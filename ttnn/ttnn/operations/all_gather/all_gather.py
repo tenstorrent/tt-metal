@@ -123,7 +123,7 @@ def validate(input_tensor, gather_dim, *, topology, output_tensor):
         raise ValueError("all_gather: sharded input not yet supported (interleaved only)")
 
     page = input_tensor.buffer_page_size()
-    if page % 16 != 0 and page != 16:
+    if page % 16 != 0:
         raise ValueError(f"all_gather: per-shard page size ({page} B) must be 16-byte aligned")
 
     if output_tensor is not None:

@@ -1,0 +1,4249 @@
+{
+  "summary": {
+    "total": 384,
+    "supported_pass": 16,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 304,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 64,
+    "invalid_unexpected": 0,
+    "no_axes_found": 0
+  },
+  "by_category": {
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-3-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-2-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-1-layout=TILE-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      }
+    ],
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT16-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=FLOAT32-gather_dim=-4-layout=TILE-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      }
+    ],
+    "invalid_skipped": [
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x64x128-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x96x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-2x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x256x256-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-4x1x32x32-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x48x64-alignment=non_tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "non_tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Linear-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Linear",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-4-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -4,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-3-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -3,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-2-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -2,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/all_gather/test_golden.py::test_op[wormhole_b0-1x1x32x96-alignment=tile_aligned-dtype=BFLOAT8_B-gather_dim=-1-layout=ROW_MAJOR-topology=Ring-mesh_device0-device_params0]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "ROW_MAJOR",
+          "topology": "Ring",
+          "gather_dim": -1,
+          "alignment": "tile_aligned"
+        },
+        "status": "skipped"
+      }
+    ]
+  }
+}
