@@ -212,6 +212,38 @@ private:
     std::unordered_map<BoardType, tt::scaleout_tools::Board> boards_;
 };
 
+// Builds the full hop-by-hop path for a single src->dst route, annotating each hop with
+// its chip id, physical tray/asic location, and the eth channel taken. Channel-to-channel
+// transitions within a chip appear as repeated entries for that chip. Example:
+//   "D0[T3/N1](ch6) -> D4[T3/N9](ch2) -> D8[T2/N1](ch3) -> D12[T2/N9](ch3)"
+// Returns "<no route>" when no valid end-to-end route exists (e.g. src not local to this host).
+std::string format_hanging_link_path(
+    tt::tt_fabric::ControlPlane& control_plane,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd,
+    const FabricNodeId& src,
+    const FabricNodeId& dst) {
+    auto fwd_chans = control_plane.get_forwarding_eth_chans_to_chip(src, dst);
+    if (fwd_chans.empty()) {
+        return "<no route>";
+    }
+    auto src_chan = fwd_chans.front();
+    auto route = control_plane.get_fabric_route(src, dst, src_chan);
+
+    auto node_label = [&](const FabricNodeId& node, unsigned chan) {
+        auto asic_id = control_plane.get_asic_id_from_fabric_node_id(node);
+        auto tray_id = psd.get_tray_id(asic_id);
+        auto asic_loc = psd.get_asic_location(asic_id);
+        return fmt::format("D{}[T{}/N{}](ch{})", node.chip_id, *tray_id, *asic_loc, chan);
+    };
+
+    std::stringstream ss;
+    ss << node_label(src, static_cast<unsigned>(src_chan));
+    for (const auto& hop : route) {
+        ss << " -> " << node_label(hop.first, static_cast<unsigned>(hop.second));
+    }
+    return ss.str();
+}
+
 }  // namespace
 
 // Returns the absolute report path; on directory-creation failure logs once
@@ -1118,6 +1150,9 @@ void TestProgressMonitor::write_summary_report(
                     }
                 }
 
+                ofs << "      Route: " << format_hanging_link_path(control_plane, psd, agg.src_node, agg.dst_node)
+                    << "\n";
+
                 uint64_t shown_packets =
                     (agg.min_packets_processed == std::numeric_limits<uint64_t>::max()) ? 0 : agg.min_packets_processed;
                 ofs << "      Hung endpoints: senders=" << agg.sender_hung << " receivers=" << agg.receiver_hung
@@ -1205,6 +1240,8 @@ void TestProgressMonitor::write_detailed_report(
                     ofs << "        " << port_resolver.link_label(src_asic_id, chan) << "\n";
                 }
             }
+
+            ofs << "      Route: " << format_hanging_link_path(control_plane, psd, src_node_id, dst_node_id) << "\n";
 
             ofs << "      Core: (" << rec->core_x << "," << rec->core_y << ") | config_idx: " << rec->config_idx
                 << "\n";

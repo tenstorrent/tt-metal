@@ -85,7 +85,8 @@ public:
         bool downstream_is_tensix_builder,
         RouterVariant variant,
         const IntermeshVCConfig* intermesh_config,
-        bool has_z_on_device = false);
+        bool has_z_on_device = false,
+        bool has_intra_mesh_z = false);
 
     /**
      * Get the internal sender channel mapping for a logical sender channel
@@ -124,7 +125,11 @@ private:
     bool downstream_is_tensix_builder_;
     RouterVariant variant_;
     const IntermeshVCConfig* intermesh_vc_config_ = nullptr;
+    // has_z_on_device_: this device has an inter-mesh Z router (Z_ROUTER serviced on VC1).
     bool has_z_on_device_ = false;
+    // has_intra_mesh_z_: this mesh router has an intra-mesh Z neighbor (sub-torus "skip link",
+    // RoutingDirection::Z within the same mesh). When set, VC0 grows from 4 -> 5 (channel 4 = Z).
+    bool has_intra_mesh_z_ = false;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;
