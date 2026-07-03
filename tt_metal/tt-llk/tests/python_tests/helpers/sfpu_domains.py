@@ -515,6 +515,9 @@ _SFPU_UNDEFINED_RANGES: Dict[
         Operand.A: [(-float("inf"), -1.0 + 1e-6), (1.0 - 1e-6, float("inf"))]
     },
     MathOperation.Log1p: {Operand.A: [(-float("inf"), -1.0 + 1e-6)]},
+    MathOperation.Erfinv: {
+        Operand.A: [(-float("inf"), -1.0 + 1e-6), (1.0 - 1e-6, float("inf"))]
+    },
     MathOperation.Rsqrt: {Operand.A: [(-float("inf"), 1e-6)]},
     MathOperation.Acosh: {Operand.A: [(-float("inf"), 1.0)]},
     # erfinv: defined only on the open interval (-1, 1)
