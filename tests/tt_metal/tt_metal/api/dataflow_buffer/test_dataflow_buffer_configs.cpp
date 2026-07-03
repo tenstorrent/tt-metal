@@ -54,6 +54,11 @@ void validate_dfb_tile_counters(
     const CoreCoord& logical_core,
     const experimental::dfb::DataflowBufferConfig& config,
     const DFBTileCounterExpectation& expectation) {
+    // risc_mask/groups are only populated by finalize_dataflow_buffer_configs(); these
+    // host-side config tests inspect that state without launching, so finalize here.
+    // Idempotent (finalize skips already-finalized DFBs) -> no-op for the MultiCore/Reentry
+    // tests that finalize explicitly.
+    program.impl().finalize_dataflow_buffer_configs();
     auto dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1) << "Expected exactly 1 DFB on core";
 
@@ -242,7 +247,7 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
         .expected_producer_tc_count = 1,  // 1 producer with 1 consumer -> 1 TC per producer
         .expected_consumer_tc_count = 1,  // 1 consumer with 1 producer -> 1 TC per consumer
         .producer_to_consumer_pairings = {
-            {0, {{0, 0, 0}}},  // Producer 0 TC[0] pairs with Consumer risc 0 TC[0]
+            {0, {{4, 0, 0}}},  // Producer 0 TC[0] pairs with Consumer risc 4 TC[0]  (consumer_risc_mask 0x10 -> risc 4; matches DMTensixTest1xDFB4Sx1SConfig)
         }};
 
     validate_dfb_tile_counters(program, logical_core, config, expectation);
@@ -505,7 +510,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_producer_tc_count = 4,  // ALL: producer broadcasts to num_consumers=4 TCs
         .expected_consumer_tc_count = 1,  // ALL: each consumer has num_producers TCs = 1
         .producer_to_consumer_pairings = {
             {0,
@@ -573,7 +578,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_producer_tc_count = 4,  // ALL: producer broadcasts to num_consumers=4 TCs
         .expected_consumer_tc_count = 4,  // ALL: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0,
@@ -630,7 +635,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_producer_tc_count = 2,  // ALL: producer broadcasts to num_consumers=2 TCs
         .expected_consumer_tc_count = 4,  // ALL: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0,
@@ -683,7 +688,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
 
     // consumer_risc_mask 0x3C = riscs 2,3,4,5
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_producer_tc_count = 4,  // ALL: producer broadcasts to num_consumers=4 TCs
         .expected_consumer_tc_count = 2,  // ALL: each consumer has num_producers TCs = 2
         .producer_to_consumer_pairings = {
             {0,
