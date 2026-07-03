@@ -213,7 +213,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (  # noqa: E4
 
 _SYSTEM_PYTHON = shutil.which("python") or sys.executable
 _THIS_FILE = str(Path(__file__).resolve())
-_WEIGHT_DTYPE = ttnn.bfloat16
+_WEIGHT_DTYPE = ttnn.bfloat4_b
 # Decode reuses the *prefill* HF reference: a single-token decode step is the
 # bit-for-bit-equivalent of a full prefill over the same tokens-so-far, so the
 # decoded row at position p must match the reference's full-prefill row p. Decode
