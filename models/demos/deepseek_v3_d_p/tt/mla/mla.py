@@ -1037,6 +1037,13 @@ class ttMLA:
         )
         return attn_out
 
+    def _cache_batch_idx(self, cache_user_id: int, cache_layer_idx: int) -> int:
+        """Flat KVPE-cache slot for (user, layer). The cache batch dim is user-major: each user reserves
+        self.layer_num contiguous slots, so the flat slot is cache_user_id * layer_num + cache_layer_idx.
+        Shared by the dense (ring_mla) and sparse (sparse_sdpa) chunked paths."""
+        assert cache_user_id < self.slot_num, f"cache_user_id {cache_user_id} >= slot_num {self.slot_num}"
+        return cache_user_id * self.layer_num + cache_layer_idx
+
     def _dense_chunked_attn(
         self,
         *,
@@ -1049,10 +1056,7 @@ class ttMLA:
         seq_len_local,
         **_,
     ):
-        # Cache batch dim is user-major: each user reserves self.layer_num contiguous slots, so the
-        # flat slot is cache_user_id * layer_num + cache_layer_idx.
-        assert cache_user_id < self.slot_num, f"cache_user_id {cache_user_id} >= slot_num {self.slot_num}"
-        cache_batch_idx = cache_user_id * self.layer_num + cache_layer_idx
+        cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
         return self._chunked_attn(
             tt_q=tt_q,
             tt_kvpe=tt_kvpe_b8,
@@ -1099,9 +1103,12 @@ class ttMLA:
     ):
         assert indices is not None, "sparse MLA forward requires indexer top-k indices"
 
+        cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
+
         # Chunked: the prefix lives in the BLOCK-CYCLIC cache. Gather it on device and hand it to
         # sparse_sdpa still block-cyclic — the op remaps the natural top-k indices to physical pages
         # in-kernel (block_cyclic_chunk_local = per-shard chunk = seq_len_local), so no host reorder.
+        # The whole multi-user cache is handed over; sparse_sdpa selects this slot via cache_batch_idx.
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             kvpe_cache,
             tt_kvpe_b8,
@@ -1111,11 +1118,13 @@ class ttMLA:
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
         )
-        kvpe_dev = self._gather_kvpe_prefix(kvpe_cache, cache_user_id, cache_layer_idx)
+        kvpe_dev = self._gather_kvpe_prefix(kvpe_cache)
         ttnn.deallocate(tt_kvpe_b8)
 
         # Sparse attention runs over latent V; project to v_head_dim afterwards.
-        attn_out = self._sparse_mla(tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local)
+        attn_out = self._sparse_mla(
+            tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local, cache_batch_idx=cache_batch_idx
+        )
         ttnn.deallocate(kvpe_dev)
         ttnn.deallocate(tt_q)
         return self._apply_wkv_b2(attn_out, seq_len_local)
@@ -1229,7 +1238,12 @@ class ttMLA:
         return self.tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
 
     def _sparse_mla(
-        self, q: ttnn.Tensor, kvpe: ttnn.Tensor, indices: ttnn.Tensor, block_cyclic_chunk_local: Optional[int] = None
+        self,
+        q: ttnn.Tensor,
+        kvpe: ttnn.Tensor,
+        indices: ttnn.Tensor,
+        block_cyclic_chunk_local: Optional[int] = None,
+        cache_batch_idx: Optional[int] = None,
     ) -> ttnn.Tensor:
         """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
         ``indices`` already encode it via the 0xFFFFFFFF sentinel). Invoked SPMD on the SP×TP mesh:
@@ -1243,7 +1257,12 @@ class ttMLA:
         block_cyclic_chunk_local: when set, ``kvpe`` is the KVPE cache in its native BLOCK-CYCLIC SP layout
         (not natural order) and ``indices`` are natural positions; sparse_sdpa remaps each index to its
         physical page in-kernel (invP) over the SP mesh axis, so the host reorder is eliminated. It is the
-        per-shard chunk length (chunk_size_global / sp). None → natural-order kvpe (single-shot path)."""
+        per-shard chunk length (chunk_size_global / sp). None → natural-order kvpe (single-shot path).
+
+        cache_batch_idx: when set, ``kvpe`` is the whole multi-user cache [B, 1, T, 576] (B =
+        num_users*num_layers user-major slots) and this selects the slot to attend — the op offsets its
+        gather page ids by cache_batch_idx * T in-kernel, so no host slot-slice. None → ``kvpe`` is a
+        single [1, 1, T, 576] slot (single-shot path)."""
         assert self.sp_axis == 0 and self.tp_axis == 1, "sparse_mla assumes sp_axis=0 (outer), tp_axis=1"
         sp = self.sp_factor
         seq_len_local = q.shape[2]  # per-chip query rows == S / sp
@@ -1291,6 +1310,7 @@ class ttMLA:
             k_chunk_size=k_chunk,
             block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
+            cache_batch_idx=cache_batch_idx,
         )
         ttnn.deallocate(q_rm)
         if idx is not indices:
@@ -1307,25 +1327,22 @@ class ttMLA:
             ttnn.deallocate(out_all_heads)
         return ret
 
-    def _gather_kvpe_prefix(self, kvpe_cache, cache_user_id, cache_layer_idx):
+    def _gather_kvpe_prefix(self, kvpe_cache):
         """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
         bf8 / TILE / ND-sharded / block-cyclic across SP; sparse_sdpa consumes it bf16 / ROW_MAJOR /
         replicated and remaps the natural-position indices to physical block-cyclic pages in-kernel
         (invP), so the buffer is LEFT in block-cyclic order — no host reorder. Pipeline (all on
-        device): ND→interleaved, SP all-gather to full-T (no-op at sp==1), select this user/layer
-        slot, bf8→bf16, TILE→RM. Returns the whole preallocated cache [1, 1, seq_len_cache, 576] bf16
-        RM (block-cyclic); the unwritten suffix is never addressed since indices stay < populated."""
+        device): ND→interleaved, SP all-gather to full-T (no-op at sp==1), bf8→bf16, TILE→RM.
+        Returns the WHOLE multi-user cache [B, 1, seq_len_cache, 576] bf16 RM (block-cyclic, B =
+        num_users*num_layers user-major slots); sparse_sdpa selects this user/layer slot itself via
+        cache_batch_idx (no host slot-slice). The unwritten suffix is never addressed since indices
+        stay < populated."""
         cache_i = ttnn.to_memory_config(kvpe_cache, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
         full = self._all_gather(
             cache_i, dim=2, cluster_axis=self.sp_axis
         )  # → [B,1,seq_len_cache,576] repl, block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
-        if full.shape[0] > 1:  # user-major slot select (no-op for the single-slot cache)
-            slot = cache_user_id * self.layer_num + cache_layer_idx
-            sel = ttnn.slice(full, [slot, 0, 0, 0], [slot + 1, 1, full.shape[2], full.shape[3]])
-            ttnn.deallocate(full)
-            full = sel
         full16 = ttnn.typecast(full, ttnn.bfloat16)
         ttnn.deallocate(full)
         full_rm = ttnn.to_layout(full16, ttnn.ROW_MAJOR_LAYOUT)
