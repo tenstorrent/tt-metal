@@ -96,7 +96,7 @@ both new values, and the verifier CLI is clean (loud categories 0).
 
 ---
 
-### [ ] Refinement 2 — Non-contiguous concat addressing (gather_dim -3, -2, -1)
+### [x] Refinement 2 — Non-contiguous concat addressing (gather_dim -3, -2, -1)
 
 **Goal**: add `-3, -2, -1` to `SUPPORTED["gather_dim"]`. At `gather_dim ≠ 0` a slice is
 no longer a contiguous output page range — the reader/writer must walk the interleaved

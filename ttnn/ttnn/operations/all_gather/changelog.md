@@ -97,3 +97,69 @@
     preserved. bf8b×RM omitted (INVALID).
   - `test_all_gather_extended.py` (**updated**): the `validate()` rejection test now gates
     on `topology=Ring` (still unsupported) since ROW_MAJOR is now SUPPORTED.
+
+## Refinement 2 — Non-contiguous concat addressing (gather_dim -3, -2, -1)
+- **Date**: 2026-07-03
+- **What was done**: Added `-3, -2, -1` to `SUPPORTED["gather_dim"]` (all four dims now
+  supported). At `gather_dim != -4` a device's slice is no longer a contiguous output
+  page range, so the reader (relay re-read) and writer (own-slot local write + fabric
+  write) now walk the interleaved concat-stride pattern. Two addressing regimes,
+  parameterized by three new CT args (`block_in`, `sub_page`, `output_page_size`) that a
+  new host helper `_concat_addressing()` derives from layout + gather axis:
+  - **Regime A — whole-page remap** (all TILE gathers on a tile-aligned axis; all
+    ROW_MAJOR non-innermost gathers): input page `in_p` of slice `j` maps to output page
+    `out_p = (in_p // block_in)*block_in*N + (in_p % block_in) + j*block_in`, where
+    `block_in` = input pages from the gather axis down (mid_in·inner). `gather_dim=-4`
+    degenerates to `block_in = pages_per_shard` → `out_p = in_p + j*pages_per_shard`, i.e.
+    the proven contiguous walk UNCHANGED (verified: gather_dim=0 regression stays green).
+    Fabric egress keeps the proven `write_page(l1, out_p, output_acc)` path.
+  - **Regime B — sub-page byte concat** (ROW_MAJOR + innermost `gather_dim=-1` only): the
+    concat lives WITHIN a row, so `out_p == in_p` but the payload lands at byte offset
+    `j*input_page_size` inside an N× larger output page (`output_page_size = N*input`).
+    Uses `get_noc_addr(page, offset)` + `write(dst, l1)`; the FABRIC dst is computed via
+    `tt::tt_fabric::linear::addrgen_detail::get_noc_address` (fabric NOC index + the
+    Wormhole DRAM→noc0 flip that `write_page` applies internally) — NOT the accessor's
+    default-NOC addr, which is only correct for the LOCAL own-slot write.
+  - The single-owner-semaphore / data-before-inc coordination is UNCHANGED — pages-per-slice
+    and slice counts are identical; only WHERE each page lands in the output changed.
+- **EXCLUSIONS** += `{layout: TILE, gather_dim: -2, alignment: non_tile_aligned}` — a
+  structural capability gap, NOT a deferred axis value. When the per-shard gather-axis
+  extent is not a multiple of 32 (H=48 in `(1,1,48,64)`, the sole non-tile-aligned INPUT),
+  the shard tiles its own 32-row boundary independently (padding the tail) while the
+  concatenated output re-tiles at a DIFFERENT 32-boundary — a landed slice straddles output
+  tile boundaries. A whole-tile copy cannot reconstruct it (it would even compute
+  out-of-bounds output pages: `Ht_out = ceil(48·8/32) = 12 ≠ Ht_shard·N = 16`), and correct
+  handling needs a sub-tile untilize/re-tilize that this pure-byte-movement op (no compute
+  kernel) cannot do. bfloat8_b is TILE-only so this one entry covers it too; `bf8b×RM` is
+  INVALID. ROW_MAJOR has no 32-row tiling, so RM+non_tile_aligned gathers cleanly at every
+  dim (verified: RM gd=-2 on `(1,1,48,64)` passes). Only `gather_dim=-2` hits the gap in the
+  current INPUTS (W stays tile-aligned in the one non-aligned shape, so gd=-1 is fine).
+- **Accuracy achieved**: identity gather is bit-exact byte movement; PCC clears the golden
+  `(0.999, 0.02)` bar on every measured cell. Measured across gather_dim ∈ {-3,-2,-1}:
+  bf16/f32 TILE (whole-page remap incl. row-stride & outer-stride), bf16/f32 RM (whole-row
+  remap + sub-page byte concat), bf8b TILE — all 8 devices agree bit-for-bit with the
+  `torch.cat` oracle. Shapes: (1,1,32,32), (1,1,64,128), (1,1,32,96), (1,1,96,64),
+  (2,1,32,64), (1,1,48,64).
+- **Golden test progress**: **157 / 384** cells passing (was 40 / 384 at Refinement 1).
+  The 117 newly-passing cells = the 3 non-contiguous gather_dims × the Linear × supported
+  dtype/layout set × 8 shapes, minus the 3 excluded TILE gd=-2 non_tile_aligned cells
+  (bf16/f32/bf8b). Verified on the multidevice WH sim (`run_multidevice_sim_pytest.py
+  --op all_gather`) in `-k` chunks: bf16 TILE+RM Linear all gather_dims (8 pass) + the
+  excluded cell (XFAIL with the EXCLUSIONS reason) + Ring (8 XFAIL, topology — Refinement 3);
+  f32 TILE+RM + bf8b TILE Linear all gather_dims (12 pass, bf8b×RM invalid-skip). Loud
+  verifier categories (supported_fail / xpass_drift / xfail_wrong_mode) all **0** on every
+  chunk. Full non-regression re-run stays green: acceptance 11/11, formats 25/25,
+  precision_baseline 8/8 (all gather_dim=0). Ring (topology, 160 xfail) remains Refinement 3.
+- **Issues encountered**: None blocking. Key correctness catch during implementation: the
+  fabric `get_noc_address` uses a fabric-specific NOC index and a Wormhole DRAM→noc0
+  coordinate flip that differs from the accessor's default-NOC `get_noc_addr` — the Regime B
+  fabric write had to use the fabric addrgen (as `write_page` does internally), while the
+  LOCAL own-slot write uses the accessor addr. Regime A was kept on the proven `write_page`
+  path to minimize risk.
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/all_gather/test_all_gather_gather_dims.py` (**new**):
+    full-gather oracle for the non-contiguous walk — 10 cells across gather_dim ∈ {-3,-2,-1},
+    both regimes (whole-page remap incl. row-stride/outer-stride + sub-page RM innermost),
+    all dtypes/layouts; plus a 3-cell excluded-cell rejection test asserting
+    `{TILE, gd=-2, non_tile_aligned}` raises the registry NotImplementedError refusal before
+    any device work (bf16/f32/bf8b). 13/13 pass on the WH sim.
