@@ -11,6 +11,14 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+# UnaryOpType -> ttnn op. The aligner activation follows HF JanusVisionAlignerMLP,
+# which applies config.hidden_act (resolved into vision_act_layer).
+_ACT_FN = {
+    ttnn.UnaryOpType.GELU: ttnn.gelu,
+    ttnn.UnaryOpType.RELU: ttnn.relu,
+    ttnn.UnaryOpType.SILU: ttnn.silu,
+}
+
 
 class TtJanusProVisionAligner(LightweightModule):
     def __init__(
@@ -25,7 +33,9 @@ class TtJanusProVisionAligner(LightweightModule):
         super().__init__()
         self.mesh_device = mesh_device
         self.args = args
+        self.act_fn = _ACT_FN[args.vision_act_layer]
 
+        # HF JanusVisionAlignerMLP: fc1 + (depth - 1) hidden layers
         num_hidden = max(0, args.vision_aligner_depth - 1)
 
         def load_linear(name):
@@ -78,6 +88,6 @@ class TtJanusProVisionAligner(LightweightModule):
         # x: [1, B, seq, vision_dim] — output of TtJanusProVisionModel (ln_post)
         x = self._linear(x, self.fc1_weight, self.fc1_bias)
         for weight, bias in self.hidden_layers:
-            x = ttnn.gelu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = self.act_fn(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x = self._linear(x, weight, bias)
         return x
