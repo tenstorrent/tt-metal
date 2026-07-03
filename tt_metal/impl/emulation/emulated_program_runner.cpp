@@ -81,7 +81,6 @@ using __emule_cb_state = tt_emule::CBSyncState;
 thread_local std::vector<uint32_t> __rt_args;
 thread_local std::vector<uint32_t> __common_rt_args;
 thread_local tt_emule::Core* __core = nullptr;
-thread_local tt_emule::Device* __device = nullptr;
 
 // Memory bridge pointers — now non-static for -rdynamic export.
 thread_local uint8_t* __emule_bridge_l1 = nullptr;
@@ -2205,7 +2204,6 @@ static void launch_cores(
                             __emule_tc_array = tc_array;
                             __processor_id = ki.processor_id;
                             __core = core;
-                            __device = nullptr;
                             __emule_core_map = core_map_ptr;
                             my_x[0] = px;
                             my_x[1] = px;
