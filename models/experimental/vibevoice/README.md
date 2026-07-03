@@ -69,6 +69,39 @@ python models/experimental/vibevoice/reference/run_inference.py \
 pytest models/experimental/vibevoice/tests/pcc/ -v
 ```
 
+## TTNN demo (on device)
+
+`demo_ttnn.py` runs on-device TTNN inference (no HuggingFace reference model) and writes
+`{output_dir}/{demo_id}/{demo_id}_tt.wav` next to the website golden clip. Multi-speaker demos
+auto-enable voice cloning from `resources/voices/`.
+
+```bash
+export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd)
+export ARCH_NAME=wormhole_b0 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml   # or blackhole
+
+# Default demo (shortest golden clip, eager — no trace)
+python models/experimental/vibevoice/demo_ttnn.py
+
+# Multi-speaker demo, cap the AR loop at 32 tokens, verbose stage/timing logs
+python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --max_new_tokens 32 --debug
+```
+
+### Run with trace
+
+`--trace` ttnn-captures the whole steady-state speech-diffusion frame (neg-LM + diffusion +
+post-diffusion + pos-LM) as one fully device-driven graph — the "llama shape": positions
+self-advance on device, RoPE is gathered on device, and the pos hidden is loop-carried — and
+replays it per frame. It gives **≈11–12 tok/s** steady-state decode vs ≈2.4 tok/s eager on the
+45-min climate demo, and opens the device with a ~1.4 GB trace region + 2 command queues.
+
+```bash
+python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --max_new_tokens 32 --trace
+```
+
+| Flag | Env var | Scope | Notes |
+|------|---------|-------|-------|
+| `--trace` | `VV_TRACE_SEGMENT=1` | whole segment, device-driven (llama shape) | fused frame replayed per frame; ~1.4 GB trace region + 2 CQs |
+
 ## Language model PCC tests
 
 Prefill and decode hidden-state PCC vs a **bf16 HuggingFace Qwen2** reference (`PCC >= 0.99`).
