@@ -25,9 +25,11 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vFloat t, rcp, x0, x1, tmp, y0;
     sfpi::vInt x_exp;
 
+    // Calculate j = x * (2 * log2(e)), interleaved with a = abs(2*x), and i = round(abs(j)), clamped to [0, 255].
+
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * 2 * log2(e)
     a = x + x;
-    // Rounds the absolute value of j, clamped to [0, 255].
+    // i = round(abs(j)), clamped to [0, 255].
     sfpi::vMag m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
     j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
     sfpi::vInt i = m;
@@ -49,11 +51,17 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     r = r * s + f;
     scale = sfpi::setexp(sfpi::vConst0, e);
     bias0 = scale - w;
+
+    // If a=±inf, converts to a finite value, otherwise if a=±NaN, converts to ±inf or ±NaN.
+    // This gives y = <finite value> * 0.0 + 1.0 = 1.0 for non-NaN x, otherwise y = NaN.
     a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
     x0 = r * scale + bias0;
     y = a * 0.0f + 1.0f;
     x1 = x0 + 1.0f;
 
+    // `i` is round(abs(2*x/log(2))). For i >= 61, |x| is about 21 or larger,
+    // so x0/(x0 + 1) is far within 0.5 ulp of 1.0f. Keep the preinitialized
+    // saturated result; below that, refine the reciprocal estimate.
     v_if(i < 61) {
         // computes x0/x1 via reciprocal and residual correction
         rcp = sfpi::approx_recip(x1);
@@ -63,6 +71,10 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
         y0 = x0 * rcp;
         x_exp = sfpi::exexp(x, sfpi::ExponentMode::NoDebias);
         t = -x1 * y0 + x0;
+
+        // For tiny inputs, tanh(x) rounds to x in fp32. `x_exp` is biased, so
+        // 115 is 127 - 12; keep y=x for |x| < 2^-12 and use the corrected
+        // ratio otherwise.
         v_if(x_exp >= 115) { y = t * rcp + y0; }
         v_endif;
     }
