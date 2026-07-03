@@ -534,9 +534,27 @@ Partial-grid + NOOP-core multicast path exercised (via bf8_b tiled output) and p
 Known untested-but-unreachable-via-pool: column-major block (transpose_mcast) NOC path —
 cover in step 3 (conv). The removal premise ("can't net-save L1") is REFUTED for pools.
 
-**Sequence (user-set):** 1. full pool on WH ✅ · 2. full pool on **Blackhole** (needs machine
-switch — alignment class-1 / NoC-order class-7 can be WH-clean/BH-broken) · 3. extend to
-conv / matmul / other ops on both. Plus the deferred DRAM-slicing L1-estimate.
+**Sequence (user-set):** 1. full pool on WH ✅ · 2. full pool on **Blackhole ✅** · 3. extend
+to conv / matmul / other ops on both. Plus the deferred DRAM-slicing L1-estimate.
+
+**STEP 2 (full pool on Blackhole p100a) COMPLETE** (branch @ 461c55d3148). Suite on p100a
+(11×10 = **110-core** grid): **20 passed / 21 skipped / 0 failed** — bitwise-exact in-place
+vs normal across the shapes that activate (height RM+tiled, width all-local, block incl.
+tiled buffer-delta path) × bf16 & bf8_b. **No corruption** in the alignment (class 1) or
+NoC-ordering (class 7) classes. Findings:
+- BH's 110-core grid **narrows the SAVE region** vs WH's 64: mid-size shapes (resnet_150x150,
+  etc.) shard across more cores → per-core shard drops below halo depth → flip SAVE→LOSE, and
+  the gate **correctly declines** them (the 21 skips). In-place pays off on *larger* feature
+  maps on BH. This is the same arch-economics lesson the removal era hit — now handled by the
+  auto-gate instead of a blanket flag.
+- The small-stick alignment hazard (#27333, C=16→32B sticks on BH's 64B alignment) **cannot
+  occur in practice**: such shapes are net-L1 LOSE so in-place never activates — the economics
+  gate implicitly steers clear of the alignment danger zone.
+- Test made arch-portable: non-activation → `pytest.skip` (not fail), since the gate
+  legitimately declines per-arch.
+
+**In-place halo is now verified correct on BOTH Wormhole and Blackhole for the full pool op
+family. The removal premise ("can't net-save L1") is refuted for pools on both archs.**
 
 **Earlier status (superseded):** the RM/height-sharded vertical slice was the first milestone.
 
