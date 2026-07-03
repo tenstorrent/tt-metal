@@ -1628,7 +1628,7 @@ ST_T = 3840  # cache length: whole chunks (3*1280) covering the fullest device's
 
 
 def _straddle_ref(q_g, k_nat, w_g, sp, chunk_global, chunk_start, t_len):
-    """Per-SP-rank straddled reference over natural-order K, mirroring the op's deduce_causal_geometry /
+    """Per-SP-rank straddled reference over natural-order K, mirroring the op's device_causal_geometry /
     update_padded_kv_cache rotation. Device r's q-row 0 sits at base = chunk_start + r*Sq; with offset =
     base % cl, rows >= (cl - offset) jump by (chunk_global - cl)."""
     heads, gq = q_g.shape[1], q_g.shape[2]
