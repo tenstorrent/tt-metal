@@ -547,14 +547,14 @@ struct CombineDebug {
     CombineChannelDebug per_ch[MAX_NUM_SENDER_CHANNELS];
     // [debug] Packet-detection telemetry, aggregated across ALL buffers for the window: tensix-sender
     // channels AND receiver/forwarding channels (packets arriving from other eth-cores). Recorded at the
-    // once-per-packet consume edge (see record_combine_packet). Wall-clock domain (get_timestamp_32b),
-    // same as tight_cycles. Note: window_start_cycles is wall-clock, while *_cycles_at_start above are
-    // BandwidthTelemetry cycles -- different clock domains, do not subtract across them.
-    uint32_t window_start_cycles;  // wall-clock at the start marker (for first-packet latency)
-    uint32_t first_pkt_cycles;     // wall-clock of the first packet seen in the window (set once)
-    uint32_t last_pkt_cycles;      // wall-clock of the most recently seen packet
+    // once-per-packet consume edge (see record_combine_packet). Full 64-bit wall-clock (get_timestamp()).
+    // Note: window_start_cycles is wall-clock, while *_cycles_at_start above are BandwidthTelemetry cycles --
+    // different clock domains, do not subtract across them.
+    uint64_t window_start_cycles;  // wall-clock at the start marker (for first-packet latency)
+    uint64_t first_pkt_cycles;     // wall-clock of the first packet seen in the window (set once)
+    uint64_t last_pkt_cycles;      // wall-clock of the most recently seen packet
     uint32_t total_pkt_bytes;      // running sum of wire bytes (header + payload) over every packet seen
-    uint32_t spare[4];             // room to grow: add per-channel fields above, or global fields here
+    uint32_t spare[3];             // room to grow: add per-channel fields above, or global fields here
 };
 // Must not exceed COMBINE_DEBUG_BUFFER_SIZE carved in FabricEriscDatamoverConfig (1024 B).
 static_assert(sizeof(CombineDebug) <= 1024, "CombineDebug exceeds the carved combine_debug_buffer region");
@@ -566,6 +566,14 @@ constexpr uint32_t COMBINE_DEBUG_MAGIC = 0xC0FFEE01;
 FORCE_INLINE volatile CombineDebug* combine_dbg() {
     return reinterpret_cast<volatile CombineDebug*>(combine_debug_buffer_addr);
 }
+
+// [debug] The CombineDebug L1 region and [cmb] prints are single-owned by ERISC0 (or the sole eRisc). Two
+// reasons: (1) tx-bandwidth telemetry only accrues on MY_ERISC_ID==0 (see update_bw_cycles), so the cycle
+// snapshots are only meaningful there; (2) the region is shared across both eRiscs on a core, so letting a
+// second eRisc snapshot/print corrupts the deltas (the receiver eRisc's near-zero tx accumulator minus the
+// sender's snapshot produced the huge/2^64-wrapped totals). The per-eRisc [rxlog]/[txlog] traces are already
+// single-owned by their role gates (is_receiver/sender_channel_serviced), which land on distinct eRiscs.
+constexpr bool combine_debug_owner = (NUM_ACTIVE_ERISCS == 1) || (MY_ERISC_ID == 0);
 
 bool combine_window_active = false;
 // [debug] Gate so first_pkt_cycles is captured exactly once per window. Reset at the start marker.
@@ -622,6 +630,15 @@ struct ReceiverLog {
     uint32_t last_wr_sent;
     uint32_t last_wr_flush;
     uint32_t last_completion;
+    // [debug] Initial in-flight backlog at window open, expressed as each counter's gap above the completion
+    // counter (ack >= wr_sent >= wr_flush >= completion, so all >= 0). The window may open NON-quiescent (the
+    // receiver already has acked-but-not-completed slots); rebasing every counter to its own snapshot would
+    // then make the reconstructed `completion` count pre-window completions and run ahead of `ack`, underflow
+    // (ack - cmpl), and clamp `free` to 0. Seeding the dump accumulators with these gaps rebases all counters
+    // to a COMMON baseline (completion at open), restoring ack >= cmpl and the correct occupancy.
+    uint32_t base_ack_gap;
+    uint32_t base_wr_sent_gap;
+    uint32_t base_wr_flush_gap;
     ReceiverLogRecord records[RECEIVER_LOG_CAPACITY];
 };
 static_assert(sizeof(ReceiverLog) <= 4096, "ReceiverLog exceeds the carved receiver_log_buffer region");
@@ -634,9 +651,8 @@ FORCE_INLINE volatile ReceiverLog* receiver_log() {
 
 // [debug] Reset the receiver trace at the combine start marker: clear the log and snapshot the current
 // flow-control state as the delta baseline. Every row in the window is stored as a delta against this
-// snapshot (see record_receiver_flow_state and the dump reconstruction), so reconstructed counters are
-// 0-based within the window. The window opens at data-send start (receiver quiescent), so the snapshot has
-// ack == wr_sent == completion and the reconstructed (ack - completion) is exactly the true slot occupancy.
+// snapshot. Counters are rebased to the completion snapshot (base_*_gap), so reconstructed values are
+// 0-based on completion and stay correctly ordered even if the window opens with packets still in flight.
 FORCE_INLINE void reset_receiver_log(
     uint32_t window_start_cycles,
     uint32_t iter,
@@ -657,6 +673,12 @@ FORCE_INLINE void reset_receiver_log(
     log->last_wr_sent = wr_sent;
     log->last_wr_flush = wr_flush;
     log->last_completion = completion;
+    // Initial in-flight backlog: each counter's gap above completion at window open. ack/wr_sent always lead
+    // completion, but wr_flush is frozen at 0 in fused builds (fuse_receiver_flush_and_completion_ptr) while
+    // completion advances -- so clamp to avoid an unsigned underflow that would poison the wflush column.
+    log->base_ack_gap = ack >= completion ? ack - completion : 0;
+    log->base_wr_sent_gap = wr_sent >= completion ? wr_sent - completion : 0;
+    log->base_wr_flush_gap = wr_flush >= completion ? wr_flush - completion : 0;
 }
 
 // [debug] Append a record iff the flow-control state changed since the last recorded row. Gated by the caller
@@ -777,6 +799,15 @@ struct SenderLog {
     uint8_t last_occ[SENDER_LOG_NUM_CHANNELS];  // previous recorded backlog level
     uint8_t reason[SENDER_LOG_NUM_CHANNELS];    // per-pass block-reason annotation
     uint8_t conn[SENDER_LOG_NUM_CHANNELS];      // per-pass connection flag
+    // [debug] Initial backlog at window open, each counter's gap above completion (sent >= acked >= cmpl).
+    // Same rationale as ReceiverLog::base_*_gap: a window that opens with packets still outstanding would
+    // otherwise make the reconstructed `cmpl` (which counts completions of pre-window sends) outrun `sent`.
+    // Seeding the dump accumulators with these gaps rebases all three to a common completion baseline.
+    // Note: sender counters are in-window event counts, so at window boundaries these gaps are approximate
+    // (a send outside any window then completed inside is missed); dncr remains the authoritative downstream
+    // occupancy. Good enough to keep sent >= acked >= cmpl and the (acked - cmpl) in-rx-buffer estimate sane.
+    uint32_t base_sent_gap[SENDER_LOG_NUM_CHANNELS];
+    uint32_t base_acked_gap[SENDER_LOG_NUM_CHANNELS];
     SenderLogRecord records[SENDER_LOG_CAPACITY];
 };
 static_assert(sizeof(SenderLog) <= 4096, "SenderLog exceeds the carved sender_log_buffer region");
@@ -823,6 +854,11 @@ __attribute__((noinline)) void reset_sender_log(uint32_t window_start_cycles, ui
         log->last_sent[ch] = log->sent[ch];
         log->last_acked[ch] = log->acked[ch];
         log->last_cmpl[ch] = log->cmpl[ch];
+        // Initial backlog gaps above completion at window open. Clamped: sent/acked are in-window-only event
+        // counts, so across window boundaries a completion counted here for an event NOT counted (its send/ack
+        // fell outside any window) could push cmpl above them -- clamp to 0 rather than underflow.
+        log->base_sent_gap[ch] = log->sent[ch] >= log->cmpl[ch] ? log->sent[ch] - log->cmpl[ch] : 0;
+        log->base_acked_gap[ch] = log->acked[ch] >= log->cmpl[ch] ? log->acked[ch] - log->cmpl[ch] : 0;
     }
 }
 
@@ -886,7 +922,9 @@ __attribute__((noinline)) void record_sender_flow_state(uint32_t iter) {
 
 // [debug] Dump the receiver flow-control trace ([rxlog]) at the combine STOP marker. Compiles to an empty body
 // on eRiscs that do not service the VC0 receiver channel. Records are delta-encoded (see ReceiverLogRecord); we
-// reconstruct 0-based cumulative values as we walk. free = slots - rdy - (ack - cmpl).
+// reconstruct cumulative values as we walk. Accumulators are seeded with the base_*_gap snapshot so all
+// counters are 0-based on completion (ack >= wsent >= cmpl even if the window opened non-quiescent), making
+// free = slots - rdy - (ack - cmpl) the true occupancy.
 // noinline: keeps the reconstruction + DEVICE_PRINT-buffer locals in this function's own frame instead of
 // inflating kernel_main's frame (which is bounded by -Werror=stack-usage). Runs once per window, so the extra
 // call is free.
@@ -895,7 +933,8 @@ static __attribute__((noinline)) void dump_receiver_log() {
         volatile ReceiverLog* rlog = receiver_log();
         uint32_t nslots = static_cast<uint32_t>(RECEIVER_NUM_BUFFERS_ARRAY[VC0_RECEIVER_CHANNEL]);
         DEVICE_PRINT("[rxlog] n={} drop={} slots={}\n", rlog->count, rlog->dropped, nslots);
-        uint32_t iter_acc = 0, ack_acc = 0, wsent_acc = 0, wflush_acc = 0, cmpl_acc = 0;
+        uint32_t iter_acc = 0, cmpl_acc = 0;
+        uint32_t ack_acc = rlog->base_ack_gap, wsent_acc = rlog->base_wr_sent_gap, wflush_acc = rlog->base_wr_flush_gap;
         for (uint32_t r = 0; r < rlog->count; r++) {
             volatile ReceiverLogRecord* rec = &rlog->records[r];
             iter_acc += rec->iter_delta;
@@ -938,7 +977,10 @@ static __attribute__((noinline)) void dump_sender_log() {
             static_cast<uint32_t>(SENDER_NUM_BUFFERS_ARRAY[1]),
             static_cast<uint32_t>(REMOTE_RECEIVER_NUM_BUFFERS_ARRAY[VC0_RECEIVER_CHANNEL]));
         uint32_t iter_acc = 0;
-        uint32_t sent0 = 0, ack0 = 0, cmpl0 = 0, sent1 = 0, ack1 = 0, cmpl1 = 0;
+        // Seed per-channel accumulators with the base gaps so all three counters are rebased to a common
+        // completion baseline (sent >= ack >= cmpl) even if the window opened non-quiescent (see base_*_gap).
+        uint32_t sent0 = slog->base_sent_gap[0], ack0 = slog->base_acked_gap[0], cmpl0 = 0;
+        uint32_t sent1 = slog->base_sent_gap[1], ack1 = slog->base_acked_gap[1], cmpl1 = 0;
         for (uint32_t r = 0; r < slog->count; r++) {
             volatile SenderLogRecord* rec = &slog->records[r];
             iter_acc += rec->iter_delta;
@@ -983,7 +1025,7 @@ static __attribute__((noinline)) void dump_sender_log() {
 // total_pkt_bytes update on every packet.
 FORCE_INLINE void record_combine_packet(uint32_t bytes) {
     volatile CombineDebug* d = combine_dbg();
-    uint32_t now = get_timestamp_32b();
+    uint64_t now = get_timestamp();  // full 64-bit wall clock (wrap-free span/first-delay math)
     if (!combine_first_pkt_seen) {
         combine_first_pkt_seen = true;
         d->first_pkt_cycles = now;
@@ -3188,38 +3230,41 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 uint32_t combine_marker = fabric_telemetry->scratch[0];
                 if (combine_marker != last_combine_marker) {
                     last_combine_marker = combine_marker;
-                    DEVICE_PRINT("[cmb] marker={}\n", combine_marker);
-
-                    volatile CombineDebug* d = combine_dbg();
+                    // The [cmb] marker line + all CombineDebug snapshot/print work is ERISC0-only (see
+                    // combine_debug_owner). combine_window_active and the per-eRisc [rxlog]/[txlog] resets/dumps
+                    // stay per-eRisc so both eRiscs open/close their own trace windows.
+                    if constexpr (combine_debug_owner) {
+                        DEVICE_PRINT("[cmb] marker={}\n", combine_marker);
+                    }
                     if (combine_marker != 0) {
-                        // START event: reset all counters, snapshot the running counters, and open the window.
-                        // Snapshot only the low 32 bits; the unsigned 32-bit subtraction at the end marker
-                        // gives the correct delta as long as the window is shorter than 2^32 cycles.
-                        d->magic = COMBINE_DEBUG_MAGIC;
-                        // [debug] Reset packet-detection counters; latch the wall-clock window start so the
-                        // first-packet latency (first_pkt_cycles - window_start_cycles) is computable.
-                        d->window_start_cycles = get_timestamp_32b();
-                        d->first_pkt_cycles = 0;
-                        d->last_pkt_cycles = 0;
-                        d->total_pkt_bytes = 0;
-                        combine_first_pkt_seen = false;
-                        for (uint32_t ch = 0; ch < MAX_NUM_SENDER_CHANNELS; ch++) {
-                            volatile CombineChannelDebug* c = &d->per_ch[ch];
-                            c->att_total = 0;
-                            c->att_enqueued = 0;
-                            c->att_starved = 0;
-                            c->att_rxfull = 0;
-                            c->att_txqbusy = 0;
-                            c->att_other = 0;
+                        // START event.
+                        if constexpr (combine_debug_owner) {
+                            volatile CombineDebug* d = combine_dbg();
+                            // Full 64-bit snapshots so the end-marker subtraction is wrap-free (the low 32 bits
+                            // of the wall clock roll over every ~4.3 s; see CombineDebug).
+                            d->magic = COMBINE_DEBUG_MAGIC;
+                            d->window_start_cycles = get_timestamp();
+                            d->first_pkt_cycles = 0;
+                            d->last_pkt_cycles = 0;
+                            d->total_pkt_bytes = 0;
+                            combine_first_pkt_seen = false;
+                            for (uint32_t ch = 0; ch < MAX_NUM_SENDER_CHANNELS; ch++) {
+                                volatile CombineChannelDebug* c = &d->per_ch[ch];
+                                c->att_total = 0;
+                                c->att_enqueued = 0;
+                                c->att_starved = 0;
+                                c->att_rxfull = 0;
+                                c->att_txqbusy = 0;
+                                c->att_other = 0;
+                            }
                         }
-                        // [debug] Reset the receiver flow-control trace for the new window, priming the
-                        // last-state sentinel so the first observed state is recorded. Uses the same
-                        // wall-clock window start so the first record's ts_delta is time-since-window-open.
-                        // Gated to the receiver eRisc: the buffer is shared across eRiscs, so letting the
-                        // sender eRisc reset here would zero the receiver's buffer mid-window.
+                        // [debug] Reset the per-eRisc flow-control traces (role-gated; land on distinct eRiscs).
+                        // Each uses its OWN wall clock (get_timestamp_32b) as the ts baseline, decoupled from the
+                        // shared CombineDebug window_start -- otherwise the receiver eRisc could read a
+                        // window_start the sender eRisc had not written yet.
                         if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
                             reset_receiver_log(
-                                d->window_start_cycles,
+                                get_timestamp_32b(),
                                 combine_loop_iter,
                                 static_cast<uint32_t>(
                                     get_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>()),
@@ -3228,46 +3273,47 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                                 receiver_channel_pointers_ch0.wr_flush_counter.counter,
                                 receiver_channel_pointers_ch0.completion_counter.counter);
                         }
-                        // [debug] Reset the sender trace (sender eRisc only); snapshots per-channel totals as
-                        // the delta baseline for the new window.
                         if constexpr (sender_log_enabled()) {
-                            reset_sender_log(d->window_start_cycles, combine_loop_iter);
+                            reset_sender_log(get_timestamp_32b(), combine_loop_iter);
                         }
                         combine_window_active = true;
                     } else {
-                        // END event: close the window, print the loop-level deltas, then one line per
-                        // serviced sender channel (idle/unserviced channels are skipped).
+                        // END event.
                         combine_window_active = false;
-                        // [debug] Packet-detection summary (all buffers). first_delay = cycles from the start
-                        // marker to the first packet; span = first-to-last packet; bytes = total wire bytes.
-                        uint32_t combine_pkt_first_delay =
-                            combine_first_pkt_seen ? (d->first_pkt_cycles - d->window_start_cycles) : 0;
-                        uint32_t combine_pkt_span =
-                            combine_first_pkt_seen ? (d->last_pkt_cycles - d->first_pkt_cycles) : 0;
-                        DEVICE_PRINT(
-                            "[cmb] pkt_first_delay={} pkt_span={} pkt_bytes={}\n",
-                            combine_pkt_first_delay,
-                            combine_pkt_span,
-                            d->total_pkt_bytes);
-                        // Per-channel send-attempt breakdown + tight Tx. Sanity per line:
-                        //   enq + starved + rxfull + txqbusy + other == att.
-                        for (uint32_t ch = 0; ch < MAX_NUM_SENDER_CHANNELS; ch++) {
-                            if (!is_sender_channel_serviced[ch]) {
-                                continue;
-                            }
-                            volatile CombineChannelDebug* c = &d->per_ch[ch];
+                        if constexpr (combine_debug_owner) {
+                            volatile CombineDebug* d = combine_dbg();
+                            // Packet-detection summary. first_delay = start marker to first packet; span =
+                            // first-to-last packet; bytes = total wire bytes.
+                            uint64_t combine_pkt_first_delay =
+                                combine_first_pkt_seen ? (d->first_pkt_cycles - d->window_start_cycles) : 0;
+                            uint64_t combine_pkt_span =
+                                combine_first_pkt_seen ? (d->last_pkt_cycles - d->first_pkt_cycles) : 0;
                             DEVICE_PRINT(
-                                "[cmb] ch={} att={} enq={} starved={} rxfull={} txqbusy={} other={}\n",
-                                ch,
-                                c->att_total,
-                                c->att_enqueued,
-                                c->att_starved,
-                                c->att_rxfull,
-                                c->att_txqbusy,
-                                c->att_other);
+                                "[cmb] pkt_first_delay={} pkt_span={} pkt_bytes={}\n",
+                                combine_pkt_first_delay,
+                                combine_pkt_span,
+                                d->total_pkt_bytes);
+                            // Per-channel send-attempt breakdown + tight Tx. Sanity per line:
+                            //   enq + starved + rxfull + txqbusy + other == att.
+                            for (uint32_t ch = 0; ch < MAX_NUM_SENDER_CHANNELS; ch++) {
+                                if (!is_sender_channel_serviced[ch]) {
+                                    continue;
+                                }
+                                volatile CombineChannelDebug* c = &d->per_ch[ch];
+                                DEVICE_PRINT(
+                                    "[cmb] ch={} att={} enq={} starved={} rxfull={} txqbusy={} other={} tight={} "
+                                    "bytes={} payload={}\n",
+                                    ch,
+                                    c->att_total,
+                                    c->att_enqueued,
+                                    c->att_starved,
+                                    c->att_rxfull,
+                                    c->att_txqbusy,
+                                    c->att_other);
+                            }
                         }
-                        // [debug] Dump the receiver ([rxlog]) and sender ([txlog]) flow-control traces at window
-                        // close. Each compiles to a no-op on the eRisc that does not service that role.
+                        // [debug] Dump the per-eRisc traces at window close (each is a no-op on the eRisc that
+                        // does not service that role).
                         dump_receiver_log();
                         dump_sender_log();
                     }
