@@ -42,11 +42,13 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
     """GroupNorm on an H/W-sharded input WITHOUT gathering full spatial.
 
     Per-group statistics pool over (channels-in-group x T x H x W). Each device computes
-    its local fp32 sum / sum-of-squares per group, the (tiny) [1,1,G,1] stat tensors are
-    all-reduced across the h/w mesh axes to global stats, then the LOCAL shard is
-    normalized and affine-transformed. Per-core work stays at the shard size, so L1 never
-    overflows. Requires ``norm._raw_gamma`` / ``norm._raw_beta`` ([1,1,1,C] fp32) attached
-    at weight-load time (the packed ttnn.group_norm weights can't be reused here)."""
+    its local sum / sum-of-squares (in the activation's native dtype, e.g. bf16 — the
+    full-size sum/multiply ops dominate device time, so avoid the fp32 upcast) per group,
+    the (tiny) [1,1,G,1] stat tensors are all-reduced across the h/w mesh axes to global
+    stats, then the LOCAL shard is normalized and affine-transformed. Per-core work stays
+    at the shard size, so L1 never overflows. Requires ``norm._raw_gamma`` / ``norm._raw_beta``
+    ([1,1,1,C] fp32) attached at weight-load time (the packed ttnn.group_norm weights
+    can't be reused here)."""
     G = norm.num_groups
     C = norm.num_channels
     Cg = C // G
@@ -55,7 +57,6 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
     n_local = T * Hl * Wl
 
     x = ttnn.to_layout(x_bthwc, ttnn.TILE_LAYOUT)
-    x = ttnn.typecast(x, ttnn.float32)
     x = ttnn.reshape(x, [1, 1, n_local, C])  # keep C last (multiple of 32) -> no TILE pad blowup
 
     # Reduce over SPATIAL first (dim2), keeping channels as the last dim. Reshaping to
@@ -96,7 +97,7 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
 
     # Expand per-group mean/inv to per-channel [1,1,1,C] (broadcast each group over its
     # Cg channels), on tiny tensors, then normalize the full local activation.
-    ones_gcg = ttnn.ones([1, 1, G, Cg], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=x.device())
+    ones_gcg = ttnn.ones([1, 1, G, Cg], dtype=x.dtype, layout=ttnn.TILE_LAYOUT, device=x.device())
     mean_c = ttnn.reshape(ttnn.multiply(mean, ones_gcg), [1, 1, 1, C])
     inv_c = ttnn.reshape(ttnn.multiply(inv, ones_gcg), [1, 1, 1, C])
     ttnn.deallocate(ones_gcg)
