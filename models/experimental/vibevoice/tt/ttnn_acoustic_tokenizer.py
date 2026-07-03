@@ -239,6 +239,10 @@ class TTConvTranspose1d:
         for p in self._phases:
             p.reset_cache()
 
+    def reset_cache_inplace(self) -> None:
+        for p in self._phases:
+            p.reset_cache_inplace()
+
     def __call__(self, x: ttnn.Tensor, use_cache: bool = False, is_final_chunk: bool = False) -> ttnn.Tensor:
         """x: [B, 1, T, in_ch] -> [B, 1, T*stride, out_ch]."""
         B, _, T, _ = x.shape
@@ -292,6 +296,16 @@ class TTAcousticTokenizer:
         for up_conv in self._dec_upsample_convs:
             up_conv.reset_cache()
         self._dec_head_conv.reset_cache()
+
+    def reset_decode_cache_inplace(self) -> None:
+        """Zero all decoder streaming caches IN PLACE (llama-pattern trace; stable addresses)."""
+        self._dec_input_conv.reset_cache_inplace()
+        for stage in self._dec_stage_blocks:
+            for blk in stage:
+                blk.reset_cache_inplace()
+        for up_conv in self._dec_upsample_convs:
+            up_conv.reset_cache_inplace()
+        self._dec_head_conv.reset_cache_inplace()
 
     def encode(self, audio: ttnn.Tensor, use_cache: bool = False, is_final_chunk: bool = False) -> ttnn.Tensor:
         """audio: [B, 1, 1, T] → [B, 1, T_enc, vae_dim]"""
