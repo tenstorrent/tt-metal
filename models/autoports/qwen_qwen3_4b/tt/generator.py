@@ -92,7 +92,7 @@ class Qwen3GreedyTP4Sampler:
         gather_cb = 1
         tile_scratch_bytes = 2048
         winner_page_bytes = 64 + 128
-        output_pair_page_bytes = 64
+        output_pair_page_bytes = 8
         tiles_per_sender = math.ceil(self.total_tiles / len(self.cores))
         final_worker = device.worker_core_from_logical_core(self.final_core)
         tensor_accessor_args = ttnn.TensorAccessorArgs(scores)
@@ -159,6 +159,7 @@ class Qwen3GreedyTP4Sampler:
                 scratch_cb,
                 scratch_page_bytes,
                 int(active_batch_size),
+                self.max_batch_size,
                 *gathered_accessor_args.get_compile_time_args(),
                 *output_accessor_args.get_compile_time_args(),
             ],
@@ -294,7 +295,6 @@ class Qwen3Generator(Generator):
         )
         self._sampling_trace_id: int | None = None
         self._sampling_trace_output = None
-        self._sampling_params = self._make_sampling_params(batch_size=1, top_k=1, top_p=0.0, temperature=1.0)
         self._sampling_trace_key: tuple[int, float, float, bool] | None = None
         self.timings: dict[str, float] = {}
 
@@ -348,6 +348,7 @@ class Qwen3Generator(Generator):
         kv_cache,
         enable_trace: bool = True,
         return_device_logits: bool = False,
+        use_persistent_ccl: bool = True,
         **kwargs: Any,
     ) -> torch.Tensor | ttnn.Tensor:
         # The eager low-level path remains available for readiness host-sampling
@@ -362,6 +363,7 @@ class Qwen3Generator(Generator):
                 page_table=page_table,
                 kv_cache=kv_cache,
                 return_device_logits=return_device_logits,
+                use_persistent_ccl=use_persistent_ccl,
             )
         return self.model.decode_forward(
             tokens,
@@ -369,6 +371,7 @@ class Qwen3Generator(Generator):
             page_table=page_table,
             kv_cache=kv_cache,
             return_device_logits=return_device_logits,
+            use_persistent_ccl=use_persistent_ccl,
         )
 
     def _make_sampling_params(self, *, batch_size: int, top_k: int, top_p: float, temperature: float):
@@ -442,12 +445,7 @@ class Qwen3Generator(Generator):
         return output
 
     def _sample_force_argmax_to_output(self, logits: ttnn.Tensor, *, tt_out_tok: ttnn.Tensor):
-        sampled, log_probs = self.force_argmax_sampler.decode_forward(logits, tt_out_tok=None)
-        sampled_for_copy = sampled
-        if list(sampled.shape) != list(tt_out_tok.shape):
-            sampled_for_copy = ttnn.reshape(sampled, list(tt_out_tok.shape))
-        ttnn.copy(sampled_for_copy, tt_out_tok)
-        return tt_out_tok, log_probs
+        return self.force_argmax_sampler.decode_forward(logits, tt_out_tok=tt_out_tok)
 
     def _sample_greedy_tp4_to_output(self, logits: ttnn.Tensor, *, tt_out_tok: ttnn.Tensor):
         return self.greedy_tp4_sampler.decode_forward(logits, tt_out_tok=tt_out_tok)
@@ -464,7 +462,7 @@ class Qwen3Generator(Generator):
         if force_argmax:
             if not enable_trace:
                 return self._sample_force_argmax_to_output(logits, tt_out_tok=tt_out_tok)
-            trace_key = (self._active_batch_size_from_token_tensor(tt_out_tok), 0.0, 1.0, True)
+            trace_key = (self._active_batch_size_from_token_tensor(tt_out_tok), 0.0, 1.0, False)
             if self._sampling_trace_id is not None and self._sampling_trace_key != trace_key:
                 ttnn.release_trace(self.mesh_device, self._sampling_trace_id)
                 self._sampling_trace_id = None
@@ -475,7 +473,7 @@ class Qwen3Generator(Generator):
                     logits,
                     tt_out_tok=tt_out_tok,
                     skip_precompile=skip_trace_precompile,
-                    force_argmax=True,
+                    force_argmax=False,
                 )
             ttnn.execute_trace(self.mesh_device, self._sampling_trace_id, cq_id=0, blocking=False)
             return self._sampling_trace_output
@@ -560,6 +558,8 @@ class Qwen3Generator(Generator):
         prompt_lens: list[int] | None = None,
         page_table=None,
         read_first_token: bool = True,
+        return_device_output: bool = False,
+        force_argmax: bool = False,
     ) -> int | list[int] | None:
         token_input, pos, prompt_lens = self._normalize_token_out_inputs(
             first_input_token=first_input_token,
@@ -596,7 +596,7 @@ class Qwen3Generator(Generator):
             warm_logits,
             tt_out_tok=prewarm_output,
             enable_trace=False,
-            force_argmax=False,
+            force_argmax=force_argmax,
         )
         self.model._reset_trace_positions_from_host()
         self.model.capture_decode_trace(kv_cache=self.kv_cache)
@@ -606,9 +606,11 @@ class Qwen3Generator(Generator):
             self.model.trace_state.logits,
             tt_out_tok=self.model.trace_state.token_input,
             enable_trace=True,
-            skip_trace_precompile=True,
-            force_argmax=False,
+            skip_trace_precompile=False,
+            force_argmax=force_argmax,
         )
+        if return_device_output:
+            return sampled, None
         if not read_first_token:
             return None
         tokens = [int(value) for value in ttnn.to_torch(ttnn.get_device_tensors(sampled)[0]).reshape(-1).tolist()]
@@ -618,18 +620,24 @@ class Qwen3Generator(Generator):
     def refresh_decode_page_table(self, page_table, *, generation: int | None = None) -> None:
         self.model.refresh_trace_page_table(page_table, generation=generation)
 
-    def decode_next_token_traced(self, *, page_table=None, page_table_generation: int | None = None):
+    def decode_next_token_traced(
+        self,
+        *,
+        page_table=None,
+        page_table_generation: int | None = None,
+        force_argmax: bool = False,
+    ):
         if page_table is not None:
             self.refresh_decode_page_table(page_table, generation=page_table_generation)
-        return self.decode_next_token_on_device()
+        return self.decode_next_token_on_device(force_argmax=force_argmax)
 
-    def decode_next_token_on_device(self):
+    def decode_next_token_on_device(self, *, force_argmax: bool = False):
         logits = self.model.execute_decode_trace()
         return self.sample_logits_on_device(
             logits,
             tt_out_tok=self.model.trace_state.token_input,
             enable_trace=True,
-            force_argmax=False,
+            force_argmax=force_argmax,
         )
 
     def benchmark_token_out_no_readback(

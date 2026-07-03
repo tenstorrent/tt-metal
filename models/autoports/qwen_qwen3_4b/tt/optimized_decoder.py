@@ -29,6 +29,35 @@ except ImportError:  # pragma: no cover - tracy is optional outside profiling ru
         return None
 
 
+def _decode_head_core_grid(mesh_device, batch_size: int) -> ttnn.CoreRangeSet:
+    from models.tt_transformers.tt.model_config import num_to_corerange
+
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    grid_x = min(batch_size, compute_grid.x)
+    if batch_size >= grid_x and batch_size % grid_x != 0:
+        divisors = [x for x in range(grid_x, 0, -1) if batch_size % x == 0 and batch_size // x <= compute_grid.y]
+        if not divisors:
+            return ttnn.num_cores_to_corerangeset(batch_size, compute_grid, row_wise=True)
+        grid_x = divisors[0]
+    return ttnn.CoreRangeSet({num_to_corerange(batch_size, grid_x=grid_x, grid_y=compute_grid.y)})
+
+
+def _decode_head_sub_core_grids(mesh_device, batch_size: int) -> ttnn.CoreRangeSet | None:
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    core_grid = _decode_head_core_grid(mesh_device, batch_size)
+    ranges = core_grid.ranges()
+    if len(ranges) == 1 and ranges[0].start == ttnn.CoreCoord(0, 0):
+        return None
+    return ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1),
+            )
+        }
+    )
+
+
 @dataclass(frozen=True)
 class PagedKVConfig:
     max_num_blocks: int = 4
@@ -227,9 +256,7 @@ class OptimizedDecoder(LightweightModule):
             raise ValueError(f"decode batch_size must be positive, got {batch_size}")
         return ttnn.create_sharded_memory_config(
             shape=(32, self.cfg.head_dim),
-            core_grid=ttnn.num_cores_to_corerangeset(
-                batch_size, self.mesh_device.compute_with_storage_grid_size(), row_wise=True
-            ),
+            core_grid=_decode_head_core_grid(self.mesh_device, batch_size),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -611,7 +638,9 @@ class OptimizedDecoder(LightweightModule):
         kv_cache: list[ttnn.Tensor],
         position_cos: ttnn.Tensor,
         position_sin: ttnn.Tensor,
+        use_persistent_ccl: bool = True,
     ) -> ttnn.Tensor:
+        del use_persistent_ccl
         signpost("PERF_DECODE")
         start = time.perf_counter()
         batch_size = hidden_states.shape[-2]
@@ -650,7 +679,11 @@ class OptimizedDecoder(LightweightModule):
             num_kv_heads=self.cfg.num_key_value_heads,
         )
         sdpa = ttnn.to_memory_config(sdpa, self._decode_head_memory_config(batch_size))
-        attn = ttnn.experimental.nlp_concat_heads_decode(sdpa, num_heads=self.cfg.num_attention_heads)
+        attn = ttnn.experimental.nlp_concat_heads_decode(
+            sdpa,
+            num_heads=self.cfg.num_attention_heads,
+            sub_core_grids=_decode_head_sub_core_grids(self.mesh_device, batch_size),
+        )
         attn = ttnn.slice(attn, [0, 0, 0, 0], [1, 1, batch_size, 4096], [1, 1, 1, 1])
         attn_out = ttnn.matmul(
             attn,

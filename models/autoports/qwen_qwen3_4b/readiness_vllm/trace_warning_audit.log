@@ -1,0 +1,30 @@
+Trace warning audit for final non-aligned prompt rerun, 2026-07-03 06:11 UTC.
+
+Artifact inspected:
+models/autoports/qwen_qwen3_4b/readiness_vllm/server.log
+
+Finding:
+server.log line 462 contains:
+Allocating device buffers is unsafe due to the existence of an active trace.
+
+Classification:
+The warning occurs after the final PERF_MULTICHIP_DECODE_END signpost for the
+request. No decode trace or execute_trace activity appears after the warning in
+the fresh server log.
+
+Audit counts over all lines after the warning:
+decode_after_warning=0
+execute_trace_after_warning=0
+lines_after_warning=110
+
+Immediate following server activity:
+line 463: GET /metrics
+line 464: Engine 000 reports Running: 0 reqs, Waiting: 0 reqs
+line 465: Engine 000 reports Running: 0 reqs, Waiting: 0 reqs
+line 466: FastAPI HTTP server shutdown
+
+Control added:
+/home/ubuntu/vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py
+now calls the model reset_warmup_state hook when the scheduler is idle and no
+pending sample/async decode completions remain. For Qwen3-4B this releases the
+decode and sampling traces before future requests can recapture/execute traces.

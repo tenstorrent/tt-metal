@@ -94,8 +94,8 @@ import time
 from pathlib import Path
 from typing import Any, List, Optional
 
-import openai
 import requests
+from transformers import AutoTokenizer
 
 DEFAULT_PORT = 8000
 DEFAULT_BLOCK_SIZE = 64
@@ -158,6 +158,7 @@ _FATAL_LOG_PATTERNS = (
 _MESH_SHAPES: dict[str, tuple[int, int]] = {
     "N150": (1, 1),
     "N300": (1, 2),
+    "P150x4": (1, 4),
     "T3K": (1, 8),
     "TG": (8, 4),
 }
@@ -235,7 +236,7 @@ def _launch_server(
     # Pass TT plugin config as a single JSON dict so JSON quoting can't be
     # mangled by intermediate shells. The dict already has
     # `sample_on_device_mode` enforced; callers extend via `tt_config`.
-    cmd += ["--plugin-config", json.dumps({"tt": tt_config})]
+    cmd += ["--additional-config", json.dumps({"tt": tt_config})]
     cmd += additional_args
 
     env = {
@@ -403,37 +404,53 @@ def _run_qualitative_prompts(
         raise RuntimeError(f"No prompts found in {prompts_file}")
 
     print(f"  Loaded {len(prompts)} prompts")
-    client = openai.OpenAI(base_url=f"{server_url.rstrip('/')}/v1", api_key="dummy")
+    tokenizer = AutoTokenizer.from_pretrained(hf_model)
+
+    def completion(prompt: str, *, temperature: float, top_p: float | None = None) -> str:
+        payload: dict[str, Any] = {
+            "model": hf_model,
+            "prompt": prompt,
+            "max_tokens": 256,
+            "temperature": temperature,
+        }
+        if top_p is not None:
+            payload["top_p"] = top_p
+        response = requests.post(
+            f"{server_url.rstrip('/')}/v1/completions",
+            json=payload,
+            timeout=DEFAULT_VLLM_RPC_TIMEOUT_MS / 1000,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if "error" in data:
+            raise RuntimeError(f"Completion request failed: {data['error']}")
+        return data["choices"][0].get("text") or ""
 
     results: List[dict[str, Any]] = []
     for i, prompt in enumerate(prompts, 1):
         print(f"\n  Prompt {i}/{len(prompts)}: {prompt[:60]}...")
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            rendered_prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError:
+            rendered_prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
 
-        greedy_text = (
-            client.completions.create(
-                model=hf_model,
-                prompt=prompt,
-                max_tokens=256,
-                temperature=0.0,
-            )
-            .choices[0]
-            .text
-        )
-        sampled_text = (
-            client.completions.create(
-                model=hf_model,
-                prompt=prompt,
-                max_tokens=256,
-                temperature=0.7,
-                top_p=0.9,
-            )
-            .choices[0]
-            .text
-        )
+        greedy_text = completion(rendered_prompt, temperature=0.0)
+        sampled_text = completion(rendered_prompt, temperature=0.7, top_p=0.9)
 
         results.append(
             {
                 "prompt": prompt,
+                "rendered_prompt": rendered_prompt,
                 "greedy_completion": greedy_text,
                 "sampled_completion": sampled_text,
             }

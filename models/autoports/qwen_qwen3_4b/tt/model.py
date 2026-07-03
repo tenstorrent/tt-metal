@@ -624,6 +624,7 @@ class Qwen3FullModel(LightweightModule):
         kv_cache: list[list[ttnn.Tensor]],
         position_cos: ttnn.Tensor,
         position_sin: ttnn.Tensor,
+        use_persistent_ccl: bool = True,
     ) -> ttnn.Tensor:
         hidden = self.embed_tokens(tokens, mode="decode")
         for layer_idx, layer in enumerate(self.layers):
@@ -634,6 +635,7 @@ class Qwen3FullModel(LightweightModule):
                 kv_cache=kv_cache[layer_idx],
                 position_cos=position_cos,
                 position_sin=position_sin,
+                use_persistent_ccl=use_persistent_ccl,
             )
         return hidden
 
@@ -723,6 +725,43 @@ class Qwen3FullModel(LightweightModule):
             return torch_logits.reshape(1, padded_len, self.vocab_size)[:, :prompt_len, :]
         return torch_logits.reshape(1, -1, self.vocab_size)[:, (prompt_len - 1) % 32 : (prompt_len - 1) % 32 + 1, :]
 
+    def prefill_forward_device_logits(
+        self,
+        tokens: torch.Tensor,
+        *,
+        page_table: ttnn.Tensor | None = None,
+        kv_cache: list[list[ttnn.Tensor]] | None = None,
+        prompt_lens: list[int] | None = None,
+        user_id: int = 0,
+    ) -> ttnn.Tensor:
+        if tokens.dim() != 2 or int(tokens.shape[0]) != 1:
+            raise ValueError(f"device prefill logits require tokens shape [1, seq], got {tuple(tokens.shape)}")
+        prompt_len = int(prompt_lens[0]) if prompt_lens else int(tokens.shape[1])
+        logical_tokens = tokens[:, :prompt_len]
+        padded_len = _pad_to(prompt_len, max(32, self.config.paged_kv_config.block_size))
+        if padded_len != prompt_len:
+            logical_tokens = torch.nn.functional.pad(logical_tokens, (0, padded_len - prompt_len), value=0)
+        hidden = self.prefill_hidden(logical_tokens, kv_cache=kv_cache, page_table=page_table, user_id=user_id)
+        last_tile_start = ((prompt_len - 1) // 32) * 32
+        local_last_idx = (prompt_len - 1) - last_tile_start
+        hidden = ttnn.slice(
+            hidden,
+            [0, 0, last_tile_start, 0],
+            [1, 1, last_tile_start + 32, self.decoder_cfg.hidden_size],
+            [1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        logits = self.apply_final_norm_and_lm_head(hidden)
+        last_logits = ttnn.slice(
+            logits,
+            [0, 0, local_last_idx, 0],
+            [1, 1, local_last_idx + 1, logits.shape[-1]],
+            [1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(logits)
+        return last_logits
+
     def decode_forward(
         self,
         tokens: torch.Tensor | ttnn.Tensor,
@@ -731,6 +770,7 @@ class Qwen3FullModel(LightweightModule):
         page_table: ttnn.Tensor,
         kv_cache: list[list[ttnn.Tensor]],
         return_device_logits: bool = False,
+        use_persistent_ccl: bool = True,
     ) -> torch.Tensor | ttnn.Tensor:
         batch_size = int(tokens.shape[0]) if isinstance(tokens, torch.Tensor) else int(tokens.shape[-2])
         if isinstance(start_pos, torch.Tensor):
@@ -768,6 +808,7 @@ class Qwen3FullModel(LightweightModule):
             kv_cache=kv_cache,
             position_cos=position_cos,
             position_sin=position_sin,
+            use_persistent_ccl=use_persistent_ccl,
         )
         logits = self.apply_final_norm_and_lm_head(hidden)
         if return_device_logits:

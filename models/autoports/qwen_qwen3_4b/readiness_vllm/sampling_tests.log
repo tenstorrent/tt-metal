@@ -1,0 +1,121 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ubuntu/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ubuntu/vllm
+configfile: pyproject.toml
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+collecting ... collected 73 items
+
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_basic_shape PASSED [  1%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_token_at_col0 PASSED [  2%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_top_n_at_cols_1_to_n PASSED [  4%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_selected_token_ranks PASSED [  5%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_at_rank0 PASSED [  6%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_max_num_logprobs_zero PASSED [  8%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_dtypes PASSED [  9%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_per_user_different_sampled PASSED [ 10%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_config_reads_additional_config PASSED [ 12%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_per_lane_max_num_seqs_derives_lane_capacity_from_global_cap PASSED [ 13%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_per_lane_max_num_seqs_requires_divisible_global_cap PASSED [ 15%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p PASSED [ 16%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_bad_words PASSED [ 17%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_logit_bias PASSED [ 19%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_allowed_token_ids PASSED [ 20%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_tokens PASSED [ 21%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-0] PASSED [ 23%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-0.5] PASSED [ 24%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-1] PASSED [ 26%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-1.5] PASSED [ 27%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-0] PASSED [ 28%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-0.5] PASSED [ 30%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1] PASSED [ 31%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1.5] PASSED [ 32%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-0] PASSED [ 34%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-0.5] PASSED [ 35%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-1] PASSED [ 36%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-1.5] PASSED [ 38%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-0] PASSED [ 39%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-0.5] PASSED [ 41%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1] PASSED [ 42%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1.5] PASSED [ 43%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-0] PASSED [ 45%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-0.5] PASSED [ 46%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-1] PASSED [ 47%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-1.5] PASSED [ 49%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab SKIPPED [ 50%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch PASSED [ 52%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_seeding PASSED [ 53%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_different_seeds_produce_different_outputs PASSED [ 54%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches PASSED [ 56%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[42] PASSED [ 57%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[123] PASSED [ 58%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[999] PASSED [ 60%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[0] PASSED [ 61%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[1] PASSED [ 63%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[0] PASSED [ 64%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_no_seed_varied PASSED [ 65%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-1] PASSED [ 67%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-0] PASSED [ 68%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-1] PASSED [ 69%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-0] PASSED [ 71%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-1] PASSED [ 72%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-0] PASSED [ 73%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_noseed_varied PASSED [ 75%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_negative_seed_does_not_crash PASSED [ 76%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[7] PASSED [ 78%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[10] PASSED [ 79%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[19] PASSED [ 80%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[32] PASSED [ 82%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[37] PASSED [ 83%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_between_batches PASSED [ 84%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[15] PASSED [ 86%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[19] PASSED [ 87%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[32] PASSED [ 89%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy PASSED [ 90%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_structured_output_dp1.py::test_dp1_full_capacity_mixes_structured_and_plain_requests PASSED [ 91%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_different_repetition_penalties PASSED [ 93%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_repetition_penalty_mixed_batch PASSED [ 94%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_different_presence_penalties PASSED [ 95%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_mixed_batch PASSED [ 97%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_different_frequency_penalties PASSED [ 98%]
+../vllm/plugins/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_mixed_batch PASSED [100%]
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+============ 72 passed, 1 skipped, 2 warnings in 787.14s (0:13:07) =============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 1 instances!
+ - leaked instance 0x7ff12e995d88 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - ... skipped remainder
+nanobind: leaked 199 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "buffer_page_size"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

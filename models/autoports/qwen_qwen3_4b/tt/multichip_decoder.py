@@ -13,7 +13,12 @@ import torch
 
 import ttnn
 from models.autoports.qwen_qwen3_4b.tt.functional_decoder import RMS_NORM_EPS, Qwen3DecoderConfig, _get_layer_tensor
-from models.autoports.qwen_qwen3_4b.tt.optimized_decoder import OptimizedDecoder, PagedKVConfig
+from models.autoports.qwen_qwen3_4b.tt.optimized_decoder import (
+    OptimizedDecoder,
+    PagedKVConfig,
+    _decode_head_core_grid,
+    _decode_head_sub_core_grids,
+)
 from models.common.lightweightmodule import LightweightModule
 
 try:
@@ -774,7 +779,7 @@ class MultichipDecoder(LightweightModule):
         attn = ttnn.transformer.concatenate_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.reshape(attn, [1, 1, seq_len, self.local_q_width], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    def _mlp(self, post_norm, *, use_dram_sharded_down: bool = False):
+    def _mlp(self, post_norm, *, use_dram_sharded_down: bool = False, use_persistent_ccl: bool = True):
         if use_dram_sharded_down:
             post_norm = ttnn.to_memory_config(post_norm, ttnn.L1_MEMORY_CONFIG)
             gate_up_memcfg, gate_up_program_config = self._gate_up_decode_geometry()
@@ -839,7 +844,7 @@ class MultichipDecoder(LightweightModule):
                 ),
                 compute_kernel_config=self.mlp_compute_kernel_config,
             )
-            return self._all_reduce_hidden(down_partial, use_persistent=True)
+            return self._all_reduce_hidden(down_partial, use_persistent=use_persistent_ccl)
         down_partial = ttnn.matmul(
             gated,
             self.down_proj_weight,
@@ -909,9 +914,7 @@ class MultichipDecoder(LightweightModule):
             raise ValueError(f"decode batch_size must be positive, got {batch_size}")
         return ttnn.create_sharded_memory_config(
             shape=(32, self.cfg.head_dim),
-            core_grid=ttnn.num_cores_to_corerangeset(
-                batch_size, self.mesh_device.compute_with_storage_grid_size(), row_wise=True
-            ),
+            core_grid=_decode_head_core_grid(self.mesh_device, batch_size),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -988,6 +991,7 @@ class MultichipDecoder(LightweightModule):
         kv_cache: list[ttnn.Tensor],
         position_cos: ttnn.Tensor,
         position_sin: ttnn.Tensor,
+        use_persistent_ccl: bool = True,
     ) -> ttnn.Tensor:
         signpost("PERF_MULTICHIP_DECODE")
         start = time.perf_counter()
@@ -1027,7 +1031,11 @@ class MultichipDecoder(LightweightModule):
             num_kv_heads=self.local_num_key_value_heads,
         )
         sdpa = ttnn.to_memory_config(sdpa, self._decode_head_memory_config(batch_size))
-        attn = ttnn.experimental.nlp_concat_heads_decode(sdpa, num_heads=self.local_num_attention_heads)
+        attn = ttnn.experimental.nlp_concat_heads_decode(
+            sdpa,
+            num_heads=self.local_num_attention_heads,
+            sub_core_grids=_decode_head_sub_core_grids(self.mesh_device, batch_size),
+        )
         attn = ttnn.slice(attn, [0, 0, 0, 0], [1, 1, batch_size, self.local_q_width], [1, 1, 1, 1])
         attn_partial = ttnn.matmul(
             attn,
@@ -1038,7 +1046,7 @@ class MultichipDecoder(LightweightModule):
             program_config=self._wo_decode_geometry(),
             compute_kernel_config=self.attention_compute_kernel_config,
         )
-        attn_out = self._all_reduce_hidden(attn_partial, use_persistent=True)
+        attn_out = self._all_reduce_hidden(attn_partial, use_persistent=use_persistent_ccl)
         attn_residual = ttnn.add(
             attn_out, hidden_states, dtype=self.residual_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -1050,7 +1058,7 @@ class MultichipDecoder(LightweightModule):
             compute_kernel_config=self.auxiliary_compute_kernel_config,
         )
         output = ttnn.add(
-            self._mlp(post_norm, use_dram_sharded_down=True),
+            self._mlp(post_norm, use_dram_sharded_down=True, use_persistent_ccl=use_persistent_ccl),
             attn_residual,
             dtype=self.residual_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
