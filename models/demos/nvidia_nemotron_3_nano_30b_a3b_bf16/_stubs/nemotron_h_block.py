@@ -216,9 +216,46 @@ class NemotronHBlock:
     def _ensure_consts(self):
         if getattr(self, "_consts_ready", False):
             return
+        import os
         sd = self._torch_module.state_dict()
-        H, P, N, G, K = self._H, self._P, self._N, self._G, self._K
-        reps = H // G
+        # FULL (unsharded) Mamba2 dims.
+        Hf, P, N, Gf, K = 64, self._P, self._N, 8, self._K
+        INTERf, GGNf, reps = Hf * P, Gf * N, Hf // Gf   # 4096, 1024, 8
+
+        # ---- Tensor-parallel (head-parallel) config --------------------
+        # ONLY shard under the shard runner (TT_HW_PLANNER_SHARD_RUN); the
+        # single-device .last_good_native path must stay byte-identical, so
+        # when unset we replicate exactly as before (TP=1 => local==full).
+        # Mamba TP = split the HEADS across chips: the SSD scan is per-head
+        # independent, so each chip runs its Hl=H/TP heads (and the matching
+        # Gl=G/TP conv groups, since reps=H/G is preserved) end-to-end with NO
+        # cross-head communication. in_proj is column-parallel (replicated
+        # input x sharded weight -> sharded proj); out_proj is row-parallel
+        # (sharded input -> partial sums -> one all_reduce -> replicated out).
+        dev = self.device
+        try:
+            is_mesh = isinstance(dev, ttnn.MeshDevice)
+        except AttributeError:
+            is_mesh = False
+        shard = bool(os.environ.get("TT_HW_PLANNER_SHARD_RUN")) and is_mesh
+        TP = int(os.environ.get("TT_HW_PLANNER_SHARD_TP", "2")) if shard else 1
+        if shard:
+            try:
+                TP = list(dev.shape)[-1] or TP
+            except Exception:
+                pass
+            shard = TP > 1 and (Hf % TP == 0) and (Gf % TP == 0)
+        self._shard, self._TP = shard, TP
+
+        # Per-device effective dims (== full when not sharding). The forward
+        # reads these instance attrs, so one program with local dims runs
+        # correctly on every (symmetric) chip.
+        Hl, Gl = Hf // TP, Gf // TP
+        self._H, self._G = Hl, Gl
+        self._INTER = Hl * P
+        self._GGN = Gl * N
+        self._CONV_DIM = self._INTER + 2 * self._GGN
+        self._GS = self._INTER // Gl   # == 512, unchanged by the head split
 
         self.ckc = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -226,41 +263,87 @@ class NemotronHBlock:
             packer_l1_acc=True,
         )
 
-        # Projections (fp32, pre-transposed [in, out]).
-        self._W_in = self._dev(sd['mixer.in_proj.weight'].t().contiguous().float())    # [2688, 10304]
-        self._W_out = self._dev(sd['mixer.out_proj.weight'].t().contiguous().float())  # [4096, 2688]
+        # On this box fabric only trains on the full mesh, so the TP run lands
+        # on a 2-D MeshShape(rows=DP, cols=TP). A flat ShardTensorToMesh would
+        # split the weight over ALL rows*cols devices (=4) — wrong for TP=2. Use
+        # ShardTensor2dMesh: shard the tensor's dim `d` along the LAST mesh axis
+        # (cols = TP) and REPLICATE along the first (rows = DP). On a genuine
+        # 1-D (1,TP) mesh dims=(None,d) degenerates to the same even TP split.
+        _mesh_shape = list(dev.shape)
+        def _shd(t, d, dtype=ttnn.float32):
+            return ttnn.from_torch(
+                t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=dev,
+                mesh_mapper=ttnn.ShardTensor2dMesh(dev, mesh_shape=_mesh_shape, dims=(None, d)),
+            )
 
-        # Norm weights (fp32).
-        self._w_block_norm = self._dev(sd['norm.weight'].view(1, 1, -1).contiguous().float())       # [1,1,2688]
-        self._w_gnorm = self._dev(sd['mixer.norm.weight'].view(1, 1, -1).contiguous().float())       # [1,1,4096]
-        self._w_ones_gs = self._dev(torch.ones(1, 1, self._GS))                                       # [1,1,512]
+        if shard:
+            # Column permutation of in_proj's 10304 outputs so each chip's
+            # heads' [gate | x | B | C | dt] land in one contiguous block that
+            # ShardTensorToMesh(dim=1) then splits evenly. Layout of proj:
+            #   gate[0:INTER] x[INTER:2INTER] B[2INTER:2INTER+GGN]
+            #   C[2INTER+GGN:2INTER+2GGN] dt[2INTER+2GGN:]
+            incol, cvcol = [], []
+            for d in range(TP):
+                hs, he = d * Hl, (d + 1) * Hl
+                gs, ge = d * Gl, (d + 1) * Gl
+                incol += list(range(hs * P, he * P))                                  # gate (per head)
+                incol += list(range(INTERf + hs * P, INTERf + he * P))                # x    (per head)
+                incol += list(range(2 * INTERf + gs * N, 2 * INTERf + ge * N))        # B    (per group)
+                incol += list(range(2 * INTERf + GGNf + gs * N, 2 * INTERf + GGNf + ge * N))  # C
+                incol += list(range(2 * INTERf + 2 * GGNf + hs, 2 * INTERf + 2 * GGNf + he))  # dt (per head)
+                # conv operates on conv_dim = [x(INTER) | B(GGN) | C(GGN)] channels.
+                cvcol += list(range(hs * P, he * P))                                  # x
+                cvcol += list(range(INTERf + gs * N, INTERf + ge * N))                # B
+                cvcol += list(range(INTERf + GGNf + gs * N, INTERf + GGNf + ge * N))  # C
+            incol = torch.tensor(incol, dtype=torch.long)
+            cvcol = torch.tensor(cvcol, dtype=torch.long)
 
-        # Depthwise conv taps: weight [conv_dim,1,K] -> per-lag tap [1,1,conv_dim].
-        # out[t,c] = sum_{lag=0..K-1} w[c, K-1-lag] * x[t-lag, c]  (causal).
-        cw = sd['mixer.conv1d.weight'].squeeze(1).float()  # [conv_dim, K]
-        self._conv_taps = [
-            self._dev(cw[:, K - 1 - lag].contiguous().view(1, 1, -1)) for lag in range(K)
-        ]
-        if 'mixer.conv1d.bias' in sd:
-            self._conv_bias = self._dev(sd['mixer.conv1d.bias'].view(1, 1, -1).contiguous().float())  # [1,1,conv_dim]
+            Win = sd['mixer.in_proj.weight'].t().contiguous().float()[:, incol]   # [2688, 10304]
+            self._W_in = _shd(Win, 1)                                             # -> [2688, 10304/TP]
+            # out_proj row-parallel: heads are contiguous in d_inner, so a plain
+            # dim-0 split lines each chip's input rows up with its heads' y.
+            self._W_out = _shd(sd['mixer.out_proj.weight'].t().contiguous().float(), 0)  # -> [INTER/TP, 2688]
+
+            cw = sd['mixer.conv1d.weight'].squeeze(1).float()[cvcol]              # [conv_dim, K] reordered
+            self._conv_taps = [_shd(cw[:, K - 1 - lag].contiguous().view(1, 1, -1), 2) for lag in range(K)]
+            self._conv_bias = (
+                _shd(sd['mixer.conv1d.bias'].float()[cvcol].view(1, 1, -1), 2)
+                if 'mixer.conv1d.bias' in sd else None
+            )
+            A = -torch.exp(sd['mixer.A_log'].float())                            # [H]
+            self._A4 = _shd(A.view(1, Hf, 1, 1).contiguous(), 1)                 # -> [1,Hl,1,1]
+            self._D4 = _shd(sd['mixer.D'].float().view(1, Hf, 1, 1).contiguous(), 1)
+            self._dt_bias = _shd(sd['mixer.dt_bias'].float().view(1, 1, Hf).contiguous(), 2)  # -> [1,1,Hl]
+            self._w_gnorm = _shd(sd['mixer.norm.weight'].view(1, 1, -1).float().contiguous(), 2)  # -> [1,1,INTER/TP]
         else:
-            self._conv_bias = None
+            self._W_in = self._dev(sd['mixer.in_proj.weight'].t().contiguous().float())    # [2688, 10304]
+            self._W_out = self._dev(sd['mixer.out_proj.weight'].t().contiguous().float())  # [4096, 2688]
+            cw = sd['mixer.conv1d.weight'].squeeze(1).float()  # [conv_dim, K]
+            self._conv_taps = [self._dev(cw[:, K - 1 - lag].contiguous().view(1, 1, -1)) for lag in range(K)]
+            self._conv_bias = (
+                self._dev(sd['mixer.conv1d.bias'].view(1, 1, -1).contiguous().float())
+                if 'mixer.conv1d.bias' in sd else None
+            )
+            A = -torch.exp(sd['mixer.A_log'].float())  # [H]
+            self._A4 = self._dev(A.view(1, Hf, 1, 1).contiguous())
+            self._D4 = self._dev(sd['mixer.D'].float().view(1, Hf, 1, 1).contiguous())
+            self._dt_bias = self._dev(sd['mixer.dt_bias'].float().view(1, 1, -1).contiguous())  # [1,1,H]
+            self._w_gnorm = self._dev(sd['mixer.norm.weight'].view(1, 1, -1).contiguous().float())  # [1,1,4096]
 
-        # SSM parameters (fp32, head-broadcast layout [1,H,1,1]).
-        A = -torch.exp(sd['mixer.A_log'].float())  # [H]
-        self._A4 = self._dev(A.view(1, H, 1, 1).contiguous())
-        self._D4 = self._dev(sd['mixer.D'].float().view(1, H, 1, 1).contiguous())
-        self._dt_bias = self._dev(sd['mixer.dt_bias'].float().view(1, 1, -1).contiguous())  # [1,1,H]
+        # Norm weights that stay REPLICATED under TP (operate on the full hidden
+        # dim or on a per-group scalar): block pre-norm + gated-norm group ones.
+        self._w_block_norm = self._dev(sd['norm.weight'].view(1, 1, -1).contiguous().float())  # [1,1,2688]
+        self._w_ones_gs = self._dev(torch.ones(1, 1, self._GS))                                # [1,1,512]
 
-        # group->head selection matmul [1, G*N, H*N]:
-        #   Esel[g*N+n, h*N+n] = 1  where g = h // reps
-        # equivalent to repeat_interleave of groups into heads.
-        sel = torch.zeros(G, H)
-        for h in range(H):
+        # group->head selection matmul [1, Gl*N, Hl*N]:  Esel[g*N+n, h*N+n]=1
+        # where g = h//reps. reps is preserved by the head split (Hl/Gl == H/G),
+        # so this local matrix is identical on every chip -> replicated.
+        sel = torch.zeros(Gl, Hl)
+        for h in range(Hl):
             sel[h // reps, h] = 1.0
         eye = torch.eye(N)
-        Esel = torch.einsum('gh,nm->gnhm', sel, eye).reshape(G * N, H * N)  # [1024, 8192]
-        self._Esel = self._dev(Esel.contiguous().view(1, G * N, H * N))
+        Esel = torch.einsum('gh,nm->gnhm', sel, eye).reshape(Gl * N, Hl * N)
+        self._Esel = self._dev(Esel.contiguous().view(1, Gl * N, Hl * N))
 
         self._consts_ready = True
 
@@ -400,8 +483,12 @@ class NemotronHBlock:
         y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
         y = ttnn.mul(y, self._w_gnorm)                                       # [1,S,4096]
 
-        # 5. out_proj: 4096 -> 2688
-        out = ttnn.linear(y, self._W_out, compute_kernel_config=ckc)        # [1,S,2688]
+        # 5. out_proj (row-parallel under TP): 4096 -> 2688.
+        out = ttnn.linear(y, self._W_out, compute_kernel_config=ckc)        # [1,S,2688] (partial per chip)
+        if self._shard:
+            # Sum the per-chip partial out_proj contributions so every chip holds
+            # the full mixer output (the mesh readback keeps only chip 0's copy).
+            out = ttnn.all_reduce(out, cluster_axis=1, topology=ttnn.Topology.Linear)
 
         # residual add (HF: residual + hidden_states), then cast to bf16.
         output = ttnn.add(residual, out)

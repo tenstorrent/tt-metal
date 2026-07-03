@@ -80,14 +80,32 @@ def _check_gate1():
     return (len(data) == 0), data
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_e2e_prefill(device_params, device):
+@pytest.fixture(scope="module")
+def mesh_pipe():
+    """Open the 4-chip TP=2 x DP=2 mesh (FABRIC_1D + shard runner) ONCE, build the
+    HF reference + the shared TTNN pipeline, and hand both to the tests. Closed at
+    module teardown. Falls back to a single device if the mesh cannot be opened."""
+    compose = _compose()
+    dev, is_mesh = pl.open_pipeline_mesh(l1_small_size=24576)
+    hf = _load_hf()
+    pipe = pl.build_pipeline(dev, hf, compose=compose)
+    print(
+        f"[e2e] mesh={is_mesh} shape={list(dev.shape) if is_mesh else [1, 1]} "
+        f"shard_active={pipe.shard_active} compose={compose}",
+        flush=True,
+    )
+    try:
+        yield hf, pipe, is_mesh
+    finally:
+        pl.close_pipeline_mesh(dev, is_mesh)
+
+
+def test_e2e_prefill(mesh_pipe):
     """Fast Gate-3 proxy: ONE prefill forward, first-token logits PCC vs golden."""
     compose = _compose()
     _reset_runtime_fallbacks()
     ids, new_ids, step_logits = _load_golden()
-    hf = _load_hf()
-    pipe = pl.build_pipeline(device, hf, compose=compose)
+    _, pipe, _ = mesh_pipe
 
     logits = pipe.forward_logits(ids)  # (vocab,)
     golden0 = step_logits[0].to(torch.float32)
@@ -99,8 +117,7 @@ def test_e2e_prefill(device_params, device):
     assert ok, f"first-token logits PCC {pcc} < {PCC_TARGET} (compose={compose})"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_e2e_generate(device_params, device):
+def test_e2e_generate(mesh_pipe):
     """Full gate: capped greedy decode, per-step logits PCC + token match + Gate 1/2."""
     compose = _compose()
     N = int(os.environ.get("TT_E2E_N", "5"))
@@ -109,9 +126,9 @@ def test_e2e_generate(device_params, device):
     ids, golden_new_ids, golden_step_logits = _load_golden()
     golden_new_ids = golden_new_ids[:N]
 
-    hf = _load_hf()
+    hf, pipe, is_mesh = mesh_pipe
     eos = int(getattr(hf.config, "eos_token_id", 2))
-    pipe = pl.build_pipeline(device, hf, compose=compose)
+    assert pipe.shard_active or not is_mesh, "TP>1 mesh run must have shard_active (ShardTensorToMesh + all_reduce)"
 
     tt_new_ids, tt_step_logits = pipe.generate(ids, N, eos_token_id=eos)
 

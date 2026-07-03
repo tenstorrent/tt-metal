@@ -37,7 +37,6 @@ def main(argv=None):
         choices=[0, 1],
         help="1=compose graduated child stubs (Gate 2); 0=monolith backbone",
     )
-    ap.add_argument("--device-id", type=int, default=0, help="TT device id to open")
     args = ap.parse_args(argv)
 
     tok = AutoTokenizer.from_pretrained(pl.HF_MODEL_ID, trust_remote_code=True)
@@ -49,12 +48,13 @@ def main(argv=None):
 
     input_ids = tok(args.prompt, return_tensors="pt")["input_ids"]
 
-    device = ttnn.open_device(device_id=args.device_id)
+    device, is_mesh = pl.open_pipeline_mesh(l1_small_size=24576)
     try:
         pipe = pl.build_pipeline(device, model, compose=bool(args.compose))
+        print(f"[demo] mesh={is_mesh} shard_active={pipe.shard_active}", flush=True)
         new_ids, _ = pipe.generate(input_ids, args.max_new_tokens, eos_token_id=eos)
     finally:
-        ttnn.close_device(device)
+        pl.close_pipeline_mesh(device, is_mesh)
 
     completion = tok.decode(new_ids)
     print("=" * 60)

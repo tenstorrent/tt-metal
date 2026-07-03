@@ -83,6 +83,21 @@ class NemotronHTopkRouter:
         # arange(E) index vector, fp32, broadcastable as (1,1,E)
         self._idx_vec = self._dev(torch.arange(E, dtype=torch.float32).reshape(1, 1, E))
 
+        # Strictly-lower-triangular tie-break mask: jlti[i, j] == 1.0 iff j < i.
+        # The all-pairs rank `rank_i = #{j : choice_j > choice_i}` uses a STRICT
+        # `>`, so experts with EXACTLY EQUAL choice scores share a rank. Ties do
+        # occur here: for large logits `sigmoid` saturates to 1.0 (bit-exact), so
+        # choice == 1.0 + bias and any two experts whose biases tie (or whose
+        # logits both saturate) collide. A shared rank corrupts the per-rank
+        # one-hot extraction below — two experts sum their indices into one slot
+        # while another rank slot finds no expert and defaults to index 0 — which
+        # silently mis-selects the top-k SET (measured: 5/64 rows flip, PCC drops
+        # to ~0.98). Counting a tie `j` as ranked-before `i` only when `j < i`
+        # gives every expert a UNIQUE rank in {0..E-1} and orders ties by
+        # ascending index, matching torch.topk's tie handling (restores PCC 1.0).
+        jlti = torch.tril(torch.ones(E, E, dtype=torch.float32), diagonal=-1)
+        self._jlti = self._dev(jlti.reshape(1, 1, E, E))
+
         self.ckc = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
@@ -145,12 +160,23 @@ class NemotronHTopkRouter:
         ttnn.deallocate(bb)
         a_full = ttnn.transpose(b_full, 2, 3)            # (B,T,E,E): [.,.,i,j]=choice_i
         gt = ttnn.gt(b_full, a_full)                      # choice_j > choice_i
+        eq = ttnn.eq(b_full, a_full)                      # choice_j == choice_i (ties)
         ttnn.deallocate(b_full)
         ttnn.deallocate(a_full)
         gt_f = ttnn.typecast(gt, ttnn.float32)
         ttnn.deallocate(gt)
-        rank = ttnn.sum(gt_f, dim=3)                      # (B,T,E)
+        # Break exact ties by ascending expert index (see _jlti above): a tie `j`
+        # is ranked before `i` only when j < i. gt and tie_before are disjoint,
+        # so their sum over j gives each expert a UNIQUE rank in {0..E-1}.
+        eq_f = ttnn.typecast(eq, ttnn.float32)
+        ttnn.deallocate(eq)
+        tie_before = ttnn.multiply(eq_f, self._jlti)      # (B,T,E,E)
+        ttnn.deallocate(eq_f)
+        order = ttnn.add(gt_f, tie_before)
         ttnn.deallocate(gt_f)
+        ttnn.deallocate(tie_before)
+        rank = ttnn.sum(order, dim=3)                     # (B,T,E)
+        ttnn.deallocate(order)
         if list(rank.shape)[-1] != E:
             rank = ttnn.reshape(rank, [B, T, E])
         ttnn.deallocate(choice)
