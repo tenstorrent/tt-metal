@@ -124,7 +124,7 @@ jobs:
       ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-        (github.event_name != 'pull_request' || needs.find-changed-files.outputs.any-code-changed == 'true')
+        ((github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.find-changed-files.outputs.any-code-changed == 'true')
       }}
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     uses: ./.github/workflows/build-artifact.yaml

@@ -218,7 +218,12 @@ ttnn::Tensor repeat(
         }
     }
 
+    // Snapshot orientation before the L1-interleaved staging hop strips it.
+    std::optional<ShardOrientation> input_orientation_hint;
     if (!native_sharded) {
+        if (input_tensor.shard_spec().has_value()) {
+            input_orientation_hint = input_tensor.shard_spec()->orientation;
+        }
         if (working_tensor.memory_config().is_sharded()) {
             // DRAM-sharded fallback via to_memory_config (sharded_to_interleaved is L1-only);
             // use working_tensor to keep rank padding from match_input_rank.
@@ -270,9 +275,8 @@ ttnn::Tensor repeat(
     if (!native_sharded && output_mem_config.is_sharded()) {
         MemoryConfig final_mc = output_mem_config;
         if (!final_mc.shard_spec().has_value()) {
-            // Synthesise shard spec from post-repeat shape.
             auto synth = operations::data_movement::repeat::generate_repeat_shard_spec(
-                working_tensor, working_tensor.padded_shape(), final_mc.memory_layout());
+                working_tensor, working_tensor.padded_shape(), final_mc.memory_layout(), input_orientation_hint);
             if (synth.has_value()) {
                 final_mc = MemoryConfig(final_mc.memory_layout(), final_mc.buffer_type(), synth);
             } else {

@@ -22,35 +22,37 @@ struct p_gpr
 // Unpack GPR thread
 struct p_gpr_unpack
 {
-    constexpr static std::uint32_t OPERAND_BASE_ADDR       = 4;      // Operand base address used by zero buffer function
-    constexpr static std::uint32_t OPERAND_OFFSET_ADDR     = 5;      // Operand offset address used by zero buffer function
-    constexpr static std::uint32_t ZERO_0                  = 8;      // Zero data
-    constexpr static std::uint32_t ZERO_1                  = 9;      // Zero data
-    constexpr static std::uint32_t ZERO_2                  = 10;     // Zero data
-    constexpr static std::uint32_t ZERO_3                  = 11;     // Zero data
-    constexpr static std::uint32_t TMP0                    = 12;     // Temp data
-    constexpr static std::uint32_t TMP1                    = 13;     // Temp data
-    constexpr static std::uint32_t TILE_SIZE               = 14;     // Tile size
-    constexpr static std::uint32_t TILE_OFFSET             = 15;     // Tile offset
-    constexpr static std::uint32_t L1_BUFFER_ADDR          = 17;     // Holds address of fixed l1 buffer used for reduce in1
-    constexpr static std::uint32_t TMP_LO                  = 18;     // Temp data. Upper 16-bits always 0
-    constexpr static std::uint32_t TMP_HI                  = 19;     // Temp data. Lower 16-bits always 0
-    constexpr static std::uint32_t PERF_FIRST_UNP_LO       = 32;     // timestamp for first-unpack-instruction (low 32b)
-    constexpr static std::uint32_t PERF_FIRST_UNP_HI       = 33;     // timestamp for first-unpack-instruction (high 32b)
-    constexpr static std::uint32_t TILE_SIZE_A             = 36;     // Holds tile size for unpacker 0
-    constexpr static std::uint32_t TILE_SIZE_B             = 37;     // Holds tile size for unpacker 1
-    constexpr static std::uint32_t KT_DIM                  = 38;     // Holds matmul kt_dim
-    constexpr static std::uint32_t FACE_DIM_16x16          = 40;     // Holds face dimension (16x16)
-    constexpr static std::uint32_t FACE_DIM_8x16           = 41;     // Holds face dimension (8x16)
-    constexpr static std::uint32_t FACE_DIM_4x16           = 42;     // Holds face dimension (4x16)
-    constexpr static std::uint32_t FACE_DIM_2x16           = 43;     // Holds face dimension (2x16)
-    constexpr static std::uint32_t FACE_DIM_1x16           = 44;     // Holds face dimension (1x16)
-    constexpr static std::uint32_t PERF_UNPACK_NUM_TILES_0 = 45;     // num tiles for input operands 0-1
-    constexpr static std::uint32_t PERF_UNPACK_NUM_TILES_1 = 46;     // num tiles for input operands 2-3
-    constexpr static std::uint32_t PERF_UNPACK_NUM_TILES_2 = 47;     // num tiles for input operands 4-5
-    constexpr static std::uint32_t PERF_UNPACK_NUM_TILES_3 = 48;     // num tiles for input operands 6-7
-    constexpr static std::uint32_t UNPACK_STRIDE           = 52;     // Used to save/restore unpack A stride (UNP0_ADDR_CTRL_ZW_REG_1_Zstride register)
-                                                                     // before/after unpacking directly to dest
+    constexpr static std::uint32_t OPERAND_BASE_ADDR       = 4;  // Operand base address used by zero buffer function
+    constexpr static std::uint32_t OPERAND_OFFSET_ADDR     = 5;  // Operand offset address used by zero buffer function
+    constexpr static std::uint32_t ZERO_0                  = 8;  // Zero data
+    constexpr static std::uint32_t ZERO_1                  = 9;  // Zero data
+    constexpr static std::uint32_t ZERO_2                  = 10; // Zero data
+    constexpr static std::uint32_t ZERO_3                  = 11; // Zero data
+    constexpr static std::uint32_t TMP0                    = 12; // Temp data
+    constexpr static std::uint32_t TMP1                    = 13; // Temp data
+    constexpr static std::uint32_t TILE_SIZE               = 14; // Tile size
+    constexpr static std::uint32_t TILE_OFFSET             = 15; // Tile offset
+    constexpr static std::uint32_t L1_BUFFER_ADDR          = 17; // Holds address of fixed l1 buffer used for reduce in1
+    constexpr static std::uint32_t TMP_LO                  = 18; // Temp data. Upper 16-bits always 0
+    constexpr static std::uint32_t TMP_HI                  = 19; // Temp data. Lower 16-bits always 0
+    constexpr static std::uint32_t PERF_FIRST_UNP_LO       = 32; // timestamp for first-unpack-instruction (low 32b)
+    constexpr static std::uint32_t PERF_FIRST_UNP_HI       = 33; // timestamp for first-unpack-instruction (high 32b)
+    constexpr static std::uint32_t TILE_SIZE_A             = 36; // Holds tile size for unpacker 0
+    constexpr static std::uint32_t TILE_SIZE_B             = 37; // Holds tile size for unpacker 1
+    constexpr static std::uint32_t KT_DIM                  = 38; // Holds matmul kt_dim
+    constexpr static std::uint32_t FACE_DIM_16x16          = 40; // Holds face dimension (16x16)
+    constexpr static std::uint32_t FACE_DIM_8x16           = 41; // Holds face dimension (8x16)
+    constexpr static std::uint32_t FACE_DIM_4x16           = 42; // Holds face dimension (4x16)
+    constexpr static std::uint32_t FACE_DIM_2x16           = 43; // Holds face dimension (2x16)
+    constexpr static std::uint32_t FACE_DIM_1x16           = 44; // Holds face dimension (1x16)
+    constexpr static std::uint32_t PERF_UNPACK_NUM_TILES_0 = 45; // num tiles for input operands 0-1
+    constexpr static std::uint32_t PERF_UNPACK_NUM_TILES_1 = 46; // num tiles for input operands 2-3
+    constexpr static std::uint32_t PERF_UNPACK_NUM_TILES_2 = 47; // num tiles for input operands 4-5
+    constexpr static std::uint32_t PERF_UNPACK_NUM_TILES_3 = 48; // num tiles for input operands 6-7
+    // Slot 52 was the legacy UNPACK_STRIDE GPR used to snapshot/restore the channel-1 Z-stride
+    // around unpack-to-dest. Removed in favor of canonical_unpA_z_stride() in the bracket pair
+    // (set_dst_write_addr / unpack_to_dest_tile_done), which recomputes the baseline instead of
+    // preserving caller-side state. Slot is reserved as free until the next unpacker GPR consolidation.
     constexpr static std::uint32_t SR_UNPACK_TILIZER_STATE_0   = 54; // Save unpack state before tilizer is enabled for quick restore
     constexpr static std::uint32_t SR_UNPACK_TILIZER_STATE_1   = 55;
     constexpr static std::uint32_t SR_UNPACK_UNTILIZER_STATE_0 = 56; // Save unpack state before tilizer is enabled for quick restore

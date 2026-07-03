@@ -105,7 +105,7 @@ struct UnaryDeviceOperation {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t&,
         const tensor_args_t&);
 
@@ -558,9 +558,9 @@ const tt::tt_metal::operation::Hash Unary::compute_program_hash(
         this->output_mem_config);
 
     for (const auto& unary_with_param_op : this->op_chain) {
-        hash = tt::stl::hash::hash_objects(hash, unary_with_param_op.op_type);
+        hash = ttsl::hash::hash_objects(hash, unary_with_param_op.op_type);
         if (unary_with_param_op.has_parameter()) {
-            hash = tt::stl::hash::hash_objects(hash, unary_with_param_op.params);
+            hash = ttsl::hash::hash_objects(hash, unary_with_param_op.params);
         }
     }
 
@@ -571,7 +571,7 @@ const tt::tt_metal::operation::Hash Unary::compute_program_hash(
 **New:**
 
 ```cpp
-tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args) {
 
@@ -591,9 +591,9 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         compute_volume(input_shape)); // core groups depend on volume
 
     for (const auto& unary_with_param_op : args.op_chain) {
-        hash = tt::stl::hash::hash_objects(hash, unary_with_param_op.op_type);
+        hash = ttsl::hash::hash_objects(hash, unary_with_param_op.op_type);
         if (unary_with_param_op.has_parameter()) {
-            hash = tt::stl::hash::hash_objects(hash, unary_with_param_op.params); // impacts defines
+            hash = ttsl::hash::hash_objects(hash, unary_with_param_op.params); // impacts defines
         }
     }
 

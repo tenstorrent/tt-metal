@@ -75,9 +75,6 @@ class ReduceUnpacker(Unpacker):
     ) -> str:
         reduce_dim = self.reduce_dim.cpp_enum_value
         pool_type = self.reduce_pool.cpp_enum_value
-        enforce_fp32_accumulation = (
-            compute_unit.enforce_fp32_accumulation.cpp_enum_value
-        )
 
         tile_shape = compute_unit.src_a.tile_shape
         tensor_shape_instantiation: str = (
@@ -85,7 +82,7 @@ class ReduceUnpacker(Unpacker):
         )
 
         return (
-            f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}, {enforce_fp32_accumulation}>(\n"
+            f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}>(\n"
             f"{tensor_shape_instantiation});\n"
         )
 
