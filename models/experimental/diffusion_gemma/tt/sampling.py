@@ -40,6 +40,23 @@ class ChunkedGumbelNoise(NamedTuple):
     dtype: object = ttnn.float32
 
 
+def argmax_last_dim(x, *, keepdim: bool = True):
+    """Multi-core argmax over the last (vocab) dim.
+
+    ``ttnn.argmax`` runs **single-core** on TILE input but **multi-core** on
+    ROW_MAJOR input for a last-dim reduction, and it always emits UINT32 ROW_MAJOR
+    output. Converting the input to ROW_MAJOR first is ~86x faster over the 262144
+    production vocab (measured on QB2: 1240ms TILE -> 14.4ms ROW_MAJOR) and is
+    bit-identical to the TILE result (verified exact match). The output layout/dtype
+    contract (UINT32 ROW_MAJOR) is unchanged, so downstream consumers are unaffected.
+    """
+    rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    out = ttnn.argmax(rm, dim=-1, keepdim=keepdim)
+    if rm is not x:
+        rm.deallocate(True)
+    return out
+
+
 def temperature_scale(logits, temperature: float):
     """``logits / T`` (no-op when T == 1.0)."""
     if temperature == 1.0:
@@ -105,11 +122,11 @@ def gumbel_max(logits, temperature: float, noise):
         )
     z = temperature_scale(logits, temperature)
     if noise is None:
-        sampled = ttnn.argmax(z, dim=-1, keepdim=True)
+        sampled = argmax_last_dim(z)
         _deallocate_scaled_if_temporary(z, logits)
         return sampled
     perturbed = ttnn.add(z, noise)
-    sampled = ttnn.argmax(perturbed, dim=-1, keepdim=True)
+    sampled = argmax_last_dim(perturbed)
     perturbed.deallocate(True)
     _deallocate_scaled_if_temporary(z, logits)
     return sampled

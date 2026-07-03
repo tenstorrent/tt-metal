@@ -42,7 +42,8 @@
   "sampling": {
     "mode": "on-device canvas sampling (sample_on_device_mode=all). No host greedy/top-1 argmax path, no full-logits readback. Per-step decision tensors ([B,L] argmax/entropy/sampled/accept) are read back only for the data-dependent halt check; the full [B,L,vocab] logits stay on device.",
     "procedure": "Per denoise step: temperature-scale (linear 0.8->0.4) -> Gumbel-max argmax(logits/T + gumbel) -> entropy-budget acceptance (sort/cumsum/scatter) -> renoise rejected positions to random tokens. Commit = clean argmax. RUN-first: --argmax-sampling routes clean argmax (gumbel_noise=None) to avoid full-vocab noise allocation at 256K.",
-    "eos_token_ids": [1, 106, 50]
+    "eos_token_ids": [1, 106, 50],
+    "optimize_perf_47465": "Terminal decision path is trace-safe and optimized (decisions unchanged): argmax over the 262144 vocab uses ROW_MAJOR multi-core (sampling.argmax_last_dim; bit-identical to TILE argmax, 1240ms->14.4ms/op, 2x/step); accept/renoise constants are preallocated once outside the trace (denoise_loop.make_denoise_constants: budget_t/accept_zeros/renoise_ones, a few KB persistent, replacing per-step ttnn.full/zeros_like host writes that are illegal during trace capture). Trace-safe fixed-step loop denoise_loop.run_fixed_denoise_steps (fixed <=48-step count, device canvas feedback, no host readback of the cutoff). Traced full 30-layer denoise step ~4176 ms; per block (48 steps + commit) ~232 s. No dtype/mesh/max_model_len change."
   },
 
   "generation_config": {

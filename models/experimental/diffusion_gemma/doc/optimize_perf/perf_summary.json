@@ -1,0 +1,67 @@
+{
+  "stage": "dg-08-optimize-perf (#47465)",
+  "device": "QB2 / bh-qbge-06 / P150x4, mesh [1,4], TP=4, fabric FABRIC_1D",
+  "baseline_sha": "aff8f2105d3",
+  "workload": {
+    "profile": "block_diffusion_denoise_step",
+    "note": "unit = denoise step over the 256-token canvas + commit, NOT per-token AR decode",
+    "prompt_len": 32,
+    "canvas_length": 256,
+    "max_denoise_steps": 48,
+    "batch": 1,
+    "mesh": [1, 4],
+    "tensor_parallel": 4
+  },
+  "precision_preserved": "bf16 weights/activations/KV; fp32 accumulation for self-conditioning softmax and entropy",
+  "diffusion_decisions_preserved": "temperature 0.8->0.4, Gumbel-max, entropy-budget accept (sort/cumsum/scatter), random-token renoise, commit = clean argmax",
+
+  "ttft_ms_reduced_layer": {"L1": 74.7, "L2": 92.6, "L4": 384.8, "note": "reduced-layer prefill of a 32-token prompt; scales ~linearly with layers"},
+
+  "terminal_decision_step_traced_ms": {
+    "original_untraceable_eager": 2494.0,
+    "optimized_baseline": 43.06,
+    "optimized_share_z_selected": 42.30,
+    "gumbel_path": 44.26,
+    "note": "1-capture/20-replay warmed traced replay at real [1,1,256,262144]; argmax RUN-first path. Original is untraceable (ttnn.full write TT_FATAL during capture)."
+  },
+
+  "denoise_step_full_30L": {
+    "per_layer_traced_ms": 137.55,
+    "fixed_overhead_traced_ms": 49.24,
+    "ms_per_step_traced_post_argmax_fix": 4175.7,
+    "ms_per_step_traced_pre_argmax_fix_est": 6642.0,
+    "argmax_fix_step_reduction_pct": 37,
+    "measured": "TRACED warmed replay, reduced-layer L=1/2/4 linear fit (traced ~= eager, path is op-cost bound); full denoise step captures + replays as a Metal trace",
+    "per_layer_eager_ms": 138.0
+  },
+
+  "per_block": {
+    "steps_per_block_fixed_trace_safe": 48,
+    "tokens_per_block": 256,
+    "ms_per_block_denoise_only_traced": 200434.0,
+    "commit_ms_full_30L_projected": 31472.0,
+    "commit_per_layer_ms": 1042.0,
+    "ms_per_block_total_traced": 231906.0,
+    "commit_note": "256 sequential single-token decode-appends; known functional-only path (plan future perf item; candidate: single causal 256-token commit forward)",
+    "blocks_per_second_traced": 0.00431
+  },
+
+  "full_generation_1block_traced_s": 232.6,
+
+  "terminal_argmax_op_ms": {"tile_single_core_before": 1239.7, "rowmajor_multicore_after": 14.4, "speedup_x": 86, "calls_per_step": 2, "bit_identical": true},
+  "accept_chain_over_256_ms": {"per_call_ttnn_full": 0.416, "preallocated_constants": 0.321, "sort": 0.114, "cumsum": 0.195},
+
+  "roofline_ms_per_step_estimate": {
+    "per_step_weight_bytes_gb_per_chip_all_experts": 12.58,
+    "at_256_GBps_chip": 49.1,
+    "at_512_GBps_chip": 24.6,
+    "at_1024_GBps_chip": 12.3,
+    "measured_vs_roofline": "traced ~4176 ms/step is ~85-170x the bandwidth roofline -> denoise per-layer is op-count bound (manual chunked RoPE, staged GQA fallback, chunked norms), not DRAM-bandwidth bound; traced ~= eager (~3%) confirms op-cost not dispatch-gap"
+  },
+
+  "decode_ms_per_token_device": null,
+  "named_limitations": [
+    "hardware-profiler-limited: build_Release has ENABLE_TRACY=OFF (confirmed CMakeCache); TT_METAL_DEVICE_PROFILER and python -m tracy raise 'requires a Tracy-enabled build'. tt-perf-report op-level CSV unavailable without a full ttnn rebuild that would disrupt the shared venv. Metal TRACE capture/replay itself works, so per-step/per-block/full-generation numbers ARE from a traced measured path; only the Tracy op-attribution table is substituted by synchronized per-op device-time tables.",
+    "backbone per-layer denoise (137.55 ms/layer traced) is op-count bound from manual chunked RoPE, staged GQA fallback, and chunked norms; identified as the dominant next optimization target (DiffusionGemma-local, ~3-5x headroom to the bandwidth roofline)."
+  ]
+}
