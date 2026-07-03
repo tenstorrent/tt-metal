@@ -177,7 +177,7 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
 
 template <enum CQNocFlags flags, bool mcast = false, bool linked = false, uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
 FORCE_INLINE void cq_noc_async_write_init_state(
-    uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint8_t noc = noc_index, uint32_t ndests = 1) {
+    uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
     WAYPOINT("CNIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc, cmd_buf)) {

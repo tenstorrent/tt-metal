@@ -377,8 +377,8 @@ void process_go_signal_mcast_cmd() {
             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
             dst_noc_addr_multicast,
             sizeof(uint32_t),
-            noc_index,
-            num_dests);
+            num_dests,
+            noc_index);
 
         // Multicast write accounting: increment counters for num_dests acks and one issued transaction.
         noc_increment_nonposted_writes_acked(noc_index, num_dests);

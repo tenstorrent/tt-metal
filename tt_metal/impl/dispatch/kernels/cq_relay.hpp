@@ -116,7 +116,7 @@ public:
     FORCE_INLINE void init_write_state_only(uint64_t downstream_noc_addr) {
 #if !defined(FABRIC_RELAY)
         cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, downstream_cmd_buf>(
-            0, downstream_noc_addr, 0, noc_index);
+            0, downstream_noc_addr, 0, 1, noc_index);
 #endif
     }
 

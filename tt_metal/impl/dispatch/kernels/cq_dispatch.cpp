@@ -858,7 +858,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
                     uint32_t rem_xfer_size = cq_noc_async_write_with_state_any_len<false>(
                         static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_dests);
                     // Unset Link flag
-                    cq_noc_async_write_init_state<CQ_NOC_sndl, true, false>(0, 0, 0, noc_index, num_dests);
+                    cq_noc_async_write_init_state<CQ_NOC_sndl, true, false>(0, 0, 0, num_dests, noc_index);
                     uint32_t data_offset = xfer_size - rem_xfer_size;
                     cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_wait>(
                         static_cast<uint32_t>(data_ptr + data_offset),
@@ -1135,8 +1135,8 @@ void process_go_signal_mcast_cmd() {
             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
             dst_noc_addr_multicast,
             sizeof(uint32_t),
-            noc_index,
-            num_dests);
+            num_dests,
+            noc_index);
         noc_nonposted_writes_acked[noc_index] += num_dests;
 
         WAYPOINT("WCW");
