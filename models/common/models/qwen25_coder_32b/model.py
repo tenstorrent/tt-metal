@@ -196,14 +196,17 @@ class Qwen25Coder32BPrecisionConfig:
     # Attention weight dtypes: accuracy uses BF16 (default), performance overrides BFP8.
     wqkv_dtype: ttnn.DataType = ttnn.bfloat16
     wo_dtype: ttnn.DataType = ttnn.bfloat16
-    # KV cache: BFP8 in BOTH recipes. TTTv1's accuracy config nominally uses BF16 KV, but the TTTv2
-    # traced on-device-topk decode packs all 64 layers' CCLs/attention into ONE trace replay, and
-    # BF16 KV's doubled per-layer KV read / L1 / NoC footprint pushes that packed replay past a
-    # cumulative fabric/traffic ceiling -> deterministic decode-trace-replay deadlock (frozen right
-    # after "Captured decode trace", zero decode steps) at full depth for batch-1·accuracy·
-    # on_device_topk. BFP8 KV halves that footprint and clears the hang, and is loss-free for this
-    # model -- teacher-forcing top1 98.6% / top5 100.0% (>= the 95/99 targets); the accuracy recipe's
-    # precision comes from BF16 attention weights + HIFI4 + fp32 dest acc, not the KV dtype.
+    # KV cache: BFP8 in BOTH recipes. TTTv1's accuracy config nominally uses BF16 KV; BFP8 is kept
+    # here because it is loss-free for this model (teacher-forcing top1 98.6% / top5 100.0%, >= the
+    # 95/99 targets -- the accuracy recipe's precision comes from BF16 attention weights + HIFI4 +
+    # fp32 dest acc, not the KV dtype) AND it avoids BF16's doubled per-layer KV read traffic in the
+    # memory-bound decode step. NOTE: an earlier bringup switched BF16 -> BFP8 KV to work around a
+    # batch-1·accuracy·on_device_topk decode-trace-replay hang, attributing it to BF16 KV's larger
+    # footprint tripping a "cumulative traffic ceiling". That was a layout band-aid: the true root
+    # cause was on-device sampling buffers being allocated while a trace was already active and then
+    # clobbered on replay, fixed generically in executor.py
+    # (TracedLLMExecutor._prealloc_sampling_buffers, called before the prefill trace is captured).
+    # BFP8 KV is now retained on its own merits (loss-free + less decode traffic), not for the hang.
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
 
     # MLP FF1/FF3 weight dtype. Accuracy keeps BFP8 default; performance overrides BFP4.
