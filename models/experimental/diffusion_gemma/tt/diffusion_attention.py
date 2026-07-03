@@ -292,8 +292,9 @@ def _manual_gqa_attention(tt_q, tt_k, tt_v):
             owns_k_group = False
             owns_v_group = False
 
-        k_transposed = ttnn.permute(k_group, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        scores = ttnn.matmul(q_group, k_transposed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # QKt via fused transpose_b (bit-exact vs explicit permute; drops the standalone
+        # Kt-materialization Permute op that was ~97% of per-layer device-fw, see #47465).
+        scores = ttnn.matmul(q_group, k_group, transpose_b=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         probs = ttnn.softmax(scores, dim=-1, numeric_stable=True)
         outputs.append(ttnn.matmul(probs, v_group, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         q_group.deallocate(True)
@@ -301,7 +302,6 @@ def _manual_gqa_attention(tt_q, tt_k, tt_v):
             k_group.deallocate(True)
         if owns_v_group:
             v_group.deallocate(True)
-        k_transposed.deallocate(True)
         scores.deallocate(True)
         probs.deallocate(True)
 
