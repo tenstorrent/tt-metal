@@ -42,6 +42,61 @@ _FORWARD = 0
 _BACKWARD = 1
 
 
+def _concat_addressing(input_tensor, output_tensor, axis, ring_size):
+    """Concat-by-gather_dim output walk (op_design "Dataflow Strategy" stride table).
+
+    Returns ``(block_in, sub_page, input_page_size, output_page_size)``.
+
+    For a slice from origin chip ``j``, input page ``in_p`` (the sequential page index
+    within a shard) maps to an output page/offset as follows:
+
+    * ``sub_page == 0`` (whole-page remap — Regime A): every input page is one output
+      page at ``out_p = (in_p // block_in)*block_in*ring_size + (in_p % block_in) + j*block_in``
+      where ``block_in`` = input pages from the gather axis down (mid_in * inner). Covers
+      every TILE gather on a tile-aligned axis and every ROW_MAJOR non-innermost gather.
+      ``axis = 0`` degenerates to ``block_in = pages_per_shard`` (contiguous slot j).
+    * ``sub_page == 1`` (sub-page byte concat — Regime B): ROW_MAJOR + INNERMOST gather
+      only. The concat happens WITHIN a page (a row): ``out_p == in_p`` but the payload
+      lands at byte offset ``j * input_page_size`` inside the (N x larger) output page.
+
+    (TILE + a non-tile-aligned gather axis is refused by EXCLUSIONS — it would need a
+    sub-tile repack this pure-byte-movement op cannot do.)
+    """
+    rank = len(input_tensor.shape)
+    shape = list(input_tensor.shape)
+    input_page_size = input_tensor.buffer_page_size()
+    pages_per_shard = input_tensor.buffer_num_pages()
+
+    if input_tensor.layout == ttnn.TILE_LAYOUT:
+        # Page grid = tile grid: last two dims collapse to tile counts, outer dims stay.
+        grid = list(shape)
+        grid[-2] = (shape[-2] + 31) // 32
+        grid[-1] = (shape[-1] + 31) // 32
+        block_in = 1
+        for i in range(axis, rank):
+            block_in *= grid[i]
+        sub_page = 0
+        output_page_size = input_page_size  # tile page size is dtype-fixed, shape-independent
+    else:  # ROW_MAJOR: page = one row of the innermost dim
+        if axis < rank - 1:
+            block_in = 1
+            for i in range(axis, rank - 1):  # pages from the gather axis down to (not incl.) the row dim
+                block_in *= shape[i]
+            sub_page = 0
+            output_page_size = input_page_size  # innermost (row) dim unchanged
+        else:  # innermost gather: concat within the row
+            block_in = pages_per_shard  # unused on the sub-page path
+            sub_page = 1
+            output_page_size = input_page_size * ring_size
+
+    # Sanity: the resolved output page size must match the allocated output tensor's.
+    assert output_page_size == output_tensor.buffer_page_size(), (
+        f"all_gather: computed output_page_size {output_page_size} != "
+        f"output tensor page size {output_tensor.buffer_page_size()} (axis={axis})"
+    )
+    return block_in, sub_page, input_page_size, output_page_size
+
+
 def _append_fabric_rt_args(rt_args_ref, src_id, neighbor_id, program, core, is_forward):
     """Mirror ttnn::ccl::dataflow::append_ccl_fabric_rt_args.
 
@@ -62,6 +117,7 @@ def create_mesh_program_descriptor(
     input_tensor: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
     topology: ttnn.Topology,
+    gather_axis: int,
     barrier_sem_addr: int,
     forward_sem_addr: int,
     backward_sem_addr: int,
@@ -74,10 +130,18 @@ def create_mesh_program_descriptor(
     l1_alignment = ttnn.get_l1_alignment()
     data_format = input_tensor.dtype
 
-    # Per-device shard metrics. gather_dim=0 => the shard is a contiguous page range.
+    # Per-device shard metrics. page_size is the INPUT page (one tile / one RM row); the
+    # relay CB always holds input pages. output_page_size differs only for the sub-page
+    # ROW_MAJOR innermost-gather path (N x larger; the concat lives inside a row).
     page_size = input_tensor.buffer_page_size()
     pages_per_shard = input_tensor.buffer_num_pages()
     aligned_page_size = ((page_size + l1_alignment - 1) // l1_alignment) * l1_alignment
+
+    # Concat-by-gather_dim addressing (block_in / sub_page). block_in=pages_per_shard,
+    # sub_page=0 reproduces the proven gather_dim=0 contiguous walk exactly.
+    block_in, sub_page, _input_page_size, output_page_size = _concat_addressing(
+        input_tensor, output_tensor, gather_axis, ring_size
+    )
 
     fwd_core = ttnn.CoreCoord(0, 0)
     bwd_core = ttnn.CoreCoord(0, 1)
@@ -124,6 +188,9 @@ def create_mesh_program_descriptor(
             int(has_fwd),
             num_recv_fwd,
             1,  # does_own_read = 1 (always, for the local write)
+            block_in,
+            sub_page,
+            output_page_size,
         ]
         fwd_reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         fwd_reader_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
@@ -149,6 +216,9 @@ def create_mesh_program_descriptor(
             1,  # is_fwd_core = 1
             l1_alignment,
             barrier_range_fwd,
+            block_in,
+            sub_page,
+            output_page_size,
         ]
         fwd_writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
         fwd_writer_rt = ttnn.RuntimeArgs()
@@ -185,6 +255,9 @@ def create_mesh_program_descriptor(
             int(has_bwd),
             num_recv_bwd,
             int(has_bwd),  # does_own_read only if it sends
+            block_in,
+            sub_page,
+            output_page_size,
         ]
         bwd_reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         bwd_reader_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
@@ -210,6 +283,9 @@ def create_mesh_program_descriptor(
             0,  # is_fwd_core = 0
             l1_alignment,
             barrier_range_bwd,
+            block_in,
+            sub_page,
+            output_page_size,
         ]
         bwd_writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
         bwd_writer_rt = ttnn.RuntimeArgs()

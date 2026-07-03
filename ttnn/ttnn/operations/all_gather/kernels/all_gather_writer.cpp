@@ -30,6 +30,13 @@
 
 using namespace dataflow_kernel_lib::ccl;
 
+// Concat-by-gather_dim output page for input page in_p of the slice from origin j
+// (whole-page remap — op_design "Dataflow Strategy" stride table). block_in = input
+// pages from the gather axis down; gather_dim=0 => block_in = pages_per_shard (contiguous).
+FORCE_INLINE uint32_t concat_out_page(uint32_t in_p, uint32_t j, uint32_t block_in, uint32_t ring_size) {
+    return (in_p / block_in) * (block_in * ring_size) + (in_p % block_in) + j * block_in;
+}
+
 void kernel_main() {
     constexpr uint32_t ring_size = get_compile_time_arg_val(0);
     constexpr uint32_t ring_index = get_compile_time_arg_val(1);
@@ -42,7 +49,10 @@ void kernel_main() {
     constexpr uint32_t is_fwd_core = get_compile_time_arg_val(8);         // owns the barrier + own-slot local write
     constexpr uint32_t alignment = get_compile_time_arg_val(9);
     constexpr uint32_t barrier_range = get_compile_time_arg_val(10);  // line-multicast range (hops) for the barrier
-    constexpr auto output_args = TensorAccessorArgs<11>();
+    constexpr uint32_t block_in = get_compile_time_arg_val(11);       // input pages per outer block (concat stride)
+    constexpr uint32_t sub_page = get_compile_time_arg_val(12);       // 1 = RM innermost gather (sub-page byte concat)
+    constexpr uint32_t output_page_size = get_compile_time_arg_val(13);  // input page size, or N*input for sub-page
+    constexpr auto output_args = TensorAccessorArgs<14>();
 
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t barrier_sem_addr = get_arg_val<uint32_t>(1);
@@ -52,7 +62,10 @@ void kernel_main() {
     const uint32_t counting_target_x = get_arg_val<uint32_t>(5);  // this direction's core NOC x on the neighbour
     const uint32_t counting_target_y = get_arg_val<uint32_t>(6);
 
-    const auto output_acc = TensorAccessor(output_args, output_addr, page_size);
+    const uint32_t input_page_size = page_size;  // fabric payload / relay CB page = one INPUT page
+    // Output accessor uses the OUTPUT page stride (== input for whole-page remap; N x larger
+    // for the sub-page RM innermost path).
+    const auto output_acc = TensorAccessor(output_args, output_addr, output_page_size);
     auto* barrier_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr);
 
     if constexpr (has_neighbor) {
@@ -80,29 +93,45 @@ void kernel_main() {
         }
 
         // ----- send own slice + relays over the fabric, one counting inc per slice -----
-        auto writer = stream.arm_unicast_write(page_size);
+        auto writer = stream.arm_unicast_write(input_page_size);
         auto counter = stream.arm_inc(1);
         const uint64_t counting_noc = safe_get_noc_addr(counting_target_x, counting_target_y, counting_sem_addr, 0);
 
         for (uint32_t s = 0; s < num_consume_slices; ++s) {
             // Forward sends S_d, S_{d-1}, ... (origin j = d - s); backward sends S_d, S_{d+1}, ...
             const uint32_t j = (direction == 0) ? (ring_index - s) : (ring_index + s);
-            const uint32_t slot_base = j * pages_per_shard;  // gather_dim=0: slice j -> output slot j (contiguous)
             const bool own_slice = (s == 0);
 
-            for (uint32_t t = 0; t < pages_per_shard; ++t) {
+            for (uint32_t in_p = 0; in_p < pages_per_shard; ++in_p) {
                 cb_wait_front(cb_relay, 1);
                 const uint32_t l1_read_addr = get_read_ptr(cb_relay);
-                const uint32_t tile_id = slot_base + t;
 
-                // core_fwd places its OWN slice locally in its own output slot d (same chip).
-                if constexpr (is_fwd_core) {
-                    if (own_slice) {
-                        noc_async_write(l1_read_addr, output_acc.get_noc_addr(tile_id), page_size);
+                if constexpr (sub_page) {
+                    // Sub-page (RM innermost): slice j lands at byte offset j*input_page_size
+                    // inside output page in_p. write_page can't express a sub-page offset, so
+                    // use write() with an explicit dst NOC addr. The LOCAL own-slot write and the
+                    // FABRIC write need DIFFERENT addresses: the local write uses the accessor's
+                    // default-NOC addr; the fabric write must use the fabric addrgen (fabric NOC
+                    // index + Wormhole DRAM noc0 flip) — exactly what write_page does internally.
+                    const uint32_t byte_off = j * input_page_size;
+                    if constexpr (is_fwd_core) {
+                        if (own_slice) {
+                            noc_async_write(l1_read_addr, output_acc.get_noc_addr(in_p, byte_off), input_page_size);
+                        }
                     }
+                    const uint64_t fabric_dst =
+                        tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_acc, in_p, byte_off);
+                    writer.write(fabric_dst, l1_read_addr);
+                } else {
+                    // Whole-page remap: input page in_p -> output page out_p (proven write_page path).
+                    const uint32_t out_p = concat_out_page(in_p, j, block_in, ring_size);
+                    if constexpr (is_fwd_core) {
+                        if (own_slice) {
+                            noc_async_write(l1_read_addr, output_acc.get_noc_addr(out_p), input_page_size);
+                        }
+                    }
+                    writer.write_page(l1_read_addr, out_p, output_acc);
                 }
-                // Fabric: one hop to the neighbour's output tile at the same concat offset.
-                writer.write_page(l1_read_addr, tile_id, output_acc);
 
                 noc_async_writes_flushed();  // both NoC sources drained -> l1 tile safe to recycle
                 cb_pop_front(cb_relay, 1);
@@ -120,12 +149,18 @@ void kernel_main() {
             noc_semaphore_wait_min(barrier_sem, ring_size - 1);
             noc_semaphore_set(barrier_sem, 0);
 
-            for (uint32_t s = 0; s < num_consume_slices; ++s) {  // == 1 (own slice)
-                const uint32_t slot_base = ring_index * pages_per_shard;
-                for (uint32_t t = 0; t < pages_per_shard; ++t) {
+            for (uint32_t s = 0; s < num_consume_slices; ++s) {  // == 1 (own slice, j = ring_index)
+                const uint32_t j = ring_index;
+                for (uint32_t in_p = 0; in_p < pages_per_shard; ++in_p) {
                     cb_wait_front(cb_relay, 1);
                     const uint32_t l1_read_addr = get_read_ptr(cb_relay);
-                    noc_async_write(l1_read_addr, output_acc.get_noc_addr(slot_base + t), page_size);
+                    uint64_t dst_noc;
+                    if constexpr (sub_page) {
+                        dst_noc = output_acc.get_noc_addr(in_p, j * input_page_size);
+                    } else {
+                        dst_noc = output_acc.get_noc_addr(concat_out_page(in_p, j, block_in, ring_size));
+                    }
+                    noc_async_write(l1_read_addr, dst_noc, input_page_size);
                     noc_async_writes_flushed();
                     cb_pop_front(cb_relay, 1);
                 }

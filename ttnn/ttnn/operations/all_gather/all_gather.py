@@ -70,15 +70,34 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     # Linear line proven (Ring is a TARGET refinement).
     "topology": [_Topology.Linear],
-    # gather_dim is an index axis in the NEGATIVE convention. -4 == gather_dim 0 for
-    # the rank-4 shards (the proven contiguous-slice case); -3/-2/-1 are refinements.
-    "gather_dim": [-4],
+    # gather_dim is an index axis in the NEGATIVE convention. -4 == gather_dim 0 (the
+    # proven contiguous-slice case); -3/-2/-1 (Refinement 2) use the non-contiguous
+    # concat walk (op_design "Dataflow Strategy" stride table). For a slice from origin
+    # j, input page in_p maps to output page
+    #   out_p = (in_p // block_in)*block_in*N + (in_p % block_in) + j*block_in
+    # (whole-page remap), where block_in = input pages from the gather axis down; -4 is
+    # the degenerate case (block_in = pages_per_shard -> contiguous). ROW_MAJOR + the
+    # INNERMOST gather (-1) concatenates WITHIN a page (sub-page byte offset
+    # j*input_page_size, output page = N*input_page_size) — a separate kernel path.
+    "gather_dim": [-4, -3, -2, -1],
     # Shape-derived: TILE pads sub-tile shards to full tiles, so byte movement is
     # identical for non-tile-aligned shards.
     "alignment": ["tile_aligned", "non_tile_aligned"],
 }
 
-EXCLUSIONS: list = []
+# Structural capability gap (Refinement 2): TILE layout + gather along a NON-tile-aligned
+# axis. When the per-shard gather-axis extent is not a multiple of 32, the shard tiles its
+# own 32-row/col boundary INDEPENDENTLY (padding the tail), but the concatenated output
+# re-tiles at a DIFFERENT 32-boundary, so a landed slice straddles output tile boundaries.
+# Reconstructing it correctly would require a sub-tile untilize/re-tilize — all_gather is
+# pure byte movement with NO compute kernel, so it cannot repack tiles. Only gather_dim=-2
+# hits this in the current INPUTS (H=48 in (1,1,48,64) is the sole non-tile-aligned dim;
+# W stays tile-aligned there, so gather_dim=-1 is fine). bfloat8_b is TILE-only so this
+# cell also covers it; bf8b x ROW_MAJOR is INVALID (never reaches here). ROW_MAJOR has no
+# 32-row tiling, so RM + non_tile_aligned gathers cleanly at every dim.
+EXCLUSIONS: list = [
+    {"layout": ttnn.TILE_LAYOUT, "gather_dim": -2, "alignment": "non_tile_aligned"},
+]
 
 
 # Module-level GlobalSemaphore cache: the three ring semaphores are created ONCE per
@@ -203,6 +222,7 @@ def all_gather(
         input_tensor,
         output_tensor,
         topology,
+        axis,  # positive gather axis -> concat stride table (block_in / sub_page)
         ttnn.get_global_semaphore_address(barrier_sem),
         ttnn.get_global_semaphore_address(forward_sem),
         ttnn.get_global_semaphore_address(backward_sem),
