@@ -188,6 +188,15 @@ def main() -> int:
         "per frame — the only config with the diffusion block traced bit-exactly in-loop "
         "(~7 tok/s target). Supersedes --trace/--trace-lm. Reserves a large trace region & 2 CQs.",
     )
+    ap.add_argument(
+        "--trace-segment",
+        action="store_true",
+        help="Whole-segment fused trace (VV_TRACE_SEGMENT=1), the llama shape: same fused frame "
+        "as --trace-frame but fully device-driven — positions self-advance (ttnn.plus_one), RoPE "
+        "is gathered on device (bf16), the neg embed is a per-frame input (a segment's first "
+        "frame folds the negative prefill), pos hidden is loop-carried on device. Lifecycle is "
+        "warmup -> throwaway capture -> reset (no capture-poison re-run). Supersedes the others.",
+    )
     args = ap.parse_args()
 
     if args.debug:
@@ -214,6 +223,10 @@ def main() -> int:
     if args.trace_frame:
         os.environ["VV_TRACE_FRAME"] = "1"
         print("[demo_ttnn] trace enabled: fused steady-state frame (VV_TRACE_FRAME=1)", flush=True)
+
+    if args.trace_segment:
+        os.environ["VV_TRACE_SEGMENT"] = "1"
+        print("[demo_ttnn] trace enabled: whole-segment fused frame (VV_TRACE_SEGMENT=1, llama shape)", flush=True)
 
     if args.text:
         text_path = Path(args.text)
@@ -325,12 +338,12 @@ def main() -> int:
     import time as _time
 
     _open_kwargs = dict(device_id=0, l1_small_size=32768)
-    if args.trace or args.trace_lm or args.trace_frame:
+    if args.trace or args.trace_lm or args.trace_frame or args.trace_segment:
         # Reserve a trace buffer + a 2nd command queue.  --trace holds the diffusion-head
         # and post-diffusion captures; --trace-lm holds the positive AND negative 28-layer
-        # LM decode captures simultaneously (two live traces); --trace-frame holds one large
-        # fused-frame capture (neg-LM + diffusion + post-diff + pos-LM) — needs the most room.
-        _size = 1_400_000_000 if args.trace_frame else 700_000_000
+        # LM decode captures simultaneously (two live traces); --trace-frame / --trace-segment
+        # hold one large fused-frame capture (neg-LM + diffusion + post-diff + pos-LM) — most room.
+        _size = 1_400_000_000 if (args.trace_frame or args.trace_segment) else 700_000_000
         _open_kwargs.update(trace_region_size=_size, num_command_queues=2)
     mesh = ttnn.open_device(**_open_kwargs)
     try:

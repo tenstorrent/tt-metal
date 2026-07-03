@@ -327,7 +327,40 @@ class TTVibeVoiceGenerator:
             # fully eager.
             self._trace_lm = self._trace_diffusion = self._trace_postdiff = False
 
+        # Optional WHOLE-SEGMENT fused trace (opt-in via VV_TRACE_SEGMENT=1, set by demo
+        # --trace-segment): the true llama shape.  Same fused frame as VV_TRACE_FRAME, but fully
+        # device-driven so there are NO per-frame host RoPE/position writes and NO capture-poison
+        # re-run: positions self-advance via ttnn.plus_one INSIDE the trace, RoPE rows are gathered
+        # on device (bf16) from the device position, the neg embed is a per-frame input (a
+        # segment's first frame decodes embed(speech_start) at neg_pos 0 — its neg-LM IS the
+        # negative prefill — then embed(speech_diffusion)), and the pos hidden is loop-carried on
+        # device.  Lifecycle per segment: warmup -> throwaway capture -> reset (rewind positions,
+        # re-seed hidden, zero the conv streaming caches IN PLACE) -> pure replay.  The trace is
+        # released at each speech_start (so the boundary's eager LM decodes cannot corrupt a live
+        # capture — same safety as --trace-frame) and recaptured per segment; a single-segment
+        # generation captures once.  Validated: tests/perf/{dev_rope_plusone,trace_fused_frame_llama,
+        # trace_segment_run}.py (PCC 1.0 vs the eager dev-rope path).  bf16 RoPE makes it ~0.9999 vs
+        # the fp32 reference — the same accepted precision as the bf16 SDPA-decode.
+        self._trace_segment = os.environ.get("VV_TRACE_SEGMENT", "0") == "1"
+        self._sf_tid = None
+        self._sf_warm = 0
+        self._sf_hidden_buf: Optional[ttnn.Tensor] = None  # loop-carried cond_pos source
+        self._sf_hidden_seed: Optional[ttnn.Tensor] = None  # segment-start hidden ([1,1,1,H], last pos)
+        self._sf_neg_embed: Optional[ttnn.Tensor] = None  # per-frame neg embed input buffer
+        self._sf_neg_start: Optional[ttnn.Tensor] = None  # const embed(speech_start_id)
+        self._sf_neg_diff: Optional[ttnn.Tensor] = None  # const embed(speech_diffusion_id)
+        self._sf_pos_pos: Optional[ttnn.Tensor] = None
+        self._sf_neg_pos: Optional[ttnn.Tensor] = None
+        self._sf_noise: Optional[ttnn.Tensor] = None
+        self._sf_t_tensors: Optional[list] = None
+        self._sf_audio_out: Optional[ttnn.Tensor] = None
+        self._sf_logits_out: Optional[ttnn.Tensor] = None
+        if self._trace_segment:
+            # Exclusive with every other trace (same coexistence reasoning as --trace-frame).
+            self._trace_lm = self._trace_diffusion = self._trace_postdiff = self._trace_frame = False
+
     _FF_WARMUP = 2
+    _SF_WARMUP = 2
 
     def _token_label(self, token_id: int) -> str:
         labels = {
@@ -792,6 +825,152 @@ class TTVibeVoiceGenerator:
         ttnn.execute_trace(dev, self._ff_tid, cq_id=0, blocking=False)
         return self._ff_audio_out, self._ff_hidden_out, self._ff_logits_out
 
+    def _reset_segment_frame_trace(self) -> None:
+        """Release the whole-segment fused trace at a segment boundary.  The boundary's eager LM
+        decodes (speech_end/speech_start) allocate DRAM; a live capture would be corrupted once
+        re-executed (coexistence hazard), so drop the capture here and let the next segment's first
+        frame re-warm + recapture.  The persistent I/O buffers and KV caches are address-stable and
+        kept; the conv streaming caches are zeroed IN PLACE by the runner's frame-0 reset (not freed
+        here, which would move their addresses out from under the recaptured trace)."""
+        if self._sf_tid is not None:
+            ttnn.release_trace(self.device, self._sf_tid)
+        self._sf_tid = None
+        self._sf_warm = 0
+
+    def _sf_write_int(self, buf: ttnn.Tensor, val: int) -> None:
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(torch.tensor([val], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            buf,
+        )
+
+    def _sf_set_inputs(self, seg_frame_idx: int, start_pos: int, noise_2x) -> None:
+        """Per-frame non-allocating writes into the persistent trace buffers.  A segment's first
+        frame (seg_frame_idx==0) rewinds the device positions, re-seeds the loop-carried hidden from
+        the (already-sliced) segment-start hidden, and selects embed(speech_start) — so its neg-LM at
+        neg_pos 0 IS the negative prefill; later frames select embed(speech_diffusion) and let the
+        positions self-advance (ttnn.plus_one) on device.  All writes here are host->device or
+        device->device copies into fixed-address buffers (no allocation), so they are safe to run
+        while the fused trace is live."""
+        if seg_frame_idx == 0:
+            self._sf_write_int(self._sf_pos_pos, start_pos)
+            self._sf_write_int(self._sf_neg_pos, 0)
+            ttnn.copy(input_a=self._sf_hidden_seed, input_b=self._sf_hidden_buf)  # device->device seed
+            ttnn.copy(input_a=self._sf_neg_start, input_b=self._sf_neg_embed)
+        else:
+            ttnn.copy(input_a=self._sf_neg_diff, input_b=self._sf_neg_embed)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(noise_2x[:1].to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            self._sf_noise,
+        )
+
+    def _sf_zero_conv(self) -> None:
+        """Zero the acoustic/semantic conv streaming caches IN PLACE (stable addresses) — the
+        segment-boundary reset performed while the fused trace is live."""
+        self.acoustic_tok.reset_decode_cache_inplace()
+        self.semantic_tok.reset_cache_inplace()
+
+    def _run_segment_frame_traced(self, seg_frame_idx, step_hidden, start_pos, noise_2x, kv_pos, kv_neg):
+        """One speech-diffusion frame as ONE device-driven trace (Option 1, llama shape), replayed
+        for the WHOLE segment.  Returns (audio_chunk, logits).  Frame graph:
+            cond_pos = condition(hidden_buf);  neg_hidden = LM_dev_rope(neg_embed @ neg_pos, kv_neg)
+            latent = DPM_loop(cond_pos, condition(neg_hidden), noise);  fused, audio = post(latent)
+            logits, new_hidden = LM_dev_rope(fused @ pos_pos, kv_pos);  copy(new_hidden -> hidden_buf)
+            plus_one(pos_pos); plus_one(neg_pos)
+        On the first frame-0 after a (re)capture the runner warms up (eager — compiles + allocates
+        the conv caches), does a throwaway capture, then RESETS (rewind positions, re-seed hidden +
+        speech_start embed, zero conv caches in place) and replays — all internal, so the caller
+        sees only the real frame's output and there is no capture-poison re-run.  RoPE is gathered
+        on device (bf16) from the device position, so no per-frame host RoPE/position write."""
+        lm = self.lm
+        dev = self.device
+
+        if self._sf_hidden_buf is None:
+            H = lm.cfg.hidden_size
+
+            def _z(shape, dt, lay):
+                return ttnn.zeros(shape, dtype=dt, layout=lay, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            self._sf_hidden_buf = _z([1, 1, 1, H], ttnn.float32, ttnn.TILE_LAYOUT)
+            self._sf_hidden_seed = _z([1, 1, 1, H], ttnn.float32, ttnn.TILE_LAYOUT)
+            self._sf_neg_start = lm._embed(torch.tensor([[self.speech_start_id]], dtype=torch.long))
+            self._sf_neg_diff = lm._embed(torch.tensor([[self.speech_diffusion_id]], dtype=torch.long))
+            self._sf_neg_embed = _z([1, 1, 1, H], self._sf_neg_start.dtype, ttnn.TILE_LAYOUT)
+            self._sf_pos_pos = _z([1], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._sf_neg_pos = _z([1], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._sf_noise = _z([1, 1, 1, 64], ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            self.scheduler.set_timesteps(self.num_diffusion_steps)
+            self._sf_t_tensors = [
+                ttnn.full(
+                    (2, 1, 1, 1),
+                    float(t),
+                    dtype=ttnn.bfloat16,
+                    device=dev,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for t in self.scheduler.timesteps
+            ]
+
+        if seg_frame_idx == 0:
+            # Capture the segment-start condition source ([1,1,1,H], last position of the
+            # speech_start decode / prefill hidden) into a persistent buffer.  seg_frame_idx==0 is
+            # only ever reached right after a speech_start released the trace (or at the very
+            # start), so NO trace is live here — this is the one place the reducing slice may
+            # allocate.  The reset then re-seeds from _sf_hidden_seed with an alloc-free copy.
+            ttnn.copy(input_a=_condition_from_hidden(step_hidden), input_b=self._sf_hidden_seed)
+
+        self._sf_set_inputs(seg_frame_idx, start_pos, noise_2x)
+
+        def _frame():
+            cond_pos = _condition_from_hidden(self._sf_hidden_buf)
+            _, neg_hidden = lm.forward_decode_traced_embeds_dev_rope(
+                self._sf_neg_embed, self._sf_neg_pos, kv_neg, return_last_hidden=True
+            )
+            cond_neg = _condition_from_hidden(neg_hidden)
+            latent = sample_speech_latents(
+                self.diffusion_head,
+                cond_pos,
+                cond_neg,
+                self.scheduler,
+                self._sf_noise,
+                cfg_scale=self.cfg_scale,
+                num_steps=self.num_diffusion_steps,
+                head_runner=None,
+                t_tensors=self._sf_t_tensors,
+            )
+            fused, audio = self._run_post_pipeline(latent)
+            logits, new_hidden = lm.forward_decode_traced_embeds_dev_rope(
+                fused, self._sf_pos_pos, kv_pos, return_last_hidden=True
+            )
+            ttnn.copy(input_a=new_hidden, input_b=self._sf_hidden_buf)  # loop-carry on device
+            ttnn.plus_one(self._sf_pos_pos)
+            ttnn.plus_one(self._sf_neg_pos)
+            return audio, logits
+
+        if self._sf_tid is None:
+            # First frame-0 after a (re)capture: warmup (eager, compiles + allocates conv caches),
+            # throwaway capture, reset, then the real replay — all internal, so warmup/capture
+            # frames are discarded and never emitted (no capture-poison re-run needed).
+            for _ in range(self._SF_WARMUP):
+                _frame()
+            tid = ttnn.begin_trace_capture(dev, cq_id=0)
+            self._sf_audio_out, self._sf_logits_out = _frame()
+            ttnn.end_trace_capture(dev, tid, cq_id=0)
+            self._sf_tid = tid
+            # RESET: rewind positions, re-seed hidden + speech_start embed, and zero the (now
+            # allocated) conv caches in place — undoing the warmup/capture frames.  KV self-heals
+            # by forward overwrite on replay.
+            self._sf_set_inputs(0, start_pos, noise_2x)
+            self._sf_zero_conv()
+            ttnn.execute_trace(dev, tid, cq_id=0, blocking=False)
+            _vv_debug("segment_frame: captured + reset")
+            return self._sf_audio_out, self._sf_logits_out
+
+        if seg_frame_idx == 0:
+            self._sf_zero_conv()  # subsequent-segment reset (positions/hidden already rewound above)
+        ttnn.execute_trace(dev, self._sf_tid, cq_id=0, blocking=False)
+        return self._sf_audio_out, self._sf_logits_out
+
     def _reset_lm_traces(self) -> None:
         """Release the pos+neg LM decode traces at a segment boundary, BEFORE the streaming
         caches are freed/reallocated.  Allocating DRAM while a trace is live corrupts it, and
@@ -1219,6 +1398,36 @@ class TTVibeVoiceGenerator:
             )
             _vv_debug(f"step {step + 1}/{max_steps}: emit {self._token_label(current_token)}")
 
+            if self._trace_segment and forced_tokens is None and current_token == self.speech_diffusion_id:
+                # WHOLE-SEGMENT fused trace (llama shape): every speech-diffusion frame — INCLUDING
+                # a segment's first frame (which folds the negative prefill) — replays one
+                # device-driven capture.  step_hidden (the speech_start / prior-token pos-LM hidden)
+                # seeds frame 0; the pos hidden is then loop-carried on device, positions
+                # self-advance, RoPE is gathered on device.  Time ONLY steady replay frames
+                # (a segment's first frame recaptures and is not timed).
+                seg_frame_idx = 0 if neg_prev_diffusion_token is None else 1
+                _sf_replay = self._sf_tid is not None
+                _frame_t0 = time.perf_counter() if _sf_replay else None
+                diffusion_frames += 1
+                noise_2x = diffusion_noise[diffusion_frames - 1] if diffusion_noise is not None else None
+                start_pos = prefill_len + step
+                with prof.section("segment_frame"):
+                    audio_chunk, logits = self._run_segment_frame_traced(
+                        seg_frame_idx, step_hidden, start_pos, noise_2x, kv_cache_pos, kv_cache_neg
+                    )
+                neg_prev_diffusion_token = current_token
+                audio_chunks.append(ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1))  # syncs frame
+                with prof.section("token_constraint"):
+                    logits = ttnn.add(
+                        logits, self._token_constraint_mask(logits.shape[-1]), memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    )
+                with prof.section("argmax"):
+                    next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)  # syncs frame (D2H)
+                if _sf_replay:
+                    _steady_decode_s += time.perf_counter() - _frame_t0
+                    _steady_decode_frames += 1
+                continue
+
             if (
                 self._trace_frame
                 and forced_tokens is None
@@ -1304,20 +1513,30 @@ class TTVibeVoiceGenerator:
                     logits, step_hidden = self._lm_decode_token(current_token, start_pos, kv_cache_pos)
 
             if current_token == self.speech_start_id:
-                _vv_debug("  new speech segment: reset neg-CFG cache + acoustic/semantic streaming caches")
-                neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
-                neg_prev_diffusion_token = None
-                # Release all traces before touching the streaming caches: the caches are
-                # freed + reallocated here, and a live trace referencing them (or any DRAM
-                # alloc while a trace is live) would be corrupted.
-                self._reset_postdiff_trace()
-                self._reset_diffusion_trace()
-                self._reset_lm_traces()
-                self._reset_fused_frame_trace()
-                self.acoustic_tok.reset_decode_cache()
-                self.semantic_tok.reset_cache()
-                if self.ref_inference is not None:
-                    self._reset_ref_tokenizer_caches()
+                if self._trace_segment:
+                    # Whole-segment fused trace: release the capture so the boundary's eager LM
+                    # decodes can't corrupt it, then let the next diffusion frame (frame 0) rewind
+                    # positions, re-seed hidden, fold the negative prefill and zero the conv caches
+                    # IN PLACE.  Do NOT free/realloc the conv or neg-KV caches here — that would
+                    # move address-stable state out from under the recaptured trace.
+                    _vv_debug("  new speech segment: release segment trace (recapture next frame)")
+                    self._reset_segment_frame_trace()
+                    neg_prev_diffusion_token = None
+                else:
+                    _vv_debug("  new speech segment: reset neg-CFG cache + acoustic/semantic streaming caches")
+                    neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
+                    neg_prev_diffusion_token = None
+                    # Release all traces before touching the streaming caches: the caches are
+                    # freed + reallocated here, and a live trace referencing them (or any DRAM
+                    # alloc while a trace is live) would be corrupted.
+                    self._reset_postdiff_trace()
+                    self._reset_diffusion_trace()
+                    self._reset_lm_traces()
+                    self._reset_fused_frame_trace()
+                    self.acoustic_tok.reset_decode_cache()
+                    self.semantic_tok.reset_cache()
+                    if self.ref_inference is not None:
+                        self._reset_ref_tokenizer_caches()
 
             with prof.section("token_constraint"):
                 logits = ttnn.add(
