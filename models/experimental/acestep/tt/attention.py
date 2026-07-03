@@ -102,6 +102,14 @@ class AceStepAttention(LightweightModule):
             else None
         )
 
+        # Self-attention: fuse Q/K/V into one weight so the head split can use
+        # ttnn.experimental.nlp_create_qkv_heads (heads land on dim 1 in one op), avoiding the
+        # per-projection reshape+transpose that profiling showed dominates attention (~0.12ms each
+        # vs 0.05ms for the matmul). wq/wk/wv are [in, out]; concat on the out axis (dim -1).
+        self._fused_qkv = None
+        if not cfg.is_cross_attention:
+            self._fused_qkv = ttnn.concat([self.wq, self.wk, self.wv], dim=-1)
+
     @classmethod
     def from_config(cls, config: AceStepAttentionConfig):
         return cls(config)
@@ -118,13 +126,21 @@ class AceStepAttention(LightweightModule):
     def forward(self, hidden_states, cos=None, sin=None, encoder_hidden_states=None, attn_mask=None):
         cfg = self.config
 
-        # Query always from hidden_states.
-        q = self._project_heads(hidden_states, self.wq, cfg.n_heads)  # [1,nq,seq,hd]
-
-        # Key/Value source: encoder for cross-attention, else self.
-        kv_source = encoder_hidden_states if cfg.is_cross_attention else hidden_states
-        k = self._project_heads(kv_source, self.wk, cfg.n_kv_heads)  # [1,nkv,kv,hd]
-        v = self._project_heads(kv_source, self.wv, cfg.n_kv_heads)  # [1,nkv,kv,hd]
+        if self._fused_qkv is not None:
+            # Self-attention: one fused QKV matmul + nlp_create_qkv_heads (no per-proj transpose).
+            fused = ttnn.linear(hidden_states, self._fused_qkv, compute_kernel_config=cfg.compute_kernel_config)
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                fused,
+                num_heads=cfg.n_heads,
+                num_kv_heads=cfg.n_kv_heads,
+                transpose_k_heads=False,  # SDPA wants K as [1,nkv,seq,hd], not transposed
+            )
+        else:
+            # Cross-attention: Q from hidden, K/V from encoder (different sources -> keep split path).
+            q = self._project_heads(hidden_states, self.wq, cfg.n_heads)  # [1,nq,seq,hd]
+            kv_source = encoder_hidden_states
+            k = self._project_heads(kv_source, self.wk, cfg.n_kv_heads)  # [1,nkv,kv,hd]
+            v = self._project_heads(kv_source, self.wv, cfg.n_kv_heads)  # [1,nkv,kv,hd]
 
         # Per-head q/k RMSNorm over head_dim (Qwen3 qk-norm), applied on [1,n,seq,hd].
         if self.q_norm is not None:
