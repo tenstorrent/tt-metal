@@ -269,6 +269,25 @@ class ModelArgs(TTModelArgs):
         model = self.reference_vision_transformer(wrap=False)
         return model.model.aligner
 
+    def reference_transformer(self, wrap=True, load_checkpoint=False):
+        if self.dummy_weights and not load_checkpoint:
+            # Base dummy path reads the HF config from LOCAL_HF_PARAMS[model_name],
+            # which Janus doesn't register. Reuse the shared random-init model and
+            # mirror the base helper: expose the text decoder (language_model) as
+            # model.model and truncate to n_layers.
+            model = self._janus_dummy_hf_model()
+            if hasattr(model, "language_model"):
+                model.model = model.language_model
+            elif hasattr(model.model, "language_model"):
+                model.model = model.model.language_model
+            model.model.layers = model.model.layers[: self.n_layers]
+            if wrap:
+                from models.tt_transformers.tt.model_config import HfModelWrapper
+
+                return HfModelWrapper(model, self.head_dim, config=self.hf_config, use_hf_rope=self.use_hf_rope)
+            return model
+        return super().reference_transformer(wrap=wrap, load_checkpoint=load_checkpoint)
+
     def reference_language_model(self):
         model = self.reference_transformer(wrap=False)
         return model.model.float()

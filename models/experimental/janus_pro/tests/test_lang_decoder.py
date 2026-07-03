@@ -42,11 +42,13 @@ from models.tt_transformers.tt.model import Transformer
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_lang_decoder_inference(seq_len, mesh_device, reset_seeds, ensure_gc):
+def test_lang_decoder_inference(seq_len, mesh_device, dummy_weights, reset_seeds, ensure_gc):
     pcc_required = 0.99
     dtype = ttnn.bfloat8_b
 
-    model_args = ModelArgs(mesh_device, max_batch_size=1, max_seq_len=max(seq_len, 512), cache_hf=True)
+    model_args = ModelArgs(
+        mesh_device, max_batch_size=1, max_seq_len=max(seq_len, 512), dummy_weights=dummy_weights, cache_hf=True
+    )
     state_dict = model_args.load_state_dict()
 
     # Reference: HF language_model (LlamaModel) restricted from the full Janus Pro model.
