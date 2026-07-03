@@ -22,6 +22,7 @@ Usage (from tt-metal root):
     python models/experimental/vibevoice/demo_ttnn.py --demo 2p_goat
     python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --output_dir ~/vv_ttnn_long
     python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --max_new_tokens 256
+    python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --trace
     python models/experimental/vibevoice/demo_ttnn.py --text ... --voice alice.wav carter.wav frank.wav --max_new_tokens 64 --debug
 """
 
@@ -169,33 +170,12 @@ def main() -> int:
     ap.add_argument(
         "--trace",
         action="store_true",
-        help="ttnn-trace the diffusion-head (VV_TRACE_DIFFUSION=1, bit-exact) and the "
-        "post-diffusion block (VV_TRACE_POSTDIFF=1, ~0.985 PCC) + open device with trace "
-        "region & 2 command queues. EVAL ONLY while post-diffusion is not yet bit-exact.",
-    )
-    ap.add_argument(
-        "--trace-lm",
-        action="store_true",
-        help="ttnn-trace ONLY the positive 28-layer LM decode step (VV_TRACE_LM=1). Bit-exact "
-        "vs eager and the largest single decode cost (~6x on the LM step); leaves the "
-        "diffusion/post-diffusion blocks eager. Reserves the trace region & 2 command queues.",
-    )
-    ap.add_argument(
-        "--trace-frame",
-        action="store_true",
-        help="ttnn-trace the WHOLE steady-state speech-diffusion frame as ONE graph "
-        "(VV_TRACE_FRAME=1): neg-LM + diffusion + post-diffusion + pos-LM fused and replayed "
-        "per frame — the only config with the diffusion block traced bit-exactly in-loop "
-        "(~7 tok/s target). Supersedes --trace/--trace-lm. Reserves a large trace region & 2 CQs.",
-    )
-    ap.add_argument(
-        "--trace-segment",
-        action="store_true",
-        help="Whole-segment fused trace (VV_TRACE_SEGMENT=1), the llama shape: same fused frame "
-        "as --trace-frame but fully device-driven — positions self-advance (ttnn.plus_one), RoPE "
-        "is gathered on device (bf16), the neg embed is a per-frame input (a segment's first "
-        "frame folds the negative prefill), pos hidden is loop-carried on device. Lifecycle is "
-        "warmup -> throwaway capture -> reset (no capture-poison re-run). Supersedes the others.",
+        help="ttnn-trace the whole steady-state speech-diffusion frame as ONE device-driven graph "
+        "(VV_TRACE_SEGMENT=1), the llama shape: neg-LM + diffusion + post-diffusion + pos-LM fused "
+        "and replayed per frame — positions self-advance (ttnn.plus_one), RoPE is gathered on device "
+        "(bf16), the neg embed is a per-frame input (a segment's first frame folds the negative "
+        "prefill), pos hidden is loop-carried on device. Lifecycle is warmup -> throwaway capture -> "
+        "reset (no capture-poison re-run). Reserves a large trace region & 2 command queues.",
     )
     args = ap.parse_args()
 
@@ -205,26 +185,6 @@ def main() -> int:
         print("[demo_ttnn] debug enabled (VV_DEBUG=1 VV_PROFILE=1)", flush=True)
 
     if args.trace:
-        # setdefault so a pre-set env var can independently disable one sub-trace
-        # (e.g. VV_TRACE_DIFFUSION=0 to trace only post-diffusion) — used to isolate
-        # the trace-coexistence corruptor.
-        os.environ.setdefault("VV_TRACE_POSTDIFF", "1")
-        os.environ.setdefault("VV_TRACE_DIFFUSION", "1")
-        print(
-            "[demo_ttnn] trace enabled: post-diffusion (VV_TRACE_POSTDIFF=1) + "
-            "diffusion-head (VV_TRACE_DIFFUSION=1)",
-            flush=True,
-        )
-
-    if args.trace_lm:
-        os.environ["VV_TRACE_LM"] = "1"
-        print("[demo_ttnn] trace enabled: LM decode step (VV_TRACE_LM=1, bit-exact)", flush=True)
-
-    if args.trace_frame:
-        os.environ["VV_TRACE_FRAME"] = "1"
-        print("[demo_ttnn] trace enabled: fused steady-state frame (VV_TRACE_FRAME=1)", flush=True)
-
-    if args.trace_segment:
         os.environ["VV_TRACE_SEGMENT"] = "1"
         print("[demo_ttnn] trace enabled: whole-segment fused frame (VV_TRACE_SEGMENT=1, llama shape)", flush=True)
 
@@ -338,13 +298,10 @@ def main() -> int:
     import time as _time
 
     _open_kwargs = dict(device_id=0, l1_small_size=32768)
-    if args.trace or args.trace_lm or args.trace_frame or args.trace_segment:
-        # Reserve a trace buffer + a 2nd command queue.  --trace holds the diffusion-head
-        # and post-diffusion captures; --trace-lm holds the positive AND negative 28-layer
-        # LM decode captures simultaneously (two live traces); --trace-frame / --trace-segment
-        # hold one large fused-frame capture (neg-LM + diffusion + post-diff + pos-LM) — most room.
-        _size = 1_400_000_000 if (args.trace_frame or args.trace_segment) else 700_000_000
-        _open_kwargs.update(trace_region_size=_size, num_command_queues=2)
+    if args.trace:
+        # Reserve a trace buffer + a 2nd command queue.  --trace holds one large fused-frame
+        # capture (neg-LM + diffusion + post-diff + pos-LM).
+        _open_kwargs.update(trace_region_size=1_400_000_000, num_command_queues=2)
     mesh = ttnn.open_device(**_open_kwargs)
     try:
         if args.debug:
@@ -394,7 +351,7 @@ def main() -> int:
         tt_gen = tt_out.sequences[0, prefill_len:]
         _ar_tokens = int(tt_gen.numel())
         _prefill_tps = prefill_len / tt_out.prefill_wall_s if tt_out.prefill_wall_s > 0 else 0.0
-        # Decode throughput: when the fused-frame trace is active, report the STEADY-STATE rate
+        # Decode throughput: when the fused-frame trace (--trace) is active, report the STEADY-STATE rate
         # (trace-replay frames only, excluding warmup+capture) — apples-to-apples with the
         # tt_transformers/llama demos.  Otherwise fall back to the whole-loop rate.
         if tt_out.steady_decode_frames > 0:
@@ -440,7 +397,7 @@ def main() -> int:
         "ar_tokens_generated": int(tt_gen.numel()),
         "ttft_s": round(tt_out.prefill_wall_s, 3),
         "decode_wall_s": round(_decode_wall, 3),  # steady-state (replay) when traced, else whole-loop
-        "decode_toks_per_s": round(_decode_tps, 2),  # steady-state (replay only) when --trace-frame
+        "decode_toks_per_s": round(_decode_tps, 2),  # steady-state (replay only) when --trace
         "decode_frames": tt_out.steady_decode_frames,  # # of timed replay frames (0 if not traced)
         "prefill_toks_per_s": round(_prefill_tps, 1),
         "generate_wall_s": round(_generate_wall, 3),
