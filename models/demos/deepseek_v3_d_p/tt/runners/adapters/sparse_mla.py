@@ -96,16 +96,9 @@ class GLM51Adapter(SparseMLAPrefillAdapter):
 
     # --- full-transformer / chunked pytest path ---
     # GLM runs the same test set as Kimi (single-shot + chunked transformer) against a vLLM golden trace
-    # (approach B). No reference_model_cls: not because glm_moe_dsa is unloadable (transformers >=5.10 ships
-    # GlmMoeDsaModel and it IS AutoConfig-loadable) but because the DSA family validates by composing the
-    # CPU references it already has — sparse-MLA (reference.cpu_deepseek_v32) + a per-expert noaux_tc MoE
-    # (reference.glm_5_1) — rather than a single HF decoder-layer forward. That composition is provably the
-    # SAME computation as GlmMoeDsaModel: its router route_tokens_to_experts is the DeepSeek MoEGate
-    # noaux_tc and its GlmMoeDsaNaiveMoe expert is the silu-gated FFN (just packed weights) — verified
-    # equal to our reference at PCC 1.0. So reference_model_cls would be redundant AND need extra plumbing
-    # (GlmMoeDsaConfig, unpacking packed experts, the DSA layer forward). See test_glm_prefill_block.
-    # Serving is still NOT wired (base's allocate_kv_cache / build_runtime raise); these fields only enable
-    # the pytest pretrained path (supports_pretrained gates it, and it's consumed exclusively by the tests).
+    # (approach B: no reference_model_cls — glm_moe_dsa isn't AutoConfig-loadable). Serving is still NOT
+    # wired (base's allocate_kv_cache / build_runtime raise); these fields only enable the pytest
+    # pretrained path (supports_pretrained gates it, and it's consumed exclusively by the test files).
     supports_pretrained = True
     ttnn_cache_env = "TT_GLM51_PREFILL_TTNN_CACHE"
     ref_cache_env = "TT_GLM51_PREFILL_HOST_REF_CACHE"
