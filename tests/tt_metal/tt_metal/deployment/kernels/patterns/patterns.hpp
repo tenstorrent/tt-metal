@@ -23,6 +23,7 @@ enum {
     DRAM_PATTERN_BYTEWISE_SSN,
 };
 
+[[maybe_unused]]
 static uint32_t num_passes_for_pattern(uint32_t pattern_id) {
     switch (pattern_id) {
         case DRAM_PATTERN_CHECKERBOARD: return 2u;
@@ -36,6 +37,7 @@ static uint32_t num_passes_for_pattern(uint32_t pattern_id) {
     }
 }
 
+[[maybe_unused]]
 static const char* pattern_name(uint32_t pattern_id) {
     switch (pattern_id) {
         case DRAM_PATTERN_COUNTER: return "Counter";
