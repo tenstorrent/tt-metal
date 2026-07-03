@@ -128,6 +128,12 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                 "Gamma and beta must have the same layout, got gamma: {} vs beta: {}",
                 gamma.value().layout(),
                 beta.value().layout());
+            TT_FATAL(
+                gamma.value().dtype() == beta.value().dtype(),
+                "Gamma and beta must have the same dtype (the program factories use a single gamma/beta "
+                "CB format for both), got gamma: {} vs beta: {}",
+                gamma.value().dtype(),
+                beta.value().dtype());
         }
     }
 
