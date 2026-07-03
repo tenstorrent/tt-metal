@@ -329,6 +329,14 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
     }
 }
 
+void Kernel::process_scratchpad_binding_handles(
+    const std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)> callback)
+    const {
+    for (const auto& handle : this->scratchpad_binding_handles_) {
+        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word);
+    }
+}
+
 void Kernel::process_named_runtime_args(const std::function<void(const NamedRuntimeArgNamespaces&)> callback) const {
     callback(this->named_runtime_arg_namespaces());
 }

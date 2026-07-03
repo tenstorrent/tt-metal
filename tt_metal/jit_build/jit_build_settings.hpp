@@ -33,7 +33,9 @@ struct KernelCrtaLayout {
     uint32_t num_named_words = 0;
     // Section 2 size, in words. Equals the sum-over-bindings of (1 + num_runtime_field_crta_words).
     uint32_t binding_section_words = 0;
-    // Start offset of section 3 (varargs), in words.
+    // Section 3 size, in words. Equals the number of scratchpad bindings (one address word each).
+    uint32_t scratchpad_section_words = 0;
+    // Start offset of section 4 (varargs), in words.
     // Stored (not computed on demand) so it can be set from a known value at spec resolution
     // and asserted against the derived sum if a consumer wants belt-and-suspenders verification.
     uint32_t vararg_section_offset = 0;
@@ -105,6 +107,14 @@ public:
                                                     uint32_t cta_offset,
                                                     uint32_t addr_crta_offset,
                                                     uint32_t num_runtime_field_crta_words)>) const {}
+
+    // Scratchpad binding callback emits the codegen-relevant fields:
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
+    //  - size_bytes: the scratchpad's per-node size, emitted as the accessor's compile-time size
+    //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
+    //    scratchpad's (framework-allocated) L1 base address
+    virtual void process_scratchpad_binding_handles(
+        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
 
     // Named RTA/CRTA schema (Metal 2.0 APIs).
     // The order of names determines the byte offset of each arg within the named-args
