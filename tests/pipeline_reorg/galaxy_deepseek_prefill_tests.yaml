@@ -114,9 +114,8 @@
     # collected fabric id back to `line` — which the -k filter below then selects.
     export DS_SPARSE_FABRIC=line
     # Sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. Random weights + on-the-fly CPU truth
-    # -> no staged V3.2 weights needed; R1 supplies the (shared-dim) config. GLM-5.1 now runs at tp=4
-    # (8x4) after the heads->sequence reshard — see the GLM DSA MLA stage below. The sparse suite carries
-    # no tier markers, so there is no -m gate. 8x4 is the full Galaxy mesh.
+    # -> no staged V3.2 weights needed; R1 supplies the (shared-dim) config. The sparse suite carries no
+    # tier markers, so there is no -m gate. 8x4 is the full Galaxy mesh.
     pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "deepseek_v32 and 8x4 and line" -vvv --tb=short
   test_type: dsa_mla
   test_group: module
@@ -132,7 +131,7 @@
     export GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache
     export DS_SPARSE_FABRIC=line
     # GLM-5.1 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. Random weights + on-the-fly CPU
-    # truth -> no staged weights. GLM reshards heads->sequence in _sparse_mla so it runs at tp=4 (8x4).
+    # truth -> no staged weights.
     pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_1 and 8x4 and line" -vvv --tb=short
   test_type: dsa_mla_glm
   test_group: module

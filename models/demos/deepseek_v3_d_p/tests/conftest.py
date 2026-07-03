@@ -123,14 +123,9 @@ def pytest_collection_modifyitems(config, items):
 
         # Architecture-specific constraints
         elif is_blackhole():
-            # BH: full-device configs, plus evenly-dividing sub-meshes (a smaller mesh opened over a
-            # subset of the SystemMesh — e.g. GLM-5.1 tp2 = (8,2) over the 8x4 Galaxy, which the tp/head
-            # constraint requires and open_mesh_device supports as a submesh). Odd/non-dividing shapes,
-            # which can't tile the SystemMesh, are still skipped.
-            if devices_needed != num_devices and (devices_needed > num_devices or num_devices % devices_needed != 0):
-                skip_reason = (
-                    f"Blackhole mesh {mesh_shape} ({devices_needed} dev) doesn't fit the {num_devices}-device system"
-                )
+            # BH: only supports all available devices configs
+            if devices_needed != num_devices:
+                skip_reason = f"Blackhole only supports {num_devices}-device mesh configs (requested {devices_needed})"
 
         elif is_wormhole_b0():
             # WH: ring topology only works with 8 devices

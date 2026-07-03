@@ -756,13 +756,12 @@ def test_kimi_prefill_transformer_chunked_padded(
     )
 
 
+# GLM-5.1 variants
 # ---------------------------------------------------------------------------
-# GLM-5.1 chunked prefill — same validation as DeepSeek/Kimi, glm_5_1 variant + on-device gate
-# (GateComputeMode.DEVICE_FP32; GLM's noaux_tc gate uses the grouped-topk fp32 device path) and
-# GLM51Config fabric payload. Golden = the vLLM GLM-5.1 55k structured trace (chunked_group_a_v1;
-# variant.prefill_trace_default, override with PREFILL_TRACE_DIR). GLM runs tp4 (mesh 8x4) on Galaxy:
-# 64 q-heads / tp=4 = 16 < 32 per chip, so sparse_sdpa relies on the head->sequence TP reshard — skips
-# until the reshard (ipotkonjak/dsa-sparse-head-reshard-tp4) lands on main and the golden trace is present.
+# Same chunked-prefill validation as the DeepSeek/Kimi tests, with the glm_5_1 variant and the on-device
+# gate (GateComputeMode.DEVICE_FP32 — GLM's noaux_tc gate uses the grouped-topk fp32 device path) +
+# GLM51Config fabric payload. Golden = the vLLM GLM-5.1 55k structured trace (chunked_group_a_v1; set via
+# the variant's test_prefill_trace_default, override with PREFILL_TRACE_DIR).
 
 
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])

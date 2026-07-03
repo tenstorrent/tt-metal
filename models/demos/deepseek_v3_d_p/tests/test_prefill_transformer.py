@@ -236,11 +236,10 @@ def run_model(
             f"(trace n_layers={trace.metadata.get('n_layers')}, test num_layers={num_layers}, "
             f"native_isl={trace_isl}, sliced={trace_sliced})"
         )
-    # Fallback: a variant may pin an explicit trace via variant.test_prefill_trace_default that
-    # find_trace_dir's (R1-centric, use_pretrained/256-expert) TRACE_LOOKUP doesn't cover — e.g. GLM-5.1's
-    # 55k chunked_group_a_v1 golden. load_debug_trace reads both the standard and chunked layouts and
-    # slices to isl_total, so the single-shot non-chunked test just chops the part it needs (e.g. the first
-    # 5120 rows == a 5120 single-shot prefill).
+    # Fallback: a variant may pin an explicit golden trace via variant.test_prefill_trace_default that
+    # find_trace_dir's (R1-centric, use_pretrained/256-expert) TRACE_LOOKUP doesn't cover. load_debug_trace
+    # reads both the single_file and chunked_group_a_v1 layouts and slices to isl_total, so the single-shot
+    # test just chops the prefix it needs (e.g. the first 5120 rows == a 5120 single-shot prefill).
     elif pcc_validation and getattr(variant, "test_prefill_trace_default", None):
         _pinned = variant.test_prefill_trace_default
         if _pinned and os.path.isdir(_pinned) and os.path.exists(os.path.join(_pinned, "metadata.json")):
@@ -1192,9 +1191,8 @@ def test_glm_prefill_transformer(
     tokenizer,
     request,
 ):
-    # GLM-5.1 must run tp2 (mesh 8x2): sparse_sdpa needs per-chip n_heads/tp >= 32 and GLM has 64 heads,
-    # so tp4 is invalid. Full-transformer end-to-end validates against the GPU trace
-    # (variant.prefill_trace_default; approach B) — MLA/DSA + MoE correctness live in their op-level tests.
+    # Full-transformer end-to-end validates against the GPU trace (variant.test_prefill_trace_default;
+    # approach B) — MLA/DSA + MoE correctness live in their op-level tests.
     run_model(
         variant,
         config_only,
