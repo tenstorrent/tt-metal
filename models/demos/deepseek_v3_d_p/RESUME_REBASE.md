@@ -1,3 +1,27 @@
+# ✅ UPDATE (2026-07-03) — runner single-GLX traced option + pipeline traced gaps (HEAD ca4cd60a6db)
+
+On top of the rebased/integrated work below, added the runner-driven single-GLX traced path + closed the
+3 pipeline-parallel traced gaps. NOT pushed yet (local commit ca4cd60a6db).
+- **Single-GLX traced runner option** (`PREFILL_USE_TRACE=1`): `PrefillRunParams.use_trace` → MLA adapter →
+  `TtPrefillRuntimeConfig.use_trace`; runner opens mesh with `trace_region_size` (`PREFILL_TRACE_REGION_SIZE`,
+  default 256MB). Run: `PREFILL_MODEL=kimi_k2_6 PREFILL_NUM_LAYERS=10 PREFILL_NUM_USERS=1 PREFILL_MAX_SEQ_LEN=56320
+  PREFILL_STANDALONE=1 PREFILL_STANDALONE_NCHUNKS=11 PREFILL_STANDALONE_PCC=1 PREFILL_SYNC_PER_CHUNK=1
+  PREFILL_USE_TRACE=1 PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
+  PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320
+  PYTHONPATH=. python_env/bin/python -m models.demos.common.prefill.runners.prefill_runner`.
+- **Validated on-device (this machine, Kimi L10, 11×5120)**: traced==eager, bit-identical **min KV-PCC 0.994120**;
+  17 seg / 7.31 MB. Warm per-chunk replay ~13% faster than eager (traced 194.6ms vs eager 223.4ms mean, chunks 1-10),
+  up to −24% at low KV, converging at high KV (compute-bound). Capture(PREPARE)~9s, chunk0 absorbs capture (~2.2s).
+- **Gap #3 (ack ordering)** = lazy capture: `compile()` only `_prepare_trace` (buffers+controller+warm-compile);
+  the first `prefill_chunk()` records the capture (`_capture_now`). So `set_layer_ack_channel()` called after
+  compile (request loop) is still known at capture → trace segments at ack points. Re-validated PCC unchanged.
+- **Gap #2 (non-last-rank output)**: captured forward output kept in `_trace_output` (captured addr); non-last rank
+  returns it from `prefill_chunk`; `_d2d_send(..., deallocate=False)` for traced so the persistent buffer isn't freed.
+  IMPLEMENTED, NOT hardware-validated (needs multi-galaxy pipeline / tt-run).
+- **Gap #1**: `use_trace` runner wiring — done (above).
+
+---
+
 # ✅ COMPLETE (2026-07-03) — rebased on current main + runner trace integrated & validated
 
 Branch `ppopovic/trace_rebased_on_main` (pushed). ALL tasks done on the 2nd (less-powerful) machine:
@@ -108,4 +132,3 @@ op C++ + kernels + nanobind + unit test ONLY (no trace/mla/block/runtime). Force
   uninit-read symptom; passed 3/3 on machine 1 → narrow bf16-layout flake)** + multi_iteration/single_iteration
   byte-exact + must-fit-cache failures = the #45821 harness issue. FLAG to op owner; neither blocks the
   trace deliverable (bfp8 bit-exact + pipeline KV-PCC 0.993/0.930).
-
