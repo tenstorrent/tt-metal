@@ -276,6 +276,23 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
     return 0 if final.get("can_stop") else 1
 
 
+def _source_phase2_shard_stubs(demo_dir: Path) -> list:
+    stub_dir = demo_dir / "_stubs"
+    if not stub_dir.is_dir():
+        return []
+    sourced = []
+    for snap in sorted(stub_dir.glob("*.py.last_good_sharded")):
+        live = snap.with_suffix("")
+        if live.suffix != ".py":
+            continue
+        try:
+            live.write_bytes(snap.read_bytes())
+            sourced.append(live.stem)
+        except OSError:
+            pass
+    return sourced
+
+
 def cmd_emit_e2e(args) -> int:
     try:
         from ..cli import _quiet_framework_logging
@@ -317,6 +334,23 @@ def cmd_emit_e2e(args) -> int:
     if _pc is not None and _pc.chips > 1:
         print(f"  chip placement: {_pc.chips}-chip mesh → TP={_pc.tp} x DP={_pc.dp} (kernel-viability selected)")
         print("  builder will open the mesh at this split; tt-metal auto-discovers the fabric topology.")
+        if _pc.tp > 1:
+            _sharded = _source_phase2_shard_stubs(demo_dir)
+            if _sharded:
+                print(f"  [shard] sourced Phase-2 TP-sharded stubs (compose as-is, do NOT replicate): {', '.join(_sharded)}")
+                _parallel_note += (
+                    f"\n\nPHASE-2 SHARD STUBS ({', '.join(_sharded)}): these _stubs ALREADY implement the "
+                    f"proven TP={_pc.tp} split (ShardTensorToMesh + all_reduce/cluster_axis). Compose them "
+                    f"AS-IS on the mesh — do NOT rewrite their sharding to replication. Only components with "
+                    f"NO shard implementation may be replicated. The final pipeline MUST contain "
+                    f"ShardTensorToMesh + a collective (all_reduce/all_gather); a pure-replication pipeline is "
+                    f"NOT an acceptable TP={_pc.tp} result."
+                )
+            else:
+                print(
+                    "  [shard] no Phase-2 (.last_good_sharded) stubs present — components will be REPLICATED "
+                    "(TP=1). Run the shard bring-up (promote TT_HW_PLANNER_SHARD=1) to produce them for real TP."
+                )
         print(sep)
 
     print("\n  ===== PHASE 1+2: BUILDER agent (plan → build → iterate) =====\n")
