@@ -185,12 +185,6 @@ For release stages, also inspect:
 For optimization stages, also inspect:
 
 - before/after measurements in the same regime;
-- whether the stage searched for same-model, same-stage, same-hardware-family
-  optimized references in the current checkout, run root, or provided
-  experiment artifacts. If such a reference is available, compare headline
-  latency and dominant op rows against it. A stage that only beats its original
-  functional baseline can still need more work when it regresses a known
-  optimized reference;
 - whether optimized paths from previous stages were preserved;
 - evidence for rejected optimizations or "already optimal" claims;
 - whether rejected optimizations were actually earned. For any material
