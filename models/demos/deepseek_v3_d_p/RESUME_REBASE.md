@@ -1,3 +1,26 @@
+# ✅ UPDATE (2026-07-03 later) — traced REQUEST LOOP + LayerAck validated (HEAD 2034313ce45, PUSHED)
+
+Pipeline integration continued. Two fixes on top of the single-GLX work below:
+- **Traced request-loop capture FATAL fixed.** `tt_prefill_block.forward` runs the metadata
+  `zero_padded_kv_cache` + ack routing ONLY when `on_layer_complete` is set. With lazy capture, compile()'s
+  warm pass ran with `on_layer_complete=None` (LayerAck registered later, after compile), so zero_padded was
+  never compiled → first-chunk capture WITH the ack hit the uncompiled op ("Cannot load new binaries during
+  trace capture"). Fix: `_capture_now` warms the ack-path programs first with a NO-OP ack (no spurious
+  injects), then registers the real ack + captures. Standalone (no ack) unchanged.
+- **Ported `PREFILL_REQUEST_LOOP_PCC`** to the common runner (lost in the common-package move): after the
+  request loop drains on the shutdown sentinel, PCC the KV vs golden (single-rank bring-up).
+- **VALIDATED end-to-end** (runner + `prefill_h2d_producer`, Kimi L10, 11×5120, traced): capture = **27
+  segments** (17 sub-device-swap + 10 per-layer ack boundaries), 7.13 MB; **KV cache PCC PASSED min 0.994120**
+  — bit-identical to the standalone traced path. Confirms gap #3: LayerAck registered AFTER compile is picked
+  up by lazy capture → trace segments at ack points → acks fire on replay → correct KV. Runner exits clean.
+- Run recipe: `scratchpad/run_kimi_request_loop.sh` (runner request mode + `PREFILL_USE_TRACE=1`
+  `PREFILL_REQUEST_LOOP_PCC=1` single-rank; producer pushes 11 chunks + `PREFILL_SEND_SHUTDOWN=1`).
+- Multi-rank (multi-galaxy D2D) traced path: plumbing complete (non-last-rank `_trace_output` +
+  `_d2d_send(deallocate=False)`; `_d2d_recv` returns fresh tensors so copy-into-`_trace_input`-then-free is
+  safe; per-chip specs match). NOT hw-validated — needs >1 galaxy + tt-run.
+
+---
+
 # ✅ UPDATE (2026-07-03) — runner single-GLX traced option + pipeline traced gaps (HEAD ca4cd60a6db)
 
 On top of the rebased/integrated work below, added the runner-driven single-GLX traced path + closed the
