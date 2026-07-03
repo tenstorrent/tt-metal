@@ -1980,7 +1980,8 @@ _TTS_TRACE_REGION_SIZE = 48 << 20
     indirect=True,
 )
 @pytest.mark.parametrize("gather_op", ["prim", "async"])
-def test_ttsampling_forward_trace_ab(ttnn_mesh_device, gather_op):
+@pytest.mark.parametrize("logit_profile", ["peaked", "flat"])
+def test_ttsampling_forward_trace_ab(ttnn_mesh_device, gather_op, logit_profile):
     import os
 
     from models.common.sampling.tt_sampling import TTSampling
@@ -2023,12 +2024,16 @@ def test_ttsampling_forward_trace_ab(ttnn_mesh_device, gather_op):
             )
         sampler._perform_all_gather = _forced_prim  # async is the branch default on this branch
 
-    # Fixed logits with a clear argmax per user (peaked so top-1 is unambiguous vs bf16 ties).
+    # peaked: a dominant token (logit 50) per user -> top-1 trivially robust (old behaviour).
+    # flat:   small-magnitude randn, NO peak -> many near-ties, mimicking real decode logits,
+    #         where a slightly-wrong candidate set flips the sampled token. This is the regime
+    #         the peaked test could not exercise.
     torch.manual_seed(1234)
-    logits_host = torch.randn(1, 1, B, padded_vocab, dtype=torch.bfloat16) * 0.1
-    peaks = torch.tensor([(u * 2711 + 13) % vocab for u in range(B)], dtype=torch.long)
-    for u in range(B):
-        logits_host[0, 0, u, peaks[u]] = 50.0
+    logits_host = torch.randn(1, 1, B, padded_vocab, dtype=torch.bfloat16) * (0.1 if logit_profile == "flat" else 0.1)
+    if logit_profile == "peaked":
+        peaks = torch.tensor([(u * 2711 + 13) % vocab for u in range(B)], dtype=torch.long)
+        for u in range(B):
+            logits_host[0, 0, u, peaks[u]] = 50.0
     if padded_vocab > vocab:
         logits_host[:, :, :, vocab:] = float("-inf")
 
@@ -2038,9 +2043,6 @@ def test_ttsampling_forward_trace_ab(ttnn_mesh_device, gather_op):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=cluster_shape),
     )
-
-    # With top_p=0.9 and one dominant (logit 50) token, the sampler should pick the peak every time.
-    expected = peaks.clone()
 
     def _tokens(tt_out_tok):
         return to_torch_auto_compose(tt_out_tok)[0, 0, :, :].reshape(-1)[:B].long()
@@ -2057,17 +2059,18 @@ def test_ttsampling_forward_trace_ab(ttnn_mesh_device, gather_op):
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
 
-    per_replay_wrong = []
+    # Determinism check: every replay must reproduce the eager tokens (same seeds, same logits).
+    per_replay_diff = []
     for r in range(NUM_REPLAYS):
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
         toks = _tokens(out)
-        per_replay_wrong.append(int((toks != expected).sum().item()))
+        per_replay_diff.append(int((toks != eager).sum().item()))
     ttnn.release_trace(mesh_device, trace_id)
 
-    print(f"[TTSampling.forward gather_op={gather_op} mesh={cluster_shape}] "
-          f"eager_wrong={int((eager != expected).sum().item())}/{B}  "
-          f"replay_wrong_per_iter={per_replay_wrong}")
-    assert all(w == 0 for w in per_replay_wrong), (
-        f"gather_op={gather_op}: TTSampling.forward heavy path picked wrong tokens under trace on "
-        f"{sum(1 for w in per_replay_wrong if w)}/{NUM_REPLAYS} replays (wrong-counts {per_replay_wrong})."
+    # Emit the eager tokens so a prim-vs-async cross-compare can be done from the two runs' logs.
+    print(f"[TTSampling.forward profile={logit_profile} gather_op={gather_op} mesh={cluster_shape}] "
+          f"replay_vs_eager_diffs={per_replay_diff}  eager_tokens={eager.tolist()}")
+    assert all(d == 0 for d in per_replay_diff), (
+        f"profile={logit_profile} gather_op={gather_op}: replays diverged from eager on "
+        f"{sum(1 for d in per_replay_diff if d)}/{NUM_REPLAYS} (diffs {per_replay_diff})."
     )
