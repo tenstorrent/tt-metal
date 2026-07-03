@@ -94,7 +94,7 @@ static inline TensorSpec make_flat_dram_tensor_spec(uint32_t page_size_bytes, ui
 
 // Build a Gen2 DM KernelSpec. Optionally opt-out of implicit sync for specific
 // DFBs (post-DFBSpec API change: disable_implicit_sync moved from DataflowBufferSpec
-// to per-kernel Gen2Config::disable_implicit_sync_for).
+// to per-kernel Gen2Config::disable_dfb_implicit_sync_for).
 static inline m2::KernelSpec make_dm_kernel(
     const m2::KernelSpecName& unique_id,
     const std::string& source_path,
@@ -108,7 +108,7 @@ static inline m2::KernelSpec make_dm_kernel(
             m2::DataMovementHardwareConfig{
                 .gen2_config =
                     m2::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = std::move(disable_implicit_sync_for),
+                        .disable_dfb_implicit_sync_for = std::move(disable_implicit_sync_for),
                     }},
     };
 }
@@ -131,9 +131,9 @@ static inline m2::KernelSpec make_compute_kernel(
 static inline void disable_implicit_sync_for(m2::KernelSpec& kernel, m2::DFBSpecName dfb_name) {
     auto& dm_cfg = std::get<m2::DataMovementHardwareConfig>(kernel.hw_config);
     if (!dm_cfg.gen2_config) {
-        dm_cfg.gen2_config.emplace();
+        dm_cfg.gen2_config = m2::DataMovementHardwareConfig::Gen2Config{};
     }
-    dm_cfg.gen2_config->disable_implicit_sync_for.push_back(std::move(dfb_name));
+    dm_cfg.gen2_config->disable_dfb_implicit_sync_for.push_back(std::move(dfb_name));
 }
 
 // Conditional variant: only add the DFB to the disable list if the test wants
