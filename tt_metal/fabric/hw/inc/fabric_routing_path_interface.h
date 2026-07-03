@@ -20,14 +20,16 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
         return false;
     }
 
-    // Get compressed route data (2 bytes: ns_hops, ew_hops, directions, turn_point)
+    // Get compressed route data (ns/ew hops, directions, turn_point, and the dedicated Z hop)
     const auto& compressed_route = paths[dst_chip_id];
     uint8_t ns_hops = compressed_route.get_ns_hops();
     uint8_t ew_hops = compressed_route.get_ew_hops();
     uint8_t ns_dir = compressed_route.get_ns_direction();
     uint8_t ew_dir = compressed_route.get_ew_direction();
+    uint8_t z_present = compressed_route.get_z_present();
+    uint8_t z_before = compressed_route.get_z_before();
 
-    if (ns_hops == 0 && ew_hops == 0) {
+    if (ns_hops == 0 && ew_hops == 0 && z_present == 0) {
         // Noop to self
         out_route_buffer[0] = 0;
         out_route_buffer[1] = 0;
@@ -46,8 +48,9 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
         ew_dir,
         temp_buffer,
         max_buffer_size,
-        prepend_one_hop  // CRITICAL: Pass through prepend_one_hop for router usage
-    );
+        prepend_one_hop,  // CRITICAL: Pass through prepend_one_hop for router usage
+        z_present,
+        z_before);
 
     // Copy to volatile output
     for (uint32_t i = 0; i < max_buffer_size; i++) {

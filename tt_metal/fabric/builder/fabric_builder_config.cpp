@@ -45,8 +45,14 @@ uint32_t get_downstream_edm_count(bool is_2D_routing) {
     return is_2D_routing ? builder_config::max_downstream_edms : builder_config::num_downstream_edms_1d;
 }
 
-uint32_t get_vc0_downstream_edm_count(bool is_2D_routing) {
-    return is_2D_routing ? builder_config::num_downstream_edms_2d_vc0 : builder_config::num_downstream_edms_vc0;
+uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool has_intra_mesh_z) {
+    if (!is_2D_routing) {
+        return builder_config::num_downstream_edms_vc0;
+    }
+    // With an intra-mesh Z (sub-torus skip-link) neighbor, a VC0 receiver may forward to a 4th
+    // downstream EDM (3 mesh directions + intra-mesh Z).
+    return has_intra_mesh_z ? builder_config::num_downstream_edms_2d_vc0_with_z
+                            : builder_config::num_downstream_edms_2d_vc0;
 }
 
 uint32_t get_vc1_downstream_edm_count(bool is_2D_routing) {

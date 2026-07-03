@@ -15,12 +15,14 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
     bool downstream_is_tensix_builder,
     RouterVariant variant,
     const IntermeshVCConfig* intermesh_config,
-    bool has_z_on_device) :
+    bool has_z_on_device,
+    bool has_intra_mesh_z) :
     topology_(topology),
     downstream_is_tensix_builder_(downstream_is_tensix_builder),
     variant_(variant),
     intermesh_vc_config_(intermesh_config),
-    has_z_on_device_(has_z_on_device) {
+    has_z_on_device_(has_z_on_device),
+    has_intra_mesh_z_(has_intra_mesh_z) {
     initialize_mappings();
 }
 
@@ -36,15 +38,16 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
     if (is_2d) {
         // 2D topology VC0 sender channels:
         //   Z_ROUTER: 5 channels (0=Worker, 1-4=E/W/N/S)
-        //   MESH: 4 channels (0=Worker, 1-3=mesh directions)
-        auto num_sender_channels = is_z_router() ? builder_config::num_sender_channels_z_router_vc0  // 5 channels
-                                                 : builder_config::num_sender_channels_2d_mesh;      // 4 channels
+        //   MESH (intra-mesh Z): 5 channels (0=Worker, 1-3=mesh directions, 4=intra-mesh Z)
+        //   MESH (no Z):         4 channels (0=Worker, 1-3=mesh directions)
+        auto num_sender_channels = get_num_sender_channels_for_vc(0);
 
         log_debug(
             LogFabric,
-            "initialize_vc0_mappings: variant={}, is_z_router={}, num_sender_channels={}",
+            "initialize_vc0_mappings: variant={}, is_z_router={}, has_intra_mesh_z={}, num_sender_channels={}",
             static_cast<int>(variant_),
             is_z_router(),
+            has_intra_mesh_z_,
             num_sender_channels);
 
         for (uint32_t i = 0; i < num_sender_channels; ++i) {
@@ -114,7 +117,11 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
             // Mesh without Z: 3 sender channels (3 mesh directions only)
             uint32_t mesh_vc1_sender_count = has_z_on_device_ ? 4 : 3;
 
-            uint32_t mesh_vc1_base_sender_channel = builder_config::num_sender_channels_2d_mesh;
+            // VC1 senders are laid out in the flat index space immediately after VC0's senders.
+            // Derive the base from the ACTUAL VC0 count (5 when intra-mesh Z, else 4) rather than the
+            // constant num_sender_channels_2d_mesh, otherwise a 5-wide VC0 would alias VC1 sender 0
+            // onto the new VC0 Z channel at flat index 4.
+            uint32_t mesh_vc1_base_sender_channel = get_num_sender_channels_for_vc(0);
             constexpr uint32_t mesh_vc1_receiver_channel = 1;
 
             // Create sender channels (3 or 4 depending on router type)
@@ -156,10 +163,11 @@ void FabricRouterChannelMapping::initialize_vc2_mappings() {
         // Mesh router VC2: 1 sender + 1 receiver
         if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc2) {
             // VC2 sender at last flat index (after VC0 + VC1 senders)
-            // Use actual VC1 sender count (0 if VC1 not active, 3 or 4 if active)
+            // Use the ACTUAL VC0 and VC1 sender counts so the base stays correct when VC0 grows to 5
+            // under intra-mesh Z (VC0: 4 or 5, VC1: 0 if not active, 3 or 4 if active).
+            uint32_t actual_vc0_sender_count = get_num_sender_channels_for_vc(0);
             uint32_t actual_vc1_sender_count = get_num_sender_channels_for_vc(1);
-            uint32_t mesh_vc2_base_sender_channel =
-                builder_config::num_sender_channels_2d_mesh + actual_vc1_sender_count;
+            uint32_t mesh_vc2_base_sender_channel = actual_vc0_sender_count + actual_vc1_sender_count;
 
             sender_channel_map_[LogicalSenderChannelKey{2, 0}] =
                 InternalSenderChannelMapping{BuilderType::ERISC, mesh_vc2_base_sender_channel};
@@ -224,8 +232,12 @@ uint32_t FabricRouterChannelMapping::get_num_sender_channels_for_vc(uint32_t vc)
             if (is_z_router()) {
                 // Only Z routers have 5 VC0 channels (0=Worker, 1-4=E/W/N/S)
                 return builder_config::num_sender_channels_z_router_vc0;  // 5 channels
+            } else if (has_intra_mesh_z_ && is_2D_topology(topology_)) {
+                // Mesh router with an intra-mesh Z (sub-torus skip-link) neighbor: 5 VC0 channels
+                // (0=Worker, 1-3=mesh directions, 4=intra-mesh Z)
+                return builder_config::num_sender_channels_2d_mesh_with_z;  // 5 channels
             } else {
-                // All mesh routers (MESH and MESH_AND_Z_ROUTER) have 4 VC0 channels
+                // Standard mesh routers have 4 VC0 channels (0=Worker, 1-3=mesh directions)
                 return builder_config::get_num_used_sender_channel_count(get_topology());  // 4 channels
             }
         case 1:  // VC1

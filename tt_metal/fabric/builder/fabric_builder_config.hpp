@@ -50,6 +50,10 @@ static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
 static constexpr std::size_t num_sender_channels_1d_neighbor_exchange = 1;
 static constexpr std::size_t num_sender_channels_1d_linear = 2;
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
+// Intra-mesh Z (sub-torus "skip link") adds a 5th VC0 sender channel on the standard mesh router:
+//   [0]=worker [1..3]=mesh dirs [4]=intra-mesh Z. This makes the mesh-router VC0 symmetric to the
+//   Z_ROUTER VC0 (also 5-wide). Gated on has_intra_mesh_z; the no-Z case stays 4-wide.
+static constexpr std::size_t num_sender_channels_2d_mesh_with_z = 5;
 
 // Z router channel counts
 // VC0: 5 sender channels (mesh→Z: 0=Worker, 1-4=E/W/N/S mesh directions) + 1 receiver
@@ -99,6 +103,9 @@ static constexpr std::size_t num_max_receiver_channels =
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
+// With intra-mesh Z, a VC0 receiver may also forward to the intra-mesh Z neighbor, so it can have a
+// 4th downstream EDM (3 mesh directions + intra-mesh Z).
+static constexpr std::size_t num_downstream_edms_2d_vc0_with_z = 4;
 static constexpr std::size_t num_downstream_edms_2d_vc1 = 3;  // XY intermesh: 3 mesh directions
 static constexpr std::size_t num_downstream_edms_2d_vc1_with_z = 4;  // Z intermesh: 3 mesh + Z
 static constexpr std::size_t num_downstream_edms_1d = num_downstream_edms_vc0;
@@ -118,7 +125,7 @@ uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::Fabric
 
 uint32_t get_downstream_edm_count(bool is_2D_routing);
 
-uint32_t get_vc0_downstream_edm_count(bool is_2D_routing);
+uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool has_intra_mesh_z = false);
 
 uint32_t get_vc1_downstream_edm_count(bool is_2D_routing);
 
