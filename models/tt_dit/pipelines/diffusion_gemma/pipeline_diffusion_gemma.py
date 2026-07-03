@@ -236,6 +236,8 @@ class DiffusionGemmaPipeline:
             vocab_size=text_cfg.vocab_size,
             final_logit_softcapping=text_cfg.final_logit_softcapping,
             mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
         )
         # ``lm_head`` is HF-tied to ``model.decoder.embed_tokens.weight`` and HF may not emit
         # both keys separately (state_dict de-dupes tied groups). Our ``DiffusionGemmaForBlockDiffusion.

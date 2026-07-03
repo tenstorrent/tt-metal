@@ -20,8 +20,9 @@ import torch
 
 import ttnn
 
-from ....layers.linear import Linear
+from ....layers.linear import ColParallelLinear, Linear
 from ....layers.module import Module
+from ....parallel.config import DiTParallelConfig
 from .encoder_model import DiffusionGemmaEncoderModel
 from .text_decoder import DiffusionGemmaDecoderModel
 
@@ -87,13 +88,32 @@ class DiffusionGemmaForBlockDiffusion(Module):
         vocab_size: int,
         final_logit_softcapping: float,
         mesh_device: ttnn.MeshDevice,
+        parallel_config: DiTParallelConfig | None = None,
+        ccl_manager=None,
     ) -> None:
         super().__init__()
         self.model = model
         self.final_logit_softcapping = final_logit_softcapping
-        # lm_head: hidden_size → vocab_size. Replicated (vocab 262144 × hidden 2816 in bf16 ≈ 1.4 GB —
-        # fits per-device; TP later as a perf optimization).
-        self.lm_head = Linear(text_hidden_size, vocab_size, bias=False, mesh_device=mesh_device)
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
+        # lm_head: hidden_size → vocab_size. TP-shard on the vocab axis when a parallel_config
+        # is provided (vocab 262144 × hidden 2816 at bf16 is ~1.4 GB per device replicated —
+        # halved with TP=2, quartered with TP=4). Halving alone is what makes the full-config
+        # model fit on WH T3K DRAM alongside the layer stack. Falls back to a plain replicated
+        # Linear when no parallel_config is passed (existing standalone tests).
+        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+            self.lm_head = ColParallelLinear(
+                text_hidden_size,
+                vocab_size,
+                bias=False,
+                mesh_device=mesh_device,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                ccl_manager=ccl_manager,
+            )
+            self._lm_head_tp = True
+        else:
+            self.lm_head = Linear(text_hidden_size, vocab_size, bias=False, mesh_device=mesh_device)
+            self._lm_head_tp = False
 
     def _prepare_torch_state(self, state) -> None:
         """HF ties ``lm_head.weight`` to ``model.decoder.embed_tokens.weight``. If the loaded
@@ -187,6 +207,13 @@ class DiffusionGemmaForBlockDiffusion(Module):
         """Project decoder hidden states to vocab logits and apply tanh softcap on-device."""
         logits = self.lm_head(decoder_h)
         ttnn.deallocate(decoder_h)
+        # When lm_head is ColParallelLinear, its output is TP-fractured on the vocab axis
+        # ([1, B, S, vocab/tp]). Gather it back so downstream (host-side sampler) sees the
+        # full vocab. When lm_head is plain Linear, this is a no-op.
+        if getattr(self, "_lm_head_tp", False) and self.parallel_config.tensor_parallel.factor > 1:
+            logits = self.ccl_manager.all_gather_persistent_buffer(
+                logits, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
         cap = self.final_logit_softcapping
         scaled = ttnn.multiply(logits, 1.0 / cap)
         ttnn.deallocate(logits)
