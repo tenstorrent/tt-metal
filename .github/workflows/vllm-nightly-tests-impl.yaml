@@ -300,7 +300,7 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
-              "name": "[BH-LB] Llama-3.1-8B-Instruct with sampling-tests",
+              "name": "[BH-LB] Llama-3.1-8B-Instruct DP=8 with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -391,6 +391,7 @@ jobs:
               "structured-output": true,
               "multimodal": true,
               "additional-server-args": "--async-scheduling",
+              "override-generation-config": "{\"repetition_penalty\": 1.05}",
               "co-owner-1-id": "U08H31YMN4Q"
             },
             {
@@ -556,6 +557,15 @@ jobs:
             DEFAULT_CHAT_TEMPLATE_KWARGS=()
           fi
 
+          # Single-quoted capture keeps the JSON payload (quotes, spaces) intact,
+          # which the word-split ADDITIONAL_SERVER_ARGS array above cannot carry.
+          OVERRIDE_GENERATION_CONFIG_RAW='${{ matrix.test-group.override-generation-config }}'
+          if [ -n "$OVERRIDE_GENERATION_CONFIG_RAW" ]; then
+            OVERRIDE_GENERATION_CONFIG=(--override-generation-config "$OVERRIDE_GENERATION_CONFIG_RAW")
+          else
+            OVERRIDE_GENERATION_CONFIG=()
+          fi
+
           export MESH_DEVICE="${{ matrix.test-group.mesh-device }}"
           if [ -n "${{ matrix.test-group.tt-llama-text-ver }}" ]; then
             export TT_LLAMA_TEXT_VER="${{ matrix.test-group.tt-llama-text-ver }}"
@@ -606,6 +616,7 @@ jobs:
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${DEFAULT_CHAT_TEMPLATE_KWARGS[@]}")
+          VLLM_SERVER_ARGS+=("${OVERRIDE_GENERATION_CONFIG[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
