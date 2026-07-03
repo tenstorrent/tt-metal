@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
-#include <functional>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>

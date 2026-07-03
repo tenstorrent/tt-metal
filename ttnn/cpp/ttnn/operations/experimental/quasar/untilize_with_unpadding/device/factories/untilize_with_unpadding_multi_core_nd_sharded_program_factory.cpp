@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <functional>
 #include <vector>
 
 #include "ttnn/operation.hpp"

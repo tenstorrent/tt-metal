@@ -5,7 +5,6 @@
 #include "ttnn/operations/experimental/quasar/reshard/device/nd_reshard_program_factory_copy_local.hpp"
 
 #include <filesystem>
-#include <functional>
 #include <numeric>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>

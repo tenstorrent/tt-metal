@@ -6,7 +6,6 @@
 
 #include <cmath>
 #include <filesystem>
-#include <functional>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>

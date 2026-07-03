@@ -23,7 +23,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <map>
 #include <set>
 #include <string>

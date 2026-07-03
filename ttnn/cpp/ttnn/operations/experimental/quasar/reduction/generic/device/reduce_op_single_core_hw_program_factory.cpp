@@ -9,7 +9,6 @@
 #include <bit>
 #include <cmath>
 #include <filesystem>
-#include <functional>
 #include <map>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 

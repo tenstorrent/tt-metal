@@ -5,7 +5,6 @@
 #include "interleaved_to_sharded_program_factory.hpp"
 
 #include <cmath>
-#include <functional>
 
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/host_api.hpp>

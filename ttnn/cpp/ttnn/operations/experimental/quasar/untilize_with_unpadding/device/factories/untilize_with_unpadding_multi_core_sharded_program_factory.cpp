@@ -6,7 +6,6 @@
 
 #include <cmath>
 #include <filesystem>
-#include <functional>
 #include <vector>
 
 #include "ttnn/operations/math.hpp"

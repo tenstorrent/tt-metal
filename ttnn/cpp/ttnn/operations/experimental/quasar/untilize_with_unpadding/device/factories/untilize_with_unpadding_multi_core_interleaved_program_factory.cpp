@@ -4,8 +4,6 @@
 
 #include "untilize_with_unpadding_multi_core_interleaved_program_factory.hpp"
 
-#include <functional>
-
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>

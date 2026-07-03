@@ -5,7 +5,6 @@
 #include "untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
 
 #include <filesystem>
-#include <functional>
 
 #include "ttnn/common/constants.hpp"
 

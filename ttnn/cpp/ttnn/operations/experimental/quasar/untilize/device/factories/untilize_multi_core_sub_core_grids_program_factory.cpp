@@ -5,7 +5,6 @@
 #include "untilize_multi_core_sub_core_grids_program_factory.hpp"
 
 #include <filesystem>
-#include <functional>
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"

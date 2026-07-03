@@ -5,7 +5,6 @@
 #include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/slice/device/slice_program_factory_rm_sharded.hpp"
 
-#include <functional>
 #include <map>
 #include <optional>
 #include <vector>

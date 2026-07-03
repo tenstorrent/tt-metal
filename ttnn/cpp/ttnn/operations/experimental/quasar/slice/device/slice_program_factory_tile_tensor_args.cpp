@@ -5,7 +5,6 @@
 #include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/slice/device/slice_program_factory_tile_tensor_args.hpp"
 
-#include <functional>
 #include <optional>
 #include <vector>
 #include <tt-metalium/work_split.hpp>
