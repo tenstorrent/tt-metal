@@ -53,8 +53,36 @@ _REFERENCE_HINTS = (
     "principles above."
 )
 
+_RESIDENCY_PRINCIPLES = (
+    "RESIDENCY-FIRST degree derivation (applies when the target is a host-free / trace-capturable model, "
+    "i.e. ALL weights must stay RESIDENT on the mesh with no per-layer host streaming). Derive every "
+    "parallel DEGREE from the ACTUAL mesh you were given and THIS model's config — never assume a fixed "
+    "number. Let C = product of the mesh dims (total chips). "
+    "(A) ATTENTION tensor-parallel is capped by the KV structure: with grouped-query attention you can "
+    "cleanly head-shard K/V only up to num_key_value_heads, so TP_attn = the largest divisor of C (or of "
+    "one mesh axis) that is <= num_key_value_heads; going past it forces KV replication + extra "
+    "all_reduce and is usually not worth it. "
+    "(B) MoE experts are the memory bulk: shard the ROUTED EXPERTS across as many chips as possible "
+    "(expert-parallel). EP = the largest divisor of the mesh capacity left after TP that also divides "
+    "n_routed_experts; each chip then holds n_routed_experts/EP WHOLE experts resident, router "
+    "replicated, combined by all-to-all / gather over the expert axis. "
+    "(C) DP (data-parallel) REPLICATES weights across its chips — it does NOT cut per-chip weight memory, "
+    "so it PREVENTS residency. Therefore spend mesh capacity on TP and EP FIRST; give an axis to DP ONLY "
+    "if weights already fit resident and you want extra batch throughput. If the model does not fit "
+    "resident under TP alone (weights stream per layer), CONVERT the DP capacity into EP: a plan that was "
+    "TP=t x DP=d becomes TP=t x EP=(d * <expert-axis already in TP>) so experts spread over all C chips. "
+    "(D) A DENSE (non-MoE) model has no expert axis, so residency there comes from higher TP or "
+    "pipeline-parallel (layers split across chip-groups), never from DP. "
+    "(E) This is mesh- AND model-agnostic — you compute the numbers, they are not baked in. Worked "
+    "examples, all from the SAME rule: 4 chips, 2 KV heads, 128 experts -> TP=2 x EP=4 (128%4==0); "
+    "an 8-chip 2x4 mesh, 8 KV heads, 64 experts -> TP up to 8 x EP over the rest (or TP=2 x EP=8 if "
+    "residency needs the experts spread wider); a dense 2 KV-head model on 4 chips -> TP=2 + "
+    "pipeline-parallel for the other axis, no EP, no DP. Always verify mesh-axis divisibility and "
+    "n_routed_experts % EP == 0; the gate then validates gathered-PCC."
+)
 
-def shard_guidance(component: str, cfg: Optional[dict] = None) -> Optional[dict]:
+
+def shard_guidance(component: str, cfg: Optional[dict] = None, goal: Optional[str] = None) -> Optional[dict]:
     """TP guidance for `component`, or None if it is a replicate-only role.
 
     None  = pure elementwise/lookup role (norm/embedding/rotary/activation/bias) — shards in no scheme,
@@ -67,7 +95,10 @@ def shard_guidance(component: str, cfg: Optional[dict] = None) -> Optional[dict]
     name = (component or "").lower()
     if re.search(_REPLICATE_ONLY, name):
         return None
-    return {"principles": _TP_PRINCIPLES, "reference_hints": _REFERENCE_HINTS}
+    principles = _TP_PRINCIPLES
+    if (goal or "").lower().replace("-", "_") in ("host_free", "residency", "resident", "trace", "traceable"):
+        principles = _TP_PRINCIPLES + " " + _RESIDENCY_PRINCIPLES
+    return {"principles": principles, "reference_hints": _REFERENCE_HINTS}
 
 
 def is_shard_eligible(component: str, cfg: Optional[dict] = None) -> bool:
