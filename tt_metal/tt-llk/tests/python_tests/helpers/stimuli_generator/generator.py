@@ -295,6 +295,7 @@ def generate_stimuli(
         (srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B).
     """
     _spec_B_originally_none = spec_B is None
+    _dims_A_originally_none = input_dimensions_A is None
 
     if input_dimensions_A is None:
         input_dimensions_A = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
@@ -305,9 +306,10 @@ def generate_stimuli(
     if spec_B is None:
         spec_B = default_spec_for_format(stimuli_format_B)
 
-    # ULP_SWEEP: auto-size input_dimensions_A from the count of representable values,
-    # ignoring any caller-supplied value. Mirror B if the caller didn't specify spec_B.
-    if spec_A.distribution == DistributionKind.ULP_SWEEP:
+    # ULP_SWEEP: if the caller passed input_dimensions_A, use it as-is. Only
+    # auto-size (from the number of representable values) when they didn't.
+    # Mirror B if the caller didn't specify spec_B.
+    if spec_A.distribution == DistributionKind.ULP_SWEEP and _dims_A_originally_none:
         _ulp_vals = _enumerate_representable(stimuli_format_A, spec_A.low, spec_A.high)
         _num_ulp = _ulp_vals.numel()
         _tile_size = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM

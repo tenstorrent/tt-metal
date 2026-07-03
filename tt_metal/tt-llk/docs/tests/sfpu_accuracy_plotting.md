@@ -60,13 +60,16 @@ Case(op=MathOperation.Reciprocal, spec=StimuliSpec.uniform(intervals=[(-10.0, -0
 
 ### Exhaustive sweep (`ulp_sweep`)
 
-For BF16 or FP16, `StimuliSpec.ulp_sweep(low, high)` tests *every* representable value in the range instead of sampling it.
+`StimuliSpec.ulp_sweep(low, high)` tests *every* representable value in the range instead of sampling it. Supported for BF16, FP16, and FP32.
 
 ```python
 Case(op=MathOperation.Reciprocal, spec=StimuliSpec.ulp_sweep(low=0.01, high=10.0))
+Case(op=MathOperation.Reciprocal, spec=StimuliSpec.ulp_sweep(low=1.0, high=2.0), fmt=FP32)
 ```
 
-`input_dimensions` is set automatically and should be left unset — the harness sizes it to hold every value in the range and streams it through the destination register in blocks. Coverage extends to roughly 64 tiles, which spans all of bf16/fp16; a range that needs more is truncated to the lowest values with a warning. FP32 is not currently supported.
+`input_dimensions` is set automatically — leave it unset. A range small enough for one run (all of BF16/FP16, or a narrow FP32 range) is swept in a single pass. A larger range — typically FP32, whose grid is far denser — is automatically split into batches and joined, so the sweep is always exhaustive. Wide FP32 ranges can therefore take a while (many batches).
+
+There is a limit: an FP32 range with too many values (roughly beyond a few octaves) would take too long, so it is rejected up front with an error saying to narrow the range. BF16 and FP16 can never hit this — their whole domain is small.
 
 ## Optional Case fields
 
@@ -78,6 +81,7 @@ Sensible defaults cover the common cases, so override only when needed.
 - `clamp_negative` — enable the kernel's negative-input clamp.
 - `dest_acc` and `unpack_to_dest` — override the format-derived accumulator defaults.
 - `input_dimensions` — set how many points sample the domain (see below).
+- `batch_tiles` — tiles per batch for a large `ulp_sweep`. Auto-chosen if you don't set it; only matters when a range is too big for one run.
 - `extra_undefined_ranges` — override the red undefined-domain shading on the plot.
 
 ### How many points to sample (`input_dimensions`)
