@@ -19,7 +19,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix, get_rot_transformation_mat
+from models.demos.deepseek_v3_d_p.tt.mla.rope import (
+    get_cos_sin_matrix,
+    get_rot_transformation_mat,
+    interleaved_to_halfsplit_perm,
+)
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
@@ -232,11 +236,11 @@ class TtIndexer:
         self.is_chunked = is_chunked
         # Block-cyclic key-cache path (chunked prefill): mirrors the MLA KVPE cache — a persistent,
         # per-user, block-cyclic ND-sharded key cache written by update_padded_kv_cache and scored by
-        # indexer_score_dsa's block-cyclic reader. Gated on interleaved RoPE: it needs an on-device
-        # INDEXED rope (rotary_embedding_indexed), which only serves the interleaved (GLM) convention;
-        # DS-v3.2's half-split (rotary_embedding_hf) has no indexed variant, so DS chunked — and all
-        # single-shot — stay on the natural gather+concat path.
-        self._blockcyclic = is_chunked and self.index_args.index_rope_interleave
+        # indexer_score_dsa's block-cyclic reader. Both variants use it; the rope is always the interleaved
+        # on-device INDEXED op (rotary_embedding_indexed). GLM is natively interleaved; DS-v3.2's half-split
+        # rope is reconciled by _rope_perm below (permute q/k rope halves so the interleaved op matches the
+        # DS reference). Single-shot (all variants) stays on the natural gather+concat path.
+        self._blockcyclic = is_chunked
         # Natural path: lazily grown replicated cache. Block-cyclic path: persistent [num_users,1,S/sp,D_idx].
         self._index_kbuf = None
         if self._blockcyclic:
@@ -252,6 +256,28 @@ class TtIndexer:
             )
         self._upload_weights(idx_host)
         self._build_rope_tables()
+        # DS block-cyclic uses the interleaved rotary_embedding_indexed op, but DS weights emit the
+        # half-split (rotate_half) rope arrangement. Permute the rope half (half-split -> interleaved) so
+        # the interleaved op pairs the right dims with each frequency; applied to BOTH q and k, the
+        # permutation cancels in q·k, so the score (hence top-k) matches the DS half-split reference. GLM
+        # is natively interleaved -> no permute. NOTE: the stored key is then in interleaved layout —
+        # reindex by rope.interleaved_to_halfsplit_perm to compare it against a half-split reference.
+        self._rope_perm = None
+        if self._blockcyclic and not self.index_args.index_rope_interleave:
+            # Build the half-split -> interleaved permutation matrix from rope.py's canonical convention
+            # (single source of truth). interleaved_to_halfsplit_perm() returns p with
+            # halfsplit = interleaved[p]; its inverse (argsort) maps halfsplit -> interleaved, i.e.
+            # out[j] = in[src[j]], realised as the matmul weight perm[src[j], j] = 1.
+            src = torch.argsort(interleaved_to_halfsplit_perm(64))
+            perm = torch.zeros(64, 64, dtype=torch.bfloat16)
+            perm[src, torch.arange(64)] = 1.0
+            self._rope_perm = ttnn.from_torch(
+                perm,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
 
     # Inlined TP/SP collectives — the indexer owns its own copy so it depends on tt_ccl, not on ttMLA
     # (the dense MLA forward keeps its own equivalents; both go through the same tt_ccl handles).
@@ -367,13 +393,19 @@ class TtIndexer:
     def _bc_rope_pe(self, x: ttnn.Tensor, rope_tensors: dict, kv_actual_global: int) -> ttnn.Tensor:
         """Block-cyclic INDEXED RoPE on the rope half (first 64) of the last dim (block-cyclic path only).
         x [1, n_heads, S/sp, D_idx] SP-sharded on seq; rope_tensors are the whole-cache block-cyclic
-        cos/sin/trans built by RotarySetup.get_rope_tensors_indexed — reused verbatim from ttMLA (for GLM
-        the indexer's interleaved rope == the MLA's, same 64-dim table). The op derives each shard-row's
+        cos/sin/trans built by RotarySetup.get_rope_tensors_indexed — reused verbatim from ttMLA (the
+        interleaved table, same 64-dim, shared with the MLA q_pe/k_pe rope). The op derives each shard-row's
         block-cyclic global position on-device from kv_actual_global, exactly as MLA's _apply_rope_padded,
-        so keys land at the same positions update_padded_kv_cache writes them to."""
+        so keys land at the same positions update_padded_kv_cache writes them to. For DS (half-split
+        weights) self._rope_perm first reorders the rope half into the interleaved arrangement so this
+        interleaved op matches the DS reference (the permutation cancels in q·k, applied to both q and k)."""
         h, n = x.shape[1], x.shape[2]
         pe = ttnn.slice(x, [0, 0, 0, 0], [1, h, n, 64])
         nope = ttnn.slice(x, [0, 0, 0, 64], [1, h, n, self.index_args.index_head_dim])
+        if self._rope_perm is not None:  # DS: half-split -> interleaved arrangement for the interleaved op
+            pe_i = ttnn.linear(pe, self._rope_perm, compute_kernel_config=self.hifi4_fp32_compute_kernel_config)
+            ttnn.deallocate(pe)
+            pe = pe_i
         pe = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
             pe,
             rope_tensors["cos_matrix"],
