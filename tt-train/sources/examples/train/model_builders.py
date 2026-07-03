@@ -65,11 +65,19 @@ class _DeepSeekSpec:
     n_limited_groups: int = 1
     score_func: str = "sigmoid"
     route_scale: float = 2.5
+    # "sparse" uses moe_group/moe_ungroup; "dense" uses on-device masked experts.
+    moe_type: Literal["sparse", "dense"] = "sparse"
     q_lora_rank: int = 256
     kv_lora_rank: int = 128
     qk_nope_head_dim: int = 64
     qk_rope_head_dim: int = 32
     v_head_dim: int = 64
+    # MoE tensor parallelism. Not parsed from YAML: set from DeviceConfig after
+    # the mesh is built (see train.py:main). ``moe_tp_axis_name`` names the mesh
+    # axis to shard the expert intermediate dim on (None disables MoE-only TP);
+    # ``moe_parallel_type`` selects SparseMoETP ("tp") vs SparseMoEEP ("ep").
+    moe_tp_axis_name: str | None = None
+    moe_parallel_type: str = "tp"
 
 
 @dataclass
@@ -206,6 +214,7 @@ def _parse_deepseek(tc: dict) -> _DeepSeekSpec:
     spec.n_limited_groups = tc.get("n_limited_groups", spec.n_limited_groups)
     spec.score_func = tc.get("score_func", spec.score_func)
     spec.route_scale = tc.get("route_scale", spec.route_scale)
+    spec.moe_type = tc.get("moe_type", spec.moe_type)
     spec.q_lora_rank = tc.get("q_lora_rank", spec.q_lora_rank)
     spec.kv_lora_rank = tc.get("kv_lora_rank", spec.kv_lora_rank)
     spec.qk_nope_head_dim = tc.get("qk_nope_head_dim", spec.qk_nope_head_dim)
@@ -215,8 +224,9 @@ def _parse_deepseek(tc: dict) -> _DeepSeekSpec:
 
 
 def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
-    if use_tp:
-        raise ValueError("model_type=deepseek has no TP path; use model_type=llama for DP+TP")
+    # DeepSeek integrates with the named-mesh TP path (MLA, dense MLP, LM head, sparse
+    # MoE shard across the "tp" axis when use_tp=True). MoE-only TP without full-model TP
+    # is configured via moe_tp_axis_name / moe_parallel_type (set on the spec in main()).
     assert isinstance(cfg.spec, _DeepSeekSpec)
     spec = cfg.spec
     inter_dim = spec.inter_dim or _default_mlp_inter_dim(cfg.embedding_dim)
@@ -236,6 +246,7 @@ def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
             n_limited_groups=spec.n_limited_groups,
             score_func=spec.score_func,
             route_scale=spec.route_scale,
+            moe_type=spec.moe_type,
             q_lora_rank=spec.q_lora_rank,
             kv_lora_rank=spec.kv_lora_rank,
             qk_nope_head_dim=spec.qk_nope_head_dim,
@@ -244,6 +255,9 @@ def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
             max_seq_len=cfg.max_sequence_length,
             rope_theta=spec.theta,
             runner_type=cfg.runner_type,
+            moe_tp_axis_name=spec.moe_tp_axis_name or None,
+            moe_parallel_type=spec.moe_parallel_type,
+            use_tp=use_tp,
         )
     )
 
