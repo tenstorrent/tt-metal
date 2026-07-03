@@ -266,6 +266,38 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             core_status.data(), core_status.size(), {static_cast<size_t>(chip_id), core}, go_msg_addr & ~0x3);
         uint8_t run = core_status.view().signal();
+        // DEBUG (maxpool-halo done-handshake): halo kernels finish (ring-buffer END markers) but ~9 cores
+        // never register DONE. Log what the host actually reads from the GO_MSG mailbox for a not-done
+        // core (throttled) so we can tell value-stale vs wrong-address/index. Remove after.
+        if (run != tt_metal::dev_msgs::RUN_MSG_DONE) {
+            static uint64_t dbg_ctr = 0;
+            if ((dbg_ctr++ % 20000) == 0) {
+                // Read go_message_index and the INDEXED go_messages slot. If index != 0 and the indexed
+                // slot reads DONE while the polled go_messages[0] reads GO, the done-check is polling the
+                // wrong slot for mcast-launched cores (go_message_index != 0).
+                uint64_t idx_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
+                uint32_t go_idx = 0;
+                tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                    &go_idx, sizeof(go_idx), {static_cast<size_t>(chip_id), core}, idx_addr & ~0x3);
+                uint32_t indexed_word = 0;
+                uint64_t indexed_addr = (go_msg_addr & ~0x3) + (uint64_t)go_idx * 4;  // sizeof(go_msg_t) == 4
+                tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                    &indexed_word, sizeof(indexed_word), {static_cast<size_t>(chip_id), core}, indexed_addr & ~0x3);
+                fprintf(
+                    stderr,
+                    "[done-check] core=(%zu,%zu) polled@0x%llx run=0x%x  go_idx=%u indexed@0x%llx signal=0x%x  "
+                    "(DONE=0x%x GO=0x%x)\n",
+                    (size_t)core.x,
+                    (size_t)core.y,
+                    (unsigned long long)(go_msg_addr & ~0x3),
+                    run,
+                    go_idx,
+                    (unsigned long long)(indexed_addr & ~0x3),
+                    (indexed_word >> 24) & 0xff,
+                    tt_metal::dev_msgs::RUN_MSG_DONE,
+                    run_state);
+            }
+        }
         if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
             fprintf(
                 stderr,

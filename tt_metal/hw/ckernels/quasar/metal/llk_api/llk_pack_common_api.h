@@ -45,7 +45,15 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
         bd_val.f.format = static_cast<std::uint8_t>(l1_data_format);
         bd_val.f.x_dim = ckernel::trisc::FACE_C_DIM;
         bd_val.f.y_dim = pack_tile_face_r_dim[i];
-        bd_val.f.z_dim = pack_tile_num_faces[i];
+        // [Local LLK bring-up fix — issue filed] Mirror construct_tdma_desc's face-grid z-mapping instead
+        // of copying total num_faces raw. A raw z_dim = num_faces = 2 (e.g. pool 64ch output {face_r=1,
+        // num_faces=2}) is rejected by validate_buffer_desc (z must be {1,4}) and, with asserts off,
+        // programs a malformed descriptor that stalls the pack dataflow. construct_tdma_desc maps a
+        // {nf_r,nf_c} tile to a valid z (e.g. {1,2} -> compute_square_of_min(1,2) = 1).
+        const ckernel::TensorShape pack_ts = get_output_tensor_shape(i);
+        bd_val.f.z_dim = (pack_ts.num_faces_r_dim == pack_ts.num_faces_c_dim)
+                             ? pack_ts.total_num_faces()
+                             : ckernel::trisc::compute_square_of_min(pack_ts.num_faces_r_dim, pack_ts.num_faces_c_dim);
 
         ckernel::trisc::_configure_buf_desc_table_(i, bd_val);
     }
