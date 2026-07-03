@@ -159,6 +159,14 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
         if cand.exists():
             py = str(cand)
             break
+    demo_repo_root = demo_dir
+    for parent in demo_dir.parents:
+        if (parent / "models").is_dir():
+            demo_repo_root = parent
+            break
+    gate_env = dict(os.environ)
+    gate_env["PYTHONPATH"] = str(demo_repo_root) + os.pathsep + gate_env.get("PYTHONPATH", "")
+    gate_env["TT_METAL_HOME"] = str(demo_repo_root)
     pytest_out = ""
     try:
         proc = subprocess.run(
@@ -166,6 +174,8 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             capture_output=True,
             text=True,
             timeout=timeout_s,
+            cwd=str(demo_repo_root),
+            env=gate_env,
         )
         pytest_out = proc.stdout or ""
         if proc.returncode != 0:
@@ -194,6 +204,93 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             reasons.append(f"honesty: {p.name} contains pytest.xfail / pytest.skip / assert True")
 
     return (len(reasons) == 0), reasons
+
+
+def _build_cc_fix_prompt(*, model_id, demo_dir, pcc) -> str:
+    """Per-round prompt for the emit-e2e cc engine. The gate is the sole authority; the agent works
+    exactly the failing gates it names and never weakens them."""
+    return (
+        f"You are finishing the end-to-end TTNN pipeline for {model_id} in {demo_dir} (required e2e "
+        f"PCC >= {pcc}).\n"
+        "LOOP every iteration: call mcp__e2e-mcp__termination_check FIRST. It is the SOLE authority on "
+        "whether you are done (can_stop=true) and returns next_target = the FAILING gates: G1 (stubs "
+        "must be native ttnn, not torch-delegating), G2/G3 (tests/e2e must PASS on device with measured "
+        "PCC >= threshold; xfail/skip/error is NOT acceptable), G4 (demo/ + tt/ + README structure).\n"
+        "Fix EXACTLY the failing gates by editing tests/e2e/, _stubs/, demo/, tt/ as needed. NEVER "
+        "weaken, xfail, skip, or assert-True a gate. Re-run termination_check after each fix. STOP only "
+        "when can_stop=true; if it is already true, do nothing."
+    )
+
+
+def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_rounds) -> int:
+    """emit-e2e cc engine: after the builder runs, drive the fix loop through the shared cc harness
+    against the e2e_mcp deterministic gate (which REUSES the same G1–G4 `_run_deterministic_gates` the
+    legacy loop uses). The gate is the sole stop authority. Returns 0 iff the gate reports can_stop."""
+    import json as _json
+    import os as _os
+
+    from .. import cc_harness
+
+    repo_root = Path(__file__).resolve().parents[3]
+    thp_dir = repo_root / "scripts" / "tt_hw_planner"
+    server_path = thp_dir / "e2e_mcp.py"
+    pybin = str(repo_root / "python_env" / "bin" / "python")
+    if not Path(pybin).is_file():
+        pybin = sys.executable
+    mcp_env = {
+        "E2E_MCP_DEMO_DIR": str(demo_dir),
+        "E2E_MCP_PCC": str(pcc),
+        "E2E_MCP_TIMEOUT": str(timeout_s),
+        "TT_METAL_HOME": str(repo_root),
+        "PYTHONPATH": str(repo_root),
+        "PATH": f"{repo_root / 'python_env' / 'bin'}{_os.pathsep}/usr/bin:/bin",
+    }
+    cfg = cc_harness.build_mcp_config(pybin, server_path, mcp_env, "e2e-mcp")
+    cfg_path = thp_dir / f".e2e_mcp_config_{re.sub(r'[^A-Za-z0-9._-]', '_', model_id)}.json"
+    cfg_path.write_text(_json.dumps(cfg, indent=2))
+    env = dict(_os.environ)
+    env["TT_METAL_HOME"] = str(repo_root)
+    env["PYTHONPATH"] = str(repo_root)
+
+    def gate_fn():
+        return cc_harness.gate_status(pybin, thp_dir, "e2e_mcp", mcp_env, repo_root)
+
+    prompt = _build_cc_fix_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc)
+    allowed = ["mcp__e2e-mcp__termination_check", "Read", "Edit", "Write", "Bash", "Grep", "Glob"]
+    print("\n  ===== PHASE 3 (cc engine): harness fix-loop on the e2e gate =====\n")
+    res = cc_harness.run_cc_loop(
+        prompt=prompt,
+        mcp_config_path=cfg_path,
+        allowed_tools=allowed,
+        cwd=repo_root,
+        env=env,
+        gate_fn=gate_fn,
+        max_rounds=max_rounds,
+        claude_bin=agent_bin,
+    )
+    final = gate_fn()
+    sep = "=" * 78
+    print("\n" + sep)
+    print(f"  cc engine: rounds={res['rounds']} can_stop={final.get('can_stop')} halted={res['halted']}")
+    print(sep)
+    return 0 if final.get("can_stop") else 1
+
+
+def _source_phase2_shard_stubs(demo_dir: Path) -> list:
+    stub_dir = demo_dir / "_stubs"
+    if not stub_dir.is_dir():
+        return []
+    sourced = []
+    for snap in sorted(stub_dir.glob("*.py.last_good_sharded")):
+        live = snap.with_suffix("")
+        if live.suffix != ".py":
+            continue
+        try:
+            live.write_bytes(snap.read_bytes())
+            sourced.append(live.stem)
+        except OSError:
+            pass
+    return sourced
 
 
 def cmd_emit_e2e(args) -> int:
@@ -232,8 +329,32 @@ def cmd_emit_e2e(args) -> int:
         print(f"  full log (complete transcript) → {full_log}")
     print(sep)
 
+    _pc = _planned_parallelism(model_id, args)
+    _parallel_note = _parallelism_prompt_block(_pc)
+    if _pc is not None and _pc.chips > 1:
+        print(f"  chip placement: {_pc.chips}-chip mesh → TP={_pc.tp} x DP={_pc.dp} (kernel-viability selected)")
+        print("  builder will open the mesh at this split; tt-metal auto-discovers the fabric topology.")
+        if _pc.tp > 1:
+            _sharded = _source_phase2_shard_stubs(demo_dir)
+            if _sharded:
+                print(f"  [shard] sourced Phase-2 TP-sharded stubs (compose as-is, do NOT replicate): {', '.join(_sharded)}")
+                _parallel_note += (
+                    f"\n\nPHASE-2 SHARD STUBS ({', '.join(_sharded)}): these _stubs ALREADY implement the "
+                    f"proven TP={_pc.tp} split (ShardTensorToMesh + all_reduce/cluster_axis). Compose them "
+                    f"AS-IS on the mesh — do NOT rewrite their sharding to replication. Only components with "
+                    f"NO shard implementation may be replicated. The final pipeline MUST contain "
+                    f"ShardTensorToMesh + a collective (all_reduce/all_gather); a pure-replication pipeline is "
+                    f"NOT an acceptable TP={_pc.tp} result."
+                )
+            else:
+                print(
+                    "  [shard] no Phase-2 (.last_good_sharded) stubs present — components will be REPLICATED "
+                    "(TP=1). Run the shard bring-up (promote TT_HW_PLANNER_SHARD=1) to produce them for real TP."
+                )
+        print(sep)
+
     print("\n  ===== PHASE 1+2: BUILDER agent (plan → build → iterate) =====\n")
-    build_prompt = _build_agent_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc)
+    build_prompt = _build_agent_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc, parallel_note=_parallel_note)
     rc_build, build_final = _run_agent(
         prompt=build_prompt,
         agent_bin=agent_bin,
@@ -246,6 +367,16 @@ def cmd_emit_e2e(args) -> int:
         print(f"\n  ✗ builder agent exited rc={rc_build}; skipping grade")
         return 1
     print("  ✓ builder finished (exit 0)")
+
+    if (getattr(args, "engine", "cc") or "cc") == "cc":
+        return _run_emit_e2e_cc(
+            model_id=model_id,
+            demo_dir=demo_dir,
+            pcc=pcc,
+            timeout_s=timeout_s,
+            agent_bin=agent_bin,
+            max_rounds=max_grade_rounds,
+        )
 
     if skip_grade:
         print("\n  (--no-grade) skipping independent grader phase.\n")
@@ -530,9 +661,10 @@ Do all of this with your own tools (Read/Bash), then report a verdict.
    {demo_dir}/tests/e2e/, and a README.md. Flag missing/placeholder pieces.
 
 4. NO-WASTE. From {demo_dir}/bringup_status.json, take the GRADUATED set (NEW
-   components with a `_stubs/<name>.py.last_good_native` snapshot). Confirm the
-   UNION of INVOKED stubs across all task heads' runs == that graduated set.
-   Name any graduated module that is never invoked.
+   components with a `_stubs/<name>.py.last_good_native` OR `.py.last_good_sharded`
+   snapshot — bring-up is single-phase, so a TP>1 mesh run graduates shardable
+   modules DIRECTLY sharded). Confirm the UNION of INVOKED stubs across all task
+   heads' runs == that graduated set. Name any graduated module never invoked.
 
 WRITE the structured machine-readable report to {demo_dir}/grader_report.json
 so the fix agent gets precise targets. Use EXACTLY this schema:
@@ -576,7 +708,66 @@ Do not write or edit any pipeline/stub/test files — you are read-only except f
 ambiguous, it is a FAIL with a hole describing the ambiguity."""
 
 
-def _build_agent_prompt(*, model_id: str, demo_dir: Path, pcc: float) -> str:
+def _mesh_chip_count(mesh_arg) -> int:
+    if not mesh_arg:
+        return 1
+    try:
+        prod = 1
+        for tok in str(mesh_arg).lower().split("x"):
+            prod *= int(tok)
+        return max(prod, 1)
+    except Exception:
+        return 1
+
+
+def _planned_parallelism(model_id: str, args):
+    chips = _mesh_chip_count(getattr(args, "mesh", None))
+    if chips <= 1:
+        return None
+    try:
+        from ..cli import evaluate_kernels, probe_model
+        from ..parallelism import select_parallelism
+
+        probe = probe_model(model_id)
+        if not getattr(probe, "raw_config", None):
+            return None
+        kr = evaluate_kernels(probe.raw_config, tp_grid=None)
+        pc = select_parallelism(chips, kr)
+    except Exception:
+        return None
+    return pc
+
+
+def _parallelism_prompt_block(pc) -> str:
+    if pc is None or pc.chips <= 1:
+        return ""
+    return f"""
+
+================ CHIP PLACEMENT — {pc.chips}-CHIP MESH (TP={pc.tp} x DP={pc.dp}) ================
+The tool has selected this parallelism split for `{pc.chips}` chips by checking per-TP kernel
+viability (largest kernel-viable TP degree that divides the mesh; the remaining chips become
+data-parallel replicas). Place the pipeline on the mesh accordingly:
+
+  - BEFORE opening the mesh, enable the inter-chip fabric: `ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)`.
+    Without this, any CCL (all_gather / all_reduce) raises `TT_FATAL ... fabric_context_ != nullptr`.
+    tt-metal AUTO-DISCOVERS the cluster topology, so do NOT set TT_MESH_GRAPH_DESC_PATH for any mesh size.
+  - Open a mesh device of {pc.chips} chips via `ttnn.open_mesh_device(ttnn.MeshShape({pc.dp}, {pc.tp}))`
+    (rows = DP={pc.dp}, cols = TP={pc.tp}); close it at the end. If only a single device is available
+    at runtime, fall back to it and note that in the run output.
+  - DATA-PARALLEL axis (DP={pc.dp}): replicate the model across the {pc.dp} replica rows using
+    `mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)` when moving tensors on-device, and compose
+    back with the matching composer. DP replicates weights (no per-chip memory saving) and runs
+    independent data copies.
+  - TENSOR-PARALLEL axis (TP={pc.tp}): where the reused ttnn modules already support column/row
+    sharding, shard the sharded weights along the TP axis with `ttnn.ShardTensorToMesh(mesh_device, dim=<shard_dim>)`
+    on the {pc.tp} TP columns; keep embeddings / norms / lm_head replicated. If a module does not
+    expose a shard dim, keep it replicated rather than guessing a split.
+  - The e2e PCC gate is unchanged: parity is still measured against the same HF golden. Placing the
+    pipeline on more chips must NOT change the numerical result — only where it runs.
+"""
+
+
+def _build_agent_prompt(*, model_id: str, demo_dir: Path, pcc: float, parallel_note: str = "") -> str:
     return f"""You are bringing up a REAL end-to-end TTNN pipeline for the model
 `{model_id}`. Work in this repository with your tools (Read/Edit/Write/Bash).
 
@@ -591,8 +782,12 @@ sibling model under models/demos/<other-model>/:
   SOURCE B — the bring-up tool output for this model at:
     {demo_dir}
       - bringup_status.json   (components + status; GRADUATED = NEW with a
-        `_stubs/<name>.py.last_good_native` snapshot and a native ttnn body;
-        REUSE entries have no stub and are NOT graduated work products)
+        `_stubs/<name>.py.last_good_native` OR `.py.last_good_sharded` snapshot.
+        Bring-up is single-phase: TP=1 graduates a native single-device body,
+        TP>1 graduates the shardable modules DIRECTLY sharded (the .last_good_sharded
+        body already does ShardTensorToMesh + all_reduce). The LIVE `_stubs/<name>.py`
+        IS the graduated body — compose it as-is. REUSE entries have no stub and are
+        NOT graduated work products)
       - _stubs/*.py           (the graduated TTNN stubs; each exposes
                                build(device, torch_module) and a callable)
       - _captured/<name>/{{args,kwargs,output}}.pt   (HF golden tensors)
@@ -614,7 +809,8 @@ dependency between them; if two calls share a graduated module, use only ONE
 agent for them. Iterate using Gate 1, Gate 2, and Gate 3 until you have an
 end-to-end pipeline ready:
 
-  Gate 1 — every routed graduated stub is still native (not torch fallback).
+  Gate 1 — every routed graduated stub is still real ttnn (not torch fallback);
+           a sharded (TP>1) body counts as native — do NOT rewrite it to replication.
   Gate 2 — every graduated module is actually INVOKED in the pipeline run
            (no graduated module left out — this is critical).
   Gate 3 — the pipeline's FINAL output PCC vs the HF golden (Source A) is
@@ -672,7 +868,7 @@ inventing a new layout. Keep iterating (fix the stub/wiring, re-run on the TT de
 gates pass. Use `./python_env/bin/python -m pytest <file> -s` to run on device.
 Report a final summary: which calls are READY, the FINAL_PCC per call, and
 confirm all graduated modules were invoked.
-"""
+{parallel_note}"""
 
 
 def _resolve_demo_dir(args) -> Path:

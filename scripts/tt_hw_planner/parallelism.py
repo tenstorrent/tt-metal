@@ -107,6 +107,33 @@ def enumerate_parallelism(chips: int, explore_pp: bool = False) -> List[Parallel
     return out
 
 
+def select_parallelism(chips: int, kernel_report) -> ParallelConfig:
+    """Turn per-TP kernel viability into a chosen TP x DP split for `chips`.
+
+    The tool computes viability per TP degree (KernelReport.has_blockers(tp) over tp_grid) but never
+    acted on it — enumerate_parallelism only ever fills the mesh with TP and DP stays 1. This selector
+    closes that gap, model-agnostically and engine-neutrally (both fsm and cc consume it upstream of the
+    bring-up loop):
+
+      tp = largest degree in the report's grid that divides `chips` AND has no kernel blockers
+      dp = chips // tp   (data-parallel replicas fill the remaining chips)
+
+    Falls back to TP=1 x DP=chips if no larger degree is viable (TP=1 always divides and is the
+    safe floor). Returns a ParallelConfig with tp and dp set."""
+    if chips <= 1:
+        return ParallelConfig(tp=1, dp=1)
+    grid = list(getattr(kernel_report, "tp_grid", None) or [1])
+    candidates = sorted({tp for tp in grid if tp >= 1 and chips % tp == 0}, reverse=True)
+    for tp in candidates:
+        try:
+            blocked = kernel_report.has_blockers(tp=tp)
+        except Exception:
+            blocked = True
+        if not blocked:
+            return ParallelConfig(tp=tp, dp=chips // tp)
+    return ParallelConfig(tp=1, dp=chips)
+
+
 def enumerate_meshes(box: Box, explore_pp: bool = False) -> Iterator[Tuple[Tuple[int, int], ParallelConfig]]:
     """
     Yield (mesh_shape, parallel_config) for each canonical mesh on `box`.

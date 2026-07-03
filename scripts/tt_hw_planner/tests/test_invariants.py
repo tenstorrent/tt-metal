@@ -4193,22 +4193,20 @@ def test_audit_bug_10_moe_block_fires_for_all_non_mla_moe_models() -> None:
 
 
 def test_audit_bug_19_env_compat_check_catches_hard_coded_grid_literals() -> None:
-    """2026-05-23 audit bug #19: `_check_demo_environment_compat` only
-    checked `find_grid`. Verify that the check ALSO grep-scans for
-    `compute_with_storage_grid_size = ttnn.CoreCoord(...)` literals
-    without an adjacent `_dispatch_safe_grid`, and surfaces them as
-    problems. This stops future regressions where someone reverts a
-    SDPA/QKV/MLP migration."""
+    """2026-07-02: the transformers-env pre-flight no longer gates on
+    model_config grid literals. Those checks demanded a `_dispatch_safe_grid`
+    helper that upstream never adopted, so they fired on every run and
+    falsely blocked bring-up. Grid/dispatch-core safety is a code-quality
+    concern, not a transformers-environment concern; it belongs in the
+    kernel-divisibility analysis, not this package-version gate. Pin that
+    the env-compat helper stays focused on transformers-version state."""
     cli_src = _planner_source()
     fn_idx = cli_src.find("def _check_demo_environment_compat(")
     assert fn_idx >= 0
     body = cli_src[fn_idx : fn_idx + 8000]
-    assert "_dispatch_safe_grid" in body, (
-        "env compat check must verify model_config.py defines the " "`_dispatch_safe_grid` helper"
-    )
-    assert "compute_with_storage_grid_size" in body, (
-        "env compat check must grep model_config.py for any remaining "
-        "hard-coded `compute_with_storage_grid_size = ...` grid literals"
+    assert "_dispatch_safe_grid" not in body, (
+        "env-compat check must NOT gate on `_dispatch_safe_grid`; that helper "
+        "was never adopted upstream and the check was a permanent false positive"
     )
 
 
