@@ -22,9 +22,14 @@ inline constexpr std::uint32_t _exp_loadmacro_replay_len_(const int num_sfpu_ite
 // Program macro seq 0 (load -> NONLINEAR(EXP), result in the load LREG) and record the per-slice
 // stream into replay slot 0. Store is explicit because the fused store only writes in-place and we
 // need a separate output slice. Load/store are split into two phases and the LREG rotates (d & 3)
-// so the exp has drained before its store. SFPLOADMACRO addr is the [10:1] field, hence >> 1.
+// so the exp has drained before its store. Because the LREG index only rotates over 4 registers,
+// this two-phase scheme is only correct for num_sfpu_iterations <= 4; beyond that the phase-1 loads
+// would overwrite an LREG whose exp result the phase-2 store has not yet drained.
+// SFPLOADMACRO addr is the [10:1] field, hence >> 1.
 inline void _exp_init_loadmacro_(const std::uint32_t load_base_addr, const std::uint32_t store_base_addr, const int num_sfpu_iterations)
 {
+    LLK_ASSERT(num_sfpu_iterations <= 4, "Two-phase exp LOADMACRO recorder only supports num_sfpu_iterations <= 4 (LREG index rotates d & 3)");
+
     // capture NONLINEAR(EXP) into instr reg 4 (VD=0xC is the backdoor)
     TTI_SFPNONLINEAR(0x0 /* VC */, 0xC /* VD */, p_sfpnonlinear::EXP_MODE);
 

@@ -253,15 +253,17 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
     golden_add = generate_add_golden(
         MathOperation.SfpuElwadd,
         torch.cat([src_add_in0, src_add_in1]),
-        0,
-        tile_cnt_add,
-        0,
-        tile_cnt_add * 32,
+        0,  # src1_idx: first tile of A
+        tile_cnt_add,  # src2_idx: first tile of B
+        0,  # dst_idx: write result starting at tile 0
+        tile_cnt_add * 32,  # num_iterations: 32 rows per tile
         [ADD_INPUT_DIMENSIONS[0] * 2, ADD_INPUT_DIMENSIONS[1]],
         formats.output_format,
         skip_tilize=True,
         input_format=formats.input_format,
-    )[: src_add_in0.numel()]
+    )[
+        : src_add_in0.numel()
+    ]  # Extract only the result region (A's tiles)
 
     num_faces = 4
 

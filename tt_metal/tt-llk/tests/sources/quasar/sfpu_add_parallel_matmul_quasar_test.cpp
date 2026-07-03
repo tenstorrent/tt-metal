@@ -143,6 +143,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(td_unpack_0.buf_desc_id, td_unpack_0.buf_desc);
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack_0);
 
+    // FormatConfig has no unpack_T_* fields, so T is unpacked with S's format. Callers must keep
+    // stimuli_T_format == stimuli_S_format or T will be read with the wrong format.
     bd_unpack_1.f.l1_addr_16B   = L1_ADDRESS(params.buffer_T[0]);
     bd_unpack_1.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
     bd_unpack_1.f.x_dim         = PARAM_SRCS_XDIM;
@@ -200,7 +202,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
 
+        // No auto-loops for unpacker due to HW bug for binary unpacking. Issue #1635: https://github.com/tenstorrent/tt-llk/issues/1635
+        // Preload the unpacker pipeline so that SFPU is not starved
         constexpr int preload_count = 3;
+        // Guard the unsigned drain loop below: PARAM_SRCS_SLICE_COUNT - preload_count wraps if slice_count <= preload_count.
+        // PARAM_SRCS_SLICE_COUNT is a runtime value (not constexpr), so this is a runtime assert.
+        LLK_ASSERT(PARAM_SRCS_SLICE_COUNT > preload_count, "slice count must exceed preload_count or the drain loop bound underflows");
 #pragma GCC unroll preload_count
         for (std::uint32_t j = 0; j < preload_count; j++)
         {
@@ -224,8 +231,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
     }
 
-    wait_sfpu_idle();
     wait_unpack_idle();
+    wait_sfpu_idle();
     wait_pack_idle();
 }
 

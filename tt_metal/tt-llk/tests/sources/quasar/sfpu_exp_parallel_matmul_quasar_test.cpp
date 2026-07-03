@@ -177,9 +177,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             TT_REPLAY(0, exp_replay_len, 0, 0, 0, 0);
             // Drain the LOADMACRO pipeline before clearing the SrcS valids so PACK1 reads the
-            // exp result, not a store still in flight.
+            // exp result, not a store still in flight. dest_done stays 0: this is a SrcS-only path.
             TTI_SFPNOP(0, 0, 0);
-            TTI_SFPNOP(0, 0, 1);
+            TTI_SFPNOP(0, 0, 0);
 
             _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
         }
