@@ -173,9 +173,11 @@ class Qwen25Coder32BPrecisionConfig:
     which falls into the standard Qwen2.5-family branch — **not** the Qwen2.5-7B / Qwen2.5-VL-7B
     special case in ``model_config.py:187``. As a result:
 
-      * **Accuracy** (``model_config.py:160-177``): BF16 ``WQKV`` / ``KV_CACHE`` / ``WO`` +
-        ``HIFI4`` on every ``LI_QKV`` / ``SDPA`` / ``LI_O``. FF and LM head stay at engine
-        defaults (BFP8 FF + ``HIFI2_FP16``).
+      * **Accuracy** (``model_config.py:160-177``): BF16 ``WQKV`` / ``WO`` + ``HIFI4`` on every
+        ``LI_QKV`` / ``SDPA`` / ``LI_O``. FF and LM head stay at engine defaults (BFP8 FF +
+        ``HIFI2_FP16``). **KV cache is BFP8, not BF16** (diverges from TTTv1) — BF16 KV deadlocks
+        the traced on-device-topk decode replay at full depth; BFP8 clears it and is loss-free
+        here (see ``kv_cache_dtype`` below).
       * **Performance** (``model_config.py:208-218``, non-7B branch): only ``FF1_FF3 → BFP4``
         and ``LI_FF1_FF3 → LOFI``. Everything else reverts to TTTv1 defaults
         (BFP8 attention + ``HIFI2`` attention kernels + BFP8 KV cache).
@@ -191,10 +193,18 @@ class Qwen25Coder32BPrecisionConfig:
     those defaults coincide with the TTTv2 ``MLP1D`` defaults.
     """
 
-    # Attention weight / KV-cache dtypes. Accuracy overrides BF16; performance keeps BFP8 default.
+    # Attention weight dtypes: accuracy uses BF16 (default), performance overrides BFP8.
     wqkv_dtype: ttnn.DataType = ttnn.bfloat16
     wo_dtype: ttnn.DataType = ttnn.bfloat16
-    kv_cache_dtype: ttnn.DataType = ttnn.bfloat16
+    # KV cache: BFP8 in BOTH recipes. TTTv1's accuracy config nominally uses BF16 KV, but the TTTv2
+    # traced on-device-topk decode packs all 64 layers' CCLs/attention into ONE trace replay, and
+    # BF16 KV's doubled per-layer KV read / L1 / NoC footprint pushes that packed replay past a
+    # cumulative fabric/traffic ceiling -> deterministic decode-trace-replay deadlock (frozen right
+    # after "Captured decode trace", zero decode steps) at full depth for batch-1·accuracy·
+    # on_device_topk. BFP8 KV halves that footprint and clears the hang, and is loss-free for this
+    # model -- teacher-forcing top1 98.6% / top5 100.0% (>= the 95/99 targets); the accuracy recipe's
+    # precision comes from BF16 attention weights + HIFI4 + fp32 dest acc, not the KV dtype.
+    kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
 
     # MLP FF1/FF3 weight dtype. Accuracy keeps BFP8 default; performance overrides BFP4.
     mlp_w1_w3_dtype: ttnn.DataType = ttnn.bfloat8_b
@@ -214,8 +224,9 @@ class Qwen25Coder32BPrecisionConfig:
 
 
 # TTTv1 ``DecodersPrecision.accuracy("Qwen2.5-Coder-32B-Instruct")`` (``model_config.py:160-177``):
-# BF16 attention weights + BF16 KV cache + HIFI4 + fp32_dest_acc on every attention stage.
-# FF and LM head sit at TTTv2 defaults (BFP8 + HIFI2_FP16); LM head tightens to bf16 (TTTv2 addition).
+# BF16 attention weights + HIFI4 + fp32_dest_acc on every attention stage. FF and LM head sit at
+# TTTv2 defaults (BFP8 + HIFI2_FP16); LM head tightens to bf16 (TTTv2 addition). KV cache is BFP8
+# (NOT TTTv1's BF16) to avoid the full-depth decode-trace-replay deadlock — see kv_cache_dtype above.
 QWEN25_CODER_32B_ACCURACY = Qwen25Coder32BPrecisionConfig()
 
 # TTTv1 ``DecodersPrecision.performance("Qwen2.5-Coder-32B-Instruct")`` (``model_config.py:208-218``,
