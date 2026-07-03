@@ -824,7 +824,7 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
 // DFB implicit-sync opt-out (Gen2)
 // ----------------------------------------------------------------------------
 // Implicit sync is ON by default for any DFB side that has a DM endpoint. A DM kernel can
-// opt out per-DFB (disable_implicit_sync_for) or for all the DFBs it binds at once
+// opt out per-DFB (disable_dfb_implicit_sync_for) or for all the DFBs it binds at once
 // (disable_dfb_implicit_sync_for_all). These tests pin the per-kernel "all" hammer.
 
 TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllDisablesProducerSide) {
@@ -916,7 +916,7 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllAgreesWithExplicitList) {
     std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer1.hw_config))
         .disable_dfb_implicit_sync_for_all = true;
     std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer2.hw_config))
-        .disable_implicit_sync_for.push_back(DFBSpecName{"dfb"});
+        .disable_dfb_implicit_sync_for.push_back(DFBSpecName{"dfb"});
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -1029,7 +1029,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithGen1ConfigFails) {
 
 TEST_F(ProgramSpecTestQuasar, DMKernelWithDefaultGen2ConfigSucceeds) {
     // On Gen2 a DM kernel needs no explicit tuning: Gen2 has a unified NOC and fully automated DM
-    // placement, and a default Gen2Config (empty disable_implicit_sync_for) is all that's required.
+    // placement, and a default Gen2Config (empty disable_dfb_implicit_sync_for) is all that's required.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
