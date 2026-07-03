@@ -17,7 +17,6 @@
       --junitxml=pytest-report-wormhole-1-compile.xml .
     pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --dist=worksteal \
       --splits 5 --group 1 \
       --timeout=60 \
       --junitxml=pytest-report-wormhole-1-run.xml .
@@ -50,7 +49,6 @@
       --junitxml=pytest-report-wormhole-2-compile.xml .
     pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --dist=worksteal \
       --splits 5 --group 2 \
       --timeout=60 \
       --junitxml=pytest-report-wormhole-2-run.xml .
@@ -83,7 +81,6 @@
       --junitxml=pytest-report-wormhole-3-compile.xml .
     pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --dist=worksteal \
       --splits 5 --group 3 \
       --timeout=60 \
       --junitxml=pytest-report-wormhole-3-run.xml .
@@ -116,7 +113,6 @@
       --junitxml=pytest-report-wormhole-4-compile.xml .
     pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --dist=worksteal \
       --splits 5 --group 4 \
       --timeout=60 \
       --junitxml=pytest-report-wormhole-4-run.xml .
@@ -149,7 +145,6 @@
       --junitxml=pytest-report-wormhole-5-compile.xml .
     pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --dist=worksteal \
       --splits 5 --group 5 \
       --timeout=60 \
       --junitxml=pytest-report-wormhole-5-run.xml .
@@ -182,7 +177,6 @@
       --junitxml=pytest-report-blackhole-1-compile.xml .
     pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --dist=worksteal \
       --splits 5 --group 1 \
       --timeout=60 \
       --junitxml=pytest-report-blackhole-1-run.xml .
@@ -215,7 +209,6 @@
       --junitxml=pytest-report-blackhole-2-compile.xml .
     pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --dist=worksteal \
       --splits 5 --group 2 \
       --timeout=60 \
       --junitxml=pytest-report-blackhole-2-run.xml .
@@ -248,7 +241,6 @@
       --junitxml=pytest-report-blackhole-3-compile.xml .
     pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --dist=worksteal \
       --splits 5 --group 3 \
       --timeout=60 \
       --junitxml=pytest-report-blackhole-3-run.xml .
@@ -281,7 +273,6 @@
       --junitxml=pytest-report-blackhole-4-compile.xml .
     pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --dist=worksteal \
       --splits 5 --group 4 \
       --timeout=60 \
       --junitxml=pytest-report-blackhole-4-run.xml .
@@ -314,7 +305,6 @@
       --junitxml=pytest-report-blackhole-5-compile.xml .
     pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --dist=worksteal \
       --splits 5 --group 5 \
       --timeout=60 \
       --junitxml=pytest-report-blackhole-5-run.xml .
