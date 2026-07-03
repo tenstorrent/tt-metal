@@ -1440,3 +1440,74 @@ class TTSeamlessM4Tv2Decoder:
         _drain_device_profiler(self.device, trace_no_profiler=trace_no_profiler)
 
         return out
+
+    def forward_decode_layer_hidden(
+        self,
+        hidden: ttnn.Tensor,
+        encoder_hidden_states: ttnn.Tensor,
+        cross_attention_mask: ttnn.Tensor,
+        *,
+        kv_cache: list[list[ttnn.Tensor]],
+        cross_attn_cache: list[list[ttnn.Tensor]],
+        current_decode_pos: ttnn.Tensor,
+        cache_seq_len: int,
+        cross_attn_cache_valid: bool = False,
+    ) -> ttnn.Tensor:
+        """Decode one layer on pre-formed hidden states (no token/position embeddings).
+
+        Used by single-layer decode PCC tests that feed random hidden vectors per step,
+        matching the ``tt_transformers`` / devstral decoder-layer unit test pattern.
+        """
+        batch = int(hidden.shape[0])
+        seq = int(hidden.shape[1])
+        enc_seq = int(encoder_hidden_states.shape[1])
+        return self._decoder_layers(
+            hidden,
+            encoder_hidden_states,
+            batch=batch,
+            seq=seq,
+            enc_seq=enc_seq,
+            causal_attention_mask=None,
+            cross_attention_mask=cross_attention_mask,
+            kv_cache=kv_cache,
+            cross_attn_cache=cross_attn_cache,
+            cross_attn_cache_valid=cross_attn_cache_valid,
+            current_decode_pos=current_decode_pos,
+            cache_seq_len=cache_seq_len,
+        )
+
+    def forward_prefill_layer_hidden(
+        self,
+        hidden: ttnn.Tensor,
+        encoder_hidden_states: ttnn.Tensor,
+        causal_attention_mask: ttnn.Tensor,
+        cross_attention_mask: ttnn.Tensor,
+        *,
+        kv_cache: list[list[ttnn.Tensor]],
+        cross_attn_cache: list[list[ttnn.Tensor]],
+        kv_cache_fill_len: int,
+        prefill_kv_cache_fill: bool = True,
+    ) -> ttnn.Tensor:
+        """Prefill one layer on pre-formed hidden states (no token/position embeddings).
+
+        Used by single-layer prefill PCC tests that feed random hidden sequences in one shot,
+        matching the ``tt_transformers`` / devstral decoder-layer prefill unit test pattern.
+        """
+        batch = int(hidden.shape[0])
+        seq = int(hidden.shape[1])
+        enc_seq = int(encoder_hidden_states.shape[1])
+        return self._decoder_layers(
+            hidden,
+            encoder_hidden_states,
+            batch=batch,
+            seq=seq,
+            enc_seq=enc_seq,
+            causal_attention_mask=causal_attention_mask,
+            cross_attention_mask=cross_attention_mask,
+            kv_cache=kv_cache,
+            cross_attn_cache=cross_attn_cache,
+            cross_attn_cache_valid=False,
+            current_decode_pos=None,
+            prefill_kv_cache_fill=prefill_kv_cache_fill,
+            kv_cache_fill_len=kv_cache_fill_len,
+        )

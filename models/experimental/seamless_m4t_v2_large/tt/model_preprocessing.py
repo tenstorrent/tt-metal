@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Callable, Optional
 
 import ttnn
 import torch
@@ -831,46 +831,115 @@ def _tp_fused_kv_col_parallel_gather_in0(
     return {"weight": w_tt, "bias": b_tt}
 
 
-def create_text_decoder_parameters(decoder, *, device: ttnn.Device, tp: Optional[int] = None) -> dict:
+def _upload_row_major_replicated(
+    tensor: torch.Tensor,
+    *,
+    device: ttnn.Device,
+    dtype: ttnn.DataType,
+    mesh_mapper,
+    label: str,
+    progress: Optional[Callable[[str], None]] = None,
+) -> ttnn.Tensor:
+    """Host staging then device upload for large ROW_MAJOR tables (avoids slow per-chip tilize)."""
+    if progress is not None:
+        progress(f"uploading {label}")
+    host = ttnn.from_torch(
+        tensor.contiguous(),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=mesh_mapper,
+    )
+    out = ttnn.to_device(host, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if progress is not None:
+        progress(f"done {label}")
+    return out
+
+
+def create_text_decoder_parameters(
+    decoder,
+    *,
+    device: ttnn.Device,
+    tp: Optional[int] = None,
+    num_layers: Optional[int] = None,
+    include_token_embeddings: bool = True,
+    include_embed_positions: bool = True,
+    progress: Optional[Callable[[str], None]] = None,
+) -> dict:
     """
     Convert [`SeamlessM4Tv2Decoder`] weights to TTNN tensors on ``device``.
 
     Token embeddings include ``embed_scale`` (see [`SeamlessM4Tv2ScaledWordEmbedding``]).
     When ``tp > 1``, attention and FFN weights are sharded across devices using
     ``ShardTensorToMesh``; embeddings and layer-norms stay replicated.
+
+    Args:
+        num_layers: Upload only the first ``N`` decoder layers (default: all).
+        include_token_embeddings: When ``False``, upload a 1-row placeholder instead of the
+            full ``vocab_size`` table (~500MB+). Use with ``inputs_embeds`` on the TT forward
+            path (host-computed token embeddings).
+        include_embed_positions: When ``False``, upload a 1-row placeholder (decode-layer PCC
+            tests that pass hidden states directly).
+        progress: Optional callback ``(message) -> None`` for upload progress logging.
     """
     tp = _resolve_tp(device, tp)
     cfg = decoder.config
     scale = embed_scale_for_config(cfg)
     mm = _replicate_mapper(device)
+    hidden_size = int(cfg.hidden_size)
 
-    # ROW_MAJOR embedding tables (matches text encoder / T2U decoder).
-    # ``ttnn.embedding`` emits TILE_LAYOUT activations regardless; TILE-stored weights
-    # can force a trailing ``UntilizeWithUnpaddingDeviceOperation`` per table lookup.
-    scaled_emb = (decoder.embed_tokens.weight.detach() * scale).contiguous()
-    embed_tokens_weight = ttnn.from_torch(
-        scaled_emb,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mm,
-    )
+    if include_token_embeddings:
+        scaled_emb = (decoder.embed_tokens.weight.detach() * scale).contiguous()
+        embed_tokens_weight = _upload_row_major_replicated(
+            scaled_emb,
+            device=device,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=mm,
+            label=f"embed_tokens [{scaled_emb.shape[0]} x {scaled_emb.shape[1]}]",
+            progress=progress,
+        )
+    else:
+        # Placeholder — never used when forward passes ``inputs_embeds``.
+        dummy = torch.zeros(1, hidden_size, dtype=torch.bfloat16)
+        embed_tokens_weight = _upload_row_major_replicated(
+            dummy,
+            device=device,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=mm,
+            label="embed_tokens placeholder (inputs_embeds path)",
+            progress=progress,
+        )
 
     pos_w = decoder.embed_positions.weights.detach()
     if pos_w.dtype != torch.bfloat16:
         pos_w = pos_w.to(dtype=torch.bfloat16)
-    embed_positions_weight = ttnn.from_torch(
-        pos_w,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mm,
-    )
+    if include_embed_positions:
+        embed_positions_weight = _upload_row_major_replicated(
+            pos_w,
+            device=device,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=mm,
+            label=f"embed_positions [{pos_w.shape[0]} x {pos_w.shape[1]}]",
+            progress=progress,
+        )
+    else:
+        dummy_pos = torch.zeros(1, hidden_size, dtype=torch.bfloat16)
+        embed_positions_weight = _upload_row_major_replicated(
+            dummy_pos,
+            device=device,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=mm,
+            label="embed_positions placeholder (layer-hidden decode path)",
+            progress=progress,
+        )
+
+    layer_modules = list(decoder.layers)
+    if num_layers is not None:
+        layer_modules = layer_modules[:num_layers]
 
     layers = []
-    for layer in decoder.layers:
+    for layer_idx, layer in enumerate(layer_modules):
+        if progress is not None:
+            progress(f"layer {layer_idx}: self-attn QKV (tp={tp})")
         if tp > 1:
             # TP>1: column-parallel QKV, row-parallel O_proj/fc2, column-parallel fc1.
             # Cross-attn: column-parallel q/kv, row-parallel out_proj.
@@ -920,6 +989,8 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device, tp: Optional
             fc1 = _linear_pair(layer.ffn.fc1, device=device, weight_dtype=ttnn.bfloat8_b)
             fc2 = _linear_pair(layer.ffn.fc2, device=device, weight_dtype=ttnn.bfloat8_b)
 
+        if progress is not None:
+            progress(f"layer {layer_idx}: layer-norms + FFN")
         layer_dict = {
             "self_attn_layer_norm": {
                 "weight": _ln_to_device(layer.self_attn_layer_norm.weight, device=device),
@@ -955,6 +1026,8 @@ def create_text_decoder_parameters(decoder, *, device: ttnn.Device, tp: Optional
         }
         layers.append(make_parameter_dict(layer_dict))
 
+    if progress is not None:
+        progress("final layer_norm")
     out = {
         "embed_tokens": make_parameter_dict({"weight": embed_tokens_weight}),
         "embed_positions": make_parameter_dict({"weight": embed_positions_weight}),
