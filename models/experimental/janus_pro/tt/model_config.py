@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.janus_pro.tt.load_checkpoints import convert_vision_hf_to_meta
+from models.tt_transformers.tt.load_checkpoints import convert_meta_to_hf
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
 
 
@@ -203,3 +204,11 @@ class ModelArgs(TTModelArgs):
     def reference_language_model(self):
         model = self.reference_transformer(wrap=False)
         return model.model.float()
+
+    def reference_rms_norm_text(self):
+        # Final RMSNorm of the text decoder (language_model.norm).
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.norm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
