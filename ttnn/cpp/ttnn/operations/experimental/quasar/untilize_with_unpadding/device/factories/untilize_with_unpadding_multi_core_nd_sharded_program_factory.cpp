@@ -202,13 +202,13 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
-    ComputeUnpackToDestModes utd;
-    if (fp32_dest_acc_en) {
-        utd.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-    }
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
         input.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
-    std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, compute_hw);
+    if (fp32_dest_acc_en) {
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
+            compute_hw);
+    }
 
     KernelSpec compute{
         .unique_id = COMPUTE,

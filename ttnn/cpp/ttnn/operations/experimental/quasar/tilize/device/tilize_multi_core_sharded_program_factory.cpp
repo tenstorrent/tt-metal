@@ -101,13 +101,12 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
     };
 
     // -- Compute kernel --
-    ComputeUnpackToDestModes utd;
-    if (fp32_llk_acc) {
-        utd = {{INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
-    }
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
         input.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_llk_acc});
-    std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, compute_hw);
+    if (fp32_llk_acc) {
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(INPUT_DFB, UnpackToDestMode::UnpackToDestFp32); }, compute_hw);
+    }
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,
         .source = "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/compute/tilize.cpp",

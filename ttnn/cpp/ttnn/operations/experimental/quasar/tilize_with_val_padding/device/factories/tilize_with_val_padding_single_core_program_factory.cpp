@@ -178,13 +178,13 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
     };
 
     // ---- Compute (Metal 2.0 fork of tilize) ----
-    ComputeUnpackToDestModes utd;
-    if (fp32_llk_acc) {
-        utd.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-    }
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
         a.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_llk_acc});
-    std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, compute_hw);
+    if (fp32_llk_acc) {
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
+            compute_hw);
+    }
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(
