@@ -507,18 +507,25 @@ tighten once real peak-L1 is measured.
 2. ✅ DONE (commit 284cd6a7603) `generate_inplace_halo_kernel_config_tensors(...)` in
    `sliding_window.cpp` (local forward-then-reverse ordering, remote transfers kept together
    + `max_ref_size`, pad); max_ref_size cross-checked vs the gate (200k fuzz, 0 mismatch).
-3. 🔜 Aliasing in `create_output_tensors` + overlap assert.
-4. 🔜 `halo_gather_in_place.cpp` (port archived; reconcile with current `experimental::CB` +
-   split-reader model). Ordering: stage-remote→temp, local (memmove-direction), global
-   semaphore/multicast barrier, padding, distribute-from-temp, atomic barrier at exit.
-5. 🔜 Factory in-place path (ProgramDescriptor): dst-bound CBs, remote-temp CB (post-untilize
-   dtype), rectangular grid + noop + semaphore, two DM kernels; `num_cores_x` from bbox.
-6. 🔜 Caller adaptation in `generic_pools` (skip dealloc/move when gate true).
-7. 🔜 Rigorous tests (§11), WH; then BH.
+3. ✅ DONE (commit aacb4e1cdd8) Aliasing in `create_output_tensors` + overlap `TT_FATAL`.
+4. ✅ DONE (aacb4e1cdd8) `halo_gather_in_place.cpp` — faithful port (only include paths changed).
+5. ✅ DONE (aacb4e1cdd8) Factory in-place path `build_inplace_halo_program` (ProgramDescriptor).
+6. ✅ DONE (aacb4e1cdd8) Caller adaptation in `generic_pools` (skip dealloc/move when gate true).
+7. ⏳ IN PROGRESS Rigorous tests (§11). **WH: PASS** (commit 8f0f8effdd1) — 4 SAVE
+   height-sharded RM shapes × {avg,max} × {bf16,bf8_b out} = 16/16 **bitwise-exact**
+   in-place vs normal (incl. the fwd/rev-read edge shapes n8_112, n32_264); proven in-place
+   actually engaged. **Remaining:** wider edge matrix (partial/noop grids, wide untilize,
+   non-tile-multiple NHW, more SAVE shapes) and **Blackhole** (alignment class 1 / NoC-order
+   class 7 can be WH-clean but BH-broken).
 
-**Note:** steps 3–6 form the integrated device-side slice — nothing is testable until the
-factory can build a complete in-place program and JIT-compile the kernel, so they land
-together and get verified on-device as a unit (not committed piecemeal as green).
+**Status:** the RM/height-sharded vertical slice is COMPLETE and WH-verified bitwise-exact.
+In-place halo silently auto-activates on the SAVE shapes and saves 28–96% of the input-shard
+buffer with zero output difference. The good outcome is demonstrated on WH; hardening
+(edge matrix + BH) and widening (tiled/untilize, width/block sharding) remain.
+
+**Test entry:** `tests/ttnn/unit_tests/operations/pool/test_inplace_halo.py`
+(`TT_METAL_DISABLE_INPLACE_HALO=1` forces the normal golden). The economics/gate gtest is
+`InPlaceHaloEconomics.MaxPoolHeightSharded` in `test_sliding_window_infra.cpp`.
 
 **Deferred (tracked, non-blocking):** DRAM-slicing L1 estimation. Lowering L1 can make the
 estimator *over*-estimate → unnecessary DRAM slicing (already happens today) → no
