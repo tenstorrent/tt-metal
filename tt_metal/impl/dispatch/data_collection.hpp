@@ -7,7 +7,6 @@
 #include <device.hpp>
 #include <host_api.hpp>
 #include <stdint.h>
-#include <functional>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -30,6 +29,7 @@ enum data_collector_t {
 
 // Aliases to the public experimental types for internal use.
 using ProgramRealtimeRecord = tt::tt_metal::experimental::ProgramRealtimeRecord;
+using ProgramRealtimeRecordBatch = tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
 using ProgramRealtimeProfilerCallback = tt::tt_metal::experimental::ProgramRealtimeProfilerCallback;
 using ProgramRealtimeProfilerCallbackHandle = tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle;
 
@@ -58,8 +58,8 @@ void RecordKernelGroup(
 // Update stats with an enqueue of given program.
 void RecordProgramRun(uint64_t program_id);
 
-// Record this program's kernel source paths.
-void RecordKernelSourceMap(tt_metal::detail::ProgramImpl& program);
+// Record metadata used by profiler lookups for this program dispatch.
+void RecordProgramMetadata(tt_metal::detail::ProgramImpl& program);
 
 struct ProgramSubDeviceInfo {
     uint8_t sub_device_id = 0;
@@ -79,24 +79,25 @@ void RecordProgramSubDevice(
 // Look up the sub-device a program was dispatched on, keyed by physical device and runtime_id.
 std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id);
 
-// Tie the program's current runtime ID to its program ID.
-void TieRuntimeIdToProgramId(tt_metal::detail::ProgramImpl& program);
-
 // Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
 // The returned span is valid until MetalContext teardown or reinitialization.
 std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id);
 
 // Register a callback to be invoked when real-time profiler data arrives.
-// Multiple callbacks can be registered; they are called in order of registration.
+// Multiple callbacks can be registered each callback is called from its own thread.
 // Returns a handle that can be used to unregister the callback.
 ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallback callback);
 
 // Unregister a previously registered callback by its handle.
 void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle);
 
-// Invoke all registered real-time profiler callbacks with the given record.
-// Called internally by the real-time profiler receiver thread.
-void InvokeProgramRealtimeProfilerCallbacks(const ProgramRealtimeRecord& record);
+class RealtimeProfilerCallbackListener {
+public:
+    virtual ~RealtimeProfilerCallbackListener() = default;
+    virtual void on_callback_registered(
+        ProgramRealtimeProfilerCallbackHandle handle, const ProgramRealtimeProfilerCallback& callback) = 0;
+    virtual void on_callback_unregistered(ProgramRealtimeProfilerCallbackHandle handle) = 0;
+};
 
 // Returns true if the real-time profiler is currently active on at least one chip,
 // i.e. at least one MeshDevice finished the init+sync handshake and has a receiver
