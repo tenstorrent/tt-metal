@@ -214,15 +214,15 @@ std::vector<CBInfo> get_cb_info(
     //  - Single height block: it reuses out_cb directly for the read-back, so no partials CB
     //    (0-page entry; allocate_cbs skips the device allocation).
     //  - Multiple height blocks, non-coalesced: out_cb is the persistent sharded output and cannot
-    //    double as the dest-reuse scratch across blocks, so allocate a small double-buffered scratch
-    //    CB in the output data format (compute_depthwise_conv1d.cpp::mul_and_accumulate_block).
+    //    double as the dest-reuse scratch across blocks, so allocate a dedicated scratch CB in the
+    //    output data format.
     const bool depthwise_dest_reuse_scratch = is_1d_depthwise_conv &&
                                               sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
                                               !coalesce_1d_depthwise_kw_reads && num_blocks_act_h > 1;
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::MATMUL_PARTIALS,
         .num_pages =
-            depthwise_dest_reuse_scratch ? (2 * act_block_num_tiles) : (is_1d_depthwise_conv ? 0 : per_core_out_ntiles),
+            depthwise_dest_reuse_scratch ? act_block_num_tiles : (is_1d_depthwise_conv ? 0 : per_core_out_ntiles),
         .page_size = depthwise_dest_reuse_scratch ? output_tile_size : partial_tile_size,
         .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
         .data_format = depthwise_dest_reuse_scratch ? output_df : partial_df});
