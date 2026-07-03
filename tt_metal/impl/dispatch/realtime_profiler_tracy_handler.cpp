@@ -71,17 +71,25 @@ std::string FormatTopCounts(const std::unordered_map<Key, uint64_t>& counts) {
 }  // namespace
 
 RealtimeProfilerTracyHandler::RealtimeProfilerTracyHandler() {
-    callback_handle_ = tt::RegisterProgramRealtimeProfilerCallback(
-        [this](const tt::ProgramRealtimeRecord& record) { HandleRecord(record); });
+#if defined(TRACY_ENABLE)
+    callback_handle_ = tt::RegisterProgramRealtimeProfilerCallback([this](const tt::ProgramRealtimeRecordBatch& batch) {
+        if (!tracy::GetProfiler().IsConnected()) {
+            return;
+        }
+        for (const auto& record : batch.records) {
+            HandleRecord(record);
+        }
+    });
+#endif
 }
 
 RealtimeProfilerTracyHandler::~RealtimeProfilerTracyHandler() {
+#if defined(TRACY_ENABLE)
     tt::UnregisterProgramRealtimeProfilerCallback(callback_handle_);
 
     std::lock_guard<std::mutex> lock(mutex_);
     MaybeEmitSkippedZoneSummaryLocked();
 
-#if defined(TRACY_ENABLE)
     for (auto& entry : tracy_contexts_) {
         TracyTTDestroy(entry.second);
     }
@@ -202,9 +210,6 @@ void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord&
     }
 
 #if defined(TRACY_ENABLE)
-    if (!tracy::GetProfiler().IsConnected()) {
-        return;
-    }
     TracyTTCtx ctx = GetContext(record.chip_id);
     if (!ctx) {
         return;
