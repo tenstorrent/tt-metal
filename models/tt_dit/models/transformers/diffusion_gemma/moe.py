@@ -144,8 +144,15 @@ class DiffusionGemmaMoE(Module):
         B, S = router_input.shape[-3], router_input.shape[-2]
         H = self.hidden_size
 
+        # Pad ``M`` to the smallest ``PREFILL_BUCKETS`` value the demos/gemma4 sparse_matmul
+        # kernel is tested at (128). Padding only to the next multiple of TILE (32) technically
+        # satisfies the seq_len-is-tile-aligned assert in the prefill kernel, but observed:
+        # M=32 hangs the sparse_matmul mid-forward, likely a resource/program-config edge case
+        # the kernel wasn't tested at (their own tests use M ∈ {128, 1024, 4096}). Padding to
+        # 128 lands on a known-good path.
         M = B * S
-        M_padded = ((M + TILE - 1) // TILE) * TILE
+        _MIN_M = 128
+        M_padded = max(_MIN_M, ((M + TILE - 1) // TILE) * TILE)
         pad_rows = M_padded - M
 
         # demos/gemma4 wants [1, 1, M, H] where M is tile-aligned.

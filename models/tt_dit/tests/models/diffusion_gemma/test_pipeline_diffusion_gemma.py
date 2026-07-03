@@ -65,6 +65,11 @@ EXPECTED_METRICS = {
     # WH T3K (2x4 ring) — bf16 doesn't fit in DRAM, skipped in-test.
     (2, 4, "ring", "bfp4"): {"encoder": 20.0, "denoising": 120.0, "total": 150.0},
     (2, 4, "ring", "bfp8"): {"encoder": 30.0, "denoising": 180.0, "total": 220.0},
+    # WH T3K (1x8 ring) — tp=8 splits MoE intermediate 8-way, so per-device DRAM is 4x
+    # smaller than (2,4). bf16 fits here. First-run values are placeholders — tighten after.
+    (1, 8, "ring", "bfp4"): {"encoder": 20.0, "denoising": 120.0, "total": 150.0},
+    (1, 8, "ring", "bfp8"): {"encoder": 25.0, "denoising": 150.0, "total": 180.0},
+    (1, 8, "ring", "bf16"): {"encoder": 40.0, "denoising": 220.0, "total": 260.0},
 }
 
 
@@ -90,6 +95,11 @@ def _expert_dtype_key(dtype: ttnn.DataType) -> str:
         pytest.param((2, 4), 0, 1, line_params, ttnn.Topology.Linear, id="bh_qb2"),
         pytest.param((4, 8), 0, 2, line_params, ttnn.Topology.Linear, id="bh_galaxy"),
         pytest.param((2, 4), 0, 1, ring_params, ttnn.Topology.Ring, id="wh_t3k"),
+        # WH T3K flat 1x8 with tp=8. Splits the MoE intermediate dim 8-way, giving ~4x less
+        # per-device DRAM than the 2x4 layout — makes bfp8/bf16 experts fit where 2x4 OOMs.
+        # tp_axis=1 since axis 0 is size 1. Attention KV heads with num_global_kv_heads=2 will
+        # be replicated 4x per device (Gemma4Attention handles this via `_kv_replication`).
+        pytest.param((1, 8), 1, 1, ring_params, ttnn.Topology.Ring, id="wh_t3k_1x8"),
     ],
     indirect=["mesh_device", "device_params"],
 )
