@@ -229,6 +229,10 @@ class DiffusionGemmaPipeline:
             mesh_device=mesh_device,
         )
         tt_for_diffusion.load_state_dict(hf_state)
+        # Free ~1.4 GB per device by aliasing encoder.embed_tokens → decoder.embed_tokens on
+        # device (HF ties these via tie_word_embeddings=True). Necessary on WH T3K where DRAM
+        # is tight with the full 30-layer model even at bfp4 experts.
+        tt_for_diffusion.tie_shared_embeddings()
         return tt_for_diffusion
 
     # -------------------------------------------------------------------------

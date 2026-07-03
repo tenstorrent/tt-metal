@@ -102,6 +102,31 @@ class DiffusionGemmaForBlockDiffusion(Module):
         if "lm_head.weight" not in state and "model.decoder.embed_tokens.weight" in state:
             state["lm_head.weight"] = state["model.decoder.embed_tokens.weight"]
 
+    def tie_shared_embeddings(self) -> None:
+        """Alias ``encoder.embed_tokens.weight`` to ``decoder.embed_tokens.weight`` on device.
+
+        HF ties ``encoder.embed ↔ decoder.embed ↔ lm_head`` via ``tie_word_embeddings=True``.
+        In our TT model each is a separate ``Parameter`` with its own device allocation, so
+        we pay 3x the vocab-embedding storage (~1.4 GB each at bf16 for vocab=262144,
+        hidden=2816). This method aliases encoder → decoder to save one copy (~1.4 GB per
+        device). ``lm_head.weight`` stores its data transposed (Linear semantics: [in, out])
+        while embedding tables are [vocab, hidden], so lm_head can't be trivially aliased —
+        it stays separate.
+
+        Call after ``load_state_dict`` so both parameters have their loaded (independent)
+        tensors first; we deallocate encoder's copy and re-point it at the decoder's.
+        """
+        encoder_embed = self.model.encoder.language_model.embed_tokens
+        decoder_embed = self.model.decoder.embed_tokens
+
+        # Free the encoder's independent allocation before aliasing.
+        if encoder_embed.weight._data is not None:
+            ttnn.deallocate(encoder_embed.weight._data)
+        encoder_embed.weight._data = decoder_embed.weight._data
+
+        # embed_scale is a scalar buffer (value = sqrt(hidden_size)) — safe to leave as two
+        # separate tiny [1, 1] tensors; not worth the aliasing complexity.
+
     def forward(
         self,
         **kwargs,
