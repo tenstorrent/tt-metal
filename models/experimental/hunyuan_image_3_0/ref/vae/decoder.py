@@ -480,6 +480,15 @@ def decode_latent(z: Tensor, model_dir: Path = MODEL_DIR, dtype: torch.dtype = t
     return load_decoder(model_dir, dtype)(z.float())
 
 
+def vae_decode_output_to_rgb(image_bcthw: Tensor) -> Tensor:
+    """Decoder output BCTHW in [-1, 1] -> RGB BCHW in [0, 1].
+
+    Single-frame latent decode (T_in=1) upsamples to T_out=4; HF AutoencoderKLConv3D
+    keeps the last temporal frame only (``decoded[:, :, -1:]``).
+    """
+    return (image_bcthw[:, :, -1] / 2 + 0.5).clamp(0, 1)
+
+
 def tensor_to_preview_image(image_bcthw: Tensor, *, frame: int = -1) -> Tensor:
     """Last temporal frame -> uint8 HWC for PIL (matches HF decode when T=1)."""
     x = image_bcthw[0, :, frame].clamp(-1, 1)
