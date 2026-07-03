@@ -29,7 +29,7 @@ target_link_libraries(
         tt-logger::tt-logger
         Metalium::Metal::Hardware
 )
-target_include_directories(llrt PUBLIC . ${PROJECT_SOURCE_DIR}/tt_metal/api)
+target_include_directories(llrt PUBLIC .)
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)
 
 include(GNUInstallDirs)
