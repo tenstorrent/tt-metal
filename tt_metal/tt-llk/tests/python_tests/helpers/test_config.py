@@ -1087,6 +1087,23 @@ class TestConfig:
             )
 
             try:
+                # Every role header (quasar_pch_{unpack,math,pack,sfpu}.h) does
+                # `#include "quasar_pch_common.h"` with a bare quoted include,
+                # resolved by GCC relative to the INCLUDING FILE'S OWN
+                # directory. That only works if the common header is staged
+                # alongside the role headers in PCH_DIR too, not just in
+                # PCH_SOURCE_DIR where they normally live side by side. This
+                # was missing entirely -- every build_pch() call has been
+                # failing with "quasar_pch_common.h: No such file or
+                # directory" since PCH was introduced (confirmed via a real
+                # run's "Report PCH status" log), meaning PCH has never once
+                # produced a usable .gch; every compile has silently fallen
+                # back to the pre-PCH fail-open path this whole time.
+                common_src = TestConfig.PCH_SOURCE_DIR / "quasar_pch_common.h"
+                if not common_src.exists():
+                    raise FileNotFoundError(f"missing PCH source header {common_src}")
+                shutil.copyfile(common_src, TestConfig.PCH_DIR / "quasar_pch_common.h")
+
                 for component in TestConfig.KERNEL_COMPONENTS:
                     trisc_define = TestConfig._pch_trisc_define(component)
                     src_header = TestConfig.PCH_SOURCE_DIR / f"quasar_pch_{component}.h"
