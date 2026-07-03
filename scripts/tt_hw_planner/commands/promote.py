@@ -85,7 +85,7 @@ def cmd_promote(args) -> int:
         )
         return 2
 
-    if (getattr(args, "engine", "fsm") or "fsm") == "cc":
+    if (getattr(args, "engine", "cc") or "cc") == "cc":
         from .._cli_helpers.bringup_cc import run_bringup_cc
 
         banner(f"PROMOTE (cc engine) — harness loop on the per-component gate for {MODEL}")

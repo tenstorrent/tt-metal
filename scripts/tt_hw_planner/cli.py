@@ -9534,7 +9534,7 @@ def _cmd_up_core(args) -> int:
             _print_bringup_summary(MODEL, box=BOX, sep=sep)
             return 0
 
-        if (getattr(args, "engine", "fsm") or "fsm") == "cc":
+        if (getattr(args, "engine", "cc") or "cc") == "cc":
             from ._cli_helpers.bringup_cc import run_bringup_cc
             from .bringup_loop import find_demo_dir
 
@@ -10455,8 +10455,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     pup.add_argument(
         "--engine",
-        default="fsm",
-        choices=["fsm", "cc"],
+        default="cc",
+        choices=["cc", "fsm"],
         help="fsm = current auto-iterate loop (default); cc = drive per-component bring-up through the "
         "shared Claude-Code harness against the deterministic bring-up gate (same PCC/cap gates + "
         "graduation snapshot contract)",
@@ -10493,8 +10493,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     paut.add_argument(
         "--engine",
-        default="fsm",
-        choices=["fsm", "cc"],
+        default="cc",
+        choices=["cc", "fsm"],
         help="fsm = current auto-iterate loop (default); cc = drive per-component bring-up through the "
         "shared Claude-Code harness against the deterministic bring-up gate (same PCC/cap gates + "
         "graduation snapshot contract)",
@@ -10672,8 +10672,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     pprom.add_argument(
         "--engine",
-        default="fsm",
-        choices=["fsm", "cc"],
+        default="cc",
+        choices=["cc", "fsm"],
         help="fsm = current auto-iterate loop (default); cc = drive per-component bring-up through the "
         "shared Claude-Code harness against the deterministic bring-up gate (same PCC/cap gates + "
         "graduation snapshot contract, agent+gate driven)",
@@ -11165,8 +11165,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     pe2e.add_argument(
         "--engine",
-        default="fsm",
-        choices=["fsm", "cc"],
+        default="cc",
+        choices=["cc", "fsm"],
         help="fsm = current build→gates→fix loop (default); cc = drive the fix loop through the shared "
         "Claude-Code harness against the e2e deterministic gate (same G1–G4 gates, agent+gate driven)",
     )
