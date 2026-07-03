@@ -88,13 +88,14 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             cache_path=c("wv" + tag),
             dtype=ttnn.bfloat8_b,
         )
-    # Row-parallel wo (reduce-scatter after)
+    # Row-parallel wo (reduce-scatter after): DRAM-width-sharded like the in-proj — decode tput win.
+    wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
     tw["wo"] = tpc.shard_w(
         state_dict["o_proj.weight"],
         mesh,
         dim=0,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        cache_path=c("wo"),
+        memory_config=args.attn_wo_weight_memcfg if wo_sharded else ttnn.DRAM_MEMORY_CONFIG,
+        cache_path=c("wo.dramshard" if wo_sharded else "wo"),
         dtype=ttnn.bfloat8_b,
     )
     # QK norms: HF-correct (1+weight) for sharp prefill attention / retrieval
@@ -123,6 +124,7 @@ class TPAttention:
         self.compute_cfg = tpc.COMPUTE_HIFI2
         # Must match load_attention_weights_tp gates
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
+        self._wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
         self._fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
         self._qg_deint = self._fused_qkv
         self.k_caches = None
@@ -169,6 +171,21 @@ class TPAttention:
             self.args.act_shard_hidden,
             self.args.prefill_progcfg,
             self.args.dim,
+        )
+
+    def _wo_proj(self, x, weight):
+        """Row-parallel output projection: DRAM-sharded decode/prefill matmul (K=attn_out_dim_tp),
+        matching the in-proj. Falls back to plain interleaved when no sharded memcfg."""
+        if not self._wo_sharded:
+            return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return tpc.sharded_decode_matmul(
+            x,
+            weight,
+            self.compute_cfg,
+            self.args.attn_wo_progcfg,
+            self.args.act_shard_attn_out,
+            self.args.prefill_progcfg,
+            self.args.attn_out_dim_tp,
         )
 
     def _make_heads(self, qg, kp, vp, S):
@@ -287,9 +304,7 @@ class TPAttention:
         gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat))
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
-        partial = ttnn.linear(
-            gated, tw["wo"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
         return tt_all_reduce(
             partial,
@@ -346,8 +361,8 @@ class TPAttention:
         if use_paged:
             # External paged KV: update at cur_pos, then paged SDPA-decode
             keys, values = self.paged_k, self.paged_v
-            k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-            v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+            k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
+            v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
             k_sh = ttnn.to_memory_config(k_p, self.args.kv_update_shard_cfg)
@@ -366,8 +381,9 @@ class TPAttention:
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
                 program_config=sdpa_dec_cfg,
-                # SDPA-decode output stays DRAM (native path; feeds DRAM-weight wo)
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # Emit to L1: consumed by the L1 sigmoid-gate multiply next (output-only, doesn't
+                # change the SDPA reduction), before the wo matmul + all-reduce re-materialize to DRAM.
+                memory_config=_L1,
             )
             ttnn.deallocate(q)
         else:
@@ -403,8 +419,9 @@ class TPAttention:
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
                 program_config=sdpa_dec_cfg,
-                # SDPA-decode output stays DRAM (native path; feeds DRAM-weight wo)
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # Emit to L1: consumed by the L1 sigmoid-gate multiply next (output-only, doesn't
+                # change the SDPA reduction), before the wo matmul + all-reduce re-materialize to DRAM.
+                memory_config=_L1,
             )
             ttnn.deallocate(q)
 
@@ -414,9 +431,7 @@ class TPAttention:
 
         gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
         ttnn.deallocate(gated)
-        wo_partial = ttnn.linear(
-            gated_flat, tw["wo"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         return tt_all_reduce(
@@ -544,9 +559,7 @@ class TPAttention:
         gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat))
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
-        partial = ttnn.linear(
-            gated, tw["wo"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
         return tt_all_reduce(
             partial,

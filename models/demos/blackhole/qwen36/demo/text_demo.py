@@ -397,8 +397,9 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     model._ondev_argmax = _greedy
     _per_shard = vocab // model.num_devices
 
-    # Multi-core max over vocab shard (tile-aligned R×256 grid)
-    _MAXVAL_C = 256
+    # Multi-core max over vocab shard: reduce dim=-1 parallelizes over tile-ROWS (R/32 cores), so
+    # a tall/narrow grid (C=32 → R≈1952 → ~61 cores) beats the old 256×256 (8 tile-rows → 8 cores).
+    _MAXVAL_C = 32
     _MAXVAL_R = (((_per_shard + _MAXVAL_C - 1) // _MAXVAL_C) + 31) // 32 * 32
 
     def _maxval_dev(sharded_logits):
@@ -422,12 +423,16 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         ttnn.deallocate(logits_rm)
         return idx, _maxval_dev(sharded_logits)
 
+    _read_comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
+
     def _read_tok(idx_t, val_t):
-        # Winner device = argmax of per-shard max vals; global token = d * per_shard + local_idx[d]
-        idxs = [int(ttnn.to_torch(t).reshape(-1)[0]) for t in ttnn.get_device_tensors(idx_t)]
-        vals = [float(ttnn.to_torch(t).reshape(-1)[0]) for t in ttnn.get_device_tensors(val_t)]
-        d = max(range(len(vals)), key=lambda i: vals[i])
-        return d * _per_shard + idxs[d]
+        # Winner device = argmax of per-shard max vals; global token = d * per_shard + local_idx[d].
+        # One mesh-composed D2H per tensor (2 total) vs one-per-shard (2*num_devices) — same
+        # device order for idx and val, so d maps to device d = vocab shard d.
+        idxs = ttnn.to_torch(idx_t, mesh_composer=_read_comp).reshape(-1)
+        vals = ttnn.to_torch(val_t, mesh_composer=_read_comp).reshape(-1)
+        d = int(torch.argmax(vals).item())
+        return d * _per_shard + int(idxs[d].item())
 
     def _update(token, position):
         host = model.prepare_decode_inputs_host(

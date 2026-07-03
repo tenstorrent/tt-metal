@@ -115,13 +115,14 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         tw["ab"] = tpc.shard_w(
             ab, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("ab"), dtype=ttnn.bfloat8_b
         )
-    # Row-parallel out projection
+    # Row-parallel out projection: DRAM-width-sharded (like the in-proj) — decode tput win.
+    _out_sharded = getattr(args, "gdn_out_weight_memcfg", None) is not None
     tw["out"] = tpc.shard_w(
         sd[P + "out_proj.weight"],
         mesh,
         dim=0,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        cache_path=c("out"),
+        memory_config=args.gdn_out_weight_memcfg if _out_sharded else ttnn.DRAM_MEMORY_CONFIG,
+        cache_path=c("out.dramshard" if _out_sharded else "out"),
         dtype=ttnn.bfloat8_b,
     )
     # Per-head params
@@ -143,6 +144,8 @@ class TPGatedDeltaNet:
         self.args = args
         self.tw = tw
         self.tt_ccl = tt_ccl
+        # DRAM-shard the row-parallel out projection (decode tput win; matches loader gate).
+        self._out_sharded = getattr(self.args, "gdn_out_weight_memcfg", None) is not None
         self.B = args.max_batch_size
         self.Nk = args.gdn_nk_tp
         self.Nv = args.gdn_nv_tp
@@ -232,6 +235,21 @@ class TPGatedDeltaNet:
             self.args.act_shard_hidden,
             self.args.prefill_progcfg,
             self.args.dim,
+        )
+
+    def _row_proj(self, x, weight):
+        """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),
+        matching the in-proj. Falls back to plain interleaved on single device (no sharded memcfg)."""
+        if not self._out_sharded:
+            return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return tpc.sharded_decode_matmul(
+            x,
+            weight,
+            self.cfg,
+            self.args.gdn_out_progcfg,
+            self.args.act_shard_gdn_value,
+            self.args.prefill_progcfg,
+            self.args.gdn_value_dim_tp,
         )
 
     def _project_qkvzab(self, x, S):
@@ -369,7 +387,7 @@ class TPGatedDeltaNet:
         gated = ttnn.multiply(out_f, ttnn.silu(z, memory_config=_L1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
-        partial = ttnn.linear(gated, tw["out"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
         return tt_all_reduce(
@@ -413,9 +431,12 @@ class TPGatedDeltaNet:
         rf = Nv // Nk
         q = ttnn.repeat_interleave(q, rf, dim=1)
         k = ttnn.repeat_interleave(k, rf, dim=1)
-        q = ttnn.reshape(q, (B, 1, Nv, Dk))
-        k = ttnn.reshape(k, (B, 1, Nv, Dk))
-        v = ttnn.reshape(v, (B, 1, Nv, Dv))
+        # Decode: hand q/k/v to the recurrent kernel in L1. The kernel typecasts + does a LOCAL
+        # l2-norm (no cross-device gather), so placement is output-neutral here (unlike SDPA-q,
+        # which hard-requires DRAM, and unlike the residual→DistributedNorm all-gather).
+        q = ttnn.reshape(q, (B, 1, Nv, Dk), memory_config=_L1)
+        k = ttnn.reshape(k, (B, 1, Nv, Dk), memory_config=_L1)
+        v = ttnn.reshape(v, (B, 1, Nv, Dv), memory_config=_L1)
 
         beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))
         ttnn.deallocate(b)
@@ -451,7 +472,7 @@ class TPGatedDeltaNet:
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
 
-        partial = ttnn.linear(gated, tw["out"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
         return tt_all_reduce(
