@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cassert>
 #include <tt_stl/assert.hpp>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,7 @@
 #include <mutex>
 #include <regex>
 #include <set>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -78,14 +80,35 @@ using __emule_cb_state = tt_emule::CBSyncState;
 thread_local std::vector<uint32_t> __rt_args;
 thread_local std::vector<uint32_t> __common_rt_args;
 thread_local tt_emule::Core* __core = nullptr;
-thread_local tt_emule::Device* __device = nullptr;
 
 // Memory bridge pointers — now non-static for -rdynamic export.
 thread_local uint8_t* __emule_bridge_l1 = nullptr;
 thread_local uint8_t* __emule_bridge_dram = nullptr;
+thread_local uint32_t __emule_pending_noc_reads = 0;
+thread_local uint32_t __emule_sem_l1_range_start = 0;
+thread_local uint32_t __emule_sem_l1_range_end = 0;
+thread_local uint32_t __emule_l1_unreserved_base = 0;
+thread_local const uint64_t* __emule_l1_tensor_ranges = nullptr;
+thread_local uint32_t __emule_l1_tensor_ranges_count = 0;
+thread_local const uint64_t* __emule_l1_padding_ranges = nullptr;
+thread_local uint32_t __emule_l1_padding_ranges_count = 0;
+thread_local const uint64_t* __emule_l1_host_ranges = nullptr;
+thread_local uint32_t __emule_l1_host_ranges_count = 0;
+thread_local uint64_t* __emule_l1_resolved_ranges = nullptr;
+thread_local uint32_t* __emule_l1_resolved_ranges_count = nullptr;
+thread_local uint32_t __emule_l1_resolved_ranges_capacity = 0;
 
 // Per-core CB state array, shared between threads on the same core.
 thread_local __emule_cb_state* __emule_cbs = nullptr;
+thread_local const char* __emule_cb_reserve_file[32] = {};
+thread_local uint32_t __emule_cb_reserve_line[32] = {};
+thread_local const char* __emule_cb_wait_file[32] = {};
+thread_local uint32_t __emule_cb_wait_line[32] = {};
+thread_local uint32_t __emule_cb_reserved_pages[32] = {};
+thread_local uint32_t __emule_cb_waited_pages[32] = {};
+thread_local bool __emule_cb_reserve_dangling[32] = {};
+thread_local bool __emule_cb_wait_dangling[32] = {};
+thread_local bool __emule_cb_boundary_strict = false;
 
 // Per-thread DFB interface array (one entry per DFB on the core).
 thread_local tt_emule::EmuleDFBInterface* __emule_dfbs = nullptr;
@@ -196,6 +219,30 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         }
     }
     return nullptr;
+}
+
+extern "C" bool __emule_noc_addr_is_dram(uint64_t noc_addr) {
+    uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
+    uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
+
+    if (__emule_core_map) {
+        uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
+        auto it = __emule_core_map->find(key);
+        if (it != __emule_core_map->end()) {
+            return it->second->role() == tt_emule::CoreRole::DRAM;
+        }
+    }
+    return false;
+}
+
+extern "C" [[noreturn]] void __emule_asan_panic(const char* fmt, ...) {
+    if (fmt != nullptr) {
+        va_list ap;
+        va_start(ap, fmt);
+        std::vfprintf(stderr, fmt, ap);
+        va_end(ap);
+    }
+    std::abort();
 }
 
 // Resolve multicast: iterate over rectangle of cores and memcpy to each.
@@ -1606,7 +1653,6 @@ static void launch_cores(
                             __emule_tc_array = tc_array;
                             __processor_id = ki.processor_id;
                             __core = core;
-                            __device = nullptr;
                             __emule_core_map = core_map_ptr;
                             my_x[0] = px;
                             my_x[1] = px;
@@ -1614,6 +1660,29 @@ static void launch_cores(
                             my_y[1] = py;
                             __emule_logical_x = lx;
                             __emule_logical_y = ly;
+                            __emule_pending_noc_reads = 0;
+                            __emule_sem_l1_range_start = 0;
+                            __emule_sem_l1_range_end = 0;
+                            __emule_l1_unreserved_base = 0;
+                            __emule_l1_tensor_ranges = nullptr;
+                            __emule_l1_tensor_ranges_count = 0;
+                            __emule_l1_padding_ranges = nullptr;
+                            __emule_l1_padding_ranges_count = 0;
+                            __emule_l1_host_ranges = nullptr;
+                            __emule_l1_host_ranges_count = 0;
+                            __emule_l1_resolved_ranges = nullptr;
+                            __emule_l1_resolved_ranges_count = nullptr;
+                            __emule_l1_resolved_ranges_capacity = 0;
+                            __emule_cb_boundary_strict = false;
+                            std::fill(std::begin(__emule_cb_reserve_file), std::end(__emule_cb_reserve_file), nullptr);
+                            std::fill(std::begin(__emule_cb_reserve_line), std::end(__emule_cb_reserve_line), 0);
+                            std::fill(std::begin(__emule_cb_wait_file), std::end(__emule_cb_wait_file), nullptr);
+                            std::fill(std::begin(__emule_cb_wait_line), std::end(__emule_cb_wait_line), 0);
+                            std::fill(std::begin(__emule_cb_reserved_pages), std::end(__emule_cb_reserved_pages), 0);
+                            std::fill(std::begin(__emule_cb_waited_pages), std::end(__emule_cb_waited_pages), 0);
+                            std::fill(
+                                std::begin(__emule_cb_reserve_dangling), std::end(__emule_cb_reserve_dangling), false);
+                            std::fill(std::begin(__emule_cb_wait_dangling), std::end(__emule_cb_wait_dangling), false);
 
                             __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
                             __emule_trisc_id = 0;
