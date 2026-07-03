@@ -226,3 +226,33 @@ Each remaining iteration is deep fused-op code surgery + 10-min reprofile + PCC 
 long autonomous grind the PLAN is built for; it is not flag-flipping. Batches 8/16/32 repeat this
 loop (decode M grows with batch → matmul util improves, so SLOW-matmul pressure eases at higher batch;
 TM structural overhead persists).
+
+## WH 1x8 optimization loop (batch-1, TP=1 correct config)
+
+After the TP=1 fix (1x8 mesh) + batch-1 baseline landed, profiled the 1x8 baseline with
+Tracy (agent_logs/profile_b1_wh_1x8.sh). Device-time breakdown (eager, prefill-dominated):
+SparseMatmul 36% (MoE experts, LoFi+tuned), ReduceScatter 28% + AllGather 9.5% (MoE/attn
+all-reduce, ~3x their 2x4 share — 8-device linear all-reduce is O(N) latency), Matmul 4.8%.
+
+Committed wins (each: tracy -> reason -> ISL perf test -> PCC vs HF 128..8192 -> commit):
+  1. Ring all-reduce (2b7a9fb2ad0): Topology.Linear -> Ring on the 8-device line.
+     decode 93.5 -> 88.4 ms/tok (-5.5%), prefill neutral, PCC unchanged. num_links=1 (no
+     deadlock). Scoped to WH via apply_wh_tp1_env; code default stays Linear (BH untouched).
+  2. WH HiFi3 for fp32-accum MLP/router matmuls (6219af33add): HiFi4+fp32-accum hits a WH HW
+     bug (slower AND less accurate; ttnn warns to prefer HiFi3). prefill 7.19 -> 6.79s (-5.6%),
+     PCC held/improved (4096: 0.9304 -> 0.9330). is_wormhole_b0()-gated; BH keeps HiFi4.
+
+Dead-ends (reasoned, NOT committed):
+  - prefill chunk 128 -> 256: SLOWER. Pushes MoE sparse matmul into num_blocks>1 (forced to
+    DRAM, 2-4x slower per moe_tt.py). Keep chunk=128.
+  - CCL_NUM_LINKS 1 -> 2 (with ring): DEADLOCK (timeout). Confirms T3K's 1-CCL-link/axis HW
+    limit is physical, not topology-dependent.
+
+Remaining bottlenecks are HW/algorithm-limited:
+  - SparseMatmul (36%): already LoFi + tuned + fused gate/up; larger M regresses it. No knob.
+  - Collectives (37%): ring took the decode latency win; prefill collectives are bandwidth-
+    bound and can't add links (1-link HW). Only lever is bf8 reduce, which is too risky — ISL
+    4096 PCC is already 0.933 (gate 0.93), so halving reduce precision would likely fail.
+  - Attention runs head-parallel OFF on 1x8 (20 heads not divisible by tp=8) -> replicated.
+    Enabling it needs head-padding 20->24 + new padded weight variants: ~3-5% upside, high
+    correctness risk, poor ROI on a hang-prone device. Deferred.
