@@ -110,6 +110,14 @@ FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t
     const auto& compressed_route = routing_info->paths[dst_chip_id];
     uint8_t ns_hops = compressed_route.get_ns_hops();
     uint8_t ew_hops = compressed_route.get_ew_hops();
+    uint8_t z_present = compressed_route.get_z_present();
+    uint8_t z_before = compressed_route.get_z_before();
+
+    if (z_present && z_before == 0) {
+        // Z is the top-priority dimension: when no NS link precedes it, the very first hop is the skip
+        // link, so the worker must inject into the Z router.
+        return static_cast<uint32_t>(eth_chan_directions::Z);
+    }
 
     if (ns_hops > 0) {
         // is there another way to know whether it's north or south hops?

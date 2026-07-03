@@ -504,6 +504,140 @@ TEST_F(RouterChannelMappingTest, ZRouter_CompleteChannelLayout) {
     EXPECT_EQ(mapping.get_num_virtual_channels(), 2);
 }
 
+// ============ Intra-Mesh Z (sub-torus skip-link) VC0 Tests ============
+//
+// Intra-mesh Z grows the mesh-router VC0 from 4 -> 5 (channel 4 = intra-mesh Z), making it symmetric
+// to the Z_ROUTER VC0. The critical invariant is that VC1/VC2 flat-base indices shift with the actual
+// VC0 count so VC1 sender 0 does NOT alias onto the new VC0 Z channel at flat index 4.
+
+TEST_F(RouterChannelMappingTest, IntraMeshZ_Mesh_VC0_Has5SenderChannels) {
+    FabricRouterChannelMapping mapping(
+        Topology::Mesh,
+        false,  // no tensix
+        RouterVariant::MESH,
+        nullptr,  // no intermesh config (single-mesh sub-torus)
+        false,    // has_z_on_device = false (no inter-mesh Z router)
+        true);    // has_intra_mesh_z = true
+
+    EXPECT_EQ(mapping.get_num_virtual_channels(), 1);  // VC0 only
+    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(0), 5);
+
+    // VC0 channels 0-4 map to erisc internal channels 0-4 (channel 4 = intra-mesh Z)
+    for (uint32_t i = 0; i < 5; ++i) {
+        auto s = mapping.get_sender_mapping(0, i);
+        EXPECT_EQ(s.builder_type, BuilderType::ERISC);
+        EXPECT_EQ(s.internal_sender_channel_id, i);
+    }
+}
+
+TEST_F(RouterChannelMappingTest, IntraMeshZ_Torus_VC0_Has5SenderChannels) {
+    FabricRouterChannelMapping mapping(
+        Topology::Torus, false, RouterVariant::MESH, nullptr, false, /*has_intra_mesh_z=*/true);
+
+    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(0), 5);
+}
+
+TEST_F(RouterChannelMappingTest, IntraMeshZ_Disabled_VC0_StaysFourChannels) {
+    // Regression: with the flag off, VC0 must remain 4-wide (byte-identical to legacy behavior).
+    FabricRouterChannelMapping mapping(
+        Topology::Mesh, false, RouterVariant::MESH, nullptr, false, /*has_intra_mesh_z=*/false);
+
+    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(0), 4);
+}
+
+TEST_F(RouterChannelMappingTest, IntraMeshZ_WithVC1_ShiftsVC1BaseTo5) {
+    // VC0 grows to 5, so VC1 senders must start at flat index 5 (NOT 4) to avoid aliasing the Z channel.
+    auto intermesh_config = IntermeshVCConfig::full_mesh();
+    FabricRouterChannelMapping mapping(
+        Topology::Mesh,
+        false,
+        RouterVariant::MESH,
+        &intermesh_config,
+        /*has_z_on_device=*/false,
+        /*has_intra_mesh_z=*/true);
+
+    EXPECT_EQ(mapping.get_num_virtual_channels(), 2);
+    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(0), 5);
+    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(1), 3);
+
+    // VC0 senders at flat 0-4
+    for (uint32_t i = 0; i < 5; ++i) {
+        EXPECT_EQ(mapping.get_sender_mapping(0, i).internal_sender_channel_id, i);
+    }
+    // VC1 senders at flat 5-7 (base shifted by the actual VC0 count of 5)
+    for (uint32_t i = 0; i < 3; ++i) {
+        auto s = mapping.get_sender_mapping(1, i);
+        EXPECT_EQ(s.builder_type, BuilderType::ERISC);
+        EXPECT_EQ(s.internal_sender_channel_id, 5 + i);
+    }
+
+    // Receivers unchanged: VC0->0, VC1->1
+    EXPECT_EQ(mapping.get_receiver_mapping(0, 0).internal_receiver_channel_id, 0);
+    EXPECT_EQ(mapping.get_receiver_mapping(1, 0).internal_receiver_channel_id, 1);
+}
+
+TEST_F(RouterChannelMappingTest, IntraMeshZ_WithVC1AndVC2_ShiftsVC2Base) {
+    // VC0:5 + VC1:3 => VC2 sender lands at flat index 8.
+    auto config = IntermeshVCConfig::full_mesh();
+    config.requires_vc2 = true;
+    FabricRouterChannelMapping mapping(
+        Topology::Mesh,
+        false,
+        RouterVariant::MESH,
+        &config,
+        /*has_z_on_device=*/false,
+        /*has_intra_mesh_z=*/true);
+
+    EXPECT_EQ(mapping.get_num_virtual_channels(), 3);
+    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(0), 5);
+    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(1), 3);
+    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(2), 1);
+
+    auto vc2_sender = mapping.get_sender_mapping(2, 0);
+    EXPECT_EQ(vc2_sender.internal_sender_channel_id, 8);  // 5 (VC0) + 3 (VC1)
+    // VC2 receiver after VC0(0) + VC1(1) => 2
+    EXPECT_EQ(mapping.get_receiver_mapping(2, 0).internal_receiver_channel_id, 2);
+}
+
+TEST_F(RouterChannelMappingTest, IntraMeshZ_WithInterMeshZAndVC1_ShiftsVC1BaseTo5) {
+    // A node that has BOTH intra-mesh Z (5-wide VC0) and an inter-mesh Z router (VC1 = 4 wide).
+    // VC1 senders must start at flat index 5: 5,6,7,8.
+    auto intermesh_config = IntermeshVCConfig::full_mesh();
+    FabricRouterChannelMapping mapping(
+        Topology::Mesh,
+        false,
+        RouterVariant::MESH,
+        &intermesh_config,
+        /*has_z_on_device=*/true,
+        /*has_intra_mesh_z=*/true);
+
+    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(0), 5);
+    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(1), 4);
+    for (uint32_t i = 0; i < 4; ++i) {
+        EXPECT_EQ(mapping.get_sender_mapping(1, i).internal_sender_channel_id, 5 + i);
+    }
+}
+
+TEST_F(RouterChannelMappingTest, IntraMeshZ_GetAllSenderMappings) {
+    auto intermesh_config = IntermeshVCConfig::full_mesh();
+    FabricRouterChannelMapping mapping(
+        Topology::Mesh,
+        false,
+        RouterVariant::MESH,
+        &intermesh_config,
+        /*has_z_on_device=*/false,
+        /*has_intra_mesh_z=*/true);
+
+    auto all_mappings = mapping.get_all_sender_mappings();
+
+    // VC0(5) + VC1(3) = 8, contiguous flat indices 0..7
+    EXPECT_EQ(all_mappings.size(), 8);
+    for (size_t i = 0; i < all_mappings.size(); ++i) {
+        EXPECT_EQ(all_mappings[i].builder_type, BuilderType::ERISC);
+        EXPECT_EQ(all_mappings[i].internal_sender_channel_id, i);
+    }
+}
+
 // ============ get_all_sender_mappings Tests ============
 
 TEST_F(RouterChannelMappingTest, GetAllSenderMappings_MeshRouter) {

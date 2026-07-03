@@ -94,6 +94,9 @@ public:
      * @param enable_mesh_pass_through EXPERIMENTAL: when set (and has_z), also forwards VC1 traffic to
      *        the local Z router (MESH_TO_Z on VC1) so inter-mesh traffic can pass through this mesh
      *        toward a further mesh (A->B->C) instead of sinking here. Reuses VC1; not deadlock-safe.
+     * @param has_intra_mesh_z Whether this mesh router has an intra-mesh Z neighbor (sub-torus skip
+     *        link). When set, Z is added as a 4th VC0 outbound direction (target sender channel 4),
+     *        so intra-mesh Z traffic rides VC0 alongside the E/W/N/S mesh directions.
      * @return Configured RouterConnectionMapping for mesh router
      */
     static RouterConnectionMapping for_mesh_router(
@@ -101,7 +104,8 @@ public:
         RoutingDirection direction,
         bool has_z,
         bool enable_vc1 = false,
-        bool enable_mesh_pass_through = false);
+        bool enable_mesh_pass_through = false,
+        bool has_intra_mesh_z = false);
 
     /**
      * @brief Factory method for Z router connection mapping

@@ -625,3 +625,136 @@ TEST_F(RouterConnectionMappingTest, PassThrough_1D_WithZ_NoVC1MeshToZ) {
     ASSERT_EQ(vc0_targets.size(), 2u);
     EXPECT_EQ(count_type(vc0_targets, ConnectionType::MESH_TO_Z), 1u);
 }
+
+// ============================================================================
+// Intra-mesh Z (sub-torus skip-link) Tests
+// ============================================================================
+//
+// Intra-mesh Z is a "skip link" within a single mesh (sub-torus). It rides VC0
+// as a 5th sender channel (channel 4 = intra-mesh Z) and is distinct from the
+// inter-mesh Z router (MESH_TO_Z / Z_TO_MESH on VC1). Two router roles exist:
+//   1. A mesh-direction router (N/E/S/W) on a chip that has a skip link gains an
+//      extra VC0 INTRA_MESH outbound to direction Z (channel 4).
+//   2. The skip-link endpoint itself is a Z-direction router built as a MESH
+//      variant; it forwards to / receives from all four mesh directions on VC0
+//      (no "opposite" direction, no VC1).
+
+TEST_F(RouterConnectionMappingTest, IntraMeshZ_2D_MeshDirection_AddsZToVC0) {
+    // A mesh-direction router on a sub-torus chip: 3 mesh dirs + intra-mesh Z on VC0.
+    // has_z=false (no inter-mesh Z router) => no MESH_TO_Z; all four targets are INTRA_MESH on VC0.
+    for (auto dir : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+        auto mapping = RouterConnectionMapping::for_mesh_router(
+            Topology::Mesh,
+            dir,
+            /*has_z=*/false,
+            /*enable_vc1=*/false,
+            /*enable_mesh_pass_through=*/false,
+            /*has_intra_mesh_z=*/true);
+
+        auto vc0_targets = mapping.get_downstream_targets(0, 0);
+        ASSERT_EQ(vc0_targets.size(), 4u) << "direction " << static_cast<int>(dir);
+        EXPECT_EQ(count_type(vc0_targets, ConnectionType::INTRA_MESH), 4u);
+        EXPECT_EQ(count_type(vc0_targets, ConnectionType::MESH_TO_Z), 0u);
+
+        // Exactly one VC0 target goes to the intra-mesh Z direction.
+        auto z_it = std::find_if(vc0_targets.begin(), vc0_targets.end(), [](const ConnectionTarget& t) {
+            return t.target_direction == RoutingDirection::Z;
+        });
+        ASSERT_NE(z_it, vc0_targets.end());
+        verify_target(*z_it, ConnectionType::INTRA_MESH, /*expected_vc=*/0, RoutingDirection::Z);
+    }
+}
+
+TEST_F(RouterConnectionMappingTest, IntraMeshZ_2D_MeshDirection_VC1ExcludesZ) {
+    // Intra-mesh Z is VC0-only: even with VC1 enabled, the VC1 forwards stay on the
+    // 3 mesh directions (no Z on VC1).
+    auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Mesh,
+        RoutingDirection::N,
+        /*has_z=*/false,
+        /*enable_vc1=*/true,
+        /*enable_mesh_pass_through=*/false,
+        /*has_intra_mesh_z=*/true);
+
+    // VC0: 3 mesh + Z.
+    EXPECT_EQ(mapping.get_downstream_targets(0, 0).size(), 4u);
+
+    // VC1: only the 3 mesh directions, none to Z.
+    auto vc1_targets = mapping.get_downstream_targets(1, 0);
+    ASSERT_EQ(vc1_targets.size(), 3u);
+    EXPECT_EQ(count_type(vc1_targets, ConnectionType::INTRA_MESH), 3u);
+    auto z_it = std::find_if(vc1_targets.begin(), vc1_targets.end(), [](const ConnectionTarget& t) {
+        return t.target_direction == RoutingDirection::Z;
+    });
+    EXPECT_EQ(z_it, vc1_targets.end()) << "VC1 must not forward to intra-mesh Z";
+}
+
+TEST_F(RouterConnectionMappingTest, IntraMeshZ_2D_ZEndpointRouter_ForwardsToFourMeshDirs) {
+    // The skip-link endpoint is a Z-direction router built as a MESH variant. It must NOT crash
+    // (get_opposite_direction has no Z case) and must forward to all four mesh directions on VC0.
+    auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        /*has_z=*/false,
+        /*enable_vc1=*/false,
+        /*enable_mesh_pass_through=*/false,
+        /*has_intra_mesh_z=*/true);
+
+    auto vc0_targets = mapping.get_downstream_targets(0, 0);
+    ASSERT_EQ(vc0_targets.size(), 4u);
+    EXPECT_EQ(count_type(vc0_targets, ConnectionType::INTRA_MESH), 4u);
+
+    // All four mesh directions present; no self-edge to Z.
+    for (auto dir : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+        auto it = std::find_if(vc0_targets.begin(), vc0_targets.end(), [dir](const ConnectionTarget& t) {
+            return t.target_direction == dir;
+        });
+        ASSERT_NE(it, vc0_targets.end()) << "missing mesh direction " << static_cast<int>(dir);
+        verify_target(*it, ConnectionType::INTRA_MESH, /*expected_vc=*/0, dir);
+    }
+    auto z_self = std::find_if(vc0_targets.begin(), vc0_targets.end(), [](const ConnectionTarget& t) {
+        return t.target_direction == RoutingDirection::Z;
+    });
+    EXPECT_EQ(z_self, vc0_targets.end()) << "Z endpoint must not forward to itself";
+}
+
+TEST_F(RouterConnectionMappingTest, IntraMeshZ_2D_ZEndpointRouter_NoVC1EvenWhenEnabled) {
+    // The intra-mesh Z endpoint does not service VC1, even if VC1 is enabled device-wide.
+    auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        /*has_z=*/false,
+        /*enable_vc1=*/true,
+        /*enable_mesh_pass_through=*/false,
+        /*has_intra_mesh_z=*/true);
+
+    EXPECT_FALSE(mapping.has_targets(1, 0));
+    EXPECT_TRUE(mapping.get_downstream_targets(1, 0).empty());
+}
+
+TEST_F(RouterConnectionMappingTest, IntraMeshZ_Disabled_BehaviorUnchanged) {
+    // Regression: with has_intra_mesh_z=false (the default), a 2D mesh router has the classic
+    // 3 INTRA_MESH VC0 targets and no Z target.
+    auto with_default = RouterConnectionMapping::for_mesh_router(Topology::Mesh, RoutingDirection::N, /*has_z=*/false);
+    auto with_explicit_false = RouterConnectionMapping::for_mesh_router(
+        Topology::Mesh,
+        RoutingDirection::N,
+        /*has_z=*/false,
+        /*enable_vc1=*/false,
+        /*enable_mesh_pass_through=*/false,
+        /*has_intra_mesh_z=*/false);
+
+    auto default_targets = with_default.get_downstream_targets(0, 0);
+    auto explicit_targets = with_explicit_false.get_downstream_targets(0, 0);
+    ASSERT_EQ(default_targets.size(), 3u);
+    ASSERT_EQ(explicit_targets.size(), 3u);
+    EXPECT_EQ(count_type(default_targets, ConnectionType::INTRA_MESH), 3u);
+    EXPECT_EQ(count_type(explicit_targets, ConnectionType::INTRA_MESH), 3u);
+
+    for (const auto& targets : {default_targets, explicit_targets}) {
+        auto z_it = std::find_if(targets.begin(), targets.end(), [](const ConnectionTarget& t) {
+            return t.target_direction == RoutingDirection::Z;
+        });
+        EXPECT_EQ(z_it, targets.end());
+    }
+}
