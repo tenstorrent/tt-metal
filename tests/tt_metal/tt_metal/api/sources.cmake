@@ -26,6 +26,7 @@ set(UNIT_TESTS_API_SOURCES
     distribution_spec/test_buffer_distribution_spec.cpp
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp
+    metal2_host_api/test_scratchpad_hw.cpp
     metal2_host_api/test_program_run_args.cpp
     metal2_host_api/test_table.cpp
     test_kernel_thread_sync.cpp
@@ -68,20 +69,33 @@ set(UNIT_TESTS_API_SOURCES
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
     test_zero_memory_api.cpp
-    test_alignment_writes.cpp
-    test_cb_leak.cpp
-    test_cb_pages.cpp
-    test_host_alignment.cpp
-    test_metadata_size.cpp
-    test_noc_without_barrier.cpp
-    test_padded_write.cpp
-    test_semaphore_write.cpp
-    test_tensor_bad_access.cpp
-    test_valid_mem_wrong_alloc.cpp
-    test_write_beyond_res_pages.cpp
-    test_write_outside_tensor.cpp
     disaggregation/test_kv_chunk_address_table.cpp
 )
+
+# tt-emule ASAN sanitizer tests. These EXPECT_DEATH tests assert on the emule
+# ASAN panic (e.g. "Illegal Semaphore Access") and JIT kernels that reference
+# emule-only defines/intrinsics (EMULE_SEM_BASE, __emule_local_l1_to_ptr). They
+# only build/pass under the emule backend; on ttsim/HW the kernels fail to
+# compile and the death tests fail. Gate them so they never enter the non-emule
+# unit_tests_api binary.
+if(TT_METAL_USE_EMULE)
+    list(
+        APPEND
+        UNIT_TESTS_API_SOURCES
+        test_alignment_writes.cpp
+        test_cb_leak.cpp
+        test_cb_pages.cpp
+        test_host_alignment.cpp
+        test_metadata_size.cpp
+        test_noc_without_barrier.cpp
+        test_padded_write.cpp
+        test_semaphore_write.cpp
+        test_tensor_bad_access.cpp
+        test_valid_mem_wrong_alloc.cpp
+        test_write_beyond_res_pages.cpp
+        test_write_outside_tensor.cpp
+    )
+endif()
 
 # Runtime tensor tests build into their own executable (unit_tests_tensor),
 # mirroring unit_tests_ttnn_tensor, so they stay out of the tt-metalium smoke binary.

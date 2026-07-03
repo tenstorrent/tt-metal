@@ -492,14 +492,14 @@ void gather_mock_cluster_desc_paths(
         for (int r = 1; r < static_cast<int>(world_size); ++r) {
             std::size_t path_size = 0;
             distributed_context->recv(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&path_size), sizeof(path_size)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&path_size), sizeof(path_size)),
                 Rank{r},
                 k_mock_path_size_tag);
             std::vector<char> path_buf(path_size);
             if (path_size > 0) {
                 distributed_context->recv(
-                    tt::stl::as_writable_bytes(
-                        tt::stl::Span<uint8_t>(reinterpret_cast<uint8_t*>(path_buf.data()), path_buf.size())),
+                    ttsl::as_writable_bytes(
+                        ttsl::Span<uint8_t>(reinterpret_cast<uint8_t*>(path_buf.data()), path_buf.size())),
                     Rank{r},
                     k_mock_path_payload_tag);
             }
@@ -511,13 +511,13 @@ void gather_mock_cluster_desc_paths(
     } else {
         std::size_t path_size = my_path.size();
         distributed_context->send(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&path_size), sizeof(path_size)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&path_size), sizeof(path_size)),
             Rank{root_rank},
             k_mock_path_size_tag);
         if (path_size > 0) {
             std::vector<uint8_t> path_bytes(my_path.begin(), my_path.end());
             distributed_context->send(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(path_bytes.data(), path_bytes.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(path_bytes.data(), path_bytes.size())),
                 Rank{root_rank},
                 k_mock_path_payload_tag);
         }

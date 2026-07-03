@@ -14,7 +14,6 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import NullIndexer, TtIndexer, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
-from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_to_natural
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
@@ -1099,10 +1098,10 @@ class ttMLA:
         **_,
     ):
         assert indices is not None, "sparse MLA forward requires indexer top-k indices"
-        start_pos = kv_actual_isl or 0
-        end_pos = start_pos + seq_len_local * self.sp_factor
 
-        # Chunked: the prefix lives in the BLOCK-CYCLIC cache; gather + un-rotate on device.
+        # Chunked: the prefix lives in the BLOCK-CYCLIC cache. Gather it on device and hand it to
+        # sparse_sdpa still block-cyclic — the op remaps the natural top-k indices to physical pages
+        # in-kernel (block_cyclic_chunk_local = per-shard chunk = seq_len_local), so no host reorder.
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             kvpe_cache,
             tt_kvpe_b8,
@@ -1112,11 +1111,11 @@ class ttMLA:
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
         )
-        kvpe_dev = self._gather_kvpe_prefix(kvpe_cache, seq_len_local, end_pos, cache_user_id, cache_layer_idx)
+        kvpe_dev = self._gather_kvpe_prefix(kvpe_cache, cache_user_id, cache_layer_idx)
         ttnn.deallocate(tt_kvpe_b8)
 
         # Sparse attention runs over latent V; project to v_head_dim afterwards.
-        attn_out = self._sparse_mla(tt_q, kvpe_dev, indices)
+        attn_out = self._sparse_mla(tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local)
         ttnn.deallocate(kvpe_dev)
         ttnn.deallocate(tt_q)
         return self._apply_wkv_b2(attn_out, seq_len_local)
@@ -1229,7 +1228,9 @@ class ttMLA:
         heads_local = self.num_heads // self.tp_factor
         return self.tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
 
-    def _sparse_mla(self, q: ttnn.Tensor, kvpe: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
+    def _sparse_mla(
+        self, q: ttnn.Tensor, kvpe: ttnn.Tensor, indices: ttnn.Tensor, block_cyclic_chunk_local: Optional[int] = None
+    ) -> ttnn.Tensor:
         """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
         ``indices`` already encode it via the 0xFFFFFFFF sentinel). Invoked SPMD on the SP×TP mesh:
         each chip runs the single-chip ``ttnn.transformer.sparse_sdpa`` over its own q shard, so q's
@@ -1237,7 +1238,12 @@ class ttMLA:
 
         q: [1, H/tp, S/sp, 576] absorbed (TILE bf16); kvpe: [1, 1, T, 576] full latent prefix, ROW_MAJOR
         replicated (K = full 576, V = leading kv_lora_rank). indices: [1, 1, S_global, k] uint32 replicated,
-        re-sharded onto SP (dim2) to match q when sp > 1 (or already SP-sharded → pass through)."""
+        re-sharded onto SP (dim2) to match q when sp > 1 (or already SP-sharded → pass through).
+
+        block_cyclic_chunk_local: when set, ``kvpe`` is the KVPE cache in its native BLOCK-CYCLIC SP layout
+        (not natural order) and ``indices`` are natural positions; sparse_sdpa remaps each index to its
+        physical page in-kernel (invP) over the SP mesh axis, so the host reorder is eliminated. It is the
+        per-shard chunk length (chunk_size_global / sp). None → natural-order kvpe (single-shot path)."""
         assert self.sp_axis == 0 and self.tp_axis == 1, "sparse_mla assumes sp_axis=0 (outer), tp_axis=1"
         sp = self.sp_factor
         seq_len_local = q.shape[2]  # per-chip query rows == S / sp
@@ -1277,7 +1283,14 @@ class ttMLA:
         # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).
         k_chunk = next((c for c in (128, 64, 32) if idx.shape[-1] % c == 0), 32)
         out = ttnn.transformer.sparse_sdpa(
-            q_rm, kvpe, idx, v_dim=self.kv_lora_rank, scale=self.scale, k_chunk_size=k_chunk
+            q_rm,
+            kvpe,
+            idx,
+            v_dim=self.kv_lora_rank,
+            scale=self.scale,
+            k_chunk_size=k_chunk,
+            block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None,
+            block_cyclic_chunk_local=block_cyclic_chunk_local,
         )
         ttnn.deallocate(q_rm)
         if idx is not indices:
@@ -1294,13 +1307,14 @@ class ttMLA:
             ttnn.deallocate(out_all_heads)
         return ret
 
-    def _gather_kvpe_prefix(self, kvpe_cache, seq_len_local, end_pos, cache_user_id, cache_layer_idx):
+    def _gather_kvpe_prefix(self, kvpe_cache, cache_user_id, cache_layer_idx):
         """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
-        bf8 / TILE / ND-sharded / block-cyclic across SP; the sparse op wants the full prefix
-        bf16 / ROW_MAJOR / replicated / natural order. Pipeline (all on device — replaces the
-        former host ConcatMesh2dToTensor + blockcyclic_positions read): ND→interleaved, SP
-        all-gather to full-T (no-op at sp==1), select this user/layer slot, bf8→bf16, TILE→RM,
-        un-rotate block-cyclic→natural, trim to end_pos. Returns [1, 1, end_pos, 576] bf16 RM."""
+        bf8 / TILE / ND-sharded / block-cyclic across SP; sparse_sdpa consumes it bf16 / ROW_MAJOR /
+        replicated and remaps the natural-position indices to physical block-cyclic pages in-kernel
+        (invP), so the buffer is LEFT in block-cyclic order — no host reorder. Pipeline (all on
+        device): ND→interleaved, SP all-gather to full-T (no-op at sp==1), select this user/layer
+        slot, bf8→bf16, TILE→RM. Returns the whole preallocated cache [1, 1, seq_len_cache, 576] bf16
+        RM (block-cyclic); the unwritten suffix is never addressed since indices stay < populated."""
         cache_i = ttnn.to_memory_config(kvpe_cache, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
         full = self._all_gather(
             cache_i, dim=2, cluster_axis=self.sp_axis
@@ -1316,6 +1330,4 @@ class ttMLA:
         ttnn.deallocate(full)
         full_rm = ttnn.to_layout(full16, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(full16)
-        out = blockcyclic_to_natural(full_rm, self.sp_factor, seq_len_local, end_pos)
-        ttnn.deallocate(full_rm)
-        return out
+        return full_rm

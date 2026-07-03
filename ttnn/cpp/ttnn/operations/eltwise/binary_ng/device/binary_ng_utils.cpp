@@ -435,6 +435,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case REMAINDER:
             if (dtype == DataType::INT32) {
                 return {"remainder_int32_tile_init();", "remainder_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"remainder_uint32_tile_init();", "remainder_uint32_tile"};
             } else {
                 return {"remainder_binary_tile_init();", "remainder_binary_tile"};
             }
