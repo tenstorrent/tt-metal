@@ -22,6 +22,7 @@
 #include <tt_stl/assert.hpp>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -763,6 +764,19 @@ static void apply_x86_rewrites(std::string& src) {
     // those addresses in the low 2 GB so the truncation is value-preserving.
 }
 
+static std::string preprocessed_header_guard_for(const std::string& canonical_path) {
+    // FNV-1a gives a deterministic, compact macro name without depending on
+    // process-local std::hash salts.
+    uint64_t h = 1469598103934665603ull;
+    for (unsigned char c : canonical_path) {
+        h ^= c;
+        h *= 1099511628211ull;
+    }
+    std::ostringstream os;
+    os << "__TT_EMULE_PREPROCESSED_HEADER_" << std::hex << h;
+    return os.str();
+}
+
 // Patch `src_path` into `out_path`, then recurse into the quoted project headers
 // it #includes (a shared `*_common.hpp` can hold the offending casts too). Each
 // patched header is written into `out_dir` under its include name; since the
@@ -774,7 +788,8 @@ static void preprocess_tu_recursive(
     const std::string& src_path,
     const std::string& out_path,
     const std::string& out_dir,
-    std::set<std::string>& done) {
+    std::map<std::string, std::string>& done,
+    const std::string& guard_macro) {
     std::ifstream in(src_path);
     if (!in) {
         throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + src_path);
@@ -800,24 +815,36 @@ static void preprocess_tu_recursive(
             continue;
         }
         const std::string canon = std::filesystem::weakly_canonical(candidate, ec).string();
-        if (canon.empty() || !done.insert(canon).second) {
-            continue;  // cycle / already patched
+        if (canon.empty()) {
+            continue;
         }
         const std::filesystem::path out_inc = std::filesystem::weakly_canonical(
             std::filesystem::path(out_dir) / inc_name);
         // Refuse to write outside the temp dir (e.g. inc_name with leading "..").
         const std::string out_inc_str = out_inc.string();
         if (out_inc_str.compare(0, out_dir_canon.string().size(), out_dir_canon.string()) != 0) {
-            done.erase(canon);
             continue;
         }
         std::filesystem::create_directories(out_inc.parent_path(), ec);
-        preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, done);
+        auto already_done = done.find(canon);
+        if (already_done != done.end()) {
+            if (already_done->second != out_inc_str && std::filesystem::exists(already_done->second, ec)) {
+                std::filesystem::copy_file(
+                    already_done->second, out_inc, std::filesystem::copy_options::overwrite_existing, ec);
+            }
+            continue;  // cycle / already patched under another include spelling
+        }
+        done.emplace(canon, out_inc_str);
+        preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, done, preprocessed_header_guard_for(canon));
     }
 
     std::ofstream out(out_path);
     if (!out) {
         throw std::runtime_error("preprocess_kernel_source_for_x86: cannot write " + out_path);
+    }
+    if (!guard_macro.empty()) {
+        out << "#ifndef " << guard_macro << "\n";
+        out << "#define " << guard_macro << "\n";
     }
     // Attribute the emitted body to the real kernel file so DWARF (and thus ASAN
     // backtraces) report `<real kernel>.cpp:<line>` rather than the generated temp
@@ -826,12 +853,15 @@ static void preprocess_tu_recursive(
     std::filesystem::path abs = std::filesystem::absolute(src_path, ec);
     out << "#line 1 \"" << (ec ? src_path : abs.string()) << "\"\n";
     out << src;
+    if (!guard_macro.empty()) {
+        out << "\n#endif  // " << guard_macro << "\n";
+    }
 }
 
 static void preprocess_kernel_source_for_x86(const std::string& src_path, const std::string& out_path) {
     const std::string out_dir = std::filesystem::path(out_path).parent_path().string();
-    std::set<std::string> done;
-    preprocess_tu_recursive(src_path, out_path, out_dir, done);
+    std::map<std::string, std::string> done;
+    preprocess_tu_recursive(src_path, out_path, out_dir, done, "");
 }
 
 static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel) {
@@ -1094,6 +1124,8 @@ static std::function<void()> jit_compile_kernel(
         << " -Wno-c++11-narrowing -fms-extensions"
         << " -I\"" << jit_inc << "\""
         << " -I\"" << parent_inc << "\""
+        << " -I\"" << dir << "\""
+        << " -I\"" << dir << "/ttnn/cpp/ttnn/kernel_lib\""
         << " -I\"" << kernel_dir << "\"";
     // Extra include paths (project source, ttnn, etc.)
     if (!extra_include_flags.empty()) {
