@@ -248,19 +248,19 @@ PRECOMPILE_PLUGIN_DIR="$REPO_DIR"
 precompile_warm() {
     # JIT server routing (WARM-PASS-ONLY). If an endpoint is configured and not disabled, the warm
     # pass compiles on the remote farm; the real run below is unaffected (server-enable is never
-    # exported globally — only into this subprocess via SRV_ENV). A configured-but-unreachable
-    # server is a setup error -> abort loudly (don't silently fall back to a slow local compile).
+    # exported globally — only into this subprocess via SRV_ENV). If the endpoint is unreachable,
+    # fall back to a local warm-pass compile (slower) and leave a prominent trace — a down farm
+    # must never abort the run.
     local -a SRV_ENV=()
     if [[ -n "$JIT_SERVER_ENDPOINT" && "$JIT_SERVER_DISABLED" == false ]]; then
         local _h="${JIT_SERVER_ENDPOINT%:*}" _p="${JIT_SERVER_ENDPOINT##*:}"
         if ! timeout 5 bash -c "exec 3<>/dev/tcp/${_h}/${_p}" 2>/dev/null; then
-            echo "SAFE_PYTEST_ERROR: JIT server '${JIT_SERVER_ENDPOINT}' unreachable — aborting." >&2
-            echo "SAFE_PYTEST_ERROR: start the server, fix --jit-server, or pass --no-jit-server to compile the warm pass locally." >&2
-            exit 4
+            echo "SAFE_PYTEST: WARNING - JIT server '${JIT_SERVER_ENDPOINT}' unreachable — falling back to LOCAL warm-pass compile (slower). Start the farm to restore speed." >&2
+        else
+            SRV_ENV=(TT_METAL_JIT_SERVER_ENABLE=1 TT_METAL_JIT_SERVER_ENDPOINT="$JIT_SERVER_ENDPOINT" \
+                     TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1)
+            echo "PRECOMPILE: warm pass -> JIT server ${JIT_SERVER_ENDPOINT} (keepalive on; real run stays local)" >&2
         fi
-        SRV_ENV=(TT_METAL_JIT_SERVER_ENABLE=1 TT_METAL_JIT_SERVER_ENDPOINT="$JIT_SERVER_ENDPOINT" \
-                 TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1)
-        echo "PRECOMPILE: warm pass -> JIT server ${JIT_SERVER_ENDPOINT} (keepalive on; real run stays local)" >&2
     fi
     [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG"
     echo "PRECOMPILE: ===== warmup (collect + precompile, real device) =====" >&2
