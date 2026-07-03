@@ -1,0 +1,19 @@
+DENOISE_START rows: [8918]  DENOISE_END rows: [33135]
+=== DENOISE region (device0) ops=6054 ===
+device_fw=133.9ms kernel=2.9ms gap=160.0ms  GAP%=54.4
+  FW ms     % KERN ms  GAP ms     n  avgFW us  OP
+  130.5  97.4     0.2   130.4   150     869.7  PermuteDeviceOperation
+    1.5   1.1     1.3    12.9  1347       1.1  BinaryNgDeviceOperation
+    1.3   1.0     1.2     0.7   213       6.2  UnaryDeviceOperation
+    0.6   0.4     0.1    12.9   513       1.1  ConcatDeviceOperation
+    0.0   0.0     0.0     2.3  2052       0.0  SliceDeviceOperation
+    0.0   0.0     0.0     0.1     9       4.8  TilizeDeviceOperation
+    0.0   0.0     0.0     0.1     9       0.7  ScatterDeviceOperation
+    0.0   0.0     0.0     0.6     3       1.2  EmbeddingsDeviceOperation
+    0.0   0.0     0.0     0.1     6       0.2  SoftmaxDeviceOperation
+    0.0   0.0     0.0     0.0     9       0.0  ReshapeViewDeviceOperation
+    0.0   0.0     0.0     0.0    24       0.0  UntilizeWithUnpaddingDeviceOperation
+    0.0   0.0     0.0     0.0     3       0.0  AllBroadcastDeviceOperation
+    0.0   0.0     0.0     0.0   432       0.0  InterleavedToShardedDeviceOperation
+    0.0   0.0     0.0     0.0   450       0.0  LayerNormDeviceOperation
+    0.0   0.0     0.0     0.0   432       0.0  ShardedToInterleavedDeviceOperation
