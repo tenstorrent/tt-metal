@@ -207,7 +207,7 @@ class DiffusionGemmaPipeline:
                 parallel_config=parallel_config,
             )
 
-        # Build encoder + decoder.
+        # Build encoder first (constructs its own layers, norm, embed_tokens on device).
         encoder = DiffusionGemmaEncoderModel(
             text_kwargs=encoder_text_kwargs,
             vision_kwargs=vision_kwargs,
@@ -218,7 +218,16 @@ class DiffusionGemmaPipeline:
             pad_token_id=text_cfg.pad_token_id,
             mesh_device=mesh_device,
         )
-        decoder = DiffusionGemmaDecoderModel(**decoder_text_kwargs)
+        # Build decoder sharing encoder's layers/norm/embed_tokens on device. Matches HF's
+        # ``DiffusionGemmaModel._tied_weights_keys`` (encoder.layers ↔ decoder.layers, .norm ↔
+        # .norm, .embed_tokens ↔ .embed_tokens). Prevents double-construction of ~5.7 GB of
+        # MoE weights per device (which OOMs on WH T3K even at bfp4 experts).
+        decoder = DiffusionGemmaDecoderModel(
+            **decoder_text_kwargs,
+            shared_layers=encoder.language_model.layers,
+            shared_norm=encoder.language_model.norm,
+            shared_embed_tokens=encoder.language_model.embed_tokens,
+        )
 
         model = DiffusionGemmaModel(encoder=encoder, decoder=decoder)
         tt_for_diffusion = DiffusionGemmaForBlockDiffusion(
@@ -228,11 +237,18 @@ class DiffusionGemmaPipeline:
             final_logit_softcapping=text_cfg.final_logit_softcapping,
             mesh_device=mesh_device,
         )
-        tt_for_diffusion.load_state_dict(hf_state)
-        # Free ~1.4 GB per device by aliasing encoder.embed_tokens → decoder.embed_tokens on
-        # device (HF ties these via tie_word_embeddings=True). Necessary on WH T3K where DRAM
-        # is tight with the full 30-layer model even at bfp4 experts.
-        tt_for_diffusion.tie_shared_embeddings()
+        # Strip the decoder-prefixed layer/norm/embed keys from the state dict — the decoder's
+        # shared submodules will be loaded via the encoder prefix, and re-loading via the
+        # decoder prefix would try to re-allocate the same tensors.
+        _shared_prefixes = ("model.decoder.layers.", "model.decoder.norm.", "model.decoder.embed_tokens.")
+        for k in list(hf_state.keys()):
+            if k.startswith(_shared_prefixes):
+                del hf_state[k]
+        # Use non-strict load: the decoder-side submodules are shared with the encoder, so
+        # the loader will visit them a second time via the decoder prefix and find no state
+        # keys (we just stripped them). Those are "missing" from the decoder's perspective
+        # but already loaded via encoder. strict=False lets that pass without error.
+        tt_for_diffusion.load_torch_state_dict(hf_state, strict=False)
         return tt_for_diffusion
 
     # -------------------------------------------------------------------------
