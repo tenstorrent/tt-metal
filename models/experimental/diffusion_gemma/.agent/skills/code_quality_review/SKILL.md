@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 ## DiffusionGemma note
 
-Load `$diffusion-gemma` first.
+Load `diffusion-gemma` first.
 - For DiffusionGemma the public contract is `models/experimental/diffusion_gemma/tt/generate.py` (and `tt/generator_vllm.py` once it exists) plus the denoise loop — not a generic decoder/`generator.py`. Acceptance tests are the DiffusionGemma device tests and the RUN smoke (`tests/test_device_text_demo_run.py`), not autoregressive vLLM readiness.
 - NEVER flag or apply refactors that touch `models/demos/gemma4/` or other shared dirs; all DiffusionGemma code stays under `models/experimental/diffusion_gemma/`.
 

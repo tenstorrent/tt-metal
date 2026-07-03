@@ -5,30 +5,23 @@ description: "Run a fresh-context AutoDebug investigation and then act on the ge
 
 # AutoDebug
 
-Use the repo-local AutoDebug runner instead of doing the overall investigation
-in your current context.
+Investigate the problem in a clean context instead of doing it in your current
+one. Spawn a **fresh subagent** via the Task/Agent tool (a general-purpose
+subagent) so it starts with no prior conversation state.
 
-Run this from the checkout or subdirectory that should be inspected:
+1. Read the brief in `scripts/AUTODEBUG_PROMPT.md` (relative to this `.agent`
+   dir) and pass it as the subagent's prompt, appending the concrete `<problem>`
+   and any focus path to inspect. Point the subagent at the checkout or
+   subdirectory that should be inspected.
+2. Instruct the subagent to write its report to `./AUTODEBUG.md`. Expect a
+   serious run to take a while.
 
-```bash
-models/experimental/diffusion_gemma/.agent/scripts/autodebug.sh [--agent codex|claude] [focus-path] "<problem>"
-```
-
-The script renders `models/experimental/diffusion_gemma/.agent/scripts/AUTODEBUG_PROMPT.md`, starts a fresh
-Codex or Claude CLI session, and asks that agent to write `./AUTODEBUG.md`.
-Expect a serious run to take about 30 minutes.
-
-After the script exits:
+After the subagent finishes:
 
 1. Read `AUTODEBUG.md`.
 2. Check the report's headline findings against the code before trusting them.
 3. Act on the report: implement the fix, ask for clarification, or explain why
    the report is inconclusive.
 
-Options:
-
-- `--agent codex` uses `codex exec` with `gpt-5.5` and `xhigh` reasoning by
-  default.
-- `--agent claude` uses `claude -p` with `opus` and `xhigh` effort by default.
-- `--model MODEL` and `--effort LEVEL` override those defaults.
-- `--help` shows the full command syntax.
+If the problem implies stage sequencing, run the stage slash-commands under
+`commands/` in order (each stage is a `/dg-NN-...` command).

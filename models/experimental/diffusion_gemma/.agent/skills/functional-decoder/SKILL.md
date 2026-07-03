@@ -7,7 +7,7 @@ description: Bring up a functionally correct TTNN implementation of HuggingFace 
 
 ## DiffusionGemma adaptation
 
-Load `$diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
+Load `diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
 
 - This skill runs for stages 01 (backbone-parity) and 02 (diffusion-delta). You are NOT authoring `functional_decoder.py` from scratch. The "decoder" is the reused `models/demos/gemma4/` backbone (NEVER edit it — `git diff main -- models/demos/gemma4/` must stay empty) plus the diffusion delta already built under `models/experimental/diffusion_gemma/` (`tt/diffusion_attention.py`, `tt/self_conditioning.py`, `tt/sampling.py`, `tt/model.py`, and root-level `kv_phase.py`). Validate and harden these; do not recreate them.
 - "prefill" = the causal encoder pass; "decode" = the bidirectional denoise pass over a fixed 256-token canvas (NOT per-token). The final path is the denoise loop, not autoregressive decode.
@@ -54,7 +54,7 @@ Implement correctness first. BF16, tile layout, and DRAM memory are fine while p
 
 For MoE models, validate the real router/gate and active experts end-to-end. Component tests for gate or experts are useful diagnostics, but the decoder result should include the gate-selected expert path a real model run would use. For non-Galaxy bringup, use the GPT-OSS active-expert pattern as the default: router/top-k scores as a sparsity tensor, `ttnn.sparse_matmul` for gate/up/down projections, score weighting, and a model-appropriate reduce over experts. Do not start from Galaxy-only fused MoE paths unless you have direct evidence that the target hardware and ops support them.
 
-When PCC is low, debug it. Split the decoder into components, check HF parity, raise fidelity where useful, simplify the failing shape, and keep narrowing until the cause is understood. If a bug is tricky enough that ordinary narrowing stalls, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. If the cause is a tt-metal bug, make a reproducer or an on-branch workaround and record the evidence.
+When PCC is low, debug it. Split the decoder into components, check HF parity, raise fidelity where useful, simplify the failing shape, and keep narrowing until the cause is understood. If a bug is tricky enough that ordinary narrowing stalls, use `autofix`; it will run `autodebug` if needed, then verify or refute each proposed bug before keeping any fix. If the cause is a tt-metal bug, make a reproducer or an on-branch workaround and record the evidence.
 
 ## Evidence To Leave
 
@@ -138,7 +138,7 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 
 ## Trace And Profiling
 
-- The final decode pass must use traced TTNN execution. If trace capture, replay, stale inputs, event synchronization, or trace-safe input setup becomes tricky, use `$tt-enable-tracing` before accepting an eager-only decode path.
+- The final decode pass must use traced TTNN execution. If trace capture, replay, stale inputs, event synchronization, or trace-safe input setup becomes tricky, use `tt-enable-tracing` before accepting an eager-only decode path.
 - Open the device with a zero trace region, for example `trace_region_size=0`, TTNN can auto-detect the right size these days.
 - Use the pattern: compile/warmup, synchronize, signpost start, execute warmed trace or warmed measured path, synchronize once, signpost end.
 - Copy the newest Tracy ops CSV into the evidence directory and run `tt-perf-report` with start/end signposts for the measured window.

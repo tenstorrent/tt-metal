@@ -1,6 +1,6 @@
 # TT-Lang Practical Guide
 
-This guide preserves the imported practical TT-Lang workflow material. Use [SKILL.md](SKILL.md) as the Codex entrypoint and [TTLangSpecification.md](TTLangSpecification.md) as the API source of truth when details conflict.
+This guide preserves the imported practical TT-Lang workflow material. Use [SKILL.md](SKILL.md) as the Claude Code entrypoint and [TTLangSpecification.md](TTLangSpecification.md) as the API source of truth when details conflict.
 
 ## External Resources
 

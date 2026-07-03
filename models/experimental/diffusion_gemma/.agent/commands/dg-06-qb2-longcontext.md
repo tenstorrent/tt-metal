@@ -1,8 +1,8 @@
-/goal Use $diffusion-gemma, $multichip, and $tt-device-usage to validate the DiffusionGemma QB2 long-context / 256K fit and mesh parallelization in the current tt-metal checkout.
+---
+description: DiffusionGemma stage 06 — validate the QB2 256K memory budget and long-context fit on the (1,4) mesh.
+---
 
-As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
-
-Load $diffusion-gemma first. This is the HW-enablement stage (#47487). The backbone is already TP=4 on QB2 (P150x4) via the untouched gemma4 CCL/expert sharding — do NOT re-plan or re-shard the backbone and do NOT edit models/demos/gemma4/. This stage sizes and validates the FULL diffusion memory budget and long-context fit on the (1,4) mesh. Work only under models/experimental/diffusion_gemma/.
+Load `diffusion-gemma` first. This is the HW-enablement stage (#47487). The backbone is already TP=4 on QB2 (P150x4) via the untouched gemma4 CCL/expert sharding — do NOT re-plan or re-shard the backbone and do NOT edit models/demos/gemma4/. This stage sizes and validates the FULL diffusion memory budget and long-context fit on the (1,4) mesh. Work only under models/experimental/diffusion_gemma/.
 
 Goal completion requirements:
 - The QB2 memory budget (models/experimental/diffusion_gemma/QB2_MEMORY_BUDGET.md, memory_budget.py) accounts for ALL diffusion terms, not just weights + persistent KV: the per-step canvas K/V scratch zone (#47474 storage class ii) and the non-causal long-context mask buffers (#47462), plus trace/activation reserve. A clean short-prompt causal run does NOT count as 256K de-risking — state that explicitly.
@@ -11,6 +11,6 @@ Goal completion requirements:
 - Long-context denoise attention (the >32768 non-causal path) is validated to fit and run at the target context on QB2; batch=1 first, then the largest batch that fits given context (#47557 is a later stage — record the ceiling here).
 - Watcher-clean run; runtime fallback audit; Blackhole/P150x4 fabric config confirmed.
 - doc/qb2_longcontext/README.md and work_log.md record the budget breakdown, byte math, capacity probes, mesh shapes, batch ceiling, limitations, exact artifacts.
-- $stage-review returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); never push; never edit models/demos/gemma4/; log SHAs.
+- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); never push; never edit models/demos/gemma4/; log SHAs.
 
-Unmet requirements, review findings, failed gates: work. Stop only after $autofix fails.
+Unmet requirements, review findings, failed gates: work. Stop only after `autofix` fails.

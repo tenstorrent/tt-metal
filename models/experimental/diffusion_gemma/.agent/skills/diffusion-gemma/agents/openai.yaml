@@ -1,7 +1,0 @@
-interface:
-  display_name: "DiffusionGemma Context"
-  short_description: "Shared model context + hard rules for the DiffusionGemma bring-up"
-  default_prompt: "Use $diffusion-gemma to load the DiffusionGemma model context before any stage-specific skill: block-diffusion generation, the reuse-vs-build boundary and the no-shared-gemma4-edits rule, diffusion-decision correctness with injected noise, the QB2 memory budget, the module map, and the issue/stage ownership."
-
-policy:
-  allow_implicit_invocation: true

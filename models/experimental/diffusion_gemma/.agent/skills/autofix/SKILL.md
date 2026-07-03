@@ -7,17 +7,17 @@ description: "Fix tricky software, TTNN, model-correctness, performance, hang, o
 
 ## DiffusionGemma note
 
-Load `$diffusion-gemma` first.
+Load `diffusion-gemma` first.
 - The debugging loop is reusable as-is, but re-point the example symptoms from prefill/decode/paged-KV/token-doubling toward the diffusion path: denoise-step numerics, entropy/accept-renoise drift, self-conditioning, bidirectional/sliding-mask attention, the staged-GQA maskless fallback, and per-step canvas K/V recompute.
 - Any fix stays under `models/experimental/diffusion_gemma/`; NEVER edit `models/demos/gemma4/`.
 
-Use this skill when a hard bug needs more than ordinary local debugging. This is the entry point for hard bugs. `$autodebug` is inspection-only; `$autofix` is the follow-through loop that turns its hypotheses into verified fixes or refutations.
+Use this skill when a hard bug needs more than ordinary local debugging. This is the entry point for hard bugs. `autodebug` is inspection-only; `autofix` is the follow-through loop that turns its hypotheses into verified fixes or refutations.
 
 ## Inputs
 
-Start from an existing `AUTOTRIAGE.md` or `AUTODEBUG.md` report when one is present and relevant to the current failure. If there is no report, or it clearly describes an older state or a different symptom, create a fresh report with `$autotriage` for hang/tt-triage cases or `$autodebug` otherwise.
+Start from an existing `AUTOTRIAGE.md` or `AUTODEBUG.md` report when one is present and relevant to the current failure. If there is no report, or it clearly describes an older state or a different symptom, create a fresh report with `autotriage` for hang/tt-triage cases or `autodebug` otherwise.
 
-For a hanging process, device stall, watcher/LLK assert, dispatch timeout, CCL/fabric wait, or any failure with tt-triage output, start with `$autotriage` before `$autodebug`. If the process is still alive and no triage log exists, try to capture tt-triage evidence with `$autotriage` first, then use that diagnosis as the starting report. If `$autotriage` cannot capture evidence or its report does not explain the issue, fall back to `$autodebug` and continue the normal repair loop.
+For a hanging process, device stall, watcher/LLK assert, dispatch timeout, CCL/fabric wait, or any failure with tt-triage output, start with `autotriage` before `autodebug`. If the process is still alive and no triage log exists, try to capture tt-triage evidence with `autotriage` first, then use that diagnosis as the starting report. If `autotriage` cannot capture evidence or its report does not explain the issue, fall back to `autodebug` and continue the normal repair loop.
 
 Also read the current failing command, logs, work log, tests, reports, and `git status`. Understand which changes are already present before editing anything.
 
@@ -25,9 +25,9 @@ Also read the current failing command, logs, work log, tests, reports, and `git 
 
 Do the diagnosis and hypothesis experiments with forked subagents when the environment supports them. The main agent should coordinate, review evidence, and integrate only proven fixes; it should not carry the full run/fix/retest transcript in its own context.
 
-Use an xhigh forked subagent for the initial `$autotriage` pass when a hang or tt-triage case needs a fresh report. Give it the current symptom, failing command, triage logs or permission to capture triage from the live hang, relevant source focus paths, and explicit instruction to produce `AUTOTRIAGE.md` before editing implementation code.
+Use an xhigh forked subagent for the initial `autotriage` pass when a hang or tt-triage case needs a fresh report. Give it the current symptom, failing command, triage logs or permission to capture triage from the live hang, relevant source focus paths, and explicit instruction to produce `AUTOTRIAGE.md` before editing implementation code.
 
-Use an xhigh forked subagent for the initial `$autodebug` pass when a fresh source-only report is needed. Give it the current symptom, failing command, relevant logs, and explicit instruction to produce `AUTODEBUG.md` without editing implementation code.
+Use an xhigh forked subagent for the initial `autodebug` pass when a fresh source-only report is needed. Give it the current symptom, failing command, relevant logs, and explicit instruction to produce `AUTODEBUG.md` without editing implementation code.
 
 Then use one forked subagent per proposed bug or tightly related hypothesis group. Give each subagent:
 
@@ -66,15 +66,15 @@ For dtype or cache-related accuracy failures, do not collapse a passing higher-p
 
 For paged-cache decode failures, also check allocation coverage against the attention op's rounded read window. Compute and log the first top-k miss index, absolute sequence position, page/block id, and dynamic chunk boundary. If the miss is a cliff at a page, tile, power-of-two, or chunk boundary, run an over-allocation control before pursuing numerical-instability explanations.
 
-If every AutoTriage hypothesis has been refuted or fixed and the original hang remains, do not keep guessing from the stale report. Update the visible evidence and try another `$autotriage` pass if fresh triage can be captured; otherwise run `$autodebug` in a fresh forked subagent from the new state. Continue with the new report.
+If every AutoTriage hypothesis has been refuted or fixed and the original hang remains, do not keep guessing from the stale report. Update the visible evidence and try another `autotriage` pass if fresh triage can be captured; otherwise run `autodebug` in a fresh forked subagent from the new state. Continue with the new report.
 
-If every AutoDebug hypothesis has been refuted or fixed and the original problem remains, do not keep guessing from the stale report. Update the visible evidence, then run `$autodebug` again in a fresh forked subagent from the new state. Continue with the new report.
+If every AutoDebug hypothesis has been refuted or fixed and the original problem remains, do not keep guessing from the stale report. Update the visible evidence, then run `autodebug` again in a fresh forked subagent from the new state. Continue with the new report.
 
 Stop only when the bug is fixed with evidence, the remaining blocker is outside the current environment or project scope, or the report plus experiments show a legitimate limitation that needs human/product direction.
 
 ## TTNN Experiment Examples
 
-- For traced-decode or serving output symptoms - token doubling, greedy nondeterminism, wrong output at the capture position, per-replica divergence, serving-only repetition - check the symptom table in `$tt-enable-tracing` first; each row names the likely mechanism and a focused experiment.
+- For traced-decode or serving output symptoms - token doubling, greedy nondeterminism, wrong output at the capture position, per-replica divergence, serving-only repetition - check the symptom table in `tt-enable-tracing` first; each row names the likely mechanism and a focused experiment.
 - Compare one decoder subcomponent against HF or the single-chip TTNN baseline with identical inputs and weights.
 - For top-k accuracy drift, probe the earliest layer/step where logits or hidden states diverge enough to change rank order, then substitute CPU/reference tail components to isolate whether the bug is in the hidden-state producer or the output head/postprocessing.
 - Print or assert the lowered TTNN op inputs: logical shape, physical/padded shape, dtype, layout, memory config, program config, compute config, mesh mapper, and runtime args.

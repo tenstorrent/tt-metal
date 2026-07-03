@@ -7,7 +7,7 @@ description: "Debug and fix tt-metal/TTNN hangs, deadlocks, LLK asserts, device 
 
 Use this skill when a tt-metal/TTNN process is hanging, has produced tt-triage evidence, or needs a source-level diagnosis and fix path from triage output. Start from triage evidence plus source, not source alone.
 
-If the user asks to fix the hang, first produce the AutoTriage diagnosis. Then implement the smallest fix only when the triage/source contract is verified; otherwise pass the report into `$autofix` for the repair loop.
+If the user asks to fix the hang, first produce the AutoTriage diagnosis. Then implement the smallest fix only when the triage/source contract is verified; otherwise pass the report into `autofix` for the repair loop.
 
 ## Getting tt-triage Evidence
 

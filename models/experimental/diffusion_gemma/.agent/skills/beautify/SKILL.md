@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 ## DiffusionGemma note
 
-Load `$diffusion-gemma` first.
+Load `diffusion-gemma` first.
 - Same scope override as code_quality_review: the DiffusionGemma public contract is `tt/generate.py` (+ `tt/generator_vllm.py` once the vLLM bridge lands, #47466) and the denoise loop; acceptance tests are the DiffusionGemma device tests + RUN smoke. Measure the diffusion-decision baseline (not teacher-forcing top-k) before/after refactors.
 - NEVER refactor `models/demos/gemma4/` or shared dirs; keep all changes under `models/experimental/diffusion_gemma/`.
 
@@ -26,7 +26,7 @@ The vLLM and readiness tests are our acceptance tests - they must still pass und
 
 ## Suggested Workflow
 
-1. Use an intelligent subagent to run `$code_quality_review` on the target code to identify opportunities for improvement. That skill contains details on the scope and types of refactors expected.
+1. Use an intelligent subagent to run `code_quality_review` on the target code to identify opportunities for improvement. That skill contains details on the scope and types of refactors expected.
 2. If the previous step reports no actionable changes, report that and stop executing this skill.
 3. Locate the accuracy tests and performance benchmarks used for the model
 4. Measure the baseline performance and accuracy. If you have problems running the

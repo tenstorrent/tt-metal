@@ -1,6 +1,6 @@
 ---
 name: tt-lang
-description: "Write, port, debug, and validate TT-Lang DSL kernels for Tenstorrent hardware. Use when Codex needs TT-Lang programming model, APIs, dataflow buffers, grid/node logic, pipes, tensor slicing, hardware constraints, or translations from CUDA, Triton, PyTorch, or TTNN kernels."
+description: "Write, port, debug, and validate TT-Lang DSL kernels for Tenstorrent hardware. Use when the agent needs TT-Lang programming model, APIs, dataflow buffers, grid/node logic, pipes, tensor slicing, hardware constraints, or translations from CUDA, Triton, PyTorch, or TTNN kernels."
 ---
 
 # TT-Lang

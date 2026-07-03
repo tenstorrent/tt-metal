@@ -7,7 +7,7 @@ description: Add vLLM serving integration for an existing TTNN full model under 
 
 ## DiffusionGemma adaptation
 
-Load `$diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
+Load `diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
 
 - Serve via the tenstorrent/vllm TT plugin (a **fork**, not upstream vLLM). The whole denoise loop lives **inside** the tt-metal model's `prefill_forward`/`decode_forward`, which emits a **256-token block per decode step**, not one token. The tt-metal model owns forward + attention + KV; the runner passes only tokens/page_table/kv_cache/start_pos/prompt_lens/sampling. This maps cleanly to the skill's "constant-size in-model recurrent state carried across steps" hook.
 - The async-decode contract is **per-block, not per-token**: `supports_async_decode`, stale-input refresh, and page-table update happen once per emitted 256-token block. Emitting a block per step likely needs an upstream tenstorrent/vllm runner+scheduler change (#47488); scope it and write the adapter to that contract.
@@ -17,7 +17,7 @@ Load `$diffusion-gemma` first; it overrides the autoregressive assumptions below
 
 ## Mission Context
 
-This stage starts from a working TTNN full model and generator, then makes it usable through the shared vLLM serving path. The full model itself belongs to `$full-model`; vLLM integration owns the adapter, plugin registration, serving checks, and serving-path performance evidence.
+This stage starts from a working TTNN full model and generator, then makes it usable through the shared vLLM serving path. The full model itself belongs to `full-model`; vLLM integration owns the adapter, plugin registration, serving checks, and serving-path performance evidence.
 
 ## Your Part
 
@@ -34,7 +34,7 @@ tt/model.py
 tt/generate.py
 ```
 
-If they do not, use `$full-model` first. During vLLM integration you may make small, evidence-backed changes to `model.py` or `generate.py` when the serving adapter exposes a real contract gap, but avoid turning this stage back into full-model bringup.
+If they do not, use `full-model` first. During vLLM integration you may make small, evidence-backed changes to `model.py` or `generate.py` when the serving adapter exposes a real contract gap, but avoid turning this stage back into full-model bringup.
 
 Before writing adapter code, load the datatype-sweep selection and confirm the generator constructs that exact policy: weight groups, activation/residual dtype, CCL dtype, KV-cache dtype, compute fidelities, and layer exceptions. Serving uses the selected full-model policy. Serving a reduced-speed model does not satisfy completion.
 
@@ -61,7 +61,7 @@ vLLM owns KV-cache allocation in serving mode. Preserve the generator's two cach
 
 Not every cache must be vLLM-owned. vLLM owns the attention KV cache, but recurrent / linear-attention state of constant size (for example conv windows or SSM / gated-delta recurrent state) can live inside the model and be carried across decode steps there, rather than being modeled as a vLLM KV cache. For attention itself, route sliding-window and full-attention layers through vLLM's hybrid attention infrastructure (per-layer KV-cache specs and block tables) instead of forcing a single uniform attention type across all layers.
 
-Make prompt lengths, page tables, decode positions, batch dimensions, trace-side state, and on-device sampling explicit. The serving decode pass must drive the generator's traced decode path, not an eager-only fallback. When adding or debugging trace capture/replay, trace-safe inputs, or replay correctness for this adapter, use `$tt-enable-tracing`. The adapter should not duplicate model logic that already lives in `tt/model.py` or `tt/generate.py`.
+Make prompt lengths, page tables, decode positions, batch dimensions, trace-side state, and on-device sampling explicit. The serving decode pass must drive the generator's traced decode path, not an eager-only fallback. When adding or debugging trace capture/replay, trace-safe inputs, or replay correctness for this adapter, use `tt-enable-tracing`. The adapter should not duplicate model logic that already lives in `tt/model.py` or `tt/generate.py`.
 
 For decode performance, implement the vLLM async split before advertising it: `decode_forward(..., read_from_device=False)` should return device tensors, `read_decode_output(..., async_read=True)` should perform the minimal deferred read, and `process_decode_output_host(...)` should do host formatting. Only set `supports_async_decode=True` after this path passes the vLLM plugin's expectations with decode trace enabled and stale-token/current-position tests passing.
 When
@@ -81,7 +81,7 @@ Leave prefix caching `False` unless it is implemented and tested.
 
 If the vLLM plugin or harness is being changed, prefer the same safety rule there: overlap should default to false unless the model declares this proof-backed capability. Leaving overlap disabled may cost a few tokens/sec/user; letting it default on can silently corrupt generation.
 
-The traced serving decode path reuses the full-model generator's canonical split-sampling path and replays via `ttnn.execute_trace(..., blocking=False)`. For `sample_on_device_mode=all`, serving has no new sampling strategy, host greedy/top-1 argmax, full-logits readback, generic top-k fallback for greedy, or Python readback/writeback token-feedback loop. If the full-model generator lacks split sampling, stop and fix `$full-model`; do not complete vLLM by patching sampling in the adapter. Do not copy a full page table every token when it is unchanged. Reduce token/current-position/page-table refresh to actual scheduler state changes, then prove both changed and unchanged cases with stale-input tests.
+The traced serving decode path reuses the full-model generator's canonical split-sampling path and replays via `ttnn.execute_trace(..., blocking=False)`. For `sample_on_device_mode=all`, serving has no new sampling strategy, host greedy/top-1 argmax, full-logits readback, generic top-k fallback for greedy, or Python readback/writeback token-feedback loop. If the full-model generator lacks split sampling, stop and fix `full-model`; do not complete vLLM by patching sampling in the adapter. Do not copy a full page table every token when it is unchanged. Reduce token/current-position/page-table refresh to actual scheduler state changes, then prove both changed and unchanged cases with stale-input tests.
 
 ## Minimum-Surface Bring-Up Loop
 
@@ -137,7 +137,7 @@ python -m models.common.readiness_check.run_vllm_server \
   --model-dir ... --hf-model ...
 ```
 
-The runner enforces on-device sampling (`sample_on_device_mode: all` in the TT plugin config). The full-model stage must already provide traced token-out split sampling. If it does not, return to `$full-model`; this stage should only adapt that contract to vLLM.
+The runner enforces on-device sampling (`sample_on_device_mode: all` in the TT plugin config). The full-model stage must already provide traced token-out split sampling. If it does not, return to `full-model`; this stage should only adapt that contract to vLLM.
 
 If shared tests require host-side sampling, expose it as an explicit compatibility mode and label metrics from that mode separately. The optimized serving path still uses on-device traced sampling and `sample_on_device_mode=all`.
 
@@ -152,7 +152,7 @@ For optimized-vLLM, optimize with same-harness primary single-user and secondary
 Check stages:
 
 - `sampling`: runs the canonical TT plugin pytest suite against the live server. `--sampling-profile full` runs the whole suite; `--sampling-profile smoke` runs a small integration sanity subset for slow bring-up loops.
-- `qualitative`: saves greedy and sampled completions for prompts from `models/common/readiness_check/vllm_prompts.txt`; use `$qualitative-check` to ensure the prompts are sent in the HF-declared model format, compare against controls, and judge coherence, topic, repetition, gibberish, and wrong-language drift.
+- `qualitative`: saves greedy and sampled completions for prompts from `models/common/readiness_check/vllm_prompts.txt`; use `qualitative-check` to ensure the prompts are sent in the HF-declared model format, compare against controls, and judge coherence, topic, repetition, gibberish, and wrong-language drift.
 - `benchmark`: runs the primary single-user decode profile by default: 128-token input, 128-token output, one prompt, `--max-concurrency 1`, `ignore_eos`, percentile metrics `ttft,tpot,itl,e2el`, and a completed-prompt gate. Use `vllm_benchmark.json` for headline decode t/s/u and comparisons to full-model or older agentic/custom-benchmark reports. This is the primary optimization target.
 - `benchmark`: also runs the vLLM-nightly-shaped CI serving-burst profile by default: 100-token inputs, 100-token outputs, 32 prompts, no explicit `--max-concurrency`, `ignore_eos`, and the same metric set. Use `vllm_ci_serving_benchmark.json` for vLLM-nightly parity, serving-capacity context, and larger-batch/concurrency coverage. Do not use it as the headline decode t/s/u because burst admission and chunked prefill can affect TPOT. The readiness runner passes `--temperature 0.0` by default so both benchmark profiles are greedy. Use `--benchmark-use-server-generation-config` only when intentionally reproducing exact nightly/server-generation-config behavior, and label those numbers as sampled/default-generation-config rather than greedy single-user t/s/u.
 
@@ -170,17 +170,17 @@ Classify reproducibility-only sampling failures separately when they are the onl
 
 If vLLM crashes mid-run, kill leftover `EngineCore` or `vllm.entrypoints` processes before retrying; they can hold chip locks after `tt-smi -r`.
 
-If a profiler run is accidentally started and fails, do not escalate it into repeated watcher/profiler/reset attempts. Kill leftover server processes. If `tt-smi -ls --local` or reset hangs, or if logs show remote Ethernet/ARC/ERISC failures such as `Timeout waiting for Ethernet core service remote IO request`, `ETH core heartbeat check failed`, `Unexpected ERISC Response Flags`, `Read 0xffffffff from ARC scratch`, or ARC lock/readback waits, stop profiler work, preserve the logs, mark the profiler evidence `hardware-profiler-limited`, and follow `$tt-device-usage` reset recovery before treating the stage as stopped. Request monitor/operator reboot only after bounded reset/list and mesh-smoke recovery fail or require authority this agent does not have.
+If a profiler run is accidentally started and fails, do not escalate it into repeated watcher/profiler/reset attempts. Kill leftover server processes. If `tt-smi -ls --local` or reset hangs, or if logs show remote Ethernet/ARC/ERISC failures such as `Timeout waiting for Ethernet core service remote IO request`, `ETH core heartbeat check failed`, `Unexpected ERISC Response Flags`, `Read 0xffffffff from ARC scratch`, or ARC lock/readback waits, stop profiler work, preserve the logs, mark the profiler evidence `hardware-profiler-limited`, and follow `tt-device-usage` reset recovery before treating the stage as stopped. Request monitor/operator reboot only after bounded reset/list and mesh-smoke recovery fail or require authority this agent does not have.
 
 Transient CCL/fabric link errors immediately after a failed multi-device run still need a device reset and one retry before being treated as hardware evidence, as long as `tt-smi` remains responsive and the failure is not part of the profiler/watcher pattern above.
 
-Failed serving gates, missing serving artifacts, sampling failures, qualitative-output failures, and `$stage-review` `more-work-needed` findings are vLLM-stage work, not terminal stop reasons. If logs make the cause obvious, fix it directly and rerun the failing gate. If the first direct fix does not close the gate, or if the failure crosses the adapter, generator, cache ownership, scheduler inputs, trace inputs, sampling, or plugin registration path, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Do not terminal-stop the vLLM stage until `$autofix` has tried and failed or an external dependency is genuinely unavailable.
+Failed serving gates, missing serving artifacts, sampling failures, qualitative-output failures, and `stage-review` `more-work-needed` findings are vLLM-stage work, not terminal stop reasons. If logs make the cause obvious, fix it directly and rerun the failing gate. If the first direct fix does not close the gate, or if the failure crosses the adapter, generator, cache ownership, scheduler inputs, trace inputs, sampling, or plugin registration path, use `autofix`; it will run `autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Do not terminal-stop the vLLM stage until `autofix` has tried and failed or an external dependency is genuinely unavailable.
 
 Record the working server invocation in the work log, including `--max-model-len`, `--tt-config`, workload config, and any env vars that mattered. Use typed runner flags for `--max-model-len` and `--tt-config`; keep `--additional-server-args` for uncommon flags only.
 
 ## Output-Quality Verdicts Need A Control
 
-Before classifying any serving-output problem as a model-quality limitation, use `$qualitative-check` to produce matching prompt-correct evidence from HF, or at minimum from the full-model stage on comparable prompts. If serving output is materially worse than the prompt-correct control, that is a serving regression and in scope for this stage - stale trace inputs, sampler state, and cache/position handling are the usual causes, not the checkpoint. If the shared readiness runner cannot send the correct prompt format, fix it or add a targeted prompt-correct request before judging output quality.
+Before classifying any serving-output problem as a model-quality limitation, use `qualitative-check` to produce matching prompt-correct evidence from HF, or at minimum from the full-model stage on comparable prompts. If serving output is materially worse than the prompt-correct control, that is a serving regression and in scope for this stage - stale trace inputs, sampler state, and cache/position handling are the usual causes, not the checkpoint. If the shared readiness runner cannot send the correct prompt format, fix it or add a targeted prompt-correct request before judging output quality.
 
 After qualitative collection, run:
 
@@ -209,7 +209,7 @@ Done means all of these are true and recorded:
 - Evidence that serving uses the full-model split-sampling contract: internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, greedy benchmarks using the fastest correct on-device sampling strategy measured for this mesh, and stale-token/current-position smoke coverage.
 - Logit-determinism evidence through vLLM, with run-to-run and cross-batch-position reproducibility checks and standalone baseline comparison.
 - Sampling test results, with any reproducibility-only failures separated from real failures.
-- `$qualitative-check` artifacts: qualitative greedy and sampled serving-output verdict, prompt-format metadata, rendered prompts or token ids, and matching HF/full-model controls.
+- `qualitative-check` artifacts: qualitative greedy and sampled serving-output verdict, prompt-format metadata, rendered prompts or token ids, and matching HF/full-model controls.
 - Primary single-user benchmark workload config, temperature/generation-config mode, and whether it used default 128/128/1 shape or explicit overrides.
 - Primary serving-path TTFT median/P99, TPOT mean/P99, ITL median/P99, aggregate output throughput, and TPOT-derived decode t/s/u from `vllm_benchmark.json`.
 - Secondary CI serving-burst benchmark workload config and metrics from `vllm_ci_serving_benchmark.json` when comparing to vLLM nightly or serving-capacity evidence.

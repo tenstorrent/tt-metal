@@ -7,7 +7,7 @@ description: Build a complete TTNN autoregressive model and generator from a Hug
 
 ## DiffusionGemma adaptation
 
-Load `$diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
+Load `diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
 
 - The generation path is block-autoregressive multi-canvas DIFFUSION, not autoregressive token-in/token-out. Replace the token-in/token-out + `tt_out_tok` feedback + greedy/top-k + teacher-forcing top-k + AIME24 readiness with the block-diffusion loop already implemented in `models/experimental/diffusion_gemma/tt/generate.py`: prefill → denoise a 256-token canvas (iterative Gumbel-max argmax + entropy-budget acceptance) → commit (append 256 tokens, advance position by 256) → next block. Wrap the reused `models/demos/gemma4/` backbone; do NOT author embeddings/stack/LM-head and do NOT edit gemma4 (`git diff main -- models/demos/gemma4/` empty).
 - There is no advancing current-position cursor within a block; position advances by 256 per commit only. "Current-position simple increment" does not apply.
@@ -52,7 +52,7 @@ Keep setup-time work outside the hot runtime path: weight conversion, dtype choi
 
 Do not use repeated full-stack model runs as the normal debugging loop. After one or two expensive full-model failures, build a reduced reproducer before continuing: for example, load the same full-model wrapper with one real layer of each kind, real tensor shapes, real cache/page-table shapes, real terminal norm/LM head/sampling, and a short prompt/generation length. Use that reduced full-model path to localize wrapper, trace, cache, page-table, LM-head, or sampling bugs, then return to the all-layer model for final evidence. If the reduced reproducer cannot expose the failure, record why before spending more full-stack runs.
 
-Avoid hidden host fallback in a single prefill or decode pass. The final decode path uses traced TTNN execution. Teacher-forcing readiness runs through traced decode. Eager decode is useful only while debugging and is not completion evidence. When adding trace capture/replay or debugging trace execution failures, use `$tt-enable-tracing`.
+Avoid hidden host fallback in a single prefill or decode pass. The final decode path uses traced TTNN execution. Teacher-forcing readiness runs through traced decode. Eager decode is useful only while debugging and is not completion evidence. When adding trace capture/replay or debugging trace execution failures, use `tt-enable-tracing`.
 
 The full-model stage owns sampling. A full model is complete only when token-out decode uses the canonical split-sampling contract:
 
@@ -81,7 +81,7 @@ Build decode around persistent device state:
 
 If TTNN or the runtime API blocks one of these items, keep the stage incomplete until it is fixed or you have the smallest repro for the blocked item. Do not treat a full-model decode result as complete while it still has avoidable host work between trace replays.
 
-Use `$multichip` and `$optimize` for full-model pieces added around the decoder stack. Match the decoder's multi-chip sharding and keep the full model optimized. For profiling, build a reduced variant with one real layer of each kind, such as one sliding-attention layer and one full-attention layer. Keep real tensor shapes, sequence shapes, sharding, dtypes, KV-cache/page-table shapes, final norm, LM head, sampling, and trace behavior. Do not run Tracy or device-profiler collection on the full all-layer model stack. This keeps profiling fast and avoids multi-GB profiler dumps and Tracy buffer limits. Final evidence should include a `tt-perf-report` for the reduced-layer profiling variant.
+Use `multichip` and `optimize` for full-model pieces added around the decoder stack. Match the decoder's multi-chip sharding and keep the full model optimized. For profiling, build a reduced variant with one real layer of each kind, such as one sliding-attention layer and one full-attention layer. Keep real tensor shapes, sequence shapes, sharding, dtypes, KV-cache/page-table shapes, final norm, LM head, sampling, and trace behavior. Do not run Tracy or device-profiler collection on the full all-layer model stack. This keeps profiling fast and avoids multi-GB profiler dumps and Tracy buffer limits. Final evidence should include a `tt-perf-report` for the reduced-layer profiling variant.
 
 The generator should expose two conceptual levels:
 
@@ -140,7 +140,7 @@ python -m models.common.readiness_check.generate \
   --output <model_dir>/readiness_aime24_chat.refpt
 ```
 
-Raw Tale-of-Two-Cities/book references can still be useful as extra stress coverage, but they should not be the main quality gate for an instruct model unless the model lacks a usable chat template. Use `$qualitative-check` for all prompt-based quality checks, prompt-format evidence, HF controls, and raw-completion versus chat-template classification.
+Raw Tale-of-Two-Cities/book references can still be useful as extra stress coverage, but they should not be the main quality gate for an instruct model unless the model lacks a usable chat template. Use `qualitative-check` for all prompt-based quality checks, prompt-format evidence, HF controls, and raw-completion versus chat-template classification.
 
 Generate the main reference fresh by default. Reuse a reference only when metadata under the current autoport directory proves the same HF model id and revision, tokenizer, prompt source, chat-template flag, generation length, top-k, and generation command. If any of that is missing or mismatched, regenerate the reference rather than carrying forward a possibly contaminated artifact.
 
@@ -153,7 +153,7 @@ python models/common/readiness_check/check_degenerate_output.py \
 
 and include its verdict in the stage evidence. Mechanical degeneracy - doubled tokens, single-token collapse - is a decode-loop bug, never a model property. The runner-side stage gate runs the same check.
 
-Shift qualitative checks left: as soon as the full model can generate text, use `$qualitative-check` to run the shared qualitative prompt suite through both the HF reference and TT generator. Later stages may add serving-specific checks, but they should not be the first place these prompts are tried.
+Shift qualitative checks left: as soon as the full model can generate text, use `qualitative-check` to run the shared qualitative prompt suite through both the HF reference and TT generator. Later stages may add serving-specific checks, but they should not be the first place these prompts are tried.
 
 Add a focused split-sampling trace test before marking the stage complete:
 
@@ -166,7 +166,7 @@ Add a focused split-sampling trace test before marking the stage complete:
 
 Build the fast probe before any repeated debugging loop: a reduced full-model variant (one layer of each kind, short generation, real tensor/cache/page-table shapes, and the real terminal path) with a documented runtime of a couple of minutes or less. Repeating a multi-minute all-layer pass to answer single-bit questions wastes the budget the debugging loop needs; the probe pays for itself within a few iterations. This probe is for debugging only. Final correctness and performance evidence still comes from the complete all-layer model.
 
-When full-model accuracy is poor, debug the new wrapper first: embeddings, final norm, LM head/tied weights, positions, masks, cache indexing, prompt lengths, page tables, and sampling all commonly fail outside the decoder itself. If the failure spans several of these boundaries and the causal chain is unclear, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Escalate back into decoder precision or fidelity only when evidence points there.
+When full-model accuracy is poor, debug the new wrapper first: embeddings, final norm, LM head/tied weights, positions, masks, cache indexing, prompt lengths, page tables, and sampling all commonly fail outside the decoder itself. If the failure spans several of these boundaries and the causal chain is unclear, use `autofix`; it will run `autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Escalate back into decoder precision or fidelity only when evidence points there.
 
 When an accuracy failure appears to follow a dtype, cache dtype, math fidelity, or CCL payload change, treat that as a precision-policy diagnosis, not as a root cause. Write down the whole active policy first: activation dtype, every weight dtype group, math fidelity per projection, cache dtype, CCL payload dtype, page/block size, cache layout, page-table policy, and decode update op. Then run controls that can distinguish a true cache/kernel defect from a policy-margin problem:
 
@@ -181,7 +181,7 @@ For paged decode, validate the cache/page-table allocation contract against the 
 
 ## Performance
 
-Measure warmed full-model prefill and decode behavior, not just block latency. Include generator overhead, cache management, final norm, LM head, logits, and sampling in the reported numbers unless the project specifically asks for device-only timing. Use the $optimize skill to ensure on-device performance is as high as you can get it, but in addition now we care about the end-to-end time as measured from the host. Section 4.5 of `tech_reports/LLMs/llms.md` has great advice on this that you should read, understand and follow.
+Measure warmed full-model prefill and decode behavior, not just block latency. Include generator overhead, cache management, final norm, LM head, logits, and sampling in the reported numbers unless the project specifically asks for device-only timing. Use the `optimize` skill to ensure on-device performance is as high as you can get it, but in addition now we care about the end-to-end time as measured from the host. Section 4.5 of `tech_reports/LLMs/llms.md` has great advice on this that you should read, understand and follow.
 
 The figures you must report are:
 
@@ -227,7 +227,7 @@ Done means all of these are true and recorded:
 - KV-cache, page-table or position handling, prompt lengths, and repeated decode reuse;
 - context contract: HF-advertised context, full-model supported context, and any hard-physical-limit reduction evidence;
 - batch contract: batch-1 primary path, largest batch tested up to 32, and any hard-physical-limit reduction evidence;
-- full-model accuracy and `$qualitative-check` evidence, including prompt-format metadata, rendered prompt artifacts, HF controls, and the shared qualitative prompt suite run through the TT generator;
+- full-model accuracy and `qualitative-check` evidence, including prompt-format metadata, rendered prompt artifacts, HF controls, and the shared qualitative prompt suite run through the TT generator;
 - split-sampling trace evidence: model trace to logits, internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, current-position coherence, and page-table refresh coverage;
 - determinism or repeated-run coverage appropriate to the implementation risk, including logit reproducibility across runs and batch positions;
 - watcher/fallback/runtime-integrity status;

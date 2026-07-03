@@ -7,7 +7,7 @@ description: Run and review qualitative or prompt-based evaluation checks for Hu
 
 ## DiffusionGemma note
 
-Load `$diffusion-gemma` first.
+Load `diffusion-gemma` first.
 - The generation path is text DIFFUSION, so add diffusion failure modes to the degeneracy checks: leftover random-noise canvas positions, non-converged canvas cells, block-boundary artifacts, premature entropy-budget acceptance — alongside (not instead of) the usual repetition/gibberish checks.
 - Add diffusion causes to the worse-than-control list: entropy-budget/acceptance schedule, Gumbel-noise handling, denoise-step count, canvas masking. Early on, the HF-vs-torch reference is the primary control (a vLLM `/v1/completions` endpoint may not exist yet). RUN-first: degenerate output may be expected until #48291.
 

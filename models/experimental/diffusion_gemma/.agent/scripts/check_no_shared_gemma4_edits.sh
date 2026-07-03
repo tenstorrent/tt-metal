@@ -3,7 +3,7 @@
 # unchanged. Every DiffusionGemma stage fix belongs inside
 # models/experimental/diffusion_gemma/ (see $diffusion-gemma, plan.md F1/F2, risk R-new).
 #
-# Exit codes follow the multigoal convention: 0 pass, 2 critical failure, 3 checker error.
+# Exit codes: 0 pass, 2 critical failure, 3 checker error.
 #
 # DG_BASE_REF is the ref the DiffusionGemma work started from — the baseline the shared
 # dirs must match. On a main-based DiffusionGemma dev branch that is `main` (the exact

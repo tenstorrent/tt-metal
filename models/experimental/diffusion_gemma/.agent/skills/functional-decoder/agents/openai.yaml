@@ -1,7 +1,0 @@
-interface:
-  display_name: "Functional Decoder"
-  short_description: "Bring up a correct TTNN decoder layer"
-  default_prompt: "Use $functional-decoder (with $diffusion-gemma) to validate and harden the DiffusionGemma diffusion delta already under models/experimental/diffusion_gemma/ (do NOT author functional_decoder.py): check the reused gemma4 backbone parity plus the bidirectional attention / three-phase KV / self-conditioning / canvas sampling pieces against the HF reference and the diffusion decisions, and leave a concise work log, report, and perf-report evidence."
-
-policy:
-  allow_implicit_invocation: true

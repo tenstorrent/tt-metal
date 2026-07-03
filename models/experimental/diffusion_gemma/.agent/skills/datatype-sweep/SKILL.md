@@ -7,7 +7,7 @@ description: Sweep and select TTNN model weight, activation, KV-cache, CCL datat
 
 ## DiffusionGemma adaptation
 
-Load `$diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
+Load `diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
 
 - Accuracy source of truth is a diffusion-decision metric, NOT AIME24 top-1/top-5 teacher-forcing: per-step Gumbel-max argmax agreement, entropy PCC, and end-to-end accept/renoise agreement vs the injected-noise reference trajectory. `bfp8` small-probability drift can FLIP an accept/renoise decision even when the argmax is unchanged, so the metric must be sensitive to small-probability mass — top-1/top-5 is not.
 - The router / top-k / logits→probability / entropy path is decision-critical: treat it as HIGH-SENSITIVITY (keep BF16/FP32, validate explicitly) and do NOT sweep it down in the coarse pass.
@@ -89,7 +89,7 @@ This order is a heuristic, not a law, with the typically most-sensitive parts of
 
 When backing out a failed BFP4 trial, restore to BFP8 first unless BFP8 itself is known to be the failing precision for that tensor group.
 
-For every material matmul group tested with BFP4 weights, include a LoFi compute-fidelity candidate for that same group. BFP4 with HiFi2 is allowed as a comparison or fallback, but it is not enough by itself. If a BFP4+LoFi candidate cannot be run, record the exact TTNN/runtime blocker and keep the stage open until the blocker is fixed or `$autofix` fails.
+For every material matmul group tested with BFP4 weights, include a LoFi compute-fidelity candidate for that same group. BFP4 with HiFi2 is allowed as a comparison or fallback, but it is not enough by itself. If a BFP4+LoFi candidate cannot be run, record the exact TTNN/runtime blocker and keep the stage open until the blocker is fixed or `autofix` fails.
 
 Sweep compute fidelity even when dtype is unchanged. For dominant decode projection groups, include BFP8+LoFi and BFP8+HiFi2 candidates when both are legal. Do not assume HiFi2 is fastest for BFP8, and do not assume LoFi is safe without full-model top-1/top-5 evidence. Record dtype and fidelity together in each candidate id so later stages can construct the exact policy.
 
@@ -122,9 +122,9 @@ Every kept candidate must be validated with full-model accuracy. For each evalua
 - whether this config passed the user-specified accuracy bar;
 - exact command, branch/commit, hardware, mesh, and environment notes.
 
-Use `$qualitative-check` for prompt-based evaluation evidence: prompt-format metadata, rendered prompt artifacts or token ids, HF controls, and classification of raw-completion or chat-template behavior.
+Use `qualitative-check` for prompt-based evaluation evidence: prompt-format metadata, rendered prompt artifacts or token ids, HF controls, and classification of raw-completion or chat-template behavior.
 
-Always use trace-verified teacher-forcing decode t/s/u to rank datatype candidates - a non-traced path is not useful. If fully-traced decode is not working, use the $autofix skill until it is.
+Always use trace-verified teacher-forcing decode t/s/u to rank datatype candidates - a non-traced path is not useful. If fully-traced decode is not working, use the `autofix` skill until it is.
 
 Teacher-forcing is the selection metric, not necessarily the serving headline. After selecting the winning config, run the same warmed token-out no-readback benchmark used by optimized full model, using the selected config through the normal construction path. Record this separately as post-selection token-out performance. If the model cannot run that benchmark, state why instead of presenting teacher-forcing performance as token-out performance.
 
@@ -165,7 +165,7 @@ Before finishing:
 - make the selected config the model's default construction path, or write a required config artifact that `build_generator`, full-model, and vLLM paths actually consume by default;
 - keep a simple config change or override to return to the safe baseline setting;
 - run a post-selection token-out no-readback performance check with the selected config and record the workload shape, trace status, TTFT, decode t/s/u, and runtime counters;
-- use `$qualitative-check` to rerun the shared qualitative prompt suite on the selected config, with HF controls. If visible text quality selects or rejects a dtype/fidelity candidate, the verdict must come from this prompt-correct suite;
+- use `qualitative-check` to rerun the shared qualitative prompt suite on the selected config, with HF controls. If visible text quality selects or rejects a dtype/fidelity candidate, the verdict must come from this prompt-correct suite;
 - add a short propagation check proving `build_generator` and the vLLM adapter load the same selected weight/activation/CCL/KV/fidelity policy used by the winning sweep result.
 - update the context contract for the selected KV-cache dtype and prove later construction paths use a matching max context.
 

@@ -7,7 +7,7 @@ description: "Enable or debug TTNN trace capture and replay for models, decoders
 
 ## DiffusionGemma adaptation
 
-Load `$diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
+Load `diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
 
 - **The central conflict.** The entropy-budget accept CUTOFF is a data-dependent decision, and early-halt is data-dependent — both are exactly the "Python decision that changes the operation sequence / shape / selected code path" that must NOT happen inside trace capture. A variable accept-count would change program-cache signatures / slice bounds and trigger a mid-capture recompile.
 - **Make the denoise loop data-INDEPENDENT.** Run a fixed maximum (≤48) steps; express the "cumulative-entropy-exceeds-budget" cutoff as an on-device tensor MASK (never a host branch or variable-length slice); use tensor-valued index arguments for scatter/gather/permute so indices stay device-resident. Early-exit cannot shorten a static trace.
@@ -191,7 +191,7 @@ When benchmarking trace replay, record whether `ttnn.execute_trace` is blocking.
 
 When a traced loop is slower than the decoder-stack lower bound, instrument and fix the loop before retuning kernels. Eliminate host token refreshes, current-position/RoPE refreshes, page-table copies, mask rebuilds, cache resets, synchronizations, blocking trace replays, and feedback readbacks from the steady-state path. A line such as `position_refreshes = gen_len - 1` is evidence that the loop is still host-stepped, even if every decoder op inside the step is traced.
 
-If you are still stuck after isolating the failing block, use `$autofix`. It should run diagnosis, then verify or refute each proposed root cause with focused experiments before keeping a fix.
+If you are still stuck after isolating the failing block, use `autofix`. It should run diagnosis, then verify or refute each proposed root cause with focused experiments before keeping a fix.
 
 ## Symptom Table
 

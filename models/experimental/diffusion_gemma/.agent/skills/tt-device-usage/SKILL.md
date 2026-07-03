@@ -13,7 +13,7 @@ Use this skill for the hardware-facing parts of model bringup. It covers only no
 - Close devices before starting the next device-facing command. Kill stale processes from the same run before reset or retry.
 - Keep watcher and profiler evidence in separate runs. Do not combine `TT_METAL_WATCHER` with device-profiler or Tracy collection.
 - Do not profile live vLLM serving stages. Use serving benchmark JSON and logs instead.
-- Preserve evidence before cleanup: work logs, README files, benchmark JSON, server logs, compact perf summaries, and exact failing commands. Do not delete `CODEX_HOME`, auth/config, completed stage artifacts, or the repo state.
+- Preserve evidence before cleanup: work logs, README files, benchmark JSON, server logs, compact perf summaries, and exact failing commands. Do not delete the agent's config/auth directories, completed stage artifacts, or the repo state.
 
 ## Reset And Health Checks
 
@@ -61,7 +61,7 @@ Recovery sequence:
 4. If listing is incomplete after the first successful reset, run the bounded reset sequence once more.
 5. If devices are visible, clear stale TT UMD locks only after confirming no live process from this run owns the devices. Then run the mesh smoke.
 6. If reset, listing, or mesh smoke still fails, ask the monitor/operator for a physical Docker-host reboot and reservation re-acquire. If the current agent explicitly owns experiment monitoring or machine recovery, reboot the host directly and repeat list/reset/list plus mesh smoke after reconnecting.
-7. Resume the same stage from preserved state. In the multigoal flow, use `--resume-stage <stage_number>` instead of restarting completed earlier stages.
+7. Resume the same stage from preserved state by re-running the relevant stage slash-command under `commands/` (each stage is a `/dg-NN-...` command); do not restart completed earlier stages.
 8. Record this as infrastructure recovery, not a model correctness or performance result.
 
 Do not mark a model stage blocked because a board briefly became undiscoverable. A model stage may block on hardware only after this recovery path fails or requires operator intervention the agent cannot perform.
@@ -95,7 +95,7 @@ python -m pip install -r tools/triage/requirements.txt
 
 Read `tools/triage/tt-triage.md` for command details and available scripts. Keep the triage output with the stage evidence.
 
-After capturing triage, use `$autofix` for the failure if ordinary log reading does not explain it. `$autofix` will run `$autodebug` when needed. Give it the failing command, console log, `tt-triage.txt`, current stage work log, and relevant source paths. Do not declare a stage blocked for a hang until `$autofix` has tried and failed, unless the remaining blocker is unavailable hardware or operator-only recovery.
+After capturing triage, if ordinary log reading does not explain the failure, spawn a fresh subagent (via the Task/Agent tool) to investigate with a clean context. Give it the failing command, console log, `tt-triage.txt`, current stage work log, and relevant source paths. Do not declare a stage blocked for a hang until that subagent investigation has tried and failed, unless the remaining blocker is unavailable hardware or operator-only recovery.
 
 ## Evidence To Record
 
@@ -108,5 +108,5 @@ For any hardware recovery or hang, record:
 - whether locks were cleared and why that was safe;
 - mesh-smoke command and result;
 - tt-triage output path for hangs;
-- whether `$autofix` was used, and its conclusion;
+- whether a fresh subagent investigation was used, and its conclusion;
 - resumed stage/thread/log path.

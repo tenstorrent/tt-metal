@@ -1,13 +1,13 @@
 ---
 name: stage-review
-description: Independently review a TTNN model bringup stage before it is allowed to pass. Use when a stage is complete or near-complete and Codex needs a fresh xhigh subagent to compare the stage output against the original goal contract, skill requirements, logs, generated model outputs, checks, benchmarks, and code artifacts; identify bugs, oddities, contradictions, weak dismissals, or suspicious behavior that hard-edged stage gates missed; and return a clean-pass or more-work-needed verdict.
+description: Independently review a TTNN model bringup stage before it is allowed to pass. Use when a stage is complete or near-complete and the agent needs a fresh xhigh subagent to compare the stage output against the original goal contract, skill requirements, logs, generated model outputs, checks, benchmarks, and code artifacts; identify bugs, oddities, contradictions, weak dismissals, or suspicious behavior that hard-edged stage gates missed; and return a clean-pass or more-work-needed verdict.
 ---
 
 # Stage Review
 
 ## DiffusionGemma adaptation
 
-Load `$diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
+Load `diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
 
 - Review the DIFFUSION capability contract: `canvas_length` (256), denoise-step budget (≤48), block granularity, three-phase KV semantics, bidirectional/sliding mask geometry, and 256K `prompt + generated` context — NOT autoregressive `max_model_len` / page / prefill-divisibility framing.
 - Drop the autoregressive quality gates: `meta_ifeval` / `meta_gpqa_cot` are not mandatory here, and the generation triggers ("prompt echo", token feedback, paged-cache decode, doubled/repeated tokens) do not apply. Review instead the diffusion decisions (entropy, Gumbel-max argmax agreement, accept/renoise agreement vs the injected-noise reference), canvas convergence, and RUN outcome via `DG_TEXT_DEMO_SUCCESS` / `DG_TEXT_DEMO_FAILURE`.
@@ -118,11 +118,11 @@ Return `more-work-needed` when evidence shows one of these:
   under BFP8/HiFi while the final or mandatory policy is BFP4/LoFi. Geometry is
   not rejected until the material geometry candidates have been measured under
   the same dtype/fidelity policy, or an exact op-contract blocker is recorded.
-- prompt-based quality evidence violates `$qualitative-check`, for example an
+- prompt-based quality evidence violates `qualitative-check`, for example an
   instruct/chat model is judged only from raw completion prompts, a base model
   is judged through invented chat prompts, or prompt-format evidence is missing.
 - a stage from full-model onward can generate text but did not run the
-  `$qualitative-check` shared suite, or did not record why the suite was
+  `qualitative-check` shared suite, or did not record why the suite was
   impossible.
 
 Do not return `more-work-needed` only because a stronger evidence format would
@@ -140,10 +140,10 @@ classified in the stage evidence.
 
 A review verdict of `more-work-needed` means exactly that: the stage is not
 ready to pass yet. It is a remediation trigger, not permission for the stage
-owner to set the Codex goal to terminal `blocked`. The stage owner must treat
+owner to mark the stage terminal `blocked`. The stage owner must treat
 each finding as work: fix it directly when the cause is obvious, or use
-`$autofix` when the fix is not obvious or the first direct fix does not close
-the gate. Only a later, explicit `$autofix` failure or an unrecoverable external
+`autofix` when the fix is not obvious or the first direct fix does not close
+the gate. Only a later, explicit `autofix` failure or an unrecoverable external
 dependency can justify terminal goal `blocked`.
 
 ## What To Inspect
@@ -175,7 +175,7 @@ For generation or serving stages, also inspect:
   that are not divisible by internal chunk, tile, block, page, or trace sizes.
   A public model/generator/serving path that rejects such lengths needs more
   work unless the HF model itself has that semantic restriction.
-- `$qualitative-check` evidence: prompt-format metadata, rendered prompts or
+- `qualitative-check` evidence: prompt-format metadata, rendered prompts or
   token ids, HF/full-model controls, and the shared qualitative suite as soon as
   the stage can generate text. Missing suite output is required work unless the
   stage records a concrete capability blocker.
@@ -211,7 +211,7 @@ For optimization stages, also inspect:
   optimization that would remove an op, collective, reshard, or layout
   conversion, a first TTNN/API error is not enough. Require evidence that the
   stage adapted shape, layout, padding, or weight packing and retried, or used
-  `$autofix`. Accept rejection only when the adapted path is measured slower,
+  `autofix`. Accept rejection only when the adapted path is measured slower,
   fails correctness for an understood reason, or a minimal repro proves the op
   cannot express the required contract;
 - whether multi-device optimization candidates were measured as coherent
@@ -273,7 +273,7 @@ For datatype-sweep stages, also inspect:
   the measured runtime path, using model summaries, propagation checks, or
   profiler/perf-report rows rather than JSON alone;
 - whether every material BFP4 matmul group considered or selected has a
-  BFP4+LoFi candidate, or an exact TTNN/runtime blocker plus `$autofix`
+  BFP4+LoFi candidate, or an exact TTNN/runtime blocker plus `autofix`
   evidence;
 - whether a "fastest evaluated config" claim is only true because an obvious
   legal precision/fidelity candidate was missing.
@@ -302,7 +302,7 @@ behavior and there is no control showing it is expected, return
 Use a prompt like this, filling in concrete paths:
 
 ```text
-Use $stage-review as an independent reviewer for one TTNN model bringup stage.
+Use `stage-review` as an independent reviewer for one TTNN model bringup stage.
 You are the fresh review subagent. Do not spawn another reviewer. Do not modify
 implementation files. You may run read-only local commands and small
 artifact-analysis scripts over existing artifacts. Do not start servers, open TT
@@ -386,8 +386,8 @@ After the reviewer returns:
 1. Read the findings and verify that the cited artifacts exist.
 2. If the verdict is `more-work-needed`, do not mark the stage complete or
    terminal `blocked`. Treat the findings as the next stage work item. Use the
-   relevant debugging skill or `$autofix` to resolve it, then rerun
-   `$stage-review`.
+   relevant debugging skill or `autofix` to resolve it, then rerun
+   `stage-review`.
 3. If the verdict is `clean-pass`, record the review artifact or subagent final
    answer path in the stage work log.
 4. After `clean-pass`, create local checkpoint commits for stage-owned changes

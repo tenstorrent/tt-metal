@@ -1,7 +1,0 @@
-interface:
-  display_name: "vLLM Integration"
-  short_description: "Add vLLM serving integration to a TTNN full model"
-  default_prompt: "Use $vllm-integration to implement models/experimental/diffusion_gemma/tt/generator_vllm.py from the existing full model and generator, register it with the TT vLLM plugin, run the vLLM readiness server path, and report serving correctness plus performance."
-
-policy:
-  allow_implicit_invocation: true

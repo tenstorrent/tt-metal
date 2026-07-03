@@ -1,13 +1,13 @@
 ---
 name: tti-release
-description: Run the tt-inference-server model release workflow for the completed generated autoport TTNN/vLLM model and produce the customer-facing readiness markdown report. Use after the vLLM-integration stage or at model readiness handoff time, especially when Codex must evaluate the generated autoport through an already-running OpenAI-compatible vLLM server, run small TTI smokes before expensive release workflows, or use Docker only as an explicit fallback.
+description: Run the tt-inference-server model release workflow for the completed generated autoport TTNN/vLLM model and produce the customer-facing readiness markdown report. Use after the vLLM-integration stage or at model readiness handoff time, especially when the agent must evaluate the generated autoport through an already-running OpenAI-compatible vLLM server, run small TTI smokes before expensive release workflows, or use Docker only as an explicit fallback.
 ---
 
 # TTI Release
 
 ## DiffusionGemma adaptation
 
-Load `$diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
+Load `diffusion-gemma` first; it overrides the autoregressive assumptions below for the text-diffusion path.
 
 - Evaluate the `models/experimental/diffusion_gemma` implementation served through the tenstorrent/vllm TT plugin — NOT stock `models/tt_transformers` or `models/demos`. Stock-impl detection keys off those paths and won't recognize the `experimental/` layout, so verify the run spec's `code_path` points at `models/experimental/diffusion_gemma`.
 - `meta_ifeval` / `meta_gpqa_cot` are autoregressive instruct-LLM gates — do NOT treat them as mandatory unless a diffusion-appropriate rationale exists; substitute or supplement with a diffusion-decision / qualitative bar and record the choice. Under RUN-first, degraded output may be expected until #48291 — record the current fidelity state rather than forcing a passing eval.
@@ -29,7 +29,7 @@ Treat a valid TTI prompt length as a logical request length. If TTI sends a prom
 
 ## Topology
 
-Assume the agent usually starts inside an IRD reservation/Codex container:
+Assume the agent usually starts inside an IRD reservation container:
 
 ```text
 reservation container:
@@ -265,7 +265,7 @@ tmux kill-session -t autoport-vllm-<run-name> 2>/dev/null || true
 ssh "$PHYSICAL_HOST" 'docker ps -aq --filter "name=tt-inference-server" | xargs -r docker rm -f'  # only if Docker was used
 ```
 
-2. Follow `$tt-device-usage` reset recovery from the reservation container. At minimum run the bounded list/reset/list sequence, retry reset once if devices or Ethernet links do not all return, and verify a mesh open/close before relaunching:
+2. Follow `tt-device-usage` reset recovery from the reservation container. At minimum run the bounded list/reset/list sequence, retry reset once if devices or Ethernet links do not all return, and verify a mesh open/close before relaunching:
 
 ```bash
 timeout 60 tt-smi -ls --local
@@ -288,17 +288,17 @@ Before changing release specs, eval configs, benchmark configs, or server launch
 
 Valid harness fixes are narrower: wrong autoport path, wrong tokenizer/chat template, host-sampling-only tests that need an explicit host-sampling compatibility mode, or requests whose prompt plus completion exceeds the true supported context. If the model cannot meet the context contract for any reason other than a hard physical device limit, fix the model path or report a readiness gap; do not weaken release coverage.
 
-Use `$qualitative-check` for prompt-based release checks. Release smokes, qualitative/API requests, eval harness configuration, and report interpretation must record the prompt-format decision and must not use raw-completion output from an instruct model, or invented chat prompts for a base model, as release-readiness evidence.
+Use `qualitative-check` for prompt-based release checks. Release smokes, qualitative/API requests, eval harness configuration, and report interpretation must record the prompt-format decision and must not use raw-completion output from an instruct model, or invented chat prompts for a base model, as release-readiness evidence.
 
 ## Failing Release Tests
 
-If the release workflow exits nonzero because `spec_tests`, `tests`, API parameter conformance, eval harness execution, or benchmark harness execution failed, use `$autofix` before declaring the TTI release stage blocked. Give `$autofix` the exact failed command, model, device, physical host, workflow log path, server log path, report/test output path, and the smallest local repro command that preserves the failure.
+If the release workflow exits nonzero because `spec_tests`, `tests`, API parameter conformance, eval harness execution, or benchmark harness execution failed, use `autofix` before declaring the TTI release stage blocked. Give `autofix` the exact failed command, model, device, physical host, workflow log path, server log path, report/test output path, and the smallest local repro command that preserves the failure.
 
-Use `$autofix` for report-marked API/spec/test failures even when `run.py` exits 0, because the release wrapper may still generate a report with failed conformance rows. After a fix, rerun the failed workflow or the full release workflow as needed, then regenerate and copy back the final report.
+Use `autofix` for report-marked API/spec/test failures even when `run.py` exits 0, because the release wrapper may still generate a report with failed conformance rows. After a fix, rerun the failed workflow or the full release workflow as needed, then regenerate and copy back the final report.
 
 Treat report generation as aggregation, not evidence collection. `release` runs expensive data-collection workflows such as `evals`, `benchmarks`, `spec_tests`, and `tests`, then runs the cheaper `reports` workflow over their outputs. If evals, benchmarks, spec tests, and tests already produced valid raw outputs, and the remaining failure is report generation, report copy-back, waiver text, stale report-input state, or the stage check not finding `report_*.md`, preserve the existing `workflow_logs` and rerun only `run.py --workflow reports` or the exact failing `workflows/run_reports.py` command after fixing the report/report-input state. Rerun expensive workflows only when their raw outputs are missing, stale for the current autoport/spec/commit, invalid, or affected by a model/spec/server change that can change the results. Record the reason for any expensive rerun.
 
-Do not use `$autofix` for pure infrastructure failures such as missing Docker, Hugging Face auth, SSH problems, or ARC/reset hangs; recover those with the topology and reset policy above. For accuracy or performance target failures, first decide whether the evidence points to an implementation/test bug or a real readiness gap. Use `$autofix` for the former. Record the latter in `RUN_NOTES.md` and the final response.
+Do not use `autofix` for pure infrastructure failures such as missing Docker, Hugging Face auth, SSH problems, or ARC/reset hangs; recover those with the topology and reset policy above. For accuracy or performance target failures, first decide whether the evidence points to an implementation/test bug or a real readiness gap. Use `autofix` for the former. Record the latter in `RUN_NOTES.md` and the final response.
 
 ## Release Readiness Failures
 
@@ -310,7 +310,7 @@ Parse the final release report and report data. Classify every failed accuracy, 
 
 Disclosure is not a waiver. A row is not `issue-waived` merely because it is called out in `RUN_NOTES.md`. Include the issue URL, affected rows, canonical/control behavior, and why the waiver applies.
 
-For text LLMs, treat `meta_ifeval` and `meta_gpqa_cot` as mandatory quality gates unless a current linked issue proves the correct canonical implementation fails the same eval in the same way. These failures usually indicate a real model or serving bug, such as stale token/position feedback, async decode reset corruption, sampling/seed handling, chat-template mismatch, or prefill/decode mode-switch corruption. Use `$autofix` and rerun the affected evals before accepting the stage.
+For text LLMs, treat `meta_ifeval` and `meta_gpqa_cot` as mandatory quality gates unless a current linked issue proves the correct canonical implementation fails the same eval in the same way. These failures usually indicate a real model or serving bug, such as stale token/position feedback, async decode reset corruption, sampling/seed handling, chat-template mismatch, or prefill/decode mode-switch corruption. Use `autofix` and rerun the affected evals before accepting the stage.
 
 LongBench and other long-context rows may have legitimate release-harness issues, but they still need row-specific evidence. For example, a current issue may waive `longbench_code_e` or `longbench_fewshot_e` for one model because the canonical release path is using the wrong chat-template setting. Do not generalize that waiver to unrelated eval rows or models.
 
@@ -366,9 +366,9 @@ Done means:
 - The copied run spec or release report data proves that the evaluated implementation path is the target `models/experimental/diffusion_gemma` directory.
 - No copied final report or run spec identifies the evaluated implementation as stock `models/tt_transformers`, `models/demos`, or another packaged implementation for the same HF model.
 - The copied run spec, server launch, and report data preserve the supported context from `doc/context_contract.json`.
-- `$qualitative-check` evidence shows prompt-based release checks used the HF-declared prompt format, and `RUN_NOTES.md` records the tokenizer/chat-template decision plus the TTI/eval setting or rendered prompt evidence.
+- `qualitative-check` evidence shows prompt-based release checks used the HF-declared prompt format, and `RUN_NOTES.md` records the tokenizer/chat-template decision plus the TTI/eval setting or rendered prompt evidence.
 - Valid non-aligned prompt lengths either pass, or the stage records the exact model bug and remains not ready.
-- Any failing release tests or API conformance rows were either fixed with `$autofix` and rerun, or explicitly classified as non-test readiness gaps with evidence.
+- Any failing release tests or API conformance rows were either fixed with `autofix` and rerun, or explicitly classified as non-test readiness gaps with evidence.
 - Any failed accuracy, benchmark target, API conformance, or incomparable metric row is classified as `fixed`, `issue-waived`, or `readiness-fail`. A `readiness-fail` means the stage is not clean-pass.
 - `meta_ifeval` and `meta_gpqa_cot` pass for text LLMs, or each failure has a current linked issue proving the correct canonical implementation fails the same eval in the same way.
 - Final release markdown is copied under `models/experimental/diffusion_gemma/doc/tti_release/`.
