@@ -54,6 +54,9 @@ _MODEL_ROOT = Path(os.environ.get("PERF_MCP_MODEL_ROOT") or _MANIFEST.get("confi
 _ENV = _MANIFEST.get("env", {})
 # where profile_model stashes the current baseline so measure_candidate can compare structurally
 _BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_baseline.json"
+_FULLPIPE_BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline.json"
+_FULLPIPE_TOL = float(os.environ.get("PERF_MCP_FULLPIPE_TOL", "0.02"))
+_FULLPIPE_TARGET_MS = float(os.environ.get("PERF_MCP_TARGET_MS", "0") or "0")
 
 # C++-kernel SAFETY: a bad Metalium kernel can WEDGE a device core (tt-lang/ttnn fail gracefully; raw
 # C++ can deadlock the NoC). Device runs are already subprocess-isolated+timeout-bounded (so the loop
@@ -440,6 +443,10 @@ def profile_model() -> dict:
     return {
         "ok": True,
         "device_ms": dev,
+        "per_token_ms": prof.get("per_token_ms"),
+        "tokens_per_sec_per_user": prof.get("tokens_per_sec_per_user"),
+        "tokens_per_sec": prof.get("tokens_per_sec"),
+        "decode_status": prof.get("decode_status"),
         "roofline_target_ms": target,
         "at_floor": at_floor,
         "residual_gap_ms": residual_gap,
@@ -480,6 +487,8 @@ def measure_candidate() -> dict:
     delta = round(base_dev - dev, 4)
     pct = round((delta / base_dev) * 100.0, 2) if base_dev else 0.0
     faster = delta > 0.05  # noise floor
+    pt_ms = prof.get("per_token_ms")
+    base_pt = baseline.get("per_token_ms")
     return {
         "verdict": "valid",
         "device_ms": dev,
@@ -487,6 +496,11 @@ def measure_candidate() -> dict:
         "delta_ms": delta,
         "pct_faster": pct,
         "is_real_gain": faster,
+        "per_token_ms": pt_ms,
+        "baseline_per_token_ms": base_pt,
+        "per_token_delta_ms": round(base_pt - pt_ms, 6) if (pt_ms and base_pt) else None,
+        "tokens_per_sec_per_user": prof.get("tokens_per_sec_per_user"),
+        "tokens_per_sec": prof.get("tokens_per_sec"),
         "note": "FASTER — real gain" if faster else ("SLOWER" if delta < -0.05 else "no gain (within noise)"),
     }
 
@@ -508,6 +522,145 @@ def check_pcc() -> dict:
     return res
 
 
+def _run_full_pipeline_ms():
+    ptr = _MANIFEST.get("perf_test_resolved", {}) or {}
+    node = ptr.get("path")
+    if not node:
+        return None, None, "no perf test in manifest"
+    case = ptr.get("case")
+    repo = str(Path(_PKG).parent.parent.parent)
+    env = dict(os.environ)
+    env["TT_METAL_HOME"] = repo
+    env["PYTHONPATH"] = repo
+    env["TT_PERF_LAYERS"] = "0"
+    env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS", "1")
+    env.setdefault("TT_PERF_TRACE", "1")
+    env.pop("TT_METAL_DEVICE_PROFILER", None)
+    cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node]
+    if case:
+        cmd += ["-k", case]
+    try:
+        r = _sp.run(cmd, cwd=repo, capture_output=True, text=True, timeout=5400, env=env)
+    except Exception as exc:  # noqa: BLE001
+        return None, None, f"run failed: {str(exc)[-400:]}"
+    out = (r.stdout or "") + "\n" + (r.stderr or "")
+    per_token = None
+    wall = None
+    for line in out.splitlines():
+        if "TRACE_PER_TOKEN_MS=" in line:
+            try:
+                per_token = float(line.split("TRACE_PER_TOKEN_MS=", 1)[1].split()[0])
+            except Exception:  # noqa: BLE001
+                pass
+        elif "FORWARD_WALL_MS=" in line:
+            try:
+                wall = float(line.split("FORWARD_WALL_MS=", 1)[1].split()[0])
+            except Exception:  # noqa: BLE001
+                pass
+    if per_token is not None:
+        return per_token, "trace", None
+    if wall is not None:
+        return wall, "eager", None
+    return None, None, "no TRACE_PER_TOKEN_MS or FORWARD_WALL_MS in output (workload did not run full-pipeline)"
+
+
+_FULLPIPE_GATE_LOG = Path(tempfile.gettempdir()) / "perf_mcp_fullpipe_gate.log"
+
+
+def _emit_fullpipe(result: dict) -> dict:
+    m = result.get("method")
+    src = "trace_replay" if m == "trace" else ("eager_wall" if m == "eager" else "n/a")
+    parts = [
+        "[full-pipeline-gate]",
+        "status=%s" % result.get("status"),
+        "end_to_end_ms=%s" % result.get("full_pipeline_ms"),
+        "via=%s" % src,
+    ]
+    if result.get("best_ms") is not None:
+        parts.append("best_ms=%s" % result.get("best_ms"))
+    if result.get("delta_pct") is not None:
+        parts.append("delta_pct=%s" % result.get("delta_pct"))
+    if result.get("target_ms") is not None:
+        parts.append("target_ms=%s gap_ms=%s" % (result.get("target_ms"), result.get("gap_to_target_ms")))
+    if result.get("error"):
+        parts.append("error=%s" % str(result.get("error"))[:140])
+    line = " ".join(parts)
+    sys.stderr.write(line + "\n")
+    sys.stderr.flush()
+    try:
+        with open(_FULLPIPE_GATE_LOG, "a") as _f:
+            _f.write(line + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+    return result
+
+
+@mcp.tool()
+def check_full_pipeline_latency() -> dict:
+    """Measure end-to-end latency and gate it as a CONVERGENCE gate toward the target (a GPU number if
+    set via PERF_MCP_TARGET_MS, else just best-so-far). Measurement source is trace_replay when the
+    pipeline exposes a trace-capturable decode step: method 'trace' reports the clean, GPU-comparable
+    per-token wall (TRACE_PER_TOKEN_MS via agent/trace_replay); otherwise it falls back to method 'eager'
+    (the whole-model FORWARD_WALL_MS, layer cap OFF, no tracy). The best-so-far baseline is keyed by
+    method, so a switch from eager to trace (e.g. once a decode_step is added) re-baselines instead of
+    cross-comparing incomparable numbers. This is NOT a fixed-threshold gate: a kept edit only has to
+    move TOWARD the target (faster / not slower), and is NEVER rejected for failing to REACH the target.
+    status 'ok' = moved toward target or held (accept); status 'diverged' = got slower than best-so-far
+    by more than the tolerance (reject — revert it). E.g. target=1ms: 10->8 is ok, 10->12 is diverged; 8
+    is accepted even though it is not 1. Best-so-far ratchets down on every improvement. Run alongside
+    check_pcc before banking any win. Each check prints a `[full-pipeline-gate]` line (status,
+    end_to_end_ms, via=trace_replay|eager_wall, best/delta/target) to stderr and appends it to
+    $TMPDIR/perf_mcp_fullpipe_gate.log so the gated end-to-end time is visible every iteration.
+    Returns {status, full_pipeline_ms, method, metric, best_ms?, delta_pct?, target_ms?,
+    gap_to_target_ms?, reached_target?}."""
+    ms, method, err = _run_full_pipeline_ms()
+    if ms is None:
+        return _emit_fullpipe({"status": "crash", "error": err})
+    metric = "trace_per_token_ms" if method == "trace" else "eager_full_pipeline_ms"
+    tgt = _FULLPIPE_TARGET_MS if _FULLPIPE_TARGET_MS > 0 else None
+    tgt_fields = {}
+    if tgt is not None:
+        tgt_fields = {
+            "target_ms": round(tgt, 4),
+            "gap_to_target_ms": round(ms - tgt, 4),
+            "reached_target": ms <= tgt,
+        }
+    base = {}
+    if _FULLPIPE_BASELINE_PATH.exists():
+        try:
+            base = json.loads(_FULLPIPE_BASELINE_PATH.read_text())
+        except Exception:  # noqa: BLE001
+            base = {}
+    best = float(base.get("full_pipeline_ms", 0.0) or 0.0)
+    if base.get("method", "eager") != method or best <= 0:
+        _FULLPIPE_BASELINE_PATH.write_text(json.dumps({"full_pipeline_ms": ms, "method": method}))
+        return _emit_fullpipe(
+            {
+                "status": "ok",
+                "full_pipeline_ms": round(ms, 4),
+                "method": method,
+                "metric": metric,
+                "note": "best-so-far recorded",
+                **tgt_fields,
+            }
+        )
+    delta_pct = round((ms - best) / best * 100.0, 2) if best > 0 else None
+    diverged = ms > best * (1.0 + _FULLPIPE_TOL)
+    if ms < best:
+        _FULLPIPE_BASELINE_PATH.write_text(json.dumps({"full_pipeline_ms": ms, "method": method}))
+    return _emit_fullpipe(
+        {
+            "status": "diverged" if diverged else "ok",
+            "full_pipeline_ms": round(ms, 4),
+            "best_ms": round(best, 4),
+            "delta_pct": delta_pct,
+            "method": method,
+            "metric": metric,
+            **tgt_fields,
+        }
+    )
+
+
 @mcp.tool()
 def git_head() -> dict:
     """Return the current git HEAD sha of the model repo (your clean checkpoint / revert target)."""
@@ -518,8 +671,9 @@ def git_head() -> dict:
 @mcp.tool()
 def git_commit(message: str) -> dict:
     """Commit the current model-dir changes (scoped to the model dir only — unrelated repo changes
-    are left untouched). Use this to BANK a verified win (valid measure + ok pcc + faster). Returns
-    the new sha."""
+    are left untouched). Use this to BANK a verified win: valid measure + ok pcc (check_pcc) + faster
+    + full-pipeline NOT regressed (check_full_pipeline_latency status == 'ok'). If check_pcc OR
+    check_full_pipeline_latency is not ok, revert — never commit. Returns the new sha."""
     repo = gitio.repo_root(_MODEL_ROOT)
     try:
         pathspec = _MODEL_ROOT.relative_to(repo)

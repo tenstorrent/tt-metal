@@ -116,6 +116,40 @@ def _is_torch_wrapper(stub: Path) -> bool:
         return False
 
 
+_FORWARD_NAMES = {"__call__", "forward"}
+_FWD_HOST_CALLS = {"to_torch", "argmax", "multinomial", "topk"}
+
+
+def _forward_has_host_ops(stub: Path) -> bool:
+    """(b) Broader than _is_torch_wrapper (which only catches REFERENCE delegation): does the stub's
+    FORWARD (__call__/forward) do a per-call host READBACK (ttnn.to_torch) or host SAMPLING
+    (torch.argmax/topk/multinomial)? These are unambiguous host round-trips. from_torch/from_device are
+    intentionally NOT flagged here (often one-time lazy-init) — the runtime G5 op-scan covers those.
+    Best-effort AST scan (no false block on parse error)."""
+    try:
+        text = stub.read_text(errors="ignore")
+        import ast
+
+        tree = ast.parse(text)
+    except Exception:  # noqa: BLE001
+        return False
+
+    def _cn(node) -> str:
+        f = getattr(node, "func", None)
+        if isinstance(f, ast.Attribute):
+            return f.attr
+        if isinstance(f, ast.Name):
+            return f.id
+        return ""
+
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name in _FORWARD_NAMES:
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Call) and _cn(node) in _FWD_HOST_CALLS:
+                    return True
+    return False
+
+
 def _is_graduated(component: str) -> bool:
     """Graduation per the SHARED contract emit-e2e/promote read: a `.py.last_good_native` snapshot
     exists next to the stub (written on a PCC pass)."""
@@ -434,6 +468,18 @@ def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str
                 pass
 
     if ok:
+        _req_dev = os.environ.get("E2E_REQUIRE_ON_DEVICE") == "1" and os.environ.get("E2E_ALLOW_HOST_DECODE") != "1"
+        if _req_dev and stub.is_file() and (_is_torch_wrapper(stub) or _forward_has_host_ops(stub)):
+            st.setdefault("consecutive_same_class", {})[component] = 0
+            _save_state(st)
+            return {
+                "recorded": True,
+                "component": component,
+                "graduated": False,
+                "reason": "on-device required: PCC passed but the stub's forward still does host ops "
+                "(torch delegation / to_torch / from_torch / host argmax) — make it native ttnn to graduate "
+                "(set E2E_ALLOW_HOST_DECODE=1 to waive)",
+            }
         if stub.is_file():
             try:
                 shutil.copy2(stub, _snap(component, ".py.last_good_native"))
@@ -662,7 +708,12 @@ def termination_check() -> dict:
     last_text_map = st.get("last_failure_text", {}) or {}
     harness_skip_reasons = st.get("harness_skip_reason", {}) or {}
     loader_resolvable = _rlr.is_enabled() and not _rlr.has_loader(_DEMO_DIR)
-    terminal = set(st.get("fallback") or []) | set(st.get("harness_skipped") or [])
+    _require_on_device = (
+        os.environ.get("E2E_REQUIRE_ON_DEVICE") == "1" and os.environ.get("E2E_ALLOW_HOST_DECODE") != "1"
+    )
+    terminal = set(st.get("harness_skipped") or [])
+    if not _require_on_device:
+        terminal |= set(st.get("fallback") or [])
     work, needs_cap = [], []
     for c in comps:
         if _grad_for_run(c) or c in terminal:

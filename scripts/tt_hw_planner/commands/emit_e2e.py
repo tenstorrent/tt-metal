@@ -117,6 +117,13 @@ _G1_TORCH_DELEGATION = (
     r"_get_torch_submodule\s*\(",
 )
 
+_G5_HOST_SAMPLING = (
+    r"torch\.argmax\s*\(",
+    r"torch\.multinomial\s*\(",
+    r"torch\.topk\s*\(",
+)
+_G5_HOST_XFER = ("from_torch", "to_torch", "from_device", "to_device")
+
 
 def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     """Model-agnostic gate runner: G1 native, G2/G3 (run tests/e2e), G4 demo/ structure. Returns (ok, reasons)."""
@@ -152,6 +159,68 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             nonnative.append(p.stem)
     if nonnative:
         reasons.append("G1: stub(s) delegate to the torch reference (not native ttnn): " + ", ".join(nonnative[:8]))
+
+    if os.environ.get("E2E_REQUIRE_ON_DEVICE") == "1" and os.environ.get("E2E_ALLOW_HOST_DECODE") != "1":
+        tt_dir = demo_dir / "tt"
+        host_hits = []
+        for p in sorted(tt_dir.glob("*.py")) if tt_dir.is_dir() else []:
+            try:
+                src = p.read_text(errors="ignore")
+            except Exception:  # noqa: BLE001
+                continue
+            if any(re.search(pat, src) for pat in _G5_HOST_SAMPLING):
+                host_hits.append(p.stem)
+        if host_hits:
+            reasons.append(
+                "G5 on-device: pipeline samples on the HOST (torch.argmax/topk/multinomial) — decode is not "
+                "fully on-device, so trace + 2CQ is blocked: " + ", ".join(host_hits[:8]) + " (move sampling "
+                "on-device with ttnn; set E2E_ALLOW_HOST_DECODE=1 to waive for a genuinely host-bound model)"
+            )
+        else:
+            repo = demo_dir
+            for parent in demo_dir.parents:
+                if (parent / "models").is_dir():
+                    repo = parent
+                    break
+            probe = repo / "models" / "experimental" / "perf_automation" / "cc_optimize" / "_op_sig_probe.py"
+            if probe.is_file() and test_files:
+                cap = int(os.environ.get("E2E_HOST_XFER_MAX", "6"))
+                penv = dict(os.environ)
+                penv["TT_METAL_HOME"] = str(repo)
+                penv["PYTHONPATH"] = str(repo) + os.pathsep + penv.get("PYTHONPATH", "")
+                penv["TT_PERF_MAX_NEW_TOKENS"] = "2"
+                penv.pop("TT_METAL_DEVICE_PROFILER", None)
+                _pb = repo / "python_env" / "bin" / "python"
+                _pbin = str(_pb) if _pb.exists() else sys.executable
+                try:
+                    pr = subprocess.run(
+                        [_pbin, str(probe), str(test_files[0].relative_to(repo))],
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_s,
+                        cwd=str(repo),
+                        env=penv,
+                    )
+                    xfer = []
+                    for line in ((pr.stdout or "") + "\n" + (pr.stderr or "")).splitlines():
+                        if line.startswith("PERF_OP_SIGS="):
+                            import json as _json
+
+                            try:
+                                sigs = _json.loads(line.split("=", 1)[1])
+                            except Exception:  # noqa: BLE001
+                                sigs = []
+                            xfer = sorted({s.split("(")[0] for s in sigs if any(h in s for h in _G5_HOST_XFER)})
+                    if len(xfer) > cap:
+                        reasons.append(
+                            f"G5 on-device: {len(xfer)} host round-trip op types in the forward (weight "
+                            f"streaming / host readback) exceeds {cap} — not fully on-device, trace+2CQ blocked: "
+                            + ", ".join(xfer[:8])
+                            + " (keep weights resident + sample on-device; "
+                            "E2E_ALLOW_HOST_DECODE=1 or raise E2E_HOST_XFER_MAX to waive)"
+                        )
+                except Exception:  # noqa: BLE001 — probe failure is not a gate failure (best-effort)
+                    pass
 
     py = sys.executable
     for parent in [Path.cwd(), *demo_dir.parents]:
@@ -337,7 +406,9 @@ def cmd_emit_e2e(args) -> int:
         if _pc.tp > 1:
             _sharded = _source_phase2_shard_stubs(demo_dir)
             if _sharded:
-                print(f"  [shard] sourced Phase-2 TP-sharded stubs (compose as-is, do NOT replicate): {', '.join(_sharded)}")
+                print(
+                    f"  [shard] sourced Phase-2 TP-sharded stubs (compose as-is, do NOT replicate): {', '.join(_sharded)}"
+                )
                 _parallel_note += (
                     f"\n\nPHASE-2 SHARD STUBS ({', '.join(_sharded)}): these _stubs ALREADY implement the "
                     f"proven TP={_pc.tp} split (ShardTensorToMesh + all_reduce/cluster_axis). Compose them "

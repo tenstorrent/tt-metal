@@ -314,6 +314,7 @@ def cmd_optimize(args) -> int:
             case=getattr(args, "case", None),
             pcc_test=pcc_test,
             baseline_only=getattr(args, "baseline_only", False),
+            e2e_only=getattr(args, "e2e_only", False),
             sync_catalog=getattr(args, "sync_catalog", False),
             catalog_remote=getattr(args, "catalog_remote", "origin"),
             catalog_branch=getattr(args, "catalog_branch", "perf-catalog"),

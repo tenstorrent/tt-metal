@@ -30,7 +30,13 @@ PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
 # is set in-process here so ONLY the perf run is capped (the correctness/e2e gate runs the full model).
 os.environ.setdefault("TT_PERF_LAYERS", "2")
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
+_DEV_PARAMS = {"l1_small_size": 24576}
+if _PERF_TRACE:
+    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
+    _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "1"))
+
+@pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
 def test_<task>_perf(device_params, device):
     # 1) build the pipeline EXACTLY as demo/demo_<task>.py does
     # 2) drain the device profiler every PERF_FLUSH_EVERY ops. MODEL-AGNOSTIC: wrap EVERY ttnn
@@ -63,6 +69,19 @@ def test_<task>_perf(device_params, device):
         for _mod, _n, _f in _orig: setattr(_mod, _n, _f)
     print("FORWARD_WALL_MS=%.4f" % ((time.monotonic() - _fw0) * 1000.0))
     assert out is not None   # perf only — NO PCC
+
+    if _PERF_TRACE:
+        try:
+            from models.experimental.perf_automation.agent.trace_replay import measure_adapter
+            from models.experimental.perf_automation.agent.perf_adapter import PipelineDecodeAdapter
+
+            def _build_for_perf(dev):
+                ...
+            _prompt_ids = ...
+            _adapter = PipelineDecodeAdapter(_build_for_perf, _prompt_ids, batch=1)
+            measure_adapter(_adapter, device, mode="auto")
+        except Exception as _te:  # noqa: BLE001
+            print("TRACE_REPLAY_SKIPPED=%r" % (_te,), flush=True)
 """
 
 
@@ -200,7 +219,18 @@ def generate_perf_test(
         "profiler and produces an EMPTY ops-perf CSV (the run aborts with TracyRunError). If the "
         "source orchestrates work by launching pytest node-ids in subprocesses, do NOT replicate "
         "that — inline / call those modules' build+forward directly so every device op runs here.\n"
-        f"- a pytest function named `test_{task}_perf` taking the standard device fixtures.\n"
+        f"- a pytest function named `test_{task}_perf`.\n"
+        "- DEVICE OPEN — MATCH THE SOURCE'S TOPOLOGY EXACTLY (this is critical for sharded models). If the "
+        "source SELF-OPENS its device (calls open_pipeline_mesh / open_mesh_device / ttnn.open_mesh_device, "
+        "or builds a MeshShape), your test MUST open + close the device the SAME way — lift that exact "
+        "open call into the test body, close it in a finally — and pass that device object to "
+        "build_pipeline / the forward. Do NOT substitute a pytest `device` / `device_params` fixture: a "
+        "single `device` fixture silently DISABLES the pipeline's sharding (shard_active becomes False) and "
+        "profiles the WRONG single-chip config for a model built to run tensor-parallel on a mesh. Use the "
+        "pytest `device`/`device_params` fixture ONLY when the source itself uses that fixture (genuine "
+        "single-device pipelines). When TT_PERF_TRACE is set and the source's open function accepts "
+        "trace_region_size / num_command_queues, pass them through that open; otherwise open exactly as the "
+        "source does (the trace block stays guarded and simply falls back).\n"
         "- BOUNDED + profiler-safe so tracy's 12000-marker buffer never overflows: cap the work (decode "
         "loop via env TT_PERF_MAX_NEW_TOKENS default 4, or a SINGLE forward if there's no loop), AND drain "
         "the profiler every TT_PERF_FLUSH_EVERY ops (default 32) + a final ttnn.ReadDeviceProfiler. DRAIN "
@@ -218,7 +248,7 @@ def generate_perf_test(
         "the host blocks in ttnn.synchronize_device for many minutes, stalling the run. If the source "
         "defines a large seq constant, OVERRIDE it with a small value here (env-overridable, small default). "
         "A perf profile only needs a representative dispatch-dense pass, not the max shape.\n"
-        "- KEEP the skeleton's `os.environ.setdefault(\"TT_PERF_LAYERS\", ...)` line VERBATIM near the top. "
+        '- KEEP the skeleton\'s `os.environ.setdefault("TT_PERF_LAYERS", ...)` line VERBATIM near the top. '
         "It caps profiled depth for deep (many-layer) models so the device profiler's marker buffer does "
         "not overflow (worse on a multi-chip mesh, where markers scale x chips). It is set in-process so "
         "ONLY this perf run is capped; a pipeline that does not read TT_PERF_LAYERS simply ignores it. Do "
@@ -227,6 +257,21 @@ def generate_perf_test(
         "- TIME THE FORWARD: keep the skeleton's time.monotonic() bracket around the bounded forward and "
         'the final print("FORWARD_WALL_MS=...") VERBATIM — the harness reads it as an independent '
         "end-to-end check on the profiler capture. Do not remove or rename it.\n"
+        "- KEEP the skeleton's trace-replay block VERBATIM in structure: the `_PERF_TRACE`/`_DEV_PARAMS` "
+        "device-param gate near the top AND the trailing `if _PERF_TRACE:` measure_adapter block. This is a "
+        "MODEL-AGNOSTIC, GPU-comparable per-token latency (TRACE_PER_TOKEN_MS). Do NOT write a per-model "
+        "adapter class — the tool ships the generic PipelineDecodeAdapter. Your ONLY job in that block is to "
+        "fill `_build_for_perf(dev)` so it builds the pipeline EXACTLY as this test/demo builds it (lift the "
+        "same imports + build args, using `dev`), and set `_prompt_ids` to a SMALL prompt. Leave everything "
+        "else in the block verbatim. The clean number is emitted automatically IFF the built pipeline exposes "
+        "a trace-capturable `decode_step(state)`; if its decode is repeat-prefill (re-runs the growing "
+        "sequence / host argmax), the adapter raises, the guard falls back to FORWARD_WALL_MS, and that is "
+        "fine. Never delete the block, never let it fail the test.\n"
+        "- TRACE BLOCK + SELF-OPEN: if (per the DEVICE OPEN rule) the test self-opens a mesh, pass the "
+        "device the test actually opened to `measure_adapter(...)` (NOT a fixture `device`), and put "
+        "`trace_region_size`/`num_command_queues` on that self-open call when TT_PERF_TRACE (drop the "
+        "`_DEV_PARAMS`/`device_params` fixture entirely). Keep `_build_for_perf(dev)` building the pipeline "
+        "on the passed-in `dev` so both the eager forward and the trace run the SAME sharded topology.\n"
         "- Lift the imports + build args straight from the demo above.\n\n"
         f"Use this structural skeleton (adapt the build+run to the demo):\n{_SKELETON_REF}\n"
     )

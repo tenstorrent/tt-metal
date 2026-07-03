@@ -14,17 +14,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
 PERF_DIR = "models/experimental/perf_automation"
 CC_DIR = PERF_DIR + "/cc_optimize"
-DEFAULT_MAX_ROUNDS = 20
+DEFAULT_MAX_ROUNDS = 10
 
 _ALLOWED_TOOLS = [
     "mcp__perf-mcp__profile_model",
     "mcp__perf-mcp__measure_candidate",
     "mcp__perf-mcp__check_pcc",
+    "mcp__perf-mcp__check_full_pipeline_latency",
     "mcp__perf-mcp__recall_knobs",
     "mcp__perf-mcp__distill_knob",
     "mcp__perf-mcp__git_head",
@@ -54,7 +56,7 @@ LOOP:
     knob:dtype -> lower that op's WEIGHT dtype (bf16->bf8_b->bf4_b). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'dtype',measured_ms,beat_baseline) EVEN IF pcc forced a revert (that marks the knob tried).
     tt-lang    -> author a tt-lang (ttl) kernel (Read GUIDELINES/11). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'tt-lang',measured_ms,beat_baseline).
     cpp        -> author a C++ Metalium kernel via ttnn.generic_op (Read GUIDELINES/12). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'cpp',measured_ms,beat_baseline).
-  (IRON RULE: a real win = check_pcc ok AND verdict 'valid' AND is_real_gain. REJECTED is never a win.)
+  (IRON RULE: a real win = check_pcc ok AND check_full_pipeline_latency ok (moved TOWARD the target / not diverged) AND verdict 'valid' AND is_real_gain. REJECTED, pcc-fail, or a DIVERGED full-pipeline latency is never a win — revert. Note: check_full_pipeline_latency never fails for missing the target, only for getting SLOWER than best-so-far.)
   WRITE-BACK: after you COMMIT a win you IMPROVISED (recall_knobs had no match), call distill_knob to persist the general technique; if the win RE-USED a provisional lever learned on another model, pass its id to distill_knob to graduate it.
   Re-run termination_check. Repeat. NEVER stop while can_stop=false. NEVER reason a lever "won't help" — prove it by measuring + recording the attempt.
 
@@ -227,6 +229,175 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
     return {"can_stop": "CANSTOP=True" in out, "halt": "HALT=True" in out, "reason": reason}
 
 
+def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> float | None:
+    """Measure the FULL-model end-to-end (ALL 52 layers, no tracy, prefill + 1 decode) ONCE and print it
+    with `label` (BEFORE / AFTER). Returns end_to_end_ms or None. This is the whole-model SCOREBOARD, run
+    only at the two BOOKENDS of a pipeline's optimization (start + right before stop) — never per iteration
+    — so a real before/after full-model speedup is reported without the per-step cost. The device_ms loop
+    metric is the fast 2-layer STEERING signal; this is the verdict. Disable via PERF_MCP_FULLPIPE_E2E=0."""
+    if os.environ.get("PERF_MCP_FULLPIPE_E2E", "1") != "1":
+        return None
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); import perf_mcp as P; "
+        "g=P.check_full_pipeline_latency\n"
+        "for a in ('fn','func','_fn','__wrapped__'):\n"
+        "    if hasattr(g,a): g=getattr(g,a); break\n"
+        "r=g()\n"
+        "print('FULLPIPE_MS=' + str(r.get('full_pipeline_ms')))"
+    )
+    env = cc_env(repo_root, devices)
+    env.update(mcp_env)
+    print(
+        f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL 52 layers, no tracy (one slow run, minutes)..."
+    )
+    ms = None
+    try:
+        r = subprocess.run(
+            [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
+            cwd=str(repo_root / PERF_DIR),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=5400,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [optimize/cc] FULL-model end-to-end ({label}) skipped ({exc})")
+        return None
+    for line in ((r.stderr or "") + "\n" + (r.stdout or "")).splitlines():
+        if line.startswith("FULLPIPE_MS="):
+            try:
+                ms = float(line.split("=", 1)[1])
+            except Exception:  # noqa: BLE001
+                ms = None
+        if "[full-pipeline-gate]" in line:
+            print("  [optimize/cc] " + line.strip())
+    if ms is not None:
+        print(f"  [optimize/cc] FULL-model end-to-end ({label}) = {ms:.1f} ms  (ALL 52 layers, prefill + 1 decode)")
+    return ms
+
+
+_HOST_XFER_OPS = ("from_torch", "to_torch", "from_device", "to_device")
+
+
+def _parse_facts(raw: str, sigs: set | None) -> dict:
+    """Extract the UNIVERSAL scorecard facts from an op-sig probe run: TP/DP + shard state (from the
+    pipeline's MeshDevice line) and whether the step round-trips to host (host-transfer ops in the op
+    set) — the latter is the trace+2CQ gate. Model-agnostic: reads the op stream, not a per-model map."""
+    facts = {"dp": 1, "tp": 1, "shard_active": False, "host_ops": [], "n_op_types": len(sigs or ())}
+    m = re.search(r"DP=(\d+)\s+TP=(\d+)", raw or "")
+    if m:
+        facts["dp"], facts["tp"] = int(m.group(1)), int(m.group(2))
+    if "shard_active=True" in (raw or ""):
+        facts["shard_active"] = True
+    facts["host_ops"] = sorted({s.split("(")[0] for s in (sigs or set()) if any(h in s for h in _HOST_XFER_OPS)})
+    return facts
+
+
+def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, k: int):
+    """Run the perf test forward at TT_PERF_LAYERS=k (no tracy, 1 decode token) through the generic
+    _op_sig_probe. Returns (sigs_set_or_None, raw_stdout_stderr)."""
+    env = cc_env(repo_root, devices)
+    env.update(mcp_env)
+    env["TT_PERF_LAYERS"] = str(k)
+    env["TT_PERF_MAX_NEW_TOKENS"] = "1"
+    env.pop("TT_METAL_DEVICE_PROFILER", None)
+    cmd = [_python_bin(repo_root), str(repo_root / CC_DIR / "_op_sig_probe.py"), node]
+    if case:
+        cmd.append(case)
+    try:
+        r = subprocess.run(cmd, cwd=str(repo_root), env=env, capture_output=True, text=True, timeout=1800)
+    except Exception:  # noqa: BLE001
+        return None, ""
+    raw = (r.stdout or "") + "\n" + (r.stderr or "")
+    sigs = None
+    for line in raw.splitlines():
+        if line.startswith("PERF_OP_SIGS="):
+            try:
+                sigs = set(json.loads(line.split("=", 1)[1]))
+            except Exception:  # noqa: BLE001
+                sigs = None
+    if not sigs:
+        return None, raw
+    return sigs, raw
+
+
+def _coverage_layers(repo_root: Path, mcp_env: dict, devices: str, node, case, n_layers: int = 52):
+    """MODEL-AGNOSTIC profiling-window sizing: grow TT_PERF_LAYERS until the set of distinct ttnn op
+    signatures SATURATES (a deeper window adds no new op type) — so the tracy 2-layer-style slice actually
+    covers EVERY block type, not just whatever falls in the first N layers. Homogeneous models saturate at
+    1-2; heterogeneous ones (mamba/attention/MoE interleaved) grow until all types appear. No per-model
+    layer maps. Returns (layer_count_or_None, facts) — facts from the deepest probe feed the scorecard.
+    Disable via PERF_MCP_COVERAGE_SIZING=0."""
+    facts: dict = {}
+    if os.environ.get("PERF_MCP_COVERAGE_SIZING", "1") != "1" or not node:
+        return None, facts
+    results: list = []
+    for k in (2, 4, 8, 16):
+        k = min(k, n_layers)
+        sigs, raw = _run_op_sigs(repo_root, mcp_env, devices, node, case, k)
+        if sigs is None:
+            break
+        facts = _parse_facts(raw, sigs)
+        print(f"  [optimize/cc] coverage probe: {k} layer(s) -> {len(sigs)} distinct op signatures")
+        results.append((k, sigs))
+        if k >= n_layers:
+            break
+    if not results:
+        return None, facts
+    max_sigs = max((s for _, s in results), key=len)
+    if results[-1][1] == max_sigs and len(results) >= 2 and results[-2][1] != max_sigs and results[-1][0] >= n_layers:
+        print("  [optimize/cc] coverage still growing at the depth cap — op coverage may be incomplete")
+    for k, s in results:
+        if s == max_sigs:
+            return k, facts
+    return results[-1][0], facts
+
+
+def _print_scorecard(devices: str, manifest: dict, pipe: dict, facts: dict, before_ms, after_ms) -> None:
+    """End-of-run scorecard. UNIVERSAL fields (hardware, TP/DP, fully-on-device, batch, users) print for
+    ANY model; token-throughput fields (TTFT / T/S/U / T/S / ISL / OSL) are class-specific and print only
+    when the model is autoregressive AND fully on-device, else N/A with the reason. Best-effort, never fails."""
+    try:
+        env = (manifest or {}).get("env", {}) or {}
+        arch = env.get("arch") or "?"
+        chips = env.get("device_count") or env.get("mesh_chips") or _chip_count(devices)
+        dp, tp = facts.get("dp", 1), facts.get("tp", 1)
+        host_ops = facts.get("host_ops", [])
+        probed = bool(facts) and facts.get("n_op_types", 0) > 0
+        on_device = probed and not host_ops
+        batch = int(os.environ.get("TT_PERF_BATCH", "1") or "1")
+        isl = os.environ.get("TT_PERF_SEQ_LEN") or "(default)"
+        osl = os.environ.get("TT_PERF_MAX_NEW_TOKENS") or "4"
+        L = ["  ┌─ optimize scorecard — pipeline: %s" % pipe.get("task", "?")]
+        L.append("  │ hardware          : %s  x%s chip(s)" % (arch, chips))
+        L.append(
+            "  │ parallelism       : TP=%s x DP=%s  (%s)"
+            % (tp, dp, "sharded mesh" if facts.get("shard_active") else "single-chip / replicated")
+        )
+        if not probed:
+            L.append("  │ fully on device   : UNKNOWN  (op-coverage probe did not run)")
+        elif on_device:
+            L.append("  │ fully on device   : YES  (trace + 2CQ possible)")
+        else:
+            L.append("  │ fully on device   : NO   -> trace + 2CQ blocked; host round-trips: %s" % ", ".join(host_ops))
+        L.append("  │ batch / users     : %s" % batch)
+        reason = (
+            "probe did not run"
+            if not probed
+            else ("not fully on-device" if not on_device else "needs a trace-capturable decode step")
+        )
+        for name in ("TTFT", "T/S/U", "T/S"):
+            L.append("  │ %-16s : N/A  (%s)" % (name, reason))
+        L.append("  │ ISL / OSL         : %s / %s  (tokens; N/A for non-token models)" % (isl, osl))
+        if before_ms and after_ms:
+            d = (before_ms - after_ms) / before_ms * 100.0
+            L.append("  │ full-model e2e    : %.1f -> %.1f ms  (%+.1f%%)" % (before_ms, after_ms, d))
+        L.append("  └─")
+        print("\n".join(L))
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [optimize/cc] scorecard skipped ({exc})")
+
+
 def _git(repo_root: Path, *args: str) -> str:
     try:
         return subprocess.run(["git", "-C", str(repo_root), *args], capture_output=True, text=True).stdout.strip()
@@ -289,11 +460,17 @@ def optimize_pipeline(
     except OSError:
         pass
     cfg = _mcp_config(repo_root, manifest_path, pipe, devices, kernel_log)
+    _cov_env = cfg["mcpServers"]["perf-mcp"]["env"]
+    _cov, _cov_facts = _coverage_layers(repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"))
+    if _cov:
+        _cov_env["TT_PERF_LAYERS"] = str(_cov)
+        print(f"  [optimize/cc] coverage-sized profiling window: TT_PERF_LAYERS={_cov} (covers all block types)")
     cfg_path = repo_root / CC_DIR / f".mcp_config_{model_name}_{task}.json"
     cfg_path.write_text(json.dumps(cfg, indent=2))
     prompt = _PROMPT.format(model=model_name, task=task, metric=metric)
     start_sha = _git(repo_root, "rev-parse", "HEAD")
     mcp_env = cfg["mcpServers"]["perf-mcp"]["env"]
+    before_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
     rounds, can_stop, halted = 0, False, False
     while rounds < max_rounds:
         st = _gate_status(repo_root, mcp_env, devices)
@@ -322,6 +499,18 @@ def optimize_pipeline(
             env=cc_env(repo_root, devices),
         )
         rounds += 1
+    after_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "AFTER")
+    if before_ms and after_ms:
+        d = (before_ms - after_ms) / before_ms * 100.0
+        print(
+            f"  [optimize/cc] FULL-model end-to-end (ALL 52 layers): BEFORE {before_ms:.1f} ms -> "
+            f"AFTER {after_ms:.1f} ms  ({d:+.1f}% {'faster' if d >= 0 else 'SLOWER'})"
+        )
+    try:
+        _mf = json.loads(Path(manifest_path).read_text())
+    except Exception:  # noqa: BLE001
+        _mf = {}
+    _print_scorecard(devices, _mf, pipe, _cov_facts, before_ms, after_ms)
     _emit_summary(repo_root, kernel_log, model_name, task, metric, start_sha)
     return {"task": task, "rounds": rounds, "can_stop": can_stop, "halted": halted}
 
@@ -574,6 +763,7 @@ def run_cc_optimize(
     case=None,
     pcc_test=None,
     baseline_only: bool = False,
+    e2e_only: bool = False,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
     sync_catalog: bool = False,
     catalog_remote: str = "origin",
@@ -611,6 +801,14 @@ def run_cc_optimize(
     pipes = pipelines_from_manifest(manifest, model_rel)
     is_mm = manifest.get("pathmap", {}).get("is_multimodal")
     print(f"  [optimize/cc] discovered pipelines: {[p['task'] for p in pipes]} (multimodal={is_mm})")
+    if e2e_only:
+        os.environ["PERF_MCP_FULLPIPE_E2E"] = "1"
+        for pipe in pipes:
+            kernel_log = f"/tmp/cc_kernlog_{model_name}_{pipe['task']}.json"
+            mcp_env = _mcp_config(repo_root, manifest_path, pipe, devices, kernel_log)["mcpServers"]["perf-mcp"]["env"]
+            print(f"  [optimize/cc] === full-model end-to-end MEASURE (no optimization): {pipe['task']} ===")
+            _fullpipe_e2e(repo_root, mcp_env, devices, "MEASURE")
+        return {"pipelines": pipes, "is_multimodal": is_mm, "results": [], "e2e_only": True}
     if baseline_only or not pipes:
         return {"pipelines": pipes, "is_multimodal": is_mm, "results": []}
     results = []
