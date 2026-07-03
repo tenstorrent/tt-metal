@@ -72,8 +72,9 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # Accuracy thresholds below are the measured TT-vs-HF top1/top5 token agreement against the committed
 # book reference (generate_book_refpt.py over tale-of-two-cities; HF intrinsic ceiling 79.8/91.8 top1/top5).
 # The 5% PERF_TOLERANCE absorbs run-to-run variation. Measured on N300 (2026-07-03):
-#   performance 88.1/99.6, accuracy 96.5/100.0 (top1/top5). N150 does not fit (L1 overflow, excluded) —
-#   its entries below are never asserted (create_model pytest.skips on the build failure).
+#   performance 88.1/99.6, accuracy 96.5/100.0 (top1/top5). N150 does not fit (14B exceeds a single
+#   Wormhole's L1) and is explicitly skipped in test_deepseek_r1_qwen_14b; its entries below are
+#   placeholders and never asserted.
 #
 # When PERF.md is eventually updated for this model, copy verbatim and add tok_s_u / ttft_ms
 # entries here (following the Mistral-7B / Qwen2.5-7B pattern).
@@ -386,6 +387,12 @@ def create_model(
 def test_deepseek_r1_qwen_14b(test_config, mesh_device, optimizations):
     """Main test entry for TTTv2 DeepSeek-R1-Distill-Qwen-14B."""
     device_name = get_device_name(mesh_device)
+    if device_name == "N150":
+        pytest.skip(
+            "DeepSeek-R1-Distill-Qwen-14B (14B) does not fit a single Wormhole's L1: a forced run "
+            "overflows a statically allocated circular buffer in the distributed LayerNorm device op "
+            "(1512864 B vs 1499136 B max), surfacing at the first forward. N150 is excluded."
+        )
     expected = EXPECTED_METRICS.get(optimizations, {}).get(device_name, {})
     model = None
     hf_model = os.environ.get("HF_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B")
@@ -508,7 +515,7 @@ def _run_perf_benchmark(
             prompts, tokenizer, max_seq_len=max_seq_len, reserve_decode_tokens=128
         )
 
-        # On-device sampling toggle (see the sampling-wiring handoff):
+        # On-device sampling toggle (SAMPLING_MODE env):
         #   host            -> sampling_params=None (host-argmax, the default shipped path)
         #   on_device       -> greedy temp=0,k=1,p=0  => trace-captured FORCE-ARGMAX full-vocab path
         #   on_device_topk  -> temp=0,k=32,p=0.08     => trace-captured TOP-K op path (gathers only

@@ -21,7 +21,7 @@ from models.common.models.deepseek_r1_distill_qwen_14b.executor import (
     EagerDeepSeekR1Qwen14BExecutor,
     TracedDeepSeekR1Qwen14BExecutor,
 )
-from models.common.models.deepseek_r1_distill_qwen_14b.model import DeepSeekR1Qwen14B
+from models.common.models.deepseek_r1_distill_qwen_14b.model import DEFAULT_HF_REVISION, DeepSeekR1Qwen14B
 from models.common.models.executor import make_contiguous_page_table
 
 
@@ -30,7 +30,7 @@ class DeepSeekR1Qwen14BGeneratorConfig:
     """Port-local serving / executor knobs (HF-free beyond ``hf_model_id``)."""
 
     hf_model_id: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
-    hf_revision: str | None = None
+    hf_revision: str | None = DEFAULT_HF_REVISION
     max_batch_size: int = 32
     max_seq_len: int = 4096
     num_layers: int | None = None
