@@ -188,7 +188,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         )
         # Mesh axis to seed UNIQUELY in the sample op: the DDP (data-parallel) axis, whose devices hold
         # DISTINCT prompts and must draw independent Gumbel noise. TP is disabled on this path (see
-        # above), so the ddp axis is the only sharded axis; None => legacy per-non-trivial-axis seeding.
+        # above), so the ddp axis is the only sharded axis; None => no per-device seeding (identical noise).
         ddp_axis = autograd_ctx.get_parallelism_context().get_ddp_axis() if self._ddp_enabled else None
         self._seed_axes: Any = [int(ddp_axis)] if ddp_axis is not None else None
 
