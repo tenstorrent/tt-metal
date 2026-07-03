@@ -12,6 +12,6 @@ Goal completion requirements:
 - The generation entry validates length/block/canvas/vocab/logits inputs; host-seeded noise + bounded host readback are acceptable for the functional run (production device RNG and intra-block device early-stop may remain deferred, recorded as such).
 - Runtime fallback audit for the measured path; watcher discipline recorded.
 - doc/block_diffusion_run/README.md and work_log.md record commands, prefill TTFT, per-block/denoise-step timing, DRAM post-build/post-prefill, degeneracy note, limitations, exact artifacts.
-- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); never push; never edit models/demos/gemma4/; log SHAs.
+- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); then push; never edit models/demos/gemma4/; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `autofix` fails.

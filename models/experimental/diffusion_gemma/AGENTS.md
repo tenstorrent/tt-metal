@@ -82,6 +82,9 @@ We serve via the [tenstorrent/vllm](https://github.com/tenstorrent/vllm) TT plug
 
 ## Conventions
 - **Commit messages must NOT include a `Co-Authored-By` trailer.**
+- **Commit and push after each meaningful, verified batch of changes** — don't accumulate a large
+  uncommitted pile; land increments on the working branch. (bhqb is set up for interactive Claude
+  Code: `~/.config/claude/env` holds `ANTHROPIC_API_KEY`, sourced from `.zshrc` — just run `claude`.)
 - **Do not skip device tests by default.** For device-facing changes, run the relevant QB2
   device test whenever hardware/env is available; only skip when the test is genuinely
   inapplicable or blocked, and record the reason in the progress source.

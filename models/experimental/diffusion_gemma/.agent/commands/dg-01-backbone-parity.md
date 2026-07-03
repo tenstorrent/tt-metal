@@ -12,6 +12,6 @@ Goal completion requirements:
 - At least one real-weights QB2 causal test passes and evidence shows it. Watcher-clean run recorded (or the exact env failure + replacement evidence).
 - No torch / ttnn.from_torch / ttnn.to_torch / host fallback inside a single measured prefill pass (setup/test boundaries excepted).
 - doc/backbone_parity/README.md and work_log.md record commands, PCC, argmax-agreement baseline, weight-mapping reconciliation, limitations, exact artifacts.
-- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit stage-owned touched changes under models/experimental/diffusion_gemma/ (no Co-Authored-By trailer); never push; never touch models/demos/gemma4/; log SHAs.
+- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit stage-owned touched changes under models/experimental/diffusion_gemma/ (no Co-Authored-By trailer); then push; never touch models/demos/gemma4/; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `autofix` fails.

@@ -12,6 +12,6 @@ Goal completion requirements:
 - On-device canvas sampling (temperature schedule, Gumbel-max, entropy) validated per-position over the 256 canvas vs reference/sampling.py, at production vocab where feasible; keep logits/probs on device.
 - Runtime fallback audit clean; watcher-clean run recorded; determinism via injected reference noise where token-exact comparison is needed.
 - doc/diffusion_delta/README.md and work_log.md record commands, PCC/decision-agreement, mask geometry, limitations, exact artifacts.
-- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); never push; never edit models/demos/gemma4/; log SHAs.
+- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); then push; never edit models/demos/gemma4/; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `autofix` fails.

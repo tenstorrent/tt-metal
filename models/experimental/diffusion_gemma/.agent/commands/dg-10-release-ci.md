@@ -11,6 +11,6 @@ Goal completion requirements:
 - CI: add DiffusionGemma to the tiered models-CI (`models-ci`) with a representative unit test (a diffusion module — denoise step / bidirectional SDPA / canvas sampling) and the device-gated RUN smoke (tests/test_device_text_demo_run.py) in the BH QB2 pipeline. Tests do not generate or read a TTNN cache file.
 - Recover ARC/ERISC/reset failures before stopping; use `autofix` for release test/spec/API/harness failures, not pure infra. Leave no servers, tmux sessions, or containers.
 - doc/tti_release/RUN_NOTES.md records server mode, host/context, TTI tag/SHA, command, key env, recovery, report path, pass/fail summary, and the implementation-path check. Small JSON/CSV/log artifacts copied to doc/tti_release/.
-- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); never push; never edit models/demos/gemma4/; log SHAs.
+- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); then push; never edit models/demos/gemma4/; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `autofix` fails.

@@ -11,6 +11,6 @@ Goal completion requirements:
 - If any op (sort/cumsum over the 256 axis) triggers a mid-capture recompile / write / host sync, it is diagnosed with the `tt-enable-tracing` flushed-marker technique and fixed or documented with a minimal repro; use `autofix` for tricky failures.
 - Watcher-clean traced run recorded; determinism across repeated replay proven with injected reference noise.
 - doc/denoise_loop/README.md and work_log.md record commands, decision-agreement, trace-safety decisions (fixed budget, device mask, tensor indices), any host-readback fallback with cost, limitations, exact artifacts.
-- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); never push; never edit models/demos/gemma4/; log SHAs.
+- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); then push; never edit models/demos/gemma4/; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `autofix` fails.

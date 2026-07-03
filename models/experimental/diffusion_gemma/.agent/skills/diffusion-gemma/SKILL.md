@@ -170,6 +170,8 @@ Under `models/experimental/diffusion_gemma/`:
 ## Conventions (hard requirements)
 
 - **Commit messages must NOT include a `Co-Authored-By` trailer.**
+- **Commit AND push after each meaningful, verified batch of changes** — don't accumulate a large
+  uncommitted pile. Land increments on the working branch (`diffusion-gemma-function`); log SHAs.
 - **Do NOT edit `models/demos/gemma4/` or any shared directory.** Keep every fix inside
   `models/experimental/diffusion_gemma/`. `git diff main -- models/demos/gemma4/` empty is a gate.
 - **Do not skip device tests by default.** Run the relevant QB2 device test whenever hardware/env

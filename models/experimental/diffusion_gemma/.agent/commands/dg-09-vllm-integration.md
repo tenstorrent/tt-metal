@@ -12,6 +12,6 @@ Goal completion requirements:
 - Serving metrics are reported per-block, not per-token TPOT: prefill TTFT, per-block latency, tokens-per-block throughput; do NOT report 1000/mean_tpot_ms. Qualitative outputs judged via `diffusion-gemma` / `qualitative-check` with an HF-vs-TT control (RUN-first: degenerate output may still be expected until #48291).
 - Runtime fallback + process cleanup audited (no leftover vLLM/EngineCore processes holding devices).
 - doc/vllm_integration/README.md and work_log.md record server command, TT config, max model len, block-granular contract, per-block metrics, qualitative verdict, limitations, exact artifacts.
-- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); never push; never edit models/demos/gemma4/; log SHAs.
+- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); then push; never edit models/demos/gemma4/; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `autofix` fails.

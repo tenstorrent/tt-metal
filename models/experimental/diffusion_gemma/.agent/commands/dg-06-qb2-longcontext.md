@@ -11,6 +11,6 @@ Goal completion requirements:
 - Long-context denoise attention (the >32768 non-causal path) is validated to fit and run at the target context on QB2; batch=1 first, then the largest batch that fits given context (#47557 is a later stage — record the ceiling here).
 - Watcher-clean run; runtime fallback audit; Blackhole/P150x4 fabric config confirmed.
 - doc/qb2_longcontext/README.md and work_log.md record the budget breakdown, byte math, capacity probes, mesh shapes, batch ceiling, limitations, exact artifacts.
-- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); never push; never edit models/demos/gemma4/; log SHAs.
+- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); then push; never edit models/demos/gemma4/; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `autofix` fails.

@@ -12,6 +12,6 @@ Goal completion requirements:
 - Two Pareto charts (argmax-agreement vs latency, accept-agreement vs latency) mark the selected point and the minimum-allowed-decision-agreement line. Ranking uses TRACED per-step/per-block latency, not eager.
 - Recompute doc/context_contract.json for every KV-cache/canvas-scratch dtype candidate that changes capacity.
 - doc/datatype_sweep/README.md and work_log.md record thresholds, selected/rejected configs, Pareto interpretation, commands, plots, perf, limitations, exact artifacts.
-- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); never push; never edit models/demos/gemma4/; log SHAs.
+- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); then push; never edit models/demos/gemma4/; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `autofix` fails.

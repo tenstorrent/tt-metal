@@ -11,6 +11,6 @@ Goal completion requirements:
 - The optimized loop keeps the fixed ≤48-step trace-safe shape (on-device cutoff mask, tensor-valued scatter indices, warmed program cache) from the denoise-loop stage; early-halt does not shorten a static trace — record the chosen static/fixed-count scheme.
 - tt-perf-report tables + CSV/provenance for prefill, one denoise step, and commit. Actionable advice tried; rejections have before/after evidence. Runtime fallback audit clean; watcher-clean.
 - doc/optimize_perf/README.md and work_log.md record before/after per-step/per-block perf, topology audit, roofline reconciliation, chosen configs, rejected options, limitations, exact artifacts. Applicable `optimize` checklist items have evidence.
-- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); never push; never edit models/demos/gemma4/; log SHAs.
+- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); then push; never edit models/demos/gemma4/; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `autofix` fails.

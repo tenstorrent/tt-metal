@@ -10,6 +10,6 @@ Goal completion requirements:
 - The precision sensitivity is characterized as diffusion-decision-aware: show where bfp8 small-probability drift flips accept/renoise even when argmax is unchanged. The router / logits→probability / entropy path is treated as high-sensitivity (keep BF16/FP32) and its dtype effect on decisions is measured, not assumed.
 - A written decision: the achievable decision-fidelity floor on current kernels, whether it clears a usable bar, and the recommendation (MoE-precision engineering on the shared backbone as a separate owned effort, or product-accept a degraded floor). Note fp32 blockers (ttnn.topk TT_FATAL on FLOAT32; fp32 experts exceed QB2 DRAM).
 - doc/decision_fidelity/README.md and work_log.md record the metrics, artifacts (replay .pt files), the localized miss, the decision, and remaining risk.
-- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); never push; log SHAs.
+- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); then push; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `autofix` fails.
