@@ -8,6 +8,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
 using namespace tt::tt_metal;
 
@@ -45,6 +46,16 @@ ttnn::Tensor untilize(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
                             input_tensor.dtype() == DataType::FLOAT32;
+    
+    if (input_tensor.logical_shape() != input_tensor.padded_shape()) {
+        ttnn::Shape output_tensor_end(SmallVector<uint32_t>(input_tensor.logical_shape().rank(), 0));
+        int logical_rank = input_tensor.logical_shape().rank();
+        for (int index = -1; index >= -logical_rank; --index) {
+            output_tensor_end[index] = input_tensor.logical_shape()[index] - 1;
+        }
+        return ttnn::untilize_with_unpadding(
+            input_tensor, output_tensor_end, memory_config, use_multicore, sub_core_grids);
+    }
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
