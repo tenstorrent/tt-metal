@@ -21,22 +21,18 @@ inputs:
       tables — a FIXED ~0.6-1.2 GiB RSS paid once per worker for the whole run,
       independent of compile work. With LLK_BUILD_PARALLELISM=1 each worker fans
       out to len(KERNEL_COMPONENTS)=4 concurrent g++ (unpack/math/pack/sfpu) for
-      one variant, so total concurrent g++ = -n x 4. The compiler-side anon
-      memory (the swap driver) scales with total g++; the fixed Python tax scales
-      with -n. Current value (10) intentionally reconstructs the ORIGINAL
-      pre-#47457 baseline concurrency exactly: before that PR, the inner
-      ThreadPoolExecutor(4) was unconditional (not a toggle), so -n 10 always
-      meant up to 10 x 4 = 40 concurrent g++. This is a deliberate A/B point on
-      the 40-core/78.5 GiB xlarge runner (where all real sidecar measurements in
-      this file's history were taken) to isolate the effect of PCH/-Os/shell=False
-      /slots against the literal original concurrency structure. Caution: 40
-      total g++ is MORE than the -n 30 serial config that already measured
-      ~3.6 GiB sustained RAM+swap per worker and swapped hard (30 total g++) --
-      this may swap as much or more; re-measure via the sidecar output and tune
-      down (or lower KERNEL_COMPONENTS fan-out) if so. Override per-call for a
-      different runner size or target concurrency.
+      one variant, so total concurrent g++ = -n x 4. Bumped from 10 to 18 based
+      on real sidecar data: at -n 10 the box was only 53% RAM with ZERO swap
+      (~2x headroom) and workers ran ~99% per-worker CPU (compute-bound, not
+      memory-bound, not idle) -- only 10 of 40 cores were being fed. Per-worker
+      RSS estimated ~1.55 GiB (linear fit from -n 10 at 41 GiB used and -n 30 at
+      72 GiB used); -n 18 projects to ~69% RAM, still with real margin below the
+      -n 30 config that measured 92% mean / 100% peak and swapped hard. -n 18 is
+      a real config change to re-measure via the sidecar output, not a
+      guaranteed-safe number -- if it swaps, drop back toward 14-16. Override
+      per-call for a different runner size or target concurrency.
     required: false
-    default: '10'
+    default: '18'
 
 runs:
   using: composite
