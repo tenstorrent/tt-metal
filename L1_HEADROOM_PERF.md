@@ -84,4 +84,10 @@ config change, new µs, verdict win/loss/noise, why)_
 
 | trace | lever | headroom? | before | after | verdict | notes |
 |---|---|---|---|---|---|---|
-| _pending_ | | | | | | |
+| UFLD-v2 HS convs (BH) | B: enable act/weights double-buffer (+act_block_h, +packer_l1_acc) | TBD | — | — | ⏳ optimizer running | double-buffer OFF on height-sharded convs today |
+| SDXL VAE (BH) | A: credit in-place in conv2d.cpp:618 → reduce DRAM slices / L1_FULL | TBD | — | — | 🔜 candidate | uses DRAM-interleaved conv tensors + huge spatial → likely auto-slices; needs device confirm + the code change |
+
+### Workstream sequencing
+- Device is single; run ONE perf task at a time (no concurrent perf; no rebuild while a perf agent measures).
+- After UFLD optimizer: implement Workstream-A credit at `conv2d.cpp:618` (correctness-matched to runtime in-place activation), confirm SDXL VAE actually auto-slices, validate the credit reduces slices → perf, no OOM.
+- Then continue Workstream B across the other candidates (ResNet50 act-block, VGG-UNet double-buffer/packer_l1_acc, functional_unet) via the optimizer.
