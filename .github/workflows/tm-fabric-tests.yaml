@@ -97,6 +97,10 @@ permissions:
 run-name: >-
   (TM-Fabric) Fabric Tests${{ github.event_name == 'schedule' && ' [CPU-only scheduled]' || '' }}
 
+concurrency:
+  group: tm-fabric-tests-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
