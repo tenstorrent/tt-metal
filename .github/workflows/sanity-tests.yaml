@@ -192,7 +192,7 @@ permissions:
   packages: write
   checks: write
 
-run-name: Sanity tests(${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' with retries' || ''}}${{ (github.event_name == 'schedule') && ' Blackhole' || ''}})
+run-name: Sanity tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' with retries' || ''}}${{ (github.event_name == 'schedule') && ' Blackhole' || ''}}
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
