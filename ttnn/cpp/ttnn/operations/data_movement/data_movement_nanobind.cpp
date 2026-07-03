@@ -27,6 +27,8 @@
 #include "ttnn/operations/data_movement/pad/pad_nanobind.hpp"
 #include "ttnn/operations/data_movement/permute/permute_nanobind.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat_nanobind.hpp"
+#include "ttnn/operations/data_movement/repeat_codegen/repeat_codegen_nanobind.hpp"
+#include "ttnn/operations/data_movement/untilize_codegen/untilize_codegen_nanobind.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave_nanobind.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape_nanobind.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_nanobind.hpp"
@@ -87,6 +89,8 @@ void py_module(nb::module_& mod) {
     bind_interleaved_to_sharded_partial(mod);
     bind_narrow(mod);
     bind_repeat(mod);
+    bind_repeat_codegen(mod);
+    bind_untilize_codegen(mod);
     bind_reshape_enum(mod);
     bind_reshape(mod);
     bind_reshape_view(mod);

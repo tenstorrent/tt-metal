@@ -176,6 +176,16 @@ target_sources(
             repeat/device/repeat_program_factory_common.hpp
             repeat/device/repeat_program_factory_higher_dim.hpp
             repeat/device/repeat_program_factory_last_dim.hpp
+            # repeat_codegen/
+            repeat_codegen/repeat_codegen_nanobind.hpp
+            repeat_codegen/device/repeat_codegen_device_operation.hpp
+            repeat_codegen/device/repeat_codegen_program_factory.hpp
+            # untilize_codegen/
+            untilize_codegen/untilize_codegen_nanobind.hpp
+            untilize_codegen/untilize_codegen.hpp
+            untilize_codegen/device/untilize_codegen_device_operation.hpp
+            untilize_codegen/device/untilize_codegen_device_operation_types.hpp
+            untilize_codegen/device/untilize_codegen_program_factory.hpp
             # repeat_interleave/
             repeat_interleave/repeat_interleave.hpp
             repeat_interleave/repeat_interleave_nanobind.hpp
