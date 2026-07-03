@@ -155,9 +155,14 @@ class SubDeviceTraceController:
                 # segment(s) so the out-of-band migration worker sees post-write KV, THEN fire the ack.
                 ttnn.synchronize_device(self.mesh_device)
                 self._on_layer_complete(payload)
-        # Flush the final segment(s) (everything after the last ack, or the whole replay when there is no
-        # ack callback) so the chunk's KV is on-device before the caller proceeds to the next chunk.
-        ttnn.synchronize_device(self.mesh_device)
+        # Ack path: flush the tail (everything after the last ack) so the migration worker's out-of-band
+        # NoC read sees the last layer's KV. NO-ACK (pipeline / standalone): do NOT sync per chunk — the
+        # segments are enqueued in order on one CQ, so chunk N's KV write completes before chunk N+1's
+        # replay reads it (and before the D2D send reads _trace_output), and the driver's end-of-loop drain
+        # (_drain_and_log_e2e) does the final flush before any readback. Syncing here per chunk serialized
+        # the traced pipeline and negated the cross-chunk overlap the untraced async path gets.
+        if self._on_layer_complete is not None:
+            ttnn.synchronize_device(self.mesh_device)
 
     # ------------------------------------------------------------------ stats / cleanup
     @property
