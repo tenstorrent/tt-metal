@@ -27,9 +27,6 @@ on:
         required: false
         type: boolean
         default: true
-    secrets:
-      VLLM_TT_PLUGIN_READ_TOKEN:
-        required: true
 
 jobs:
   generate-matrix:
@@ -499,15 +496,6 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
 
-      - name: Verify vLLM TT plugin token
-        run: |
-          if [ -z "$VLLM_TT_PLUGIN_READ_TOKEN" ]; then
-            echo "::error::Set VLLM_TT_PLUGIN_READ_TOKEN to a token with read access to tenstorrent/vllm-tt-plugin."
-            exit 1
-          fi
-        env:
-          VLLM_TT_PLUGIN_READ_TOKEN: ${{ secrets.VLLM_TT_PLUGIN_READ_TOKEN }}
-
       - name: ⬇️ Checkout vLLM TT plugin
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -515,7 +503,6 @@ jobs:
           repository: tenstorrent/vllm-tt-plugin
           path: docker-job/vllm-tt-plugin
           ref: ${{ inputs.vllm-tt-plugin-ref }}
-          token: ${{ secrets.VLLM_TT_PLUGIN_READ_TOKEN }}
           fetch-depth: 0
 
       - name: 📂 Create output directory
