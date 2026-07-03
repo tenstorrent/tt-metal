@@ -10,10 +10,7 @@ on:
         type: choice
         options:
           - all
-          - P150 CIv2 (1xP150)
           - LoudBox (8xP150)
-          - P300 (1xP300)
-          - QuietBox 2 (2xP300)
       platform:
         required: false
         type: choice
@@ -100,10 +97,7 @@ jobs:
         id: set-matrix
         run: |
           all_systems='[
-            {"name": "P150 CIv2 (1xP150)", "sku": "bh_p150b_civ2"},
-            {"name": "LoudBox (8xP150)", "sku": "bh_loudbox"},
-            {"name": "P300 (1xP300)", "sku": "bh_p300"},
-            {"name": "QuietBox 2 (2xP300)", "sku": "bh_quietbox_2"}
+            {"name": "LoudBox (8xP150)", "sku": "bh_loudbox"}
           ]'
           selected_system_type="${{ inputs.system-type || 'all' }}"
           if [[ "${{ github.event_name }}" == "schedule" || "$selected_system_type" == "all" ]]; then
