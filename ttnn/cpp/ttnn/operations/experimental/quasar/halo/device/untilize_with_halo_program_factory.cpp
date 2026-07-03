@@ -356,10 +356,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     Group<KernelSpec> kernels;
 
     if (!skip_untilize) {
-        auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-            get_compute_kernel_config_args(input_tensor.device()->arch(), operation_attributes.compute_kernel_config);
-        (void)packer_l1_acc;
-
         KernelSpec compute{
             .unique_id = COMPUTE,
             .source = std::filesystem::path(kComputeKernelPath),
@@ -377,22 +373,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .compile_time_args =
                 {{"tiles_per_row", ntiles_per_block}, {"block_size", clamped_block_size_height / TILE_HEIGHT}},
             .runtime_arg_schema = {.runtime_arg_names = {"total_blocks"}},
-            .hw_config = std::invoke([&]() -> ComputeHardwareConfig {
-                if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
-                    return ComputeGen2Config{
-                        .math_fidelity = math_fidelity,
-                        .fp32_dest_acc_en = fp32_dest_acc_en,
-                        .dst_full_sync_en = dst_full_sync_en,
-                        .math_approx_mode = math_approx_mode,
-                    };
-                }
-                return ComputeGen1Config{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .math_approx_mode = math_approx_mode,
-                };
-            }),
+            .hw_config = ttnn::to_compute_hardware_config(
+                input_tensor.device()->arch(), operation_attributes.compute_kernel_config),
         };
         kernels.push_back(std::move(compute));
     }

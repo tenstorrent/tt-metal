@@ -106,14 +106,22 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
         compute_kernel_config.dst_full_sync_en);
 }
 
-tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config) {
-    return tt::tt_metal::experimental::ComputeHardwareConfig{
-        tt::tt_metal::experimental::ComputeGen1Config{
+tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
+    tt::ARCH arch, const ComputeKernelConfig& config) {
+    // The four knobs are common to both generations; select the alternative matching the target arch.
+    if (arch == tt::ARCH::QUASAR) {
+        return tt::tt_metal::experimental::ComputeGen2Config{
             .math_fidelity = config.math_fidelity,
             .fp32_dest_acc_en = config.fp32_dest_acc_en,
             .dst_full_sync_en = config.dst_full_sync_en,
             .math_approx_mode = config.math_approx_mode,
-        },
+        };
+    }
+    return tt::tt_metal::experimental::ComputeGen1Config{
+        .math_fidelity = config.math_fidelity,
+        .fp32_dest_acc_en = config.fp32_dest_acc_en,
+        .dst_full_sync_en = config.dst_full_sync_en,
+        .math_approx_mode = config.math_approx_mode,
     };
 }
 

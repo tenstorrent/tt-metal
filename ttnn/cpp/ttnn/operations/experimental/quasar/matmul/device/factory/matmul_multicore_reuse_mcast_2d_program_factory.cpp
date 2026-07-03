@@ -3738,22 +3738,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         m2::SemaphoreSpec{.unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = all_cores_set},
     };
 
-    m2::ComputeHardwareConfig compute_hw_config = std::invoke([&]() -> m2::ComputeHardwareConfig {
-        if (device->arch() == tt::ARCH::QUASAR) {
-            return m2::ComputeGen2Config{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = false,
-                .math_approx_mode = math_approx_mode,
-            };
-        }
-        return m2::ComputeGen1Config{
+    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
+        device->arch(),
+        ttnn::ComputeKernelConfig{
             .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = false,
             .math_approx_mode = math_approx_mode,
-        };
-    });
+            .fp32_dest_acc_en = fp32_dest_acc_en});
 
     // in1 reader uses the optimized reader noc; in0 the dram-write noc. (The legacy split-half
     // _other receivers ran on the opposite NOC for perf; the Metal 2.0 host API selects the NOC via

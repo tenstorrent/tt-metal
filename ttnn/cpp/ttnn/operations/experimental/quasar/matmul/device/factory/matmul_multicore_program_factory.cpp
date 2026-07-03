@@ -65,9 +65,6 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
 
     tt::tt_metal::IDevice* device = &a.mutable_device();
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
-    (void)packer_l1_acc;
 
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
@@ -227,22 +224,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
     // Table has no iterator-pair constructor; use the single-argument range constructor over the std::map.
     KernelSpec::CompilerOptions::Defines compute_defines(mm_kernel_defines);
 
-    ComputeHardwareConfig compute_hw_config = std::invoke([&]() -> ComputeHardwareConfig {
-        if (device->arch() == tt::ARCH::QUASAR) {
-            return ComputeGen2Config{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = dst_full_sync_en,
-                .math_approx_mode = math_approx_mode,
-            };
-        }
-        return ComputeGen1Config{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode,
-        };
-    });
+    ComputeHardwareConfig compute_hw_config =
+        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config.value());
 
     // bmm compute kernel: B, Mt, Nt are just 3 for loops that act as 1 large loop,
     // so only set Nt for simplicity
