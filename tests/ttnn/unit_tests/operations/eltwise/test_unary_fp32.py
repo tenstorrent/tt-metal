@@ -214,6 +214,34 @@ def test_tanh(device, h, w):
     run_unary_test(device, h, w, ttnn.tanh, ulp=3)
 
 
+@pytest.mark.parametrize(
+    "base_bits,pad_bits",
+    [
+        (0x7F800000, 0x7FC00000),
+        (-0x800000, -0x400000),
+    ],
+    ids=["positive_nan_payloads", "negative_nan_payloads"],
+)
+def test_tanh_fp32_all_nan_payloads_propagate(device, base_bits, pad_bits):
+    mantissas = torch.arange(1, 0x800000, dtype=torch.int32)
+    input_bits = base_bits + mantissas
+    input_bits = torch.cat([input_bits, torch.tensor([pad_bits], dtype=torch.int32)])
+    torch_input_tensor = input_bits.view(torch.float32).reshape(8192, 1024)
+    assert torch.isnan(torch_input_tensor).all()
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        preserve_nan_values=True,
+    )
+
+    output_tensor = ttnn.to_torch(ttnn.tanh(input_tensor))
+
+    assert torch.isnan(output_tensor).all()
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_gelu(device, h, w):
