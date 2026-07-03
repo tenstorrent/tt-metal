@@ -1,0 +1,75 @@
+{
+  "date": "2026-07-03",
+  "device": "QB2 / bh-qbge-06 / P150x4 (4 Blackhole, TP=4, (1,4) mesh)",
+  "vllm": "0.1.dev1+g6b4a3a7b4.empty (tenstorrent/vllm fork dev@6b4a3a7, VLLM_TARGET_DEVICE=empty)",
+  "plugin": "vllm-tt-plugin 0.0.0 (editable from /home/zni/tt-vllm/plugins/vllm-tt-plugin)",
+  "env": "venv /home/zni/venvs/tt-diffusion-gemma; ttnn from /home/zni/tt-metal; transformers 5.12.1; torch 2.11.0+cpu",
+  "install": "VLLM_TARGET_DEVICE=empty uv pip install -e . --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match ; uv pip install -e plugins/vllm-tt-plugin",
+  "note": "Fresh, project-matching vLLM built against the CURRENT tt-metal. NOT the stale ghcr image 0.14.0-80180b9-7678b70.",
+
+  "server_launch": "python -m vllm.entrypoints.openai.api_server --model /home/zni/dg_models/diffusiongemma-26B-A4B-it --served-model-name diffusiongemma-26B-A4B-it --max-model-len 1024 --max-num-seqs 1 --block-size 64 --additional-config '{\"tt\": {\"sample_on_device_mode\": \"all\", \"enable_model_warmup\": false}}' --host 127.0.0.1 --port 8000",
+  "server_launch_env": "MESH_DEVICE=P150x4 DG_CKPT=/home/zni/dg_models/diffusiongemma-26B-A4B-it DG_VLLM_GUMBEL_MODE=argmax VLLM_ENABLE_V1_MULTIPROCESSING=0 TT_METAL_HOME=/home/zni/tt-metal VLLM_RPC_TIMEOUT=1800000",
+  "max_model_len_used": 1024,
+  "max_model_len_note": "1024 is the inner-loop bring-up value (fast KV/build). Context contract advertises 262144; unchanged for final headline evidence.",
+  "block_size": 64,
+  "sampling": "on-device (sample_on_device_mode=all), argmax (DG_VLLM_GUMBEL_MODE=argmax)",
+  "datatype": "bf16 weights + bf16 KV + bf16 CCL (full-model policy)",
+
+  "startup": {
+    "health": "GET /health -> 200",
+    "models": "diffusiongemma-26B-A4B-it, max_model_len 1024",
+    "arch_resolved": "DiffusionGemmaForBlockDiffusion -> TT class",
+    "gpu_kv_cache_tokens": 21824,
+    "model_build": "30-layer 26B on (1,4) mesh, warmup skipped (block-diffusion warms lazily)"
+  },
+
+  "live_47488_blocker_prepatch": {
+    "site": "vllm_tt_plugin/model_runner.py:2757 _get_output_tokens",
+    "code": "next_token_ids = _take(tt_out).reshape(sz)",
+    "error": "RuntimeError: shape '[1]' is invalid for input of size 256",
+    "meaning": "model committed a 256-token canvas block; runner assumed one committed token per step (#47488).",
+    "http": 500,
+    "engine": "EngineDeadError"
+  },
+
+  "device_recovery": {
+    "signature": "TT_THROW llrt.cpp:566 assert_active_ethernet_cores_to_reset (hard-killed EngineCore left eth un-reset)",
+    "action": "tt-smi -r (bounded) + (1,4) mesh open/close smoke -> recovered",
+    "note": "prefer graceful SIGTERM shutdown of the server to avoid re-dirtying the device"
+  },
+
+  "live_request_postpatch": {
+    "endpoint": "POST /v1/completions",
+    "request": {"model": "diffusiongemma-26B-A4B-it", "prompt": "Hello, how are you?", "max_tokens": 32, "temperature": 0},
+    "response": {"id": "cmpl-ab17c7b1523666b5", "object": "text_completion", "choices": [{"index": 0, "text": "", "finish_reason": "stop"}], "usage": {"prompt_tokens": 6, "total_tokens": 7, "completion_tokens": 1}},
+    "http": 200,
+    "wall_s": 254,
+    "per_block": {
+      "prompt_len": 6,
+      "prompt_aligned_256": false,
+      "cache_len": 32,
+      "blocks_emitted": 1,
+      "canvas_length": 256,
+      "next_pos": "32 -> 288",
+      "denoise_steps": 35,
+      "denoise_step_cap": 48,
+      "early_halted": true,
+      "block0_latency_s": 252.259
+    },
+    "text_empty_reason": "committed argmax canvas placed EOS at position 0 -> vLLM stops at first token, skip_special_tokens -> empty. Known RUN-first #48291 fidelity behavior (bf16/MoE/TP=4 argmax commits EOS-heavy blocks). NOT a serving regression.",
+    "metrics_note": "block-diffusion cost profile is per-block; 1000/mean_tpot_ms is intentionally NOT reported."
+  },
+
+  "remaining_47488_scheduler_half": {
+    "trigger": "POST /v1/completions with ignore_eos=true, max_tokens=48 (request does not stop at the block's EOS, so >1 token survives per step)",
+    "http": 500,
+    "wall_s": 253,
+    "site": "vllm/v1/core/sched/async_scheduler.py:53 AsyncScheduler._update_request_with_output",
+    "code": "request.num_output_placeholders -= len(new_token_ids); assert request.num_output_placeholders >= 0",
+    "error": "AssertionError (num_output_placeholders goes negative)",
+    "root_cause": "AsyncScheduler reserves exactly 1 output placeholder per scheduled step (_update_after_schedule: num_output_placeholders += 1 + spec) but a block-diffusion step emits up to canvas_length=256 tokens, so the placeholder budget underflows whenever more than the reserved count survives the stop-trim.",
+    "why_first_request_passed": "the default-stop request committed EOS at canvas position 0, so _update_request_with_output trimmed to 1 token (within the 1-placeholder reservation) -> assert held.",
+    "scope": "This is the SCHEDULER half of #47488 (num_output_placeholders + num_computed_tokens advance by canvas_length, for both the prefill-block and decode-block). It is beyond the scoped model_runner.py change (which is done + verified). A correct fix must generalize placeholder reservation AND the num_computed_tokens advance to canvas_length; doing so hastily risks silently corrupting generation (per the vLLM-integration skill), so it is left as the precise, live-captured remaining blocker rather than hacked.",
+    "verdict": "Single-block serving where the request stops within block 0 (the realistic DG default-stop path) works live end-to-end (HTTP 200). Multi-token-survival / multi-block serving needs the #47488 scheduler half."
+  }
+}

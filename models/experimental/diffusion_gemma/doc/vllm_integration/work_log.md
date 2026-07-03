@@ -103,19 +103,14 @@ below the advertised context. Physical-limit note: full-depth 256K weights+KV fi
 serving uses the chunked / argmax sampler (`DG_VLLM_GUMBEL_MODE`) which fits. See context
 contract.
 
-## Serving environment reality (why no live `run_vllm_server`)
+## Serving environment reality — SUPERSEDED 2026-07-03 (fresh host vLLM now live)
 
-- vLLM + the TT plugin exist **only inside a container image**
-  (`ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-release-ubuntu-22.04-amd64:0.14.0-80180b9-7678b70`);
-  no host vLLM, no running container.
-- The container's baked tt-metal is stale (`80180b9`): no `models/experimental/diffusion_gemma`,
-  no DiffusionGemma registration, and `models/common/readiness_check/` (the skill's
-  `run_vllm_server`) **does not exist anywhere** on host or in the image.
-- The upstream runner's `assert num_out_tokens == 1` hard-blocks block emission until #47488.
-
-⇒ The skill's fallback applies verbatim: "If the runner+scheduler cannot accept block output,
-the required upstream change is scoped (#47488) and the adapter is written to that contract."
-Serving-path evidence is produced by the reduced-surface driver on the free device.
+The earlier blocker ("vLLM + plugin only in a stale ghcr image; runner asserts one token") is no
+longer the state. A fresh, project-matching vLLM was built on host and the #47488 runner change was
+applied and verified LIVE. See **§ Live serving verification (fresh vLLM) — 2026-07-03** below. The
+stale image (`0.14.0-80180b9-7678b70`) is NOT used; `models/common/readiness_check/run_vllm_server`
+still does not exist in this checkout, so the live serve is driven directly against
+`vllm.entrypoints.openai.api_server` (the fork's documented server path).
 
 ## Device runs (reduced-surface serving driver)
 
@@ -237,7 +232,98 @@ Anomalies were classified as controlled: the 4-step degenerate/empty block and t
 reproduces the coherent RUN control), and the 1-block early stop at 4 steps is correct EOS-stop
 behavior (`stop` distinct from denoise `halted`).
 
-## SHAs
+## Live serving verification (fresh vLLM) — 2026-07-03
+
+Goal met: stand up a CURRENT-project vLLM (not the stale ghcr image) and do the LIVE serving
+verification. Host install succeeded, so no container was built.
+
+### Environment (host install into the current DG venv)
+
+- venv `/home/zni/venvs/tt-diffusion-gemma`: Python 3.12.12, `ttnn` editable from
+  `/home/zni/tt-metal` (current checkout), transformers 5.12.1, torch 2.11.0+cpu, `uv` present.
+- fork `/home/zni/tt-vllm` (branch `dev`, head `6b4a3a7`) = full vLLM source + TT plugin
+  (`plugins/vllm-tt-plugin`, a pip package).
+- Install (per `plugins/vllm-tt-plugin/docs/install-vllm-tt.sh`):
+  `VLLM_TARGET_DEVICE=empty uv pip install -e . --extra-index-url .../cpu --index-strategy unsafe-best-match`
+  then `uv pip install -e plugins/vllm-tt-plugin`.
+  - empty target → `ext_modules=[]` (no CUDA/kernel compile; gRPC codegen only). Runtime deps read
+    from `requirements/common.txt` (`_no_device()` branch of `get_requirements`), which pins **no**
+    torch → the venv's torch 2.11 / transformers 5.12.1 / ttnn are preserved. Build isolation
+    installs `torch==2.10.0` (build-system.requires) only in a throwaway env.
+- Verified: `vllm 0.1.dev1+g6b4a3a7b4.empty`, `vllm-tt-plugin 0.0.0`,
+  `platform_plugin() -> vllm_tt_plugin.platform.TTPlatform`, ttnn/transformers/torch versions
+  unchanged, DG adapter imports.
+
+### Applied patches (saved as files here; fork is a separate repo)
+
+- `plugin_47488_registration.patch` — `register_tt_models()` in `platform.py`: HF arch
+  `DiffusionGemmaForBlockDiffusion` + `DiffusionGemmaForCausalLM` + `TT*` aliases →
+  `models.experimental.diffusion_gemma.tt.generator_vllm:DiffusionGemmaForCausalLM`, inserted after
+  the Gemma4 block.
+- `plugin_47488_model_runner.patch` — the #47488 runner change (`model_runner.py`), verified live.
+  Line numbers here are for `6b4a3a7` (the stale-image numbers in the older scope table differ):
+
+  | What | Where (6b4a3a7) | Change |
+  |---|---|---|
+  | Collapse device sample to 1 token | `_get_output_tokens` :2760 `reshape(sz)` | `reshape(sz, -1)` → keep `[sz, num_out]`; guard 1-token logprobs path |
+  | DP-pack 1-token assert | `sample_tokens` :2252 `shape[1]==1` | accept `shape[1] >= 1` |
+  | apply-to-state 1-token assert + writes | `_apply_sampled_tokens_to_state` :2887 | drop `num_out_tokens==1`; write `[start:start+N]` block, advance `num_tokens` by N, extend output by N (sync + captured paths) |
+  | build-output 1-token list | `_build_runner_output` :2839 `view(num_reqs)` | `reshape(num_reqs, num_out)`, emit N tokens/req |
+
+  Design: `num_out_tokens = sampled_token_ids.shape[1]`. N=1 keeps the autoregressive path
+  byte-identical; N=`canvas_length`(256) for DiffusionGemma. vLLM v1 core already supports a
+  per-request token *list* (`update_from_output` → `_update_request_with_output` appends all and
+  trims at the stop point), so a single 256-token block satisfying `max_tokens <= 256` needs no
+  scheduler change; multi-block (`max_tokens > 256`) needs the scheduler
+  `num_computed_tokens += canvas_length` half of #47488 (recorded, not yet applied).
+
+### Live server + request
+
+- Launch: `python -m vllm.entrypoints.openai.api_server --model $DG_CKPT --max-model-len 1024
+  --max-num-seqs 1 --block-size 64 --additional-config '{"tt":{"sample_on_device_mode":"all",
+  "enable_model_warmup":false}}'`, env `MESH_DEVICE=P150x4 DG_CKPT=... DG_VLLM_GUMBEL_MODE=argmax
+  VLLM_ENABLE_V1_MULTIPROCESSING=0 TT_METAL_HOME=/home/zni/tt-metal`.
+  - `--block-size 64` is required (else `get_num_available_blocks_tt` hits
+    `block_size(None) * max_batch` → TypeError at KV init). Launch flag, not a model bug.
+  - `--max-model-len 1024` = inner-loop bring-up value (fast KV/build); context contract's 262144
+    unchanged and is the value for final headline evidence.
+  - Startup: `/health` 200, `/v1/models` OK, arch → `DiffusionGemmaForBlockDiffusion`,
+    30-layer 26B builds on `(1,4)`, `GPU KV cache size: 21,824 tokens`, warmup skipped.
+- Live #47488 blocker (pre-patch), reproduced on the running server:
+  `_get_output_tokens :2757 next_token_ids = _take(tt_out).reshape(sz)` →
+  `RuntimeError: shape '[1]' is invalid for input of size 256` → `EngineDeadError`, HTTP 500 after a
+  253 s prefill+denoise. Confirms #47488 exactly (256-token block vs one-token runner).
+- Device recovery: a hard-killed EngineCore left ethernet cores un-reset
+  (`TT_THROW ... assert_active_ethernet_cores_to_reset`); `tt-smi -r` + `(1,4)` mesh-smoke recovered
+  (per tt-device-usage). Prefer graceful SIGTERM shutdown to avoid this.
+- Live request after patch (`POST /v1/completions`, prompt "Hello, how are you?", max_tokens 32,
+  temperature 0):
+  `HTTP 200` (wall 254 s), `{"choices":[{"text":"","finish_reason":"stop"}],
+  "usage":{"prompt_tokens":6,"completion_tokens":1}}`.
+  Server per-block: `prefill row=0 prompt_len=6 cache_len=32 block0 next_pos=288 steps=35
+  latency=252.259s` — a 256-token block emitted through vLLM, position 32→288, 35 denoise steps
+  (early-halt), full 30-layer 26B, argmax, bf16, TP=4. Empty text/1 token = EOS committed at
+  canvas position 0 → the known RUN-first #48291 fidelity behavior, not a serving regression.
+- Remaining #47488 **scheduler half**, captured live: a second request with `ignore_eos:true`
+  (`max_tokens:48`, so >1 token must survive per step) → HTTP 500 at
+  `vllm/v1/core/sched/async_scheduler.py:53 assert request.num_output_placeholders >= 0`. The async
+  scheduler reserves 1 output placeholder/step (`_update_after_schedule` `+= 1 + spec`) while a
+  block-diffusion step emits up to `canvas_length=256` → underflow when >1 token survives the
+  stop-trim (the first request passed only because it EOS-stopped at token 0). This is beyond the
+  scoped `model_runner.py` change (done); generalizing placeholder reservation + the
+  `num_computed_tokens += canvas_length` advance (prefill-block + decode-block) is the scheduler
+  half — left as the precise live blocker rather than hacked (a wrong num-computed advance can
+  silently corrupt generation). Batch-1 single-block serving that stops within block 0 (the DG
+  default-stop path) works live end-to-end.
+
+### Result vs task goal
+
+Fresh CURRENT-project vLLM (host install, not the stale image) + live serving verification: DONE.
+Live server serves DiffusionGemma on QB2; a real `/v1/completions` returns HTTP 200 with a
+256-token block; per-block metrics captured; the #47488 runner blocker was reproduced live and
+fixed live; the remaining scheduler-half blocker is reproduced + documented live (task step 6).
+
+
 
 - `faebfbcc358` — feat(diffusion_gemma): block-granular vLLM serving adapter (#47466/#47488).
   Pushed to `diffusion-gemma-function` (194dbd432db..faebfbcc358). All pre-commit hooks passed.
