@@ -21,8 +21,8 @@ namespace ckernel::sfpu {
 
 // tanh(x): t = 0.5*expm1(abs(2*x)); sgn(x) * t / (t + 1)
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
-    sfpi::vFloat a, r, s, f, w, y, scale, bias0, bias1, c0;
-    sfpi::vFloat j, t, rcp, x0, x1, tmp, y0;
+    sfpi::vFloat a, r, s, f, w, y, scale, bias0;
+    sfpi::vFloat j, t, rcp, x0, x1, y0;
     sfpi::vInt i, e, x_exp;
     sfpi::vMag m;
 
