@@ -490,7 +490,12 @@ def test_ttnn_dispatch(
 # into extra writes). This pins that config so the path has an explicit, self-documenting correctness
 # check (the shared PCC verify catches any missed or mis-routed page). The full cross-product in
 # test_ttnn_dispatch also covers it; this is the focused guard.
-_SPARSE_MCAST_RING_CONFIGS = [p for p in ALL_MESH_CONFIGS if p.id and "ring" in p.id]
+# Sparse multicast is a 1D-line primitive, enabled for both Ring and 1D Linear lines (see the
+# enable_sparse_mcast gate in dispatch_program_factory). Select the 1D-line configs (ring-*/linear-*),
+# excluding 2D meshes (mesh-*).
+_SPARSE_MCAST_CONFIGS = [
+    p for p in ALL_MESH_CONFIGS if p.id and (p.id.startswith("ring-") or p.id.startswith("linear-"))
+]
 
 
 def _sparse_mcast_shapes():
@@ -521,7 +526,7 @@ _SPARSE_MCAST_SHAPES = _sparse_mcast_shapes()
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    _SPARSE_MCAST_RING_CONFIGS,
+    _SPARSE_MCAST_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
@@ -546,7 +551,7 @@ def test_ttnn_dispatch_sparse_mcast(
     # Guard the one assumption the sparse-multicast path is built on: 1D Ring. Both the tile and
     # row-major input paths group co-directional destinations into per-page sparse multicasts, for any
     # top-k (a direction's destinations beyond the 4-per-multicast cap spill into extra writes).
-    assert topology == ttnn.Topology.Ring
+    assert topology in (ttnn.Topology.Ring, ttnn.Topology.Linear)
     run_dispatch(
         mesh_device,
         seq_len_per_chip,
@@ -568,7 +573,7 @@ def test_ttnn_dispatch_sparse_mcast(
 
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    _SPARSE_MCAST_RING_CONFIGS,
+    _SPARSE_MCAST_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
@@ -587,7 +592,7 @@ def test_ttnn_dispatch_sparse_mcast_seq3200_topk8(
     # OP_TESTS time budget; run locally. bf16 + random (fp8/predictable are covered by the seq=32 guard).
     if is_ci_env or is_ci_v2_env:
         pytest.skip("seq=3200 PCC is a local-only scale check; too heavy for the OP_TESTS time budget")
-    assert topology == ttnn.Topology.Ring
+    assert topology in (ttnn.Topology.Ring, ttnn.Topology.Linear)
     run_dispatch(
         mesh_device,
         3200,  # seq_len_per_chip
