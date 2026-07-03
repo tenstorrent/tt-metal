@@ -215,13 +215,15 @@ ALWI void matmul_block(
     constexpr bool finalize_relu = (last_block_target == LastBlockTarget::OutWithRelu);
 
     // in_place: the (packer_l1_acc + accumulate-to-interm) config packs in place — one reserve_back
-    // over the whole output block before the K-loop + one push_back after (issued INTERNALLY here,
-    // per batch), skipping the per-K-block reserve/push/drain. Each K-block packs to absolute offsets
-    // in that fixed region and packer_l1_acc accumulates in place. packer_l1_acc makes in-place L1
-    // accumulation the whole point; without it the accumulation path is a software spill+reload, which
-    // does NOT accumulate in interm and must not take this path. Both layouts place each subblock
-    // correctly via an absolute-offset pack: TileRowMajor row-strided (M-row-group base folded into the
-    // OOP offset), SubblockMajor contiguous (subblock_idx * out_num_tiles).
+    // over the whole output block before the K-loop, skipping the per-K-block reserve/push/drain. Each
+    // K-block packs to absolute offsets in that fixed region and packer_l1_acc accumulates in place.
+    // The block is then published (issued INTERNALLY here, per batch) EITHER as one push_back after the
+    // K-loop (the default) OR, for the alias_out SubblockMajor case, per-subblock on the last K-block so
+    // the output writer overlaps the remaining subblocks' compute (see alias_out below). packer_l1_acc
+    // makes in-place L1 accumulation the whole point; without it the accumulation path is a software
+    // spill+reload, which does NOT accumulate in interm and must not take this path. Both layouts place
+    // each subblock correctly via an absolute-offset pack: TileRowMajor row-strided (M-row-group base
+    // folded into the OOP offset), SubblockMajor contiguous (subblock_idx * out_num_tiles).
     constexpr bool in_place = packer_l1_acc;
 
     // pack_last_to_interm: land the FINAL K-block in interm (vs straight to out). Do this ONLY when
@@ -249,6 +251,43 @@ ALWI void matmul_block(
     const uint32_t in1_cb_id = buf_id(in1_buf);
     const uint32_t out_cb_id = buf_id(out_buf);
     const uint32_t interm_cb_id = buf_id(interm_buf);
+
+    // ── In-place-into-OUT alias (skip the redundant finalize copy) ───────────────
+    // For the in_place (packer_l1_acc) Out-target path the K-loop accumulates into interm and a
+    // finalize step then copies interm→out. When interm and out carry the SAME tile data format
+    // (e.g. bf16 out) that finalize is a REDUNDANT same-format copy: it runs as a serial tail after
+    // the whole K-loop and delays the output writer's drain (measured: BRISC +~4.4µs / +5% on the
+    // reader/writer-bound small-N DeepSeek matmuls — the writer can't start until the copy pushes out).
+    // alias_out routes the in-place accumulator DIRECTLY into out_buf instead, so needs_finalize
+    // (out != accum) is false and the copy is skipped — while keeping the single-reserve +
+    // pack_subblock_at_offset + packer_l1_acc in-place accumulation fully intact.
+    //
+    // Eligibility (compile-time). Aliasing is only safe when the finalize would be a PURE copy:
+    //   in_place                     — only the packer_l1_acc in-place path has a finalize to skip.
+    //   tile_order == SubblockMajor  — the regressing case; TileRowMajor is left on the finalize
+    //                                  path unchanged (its row-strided reserve/pad geometry is not
+    //                                  in scope here).
+    //   !target_is_interm            — Interm feeds a downstream in-kernel op that reads from interm.
+    //   !finalize_relu && no SFPU Activation — relu / SFPU activation are finalize-only for in_place
+    //                                  (a per-partial apply under packer_l1_acc would transform each
+    //                                  partial before the sum); aliasing would silently drop them.
+    //   !fp32_dest_acc_en            — with fp32 DEST the factory makes interm Float32 ≠ out; keep
+    //                                  the converting finalize.
+    // Runtime format guard: even with !fp32_dest_acc_en the factory sets a packer_l1_acc interm to
+    // Float16_b while out may be a narrower format (e.g. bf8), so accumulating directly in out would
+    // change numerics. unpack_src_format is the one data-format array emitted on ALL THREE TRISC
+    // threads (re-emitted on PACK for the BH tilize workaround) and is equalized to each CB's real
+    // format (incl. the pack-only out CB), so compare it. A mismatch keeps the down-converting finalize.
+    constexpr bool alias_out_eligible =
+        in_place && (tile_order == OutputCBLayout::SubblockMajor) &&
+        (last_block_target != LastBlockTarget::Interm) && (last_block_target != LastBlockTarget::OutWithRelu) &&
+        (Activation::activation == KernelActivation::NONE) && !get_fp32_dest_acc_enabled();
+    const bool alias_out =
+        alias_out_eligible && (unpack_src_format[out_cb_id] == unpack_src_format[interm_cb_id]);
+    // The in-place accumulation buffer: out_buf when aliased (finalize skipped), else interm_buf
+    // (identical to the prior behavior — accum_cb_id == interm_cb_id whenever not aliased).
+    Buf& accum_buf = alias_out ? out_buf : interm_buf;
+    const uint32_t accum_cb_id = alias_out ? out_cb_id : interm_cb_id;
 
     // Fail fast on shape / CB invariants before doing any init or pipeline work.
     ASSERT(shape.in0_block_k > 0);
@@ -283,7 +322,7 @@ ALWI void matmul_block(
         if constexpr (
             reconfig == matmul_config::DataFormatReconfig::OUTPUT ||
             reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
-            PACK((pack_reconfig_data_format(interm_cb_id)));
+            PACK((pack_reconfig_data_format(accum_cb_id)));
         }
         if constexpr (init_mode == matmul_config::InitMode::Short) {
             matmul_block_init(
@@ -317,7 +356,7 @@ ALWI void matmul_block(
         // K-block packs to absolute offsets in this fixed region with packer_l1_acc accumulating in
         // place; the helper skips its own per-block reserve/push/drain (gated below on in_place).
         if constexpr (in_place) {
-            interm_buf.reserve_back(out_block_num_tiles);
+            accum_buf.reserve_back(out_block_num_tiles);
         }
 
         for (uint32_t block = 0; block < shape.num_k_blocks; block++) {
@@ -353,7 +392,7 @@ ALWI void matmul_block(
                 if constexpr (
                     reconfig == matmul_config::DataFormatReconfig::OUTPUT ||
                     reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
-                    PACK((pack_reconfig_data_format(interm_cb_id)));
+                    PACK((pack_reconfig_data_format(accum_cb_id)));
                 }
                 matmul_block_init(
                     active_in0_cb_id,
@@ -380,8 +419,10 @@ ALWI void matmul_block(
 
             // Pick the buffer the last K-block packs to. The reference here lets the
             // sync calls below dispatch through the right object regardless of branch.
-            Buf& pack_target_buf = pack_last_to_interm ? interm_buf : out_buf;
-            const uint32_t pack_target_id = pack_last_to_interm ? interm_cb_id : out_cb_id;
+            // For pack_last_to_interm the accumulator is accum_buf (out_buf when aliased, else
+            // interm_buf); the non-l1_acc straight-to-out path packs to out_buf.
+            Buf& pack_target_buf = pack_last_to_interm ? accum_buf : out_buf;
+            const uint32_t pack_target_id = pack_last_to_interm ? accum_cb_id : out_cb_id;
 
             // SubblockMajor: reserve the full out_block on the first non-last K-block so
             // interm spills don't clobber output when interm shares out's L1 region (the
@@ -532,8 +573,19 @@ ALWI void matmul_block(
                             // region (subblock_idx * out_num_tiles); pack_tile_block's wr_ptr-relative
                             // pack would clobber all subblocks onto the same slot. Contiguous mirror of
                             // the TileRowMajor row-strided pack below.
+                            //
+                            // alias_out: pack at the CURRENT fifo base (offset 0) and push_back this
+                            // subblock immediately (below) so the output writer can drain it while the
+                            // remaining subblocks of this LAST K-block still compute — restoring the
+                            // per-subblock reader/writer overlap that main's straight-to-out pack has and
+                            // that a single push-at-end loses (the measured BRISC regression). pack_tile<true>
+                            // and packer_l1_acc both address off the live fifo_wr_ptr, which each push_back
+                            // advances by out_num_tiles; so after i pushes, offset 0 == base + i*out_num_tiles
+                            // == subblock i's in-place partial → the l1_acc read-add-write lands correctly and
+                            // the subblock's absolute layout is preserved. Single reserve + in-place l1_acc are
+                            // unchanged; only the push granularity moves from one block-push to per-subblock.
                             const uint32_t abs_off =
-                                (in0_subblock * shape.in1_num_subblocks + in1_subblock) * out_num_tiles;
+                                alias_out ? 0u : (in0_subblock * shape.in1_num_subblocks + in1_subblock) * out_num_tiles;
                             pack_subblock_at_offset(0, pack_target_id, abs_off, out_num_tiles);
                         } else if constexpr (tile_order == OutputCBLayout::TileRowMajor) {
                             // Absolute-offset per-tile pack into the row-group reserve; row stride
@@ -558,8 +610,16 @@ ALWI void matmul_block(
                         if constexpr (activate_on_last_pack && finalize_relu) {
                             PACK((llk_pack_relu_config(ReluConfig::none())));
                         }
-                        if constexpr (tile_order == OutputCBLayout::SubblockMajor && !in_place) {
-                            pack_target_buf.push_back(out_num_tiles);
+                        if constexpr (tile_order == OutputCBLayout::SubblockMajor) {
+                            if constexpr (!in_place) {
+                                pack_target_buf.push_back(out_num_tiles);
+                            } else if (alias_out) {
+                                // Aliased in-place: publish this fully-accumulated subblock now so the
+                                // writer overlaps the remaining subblocks' compute (see the pack above).
+                                // Total per-subblock pushes == out_block_num_tiles, so the block-push at
+                                // the end of the batch loop is skipped for alias_out.
+                                pack_target_buf.push_back(out_num_tiles);
+                            }
                         }
 
                     } else {
@@ -573,9 +633,9 @@ ALWI void matmul_block(
                         tile_regs_wait();
 
                         if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
-                            // Pack-DF must match interm's format for non-last spills, else spills
-                            // land in whatever format the previous op left (typically out's).
-                            PACK((pack_reconfig_data_format(interm_cb_id)));
+                            // Pack-DF must match the accumulator's format for non-last spills, else
+                            // spills land in whatever format the previous op left (typically out's).
+                            PACK((pack_reconfig_data_format(accum_cb_id)));
                         }
                         if constexpr (packer_l1_acc) {
                             PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
@@ -587,7 +647,7 @@ ALWI void matmul_block(
                             // same L1 cells across K-blocks.
                             const uint32_t abs_off =
                                 (in0_subblock * shape.in1_num_subblocks + in1_subblock) * out_num_tiles;
-                            pack_subblock_at_offset(0, interm_cb_id, abs_off, out_num_tiles);
+                            pack_subblock_at_offset(0, accum_cb_id, abs_off, out_num_tiles);
                         } else if constexpr (spill_row_grouped) {
                             // in_place: fold the M-row-group base into the offset, same as the
                             // last-block pack above.
@@ -684,7 +744,11 @@ ALWI void matmul_block(
         // l1_acc=1 (accumulate) — handled per-block above — so no pre-reserve reset is needed here;
         // the post-push reconfig_l1_acc(0) restores a clean packer state for the next consumer/op.
         if constexpr (in_place) {
-            interm_buf.push_back(out_block_num_tiles);
+            // alias_out (SubblockMajor) already published the block per-subblock on the last K-block for
+            // writer overlap; every other in_place path publishes the whole block once here.
+            if (!alias_out) {
+                accum_buf.push_back(out_block_num_tiles);
+            }
             if constexpr (packer_l1_acc) {
                 PACK((llk_pack_reconfig_l1_acc(0)));
             }
@@ -699,12 +763,14 @@ ALWI void matmul_block(
         //                           reblock_and_untilize phase in the kernel — see the gather kernels).
         //   Out / OutWithRelu, non-l1_acc → the last block packed STRAIGHT TO OUT (pack_last_to_interm
         //                           is false), relu/Activation already applied → NO finalize.
-        //   Out / OutWithRelu, in_place   → needs_finalize = (out != interm). If false (aliased) the
-        //                           accumulated block in interm IS out (same CB → same dtype /
-        //                           layout / tile) → zero-copy skip. If true → copy interm→out with
-        //                           dtype-convert + relu + Activation.
+        //   Out / OutWithRelu, in_place   → needs_finalize = (out != accum). accum is out_buf when the
+        //                           block was aliased directly into out (alias_out: SubblockMajor + Out +
+        //                           no relu/activation + same tile format + !fp32_dest) → needs_finalize
+        //                           false → the accumulated block already IS out → zero-copy skip. Else
+        //                           accum is interm_buf → copy interm→out with dtype-convert + relu +
+        //                           Activation (fp32 interm, or a bf8/narrower out vs the Float16_b interm).
         if constexpr (pack_last_to_interm && !target_is_interm) {
-            const bool needs_finalize = (out_cb_id != interm_cb_id);
+            const bool needs_finalize = (out_cb_id != accum_cb_id);
             if (needs_finalize) {
                 matmul_block_finalize_copy<packer_l1_acc, finalize_relu, Activation>(
                     interm_buf, out_buf, out_block_num_tiles, out_num_tiles, /*prev_srca_cb_id=*/in1_cb_id);
