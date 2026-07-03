@@ -788,11 +788,11 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         {"unit_size", unit_size},
     };
 
-    const auto make_worker = [&](const char* name, const DataMovementGen1Config& gen1, DFBEndpointType endpoint) {
+    const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, DFBEndpointType endpoint) {
         KernelSpec k{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_source),
-            .hw_config = ttnn::to_datamovement_hardware_config(device->arch(), gen1),
+            .hw_config = std::move(hw_config),
         };
         k.tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = TensorParamName{kGenInputTensorParam}, .accessor_name = kGenInputTensorParam});
@@ -808,8 +808,10 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         return k;
     };
 
-    KernelSpec k0 = make_worker("reader", create_reader_gen1_datamovement_config(), DFBEndpointType::PRODUCER);
-    KernelSpec k1 = make_worker("writer", create_writer_gen1_datamovement_config(), DFBEndpointType::CONSUMER);
+    KernelSpec k0 =
+        make_worker("reader", ttnn::create_reader_datamovement_config(device->arch()), DFBEndpointType::PRODUCER);
+    KernelSpec k1 =
+        make_worker("writer", ttnn::create_writer_datamovement_config(device->arch()), DFBEndpointType::CONSUMER);
 
     // The borrowed DFB is only an address source (the kernel writes via get_write_ptr() + offset and
     // only ever touches the real, mapped output pages). A sharded output shard shape can be padded
