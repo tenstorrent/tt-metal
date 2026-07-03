@@ -56,10 +56,18 @@ def tag_alignment(inputs, axes):
 INPUT_TAGGERS: dict = {"alignment": tag_alignment}
 
 SUPPORTED = {
-    # bfloat16 primary, float32 second required dtype (bfloat8_b is a TARGET refinement).
-    "dtype": [ttnn.bfloat16, ttnn.float32],
-    # TILE_LAYOUT proven (ROW_MAJOR is a TARGET refinement).
-    "layout": [ttnn.TILE_LAYOUT],
+    # bfloat16/float32 (Phase 0) + bfloat8_b (Refinement 1). all_gather is pure byte
+    # movement — it never (un)tilizes — so the whole-tile block-float page (bf8b tile =
+    # 1088 B, 16-B aligned) is relayed intact; the packed exponents are preserved even for
+    # non-tile-aligned shards (tiles arrive already-packed, never re-tilized). bf8b x
+    # ROW_MAJOR is structurally impossible (INVALID in feature_spec, never reaches here).
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
+    # TILE_LAYOUT (Phase 0) + ROW_MAJOR_LAYOUT (Refinement 1). RM is native in-kernel byte
+    # movement (no to_layout/tilize wrapper): the relay CB page is the row (logical
+    # buffer_page_size, L1-aligned for the CB slot); at gather_dim=-4 an RM shard is still a
+    # contiguous page range, so the contiguous-slice walk is unchanged. Interleaved
+    # TensorAccessor self-aligns the DRAM page stride, so the logical page size is correct.
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     # Linear line proven (Ring is a TARGET refinement).
     "topology": [_Topology.Linear],
     # gather_dim is an index axis in the NEGATIVE convention. -4 == gather_dim 0 for

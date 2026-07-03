@@ -46,3 +46,54 @@
   2. Non-contiguous concat addressing: gather_dim −3/−2/−1 (verifier-authored)
   3. Ring topology (verifier-authored; **verification infra-blocked** — no ring
      topology in the multidevice sim matrix yet)
+
+## Refinement 1 — Format axes: bfloat8_b dtype + ROW_MAJOR layout
+- **Date**: 2026-07-03
+- **What was done**: Promoted `ttnn.bfloat8_b` into `SUPPORTED["dtype"]` and
+  `ttnn.ROW_MAJOR_LAYOUT` into `SUPPORTED["layout"]`. **No kernel or program-descriptor
+  change was needed** — all_gather is pure byte movement (it never (un)tilizes), and the
+  reader/writer already move whole pages by page-index via `TensorAccessor`, with the
+  relay-CB `data_format` derived from the input dtype and the page size from
+  `buffer_page_size()` / `buffer_num_pages()`. Both new axes are therefore native
+  in-kernel format flexibility, NOT a `to_layout`/`tilize` wrapper:
+  - **ROW_MAJOR**: the relay CB page is the logical row (`buffer_page_size()`, L1-aligned
+    for the CB slot). At `gather_dim=-4` an RM shard is still a contiguous page range, so
+    the existing contiguous-slice walk is unchanged. Confirmed (via the `point_to_point`
+    sibling RM CCL op + the TensorAccessor implementation) that for **interleaved DRAM**
+    tensors `get_noc_addr(page_id)` re-aligns the DRAM page stride internally through
+    `InterleavedAddrGen`, so passing the logical page size is correct (not a stride bug).
+  - **bfloat8_b**: the whole block-float tile page (1088 B, 16-B aligned) is relayed
+    intact; because tiles arrive already-packed and are NEVER re-tilized, the shared-face
+    exponents survive even for non-tile-aligned shards (memory-layouts §5) — so
+    `bfloat8_b × non_tile_aligned` needs **no EXCLUSIONS** (the verifier's flagged
+    possible-exclusion did not materialize; EXCLUSIONS stays `[]`).
+  - `bfloat8_b × ROW_MAJOR` is structurally impossible (INVALID in feature_spec, skipped
+    by the harness); the op file is agnostic to it (no INVALID block, per the model).
+  - `validate()` needed no structural change — the registry axis gate enforces the
+    extended SUPPORTED automatically.
+- **Accuracy achieved**: identity gather is bit-exact byte movement, so the only error is
+  the pre-op `from_torch` dtype quantization. Measured on the golden `(0.999, 0.02)`
+  (PCC, relative-RMS) bar across all 8 golden shapes (incl. non_tile_aligned 1×1×48×64):
+  - RM bfloat16: PCC ≈ 0.999+ (bf16 round-trip), well within tolerance.
+  - RM float32: PCC ≈ 1.0.
+  - bfloat8_b (TILE): PCC = 0.999971, relative-RMS = 0.0076 (host round-trip probe),
+    matched by the on-device gather — comfortably clears 0.999.
+- **Golden test progress**: **40 / 384** cells passing (was 16 / 384 at Phase 0) — the
+  24 previously-xfail `gather_dim=-4, topology=Linear` cells for the three new format
+  combinations (RM×bf16 = 8, RM×f32 = 8, bf8b×TILE = 8) all flipped to `supported_pass`.
+  Verified on the multidevice WH sim (`run_multidevice_sim_pytest.py --op all_gather`)
+  in `-k` chunks. Non-regression + no-drift confirmed on a 1×1×32×32 all-Linear sweep:
+  TILE bf16/f32 gd=-4 still pass, and every gd∈{-3,-2,-1} cell still xfails with the
+  correct reason (no xpass-drift, no xfail_wrong_mode). bf8b×RM cells correctly skipped
+  (INVALID). Loud verifier categories (supported_fail / xpass_drift / xfail_wrong_mode)
+  all 0.
+- **Issues encountered**: None. The verifier-flagged risk (`bf8b × non_tile_aligned`
+  block-float sub-tile edge) did not occur — non-aligned bf8b gives identical PCC to
+  aligned bf8b because the op never re-tilizes.
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/all_gather/test_all_gather_formats.py` (**new**):
+    format/layout matrix — RM×{bf16,f32}, bf8b×TILE, plus TILE regression, across
+    tile-aligned and non-tile-aligned shard shapes, asserting output dtype+layout are
+    preserved. bf8b×RM omitted (INVALID).
+  - `test_all_gather_extended.py` (**updated**): the `validate()` rejection test now gates
+    on `topology=Ring` (still unsupported) since ROW_MAJOR is now SUPPORTED.

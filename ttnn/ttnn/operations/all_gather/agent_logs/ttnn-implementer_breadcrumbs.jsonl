@@ -1,3 +1,10 @@
 {"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find NOC coord + route host helpers","ts":"2026-07-03T03:29:18+00:00"}
 {"event":"fix_applied","summary":"Initial all_gather implementation: reader/writer kernels, program descriptor, op entry, registry decls","ts":"2026-07-03T03:45:56+00:00"}
 {"event":"test_run","result":"pass","detail":"full acceptance suite 9/9 pass (bf16+fp32 x4 shapes + program_cache)","ts":"2026-07-03T03:52:50+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-07-03T05:31:33+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-07-03T05:32:11+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find RM TensorAccessor page sizing","ts":"2026-07-03T05:39:50+00:00"}
+{"event":"hypothesis","detail":"all_gather is pure byte movement; kernels/descriptor already format+layout agnostic. RM interleaved TensorAccessor self-aligns page stride (confirmed via point_to_point sibling). bf8b round-trip PCC=0.99997 relRMS=0.0076 for all shapes incl non-tile-aligned (host probe), clears golden (0.999,0.02). Refinement 1 = add bf8b+ROW_MAJOR to SUPPORTED, no kernel change, no EXCLUSIONS expected.","ts":"2026-07-03T05:43:48+00:00"}
+{"event":"test_run","detail":"golden chunk1 RM bf16 gd=-4 Linear: 8/8 PASSED incl non_tile_aligned (486s)","classification":"pass","ts":"2026-07-03T05:59:43+00:00"}
+{"event":"test_run","detail":"golden RM f32 8/8 PASS; bf8b TILE 8/8 PASS (+8 bf8b-RM INVALID skipped). 24/24 new gd=-4 Linear golden cells pass incl non_tile_aligned for all 3 new axes.","classification":"pass","ts":"2026-07-03T06:11:48+00:00"}
+{"event":"test_run","detail":"32x32 all-Linear golden: 5 pass (TILE bf16/f32 gd=-4 non-regression + RM bf16/f32 + bf8b TILE new), 15 xfail (all gd-3/-2/-1 correct reason, no xpass-drift), 4 skip (bf8b-RM INVALID). extended test 2/2 pass. Refinement 1 fully verified.","classification":"pass","ts":"2026-07-03T06:15:35+00:00"}

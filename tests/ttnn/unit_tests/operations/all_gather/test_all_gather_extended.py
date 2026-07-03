@@ -94,17 +94,21 @@ def test_all_gather_preallocated_output(mesh_device):
 @pytest.mark.parametrize("device_params", [LINEAR], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_gather_validate_rejections(mesh_device):
-    """validate() gates: registry refusal for an out-of-SUPPORTED axis (ROW_MAJOR
-    layout) and a structural ValueError for gather_dim out of range. Both fire
-    before any fabric work, so this is fast (no gather)."""
+    """validate() gates: registry refusal for an out-of-SUPPORTED axis (Ring
+    topology) and a structural ValueError for gather_dim out of range. Both fire
+    before any fabric work, so this is fast (no gather).
+
+    NOTE: ROW_MAJOR_LAYOUT and bfloat8_b were promoted to SUPPORTED in Refinement 1,
+    so the still-unsupported axis exercised here is topology=Ring (a Refinement 3
+    TARGET). gather_dim in {-3,-2,-1} is the other remaining refusal (Refinement 2)."""
     num_devices = prod(tuple(mesh_device.shape))
     if num_devices < 2:
         pytest.skip("all_gather requires at least 2 mesh devices")
 
-    # ROW_MAJOR is not in SUPPORTED["layout"] -> typed registry refusal.
-    rm_input, _ = _make_sharded_input(mesh_device, (1, 1, 32, 64), ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    # Ring topology is not in SUPPORTED["topology"] -> typed registry refusal.
+    tile_ring_input, _ = _make_sharded_input(mesh_device, (1, 1, 32, 64), ttnn.bfloat16)
     with pytest.raises(UnsupportedAxisValue):
-        all_gather(rm_input, 0, topology=ttnn.Topology.Linear)
+        all_gather(tile_ring_input, 0, topology=ttnn.Topology.Ring)
 
     # gather_dim out of range (rank is 4) -> structural ValueError.
     tile_input, _ = _make_sharded_input(mesh_device, (1, 1, 32, 64), ttnn.bfloat16)

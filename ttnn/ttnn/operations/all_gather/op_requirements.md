@@ -59,7 +59,7 @@
 
 ---
 
-### [ ] Refinement 1 — Format axes: bfloat8_b dtype + ROW_MAJOR layout
+### [x] Refinement 1 — Format axes: bfloat8_b dtype + ROW_MAJOR layout
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and `ttnn.ROW_MAJOR_LAYOUT` to
 `SUPPORTED["layout"]`, natively in the reader/writer page handling. all_gather is pure
