@@ -20,10 +20,35 @@ benefit. Log what worked AND what didn't.
    DRAM-slices (big perf hit) and which config it picks. In-place halo lowers the halo phase's
    L1; IF the conv L1 estimate credits that saving, convs that currently slice (or pick a
    lower-perf config) because the estimate over-counts could now run L1-full / higher-config.
-   This is the deferred "DRAM-slicing L1 estimate" item from the in-place work — now the KEY
-   lever. **Linchpin to verify: does `calculate_L1_usage_for_conv_op` / the DRAM-slice decision
-   account for the halo intermediate's coexistence peak, and where does the in-place saving
-   propagate?** (under investigation)
+   This is the deferred "DRAM-slicing L1 estimate" item from the in-place work.
+
+   **LINCHPIN RESOLVED (conv2d L1-estimate → slicing/config map):**
+   - **DRAM-slicing is AUTOMATIC + L1-fit-driven.** Path: input in L1 → L1 path; input in
+     DRAM-interleaved → DRAM path, which auto-searches the smallest `num_slices` that fits free
+     L1, and promotes a 1-slice fit to `L1_FULL` (whole conv in L1). (`op_slicing.cpp:156-269,
+     283-324`.)
+   - **The halo input+output coexistence is counted in exactly ONE place:**
+     `conv2d.cpp:618` `Conv2dSliceAttr::get_L1_usage` = `max(halo_input_size + halo_output_size,
+     total_size)`. That `halo_input_size` is precisely what in-place eliminates. Crediting it
+     here (when `should_halo_be_in_place` is true for the slice) lowers the fit estimate → fewer
+     slices / `L1_FULL` promotion → **avoids DRAM slicing = the big automatic win.**
+     → **WORKSTREAM A** (code change). CORRECTNESS-CRITICAL: must credit *exactly* when in-place
+     activates at runtime for that slice geometry, else it under-estimates → OOM/FATAL.
+   - **The L1 path has NO L1-budget-gated config.** `act_block_h`, `enable_act/weights_double_buffer`,
+     `full_inner_dim` are model-set pass-through `Conv2dConfig` flags — nothing auto-enables them
+     from freed L1. So on the L1 path, spending headroom = **per-trace manual config relaxation**
+     at in-place-freed layers, validated for no-OOM + measured perf.
+     → **WORKSTREAM B** (per-trace, via tt-blackhole-perf-optimizer).
+   - Note: conv2d already calls the gate with `allow_in_place=true` (`conv2d.cpp:288`), so
+     in-place is live for conv2d today; only the DRAM-slice *estimator* is in-place-blind.
+
+## Two workstreams
+- **A. DRAM-slicing credit** (`conv2d.cpp:618`) — automatic, model-agnostic; helps every
+  auto-slicing conv where in-place activates. Gate: beneficiaries must exist (a conv that
+  auto-DRAM-slices, e.g. SDXL VAE high-res). Impl must match runtime in-place activation exactly.
+- **B. L1-path per-trace config relaxation** — enable double-buffer / larger act_block at
+  in-place-freed layers. First concrete candidate: **UFLD-v2** height-sharded convs (double-buffer
+  is OFF there: `enable_act/weights_double_buffer = True only if block-sharded`).
 3. **Headroom is targeted, not blanket.** In-place lowers *whole-op* peak L1 only where the
    halo input↔output coexistence was the binding peak = large-feature-map **downsampling
    (stride≥2)** conv layers (measured −29..−34% last session). Stride-1 is peak-neutral.
