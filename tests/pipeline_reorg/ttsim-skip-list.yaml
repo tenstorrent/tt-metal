@@ -31,9 +31,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
 
-  # ERROR: UnsupportedFunctionality: tensix_gmpool: src_b_val=0x0 must be 1.0f
-  - tests/ttnn/unit_tests/operations/reduce/test_moe.py
-
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
@@ -68,6 +65,3 @@ blackhole:
   # https://github.com/tenstorrent/tt-metal/issues/41530
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
-
-  # ERROR: UnsupportedFunctionality: tensix_gmpool: src_b_val=0x0 must be 1.0f
-  - tests/ttnn/unit_tests/operations/reduce/test_moe.py
