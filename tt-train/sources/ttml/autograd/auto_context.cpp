@@ -157,8 +157,6 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
 
 ParallelismContext::ParallelismContext(
     const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) {
-    TT_FATAL(!config.enable_sp || config.enable_tp, "Sequence parallelism requires tensor parallelism to be enabled.");
-
     const uint32_t num_enabled_parallelisms =
         (uint32_t)config.enable_ddp + (uint32_t)config.enable_cp + (uint32_t)config.enable_tp;
     const auto& mesh_shape = mesh_device.shape();
@@ -222,19 +220,16 @@ ParallelismContext::ParallelismContext(
         }
     }
 
-    m_sp_enabled = config.enable_sp;
-
     fmt::println(
         "[ttml] ParallelismContext initialized: mesh_shape={} ddp_axis={} cp_axis={} tp_axis={} ddp_size={} cp_size={} "
-        "tp_size={} sp_enabled={}",
+        "tp_size={}",
         mesh_shape,
         m_ddp_axis.has_value() ? static_cast<int>(*m_ddp_axis) : -1,
         m_cp_axis.has_value() ? static_cast<int>(*m_cp_axis) : -1,
         m_tp_axis.has_value() ? static_cast<int>(*m_tp_axis) : -1,
         m_num_ddp_devices,
         m_num_cp_devices,
-        m_num_tp_devices,
-        m_sp_enabled);
+        m_num_tp_devices);
 }
 
 [[nodiscard]] const ParallelismContext& AutoContext::get_parallelism_context() const {

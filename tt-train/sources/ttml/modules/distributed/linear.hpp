@@ -39,7 +39,6 @@ public:
         bool gather_output = false,
         std::optional<uint32_t> shard_dim = std::nullopt);
     autograd::TensorPtr operator()(const autograd::TensorPtr& tensor) override;
-    autograd::TensorPtr forward_no_input_broadcast(const autograd::TensorPtr& tensor);
 
 private:
     autograd::TensorPtr forward_impl(const autograd::TensorPtr& tensor, bool input_is_replicated);

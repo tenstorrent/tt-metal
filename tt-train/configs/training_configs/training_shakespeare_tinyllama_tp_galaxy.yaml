@@ -21,7 +21,6 @@ training_config:
 
 device_config:
   enable_tp: true
-  # enable_sp: true
   enable_ddp: true
   mesh_shape: [8, 4]
 

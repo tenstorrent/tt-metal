@@ -22,7 +22,6 @@ training_config:
 device_config:
   enable_ddp: true
   enable_tp: true
-  enable_sp: true
   mesh_shape: [8, 4]
 eval_config:
   repetition_penalty: 1.0

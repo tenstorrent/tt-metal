@@ -225,7 +225,6 @@ struct DeviceConfig {
     bool enable_ddp = false;
     bool enable_tp = false;
     bool enable_cp = false;
-    bool enable_sp = false;
 };
 
 DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
@@ -238,13 +237,9 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
     config.enable_cp = device_node["enable_cp"].as<bool>(false);
-    config.enable_sp = device_node["enable_sp"].as<bool>(false);
-    if (config.enable_sp && !config.enable_tp) {
-        throw std::runtime_error("device_config.enable_sp requires device_config.enable_tp=true");
-    }
 
     auto mesh_shape_node = device_node["mesh_shape"];
-    bool multidevice = config.enable_ddp || config.enable_tp || config.enable_cp || config.enable_sp;
+    bool multidevice = config.enable_ddp || config.enable_tp || config.enable_cp;
     if (multidevice && !mesh_shape_node) {
         throw std::runtime_error("Mesh shape is required for multidevice training");
     }
@@ -425,7 +420,6 @@ int main(int argc, char **argv) {
     if (device_config.enable_ddp || device_config.enable_cp || device_config.enable_tp) {
         fmt::println("Device config:");
         fmt::println("  Tensor parallel enabled: {}", device_config.enable_tp);
-        fmt::println("  Sequence parallel enabled: {}", device_config.enable_sp);
         fmt::println("  Context parallel enabled: {}", device_config.enable_cp);
         fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_ddp);
         fmt::println("  Mesh shape: {}", device_config.mesh_shape);
@@ -434,14 +428,12 @@ int main(int argc, char **argv) {
         ttml::autograd::ctx().initialize_parallelism_context(
             {.enable_ddp = device_config.enable_ddp,
              .enable_tp = device_config.enable_tp,
-             .enable_cp = device_config.enable_cp,
-             .enable_sp = device_config.enable_sp});
+             .enable_cp = device_config.enable_cp});
         const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
         fmt::println(
-            "Parallelism context initialized: tp_axis={} tp_size={} sequence_parallel_active={}",
+            "Parallelism context initialized: tp_axis={} tp_size={}",
             pctx.get_tp_axis().has_value() ? static_cast<int>(*pctx.get_tp_axis()) : -1,
-            pctx.get_tp_size(),
-            pctx.is_sp_enabled());
+            pctx.get_tp_size());
     }
 
     if (multihost_config.enable_mpi) {
@@ -602,26 +594,6 @@ int main(int argc, char **argv) {
                     }
                     if (pctx.is_cp_enabled()) {
                         data_placements[pctx.get_cp_axis().value()] =
-                            ttnn::distributed::MeshMapperConfig::Shard{SEQUENCE_DIM_DATA};
-                    }
-                    if (pctx.is_sp_enabled()) {
-                        if (sequence_length % pctx.get_tp_size() != 0U) {
-                            throw std::logic_error(fmt::format(
-                                "Sequence parallelism requires sequence_length to be divisible by TP size. "
-                                "sequence_length={}, tp_size={}",
-                                sequence_length,
-                                pctx.get_tp_size()));
-                        }
-                        static bool printed_sp_data_shard = false;
-                        if (!printed_sp_data_shard) {
-                            fmt::println(
-                                "[ttml][SP] dataloader sharding data sequence dim {} on TP axis {}; targets stay "
-                                "replicated for full-sequence vocab-parallel loss",
-                                SEQUENCE_DIM_DATA,
-                                pctx.get_tp_axis().has_value() ? static_cast<int>(*pctx.get_tp_axis()) : -1);
-                            printed_sp_data_shard = true;
-                        }
-                        data_placements[pctx.get_tp_axis().value()] =
                             ttnn::distributed::MeshMapperConfig::Shard{SEQUENCE_DIM_DATA};
                     }
                     const auto data_mapper =

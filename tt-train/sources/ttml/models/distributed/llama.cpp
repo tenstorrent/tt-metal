@@ -148,23 +148,7 @@ autograd::TensorPtr DistributedLlama::operator()(
         }
     }
     out = (*ln_fc)(out);
-    const auto& pctx = autograd::ctx().get_parallelism_context();
-    if (pctx.is_sp_enabled()) {
-        static bool printed_sp_lm_head_gather = false;
-        const int seq_dim = static_cast<int>(out->get_rank()) - 2;
-        if (!printed_sp_lm_head_gather) {
-            fmt::println(
-                "[ttml][SP] DistributedLlama all_gathering hidden before LM head on seq_dim={} cluster_axis={}",
-                seq_dim,
-                pctx.get_tp_axis().has_value() ? static_cast<int>(*pctx.get_tp_axis()) : -1);
-            printed_sp_lm_head_gather = true;
-        }
-        out = ops::distributed::all_gather(out, seq_dim, pctx.get_tp_axis(), ops::distributed::GradOutputType::SHARDED);
-    }
-    auto logits =
-        pctx.is_sp_enabled()
-            ? std::static_pointer_cast<modules::distributed::ColumnParallelLinear>(fc)->forward_no_input_broadcast(out)
-            : (*fc)(out);
+    auto logits = (*fc)(out);
     return logits;
 }
 

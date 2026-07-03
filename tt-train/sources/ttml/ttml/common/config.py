@@ -29,13 +29,6 @@ class DeviceConfig:
         self.device_ids = device_config.get("device_ids", None)
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
-        # Sequence parallelism over the TP axis: shard activations along the
-        # sequence dim at block boundaries; all_gather before column-parallel
-        # projections and reduce_scatter after row-parallel projections.
-        # Requires enable_tp=true.
-        self.enable_sp = device_config.get("enable_sp", False)
-        if self.enable_sp and not self.enable_tp:
-            raise ValueError("device_config.enable_sp requires device_config.enable_tp=true")
         # MoE tensor-parallel axis index in `mesh_shape`. -1 (default)
         # disables MoE-only TP; 0/1/... selects which mesh axis to shard the
         # MoE experts on. The axis is registered on the mesh under the name

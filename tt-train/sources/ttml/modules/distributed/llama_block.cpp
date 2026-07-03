@@ -76,28 +76,8 @@ autograd::TensorPtr DistributedLlamaMLP::operator()(const autograd::TensorPtr& i
             false);
     }
 
-    auto linear_input = input;
-    const auto& pctx = autograd::ctx().get_parallelism_context();
-    const bool use_sp = pctx.is_sp_enabled();
-    if (use_sp) {
-        static bool printed_sp_path = false;
-        const int seq_dim = static_cast<int>(input->get_rank()) - 2;
-        if (!printed_sp_path) {
-            fmt::println(
-                "[ttml][SP] LlamaMLP all_gathering sequence before column projections on seq_dim={} cluster_axis={}",
-                seq_dim,
-                pctx.get_tp_axis().has_value() ? static_cast<int>(*pctx.get_tp_axis()) : -1);
-            printed_sp_path = true;
-        }
-        linear_input =
-            ops::distributed::all_gather(input, seq_dim, pctx.get_tp_axis(), ops::distributed::GradOutputType::SHARDED);
-    }
-
-    auto swished = ops::silu(
-        use_sp ? std::static_pointer_cast<ColumnParallelLinear>(m_w1)->forward_no_input_broadcast(linear_input)
-               : (*m_w1)(linear_input));
-    auto gate = use_sp ? std::static_pointer_cast<ColumnParallelLinear>(m_w3)->forward_no_input_broadcast(linear_input)
-                       : (*m_w3)(linear_input);
+    auto swished = ops::silu((*m_w1)(input));
+    auto gate = (*m_w3)(input);
     auto gated = swished * gate;
     auto x = (*m_w2)(gated);
     x = (*m_dropout)(x);
