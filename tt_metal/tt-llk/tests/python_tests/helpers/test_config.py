@@ -150,6 +150,47 @@ class TestConfig:
     PCH_AVAILABLE: ClassVar[bool] = False
     PCH_ATTEMPTED: ClassVar[bool] = False
 
+    # Test sources that must NOT force-include the math-role PCH: doing so
+    # crashes the pinned SFPI toolchain (riscv-tt-elf-g++ 7.64.0[735], GCC 15.1
+    # fork; tenstorrent/sfpi) with a hard internal compiler error, not a
+    # graceful -Winvalid-pch fallback.
+    #
+    # Root cause, reproduced directly against the pinned toolchain: the ICE
+    # requires BOTH -Os (this branch's Quasar-only opt level, see
+    # setup_compilation_options) AND a matching force-included PCH. The exact
+    # 2x2 matrix on sfpu_where_quasar_test.cpp's math .elf:
+    #     -Os + PCH  -> ICE      -O2/-O3 + PCH  -> OK
+    #     -Os no-PCH -> OK       -O2/-O3 no-PCH -> OK
+    # i.e. neither -Os alone (every pre-PCH run compiled these fine) nor PCH
+    # alone (at -O2/-O3) is sufficient; only the combination trips it. The
+    # crash is in the fork's custom RISC-V backend passes, downstream of PCH
+    # AST restore + the -Os codegen path, on the unrolled `v_if`-based SFPU
+    # bodies these two ops share:
+    #   ckernel_sfpu_where.h:71   -> in transform, at rtl-rvtt-synth.cc:123
+    #   ckernel_sfpu_binary.h:66  -> in get_def_stmt_liveness_1, at
+    #                                gimple-rvtt-live.cc:347
+    # (confirmed as the ONLY two files that ICE across a full ~2500-compile
+    # producer run; every other SFPU op -- gelu/tanh/square/exp/... -- and
+    # every non-SFPU math op compiles cleanly with -Os + math PCH, so this is
+    # scoped per-source, not per-role.)
+    #
+    # -Wno-error=invalid-pch (below) is NOT a backstop here: it only rescues a
+    # *mismatched* .gch (which GCC discards). These variants match the PCH
+    # exactly, so the .gch is accepted and consumed, and the compiler crashes
+    # anyway. The only safe option is to skip -include entirely for these
+    # sources; they then compile via the plain -Os path (proven OK above),
+    # forgoing PCH's speedup for ~2 ops while every other op keeps it.
+    #
+    # Keyed on os.path.basename(self.test_name). Revisit when the pinned SFPI
+    # version bumps -- if a newer toolchain fixes the backend passes, this set
+    # can shrink to empty and PCH re-enabled for these ops.
+    PCH_INCOMPATIBLE_SOURCES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "sfpu_where_quasar_test.cpp",
+            "eltwise_binary_sfpu_quasar_test.cpp",
+        }
+    )
+
     # Sources directories
     LLK_ROOT: ClassVar[Path]
     TESTS_WORKING_DIR: ClassVar[Path]
@@ -1460,14 +1501,34 @@ class TestConfig:
                 # only for variants whose compile flags match those the .gch was
                 # built with (the common case). The PCH is built with the
                 # canonical flag set (no coverage/profiler/device-print,
-                # -DRUNTIME_FORMATS present, no -DDISABLE_SFPLOADMACRO); using it
-                # on a variant with a different macro set would make GCC discard
-                # it anyway (-Winvalid-pch, which under -Werror could fail the
-                # build), so we simply skip -include there and compile as before.
+                # -DRUNTIME_FORMATS present, no -DDISABLE_SFPLOADMACRO).
+                #
+                # canonical_variant is a best-effort gate, not a guarantee: a
+                # real run just proved it has gaps (e.g. implied_math_format
+                # isn't checked here, and a mismatched variant got -include'd
+                # anyway). The design intent was always "an incompatible .gch
+                # just gets discarded and re-parsed from source via
+                # -Winvalid-pch, never a hard failure" -- but -Werror is on
+                # globally (INITIAL_OPTIONS_COMPILE) and invalid-pch was never
+                # added to the -Wno-error= exemptions, so a real mismatch
+                # turned that intended-safe warning into a build-breaking
+                # error instead. -Wno-error=invalid-pch restores the actually
+                # intended fail-safe behavior regardless of any gap in
+                # canonical_variant's flag coverage -- correctness no longer
+                # depends on that gate being exhaustive.
                 pch_include = ""
                 if TestConfig.PCH_AVAILABLE:
+                    # Some sources crash the pinned toolchain when the math-role
+                    # PCH is force-included under -Os (hard ICE, not a graceful
+                    # -Winvalid-pch fallback). Skip -include for those so they
+                    # compile via the plain path; see PCH_INCOMPATIBLE_SOURCES.
+                    pch_safe_source = (
+                        os.path.basename(self.test_name)
+                        not in TestConfig.PCH_INCOMPATIBLE_SOURCES
+                    )
                     canonical_variant = (
-                        self.coverage_build == CoverageBuild.No
+                        pch_safe_source
+                        and self.coverage_build == CoverageBuild.No
                         and self.profiler_build == ProfilerBuild.No
                         and not self.compile_time_formats
                         and not device_print_flags
@@ -1475,7 +1536,10 @@ class TestConfig:
                     )
                     if canonical_variant:
                         pch_header = TestConfig.PCH_DIR / f"quasar_pch_{name}.h"
-                        pch_include = f"-include {pch_header} -Winvalid-pch "
+                        pch_include = (
+                            f"-include {pch_header} "
+                            "-Winvalid-pch -Wno-error=invalid-pch "
+                        )
 
                 compile_command = (
                     f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
