@@ -556,6 +556,29 @@ NoC-ordering (class 7) classes. Findings:
 **In-place halo is now verified correct on BOTH Wormhole and Blackhole for the full pool op
 family. The removal premise ("can't net-save L1") is refuted for pools on both archs.**
 
+**STEP 3 (conv2d) — DONE + BH-verified** (branch @ 8691f8f70ce). conv2d opts into in-place
+(allow_in_place=true + lifecycle skip); matmul is covered by this (frees L1 for conv's
+internal matmul; standalone in-place matmul is infeasible — GEMM's K-reduction re-reads its
+inputs). conv exercised the **column-major block** (transpose_mcast) path pool couldn't reach
+(bitwise PASS) and surfaced the **class-1/2 alignment bug**, now fixed: the L1 allocator
+aligns sharded-buffer BASE addresses to `get_dram_alignment()` (64B BH) while a row-major
+stick pitch is only `get_l1_alignment()` (16B), so incommensurate sub-64B widths (e.g. 48B
+sticks) make in-place aliasing impossible for the current kernel. Fix = deltas from the true
+address offset + the gate DECLINES non-base-aligned geometries (silent fallback; asserts are
+backstops). conv_transpose2d/fold/upsample remain default-off (future).
+
+**L1 SAVINGS (measured on BH p100a, device graph-capture peak L1; measured == analytical to
+the byte):** In-place frees the input-shard buffer at the halo coexistence point (minus the
+small remote-temp CB) = **27–58% of the per-core input footprint (median ~43%; ~29 KB–224 KB
+/core)**, always positive when activated. Two regimes:
+- **Downsampling (stride≥2)** — the halo coexistence is the op's binding peak → **whole-op
+  peak device L1 drops 29–34%** (the OOM-relevant win, on large-feature-map early conv/pool).
+- **Full-resolution (stride-1)** — the input shard is still freed during the halo window, but
+  a downstream compute phase sets the op peak → whole-op peak ~neutral (0%).
+Width-sharded halo is all-local (remote-temp=0) → the full input shard is saved for free.
+The gate is conservative on BH's 110-core grid: it declines the smaller-per-core shapes
+(net-L1 LOSE), verified by exactly-zero allocation-graph deltas.
+
 **Earlier status (superseded):** the RM/height-sharded vertical slice was the first milestone.
 
 **Test entry:** `tests/ttnn/unit_tests/operations/pool/test_inplace_halo.py`
