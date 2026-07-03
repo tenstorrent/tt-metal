@@ -189,7 +189,7 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
 
 template <enum CQNocFlags flags, bool mcast = false, bool linked = false, uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
 FORCE_INLINE void cq_noc_async_write_init_state(
-    uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint8_t noc = noc_index) {
+    uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint8_t noc = noc_index, uint32_t ndests = 1) {
     WAYPOINT("CNIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc, cmd_buf)) {
@@ -204,13 +204,18 @@ FORCE_INLINE void cq_noc_async_write_init_state(
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, mcast ? DEBUG_SANITIZE_NOC_MULTICAST : DEBUG_SANITIZE_NOC_UNICAST);
 
     noc_write_init_state<cmd_buf, cmd_flags>(noc, vc);
-    cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size);
+    cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size, ndests);
 }
 // Similar to the above function but this one takes noc-xy coordinates as a separate argument to permit 64-bit
 // addressing at NOC tile
 template <enum CQNocFlags flags, bool mcast = false, bool linked = false, uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
 FORCE_INLINE void cq_noc_async_wwrite_init_state(
-    uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint8_t noc = noc_index) {
+    uint32_t src_addr,
+    uint32_t dst_noc_addr,
+    uint64_t dst_addr,
+    uint32_t size = 0,
+    uint8_t noc = noc_index,
+    uint32_t ndests = 1) {
     WAYPOINT("CNIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc, cmd_buf)) {
@@ -226,7 +231,7 @@ FORCE_INLINE void cq_noc_async_wwrite_init_state(
 
     noc_write_init_state<cmd_buf, cmd_flags>(noc, vc);
     cq_noc_async_wwrite_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(
-        src_addr, dst_noc_addr, dst_addr, size, noc);
+        src_addr, dst_noc_addr, dst_addr, size, ndests, noc);
 }
 
 template <enum CQNocInlineFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSend send = CQ_NOC_SEND>
