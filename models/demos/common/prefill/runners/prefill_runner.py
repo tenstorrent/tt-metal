@@ -172,6 +172,11 @@ SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 # semaphores to L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static
 # CBs, which needs the mesh opened with an L1_SMALL region. The adapter owns both knobs.
 _L1_SMALL_SIZE = ADAPTER.l1_small_size
+# Capture each rank's per-chunk forward as a (segmented) ttnn trace and replay it every chunk instead of
+# re-dispatching op-by-op. Needs the mesh opened with a trace region; the segmented capture (sub-device
+# swaps + per-layer acks) is handled by SubDeviceTraceController inside the runtime.
+USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
+_TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
@@ -334,10 +339,14 @@ def _d2d_recv(inbound) -> tuple:
     return act, meta
 
 
-def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
+def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict, *, deallocate: bool = True) -> None:
     """Push this rank's output hidden state + metadata to the downstream rank's receiver, then free it.
     The model already emits the activation in the sender backing's spec, and outbound_socket_service_sync
-    TT_FATALs on any spec mismatch, so no host-side relayout is needed."""
+    TT_FATALs on any spec mismatch, so no host-side relayout is needed.
+
+    deallocate=False when the activation is the traced path's persistent _trace_output buffer: the socket
+    sync copies it into the sender backing on the CQ (before the next replay, which reuses the same buffer,
+    is enqueued), so it must NOT be freed — the next chunk's replay writes into it in place."""
     t0 = time.perf_counter()
     backing = outbound.get_backing_tensor()
     import torch
@@ -356,7 +365,8 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
         ),
     )
     ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
-    ttnn.deallocate(activation)
+    if deallocate:
+        ttnn.deallocate(activation)
     logger.info(
         f"[pp rank {rank}] SEND-d2d [{meta['actual_start']},{meta['actual_end']}) "
         f"[xfer] push={(time.perf_counter() - t0) * 1000.0:.2f}ms"
@@ -416,7 +426,9 @@ def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d
         ttnn.synchronize_device(runtime.mesh_device)
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
     if not runtime.config.is_last_rank:
-        _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it over fabric
+        # Traced: `out` is the runtime's persistent _trace_output (the next replay overwrites it in place),
+        # so the send copies it into the socket backing but must not free it. Eager: `out` is fresh — free it.
+        _d2d_send(d2d_out, out, rank, meta, deallocate=not runtime.config.use_trace)  # grant below ships it
     if d2d_out is not None:
         d2d_out.release_fabric_links()
     logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f}")
@@ -562,6 +574,7 @@ def _print_config() -> None:
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
         ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
         ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
+        ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_STANDALONE_NCHUNKS", str(NUM_CHUNKS)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
@@ -618,7 +631,9 @@ def main() -> None:
         f"chunk_size={CHUNK_SIZE} max_seq_len={MAX_SEQ_LEN} num_users={NUM_USERS}"
     )
 
-    mesh_device = open_mesh_device(GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE)
+    mesh_device = open_mesh_device(
+        GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE
+    )
 
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = MAX_SEQ_LEN
@@ -640,6 +655,7 @@ def main() -> None:
         # this (single-rank inherits it); PREFILL_KV_ONLY_LAST_LAYER can force it off.
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
+        use_trace=USE_TRACE,
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
