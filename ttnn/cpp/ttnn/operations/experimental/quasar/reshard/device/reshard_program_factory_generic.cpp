@@ -787,7 +787,7 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         {"unit_size", unit_size},
     };
 
-    const auto make_worker = [&](const char* name, DataMovementRoleHint role, DFBEndpointType endpoint) {
+    const auto make_worker = [&](const char* name, const DataMovementGen1Config& gen1, DFBEndpointType endpoint) {
         KernelSpec k{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_source),
@@ -795,7 +795,7 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
                 if (device->arch() == tt::ARCH::QUASAR) {
                     return DataMovementGen2Config{};
                 }
-                return create_from_role(role);
+                return gen1;
             }),
         };
         k.tensor_bindings.push_back(TensorBinding{
@@ -812,8 +812,8 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         return k;
     };
 
-    KernelSpec k0 = make_worker("reader", DataMovementRoleHint::READER, DFBEndpointType::PRODUCER);
-    KernelSpec k1 = make_worker("writer", DataMovementRoleHint::WRITER, DFBEndpointType::CONSUMER);
+    KernelSpec k0 = make_worker("reader", create_reader_gen1_datamovement_config(), DFBEndpointType::PRODUCER);
+    KernelSpec k1 = make_worker("writer", create_writer_gen1_datamovement_config(), DFBEndpointType::CONSUMER);
 
     // The borrowed DFB is only an address source (the kernel writes via get_write_ptr() + offset and
     // only ever touches the real, mapped output pages). A sharded output shard shape can be padded

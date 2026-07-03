@@ -173,7 +173,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         if (device->arch() == tt::ARCH::QUASAR) {
             return DataMovementGen2Config{};
         }
-        return create_from_role(DataMovementRoleHint::READER);
+        return create_reader_gen1_datamovement_config();
     });
     if (use_block_reader) {
         reader.source = kdir / "reader_unary_sharded_blocks_metal2.cpp";
@@ -216,7 +216,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
             if (device->arch() == tt::ARCH::QUASAR) {
                 return DataMovementGen2Config{};
             }
-            return create_from_role(DataMovementRoleHint::WRITER);
+            return create_writer_gen1_datamovement_config();
         }),
     };
 

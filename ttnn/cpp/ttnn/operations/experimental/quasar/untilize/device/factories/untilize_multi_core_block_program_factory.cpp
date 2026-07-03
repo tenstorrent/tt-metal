@@ -211,7 +211,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
             if (device->arch() == tt::ARCH::QUASAR) {
                 return DataMovementGen2Config{};
             }
-            return create_from_role(DataMovementRoleHint::READER);
+            return create_reader_gen1_datamovement_config();
         }),
     };
 
@@ -242,7 +242,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
             if (device->arch() == tt::ARCH::QUASAR) {
                 return DataMovementGen2Config{};
             }
-            return create_from_role(DataMovementRoleHint::WRITER);
+            return create_writer_gen1_datamovement_config();
         }),
     };
 

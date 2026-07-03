@@ -422,7 +422,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
                 if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
                     return DataMovementGen2Config{};
                 }
-                return create_from_role(DataMovementRoleHint::READER);
+                return create_reader_gen1_datamovement_config();
             }),
         };
         reader_spec.compiler_options.defines = {{"USE_SPECIAL_CASE", "1"}};
@@ -446,7 +446,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
                 if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
                     return DataMovementGen2Config{};
                 }
-                return create_from_role(DataMovementRoleHint::WRITER);
+                return create_writer_gen1_datamovement_config();
             }),
         };
         writer_spec.advanced_options.num_runtime_varargs = max_writer_varargs;
@@ -515,7 +515,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
                 if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
                     return DataMovementGen2Config{};
                 }
-                return create_from_role(DataMovementRoleHint::READER);
+                return create_reader_gen1_datamovement_config();
             }),
         };
         reader_spec.advanced_options.num_runtime_varargs = num_cores_x + num_cores_y;

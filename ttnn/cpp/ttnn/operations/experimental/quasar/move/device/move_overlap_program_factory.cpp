@@ -170,7 +170,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             if (device->arch() == tt::ARCH::QUASAR) {
                 return m2::DataMovementGen2Config{};
             }
-            return m2::create_from_role(m2::DataMovementRoleHint::READER);
+            return m2::create_reader_gen1_datamovement_config();
         }),
     };
 
@@ -218,7 +218,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             if (device->arch() == tt::ARCH::QUASAR) {
                 return m2::DataMovementGen2Config{};
             }
-            return m2::create_from_role(m2::DataMovementRoleHint::WRITER);
+            return m2::create_writer_gen1_datamovement_config();
         }),
     };
 

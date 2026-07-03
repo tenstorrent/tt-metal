@@ -818,7 +818,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // implicit cross-generation substitution — supplying the wrong alternative is a hard error, not
     // silently defaulted. On Gen1 (WH/BH) the kernel must carry a DataMovementGen1Config declaring its
     // RISC/NOC placement (op-specific; no safe reader-vs-writer default), built with
-    // create_from_role(READER/WRITER) or constructed directly. On Gen2 (Quasar) the kernel must carry a
+    // create_reader_gen1_datamovement_config() / create_writer_gen1_datamovement_config() or
+    // constructed directly. On Gen2 (Quasar) the kernel must carry a
     // DataMovementGen2Config (a default-constructed one is fine; core selection is automated and the
     // config only carries DFB implicit-sync opt-outs).
     for (const auto& kernel : spec.kernels) {
@@ -829,7 +830,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 TT_FATAL(
                     std::holds_alternative<DataMovementGen1Config>(data_movement_config),
                     "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig holds a "
-                    "DataMovementGen2Config. Supply a Gen1 config (e.g. create_from_role(READER/WRITER)).",
+                    "DataMovementGen2Config. Supply a Gen1 config (e.g. "
+                    "create_reader_gen1_datamovement_config()/create_writer_gen1_datamovement_config()).",
                     kernel.unique_id);
             } else if (is_gen2_arch()) {
                 TT_FATAL(

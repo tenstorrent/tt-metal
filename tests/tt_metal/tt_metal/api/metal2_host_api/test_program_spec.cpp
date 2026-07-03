@@ -1045,15 +1045,15 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithDefaultGen2ConfigSucceeds) {
 }
 
 TEST_F(ProgramSpecTestQuasar, RoleBasedGen1ConfigOnGen2Fails) {
-    // create_from_role(READER/WRITER) builds a Gen1 placement (DataMovementGen1Config), which is the
-    // wrong generation for Gen2 (Quasar): the platform requires a DataMovementGen2Config, so the
+    // create_reader_gen1_datamovement_config() builds a Gen1 placement (DataMovementGen1Config), which
+    // is the wrong generation for Gen2 (Quasar): the platform requires a DataMovementGen2Config, so the
     // mismatch is a hard error rather than a silently-ignored role hint.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto kernel = MakeMinimalRoleDMKernel("kernel", DataMovementRoleHint::READER);
+    auto kernel = MakeMinimalRoleDMKernel("kernel", create_reader_gen1_datamovement_config());
 
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
@@ -3186,8 +3186,8 @@ TEST_F(ProgramSpecTestGen1, ReaderAndWriterRolesOnSameNodeSucceed) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto reader = MakeMinimalRoleDMKernel("reader", DataMovementRoleHint::READER);
-    auto writer = MakeMinimalRoleDMKernel("writer", DataMovementRoleHint::WRITER);
+    auto reader = MakeMinimalRoleDMKernel("reader", create_reader_gen1_datamovement_config());
+    auto writer = MakeMinimalRoleDMKernel("writer", create_writer_gen1_datamovement_config());
 
     spec.kernels = {reader, writer};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"reader", "writer"})};
@@ -3204,8 +3204,8 @@ TEST_F(ProgramSpecTestGen1, TwoReaderRolesOnSameNodeConflict) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto r0 = MakeMinimalRoleDMKernel("r0", DataMovementRoleHint::READER);
-    auto r1 = MakeMinimalRoleDMKernel("r1", DataMovementRoleHint::READER);
+    auto r0 = MakeMinimalRoleDMKernel("r0", create_reader_gen1_datamovement_config());
+    auto r1 = MakeMinimalRoleDMKernel("r1", create_reader_gen1_datamovement_config());
 
     spec.kernels = {r0, r1};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"r0", "r1"})};

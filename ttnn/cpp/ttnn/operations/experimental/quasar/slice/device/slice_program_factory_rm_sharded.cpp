@@ -278,7 +278,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
             if (input.device()->arch() == tt::ARCH::QUASAR) {
                 return DataMovementGen2Config{};
             }
-            return create_from_role(DataMovementRoleHint::READER);
+            return create_reader_gen1_datamovement_config();
         }),
         .advanced_options = {.num_runtime_varargs = max_varargs},
     };

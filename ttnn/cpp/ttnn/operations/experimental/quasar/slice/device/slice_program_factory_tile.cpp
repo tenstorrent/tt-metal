@@ -109,7 +109,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             if (device->arch() == tt::ARCH::QUASAR) {
                 return DataMovementGen2Config{};
             }
-            return create_from_role(DataMovementRoleHint::READER);
+            return create_reader_gen1_datamovement_config();
         }),
         .advanced_options = {.num_runtime_varargs = num_dims, .num_common_runtime_varargs = 2 * num_dims},
     };
@@ -129,7 +129,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             if (device->arch() == tt::ARCH::QUASAR) {
                 return DataMovementGen2Config{};
             }
-            return create_from_role(DataMovementRoleHint::WRITER);
+            return create_writer_gen1_datamovement_config();
         }),
     };
 
