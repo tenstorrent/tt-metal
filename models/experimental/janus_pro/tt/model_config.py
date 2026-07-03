@@ -199,3 +199,7 @@ class ModelArgs(TTModelArgs):
     def reference_vision_aligner(self):
         model = self.reference_vision_transformer(wrap=False)
         return model.model.aligner
+
+    def reference_language_model(self):
+        model = self.reference_transformer(wrap=False)
+        return model.model.float()
