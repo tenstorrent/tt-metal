@@ -64,7 +64,8 @@ void add_cb(
     tt::DataFormat df,
     uint32_t npages,
     uint32_t pagesize,
-    Buffer* buffer = nullptr) {
+    Buffer* buffer = nullptr,
+    uint32_t address_offset = 0) {
     desc.cbs.push_back(CBDescriptor{
         .total_size = npages * pagesize,
         .core_ranges = cores,
@@ -74,6 +75,7 @@ void add_cb(
             .page_size = pagesize,
         }}},
         .buffer = buffer,
+        .address_offset = address_offset,
     });
 }
 
@@ -383,6 +385,362 @@ ProgramDescriptor build_halo_program(
     return desc;
 }
 
+// Sequential CB-id assignment for the in-place halo program (mirrors the archived
+// inplace_untilize_with_halo_multi_core InplaceCBIndices).
+struct InplaceCBIndices {
+    uint32_t src_cb_id = 32;
+    uint32_t pad_cb_id = 32;
+    uint32_t out_cb_id = 32;
+    uint32_t padding_config_cb_id = 32;
+    uint32_t local_config_cb_id = 32;
+    uint32_t remote_config_cb_id = 32;
+    uint32_t untilize_out_cb_id = 32;
+    uint32_t get_next_cb_id() { return next_cb_id++; }
+
+private:
+    uint32_t next_cb_id = tt::CBIndex::c_0;
+};
+
+// Build the in-place halo ProgramDescriptor. Faithful port of the archived
+// inplace_untilize_with_halo_multi_core (which used the pre-ProgramDescriptor
+// CreateCircularBuffer/CreateKernel/CreateSemaphore API) to the current
+// declarative framework. The four config Tensors are owned by the caller and
+// parked on the WorkloadDescriptor; their backing buffers are passed in.
+//
+// Framework adaptations vs the archived factory (all flagged in the redo notes):
+//   - src_cb is bound to dst_buffer with address_offset == delta_bytes rather than
+//     to the (now-deallocated) input buffer: the input's data physically lives at
+//     dst_addr + delta after the create_output_tensors aliasing, and the current
+//     framework's collect_tensor_buffers/patching re-points CBs against the OUTPUT
+//     tensor buffer on every dispatch. Semantically identical to "src_cb -> old
+//     input addr" but survives program-cache hits.
+//   - The NC/BR sync CBs use RawUInt16 (the archived used DataFormat::UInt16, which
+//     that same file comments is unsupported for CB types); format is irrelevant for
+//     a 1-slot ping-pong sync signal.
+ProgramDescriptor build_inplace_halo_program(
+    const HaloParams& operation_attributes,
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    Buffer* padding_config_buffer,
+    Buffer* local_config_buffer,
+    Buffer* remote_config_buffer,
+    uint32_t max_ref_size,
+    int32_t in_out_shard_size_delta,
+    bool padding_exists,
+    uint32_t num_cores_x) {
+    const auto& pad_val = operation_attributes.pad_val;
+    const uint32_t ncores_nhw = operation_attributes.config.num_cores_nhw;
+    const uint32_t max_out_nsticks_per_core = operation_attributes.max_out_nsticks_per_core;
+    const bool config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
+    const bool remote_read = operation_attributes.remote_read;
+    const bool transpose_mcast = operation_attributes.transpose_mcast;
+
+    auto* device = input_tensor.device();
+    Buffer* src_buffer = input_tensor.buffer();
+    Buffer* dst_buffer = output_tensor.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    const auto& input_shape = input_tensor.padded_shape();
+
+    const tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.dtype());
+    const tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());
+    const uint32_t out_nbytes = datum_size(out_df);
+
+    const CoreRangeSet all_cores = output_tensor.shard_spec().value().grid;
+    const auto input_shard_shape = output_tensor.shard_spec().value().shape;
+    const auto output_shard_shape = output_tensor.shard_spec().value().shape;
+    TT_ASSERT(input_shard_shape[1] == output_shard_shape[1]);
+
+    const uint32_t input_nhw_height = input_shape[0] * input_shape[1] * input_shape[2];
+    const uint32_t remapped_input_shard_shape_for_output_grid = tt::div_up(input_nhw_height, ncores_nhw);
+    uint32_t ntiles_per_block = tt::div_up(input_shard_shape[1], TILE_WIDTH);
+    uint32_t input_nblocks_per_core = tt::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
+    uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
+
+    const uint32_t out_stick_nbytes = output_shard_shape[1] * out_nbytes;
+
+    uint32_t in_page_size = tt::tile_size(in_df);
+    const uint32_t out_tile_size = tt::tile_size(out_df);
+
+    const bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
+    const bool wide_tensor = ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH;
+
+    // Aligned stick size (input and output share channel width). For row-major input the
+    // kernel reads/writes with aligned_stick stride across the shard buffers.
+    uint32_t aligned_stick_nbytes = out_stick_nbytes;
+    if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
+        aligned_stick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
+    }
+    if (skip_untilize) {
+        // NOTE: input_shard_shape here is the OUTPUT shard shape (as in the archived factory),
+        // so its [0] is the OUTPUT height. The input page count is the per-core INPUT stick count.
+        in_page_size = aligned_stick_nbytes;
+        input_npages = remapped_input_shard_shape_for_output_grid;
+    }
+
+    // Byte offset of the input shard data within the (larger) output shard buffer.
+    const uint32_t delta_bytes = static_cast<uint32_t>(in_out_shard_size_delta) * out_stick_nbytes;
+
+    ProgramDescriptor desc;
+    InplaceCBIndices cb_indices = InplaceCBIndices();
+
+    // Input shard CB. Bound to the OUTPUT buffer at address_offset == delta_bytes because the
+    // input's data lives in the output buffer's tail after the in-place aliasing.
+    cb_indices.src_cb_id = cb_indices.get_next_cb_id();
+    add_cb(desc, all_cores, cb_indices.src_cb_id, in_df, input_npages, in_page_size, dst_buffer, delta_bytes);
+
+    cb_indices.out_cb_id = cb_indices.get_next_cb_id();
+    add_cb(desc, all_cores, cb_indices.out_cb_id, out_df, max_out_nsticks_per_core, aligned_stick_nbytes, dst_buffer);
+
+    cb_indices.pad_cb_id = cb_indices.get_next_cb_id();
+    add_cb(desc, all_cores, cb_indices.pad_cb_id, out_df, 1, aligned_stick_nbytes);
+
+    const tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 unsupported for CB types
+
+    uint32_t temp_cb_id = 0;
+    uint32_t input_to_writer_cb_id = cb_indices.src_cb_id;
+    if (!skip_untilize) {
+        // Untilize-in-place path (dead for the row-major gate; ported for faithfulness). The
+        // untilize output is written straight into the dst buffer.
+        cb_indices.untilize_out_cb_id = cb_indices.get_next_cb_id();
+        input_to_writer_cb_id = cb_indices.untilize_out_cb_id;
+        const uint32_t output_ntiles = ntiles_per_block * input_nblocks_per_core;
+        add_cb(desc, all_cores, cb_indices.untilize_out_cb_id, out_df, output_ntiles, out_tile_size, dst_buffer);
+
+        std::string compute_kernel;
+        std::vector<uint32_t> compute_ct_args;
+        if (wide_tensor) {
+            temp_cb_id = cb_indices.get_next_cb_id();
+            add_cb(desc, all_cores, temp_cb_id, out_df, ntiles_per_block, out_tile_size);
+            compute_ct_args = {input_nblocks_per_core, ntiles_per_block, cb_indices.src_cb_id, temp_cb_id};
+            compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        } else {
+            compute_ct_args = {input_nblocks_per_core, ntiles_per_block, cb_indices.src_cb_id, input_to_writer_cb_id};
+            compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
+        }
+        auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+            get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+        KernelDescriptor compute_desc;
+        compute_desc.kernel_source = compute_kernel;
+        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc.core_ranges = all_cores;
+        compute_desc.compile_time_args = compute_ct_args;
+        compute_desc.config = ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode,
+        };
+        desc.kernels.push_back(std::move(compute_desc));
+    }
+
+    TT_ASSERT(padding_config_buffer != nullptr);
+    TT_ASSERT(local_config_buffer != nullptr);
+    TT_ASSERT(remote_config_buffer != nullptr);
+
+    cb_indices.padding_config_cb_id = cb_indices.get_next_cb_id();
+    add_cb(
+        desc,
+        all_cores,
+        cb_indices.padding_config_cb_id,
+        kernel_config_df,
+        1,
+        padding_config_buffer->page_size(),
+        config_tensors_in_dram ? nullptr : padding_config_buffer);
+
+    cb_indices.local_config_cb_id = cb_indices.get_next_cb_id();
+    add_cb(
+        desc,
+        all_cores,
+        cb_indices.local_config_cb_id,
+        kernel_config_df,
+        1,
+        local_config_buffer->page_size(),
+        config_tensors_in_dram ? nullptr : local_config_buffer);
+
+    cb_indices.remote_config_cb_id = cb_indices.get_next_cb_id();
+    add_cb(
+        desc,
+        all_cores,
+        cb_indices.remote_config_cb_id,
+        kernel_config_df,
+        1,
+        remote_config_buffer->page_size(),
+        config_tensors_in_dram ? nullptr : remote_config_buffer);
+
+    const bool is_height_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+
+    TT_ASSERT(
+        src_buffer->address() == dst_buffer->address() + delta_bytes,
+        "In-place halo requires input and output buffers to overlap at the expected offset");
+    TT_ASSERT(!remote_read, "remote_read is not supported for in place operation");
+
+    // Remote-temp CB: stages a source core's outbound halo before local overwrites (post-untilize
+    // dtype width). Sized by max_ref_size (max outbound-halo sticks over all cores).
+    uint32_t remote_temp_cb_id = 0;
+    if (max_ref_size > 0) {
+        remote_temp_cb_id = cb_indices.get_next_cb_id();
+        add_cb(desc, all_cores, remote_temp_cb_id, kernel_config_df, max_ref_size, output_shard_shape[1] * out_nbytes);
+    }
+
+    // NOC coordinate conversion (rectangular grid, row-major worker layout).
+    auto core_id_to_noc_coords = [device, num_cores_x](uint32_t core_id) -> CoreCoord {
+        auto core_coord = CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
+        return device->worker_core_from_logical_core(core_coord);
+    };
+
+    CoreCoord noc_TL = core_id_to_noc_coords(0);
+
+    const bool is_rm_orientation = input_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
+    const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_orientation);
+    int32_t num_active_cores = static_cast<int32_t>(cores.size());
+    int32_t num_cores_rectangular =
+        is_block_sharded ? num_active_cores : static_cast<int32_t>(tt::round_up(num_active_cores, num_cores_x));
+    int32_t num_noop_cores = is_block_sharded ? 0 : num_cores_rectangular - num_active_cores;
+    TT_FATAL(
+        !is_block_sharded || all_cores.ranges().size() == 1,
+        "for block sharding the implementation depends on the assumption that there is only 1 core range");
+    CoreCoord last_active_coord = is_block_sharded
+                                      ? device->worker_core_from_logical_core(all_cores.ranges()[0].end_coord)
+                                      : core_id_to_noc_coords(num_active_cores - 1);
+    uint32_t last_active_x = last_active_coord.x;
+
+    uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
+    uint32_t rectangular_y =
+        is_block_sharded ? all_cores.ranges()[0].end_coord.y + 1
+                         : (num_noop_cores ? (num_active_cores / num_cores_x) + 1 : num_active_cores / num_cores_x);
+    std::set<CoreRange> rectangular_cores_set;
+    if (is_block_sharded) {
+        rectangular_cores_set.insert(all_cores.ranges()[0]);
+    } else {
+        rectangular_cores_set.insert(CoreRange(CoreCoord(0, 0), CoreCoord(rectangular_x - 1, rectangular_y - 1)));
+    }
+    CoreRangeSet rectangular_cores(rectangular_cores_set);
+    CoreCoord noc_BR =
+        is_block_sharded ? last_active_coord : core_id_to_noc_coords((rectangular_x * rectangular_y) - 1);
+
+    // Global barrier semaphore on the rectangular grid (incl. noop cores for the multicast).
+    const uint32_t semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = semaphore_id,
+        .core_ranges = rectangular_cores,
+        .initial_value = 0,
+    });
+
+    uint32_t aligned_input_nstick_nbytes = out_stick_nbytes;
+    if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
+        aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
+    }
+
+    // NC/BR intra-tensix sync CBs (1-slot ping-pong; see class-10 double-push note).
+    const uint32_t sync_cb_id1 = cb_indices.get_next_cb_id();
+    add_cb(desc, all_cores, sync_cb_id1, kernel_config_df, 1, 2);
+    const uint32_t sync_cb_id2 = cb_indices.get_next_cb_id();
+    add_cb(desc, all_cores, sync_cb_id2, kernel_config_df, 1, 2);
+
+    std::vector<uint32_t> reader_ct_args = {
+        true,  // main thread
+        padding_exists,
+        cb_indices.padding_config_cb_id,
+        cb_indices.local_config_cb_id,
+        cb_indices.remote_config_cb_id,
+        remote_temp_cb_id,
+        cb_indices.src_cb_id,
+        input_to_writer_cb_id,
+        cb_indices.out_cb_id,
+        cb_indices.pad_cb_id,
+        pad_val,
+        input_npages,
+        out_stick_nbytes,
+        is_block_sharded,
+        (uint32_t)(transpose_mcast ? 1 : 0),
+        is_width_sharded,
+        aligned_input_nstick_nbytes,
+        remote_read,
+        (uint32_t)num_active_cores,
+        (uint32_t)noc_TL.x,
+        (uint32_t)noc_TL.y,
+        (uint32_t)noc_BR.x,
+        (uint32_t)noc_BR.y,
+        rectangular_x,
+        rectangular_y,
+        last_active_x,
+        semaphore_id,
+        (uint32_t)in_out_shard_size_delta,
+        temp_cb_id,
+        ntiles_per_block,
+        input_nblocks_per_core,
+        sync_cb_id1,
+        sync_cb_id2};
+
+    KernelDescriptor::Defines reader_defines;
+    if (config_tensors_in_dram) {
+        reader_defines.emplace_back("CONFIG_TENSOR_IN_DRAM", "1");
+        reader_ct_args.push_back(padding_config_buffer->address());
+        reader_ct_args.push_back(padding_config_buffer->page_size());
+        reader_ct_args.push_back(local_config_buffer->address());
+        reader_ct_args.push_back(local_config_buffer->page_size());
+        reader_ct_args.push_back(remote_config_buffer->address());
+        reader_ct_args.push_back(remote_config_buffer->page_size());
+        tt::tt_metal::TensorAccessorArgs(padding_config_buffer).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(local_config_buffer).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(remote_config_buffer).append_to(reader_ct_args);
+    }
+
+    KernelDescriptor reader_0_desc;
+    reader_0_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp";
+    reader_0_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_0_desc.core_ranges = rectangular_cores;
+    reader_0_desc.compile_time_args = reader_ct_args;
+    reader_0_desc.defines = reader_defines;
+    reader_0_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = NOC::RISCV_0_default,
+    };
+
+    reader_ct_args[0] = false;  // secondary thread
+    KernelDescriptor reader_1_desc;
+    reader_1_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp";
+    reader_1_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_1_desc.core_ranges = rectangular_cores;
+    reader_1_desc.compile_time_args = std::move(reader_ct_args);
+    reader_1_desc.defines = std::move(reader_defines);
+    reader_1_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = NOC::RISCV_1_default,
+    };
+
+    for (uint32_t core_i = 0; core_i < static_cast<uint32_t>(num_cores_rectangular); core_i++) {
+        uint32_t core_x_i = core_i % rectangular_x;
+        uint32_t core_y_i = core_i / rectangular_x;
+        CoreCoord core(core_x_i, core_y_i);
+        bool noop_core = core_i >= static_cast<uint32_t>(num_active_cores);
+        bool cast_core = core_i == 0;  // first core controls the multicasting
+
+        std::vector<uint32_t> reader_rt_args0 = {(uint32_t)noop_core, (uint32_t)cast_core};
+        std::vector<uint32_t> reader_rt_args1 = {(uint32_t)noop_core, (uint32_t)false};
+        if (is_height_sharded) {
+            reader_rt_args0.push_back(core_i);
+        } else if (is_width_sharded) {
+            reader_rt_args0.push_back(0);
+        } else if (is_block_sharded) {
+            auto nhw_index = is_rm_orientation ? core_y_i : core_x_i;
+            reader_rt_args0.push_back(nhw_index);
+        }
+        reader_0_desc.runtime_args.emplace_back(core, std::move(reader_rt_args0));
+        reader_1_desc.runtime_args.emplace_back(core, std::move(reader_rt_args1));
+    }
+
+    desc.kernels.push_back(std::move(reader_0_desc));
+    desc.kernels.push_back(std::move(reader_1_desc));
+
+    return desc;
+}
+
 }  // namespace
 
 tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload_descriptor(
@@ -407,6 +765,110 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
         sliding_window::generate_tensor_metadata(pad_metadata, operation_attributes.config, input_shard_height);
 
     const uint32_t num_cores_x = input_tensor.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
+
+    // ---- In-place halo path (silent auto-activation; see IN_PLACE_HALO_REDO.md sec 10). ----
+    // Uses the SAME pure decision function as create_output_tensors (which already deallocated
+    // the input and allocated the overlapping output) and the pool caller.
+    const bool is_height_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    if (sliding_window::should_halo_be_in_place(
+            operation_attributes.config, operation_attributes.in_nsticks_per_core, is_height_sharded, is_in_tiled)) {
+        // Stick delta between input and output shards (MUST match create_output_tensors).
+        const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
+        const uint32_t nbytes = input_tensor.dtype() == DataType::FLOAT32 ? 4u : 2u;  // post-untilize width
+        const uint32_t width_bytes = shard_width * nbytes;
+        const uint32_t aligned_delta_size =
+            (sliding_window::align_buffer(operation_attributes.max_out_nsticks_per_core * width_bytes) / width_bytes) -
+            (sliding_window::align_buffer(operation_attributes.in_nsticks_per_core * width_bytes) / width_bytes);
+        const int32_t in_out_shard_size_delta = is_in_tiled ? 0 : static_cast<int32_t>(aligned_delta_size);
+
+        auto inplace_config = sliding_window::generate_inplace_halo_kernel_config_tensors(
+            tensor_metadata,
+            shard_boundaries,
+            is_block_sharded,
+            transpose_mcast,
+            remote_read,
+            is_in_tiled,
+            device,
+            num_cores_x,
+            operation_attributes.max_out_nsticks_per_core,
+            operation_attributes.in_nsticks_per_core,
+            /*in_place=*/true,
+            static_cast<uint32_t>(in_out_shard_size_delta));
+        const auto& cfgs = std::get<0>(inplace_config);
+        const int max_ref_size = std::get<1>(inplace_config);
+        // in-place uses the un-split (main-thread) config vectors: {pad0, _, local0, _, remote0, _}.
+        const auto& pad_config = cfgs[0];
+        const auto& local_config = cfgs[2];
+        const auto& remote_config = cfgs[4];
+
+        const auto pad_config_tensor = sliding_window::construct_on_host_config_tensor(
+            pad_config, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
+        const auto local_config_tensor = sliding_window::construct_on_host_config_tensor(
+            local_config, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
+        const auto remote_config_tensor = sliding_window::construct_on_host_config_tensor(
+            remote_config, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
+
+        Tensor pad_config_device_tensor = sliding_window::move_config_tensor_to_device(
+            pad_config_tensor,
+            operation_attributes.parallel_config,
+            is_block_sharded,
+            device,
+            operation_attributes.config_tensors_in_dram);
+        Tensor local_config_device_tensor = sliding_window::move_config_tensor_to_device(
+            local_config_tensor,
+            operation_attributes.parallel_config,
+            is_block_sharded,
+            device,
+            operation_attributes.config_tensors_in_dram);
+        Tensor remote_config_device_tensor = sliding_window::move_config_tensor_to_device(
+            remote_config_tensor,
+            operation_attributes.parallel_config,
+            is_block_sharded,
+            device,
+            operation_attributes.config_tensors_in_dram);
+
+        TT_ASSERT(pad_config_device_tensor.dtype() == DataType::UINT16);
+        TT_ASSERT(local_config_device_tensor.dtype() == DataType::UINT16);
+        TT_ASSERT(remote_config_device_tensor.dtype() == DataType::UINT16);
+
+        tt::tt_metal::WorkloadDescriptor workload_descriptor;
+        auto pad_owner = std::make_shared<Tensor>(std::move(pad_config_device_tensor));
+        Buffer* pad_buf = pad_owner->buffer();
+        workload_descriptor.buffers.push_back({pad_owner, pad_buf});
+        auto local_owner = std::make_shared<Tensor>(std::move(local_config_device_tensor));
+        Buffer* local_buf = local_owner->buffer();
+        workload_descriptor.buffers.push_back({local_owner, local_buf});
+        auto remote_owner = std::make_shared<Tensor>(std::move(remote_config_device_tensor));
+        Buffer* remote_buf = remote_owner->buffer();
+        workload_descriptor.buffers.push_back({remote_owner, remote_buf});
+
+        const int pad_h = operation_attributes.config.get_pad_h() + operation_attributes.config.get_ceil_pad_h();
+        const int pad_w = operation_attributes.config.get_pad_w() + operation_attributes.config.get_ceil_pad_w();
+        const bool padding_exists = pad_h > 0 || pad_w > 0;
+
+        auto desc = build_inplace_halo_program(
+            operation_attributes,
+            input_tensor,
+            output_tensor,
+            pad_buf,
+            local_buf,
+            remote_buf,
+            static_cast<uint32_t>(max_ref_size),
+            in_out_shard_size_delta,
+            padding_exists,
+            num_cores_x);
+
+        auto ranges = tensor_coords.ranges();
+        workload_descriptor.programs.reserve(ranges.size());
+        for (size_t i = 0; i + 1 < ranges.size(); ++i) {
+            workload_descriptor.programs.push_back({ranges[i], desc});
+        }
+        if (!ranges.empty()) {
+            workload_descriptor.programs.push_back({ranges.back(), std::move(desc)});
+        }
+        return workload_descriptor;
+    }
+    // ---- normal (non-in-place) path (unchanged) ----
 
     auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
         tensor_metadata,

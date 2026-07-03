@@ -7,6 +7,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include <tt-metalium/mesh_buffer.hpp>  // complete MeshBuffer type for the in-place input deallocation
 #include <array>
 
 namespace ttnn::prim {
@@ -93,7 +94,52 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
 HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.device());
+    const auto& input_tensor = tensor_args;
+
+    // In-place halo (silent auto-activation; see IN_PLACE_HALO_REDO.md sec 10). The SAME pure
+    // decision function is used by the program factory and the pool caller so all three agree.
+    const bool is_height_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool is_in_tiled = input_tensor.layout() == Layout::TILE;
+    const bool in_place = ttnn::operations::sliding_window::should_halo_be_in_place(
+        args.config, args.in_nsticks_per_core, is_height_sharded, is_in_tiled);
+    if (!in_place) {
+        return create_device_tensor(output_spec, input_tensor.device());
+    }
+    log_info(tt::LogOp, "halo_device_operation - in-place halo active; aliasing output onto input buffer");
+
+    // Capture the input shard address BEFORE freeing it (used to assert the overlap below).
+    Buffer* src_buffer = input_tensor.buffer();
+    const uint32_t src_addr = src_buffer->address();
+
+    // Stick delta between input and output shards (MUST match the factory). Post-untilize
+    // width bytes; row-major (gate excludes tiled) so is_in_tiled == false here.
+    const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
+    const uint32_t nbytes = input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ? 4u : 2u;
+    const uint32_t width_bytes = shard_width * nbytes;
+    const uint32_t aligned_delta_size =
+        (ttnn::operations::sliding_window::align_buffer(args.max_out_nsticks_per_core * width_bytes) / width_bytes) -
+        (ttnn::operations::sliding_window::align_buffer(args.in_nsticks_per_core * width_bytes) / width_bytes);
+    const uint32_t delta_bytes = aligned_delta_size * width_bytes;
+
+    // Free the input shard's L1 region so the (larger) output shard can be allocated over the
+    // same top-of-L1 region (sharded L1 allocates top-down). Deallocating the underlying
+    // MeshBuffer (not the Tensor) frees the owning allocation while keeping the input Tensor's
+    // storage/buffer() queryable -- the framework's collect_tensor_buffers reads input.buffer()
+    // during workload build. The input aliases into the output after this, so the pool/conv
+    // caller MUST skip its own input-dealloc when in-place is active.
+    // TODO: mesh_buffer() is const-qualified but MeshBuffer::deallocate() is not.
+    const_cast<tt::tt_metal::distributed::MeshBuffer&>(input_tensor.mesh_buffer()).deallocate();
+
+    auto output = create_device_tensor(output_spec, input_tensor.device());
+    Buffer* dst_buffer = output.buffer();
+    TT_FATAL(
+        src_addr == dst_buffer->address() + delta_bytes,
+        "In-place halo requires the input shard buffer to overlap the output shard buffer at the expected "
+        "offset (src {} != dst {} + delta {})",
+        src_addr,
+        dst_buffer->address(),
+        delta_bytes);
+    return output;
 }
 
 Tensor halo(

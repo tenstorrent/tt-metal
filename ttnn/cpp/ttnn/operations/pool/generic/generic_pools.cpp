@@ -337,6 +337,18 @@ static std::vector<Tensor> pool2d_L1(
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/input_tensor_sharded.dtype() == DataType::FLOAT32,
         /*default_l1_acc=*/false);
+    // Compute the in-place-halo decision with the SAME pure function the halo op and its factory
+    // use (IN_PLACE_HALO_REDO.md sec 10). When in-place activates, the halo op deallocates the
+    // input and allocates the output OVER the same L1 region (input aliases into the output), so
+    // the caller must NOT deallocate the input (double-free of the shared buffer) nor ttnn::move
+    // the output (would copy to a fresh buffer, spiking L1 and undoing the saving). Computed
+    // before the halo call while input_tensor_sharded is fully valid.
+    const bool halo_is_in_place = ttnn::operations::sliding_window::should_halo_be_in_place(
+        sliding_window_config,
+        input_tensor_sharded.memory_config().shard_spec()->shape[0],
+        input_tensor_sharded.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        input_tensor_sharded.layout() == tt::tt_metal::Layout::TILE);
+
     Tensor haloed_tensor = ttnn::halo(
         input_tensor_sharded,
         sliding_window_config,
@@ -347,11 +359,11 @@ static std::vector<Tensor> pool2d_L1(
         is_out_tiled,
         config_tensor_in_dram);
 
-    if (deallocate_input || is_input_tensor_in_dram) {
+    if (!halo_is_in_place && (deallocate_input || is_input_tensor_in_dram)) {
         input_tensor_sharded.deallocate(/*force*/ true);
     }
 
-    if (reallocate_halo_output) {
+    if (!halo_is_in_place && reallocate_halo_output) {
         haloed_tensor = ttnn::move(haloed_tensor);
     }
 
