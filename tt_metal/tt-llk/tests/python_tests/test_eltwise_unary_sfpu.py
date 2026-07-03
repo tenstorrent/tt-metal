@@ -383,10 +383,11 @@ def test_eltwise_unary_sfpu_int(
 
 
 # Unary SFPU ops that require per-op input domains: heaviside/softshrink/
-# softsign/compare-to-zero span negatives, erfinv is only defined on (-1, 1),
-# i0 is valid on |x| <= 3.75, rdiv needs x away from 0, and clamp/hardtanh must
-# span past their bounds. They are driven through the domain registry rather
-# than the default positive-only stimuli used by the big float sweep.
+# softsign/compare-to-zero/lrelu span negatives, erfinv is only defined on
+# (-1, 1), i0 is valid on |x| <= 3.75, rdiv needs x away from 0, and
+# clamp/hardtanh must span past their bounds. They are driven through the
+# domain registry rather than the default positive-only stimuli used by the
+# big float sweep.
 DOMAIN_MATHOPS = [
     MathOperation.Erfinv,
     MathOperation.Heaviside,
@@ -405,6 +406,7 @@ DOMAIN_MATHOPS = [
     MathOperation.Rdiv,
     MathOperation.Clamp,
     MathOperation.Hardtanh,
+    MathOperation.Lrelu,
 ]
 
 

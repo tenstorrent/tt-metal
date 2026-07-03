@@ -214,6 +214,11 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.ReluMin: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
+    # lrelu: leaky ReLU with slope 0.1; span both signs so the negative
+    # (scaled) branch and the positive (pass-through) branch are exercised.
+    MathOperation.Lrelu: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
     MathOperation.Threshold: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),

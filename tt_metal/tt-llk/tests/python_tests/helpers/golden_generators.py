@@ -2167,6 +2167,7 @@ class UnarySFPUGolden:
             MathOperation.Threshold: self._threshold,
             MathOperation.ReluMax: self._relu_max,
             MathOperation.ReluMin: self._relu_min,
+            MathOperation.Lrelu: self._lrelu,
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
             MathOperation.Typecast: self._typecast,
@@ -2601,6 +2602,19 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return torch.max(input_tensor, torch.tensor(threshold)).item()
+
+    def _lrelu(self, x, negative_slope=0.1):
+        # Leaky ReLU: matches _calculate_lrelu_ with the dispatch-baked slope
+        # (0x3dcccccd = 0.1f in sfpu_operations.h). Positives pass through,
+        # negatives are scaled by `negative_slope`.
+        input_tensor = (
+            x
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(x, dtype=format_dict[self.data_format])
+        )
+        return torch.nn.functional.leaky_relu(
+            input_tensor, negative_slope=negative_slope
+        ).item()
 
     def _reduce_columns(self, x, reduce_pool: ReducePool):
         """Reduce columns across tiles, computing sum, average, or max."""
