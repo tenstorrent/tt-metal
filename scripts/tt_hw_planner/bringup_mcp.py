@@ -129,6 +129,16 @@ def _is_shard_graduated(component: str) -> bool:
     return _snap(component, ".py.last_good_sharded").is_file()
 
 
+def _shard_mode_active() -> bool:
+    return _shard_enabled() and int(_SHARD_TP) > 1
+
+
+def _grad_for_run(component: str) -> bool:
+    if _shard_mode_active() and _shard.is_shard_eligible(component):
+        return _is_shard_graduated(component)
+    return _is_graduated(component)
+
+
 _FABRIC_FAILURE_SIGNATURES = (
     "Fabric Router Sync: Timeout",
     "fabric_firmware_initializer.cpp",
@@ -655,7 +665,7 @@ def termination_check() -> dict:
     terminal = set(st.get("fallback") or []) | set(st.get("harness_skipped") or [])
     work, needs_cap = [], []
     for c in comps:
-        if _is_graduated(c) or c in terminal:
+        if _grad_for_run(c) or c in terminal:
             continue
         eff = bringup_ladder.effective_attempt_cap(
             c,
@@ -701,6 +711,19 @@ def termination_check() -> dict:
                 f"genuinely uncallable as one unit, decompose_component('{c}'); if it needs a "
                 f"human-authored test, mark_harness_skipped('{c}', 'manual').",
             }
+        elif _shard_mode_active() and _shard.is_shard_eligible(c):
+            nxt = {
+                "unit": c,
+                "rung": "shard",
+                "reason": f"component '{c}' must graduate DIRECTLY tensor-parallel for TP={_SHARD_TP} — "
+                f"single-phase: there is NO single-device graduation first, the shard IS the graduation. "
+                f"Call get_shard_plan('{c}') for the TP principles + references, reason out the scheme, edit "
+                f"_stubs/{c}.py to shard weights (ShardTensorToMesh + all_gather after column-parallel / "
+                f"all_reduce after row-parallel; expert-parallel+gather for MoE; shard heads/channels for "
+                f"Mamba). Then run_component('{c}', mode='shard') and record_result(mode='shard'); a "
+                f"gathered-PCC>={_PCC} pass writes .py.last_good_sharded. Math unchanged: gathered output == "
+                f"golden.",
+            }
         else:
             rung = "emit" if attempts == 0 else "repair"
             nxt = {
@@ -735,30 +758,11 @@ def termination_check() -> dict:
                 "reason": f"component '{c}' exhausted its attempt cap — call fall_back_to_cpu('{c}') to "
                 f"retire it to CPU (mixed execution) so the pipeline still works.",
             }
-    fabric_unhealthy = bool(st.get("fabric_unhealthy"))
-    if can_stop and _shard_enabled() and not fabric_unhealthy:
-        sc = _pending_shard_component(comps)
-        if sc is not None:
-            can_stop = False
-            nxt = {
-                "unit": sc,
-                "rung": "shard",
-                "reason": f"component '{sc}' is single-device graduated and shard-eligible; make it "
-                f"tensor-parallel for TP={_SHARD_TP}. Call get_shard_plan('{sc}') for the TP principles "
-                f"+ reference implementations, then REASON OUT the scheme for this component (there is "
-                f"no prescribed per-weight plan — study the references and apply the principles). Edit "
-                f"_stubs/{sc}.py to shard weights via ShardTensorToMesh(dim=...) and place the collective "
-                f"(all_gather after column-parallel, all_reduce after row-parallel; expert-parallel + "
-                f"gather for MoE; shard heads/channels for Mamba). The math must be unchanged: gathered "
-                f"output == golden. Then run_component('{sc}', mode='shard') and record_result(mode="
-                f"'shard') — a gathered-PCC>={_PCC} pass writes .py.last_good_sharded. NEVER edit the "
-                f"single-device .last_good_native.",
-            }
     return {
         "can_stop": can_stop,
         "halt": False,
         "halt_reason": None,
-        "graduated": sorted([c for c in comps if _is_graduated(c)]),
+        "graduated": sorted([c for c in comps if _grad_for_run(c)]),
         "shard_graduated": sorted([c for c in comps if _is_shard_graduated(c)]) if _shard_enabled() else [],
         "fallen_back": sorted(st.get("fallback") or []),
         "harness_skipped": sorted(st.get("harness_skipped") or []),
