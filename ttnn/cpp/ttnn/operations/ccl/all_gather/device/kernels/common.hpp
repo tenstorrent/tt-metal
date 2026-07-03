@@ -76,29 +76,33 @@ private:
 
 // Unicasts pages one hop to the single neighbor device. Handles packetization (packing several pages into a
 // scatter-write packet when they fit, else splitting a big page across packets).
-template <uint32_t page_size, uint32_t packet_size>
+//
+// Templated on the fabric sender type (SenderT*), so the same writer drives either a direct
+// WorkerToFabricEdmSender (one worker per direction) or a WorkerToFabricMuxSender (multiple workers per
+// direction sharing a fabric mux). The linear-fabric send calls are all base (sender-pointer) overloads that
+// accept either sender type; for 1D-linear all routing reduces to to_chip_unicast(1), which set_state does,
+// so no route-manager is needed. FabricWriter owns its two packet headers directly.
+template <uint32_t page_size, uint32_t packet_size, typename SenderT>
 class FabricWriter {
 public:
-    FabricWriter(const Noc& noc, tt::tt_fabric::RoutingPlaneConnectionManager& manager) :
+    FabricWriter(const Noc& noc, SenderT* sender) :
         noc{noc},
-        fabric_connection{manager},
-        scatter_route_id{PacketHeaderPool::allocate_header_n(1)},
-        unicast_route_id{PacketHeaderPool::allocate_header_n(1)},
+        sender{sender},
+        scatter_hdr{PacketHeaderPool::allocate_header(1)},
+        unicast_hdr{PacketHeaderPool::allocate_header(1)},
         scatter_header({}, {}),
         chunk_count{0} {
         std::array<uint64_t, max_pages_per_packet> dummy_addrs{};
         std::array<uint16_t, max_pages_per_packet - 1> chunk_sizes{};
         chunk_sizes.fill(page_size);
-        uint8_t num_hops[1] = {1};
+        constexpr uint8_t num_hops = 1;  // store-and-forward: always the immediate neighbor
 
         fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
-            fabric_connection,
-            scatter_route_id,
+            scatter_hdr,
             num_hops,
             NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
 
-        fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
-            fabric_connection, unicast_route_id, num_hops);
+        fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(unicast_hdr, num_hops);
     }
 
     ~FabricWriter() { ASSERT(chunk_count == 0); }  // outstanding chunks! flush() not called correctly
@@ -115,7 +119,7 @@ public:
                 scatter_header.chunk_count = chunk_count;
                 fabric_api::fabric_unicast_noc_scatter_write_with_state<
                     UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
-                    fabric_connection, scatter_route_id, start_l1_addr, scatter_header, payload_size);
+                    sender, scatter_hdr, start_l1_addr, scatter_header, payload_size);
                 chunk_count = 0;
             }
         } else {
@@ -124,8 +128,8 @@ public:
                 noc.async_writes_flushed();
                 fabric_api::fabric_unicast_noc_unicast_write_with_state<
                     UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                    fabric_connection,
-                    unicast_route_id,
+                    sender,
+                    unicast_hdr,
                     l1_addr,
                     tt::tt_fabric::NocUnicastCommandHeader{remote_noc_addr},
                     (packet < packets_per_page - 1) ? payload_size : last_payload_size);
@@ -145,8 +149,8 @@ public:
                     // scatter_write needs chunk_count >= 2, so a lone leftover page goes as a unicast_write.
                     fabric_api::fabric_unicast_noc_unicast_write_with_state<
                         UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                        fabric_connection,
-                        unicast_route_id,
+                        sender,
+                        unicast_hdr,
                         start_l1_addr,
                         tt::tt_fabric::NocUnicastCommandHeader{scatter_header.noc_address[0]},
                         page_size);
@@ -154,7 +158,7 @@ public:
                     scatter_header.chunk_count = chunk_count;
                     fabric_api::fabric_unicast_noc_scatter_write_with_state<
                         UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
-                        fabric_connection, scatter_route_id, start_l1_addr, scatter_header, chunk_count * page_size);
+                        sender, scatter_hdr, start_l1_addr, scatter_header, chunk_count * page_size);
                 }
                 chunk_count = 0;
             }
@@ -172,9 +176,9 @@ private:
     static constexpr uint32_t last_payload_size = page_size - ((packets_per_page - 1) * packet_size);
 
     const Noc& noc;
-    tt::tt_fabric::RoutingPlaneConnectionManager& fabric_connection;
-    uint8_t scatter_route_id;
-    uint8_t unicast_route_id;
+    SenderT* sender;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* scatter_hdr;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* unicast_hdr;
     NocUnicastScatterCommandHeader scatter_header;
     uint8_t chunk_count;
     uint32_t start_l1_addr;

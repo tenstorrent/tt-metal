@@ -32,7 +32,18 @@ void kernel_main() {
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
     constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
-    constexpr auto output_tensor_args = TensorAccessorArgs<8>();
+    constexpr uint32_t data_valid_granularity = 320;  // get_compile_time_arg_val(8);
+    constexpr auto output_tensor_args = TensorAccessorArgs<9>();
+
+#ifdef USE_WORKER_MUX
+    // Fabric-mux geometry, appended by ccl::fabric_mux_connection_ct_args (after the tensor-accessor args).
+    constexpr uint32_t mux_ct_base = output_tensor_args.next_compile_time_args_offset();
+    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(mux_ct_base + 0);
+    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(mux_ct_base + 1);
+    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(mux_ct_base + 2);
+    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(mux_ct_base + 3);
+    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(mux_ct_base + 4);
+#endif
 
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
 
@@ -52,38 +63,95 @@ void kernel_main() {
     const uint8_t own_noc_y = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] const uint8_t paired_noc_x = get_arg_val<uint32_t>(arg_idx++);  // ready target (init only)
     [[maybe_unused]] const uint8_t paired_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    size_t arg_for_fab = arg_idx;
+    const uint32_t num_granular_sends = get_arg_val<uint32_t>(arg_idx++);  // leading sends the downstream relays
+    [[maybe_unused]] size_t arg_for_fab = arg_idx;  // fabric connection args start here (non-mux path)
 
-    // A direction with no neighbor (a line endpoint) relays nothing; no fabric connection was appended.
+    // A direction with no neighbor (a line endpoint) relays nothing; no fabric/mux connection was appended.
     if (num_iters == 0) {
         return;
     }
+
+#ifdef USE_WORKER_MUX
+    // Fabric-mux connection RT args, appended by ccl::fabric_mux_connection_rt_args (17 args). Only appended
+    // for an active direction, so we always have a live connection here (num_iters > 0 implies a neighbor).
+    [[maybe_unused]] const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++) != 0;
+    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint8_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+#endif
 
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
     Noc noc;
     CircularBuffer cb(cb0_id);
 
+#ifdef USE_WORKER_MUX
+    // Multiple workers per direction share one fabric link through a fabric mux. Connect to our channel on
+    // the mux instead of opening a direct connection to the neighbor's ERISC.
+    using SenderT = tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>;
+    SenderT mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+        fabric_mux_x,
+        fabric_mux_y,
+        fabric_mux_channel_id,
+        fabric_mux_num_buffers_per_channel,
+        fabric_mux_channel_buffer_size_bytes,
+        fabric_mux_channel_base_address,
+        fabric_mux_connection_info_address,
+        fabric_mux_connection_handshake_address,
+        fabric_mux_flow_control_address,
+        fabric_mux_buffer_index_address,
+        local_flow_control_address,
+        local_teardown_address,
+        local_buffer_index_address);
+    tt::tt_fabric::wait_for_fabric_endpoint_ready(
+        fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
+    tt::tt_fabric::fabric_client_connect(mux_connection);
+    SenderT* sender = &mux_connection;
+#else
+    // Single worker per direction: connect directly to the neighbor's ERISC.
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, 1, arg_for_fab);
-    FabricWriter<output_chunk_size, packet_size> fabric(noc, fabric_connection);
+    using SenderT = tt::tt_fabric::WorkerToFabricEdmSender;
+    SenderT* sender = &fabric_connection.get(0).sender;
+#endif
 
-    // One 1-hop atomic-inc route reused for both the "alive" ready inc and the per-stripe data_valid signal.
-    uint8_t sem_route_id = PacketHeaderPool::allocate_header_n(1);
-    uint8_t num_hops[1] = {1};
+    FabricWriter<output_chunk_size, packet_size, SenderT> fabric(noc, sender);
+
+    // One 1-hop atomic-inc header reused for both the "alive" ready inc and the per-stripe data_valid signal.
+    auto sem_hdr = PacketHeaderPool::allocate_header(1);
     fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-        fabric_connection, sem_route_id, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
+        sem_hdr, /*num_hops=*/1, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
 
     // Init handshake (send only): tell the neighbor's opposite-direction reader we're alive, so it lets its
     // paired writer start writing into our output. Our own reader does the matching wait.
     if constexpr (do_init_barrier) {
         uint64_t paired_ready_addr = safe_get_noc_addr(paired_noc_x, paired_noc_y, ready_sem, 0);
         fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_connection, sem_route_id, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{paired_ready_addr, 0});
+            sender, sem_hdr, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{paired_ready_addr, 0});
     }
 
     const uint64_t downstream_data_valid_addr = safe_get_noc_addr(own_noc_x, own_noc_y, data_valid_sem, 0);
+
+    // Increment the downstream reader's data_valid. Ordered after the data on this connection, so the reader
+    // can safely read once it observes the increment.
+    auto signal_data_valid = [&]() {
+        fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            sender, sem_hdr, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{downstream_data_valid_addr, 0});
+    };
 
     OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
 
@@ -92,6 +160,11 @@ void kernel_main() {
         const bool last = (iter == num_iters - 1);
         it.init(stripe, last ? final_start : slice_start, last ? final_count : slice_count);
         const bool local_copy = (iter == 0) && (do_local_write != 0);
+
+        // Stripes the downstream relays are signalled once per data_valid_granularity CB pages so it can start
+        // forwarding early; the rest (its antipode) get a single inc that also serves as the completion signal.
+        const bool signal_granular = (iter < num_granular_sends);
+        uint32_t packets_since_inc = 0;
 
         while (it.valid()) {
             cb.wait_front(1);
@@ -119,18 +192,39 @@ void kernel_main() {
             }
             fabric.async_writes_flushed();
             cb.pop_front(1);
+
+            if (signal_granular) {
+                packets_since_inc = (packets_since_inc + 1 == data_valid_granularity) ? 0 : packets_since_inc + 1;
+                if (packets_since_inc == 0) {
+                    signal_data_valid();
+                }
+            }
         }
 
-        // Tell the downstream neighbor this stripe has landed. Ordered after the data on this connection, so
-        // its reader can safely read the stripe once it observes the increment.
-        fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_connection,
-            sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{downstream_data_valid_addr, 0});
+        // A single inc for a non-granular stripe, or the trailing partial granule of a granular one.
+        if (!signal_granular || packets_since_inc != 0) {
+            signal_data_valid();
+        }
 
         stripe = (stripe + stripe_step) % num_devices;
     }
 
+#ifdef USE_WORKER_MUX
+    // Disconnect from the mux. Worker 0 (termination master) waits for every peer to disconnect, then tells
+    // the mux to gracefully terminate (drain, then exit); the rest just signal the master.
+    tt::tt_fabric::fabric_client_disconnect(mux_connection);
+    if (is_termination_master) {
+        auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
+        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+    } else {
+        uint64_t master_sync_addr =
+            safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
+        noc_semaphore_inc(master_sync_addr, 1);
+        noc_async_atomic_barrier();
+    }
+#else
     close_connections(fabric_connection);
+#endif
     noc.async_write_barrier();
 }

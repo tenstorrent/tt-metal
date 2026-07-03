@@ -4,6 +4,9 @@
 
 #include "all_gather_factory.hpp"
 
+#include <map>
+#include <set>
+
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -12,6 +15,19 @@
 namespace ttnn::operations::ccl {
 
 using namespace ::ttnn::ccl;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tunables (edit here). Hardcoded for now; op-level plumbing + heuristics are future work.
+//   NUM_WORKERS_PER_LINK : worker (reader+writer) cores per direction per link. The forward and backward
+//                          conveyors each get this many. >1 requires a fabric mux (see below).
+//   MUX_NUM_BUFFERS      : L1 buffer slots per worker channel on the fabric mux.
+//
+// When NUM_WORKERS_PER_LINK == 1 the op takes the original single-conveyor path with a direct fabric
+// connection (no mux). When > 1, each direction's workers share a fabric mux core that owns the single
+// fabric connection and multiplexes their traffic onto the link.
+// ─────────────────────────────────────────────────────────────────────────────
+constexpr uint32_t NUM_WORKERS_PER_LINK = 4;
+constexpr uint32_t MUX_NUM_BUFFERS = 2;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Store-and-forward AllGather (Fabric_1D line/ring only).
@@ -111,10 +127,17 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     auto bwd_coord =
         ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, sender_device_coord, -1, topology, axis);
 
-    // Stripes each conveyor sends: ring -> N/2; line fwd -> d+1, bwd -> N-d; 0 at a dead endpoint. The rest of
-    // each conveyor's schedule (num_recv, stripe_step, do_local_write, half-slice) is derived per conveyor below.
-    const uint32_t fwd_iters = is_ring ? num_devices / 2 : (device_idx + 1 < num_devices ? device_idx + 1 : 0);
-    const uint32_t bwd_iters = is_ring ? num_devices / 2 : (device_idx > 0 ? num_devices - device_idx : 0);
+    // Stripes a conveyor sends from a given device: ring -> N/2; line fwd -> d+1, bwd -> N-d; 0 at a dead
+    // endpoint. Also queried for the downstream device below to decide granular vs single data_valid signalling.
+    // The rest of each conveyor's schedule (num_recv, stripe_step, do_local_write, half-slice) is derived below.
+    auto conveyor_iters = [&](uint32_t idx, bool is_forward) -> uint32_t {
+        if (is_ring) {
+            return num_devices / 2;
+        }
+        return is_forward ? (idx + 1 < num_devices ? idx + 1 : 0) : (idx > 0 ? num_devices - idx : 0);
+    };
+    const uint32_t fwd_iters = conveyor_iters(device_idx, true);
+    const uint32_t bwd_iters = conveyor_iters(device_idx, false);
     TT_FATAL(fwd_iters > 0 || bwd_iters > 0, "device participates in neither direction");
 
     // Even ring: the last iteration sends a contiguous half of the stripe so the two conveyors split the
@@ -126,19 +149,97 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     const uint32_t num_links = operation_attributes.axis_num_links[axis];
 
     ////////////////////////////////////////////////////////////////
-    // Worker cores: one forward + one backward core per link. Allocate all at once; the first num_links are the
-    // forward conveyors, the next num_links the backward ones.
+    // Worker + mux cores.
+    //
+    // Each link runs two conveyors: forward (dir 0) and backward (dir 1). With NUM_WORKERS_PER_LINK == 1 each
+    // conveyor is a single core connecting directly to its neighbor's ERISC. With NUM_WORKERS_PER_LINK > 1 the
+    // workers of a direction cannot each open a direct connection (an ERISC exposes one worker sender channel
+    // per direction), so they share a fabric mux: one dedicated mux core per direction per link owns the
+    // single fabric connection and multiplexes the workers' traffic onto the link.
+    //
+    // Flat layout from choose_worker_cores(num_links, num_cores_per_link), per link:
+    //   [dir 0: (mux?) worker 0 .. worker W-1][dir 1: (mux?) worker 0 .. worker W-1]
     ////////////////////////////////////////////////////////////////
 
-    auto [worker_core_range, worker_cores] = ttnn::ccl::choose_worker_cores(
-        2 * num_links,
-        /*num_workers_per_link=*/1,
+    constexpr uint32_t num_directions = 2;  // 0 = forward, 1 = backward
+    const uint32_t workers_per_dir = NUM_WORKERS_PER_LINK;
+    const bool use_mux = workers_per_dir > 1;
+    const uint32_t mux_per_dir = use_mux ? 1u : 0u;
+    const uint32_t cores_per_dir = workers_per_dir + mux_per_dir;
+    const uint32_t num_cores_per_link = num_directions * cores_per_dir;
+
+    // all_core_range spans workers + mux; we drive kernels from the worker-only / mux-only subsets built below.
+    [[maybe_unused]] auto [all_core_range, all_cores] = ttnn::ccl::choose_worker_cores(
+        num_links,
+        num_cores_per_link,
         mesh_device,
         operation_attributes.subdevice_id,
         /*core_grid_offset=*/CoreCoord{0, 0},
         operation_attributes.sub_core_grid);
+    TT_FATAL(
+        all_cores.size() == static_cast<size_t>(num_links) * num_cores_per_link,
+        "AllGather needs {} worker cores ({} links x {} cores/link) but only {} are available; reduce "
+        "NUM_WORKERS_PER_LINK or provide a larger sub_core_grid.",
+        static_cast<size_t>(num_links) * num_cores_per_link,
+        num_links,
+        num_cores_per_link,
+        all_cores.size());
+
+    // Indexing into the flat core vector (dir: 0 = forward, 1 = backward).
+    auto core_at = [&](uint32_t link, uint32_t dir, uint32_t idx_in_dir) -> const CoreCoord& {
+        return all_cores[(link * num_cores_per_link) + (dir * cores_per_dir) + idx_in_dir];
+    };
+    auto mux_core = [&](uint32_t link, uint32_t dir) -> const CoreCoord& { return core_at(link, dir, 0); };
+    auto worker_core = [&](uint32_t link, uint32_t dir, uint32_t w) -> const CoreCoord& {
+        return core_at(link, dir, mux_per_dir + w);
+    };
+    auto dir_neighbor = [&](uint32_t dir) { return dir == 0 ? fwd_coord : bwd_coord; };
+    auto dir_active = [&](uint32_t dir) { return dir_neighbor(dir).has_value(); };
+
+    // Reader/writer kernels + CB run on worker cores only; the mux kernel runs on its own cores (a mux is
+    // created only for a direction that has a neighbor).
+    std::vector<CoreCoord> worker_cores;
+    worker_cores.reserve(static_cast<size_t>(num_links) * num_directions * workers_per_dir);
+    std::set<CoreRange> worker_core_set;
+    std::set<CoreRange> mux_core_set;
+    for (uint32_t link = 0; link < num_links; ++link) {
+        for (uint32_t dir = 0; dir < num_directions; ++dir) {
+            if (use_mux && dir_active(dir)) {
+                mux_core_set.emplace(mux_core(link, dir));
+            }
+            for (uint32_t w = 0; w < workers_per_dir; ++w) {
+                worker_cores.push_back(worker_core(link, dir, w));
+                worker_core_set.emplace(worker_core(link, dir, w));
+            }
+        }
+    }
+    const CoreRangeSet worker_core_range(worker_core_set);
+    const CoreRangeSet mux_core_range(mux_core_set);
 
     const uint32_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+
+    // Fabric mux config: one full-size channel per worker in a direction. Cheap to construct; only wired up
+    // (kernel + args) when use_mux.
+    tt::tt_fabric::FabricMuxConfig mux_config(
+        /*num_full_size_channels=*/static_cast<uint8_t>(workers_per_dir),
+        /*num_header_only_channels=*/0,
+        /*num_buffers_full_size_channel=*/static_cast<uint8_t>(MUX_NUM_BUFFERS),
+        /*num_buffers_header_only_channel=*/0,
+        /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
+        /*base_l1_address=*/mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+
+    tt::tt_metal::KernelHandle mux_kernel_id = 0;
+    if (use_mux && mux_core_range.num_cores() > 0) {
+        mux_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+            mux_core_range,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = mux_config.get_fabric_mux_compile_time_args(),
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    }
 
     ////////////////////////////////////////////////////////////////
     // Page indexing (unchanged from the multicast op). See the OutputStripeIterator in common.hpp: the kernel
@@ -217,6 +318,10 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         tt::tt_metal::CircularBufferConfig(cb_depth * cb_page_size, {{cb0_id, df}}).set_page_size(cb0_id, cb_page_size);
     CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
+    // data_valid is signalled once per this many CB pages so a downstream can start relaying a stripe before
+    // the whole stripe has arrived. Tunable: larger = fewer syncs, smaller = finer pipelining.
+    constexpr uint32_t data_valid_granularity = 4;
+
     std::vector<uint32_t> reader_ct = {
         input_page_size,
         output_chunk_size,
@@ -226,6 +331,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         cb0_id,
         cb_page_size,
         do_init_barrier ? 1u : 0u,
+        data_valid_granularity,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_ct);
@@ -239,8 +345,18 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         cb_page_size,
         packet_size,
         do_init_barrier ? 1u : 0u,
+        data_valid_granularity,
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct);
+
+    // When multiple workers share a fabric mux, the writer connects through it. Append the mux geometry (after
+    // the tensor-accessor args) and flip the kernel onto its USE_WORKER_MUX path.
+    std::map<std::string, std::string> writer_defines;
+    if (use_mux) {
+        ttnn::ccl::fabric_mux_connection_ct_args(
+            workers_per_dir, tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_config, writer_ct);
+        writer_defines["USE_WORKER_MUX"] = "1";
+    }
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -251,100 +367,156 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/writer.cpp",
         worker_core_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct));
+        tt::tt_metal::WriterDataMovementConfig(writer_ct, writer_defines));
 
     ////////////////////////////////////////////////////////////////
-    // Runtime args, per link. The per-link page split is direction-independent.
+    // Runtime args. The page split is now per (link, worker) -- num_links * workers_per_dir sub-slices -- and
+    // is direction-independent, so the forward and backward conveyors of a given (link, worker) relay the same
+    // stripe sub-slice. The per-worker/per-device core assignment is deterministic, so worker w's core has the
+    // same coords on every device: data_valid signals target the mirror worker w on the neighbor.
     ////////////////////////////////////////////////////////////////
 
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
     const uint32_t input_addr = input_tensor.buffer()->address();
     const uint32_t output_addr = output_tensor.buffer()->address();
 
-    for (uint32_t link = 0; link < num_links; link++) {
-        const uint32_t input_pages_per_link = num_input_pages / num_links;
-        const uint32_t remainder = num_input_pages % num_links;
-        const uint32_t input_tile_id_start = (link * input_pages_per_link) + std::min(link, remainder);
-        const uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
-        const uint32_t local_output_start = (input_tile_id_start * num_output_chunks) / num_input_pages;
-        const uint32_t local_output_end = (input_tile_id_end * num_output_chunks) / num_input_pages;
-        const uint32_t num_worker_output_chunks = local_output_end - local_output_start;
-        const uint32_t half = num_worker_output_chunks / 2;
-
-        // Configure one conveyor. own_vc is this core's coords, reused as the data_valid target on the
-        // neighbor's mirror core; partner_vc is the opposite-direction core, the ready target.
-        auto set_conveyor = [&](bool is_forward) {
-            const CoreCoord core = worker_cores[is_forward ? link : num_links + link];
-            const CoreCoord partner = worker_cores[is_forward ? num_links + link : link];
-            const CoreCoord own_vc = mesh_device->worker_core_from_logical_core(core);
-            const CoreCoord partner_vc = mesh_device->worker_core_from_logical_core(partner);
-            const auto& neighbor = is_forward ? fwd_coord : bwd_coord;
-
-            const uint32_t stripe_step = is_forward ? num_devices - 1 : 1;
-            const uint32_t num_iters = is_forward ? fwd_iters : bwd_iters;
-            const uint32_t num_recv =
-                is_ring ? num_devices / 2 : (is_forward ? device_idx : num_devices - 1 - device_idx);
-            const bool do_local_write = is_forward ? (fwd_iters > 0) : (fwd_iters == 0);
-
-            uint32_t final_start = local_output_start;
-            uint32_t final_count = num_worker_output_chunks;
-            if (ring_even_split) {
-                final_start = is_forward ? local_output_start : (local_output_start + half);
-                final_count = is_forward ? half : (num_worker_output_chunks - half);
+    // Mux kernel runtime args: one fabric connection per active direction per link, to that direction's
+    // neighbor. The N workers of the direction all feed this one connection.
+    if (use_mux) {
+        for (uint32_t link = 0; link < num_links; ++link) {
+            for (uint32_t dir = 0; dir < num_directions; ++dir) {
+                if (!dir_active(dir)) {
+                    continue;
+                }
+                const CoreCoord mc = mux_core(link, dir);
+                const auto dst_node = mesh_device->get_fabric_node_id(*dir_neighbor(dir));
+                auto mux_rt =
+                    mux_config.get_fabric_mux_run_time_args(sender_fabric_node_id, dst_node, link, program, mc);
+                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mc}, mux_rt);
             }
+        }
+    }
 
-            std::vector<uint32_t> reader_rt = {
-                input_addr,
-                output_addr,
-                device_idx,
-                stripe_step,
-                num_iters,
-                num_recv,
-                local_output_start,
-                num_worker_output_chunks,
-                final_start,
-                final_count,
-                input_tile_id_start,
-                input_tile_id_end,
-                data_valid_sem.address(),
-                ready_sem.address(),
+    const uint32_t total_slices = num_links * workers_per_dir;
+    for (uint32_t link = 0; link < num_links; ++link) {
+        for (uint32_t w = 0; w < workers_per_dir; ++w) {
+            const uint32_t slice_idx = (link * workers_per_dir) + w;
+            const uint32_t input_pages_per_slice = num_input_pages / total_slices;
+            const uint32_t remainder = num_input_pages % total_slices;
+            const uint32_t input_tile_id_start = (slice_idx * input_pages_per_slice) + std::min(slice_idx, remainder);
+            const uint32_t input_tile_id_end =
+                ((slice_idx + 1) * input_pages_per_slice) + std::min(slice_idx + 1, remainder);
+            const uint32_t local_output_start = (input_tile_id_start * num_output_chunks) / num_input_pages;
+            const uint32_t local_output_end = (input_tile_id_end * num_output_chunks) / num_input_pages;
+            const uint32_t num_worker_output_chunks = local_output_end - local_output_start;
+            const uint32_t half = num_worker_output_chunks / 2;
+
+            // Configure one conveyor (dir: 0 = forward, 1 = backward). own_vc is this core's coords, reused as
+            // the data_valid target on the neighbor's mirror core; partner_vc is the opposite-direction worker
+            // (same index w), the ready target.
+            auto set_conveyor = [&](uint32_t dir) {
+                const bool is_forward = (dir == 0);
+                const CoreCoord core = worker_core(link, dir, w);
+                const CoreCoord partner = worker_core(link, 1 - dir, w);
+                const CoreCoord own_vc = mesh_device->worker_core_from_logical_core(core);
+                const CoreCoord partner_vc = mesh_device->worker_core_from_logical_core(partner);
+                const auto neighbor = dir_neighbor(dir);
+
+                const uint32_t stripe_step = is_forward ? num_devices - 1 : 1;
+                const uint32_t num_iters = is_forward ? fwd_iters : bwd_iters;
+                const uint32_t num_recv =
+                    is_ring ? num_devices / 2 : (is_forward ? device_idx : num_devices - 1 - device_idx);
+                const bool do_local_write = is_forward ? (fwd_iters > 0) : (fwd_iters == 0);
+
+                // Signal granularly only for the stripes the downstream will actually relay (its first
+                // downstream_iters - 1 received stripes); its antipode stripes get a single completion inc.
+                uint32_t num_granular = 0;
+                if (num_iters > 0) {
+                    const uint32_t downstream_iters =
+                        is_ring ? num_devices / 2
+                                : conveyor_iters(is_forward ? device_idx + 1 : device_idx - 1, is_forward);
+                    num_granular = downstream_iters > 0 ? downstream_iters - 1 : 0;
+                }
+
+                uint32_t final_start = local_output_start;
+                uint32_t final_count = num_worker_output_chunks;
+                if (ring_even_split) {
+                    final_start = is_forward ? local_output_start : (local_output_start + half);
+                    final_count = is_forward ? half : (num_worker_output_chunks - half);
+                }
+
+                std::vector<uint32_t> reader_rt = {
+                    input_addr,
+                    output_addr,
+                    device_idx,
+                    stripe_step,
+                    num_iters,
+                    num_recv,
+                    local_output_start,
+                    num_worker_output_chunks,
+                    final_start,
+                    final_count,
+                    input_tile_id_start,
+                    input_tile_id_end,
+                    data_valid_sem.address(),
+                    ready_sem.address(),
+                };
+                tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt);
+
+                std::vector<uint32_t> writer_rt = {
+                    output_addr,
+                    device_idx,
+                    stripe_step,
+                    num_iters,
+                    local_output_start,
+                    num_worker_output_chunks,
+                    final_start,
+                    final_count,
+                    do_local_write ? 1u : 0u,
+                    data_valid_sem.address(),
+                    ready_sem.address(),
+                    (uint32_t)own_vc.x,
+                    (uint32_t)own_vc.y,
+                    (uint32_t)partner_vc.x,
+                    (uint32_t)partner_vc.y,
+                    num_granular,
+                };
+                if (num_iters > 0 && neighbor.has_value()) {
+                    if (use_mux) {
+                        // Connect this worker to its channel (== worker index w) on the direction's mux.
+                        const CoreCoord mux_vc = mesh_device->worker_core_from_logical_core(mux_core(link, dir));
+                        const CoreCoord term_master_vc =
+                            mesh_device->worker_core_from_logical_core(worker_core(link, dir, 0));
+                        ttnn::ccl::fabric_mux_connection_rt_args(
+                            /*mux_connection_valid=*/true,
+                            /*is_termination_master=*/w == 0,
+                            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                            mux_vc,
+                            /*worker_id=*/w,
+                            core,
+                            mux_config,
+                            program,
+                            term_master_vc,
+                            writer_rt);
+                    } else {
+                        std::vector<tt::tt_fabric::FabricNodeId> dst = {mesh_device->get_fabric_node_id(*neighbor)};
+                        append_routing_plane_connection_manager_rt_args(
+                            sender_fabric_node_id,
+                            dst,
+                            {link},
+                            program,
+                            writer_kernel_id,
+                            {core},
+                            writer_rt,
+                            tt::tt_fabric::FabricApiType::Linear);
+                    }
+                }
+                tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt);
             };
-            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt);
 
-            std::vector<uint32_t> writer_rt = {
-                output_addr,
-                device_idx,
-                stripe_step,
-                num_iters,
-                local_output_start,
-                num_worker_output_chunks,
-                final_start,
-                final_count,
-                do_local_write ? 1u : 0u,
-                data_valid_sem.address(),
-                ready_sem.address(),
-                (uint32_t)own_vc.x,
-                (uint32_t)own_vc.y,
-                (uint32_t)partner_vc.x,
-                (uint32_t)partner_vc.y,
-            };
-            if (num_iters > 0 && neighbor.has_value()) {
-                std::vector<tt::tt_fabric::FabricNodeId> dst = {mesh_device->get_fabric_node_id(*neighbor)};
-                append_routing_plane_connection_manager_rt_args(
-                    sender_fabric_node_id,
-                    dst,
-                    {link},
-                    program,
-                    writer_kernel_id,
-                    {core},
-                    writer_rt,
-                    tt::tt_fabric::FabricApiType::Linear);
-            }
-            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt);
-        };
-
-        set_conveyor(/*is_forward=*/true);
-        set_conveyor(/*is_forward=*/false);
+            set_conveyor(/*dir=*/0);
+            set_conveyor(/*dir=*/1);
+        }
     }
 
     shared_variables_t shared_variables{
