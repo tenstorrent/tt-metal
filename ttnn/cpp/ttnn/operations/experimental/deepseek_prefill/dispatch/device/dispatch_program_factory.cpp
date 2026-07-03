@@ -338,8 +338,13 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     // slots). The payload/metadata rings are unchanged; the sender builds each destination's metadata
     // from this record (fields kept unpacked so the sender needs no unpack helpers). Every other config
     // keeps the per-expert path.
+    // Sparse multicast is a 1D-line primitive (hop-bitmask along one forwarding direction), so it is
+    // enabled only for a 1D line: Ring, or Linear with one mesh dimension == 1. Excludes 2D meshes
+    // (both dims > 1) whose Topology::Linear would otherwise match — those route along an axis and were
+    // never validated for the grouped path.
     const bool enable_sparse_mcast =
-        (topology == tt::tt_fabric::Topology::Ring) && (operation_attributes.num_links > 0);
+        (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Linear) &&
+        (mesh_view.num_rows() == 1 || mesh_view.num_cols() == 1) && (operation_attributes.num_links > 0);
     log_info(
         tt::LogOp,
         "[dispatch][tile] enable_sparse_mcast={} (topology={}, num_links={})",
@@ -1106,9 +1111,12 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
     // writes). This widens the route_info slot to hold a grouped record and toggles the
     // SPARSE_MCAST_DISPATCH define on both kernels; every other config keeps the per-expert path.
     // Requires fabric (num_links > 0 => DEST_CHIP_ID) since the grouped writer uses the fabric
-    // connections + packet header that only exist in the cross-device build.
+    // connections + packet header that only exist in the cross-device build. Restricted to a 1D line
+    // (Ring, or Linear with one mesh dim == 1): sparse multicast is a 1D-line primitive, so 2D meshes
+    // (both dims > 1) whose Topology::Linear would otherwise match are excluded.
     const bool enable_sparse_mcast =
-        (topology == tt::tt_fabric::Topology::Ring) && (operation_attributes.num_links > 0);
+        (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Linear) &&
+        (mesh_view.num_rows() == 1 || mesh_view.num_cols() == 1) && (operation_attributes.num_links > 0);
     log_info(
         tt::LogOp,
         "[dispatch][row_major] enable_sparse_mcast={} (topology={}, num_links={})",

@@ -369,22 +369,6 @@ void kernel_main() {
                             counts[num_chips - 1]++;
                         }
                     }
-                    // TEMP observability (remove before merge): fires only when this single sparse-multicast
-                    // call carries more pages than chips, i.e. at least one chip receives >1 page. counts[c]
-                    // is that chip's page count; num_chips>1 with some counts[c]>1 is the mixed case (multiple
-                    // pages to one chip AND pages to other chips, all in one fabric call).
-                    if (num_dests > num_chips) {
-                        DPRINT(
-                            "[SND-TILE] one-call multipage: num_dests={} num_chips={} counts=[{},{},{},{}] "
-                            "hop_mask={}\n",
-                            num_dests,
-                            (uint32_t)num_chips,
-                            (uint32_t)counts[0],
-                            (uint32_t)counts[1],
-                            (uint32_t)counts[2],
-                            (uint32_t)counts[3],
-                            (uint32_t)hop_mask);
-                    }
                     uint32_t payload_addr = ring_payload_base[s] + slot * aligned_output_page_size;
                     DPRINT_DISPATCH(
                         "[SND] SPARSE_MCAST_FIRED ring={} dir={} num_dests={} num_chips={} hop_mask={}\n",
@@ -542,21 +526,6 @@ void kernel_main() {
             } else {
                 counts[num_chips - 1]++;
             }
-        }
-        // TEMP observability (remove before merge): fires only when this single sparse-multicast call
-        // carries more pages than chips, i.e. at least one chip receives >1 page. counts[c] is that chip's
-        // page count; num_chips>1 with some counts[c]>1 is the mixed case (multiple pages to one chip AND
-        // pages to other chips, all in one fabric call).
-        if (num_dests > num_chips) {
-            DPRINT(
-                "[SND-RM] one-call multipage: num_dests={} num_chips={} counts=[{},{},{},{}] hop_mask={}\n",
-                num_dests,
-                (uint32_t)num_chips,
-                (uint32_t)counts[0],
-                (uint32_t)counts[1],
-                (uint32_t)counts[2],
-                (uint32_t)counts[3],
-                (uint32_t)hop_mask);
         }
         cb_pop_front(cb_route_info_id, 1);
 
