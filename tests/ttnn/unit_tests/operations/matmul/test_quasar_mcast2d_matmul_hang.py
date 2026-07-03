@@ -26,6 +26,8 @@ Config is copied verbatim from the resnet run (log 108704):
                    transpose_mcast=0)
   output = BLOCK_SHARDED [224,32]
 
+out_subblock_h=1 also hangs, and made this a parameter.
+
 Run (craq-sim, slow dispatch, forced JIT):
   TT_METAL_SIMULATOR=~/sim/libttsim.so \
   TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \
@@ -41,6 +43,7 @@ import ttnn
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("out_subblock_h", [1, 7])
 def test_quasar_mcast2d_matmul_hang(mesh_device):
     device = mesh_device
 
@@ -69,7 +72,7 @@ def test_quasar_mcast2d_matmul_hang(mesh_device):
     program_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=2,
-        out_subblock_h=7,
+        out_subblock_h=out_subblock_h,
         out_subblock_w=1,
         out_block_h=7,
         out_block_w=1,
