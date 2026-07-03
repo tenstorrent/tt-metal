@@ -4,6 +4,7 @@
 #include "sliding_window.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
 #include <tt-logger/tt-logger.hpp>
 #include <vector>
@@ -599,6 +600,11 @@ uint32_t compute_max_outbound_halo_sticks(
 
 bool should_halo_be_in_place(
     const SlidingWindowConfig& config, uint32_t in_nsticks_per_core, bool is_height_sharded, bool is_in_tiled) {
+    // Test-only override: when TT_METAL_DISABLE_INPLACE_HALO is set (non-empty), force the
+    // trusted normal-halo path so the correctness test can capture the golden output.
+    if (const char* disable = std::getenv("TT_METAL_DISABLE_INPLACE_HALO"); disable != nullptr && disable[0] != '\0') {
+        return false;
+    }
     // Safety gate: only the classes validated corruption-safe so far. Start with the
     // simplest path (row-major, height-sharded, no untilize); widen as each class is
     // proven with the rigorous elementwise tests (see IN_PLACE_HALO_REDO.md section 11).
