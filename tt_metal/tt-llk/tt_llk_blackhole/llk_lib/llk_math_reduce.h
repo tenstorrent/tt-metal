@@ -420,12 +420,28 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
  * @param tensor_shape: Tile shape describing tile dimensions.
  * @note Call @ref _llk_math_reduce_ with matching template args after this function,
  *       and @ref _llk_math_reduce_uninit_ after the last reduce to restore modified state.
+ * @note REDUCE_ROW SUM/AVG under fp32 dest accumulation forces the (swapped) scaler
+ *       operand in SrcA to be decoded as Tf32 so the MVMUL accumulation stays fp32-precise;
+ *       otherwise the unpacker-implied bf16 SrcA format truncates the reduction. Restored by
+ *       @ref _llk_math_reduce_uninit_.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 {
     reduce_configure_addrmod<type, dim, math_fidelity>(tensor_shape);
     reduce_configure_mop<type, dim, math_fidelity>(tensor_shape);
+
+    if constexpr (is_fp32_dest_acc_en && dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX)
+    {
+        // REDUCE_ROW SUM/AVG accumulates via MVMUL with the scaler swapped into SrcA. On Blackhole the
+        // unpacker-stamped implied SrcA format (bf16 for a bf16 scaler CB) would otherwise govern the MVMUL
+        // decode and quantize the within-face accumulation to bf16 (round-toward-zero) even with fp32 dest
+        // accumulation enabled. Disable implied-format inference and force SrcA to Tf32 so the reduction
+        // accumulates at fp32 precision; the scaler is represented at least as accurately in Tf32. This
+        // mirrors the fp32-scaler workaround and llk_math_transpose_dest.h; restored in _llk_math_reduce_uninit_.
+        TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
+    }
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
@@ -435,8 +451,14 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 /**
  * @brief Uninitialize after a reduce operation, undoing any init/execute-time workarounds.
  *
- * @note Reverses @ref _llk_math_reduce_init_
+ * @note Reverses @ref _llk_math_reduce_init_ by restoring implied SrcA-format inference
+ *       (DISABLE_IMPLIED_SRCA_FMT) to its hardware default, which @ref _llk_math_reduce_init_
+ *       disables to force the REDUCE_ROW SUM/AVG scaler to Tf32 under fp32 dest accumulation.
  */
 inline void _llk_math_reduce_uninit_()
 {
+    // Restore implied SrcA-format inference (hardware default). _llk_math_reduce_init_ disables it for
+    // REDUCE_ROW SUM/AVG under fp32 dest accumulation; reset unconditionally so subsequent ops are unaffected.
+    // Once implied inference is re-enabled it overrides ALU_FORMAT_SPEC_REG0_SrcA, so no format-register reset is needed.
+    TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
 }
