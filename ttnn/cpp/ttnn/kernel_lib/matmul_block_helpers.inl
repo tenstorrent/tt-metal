@@ -200,18 +200,44 @@ ALWI void matmul_block(
     // helper can't infer it). Set Activation here only when the downstream phase reads the
     // partials unchanged; otherwise leave it NoneActivation and activate downstream.
 
-    // ── Accumulate + finalize contract (Stage 2) ─────────────────────────────────
-    // The K-loop ALWAYS accumulates the full output block into interm (tile-format, in the
-    // output layout picked by tile_order). A SEPARATE finalize step then materializes out ONLY
-    // when the accumulated block isn't already the output:
-    //   needs_finalize = (buf_id(out) != buf_id(interm)) || untilize_requested
-    // If false → the accumulated block in interm IS out (aliased, same CB → same dtype / layout /
-    // tile) → zero-copy skip. If true → datacopy interm→out (dtype-convert via pack_reconfig +
-    // relu via the Activation param; untilize becomes a finalize transform in Stage 3).
+    // ══ OUTPUT PUBLICATION — one principle, four structural exceptions ═══════════
+    // Every output block reaches its consumer by ONE rule:
     //
-    // Interm target: a downstream in-kernel op consumes the accumulated block — no finalize.
+    //   Stream-publish each subblock (SubblockMajor) / row-group (TileRowMajor) the MOMENT its
+    //   fully-accumulated sum is available to the PACKER, on the last K-block — so the output
+    //   writer drains it while the remaining subblocks still compute. Fall back to a single
+    //   whole-block publish + a SEPARATE finalize pass ONLY when the final sum is structurally
+    //   not packer-ready per-subblock.
+    //
+    // The streaming case is the two paths where the last pack yields the finished sum:
+    //   • non-l1_acc reload — the software reload already added every prior K-block into DST, so
+    //                         the last pack IS the sum → pack straight to out, publish per-subblock.
+    //   • l1_acc "alias_out" — the sum is accumulated in place directly in out_buf via
+    //                         packer_l1_acc → the last pack completes it in out → publish per-subblock.
+    //
+    // The whole-block finalize is forced ONLY by these four STRUCTURAL reasons — each a property
+    // of the config, never of the shape or a specific test:
+    //   1. Interm target     — the consumer is a downstream IN-KERNEL op (bias-add, untilize), not
+    //                          the NoC writer; the block is handed over whole (there is no "publish").
+    //   2. converting format — packer_l1_acc must accumulate in a WIDE interm (you cannot l1_acc into
+    //                          a narrow out, e.g. bf8); publishing needs a convert-READ of interm,
+    //                          which the single-reserve accumulate has no pack→unpack barrier for →
+    //                          the finalize's wait_front supplies the barrier and converts the copy.
+    //   3. SFPU activation   — the activation runs in DST on the full sum; under l1_acc the sum lives
+    //                          in L1, not DST, so the finalize brings it to DST first.
+    //   4. relu under l1_acc — relu must apply to the POST-accumulation sum; the finalize relus the
+    //                          full sum in DST (a per-partial relu would clamp each K-block pre-sum).
+    //
+    // Measured (Blackhole, isolated traces): streaming recovers the small-N reader/writer-bound
+    // regression (writer overlap); the finalize case is neutral-to-win everywhere (gelu −0.9%,
+    // large-N −2.3%, conv l1_acc neutral) since its tail is amortized. Streaming is applied exactly
+    // where it helps, NOT forced uniformly onto paths a whole-block finalize already serves well.
+    //
+    // ── Implementation of the above (flags) ──────────────────────────────────────
+    // needs_finalize = (buf_id(out) != buf_id(accum)); false → the accumulated block already IS out
+    // (alias_out, streamed) → zero-copy skip. Interm target consumes from interm directly → no finalize.
     constexpr bool target_is_interm = (last_block_target == LastBlockTarget::Interm);
-    // Relu on the finalize copy (OutWithRelu); Interm defers relu to its downstream phase.
+    // Relu on the finalize copy (OutWithRelu, exception 4); Interm defers relu to its downstream phase.
     constexpr bool finalize_relu = (last_block_target == LastBlockTarget::OutWithRelu);
 
     // in_place: the (packer_l1_acc + accumulate-to-interm) config packs in place — one reserve_back
