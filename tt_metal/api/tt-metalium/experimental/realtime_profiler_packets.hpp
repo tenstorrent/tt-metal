@@ -66,6 +66,8 @@ struct WorkerZonePacket {
     uint32_t core_virtual_y;
     uint32_t core_noc0_x;  // translated — matches the standard DeviceProfiler / DRAM view
     uint32_t core_noc0_y;
+    uint32_t core_logical_x;  // logical grid coord (how users address the core; for Tracy lane naming)
+    uint32_t core_logical_y;
     uint32_t risc;          // 0=BRISC 1=NCRISC 2/3/4=TRISC_0/1/2
     uint32_t timer_id;      // 16-bit zone-name hash
     std::string_view name;  // deciphered zone name; stable for the profiler session

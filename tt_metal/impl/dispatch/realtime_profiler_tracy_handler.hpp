@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <tracy/TracyTTDevice.hpp>
 #include <tt-metalium/experimental/realtime_profiler_packets.hpp>
@@ -48,7 +49,15 @@ public:
     void CalibrateDevice(uint32_t chip_id, int64_t host_time, uint64_t device_timestamp, double frequency);
 
 private:
-    TracyTTCtx GetContext(uint32_t chip_id);
+    // Tracy shows device zones as one row PER CONTEXT, so we key a context by (chip, core) — like the
+    // standard DeviceProfiler's device_tracy_contexts[{chip,core}] — otherwise every core's RISCs
+    // collapse into a single device row. Contexts are created lazily on the first marker for a core,
+    // calibrated from the chip's AddDevice calibration. Returns nullptr if the chip wasn't added.
+    static uint64_t ContextKey(uint32_t chip_id, uint32_t core_x, uint32_t core_y) {
+        return (static_cast<uint64_t>(chip_id) << 40) | (static_cast<uint64_t>(core_x) << 20) |
+               (static_cast<uint64_t>(core_y) & 0xFFFFF);
+    }
+    TracyTTCtx GetOrCreateContext(uint32_t chip_id, uint32_t core_x, uint32_t core_y, const std::string& name);
 
     void RecordSkippedZoneWithEndBeforeStart(const tt::ProgramRealtimeRecord& record, int64_t delta);
     void MaybeEmitSkippedZoneSummaryLocked();
@@ -63,8 +72,23 @@ private:
         static constexpr std::chrono::seconds kSummaryInterval{30};
     };
 
+    // Per-chip calibration used to populate each per-core context lazily. AddDevice sets the
+    // Populate anchor; CalibrateDevice refines the device<->host mapping and records the LATEST
+    // calibrate so a context created later (lazy, per core) gets the SAME calibration the earlier
+    // contexts already received — otherwise late-created cores drift relative to the program row.
+    struct ChipCalibration {
+        int64_t host_start = 0;
+        double first_timestamp = 0.0;
+        double frequency = 0.0;
+        bool has_calibrate = false;
+        int64_t cal_host_time = 0;
+        double cal_device_timestamp = 0.0;
+        double cal_frequency = 0.0;
+    };
+
     std::mutex mutex_;
-    std::unordered_map<uint32_t, TracyTTCtx> tracy_contexts_;
+    std::unordered_map<uint32_t, ChipCalibration> chip_calibrations_;  // chip_id -> calibration
+    std::unordered_map<uint64_t, TracyTTCtx> tracy_contexts_;          // ContextKey(chip,core) -> ctx
     SkippedEndBeforeStartStats skipped_end_before_start_stats_;
     tt::ProgramRealtimeProfilerCallbackHandle callback_handle_;
     tt::tt_metal::experimental::ProfilerPacketCallbackHandle packet_callback_handle_;

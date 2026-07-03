@@ -99,36 +99,69 @@ void RealtimeProfilerTracyHandler::AddDevice(
     [[maybe_unused]] double frequency) {
 #if defined(TRACY_ENABLE)
     std::lock_guard<std::mutex> lock(mutex_);
-    if (tracy_contexts_.contains(chip_id)) {
+    // Record the chip's calibration; the actual Tracy contexts are created lazily, one per core, on
+    // the first marker for that core (see GetOrCreateContext). A single per-chip context would put
+    // every core's RISCs on one device row.
+    if (chip_calibrations_.contains(chip_id)) {
         log_warning(tt::LogMetal, "RealtimeProfilerTracyHandler: device {} already added, skipping", chip_id);
         return;
     }
-
-    TracyTTCtx ctx = TracyTTContext();
-    TracyTTContextPopulate(ctx, host_start, first_timestamp, frequency);
-    std::string name = fmt::format("Device {}:", chip_id);
-    TracyTTContextName(ctx, name.c_str(), name.size());
-
-    tracy_contexts_[chip_id] = ctx;
+    chip_calibrations_[chip_id] = ChipCalibration{host_start, first_timestamp, frequency};
 #endif
 }
 
 void RealtimeProfilerTracyHandler::RemoveDevice([[maybe_unused]] uint32_t chip_id) {
 #if defined(TRACY_ENABLE)
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = tracy_contexts_.find(chip_id);
-    if (it == tracy_contexts_.end()) {
-        return;
+    // Destroy every per-core context belonging to this chip (key high bits == chip_id).
+    for (auto it = tracy_contexts_.begin(); it != tracy_contexts_.end();) {
+        if (static_cast<uint32_t>(it->first >> 40) == chip_id) {
+            TracyTTDestroy(it->second);
+            it = tracy_contexts_.erase(it);
+        } else {
+            ++it;
+        }
     }
-    TracyTTDestroy(it->second);
-    tracy_contexts_.erase(it);
+    chip_calibrations_.erase(chip_id);
 #endif
 }
 
-TracyTTCtx RealtimeProfilerTracyHandler::GetContext(uint32_t chip_id) {
+TracyTTCtx RealtimeProfilerTracyHandler::GetOrCreateContext(
+    [[maybe_unused]] uint32_t chip_id,
+    [[maybe_unused]] uint32_t core_x,
+    [[maybe_unused]] uint32_t core_y,
+    [[maybe_unused]] const std::string& name) {
+#if defined(TRACY_ENABLE)
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = tracy_contexts_.find(chip_id);
-    return it != tracy_contexts_.end() ? it->second : nullptr;
+    const uint64_t key = ContextKey(chip_id, core_x, core_y);
+    if (auto it = tracy_contexts_.find(key); it != tracy_contexts_.end()) {
+        return it->second;
+    }
+    auto calib_it = chip_calibrations_.find(chip_id);
+    if (calib_it == chip_calibrations_.end()) {
+        return nullptr;  // AddDevice not called for this chip yet
+    }
+    const ChipCalibration& c = calib_it->second;
+    TracyTTCtx ctx = TracyTTContext();
+    // Populate WITH the accurate sync anchor, exactly like the standard DeviceProfiler
+    // (updateTracyContext Populates using device_sync_info). Using the initial AddDevice anchor and
+    // then immediately Calibrating with the sync-check anchor gives Tracy two calibration points that
+    // can be ~seconds apart -> a broken GPU->CPU mapping and the device zones don't render in the GUI.
+    // A single consistent anchor both renders correctly AND keeps every core aligned with the program
+    // row. Newer syncs still recalibrate all contexts via CalibrateDevice.
+    if (c.has_calibrate) {
+        TracyTTContextPopulate(ctx, c.cal_host_time, c.cal_device_timestamp, c.cal_frequency);
+    } else {
+        TracyTTContextPopulate(ctx, c.host_start, c.first_timestamp, c.frequency);
+    }
+    TracyTTContextName(ctx, name.c_str(), name.size());
+    tracy_contexts_[key] = ctx;
+    log_debug(
+        tt::LogMetal, "[Real-time profiler] created Tracy device context ({} total): {}", tracy_contexts_.size(), name);
+    return ctx;
+#else
+    return nullptr;
+#endif
 }
 
 void RealtimeProfilerTracyHandler::RecordSkippedZoneWithEndBeforeStart(
@@ -208,7 +241,9 @@ void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord&
     if (!tracy::GetProfiler().IsConnected()) {
         return;
     }
-    TracyTTCtx ctx = GetContext(record.chip_id);
+    // Program zones live on the fixed "program" core (100,100) that make_marker() uses; give them
+    // their own device row named just after the chip.
+    TracyTTCtx ctx = GetOrCreateContext(record.chip_id, 100, 100, fmt::format("Device {}", record.chip_id));
     if (!ctx) {
         return;
     }
@@ -238,7 +273,8 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
     if (!tracy::GetProfiler().IsConnected()) {
         return;
     }
-    TracyTTCtx ctx = GetContext(chip_id);
+    // Sync-check zones ride the same program core (100,100) row as program zones.
+    TracyTTCtx ctx = GetOrCreateContext(chip_id, 100, 100, fmt::format("Device {}", chip_id));
     if (!ctx) {
         return;
     }
@@ -278,7 +314,20 @@ void RealtimeProfilerTracyHandler::HandleWorkerZone(
     if (!tracy::GetProfiler().IsConnected()) {
         return;
     }
-    TracyTTCtx ctx = GetContext(zone.chip_id);
+    // One Tracy context (device row) per core, so a core's 5 RISCs are lanes within it rather than
+    // all cores collapsing into a single device. Name matches the standard DeviceProfiler so the
+    // X280 view lines up with the DRAM push profiler's.
+    TracyTTCtx ctx = GetOrCreateContext(
+        zone.chip_id,
+        zone.core_noc0_x,
+        zone.core_noc0_y,
+        fmt::format(
+            "Device: {}, Logical ({},{}) Physical ({},{})",
+            zone.chip_id,
+            zone.core_logical_x,
+            zone.core_logical_y,
+            zone.core_noc0_x,
+            zone.core_noc0_y));
     if (!ctx) {
         return;
     }
@@ -286,7 +335,7 @@ void RealtimeProfilerTracyHandler::HandleWorkerZone(
     // The enriched packet is already fully resolved by the host (NOC0 coord, deciphered name,
     // is_start). Zones arrive in ring order (== emission order == correct nest order per lane), so
     // pushing START/END in arrival order lets Tracy nest them correctly. Markers share the device
-    // clock domain, so the per-chip context calibration applies directly.
+    // clock domain, so the context calibration applies directly.
     static constexpr tracy::RiscType kRisc[5] = {
         tracy::RiscType::BRISC,
         tracy::RiscType::NCRISC,
@@ -323,11 +372,61 @@ void RealtimeProfilerTracyHandler::CalibrateDevice(
     if (!tracy::GetProfiler().IsConnected()) {
         return;
     }
-    TracyTTCtx ctx = GetContext(chip_id);
-    if (!ctx) {
+    // Guard 1: a failed/bogus sync read reports device_timestamp == 0. Calibrating with it slams the
+    // Tracy context anchor to 0 and collapses every subsequent zone to the start of the trace (t≈0) —
+    // the classic "device zones far off to the left" symptom. Drop it.
+    if (device_timestamp == 0) {
+        log_warning(
+            tt::LogMetal,
+            "[Real-time profiler] Device {} skipping calibrate: device_timestamp=0 (failed sync read)",
+            chip_id);
         return;
     }
-    TracyTTContextCalibrate(ctx, host_time, static_cast<double>(device_timestamp), frequency);
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = chip_calibrations_.find(chip_id);
+    if (it == chip_calibrations_.end()) {
+        return;
+    }
+    ChipCalibration& c = it->second;
+
+    // Guard 2: reject calibrations whose implied device<->host clock rate is not ~1.0. Tracy sets
+    // calibrationMod = host_delta_ns / device_delta_ns and maps every zone by it; a garbage sync
+    // (non-monotonic device time, or a wildly off delta) yields a mod that skews or zeroes the whole
+    // timeline. The previous anchor is the last accepted calibrate, else the init Populate anchor.
+    const double prev_dev = c.has_calibrate ? c.cal_device_timestamp : c.first_timestamp;
+    const int64_t prev_host = c.has_calibrate ? c.cal_host_time : c.host_start;
+    const double prev_freq = c.has_calibrate ? c.cal_frequency : c.frequency;
+    const double dev_new_ns = static_cast<double>(device_timestamp) / frequency;
+    const double dev_prev_ns = (prev_freq > 0.0) ? prev_dev / prev_freq : 0.0;
+    const double dev_delta_ns = dev_new_ns - dev_prev_ns;
+    const double host_delta_ns = static_cast<double>(host_time - prev_host) * TracyGetTimerMul();
+    if (dev_delta_ns <= 0.0) {
+        log_debug(tt::LogMetal, "[Real-time profiler] Device {} skip calibrate: non-monotonic device time", chip_id);
+        return;
+    }
+    const double rate = host_delta_ns / dev_delta_ns;
+    if (rate < 0.8 || rate > 1.2) {
+        log_warning(
+            tt::LogMetal,
+            "[Real-time profiler] Device {} skipping calibrate: implied host/device rate {:.4f} out of band "
+            "(bad sync sample)",
+            chip_id,
+            rate);
+        return;
+    }
+
+    // Accepted. Record as the chip's latest calibration so contexts created LATER (lazy, per core)
+    // pick it up on creation and stay aligned with the ones recalibrated below.
+    c.has_calibrate = true;
+    c.cal_host_time = host_time;
+    c.cal_device_timestamp = static_cast<double>(device_timestamp);
+    c.cal_frequency = frequency;
+    // Recalibrate every per-core context belonging to this chip (they share the device clock domain).
+    for (auto& [key, ctx] : tracy_contexts_) {
+        if (static_cast<uint32_t>(key >> 40) == chip_id && ctx != nullptr) {
+            TracyTTContextCalibrate(ctx, host_time, static_cast<double>(device_timestamp), frequency);
+        }
+    }
 #endif
 }
 

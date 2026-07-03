@@ -97,6 +97,18 @@ constexpr auto kRtProfilerMinSyncInterval = std::chrono::seconds(60);
 std::mutex g_rt_profiler_init_sync_mu;
 std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> g_rt_profiler_last_init_sync_by_chip;
 
+// Last good regression sync anchor per chip, cached process-wide alongside the timestamp above.
+// The init throttle reuses it so a throttled re-open still gets a valid device<->host anchor
+// instead of first_timestamp=0 (which anchors the device clock at 0ns and shifts the entire
+// device timeline). Valid within a process: the device wall clock only resets on ASIC reset,
+// which cannot happen while a process holds the device.
+struct RtProfilerCachedAnchor {
+    uint64_t first_timestamp = 0;
+    int64_t sync_host_start = 0;
+    double sync_frequency = 0.0;
+};
+std::unordered_map<uint32_t, RtProfilerCachedAnchor> g_rt_profiler_anchor_by_chip;
+
 // Sync marker ID — must match device-side REALTIME_PROFILER_SYNC_MARKER_ID.
 constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 
@@ -697,7 +709,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                         const CoreCoord noc0 = x280_cluster.get_physical_coordinate_from_logical_coordinates(
                             device_id, CoreCoord{lx, ly}, CoreType::WORKER, /*no_warn=*/true);
                         dev_state.x280_virt_to_noc0[(static_cast<uint64_t>(vx) << 32) | vy] = {
-                            static_cast<uint32_t>(noc0.x), static_cast<uint32_t>(noc0.y)};
+                            static_cast<uint32_t>(noc0.x), static_cast<uint32_t>(noc0.y), lx, ly};
                         if (lx == 0 && ly == 0) {
                             log_debug(
                                 tt::LogMetal,
@@ -845,7 +857,6 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         tt::NotifyProgramRealtimeProfilerActivated(dev_state.chip_id);
     }
 
-    auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const auto init_throttle_now = std::chrono::steady_clock::now();
     std::vector<bool> skip_init_sync_check(devices_.size(), false);
     std::vector<size_t> init_run_sync_indices;
@@ -857,28 +868,36 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     for (size_t di = 0; di < devices_.size(); ++di) {
         auto& dev_state = devices_[di];
         bool throttle_skip = false;
+        RtProfilerCachedAnchor cached_anchor;
         {
             std::lock_guard<std::mutex> lock(g_rt_profiler_init_sync_mu);
             const auto it = g_rt_profiler_last_init_sync_by_chip.find(dev_state.chip_id);
+            const auto ait = g_rt_profiler_anchor_by_chip.find(dev_state.chip_id);
+            // Only throttle when we ALSO have a cached anchor to reuse; otherwise fall through to a
+            // fresh run_sync rather than anchoring the device clock at 0 and shifting the timeline.
             if (it != g_rt_profiler_last_init_sync_by_chip.end() &&
-                init_throttle_now - it->second < kRtProfilerMinSyncInterval) {
+                init_throttle_now - it->second < kRtProfilerMinSyncInterval &&
+                ait != g_rt_profiler_anchor_by_chip.end() && ait->second.first_timestamp != 0) {
                 throttle_skip = true;
+                cached_anchor = ait->second;
             }
         }
 
         if (throttle_skip) {
-            const int64_t host_start = rt_profiler_host_ticks();
-            dev_state.sync_frequency = cluster.get_device_aiclk(dev_state.chip_id) / 1000.0;
-            dev_state.first_timestamp = 0;
-            dev_state.sync_host_start = host_start;
+            // Reuse the cached regression anchor (same clocks, still valid within this process)
+            // instead of first_timestamp=0, so the device timeline stays aligned on throttled re-opens.
+            dev_state.sync_frequency = cached_anchor.sync_frequency;
+            dev_state.first_timestamp = cached_anchor.first_timestamp;
+            dev_state.sync_host_start = cached_anchor.sync_host_start;
             dev_state.last_finish_sync_at = init_throttle_now;
             skip_init_sync_check[di] = true;
             log_debug(
                 tt::LogMetal,
                 "[Real-time profiler] Device {}: skipping init run_sync and constructor SYNC_CHECK "
-                "(last init sync within {}s; using AICLK frequency fallback)",
+                "(last init sync within {}s; reusing cached anchor first_timestamp={})",
                 dev_state.chip_id,
-                static_cast<int>(kRtProfilerMinSyncInterval.count()));
+                static_cast<int>(kRtProfilerMinSyncInterval.count()),
+                cached_anchor.first_timestamp);
             continue;
         }
 
@@ -907,6 +926,8 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         if (dev_state.first_timestamp != 0) {
             std::lock_guard<std::mutex> lock(g_rt_profiler_init_sync_mu);
             g_rt_profiler_last_init_sync_by_chip[dev_state.chip_id] = std::chrono::steady_clock::now();
+            g_rt_profiler_anchor_by_chip[dev_state.chip_id] =
+                RtProfilerCachedAnchor{dev_state.first_timestamp, dev_state.sync_host_start, dev_state.sync_frequency};
         }
     });
 
@@ -1095,13 +1116,15 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                     if (ptype != kernel_profiler::ZONE_START && ptype != kernel_profiler::ZONE_END) {
                         break;  // only zone start/end are handled today; other packet types are deferred
                     }
-                    // Enrich: virtual -> NOC0 (map built at boot; fall back to virtual if unmapped).
-                    uint32_t noc0_x = w->core_x, noc0_y = w->core_y;
+                    // Enrich: virtual -> NOC0 + logical (map built at boot; fall back to virtual if unmapped).
+                    uint32_t noc0_x = w->core_x, noc0_y = w->core_y, log_x = w->core_x, log_y = w->core_y;
                     if (auto it =
                             dev_state.x280_virt_to_noc0.find((static_cast<uint64_t>(w->core_x) << 32) | w->core_y);
                         it != dev_state.x280_virt_to_noc0.end()) {
-                        noc0_x = it->second.first;
-                        noc0_y = it->second.second;
+                        noc0_x = it->second.noc0_x;
+                        noc0_y = it->second.noc0_y;
+                        log_x = it->second.logical_x;
+                        log_y = it->second.logical_y;
                     }
                     // Enrich: 16-bit hash -> deciphered zone name (stable string_view into the map).
                     std::call_once(x280_zone_names_once, [&] {
@@ -1128,6 +1151,8 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                         .core_virtual_y = w->core_y,
                         .core_noc0_x = noc0_x,
                         .core_noc0_y = noc0_y,
+                        .core_logical_x = log_x,
+                        .core_logical_y = log_y,
                         .risc = w->risc,
                         .timer_id = hash,
                         .name = name,

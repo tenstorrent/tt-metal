@@ -103,10 +103,14 @@ private:
         std::unique_ptr<profiler::X280Driver> x280_driver;
         uint64_t x280_params_addr = 0;  // MBOX_PARAMS in the X280 LIM (for the P_STOP write at shutdown)
         bool x280_active = false;
-        // The X280 relays worker cores in VIRTUAL coords (what its NoC addresses); Tracy device
-        // lanes must use the same NOC0 coords the standard DeviceProfiler uses, so we map here.
-        // Key = (uint64_t(virtual_x) << 32) | virtual_y, value = NOC0 (x, y).
-        std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> x280_virt_to_noc0;
+        // The X280 relays worker cores in VIRTUAL coords (what its NoC addresses). The host enriches
+        // each marker with the NOC0 coord (matches the standard DeviceProfiler / DRAM Tracy view) and
+        // the LOGICAL coord (how users address the core; used to name the per-core Tracy context).
+        // Key = (uint64_t(virtual_x) << 32) | virtual_y.
+        struct X280CoreCoords {
+            uint32_t noc0_x, noc0_y, logical_x, logical_y;
+        };
+        std::unordered_map<uint64_t, X280CoreCoords> x280_virt_to_noc0;
         // Owns the BRISC+NCRISC realtime-profiler program so its kernels remain alive for
         // the lifetime of the manager. If this goes out of scope while the kernels are
         // still running, downstream tooling (e.g. tt-inspector) loses the kernel metadata.
