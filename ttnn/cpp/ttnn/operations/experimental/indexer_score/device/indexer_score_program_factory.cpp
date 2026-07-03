@@ -52,13 +52,14 @@ constexpr uint32_t writer_straddle_jump_tiles = 1 + 9;
 
 // Per-device causal geometry for the block-cyclic slab layout, all in tiles. Each device scores Sq queries;
 // on a mesh device r's q-row 0 sits at chunk_start_idx + r*Sq. When those Sq queries cross a CACHE slab
-// boundary (a multiple of cl = the cache's per-shard width = chunk_size/ring_size), the post-boundary q-rows
-// live in the next slab, so the causal diagonal JUMPS by (chunk_size - cl) tiles at q-row (cl - offset).
-// offset == 0, or Sq fitting inside one slab (offset + Sq <= cl), leaves the diagonal linear -- the common
-// chunk-aligned case and any re-split where Sq divides cl. No slab -> plain linear, no straddle. sp is
-// derived from the mesh, so a slab implies a real mesh; the straddle is always evaluated when present
-// (validate_slab guarantees Sq <= cl, so a device crosses at most one boundary). Shared by create_at
-// (device_index from the coordinate) and override (stored device_index).
+// boundary (a multiple of cl = the cache's per-shard width = block_cyclic->chunk_local), the post-boundary
+// q-rows live in the next slab, so the causal diagonal JUMPS by (chunk_global - cl) tiles at q-row
+// (cl - offset), where chunk_global = sp * chunk_local. offset == 0, or Sq fitting inside one slab
+// (offset + Sq <= cl), leaves the diagonal linear -- the common chunk-aligned case and any re-split where Sq
+// divides cl. No block_cyclic -> plain linear, no straddle. sp is derived from the mesh, so a slab implies a
+// real mesh; the straddle is always evaluated when present (validate_block_cyclic guarantees Sq <= cl, so a
+// device crosses at most one boundary). Shared by create_at (device_index from the coordinate) and override
+// (stored device_index).
 struct DeviceCausalGeometry {
     uint32_t chunk_start_tiles;    // global position of this device's q-row 0 (tiles)
     uint32_t straddle_q_tile;      // q-tile-row at/after which the diagonal jumps (only when this device straddles)
@@ -68,11 +69,11 @@ inline DeviceCausalGeometry device_causal_geometry(
     const operation_attributes_t& args, uint32_t device_index, uint32_t Sq) {
     const uint32_t TW = tt::constants::TILE_WIDTH;
     const uint32_t chunk_start = args.chunk_start_idx + device_index * Sq;
-    if (!args.slab.has_value()) {
+    if (!args.block_cyclic.has_value()) {
         return {chunk_start / TW, 0u, 0u};  // contiguous K -> linear diagonal, never straddles
     }
-    const uint32_t cl = args.slab->chunk_size / args.slab->ring_size;  // cache per-shard slab width (elements)
-    const uint32_t chunk_global = args.slab->chunk_size;
+    const uint32_t cl = args.block_cyclic->chunk_local;  // cache per-shard slab width (elements)
+    const uint32_t chunk_global = args.block_cyclic->sp * args.block_cyclic->chunk_local;
     const uint32_t offset = chunk_start % cl;  // position within the cache slab
     uint32_t straddle_q_tile = 0, straddle_jump_tiles = 0;
     if (offset != 0 && offset + Sq > cl) {
