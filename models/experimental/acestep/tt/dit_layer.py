@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight
@@ -88,6 +89,19 @@ class AceStepDiTLayer(LightweightModule):
             cfg.mesh_device = cfg.scale_shift_table.device
 
         self.scale_shift_table = cfg.scale_shift_table.get_device_weight()  # [1,6,dim] (padded)
+        # Pre-increment the two SCALE rows (idx 1 = scale_msa, idx 4 = c_scale) by 1.0 so the AdaLN
+        # apply is norm*scale_row + shift_row directly, instead of norm*(scale+1)+shift at runtime.
+        # Mathematically identical (norm*(sst_scale+temb+1)+shift); saves a per-layer elementwise
+        # add(scale,1.0) x2 (~0.05ms each). Built once here.
+        _dim = self.scale_shift_table.shape[-1]
+        _one_rows = torch.zeros(1, 6, 1, _dim)
+        _one_rows[:, 1, :, :] = 1.0
+        _one_rows[:, 4, :, :] = 1.0
+        _one_tt = ttnn.from_torch(
+            _one_rows, device=cfg.mesh_device, dtype=self.scale_shift_table.dtype, layout=ttnn.TILE_LAYOUT
+        )
+        self.scale_shift_table = ttnn.add(ttnn.reshape(self.scale_shift_table, (1, 6, 1, _dim)), _one_tt)
+        self.scale_shift_table = ttnn.reshape(self.scale_shift_table, (1, 6, _dim))
 
         self.self_attn_norm = RMSNorm1D.from_config(RMSNorm1DConfig(weight=cfg.self_attn_norm_weight, eps=cfg.eps))
         self.mlp_norm = RMSNorm1D.from_config(RMSNorm1DConfig(weight=cfg.mlp_norm_weight, eps=cfg.eps))
@@ -148,9 +162,10 @@ class AceStepDiTLayer(LightweightModule):
         c_scale = mod[:, 4:5, :, :]
         c_gate = mod[:, 5:6, :, :]
 
-        # 1. Self-attention with AdaLN: n = norm(x)*(1+scale)+shift ; x = x + attn(n)*gate.
+        # 1. Self-attention with AdaLN: n = norm(x)*scale+shift (scale row is pre-incremented by 1.0
+        # at construction, so this is the reference's norm*(1+scale)+shift). x = x + attn(n)*gate.
         n = self.self_attn_norm.forward(hidden_states, mode="prefill")
-        n = ttnn.add(ttnn.mul(n, ttnn.add(scale_msa, 1.0)), shift_msa)
+        n = ttnn.add(ttnn.mul(n, scale_msa), shift_msa)
         attn = self.self_attn.forward(n, cos=cos, sin=sin, attn_mask=attn_mask)
         hidden_states = ttnn.add(hidden_states, ttnn.mul(attn, gate_msa))
 
@@ -160,9 +175,9 @@ class AceStepDiTLayer(LightweightModule):
             cattn = self.cross_attn.forward(n, encoder_hidden_states=encoder_hidden_states, attn_mask=cross_mask)
             hidden_states = ttnn.add(hidden_states, cattn)
 
-        # 3. MLP with AdaLN.
+        # 3. MLP with AdaLN (c_scale row pre-incremented by 1.0 at construction).
         n = self.mlp_norm.forward(hidden_states, mode="prefill")
-        n = ttnn.add(ttnn.mul(n, ttnn.add(c_scale, 1.0)), c_shift)
+        n = ttnn.add(ttnn.mul(n, c_scale), c_shift)
         ff = self.mlp.forward(n, mode="prefill")
         hidden_states = ttnn.add(hidden_states, ttnn.mul(ff, c_gate))
         return hidden_states
