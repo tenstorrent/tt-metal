@@ -1,0 +1,89 @@
+# tenstorrent/vllm (fork) — #47488 scheduler-half change for DiffusionGemma
+# Target repo:  github.com/tenstorrent/vllm  (branch dev, head 6b4a3a7)
+# Target file:  plugins/vllm-tt-plugin/src/vllm_tt_plugin/scheduler.py
+# Purpose: generalize TTScheduler's inherited AsyncScheduler 1-token output-
+#   placeholder accounting to block-granular commits, so a block-diffusion
+#   decode step that commits a whole 256-token canvas does not underflow
+#   num_output_placeholders (async_scheduler.py:53 assert). n==1 keeps the
+#   autoregressive path byte-identical. Companion to plugin_47488_model_runner.patch.
+# Apply from the vllm repo root with:  git apply doc/.../plugin_47488_scheduler.patch
+#
+diff --git a/plugins/vllm-tt-plugin/src/vllm_tt_plugin/scheduler.py b/plugins/vllm-tt-plugin/src/vllm_tt_plugin/scheduler.py
+index 8a65830..6db5617 100644
+--- a/plugins/vllm-tt-plugin/src/vllm_tt_plugin/scheduler.py
++++ b/plugins/vllm-tt-plugin/src/vllm_tt_plugin/scheduler.py
+@@ -8,7 +8,8 @@ from vllm.logger import init_logger
+ from vllm.v1.core.sched.async_scheduler import AsyncScheduler
+ from vllm.v1.core.sched.output import SchedulerOutput
+ from vllm.v1.core.sched.request_queue import RequestQueue, create_request_queue
+-from vllm.v1.request import Request
++from vllm.v1.core.sched.scheduler import Scheduler
++from vllm.v1.request import Request, RequestStatus
+ 
+ logger = init_logger(__name__)
+ 
+@@ -64,6 +65,64 @@ class TTScheduler(AsyncScheduler):
+     def set_forced_mode(self, mode: TTSchedulingMode) -> None:
+         self._forced_mode = mode
+ 
++    def _update_request_with_output(
++        self, request: Request, new_token_ids: list[int]
++    ) -> tuple[list[int], bool]:
++        """#47488 scheduler half: generalize the 1-token async accounting to
++        block-granular commits (block-diffusion models such as DiffusionGemma).
++
++        AsyncScheduler models an autoregressive 1-in/1-out decode step: it
++        reserves exactly one output placeholder per scheduled step and asserts
++        ``num_output_placeholders >= 0`` after subtracting the committed count.
++        A block-diffusion decode step commits a whole canvas of ``n`` tokens
++        (n == ``canvas_length``, e.g. 256) in ONE model step whose K/V is written
++        inside the model, so more than one committed token survives the stop-trim
++        and AsyncScheduler underflows (``async_scheduler.py:53``).
++
++        This override keeps the same intent while allowing ``n > 1``:
++        * clamp the placeholder budget at 0 instead of asserting;
++        * advance ``num_computed_tokens`` by the extra ``n - 1`` committed tokens
++          so it keeps lagging the committed output by exactly one position — the
++          invariant the running-loop scheduler math relies on to schedule the
++          next decode step (``num_new_tokens == 1``);
++        * skip the prefix-cache bookkeeping for block commits (prefix caching is
++          force-disabled on this sliding-window / block-diffusion path and the
++          committed block's slots are model-owned, not vLLM-paged).
++
++        For ``n == 1`` (every autoregressive model, and DiffusionGemma requests
++        that stop at the block's first token) this is byte-identical to
++        ``AsyncScheduler._update_request_with_output``.
++        """
++        if request.discard_latest_async_tokens:
++            # Force-preempted in reset_prefix_cache: discard the async token.
++            request.discard_latest_async_tokens = False
++            return [], False
++
++        status_before_update = request.status
++        # Grandparent (base Scheduler) does the append + stop-trim; we replace
++        # AsyncScheduler's fixed 1-token placeholder/num_computed accounting.
++        new_token_ids, stopped = Scheduler._update_request_with_output(
++            self, request, new_token_ids
++        )
++        n = len(new_token_ids)
++
++        request.num_output_placeholders -= n
++        if request.num_output_placeholders < 0:
++            # Block committed more tokens than the single reserved placeholder.
++            request.num_output_placeholders = 0
++        if n > 1:
++            # _update_after_schedule already advanced num_computed by the one
++            # scheduled input position; add the remaining committed tokens so
++            # num_computed catches up to (num_tokens - 1).
++            request.num_computed_tokens += n - 1
++
++        if status_before_update == RequestStatus.RUNNING and n == 1:
++            self.kv_cache_manager.cache_blocks(
++                request,
++                request.num_computed_tokens - request.num_output_placeholders,
++            )
++        return new_token_ids, stopped
++
+     def schedule(self) -> SchedulerOutput:
+         has_waiting = bool(self.waiting)
+         has_running = bool(self.running)

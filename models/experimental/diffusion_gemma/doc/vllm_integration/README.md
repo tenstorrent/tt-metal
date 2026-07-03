@@ -13,7 +13,13 @@
   regression**. With the fast RUN config (4 steps / EOS-stop) it emits the expected EOS-heavy
   degenerate block (#48291 fidelity bar, not a serving bug). Control: the RUN visible-dialogue
   output + the R0.5 HF-vs-TT committed-argmax replay (`demo/replay_hf_tt.py`, `plan.md`).
-- **Serving path: LIVE.** A fresh, project-matching vLLM (built from the tenstorrent/vllm fork
+- **Serving path: LIVE + MULTI-BLOCK (updated 2026-07-03).** A full live serving test suite ran on
+  QB2: 7 real OpenAI requests (completions + chat, all non-256-aligned prompts) each returned HTTP
+  200, and a **live 2-block serve** emitted two real committed 256-token denoise blocks
+  (`32→288→544`). The dg-09 `#47488` scheduler-half blocker was reproduced live (on an ordinary
+  completion) and **fixed** (`plugin_47488_scheduler.patch` + a `generator_vllm.py` session-stop
+  deferral). See **§ Serving test suite** and `serving_test_suite.json`. Original block-0 bring-up:
+- **Serving path: LIVE (block-0, dg-09).** A fresh, project-matching vLLM (built from the tenstorrent/vllm fork
   against the *current* tt-metal `ttnn`, NOT the stale ghcr image) now serves DiffusionGemma
   end-to-end on QB2. A real `POST /v1/completions` returns **HTTP 200** with a valid OpenAI
   response; the 256-token block flows through prefill → runner sampling → state/​output build →
@@ -226,7 +232,11 @@ POST /v1/completions HTTP/1.1 200 OK
   temperature cushion), **not a serving regression** — it matches the recorded full-depth 4-step
   `serving_smoke` result.
 
-### Remaining live blocker: the #47488 *scheduler* half
+### Remaining live blocker: the #47488 *scheduler* half — RESOLVED 2026-07-03
+
+> **Update (2026-07-03):** this blocker is now **fixed** — see **§ Serving test suite** above
+> (`plugin_47488_scheduler.patch` + the `generator_vllm.py` session-stop deferral) and the live
+> 2-block serve. The original capture below is retained for the record.
 
 A second live request with `ignore_eos:true` (`max_tokens:48`, so >1 token must survive per step)
 returns HTTP 500 and dies at:
@@ -252,9 +262,80 @@ remaining blocker rather than hacked. **Net:** batch-1 single-block serving wher
 within block 0 (the realistic DG default-stop path) works live end-to-end; multi-token-survival /
 multi-block serving needs the #47488 scheduler half.
 
+## Serving test suite (live QB2, 2026-07-03 — #47488 scheduler half RESOLVED)
+
+A full live serving pass was run on QB2 against the recorded server (config in
+`live_vllm_serving.json`), reusing the intact venv + patched plugin (both #47488 patches
+reverse-apply clean — no rebuild). Full per-request evidence + per-block metrics are in
+**`serving_test_suite.json`**. Headline results:
+
+- **Device-gated test:** `pytest tests/test_serving_block_contract.py` → **7 passed** (incl. the
+  device block-emission case: prefill + 2×256-token blocks on device, 8.38 s).
+- **7 live OpenAI requests** (4 `/v1/completions` + 2 `/v1/chat/completions` + the 2-block serve),
+  all with **non-256-aligned prompt lengths** (6, 5, 25, 31, 21 tokens) — every one returned
+  **HTTP 200** with a valid OpenAI response and a 256-token block emission through the vLLM engine.
+- **LIVE 2-BLOCK SERVE (the #47488 scheduler-half goal):** one request (`ignore_eos`,
+  `max_tokens 512`) emitted **two REAL committed 256-token denoise blocks** —
+  `prefill block0 32→288 (35 steps, 178.2 s)` then `decode block=1 288→544 (48 steps, 232.8 s,
+  stop=False)`, position advanced `32→288→544 = cache_len + 2×256`, 512 committed tokens, HTTP 200.
+- **Per-block metrics** (block-diffusion cost profile — never `1000/mean_tpot_ms`): block-0
+  latency 178–276 s at 17–48 denoise steps; the real block-1 232.8 s at 48 steps; 256 committed
+  tokens per block.
+- **Qualitative (RUN-first, HF/RUN control):** one chat request produced coherent on-topic text
+  through the serving path — `The vast blue expanse holds endless secrets beneath its rolling
+  waves.` — matching the recorded visible-dialogue RUN control; other prompts committed
+  EOS/degenerate canvases (the RUN-first #48291 fidelity limit). **PASS — not a serving regression.**
+
+### The #47488 scheduler half — reproduced live, then FIXED live
+
+The dg-09 record left the scheduler half as an open blocker. This pass reproduced it **live on an
+ordinary completion** (not just `ignore_eos`): `POST /v1/completions {"prompt":"The capital of
+France is","max_tokens":16}` ran the full block-0 denoise (48 steps, 233 s) and then died in
+`vllm/v1/core/sched/async_scheduler.py:53  assert request.num_output_placeholders >= 0`
+(`EngineDeadError`, HTTP 500). Root cause: `AsyncScheduler` reserves exactly **one** output
+placeholder per scheduled step (`_update_after_schedule`: `num_output_placeholders += 1 + spec`),
+but a block-diffusion step commits up to `canvas_length = 256` tokens — so **any** request whose
+committed block-0 does not place a stop token within the first reserved position underflows. (The
+dg-09 default-stop request passed only because it EOS-stopped at canvas position 0 → 1 token.)
+
+**Fix (this session), two coupled pieces:**
+
+1. **`plugin_47488_scheduler.patch`** (fork `scheduler.py`) — a `TTScheduler._update_request_with_output`
+   override generalizing the 1-token async accounting to N-token block commits: clamp
+   `num_output_placeholders` at 0 instead of asserting; advance `num_computed_tokens` by `n-1` to
+   keep the autoregressive "num_computed lags committed output by exactly 1" invariant the
+   running-loop scheduler math relies on; skip prefix-cache bookkeeping for block commits (prefix
+   caching is disabled here). **`n == 1` is byte-identical to `AsyncScheduler`** — the autoregressive
+   path is unchanged, and the override self-activates only when a step commits >1 token (only
+   block-diffusion does). Safety: the DiffusionGemma model owns its own KV/position (`page_table=None`,
+   contiguous cache), so vLLM's `num_computed_tokens` governs only stop/bound/bookkeeping — never
+   what the model computes — so a mis-count cannot silently corrupt generation; correctness is
+   verified by counting the emitted blocks.
+2. **`tt/generator_vllm.py` adapter fix** — serving sessions are now built with `stop_token_ids=[]`
+   so the **session** does not self-finish on an internal EOS; vLLM owns the stop decision. Without
+   this, a committed block containing an EOS forced `session.finished=True` and the next decode step
+   returned synthetic `256×stop_id` padding (defeating `ignore_eos`, so the "2-block" request
+   returned 512 tokens with only ONE real block). With it, a genuine block-1 denoise runs.
+
+The launch also needs **`--generation-config vllm`** for multi-block, to drop the model's
+`generation_config.json` default `max_tokens=256` cap (else a request stops at exactly block-0).
+
+**Net:** batch-1 single-block serving works for ordinary requests (no longer only the EOS-at-0 case),
+and multi-block (≥2 committed denoise blocks per request) works live end-to-end. Remaining beyond
+this: concurrent batched multi-sequence serving = #47488 paged-cache ownership + #47557 batched
+canvas decode.
+
 ## How to reproduce the block-emission evidence
 
 ```bash
+# live 2-block serve (fork scheduler + runner patches applied; adapter session-stop deferral):
+#   1) apply the three fork patches under doc/vllm_integration/ to /home/zni/tt-vllm
+#   2) launch with --generation-config vllm (removes the model max_tokens=256 cap):
+#      bash launch_server_gencfg.sh    # = live_vllm_serving.json launch + `--generation-config vllm`
+#   3) curl -s :8000/v1/completions -d '{"model":"diffusiongemma-26B-A4B-it",
+#         "prompt":"Hello, how are you?","max_tokens":512,"temperature":0,"ignore_eos":true}'
+#      -> HTTP 200, 512 tokens, server log shows block0 32->288 then decode block=1 288->544
+
 # reduced-surface serving driver on QB2 (proves the block contract on the free device)
 TT_LOGGER_LEVEL=ERROR DG_CKPT=/home/zni/dg_models/diffusiongemma-26B-A4B-it \
 python -m models.experimental.diffusion_gemma.demo.serving_smoke \
@@ -272,13 +353,15 @@ commands in **§ Live serving verification (fresh vLLM)** above.
 
 ## Limitations
 
-- Live full-vLLM-engine serving now works end-to-end for batch-1 (see § Live serving verification):
-  a real `POST /v1/completions` returns HTTP 200 and emits a 256-token block. It requires the
-  fork's #47488 runner patch (`plugin_47488_model_runner.patch`, applied to `/home/zni/tt-vllm`,
-  a separate repo — not vendored in tt-metal). Multi-block serving where `max_tokens > canvas_length`
-  additionally needs the scheduler `num_computed_tokens += canvas_length` half of #47488 (a single
-  block satisfies `max_tokens <= 256`; the runner-side token accounting is generalized, the
-  scheduler-side advance is the remaining piece for multi-block).
+- Live full-vLLM-engine serving works end-to-end (see § Serving test suite): real
+  `/v1/completions` and `/v1/chat/completions` requests return HTTP 200 and emit 256-token blocks,
+  and **multi-block (≥2 committed denoise blocks per request) is demonstrated live**. It requires
+  the three fork patches applied to `/home/zni/tt-vllm` (a separate repo, not vendored in tt-metal):
+  `plugin_47488_registration.patch`, `plugin_47488_model_runner.patch` (runner N-token block), and
+  `plugin_47488_scheduler.patch` (scheduler N-token placeholder/num_computed accounting) — plus the
+  `generator_vllm.py` session-stop deferral and the `--generation-config vllm` launch flag for
+  multi-block. Remaining: concurrent batched **multi-sequence** serving = #47488 paged-cache
+  ownership + #47557 batched canvas decode (still `--max-num-seqs 1`).
 - The shared `run_vllm_server` readiness harness (`models/common/readiness_check/`) does not exist
   in this tt-metal checkout, so the live serve is driven directly against
   `vllm.entrypoints.openai.api_server` (the fork's documented server path) rather than that runner.

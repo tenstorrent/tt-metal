@@ -285,6 +285,15 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         return ids
 
     def _make_session(self, seed: int = 0) -> BlockDiffusionServingSession:
+        # Serving contract: vLLM owns the stop decision (EOS / stop strings /
+        # max_tokens / ignore_eos), not the model. Disable the session's internal
+        # EOS stop (``stop_token_ids=[]``) so a committed block that happens to
+        # contain an EOS does NOT force the session to finish and emit synthetic
+        # stop-padding on the next decode step — that would defeat ``ignore_eos``
+        # and short-circuit real multi-block generation. The runner still returns
+        # the whole 256-token committed canvas to vLLM, which trims at its own
+        # stop point (block-diffusion #47488 scheduler-half contract). The
+        # standalone ``serving_smoke`` driver keeps its own session-level stop.
         return BlockDiffusionServingSession(
             self.model[0],
             self._dg_state_dict,
@@ -292,6 +301,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             tokenizer=self._tokenizer,
             gumbel_mode=self._gumbel_mode,
             seed=seed,
+            stop_token_ids=[],
         )
 
     def prefill_forward(
@@ -378,8 +388,10 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             session = self._sessions[row]
             if session.finished:
                 # Request already emitted a stop token; pad with the stop id.
+                # (With the serving contract above this is dead for max_num_seqs=1,
+                # but a batched session may still self-finish; guard for empty.)
                 stop_id = 0
-                if session.stop_token_ids is not None:
+                if session.stop_token_ids:
                     ids = (
                         session.stop_token_ids
                         if isinstance(session.stop_token_ids, (list, tuple))

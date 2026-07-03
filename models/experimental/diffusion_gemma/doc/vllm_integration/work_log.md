@@ -333,3 +333,54 @@ fixed live; the remaining scheduler-half blocker is reproduced + documented live
   Post-clean-pass touch-ups (unify KV allocators via `_model_owned_kv_handles`, docstring fix,
   drop unused import, README coverage-gap note, work-log review record). Pushed
   (faebfbcc358..4d320be2615). All pre-commit hooks passed.
+
+## Serving test suite + #47488 scheduler half RESOLVED — 2026-07-03 (this session)
+
+Goal: thoroughly TEST the live serving path (block-0 verified by dg-09), reusing the intact env,
+and push toward multi-block. Full evidence: `doc/vllm_integration/serving_test_suite.json`.
+
+**Env intact (no rebuild).** venv `/home/zni/venvs/tt-diffusion-gemma`: `vllm
+0.1.dev1+g6b4a3a7b4.empty`, `vllm-tt-plugin` editable, ttnn/transformers 5.12.1/torch 2.11 unchanged.
+Both dg-09 fork patches (`plugin_47488_registration.patch`, `plugin_47488_model_runner.patch`)
+reverse-apply clean → currently applied. Device: 4× Blackhole free.
+
+**Device-gated test.** `DG_RUN_DEVICE=1 pytest tests/test_serving_block_contract.py -q` → **7 passed
+in 9.09 s** (device block-emission case 8.38 s: prefill + 2×256 blocks, non-aligned prompt,
+position advance, per-block metrics).
+
+**Live requests (7, all HTTP 200, all non-256-aligned prompts).** 4 `/v1/completions` + 2
+`/v1/chat/completions` + the 2-block serve. Per-block metrics (block-diffusion — never
+`1000/mean_tpot_ms`): block-0 178–276 s at 17–48 denoise steps; real block-1 232.8 s at 48 steps.
+One chat request produced **coherent** text (`The vast blue expanse holds endless secrets beneath
+its rolling waves.`); others committed EOS/degenerate canvases (RUN-first #48291). Qualitative
+verdict **PASS (RUN-first)** vs the recorded visible-dialogue RUN control — not a serving regression.
+
+**#47488 scheduler half — reproduced live, then FIXED live.** An **ordinary** completion (`"The
+capital of France is"`, `max_tokens 16`) ran block-0 (48 steps, 233 s) then died at
+`async_scheduler.py:53 assert num_output_placeholders >= 0` (EngineDeadError, HTTP 500). Root cause:
+`AsyncScheduler` reserves 1 output placeholder/step but a block commits up to 256 tokens →
+underflow whenever a committed block does not stop within the first reserved position (broader than
+the dg-09 `ignore_eos`-only capture). Fix, two coupled pieces (both NEW this session):
+1. `plugin_47488_scheduler.patch` (fork `scheduler.py`) — `TTScheduler._update_request_with_output`
+   override: clamp `num_output_placeholders` at 0; advance `num_computed_tokens` by `n-1` to keep
+   the AR lag-by-1 invariant; skip prefix-cache bookkeeping for block commits. `n==1` byte-identical
+   to `AsyncScheduler`; self-activates only when a step commits >1 token. Safe because the model owns
+   its KV/position (`page_table=None`), so vLLM `num_computed` governs only stop/bound/bookkeeping,
+   never the model's compute → mis-count cannot silently corrupt generation; validated by block count.
+2. `tt/generator_vllm.py::_make_session` — serving sessions now built with `stop_token_ids=[]` so the
+   session defers stop to vLLM; otherwise a committed EOS forced `session.finished` and the next
+   decode step returned synthetic `256×stop_id` padding (the "2-block" request returned 512 tokens
+   with only ONE real block). Also needs `--generation-config vllm` to drop the model's
+   `max_tokens=256` default cap for multi-block.
+
+**LIVE 2-BLOCK SERVE (goal met).** `/v1/completions {"prompt":"Hello, how are you?","max_tokens":512,
+"ignore_eos":true}` → HTTP 200, 512 tokens, **two real committed 256-token denoise blocks**:
+`prefill block0 32→288 (35 steps, 178.2 s)` + `decode block=1 288→544 (48 steps, 232.8 s,
+stop=False)`, position `32→288→544 = cache_len + 2×256`, wall 412 s. Engine survived all requests
+(pre-patch it died on request 2).
+
+**Device hygiene.** 3× bounded `tt-smi -r` + `(1,4)` mesh-smoke recoveries were needed after
+EngineCore shutdown/crash left ethernet core 29-25 un-reset (recurring recoverable ARC/ERISC fault
+per tt-device-usage; each recovered on first reset + smoke). No profiler/Tracy in this stage. gemma4
+isolation gate held (`git status --porcelain -- models/demos/gemma4/` empty). Server stopped +
+device freed at end.

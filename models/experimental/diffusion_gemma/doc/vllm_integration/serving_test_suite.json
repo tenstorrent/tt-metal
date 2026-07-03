@@ -1,0 +1,133 @@
+{
+  "date": "2026-07-03",
+  "title": "DiffusionGemma vLLM serving test suite (live QB2) — #47466 / #47488",
+  "device": "QB2 / bh-qbge-06 / P150x4 (4 Blackhole, TP=4, (1,4) mesh)",
+  "env": "venv /home/zni/venvs/tt-diffusion-gemma; vllm 0.1.dev1+g6b4a3a7b4.empty (tenstorrent/vllm fork dev@6b4a3a7); vllm-tt-plugin editable /home/zni/tt-vllm; ttnn editable /home/zni/tt-metal; transformers 5.12.1; torch 2.11.0+cpu",
+  "sampling": "on-device (sample_on_device_mode=all), argmax (DG_VLLM_GUMBEL_MODE=argmax)",
+  "datatype": "bf16 weights + bf16 KV + bf16 CCL (full-model policy)",
+  "metrics_note": "All latencies are per-BLOCK (block-diffusion commits a 256-token canvas per model step). 1000/mean_tpot_ms is intentionally NOT reported — there is no per-token TPOT in block-diffusion.",
+
+  "env_intact_check": {
+    "venv": "OK (vllm 0.1.dev1+g6b4a3a7b4, vllm-tt-plugin editable, ttnn/transformers/torch unchanged)",
+    "plugin_47488_registration.patch": "reverse-apply clean -> currently applied",
+    "plugin_47488_model_runner.patch": "reverse-apply clean -> currently applied",
+    "action": "none (env + patched plugin intact; no rebuild/reapply needed)"
+  },
+
+  "device_gated_test": {
+    "cmd": "DG_RUN_DEVICE=1 DG_CKPT=... pytest models/experimental/diffusion_gemma/tests/test_serving_block_contract.py -q",
+    "result": "7 passed in 9.09s",
+    "device_case": "test_serving_smoke_emits_blocks_and_advances_position (8.38s): reduced-surface driver, prefill + 2x256-token blocks on device, non-256-aligned prompt, position advancement, per-block metrics — PASS"
+  },
+
+  "server_configs": {
+    "A_default_gencfg": "python -m vllm.entrypoints.openai.api_server --model $DG_CKPT --served-model-name diffusiongemma-26B-A4B-it --max-model-len 1024 --max-num-seqs 1 --block-size 64 --additional-config '{\"tt\":{\"sample_on_device_mode\":\"all\",\"enable_model_warmup\":false}}' --host 127.0.0.1 --port 8000  (env: MESH_DEVICE=P150x4 DG_CKPT=... DG_VLLM_GUMBEL_MODE=argmax VLLM_ENABLE_V1_MULTIPROCESSING=0 TT_METAL_HOME=/home/zni/tt-metal VLLM_RPC_TIMEOUT=1800000). NOTE: the model generation_config.json caps default max_tokens=256.",
+    "B_multiblock": "config A + --generation-config vllm  (disables the model's max_tokens=256 cap so a request can span >1 block). Used for the 2-block serve."
+  },
+
+  "scheduler_patch": {
+    "file": "doc/vllm_integration/plugin_47488_scheduler.patch",
+    "target": "/home/zni/tt-vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/scheduler.py (fork, separate repo)",
+    "what": "TTScheduler._update_request_with_output override: generalizes AsyncScheduler's 1-token output-placeholder accounting to N-token block commits. Clamps num_output_placeholders at 0 instead of asserting; advances num_computed_tokens by (n-1) to keep the AR lag-by-1 invariant; skips prefix-cache bookkeeping for block commits. n==1 is byte-identical to AsyncScheduler (autoregressive path unchanged).",
+    "pre_patch_blocker": {
+      "site": "vllm/v1/core/sched/async_scheduler.py:53 AsyncScheduler._update_request_with_output",
+      "assert": "assert request.num_output_placeholders >= 0",
+      "trigger": "ANY request whose committed block-0 does not place a stop token within the first num_output_placeholders(=1) positions. Reproduced LIVE by an ORDINARY completion ('The capital of France is', max_tokens=16) — block-0 emitted 48 denoise steps (233s) then the scheduler underflowed (16 survived > 1 reserved placeholder) -> EngineCore fatal, HTTP 500, engine dead.",
+      "note": "Broader than the dg-09 record (which needed ignore_eos): the default-stop path also crashes unless the block EOS-stops almost immediately."
+    },
+    "adapter_companion_fix": {
+      "file": "models/experimental/diffusion_gemma/tt/generator_vllm.py",
+      "what": "DiffusionGemmaForCausalLM._make_session now constructs serving sessions with stop_token_ids=[] so the SESSION does not self-finish on an internal EOS; vLLM owns the stop decision (EOS/stop/max_tokens/ignore_eos). Without this, a committed block containing an EOS forced session.finished=True and the next decode step returned synthetic 256xstop_id padding (defeating ignore_eos and short-circuiting real multi-block). The standalone serving_smoke driver keeps its own session-level stop.",
+      "evidence": "Before the adapter fix (config B, scheduler-patched): the 2-block request returned 512 tokens in ~182s with only ONE real block emission line — block-1 was synthetic padding (session self-finished). After the fix: two REAL block emissions (see multi_block below)."
+    }
+  },
+
+  "requests": [
+    {
+      "n": 1, "label": "cmpl-baseline-6tok", "endpoint": "/v1/completions", "server_config": "A",
+      "prompt": "Hello, how are you?", "prompt_len": 6, "prompt_aligned_256": false,
+      "max_tokens": 32, "ignore_eos": false,
+      "http": 200, "completion_tokens": 1, "finish_reason": "stop", "text": "",
+      "per_block": {"blocks": 1, "block0": {"pos": "32->288", "denoise_steps": 35, "latency_s": 178.444}},
+      "verdict": "PASS (serving path OK; empty text = EOS committed at canvas position 0, RUN-first #48291)"
+    },
+    {
+      "n": 2, "label": "cmpl-france PRE-PATCH", "endpoint": "/v1/completions", "server_config": "A (scheduler NOT yet patched)",
+      "prompt": "The capital of France is", "prompt_len": 5, "prompt_aligned_256": false,
+      "max_tokens": 16, "ignore_eos": false,
+      "http": 500, "completion_tokens": null, "finish_reason": null, "text": null,
+      "per_block": {"blocks": 1, "block0": {"pos": "32->288", "denoise_steps": 48, "latency_s": 233.187, "note": "block emitted, then scheduler crashed in update_from_output"}},
+      "verdict": "PRE-PATCH BLOCKER REPRODUCED LIVE: async_scheduler.py:53 num_output_placeholders underflow -> EngineDeadError. Requests 3-5 of the pre-patch batch then hit the dead engine (instant HTTP 500)."
+    },
+    {
+      "n": 3, "label": "cmpl-france POST-PATCH", "endpoint": "/v1/completions", "server_config": "A (scheduler patched)",
+      "prompt": "The capital of France is", "prompt_len": 5, "prompt_aligned_256": false,
+      "max_tokens": 16, "ignore_eos": false,
+      "http": 200, "completion_tokens": 16, "finish_reason": "length", "text": " (o de-facto-writes ( the Algy-Bank water-",
+      "per_block": {"blocks": 1, "block0": {"pos": "32->288", "denoise_steps": 48, "latency_s": 235.695}},
+      "verdict": "PASS: the exact request that CRASHED the pre-patch engine now returns HTTP 200 with 16 tokens. Exercises the scheduler patch's n>1 (n=16) placeholder-clamp path; engine survived. Text degenerate (RUN-first #48291), not a serving regression."
+    },
+    {
+      "n": 4, "label": "chat-japan", "endpoint": "/v1/chat/completions", "server_config": "A (scheduler patched)",
+      "prompt": "[user] What is the capital of Japan? Answer in one word.", "prompt_len": 25, "prompt_aligned_256": false,
+      "max_tokens": 16, "ignore_eos": false,
+      "http": 200, "completion_tokens": 1, "finish_reason": "stop", "text": "",
+      "per_block": {"blocks": 1, "block0": {"pos": "32->288", "denoise_steps": 43, "latency_s": 276.339}},
+      "verdict": "PASS: chat/instruct format via the checkpoint chat template (rendered to 25 non-aligned tokens). Empty text = EOS-first canvas (RUN-first #48291)."
+    },
+    {
+      "n": 5, "label": "multiblock-2x256 (TRUE 2-BLOCK)", "endpoint": "/v1/completions", "server_config": "B (scheduler patched + adapter session-stop deferral + --generation-config vllm)",
+      "prompt": "Hello, how are you?", "prompt_len": 6, "prompt_aligned_256": false,
+      "max_tokens": 512, "ignore_eos": true,
+      "http": 200, "completion_tokens": 512, "total_tokens": 518, "finish_reason": "length", "text": "",
+      "per_block": {
+        "blocks": 2,
+        "block0": {"pos": "32->288", "denoise_steps": 35, "latency_s": 178.205, "kind": "prefill+block0"},
+        "block1": {"pos": "288->544", "denoise_steps": 48, "latency_s": 232.838, "halted": false, "stop": false, "kind": "real decode denoise"}
+      },
+      "wall_s": 412.401,
+      "verdict": "PASS — LIVE 2-BLOCK SERVE. Two REAL committed 256-token denoise blocks (35 + 48 denoise steps), position advanced 32->288->544 = cache_len + 2x256, 512 committed tokens, HTTP 200, engine survived. This is the #47488 scheduler-half + adapter-fix demonstration."
+    },
+    {
+      "n": 6, "label": "cmpl-long-nonaligned", "endpoint": "/v1/completions", "server_config": "B",
+      "prompt": "In a few words, summarize why the sky appears blue during the day and turns orange and red near sunset, mentioning how sunlight scatters in the atmosphere:",
+      "prompt_len": 31, "prompt_aligned_256": false,
+      "max_tokens": 24, "ignore_eos": false,
+      "http": 200, "completion_tokens": 4, "finish_reason": "stop", "text": ",, the",
+      "per_block": {"blocks": 1, "block0": {"pos": "32->288", "denoise_steps": 48, "latency_s": 232.996}},
+      "verdict": "PASS: LONG non-256-aligned completion (31 tokens) — the one that hit the dead engine pre-patch — now HTTP 200. Non-aligned prefill (31 -> cache_len 32). Degenerate text (RUN-first #48291)."
+    },
+    {
+      "n": 7, "label": "chat-ocean", "endpoint": "/v1/chat/completions", "server_config": "B",
+      "prompt": "[user] Write one short sentence about the ocean.", "prompt_len": 21, "prompt_aligned_256": false,
+      "max_tokens": 24, "ignore_eos": false,
+      "http": 200, "completion_tokens": 16, "finish_reason": "stop", "text": "尼尼尼The vast blue expanse holds endless secrets beneath its rolling waves.",
+      "per_block": {"blocks": 1, "block0": {"pos": "32->288", "denoise_steps": 17, "latency_s": 101.970}},
+      "verdict": "PASS + COHERENT: chat/instruct request produced coherent, on-topic text through the serving path ('The vast blue expanse holds endless secrets beneath its rolling waves.', with a few leading degenerate tokens). Strong evidence the serving path reproduces the model's RUN output (matches the recorded visible-dialogue RUN control) — NOT a serving regression."
+    }
+  ],
+
+  "multi_block": {
+    "status": "DEMONSTRATED LIVE (2 committed 256-token denoise blocks in one request)",
+    "request_n": 5,
+    "requires": [
+      "plugin_47488_model_runner.patch (already applied) — N-token block on the runner side",
+      "plugin_47488_scheduler.patch (NEW this session) — TTScheduler N-token placeholder/num_computed accounting",
+      "generator_vllm.py adapter fix (NEW this session) — session defers stop to vLLM so a real block-1 runs",
+      "--generation-config vllm launch flag — removes the model's max_tokens=256 default cap"
+    ],
+    "note": "Block granularity is 256 tokens of OUTPUT; a request spanning >256 output tokens (or ignore_eos) drives >1 real denoise block. max_num_seqs=1 (single active sequence per contiguous model cache); concurrent batched multi-seq is still #47488 paged-cache ownership + #47557 batched canvas decode."
+  },
+
+  "qualitative_verdict": {
+    "verdict": "PASS (RUN-first).",
+    "control": "Recorded RUN-path visible-dialogue control (dg-09 serving_smoke_fulldepth_visible.json): '你好！I'm doing well, thank you for asking. How can I help you today?'. Live serving mirrors the RUN-path profile: some canvases commit coherent text (chat-ocean: 'The vast blue expanse holds endless secrets beneath its rolling waves.'), others commit EOS/degenerate canvases (baseline, france, long-nonaligned).",
+    "conclusion": "The serving block-emission path faithfully reproduces the model's RUN output — coherent when the argmax canvas converges, degenerate/EOS-heavy otherwise (the RUN-first #48291 fidelity limitation, bf16/MoE/TP=4 argmax with no temperature cushion). This is a MODEL fidelity limitation, NOT a serving regression: the live serving output is not materially worse than the prompt-correct RUN control, and one chat request produced fully coherent on-topic text through the exact serving path.",
+    "degeneracy_gate": "The shared models/common/readiness_check/check_degenerate_output.py is absent in this checkout (whole readiness_check harness missing); the RUN-control comparison serves the same purpose."
+  },
+
+  "device_hygiene": {
+    "resets": "3 tt-smi -r + (1,4) mesh-smoke recoveries were needed after EngineCore shutdown/crash left ethernet core 29-25 un-reset (recurring recoverable ARC/ERISC fault per tt-device-usage; each recovered on the first bounded reset + mesh smoke).",
+    "final": "server stopped, device reset + mesh-smoke verified free at end of session."
+  }
+}
