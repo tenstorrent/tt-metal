@@ -33,10 +33,11 @@ def pearson_correlation_coefficient(expected, actual):
         logger.error("One tensor is all nan, the other is not.")
         return 0.0
 
-    # Test if either is completely zero
+    # Test if either is completely zero — also a constant (zero-variance) case.
+    # Fall back to allclose so that zero-vs-small-constant within tolerance passes.
     if torch.any(expected.bool()) != torch.any(actual.bool()):
-        logger.error("One tensor is all zero")
-        return 0.0
+        logger.warning("One tensor is all zero. PCC undefined; falling back to allclose.")
+        return float(torch.allclose(expected, actual, rtol=1e-05, atol=1e-04))
 
     # For now, mask all infs and nans so that we check the rest... TODO
     expected = expected.clone()

@@ -500,10 +500,13 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
         logger.error("One tensor is all nan, the other is not.")
         return False, 0.0
 
-    # Test if either is completely zero
+    # Test if either is completely zero — but a zero tensor is also a constant tensor,
+    # so fall back to allclose instead of a hard 0.0: zero-vs-small-constant may be
+    # within the caller's tolerances.
     if torch.any(golden.bool()) != torch.any(calculated.bool()):
-        logger.error("One tensor is all zero")
-        return False, 0.0
+        logger.warning("One tensor is all zero. PCC undefined; falling back to allclose.")
+        result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
+        return result, float(result)
 
     golden = torch.squeeze(golden).flatten()
     calculated = torch.squeeze(calculated).flatten()
