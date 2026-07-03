@@ -15,6 +15,7 @@ fabric config and the underlying mesh fails to initialize.
 
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from typing import Optional
 
@@ -101,9 +102,10 @@ def open_decode_16_mesh(
     num_command_queues: int = 1,
 ):
     """Open a 16-chip layout on the BH Galaxy for TP=8 prefill + 8-stage
-    streamed denoise. Opens the full Galaxy as a (4,8) parent and carves two
-    adjacent 8-chip rows from it (only 16 of 32 chips are actually used; this
-    matches the 28-chip pipeline's "open full Galaxy, carve submeshes" pattern).
+    streamed denoise. Default: open ONLY the 16 devices used (rows 0-1) as a
+    direct (2,8) mesh via a TT_VISIBLE_DEVICES subset restriction, leaving the
+    other 16 chips free for another user. PI0_16_FULL_MESH=1 falls back to
+    opening the full (4,8) parent and carving the (2,8) from it.
 
     Layout (on the (4,8) parent):
       row 0: prefill_submesh (1,8) at (0,0) — SigLIP DP + StagePrefillTP4.
@@ -118,9 +120,25 @@ def open_decode_16_mesh(
     when those use Linear topology via PI0_CCL_TOPOLOGY=linear — Ring deadlocks
     under FABRIC_2D). Verified by _bench_runs/probe_{fabric_allreduce,socket_d2d}.py.
     """
-    # Galaxy is 32 chips. Open a row-major (4,8) parent so every 8-chip stage
-    # uses the same orientation as the known-good production 1x8 prefill.
-    open_kwargs = {"mesh_shape": ttnn.MeshShape(4, 8)}
+    # Default: open ONLY the 16 devices this pipeline uses (rows 0-1) as a direct
+    # (2,8) mesh — leaves chips 8-23 free for another user (smaller blast radius).
+    # open_mesh_device(MeshShape(2,8)) alone fails MGD topology mapping on the full
+    # 32-chip descriptor; restricting the discovered topology to exactly those 16
+    # physical chips via TT_VISIBLE_DEVICES makes the (2,8) map (verified). The
+    # subset is the (4,8) rows 0-1 physical device IDs on this Galaxy (chips
+    # 0-7 + 24-31 — the mapping is NOT identity; queried from a (4,8) carve).
+    # Runtime os.environ set is read at cluster init (before the open below).
+    # setdefault: an explicit external TT_VISIBLE_DEVICES still wins. Ring CCL is
+    # still impossible (the prefill row is a (2,8) sub-view; Ring deadlocks under
+    # the FABRIC_2D the KV sockets require) -> prefill stays Linear.
+    # PI0_16_FULL_MESH=1 restores the old full-(4,8)-parent + carve path.
+    _full_mesh = os.environ.get("PI0_16_FULL_MESH", "").lower() in ("1", "true", "yes", "on")
+    if _full_mesh:
+        _mesh_shape, _expected = ttnn.MeshShape(4, 8), 32
+    else:
+        os.environ.setdefault("TT_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7,24,25,26,27,28,29,30,31")
+        _mesh_shape, _expected = ttnn.MeshShape(2, 8), 16
+    open_kwargs = {"mesh_shape": _mesh_shape}
     if l1_small_size is not None:
         open_kwargs["l1_small_size"] = l1_small_size
     if trace_region_size is not None:
@@ -167,19 +185,20 @@ def open_decode_16_mesh(
         parent = ttnn.open_mesh_device(**open_kwargs)
     all_submeshes = []
     try:
-        if parent.get_num_devices() != 32:
-            raise RuntimeError(f"Parent mesh has {parent.get_num_devices()} devices, expected 32 (full Galaxy)")
+        if parent.get_num_devices() != _expected:
+            raise RuntimeError(f"Parent mesh has {parent.get_num_devices()} devices, expected {_expected}")
 
-        # (2,8) compute submesh = rows 0-1 = the 16 commanded chips. This is the
-        # single-trace root (mirrors the 28-chip's (7,4) compute submesh): a trace's
-        # blocking finish waits on the root mesh's full range, so rooting on the (4,8)
-        # parent would deadlock on idle rows 2-3 (empty completion queue). Rooting on
-        # the (2,8) waits only on the 16 chips prefill (row 0) + denoise (row 1)
-        # actually command. Prefill + denoise submeshes are carved FROM compute (not
-        # the parent) so they share it as parent -> one begin_trace_capture(compute)
-        # captures ops on all of them (incl. the cross-row KV sockets).
-        compute = parent.create_submesh(ttnn.MeshShape(2, 8), ttnn.MeshCoordinate(0, 0))
-        all_submeshes.append(compute)
+        # The (2,8) compute submesh = rows 0-1 = the 16 commanded chips, and the
+        # single-trace root (mirrors the 28-chip's (7,4) compute submesh). In the
+        # default 16-device mode the parent IS already the (2,8), so it is the compute
+        # mesh directly; in full-mesh mode we carve the (2,8) from the (4,8) parent.
+        # Prefill + denoise submeshes are carved FROM compute so they share it as
+        # parent -> one begin_trace_capture(compute) captures ops on all of them.
+        if _full_mesh:
+            compute = parent.create_submesh(ttnn.MeshShape(2, 8), ttnn.MeshCoordinate(0, 0))
+            all_submeshes.append(compute)
+        else:
+            compute = parent  # parent is the (2,8) itself
 
         # 8 chips row 0: TP=8 prefill in the original working 1x8 orientation.
         prefill_submesh = compute.create_submesh(ttnn.MeshShape(1, 8), ttnn.MeshCoordinate(0, 0))
