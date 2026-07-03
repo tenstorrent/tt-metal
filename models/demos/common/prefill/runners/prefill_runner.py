@@ -722,6 +722,12 @@ def _serve_standalone(
         # downstream ranks to enter their consume loops — moving that skew out of the timed chunk loop.
         ttnn.distributed_context_barrier()
 
+    # Capture the trace (use_trace) HERE — after D2D endpoints are built (their receiver-socket L1 must be
+    # allocated before the trace records, or it corrupts replay on the last rank) and before the chunk loop,
+    # so the one-time capture stays out of the timed loop.
+    if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
+        runtime.capture_trace(kv_cache)
+
     logger.info(f"[pp rank {rank}] setup complete, entering standalone loop")
     run_standalone_loop(runtime, kv_cache, rank, num_ranks, d2d_in=d2d_in, d2d_out=d2d_out)
 
@@ -816,6 +822,11 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
         runtime.set_layer_ack_channel(ack_channel)
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+
+    # Capture the trace (use_trace) after D2D endpoints + LayerAck are set up, before the request loop
+    # (one-time, out of the loop; correct memory + ack ordering). See _serve_standalone / capture_trace().
+    if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
+        runtime.capture_trace(kv_cache)
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
     run_request_loop(

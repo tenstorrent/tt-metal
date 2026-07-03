@@ -226,19 +226,21 @@ class TtPrefillRuntime:
         """Warm up one chunk so the per-chunk loop hits no first-run cost. The engine
         passes the cache it owns; the warm-up writes into it (slot 0) and is harmless.
 
-        use_trace: set up the persistent buffers + controller, warm-compile the metadata programs, AND
-        record the segmented trace capture here — EAGERLY, before the chunk loop — so the (one-time) capture
-        cost is out of the timed loop. prefill_chunk() then only replays. A per-layer LayerAck registered via
-        set_layer_ack_channel() AFTER compile() (request loop) triggers a one-time re-capture with the ack so
-        the trace still segments at the ack points (see set_layer_ack_channel)."""
+        use_trace: set up the persistent buffers + controller and warm-compile the metadata programs here,
+        but do NOT record the capture yet — the driver must call capture_trace() AFTER any pipeline D2D
+        endpoints are built (build_d2d_pipeline_endpoints allocates L1 for the receiver socket, which would
+        otherwise land on top of the captured trace buffers on the last rank and corrupt replay) and after
+        set_layer_ack_channel(). capture_trace() runs before the chunk loop, so the one-time capture is still
+        out of the timed loop; prefill_chunk() then only replays (with a lazy-capture safety net)."""
         assert self.model_built
         chunk = self.config.chunk_size
         t0 = time.perf_counter()
         if self.config.use_trace:
-            logger.info(f"TtPrefillRuntime.compile() — warming + capturing traced {chunk}-token chunk (metadata path)")
-            self._kv_cache = kv_cache  # kept so a post-compile set_layer_ack_channel() can re-capture with the ack
+            logger.info(
+                f"TtPrefillRuntime.compile() — warming traced {chunk}-token chunk (metadata path); capture deferred to capture_trace()"
+            )
+            self._kv_cache = kv_cache  # kept so capture_trace()/set_layer_ack_channel() can (re)capture
             self._prepare_trace(kv_cache)
-            self._capture_now(kv_cache)
         else:
             logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
             tt_input = self.make_chunk_input([0] * chunk)
@@ -246,10 +248,20 @@ class TtPrefillRuntime:
             ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(
-            f"[prefill timing] task_id={'CAPTURE' if self.config.use_trace else 'WARMUP'} num_tokens={chunk} "
+            f"[prefill timing] task_id={'PREPARE' if self.config.use_trace else 'WARMUP'} num_tokens={chunk} "
             f"runtime.compile() = {warmup_ms:.2f} ms"
         )
         self.compiled = True
+
+    def capture_trace(self, kv_cache: ttnn.Tensor) -> None:
+        """Record the segmented trace, ONCE, before the chunk loop. The driver must call this AFTER
+        building any D2D pipeline endpoints (their receiver-socket L1 must be allocated first, or it lands
+        on the captured trace buffers on the last rank and corrupts replay) and AFTER set_layer_ack_channel()
+        (so the ack segments the capture). No-op if not use_trace or already captured. See compile()."""
+        if not self.config.use_trace or self._trace_captured:
+            return
+        assert self._controller is not None, "capture_trace(): compile() must run first (prepares the trace)"
+        self._capture_now(kv_cache)
 
     def _meta1_dev(self, val: int) -> ttnn.Tensor:
         """One persistent 1-element uint32 replicated-DRAM metadata scalar (captured address)."""
