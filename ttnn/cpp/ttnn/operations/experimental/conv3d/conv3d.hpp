@@ -29,6 +29,7 @@ ttnn::Tensor conv3d(
     const std::string& padding_mode_ = "zeros",
     uint32_t groups_ = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& halo_buffer = std::nullopt);
 
 }  // namespace ttnn::experimental

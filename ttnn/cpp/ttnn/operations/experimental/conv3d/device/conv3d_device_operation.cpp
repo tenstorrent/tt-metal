@@ -301,6 +301,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv3dDeviceOperation
     if (tensor_args.bias_tensor.has_value()) {
         input_tensors.push_back(tensor_args.bias_tensor.value());
     }
+    if (tensor_args.halo_buffer.has_value()) {
+        input_tensors.push_back(tensor_args.halo_buffer.value());
+    }
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         input_tensors, output_tensor, ideal_dev_clock_cycles);
 
@@ -325,7 +328,8 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     const std::string& padding_mode_,
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<Tensor>& halo_buffer) {
     using OperationType = ttnn::experimental::prim::Conv3dDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -356,7 +360,10 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         dilation_[1],
         dilation_[2]);
     auto tensor_args = OperationType::tensor_args_t{
-        .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor};
+        .input_tensor = input_tensor,
+        .weight_tensor = weight_tensor,
+        .bias_tensor = bias_tensor,
+        .halo_buffer = halo_buffer};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

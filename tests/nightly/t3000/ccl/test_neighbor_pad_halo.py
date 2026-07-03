@@ -618,3 +618,168 @@ def test_neighbor_pad_halo_devfw(mesh_device, device_params):
     ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
+
+
+# Halo-aware conv3d correctness: the compact two-dispatch (neighbor_pad_halo -> conv3d halo mode) must
+# equal the current full-pad two-dispatch (neighbor_pad_async -> conv3d) on device. Same weight/input;
+# both compute conv on the neighbor-padded input, so a device-to-device match proves the halo read.
+def run_conv3d_halo_vs_fullpad_2d(mesh_device, input_shape, C_out, kernel_size, pH, pW, num_links=2):
+    h_dim, w_dim, h_axis, w_axis = 2, 3, 0, 1
+    mesh_shape = tuple(mesh_device.shape)
+    h_factor, w_factor = mesh_shape[h_axis], mesh_shape[w_axis]
+    B, T, Hf, Wf, C = input_shape
+    kT, kH, kW = kernel_size
+    pT = kT // 2
+    torch.manual_seed(0)
+    inp = torch.rand(input_shape).bfloat16()
+    H_dev, W_dev = Hf // h_factor, Wf // w_factor
+    outer = B * T
+    total_sticks = outer * 2 * pH * W_dev + outer * 2 * pW * (H_dev + 2 * pH)
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+    mesh_device.load_sub_device_manager(mgr)
+    sub_id = ttnn.SubDeviceId(0)
+    mesh_device.set_sub_device_stall_group([sub_id])
+    h_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    w_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    dims = [None, None]
+    dims[h_axis], dims[w_axis] = h_dim, w_dim
+    inp_mesh = ttnn.from_torch(
+        inp,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+    )
+
+    w = torch.rand(C_out, C, kT, kH, kW).bfloat16()
+    tt_w = ttnn.from_torch(w, dtype=ttnn.bfloat16, pad_value=0)
+    config = ttnn.Conv3dConfig(
+        weights_dtype=ttnn.bfloat16,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        C_in_block=32,
+        compute_with_storage_grid_size=(grid.x, grid.y),
+    )
+    tt_w = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_w, groups=1, C_in_block=32, alignment=32, device=mesh_device
+    )
+    tt_b = ttnn.from_torch(
+        torch.rand(1, C_out).bfloat16(), device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, pad_value=0
+    )
+    kcfg = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    def do_conv(inp_t, padding, halo=None):
+        return ttnn.experimental.conv3d(
+            input_tensor=inp_t,
+            weight_tensor=tt_w,
+            device=mesh_device,
+            bias_tensor=tt_b,
+            config=config,
+            dtype=ttnn.bfloat16,
+            output_channels=C_out,
+            kernel_size=kernel_size,
+            stride=(1, 1, 1),
+            padding=padding,
+            dilation=(1, 1, 1),
+            padding_mode="zeros",
+            groups=1,
+            compute_kernel_config=kcfg,
+            halo_buffer=halo,
+        )
+
+    # Golden: full-pad (neighbor_pad_async) then conv with spatial pad 0.
+    out_shape = list(input_shape)
+    out_shape[h_dim] += h_factor * 2 * pH
+    out_shape[w_dim] += w_factor * 2 * pW
+    persist = ttnn.from_torch(
+        torch.zeros(out_shape).bfloat16(),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+    )
+    full = ttnn.experimental.neighbor_pad_async(
+        inp_mesh,
+        [h_dim, w_dim],
+        [pH, pW],
+        [pH, pW],
+        "zeros",
+        [h_axis, w_axis],
+        [h_sem, w_sem],
+        [barrier_sem],
+        num_links=[num_links, num_links],
+        memory_config=mem,
+        topology=ttnn.Topology.Linear,
+        persistent_output_buffer=persist,
+    )
+    out_gold = do_conv(full, (pT, 0, 0))
+    ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
+
+    # Halo: compact (neighbor_pad_halo) then conv with spatial pad pH/pW reading the halo.
+    halo_buf = ttnn.from_torch(
+        torch.zeros([total_sticks, C]).bfloat16(),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+    )
+    ttnn.experimental.neighbor_pad_halo(
+        inp_mesh,
+        halo_buf,
+        np_padding_h=pH,
+        np_padding_w=pW,
+        np_cluster_axis=h_axis,
+        np_num_links=num_links,
+        np_topology=ttnn.Topology.Linear,
+        h_neighbor_semaphore=h_sem,
+        barrier_semaphore=barrier_sem,
+        w_neighbor_semaphore=w_sem,
+        np_pad_dim2=w_dim,
+        np_pad2_left=pW,
+        np_pad2_right=pW,
+        np_pad2_cluster_axis=w_axis,
+        np_pad2_num_links=num_links,
+        padding_mode="zeros",
+    )
+    out_halo = do_conv(inp_mesh, (pT, pH, pW), halo=halo_buf)
+    ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
+
+    gold_dev = ttnn.get_device_tensors(ttnn.from_device(out_gold))
+    halo_dev = ttnn.get_device_tensors(ttnn.from_device(out_halo))
+    all_pass = True
+    for i in range(mesh_shape[0] * mesh_shape[1]):
+        g = ttnn.to_torch(gold_dev[i])
+        h = ttnn.to_torch(halo_dev[i])
+        ok, pcc = comp_pcc(g, h, 0.999)
+        if not ok:
+            all_pass = False
+            print(f"FAIL dev {i}: {pcc}  shapes g={tuple(g.shape)} h={tuple(h.shape)}")
+        else:
+            print(f"PASS dev {i}: {pcc}")
+    mesh_device.reset_sub_device_stall_group()
+    mesh_device.clear_loaded_sub_device_manager()
+    assert all_pass, "halo conv3d != full-pad conv3d"
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape, C_out",
+    [([1, 4, 68, 120, 64], 64), ([1, 8, 136, 240, 64], 128)],
+    ids=["small_34x60_C64", "mid_68x120_C64"],
+)
+def test_conv3d_halo_vs_fullpad(mesh_device, device_params, input_shape, C_out):
+    run_conv3d_halo_vs_fullpad_2d(mesh_device, input_shape, C_out=C_out, kernel_size=(3, 3, 3), pH=1, pW=1, num_links=2)

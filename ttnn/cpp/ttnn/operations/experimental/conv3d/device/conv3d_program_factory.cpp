@@ -294,6 +294,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "CB matmul_result_rm: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
 
     bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
+    // Halo-aware mode: spatial (H/W) boundary conv-window positions read from the compact halo buffer
+    // instead of zero-padding. Only for zeros mode (the halo carries the neighbor's real pixels).
+    const bool halo_mode = tensor_args.halo_buffer.has_value() && is_padding_zeros;
 
     uint32_t in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t out_row_size_bytes = output_tensor.buffer()->aligned_page_size();
@@ -732,8 +735,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         coalesced_scratch_rows,
         cb_dram_read_scratch_id,
         static_cast<uint32_t>(enable_dram_read_staging),
-        dram_read_alignment};
+        dram_read_alignment,
+        static_cast<uint32_t>(halo_mode)};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    // Halo buffer accessor follows the input accessor (nullptr when not in halo mode, like bias).
+    tt::tt_metal::TensorAccessorArgs(halo_mode ? tensor_args.halo_buffer.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/reader_vol2col.cpp";
@@ -849,6 +856,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
 
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
+    tt::tt_metal::Buffer* halo_buffer_ptr = halo_mode ? tensor_args.halo_buffer.value().buffer() : nullptr;
     tt::tt_metal::Buffer* out_buffer = output_tensor.buffer();
     tt::tt_metal::Buffer* weight_buffer = weight_tensor.buffer();
     tt::tt_metal::Buffer* bias_buffer = bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr;
@@ -1179,19 +1187,24 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         const uint32_t num_workers = cw.has_work ? (uint32_t)worker_core_ids[group_id].size() : 0u;
 
         // Reader pos[0] is the input buffer address (patched on cache hit via emplace_runtime_args).
-        reader_desc.emplace_runtime_args(
-            core,
-            {input_buffer,
-             cw.c_in_block_start,
-             cw.c_in_block_end,
-             cw.c_out_block_start,
-             cw.c_out_block_end,
-             cw.t_out_start,
-             cw.t_out_end,
-             cw.h_out_start,
-             cw.h_out_end,
-             cw.w_out_start,
-             cw.w_out_end});
+        // Trailing halo buffer address (halo mode only) is read by the reader when its halo_mode CT flag set.
+        KernelDescriptor::RTArgList reader_args;
+        reader_args.reserve(12);
+        reader_args.push_back(input_buffer);
+        reader_args.push_back(cw.c_in_block_start);
+        reader_args.push_back(cw.c_in_block_end);
+        reader_args.push_back(cw.c_out_block_start);
+        reader_args.push_back(cw.c_out_block_end);
+        reader_args.push_back(cw.t_out_start);
+        reader_args.push_back(cw.t_out_end);
+        reader_args.push_back(cw.h_out_start);
+        reader_args.push_back(cw.h_out_end);
+        reader_args.push_back(cw.w_out_start);
+        reader_args.push_back(cw.w_out_end);
+        if (halo_mode) {
+            reader_args.push_back(halo_buffer_ptr);
+        }
+        reader_desc.emplace_runtime_args(core, reader_args);
 
         compute_desc.runtime_args.emplace_back(
             core,

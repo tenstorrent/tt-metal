@@ -55,7 +55,8 @@ ttnn::Tensor conv3d(
     const std::string& padding_mode_,
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& halo_buffer) {
     // Conservative default blocking: minimal spatial blocks, smallest valid C_in_block.
     // C_in_block must satisfy: kernel_vol * C_in_block ≡ 0 (mod TILE_WIDTH) for weight tile
     // alignment, and C_in_block % l1_alignment == 0 for L1 alignment.
@@ -92,7 +93,8 @@ ttnn::Tensor conv3d(
         padding_mode_,
         groups_,
         memory_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        halo_buffer);
 }
 
 }  // namespace ttnn::experimental

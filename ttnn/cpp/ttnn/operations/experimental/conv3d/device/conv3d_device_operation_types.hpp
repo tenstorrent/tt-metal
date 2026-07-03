@@ -92,6 +92,11 @@ struct Conv3dInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<const Tensor> bias_tensor;
+    // Halo-aware mode: when set, the reader reads spatial (H/W) boundary conv-window positions from this
+    // compact [H-top|H-bot|W-left|W-right] buffer (produced by neighbor_pad_halo) instead of zero-padding.
+    // Temporal (T) boundary positions still zero-pad. Section geometry is derived in the program factory
+    // from the input shape + padding. Only meaningful with padding_mode "zeros".
+    std::optional<const Tensor> halo_buffer;
 };
 
 namespace detail {
