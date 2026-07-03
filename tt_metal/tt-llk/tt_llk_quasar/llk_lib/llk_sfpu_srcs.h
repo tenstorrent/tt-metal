@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <utility>
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
@@ -16,31 +15,28 @@
 using namespace ckernel;
 using namespace ckernel::math;
 
-// SrcS SFPU pipeline (UNP_S -> SrcS -> SFPU -> PACK1 -> L1), all on one TRISC (ISOLATE_SFPU).
+// SrcS unary SFPU pipeline: UNP_S -> SrcS -> SFPU -> PACK1 -> L1, on the ISOLATE_SFPU TRISC.
+// SrcS index convention: input in the first slice (SFPU_SRCS_BASE_ADDR), result in the third
+// (SFPU_SRCS_BASE_ADDR + 2 * YDIM). A 32x32 tile spans slice_count(mode) slices, each YDIM >> 1
+// SFPU rows (SFP_ROWS == 2).
 //
-// SrcS index convention (owned here so callers do not repeat it):
-//   - The input tile is unpacked into the first SrcS slice, read from SFPU_SRCS_BASE_ADDR.
-//   - The SFPU result is written to the third SrcS slice, at SFPU_SRCS_BASE_ADDR + 2 * YDIM,
-//     which the packer then streams out to L1.
-// One 32x32 tile spans srcs_dims::slice_count(mode) SrcS slices; each slice holds
-// (YDIM >> 1) SFPU rows (SFP_ROWS == 2).
+// TODO: only supports per-slice ops for now. Add SFPLOADMACRO support once BinarySFPU (#47469) is merged.
 
 /**
- * @brief Configure the SrcS SFPU pipeline for a unary op: unpack (UNP_S), pack (PACK1) and SFPU.
+ * @brief Configure the unary SrcS SFPU pipeline: unpack (UNP_S), pack (PACK1) and SFPU.
  *
- * Builds the unpack/pack buffer descriptors, programs the SrcS auto-loop config for one tile and
- * initializes the SFPU. SrcS geometry (XDIM/YDIM/ZDIM/slice_count) is derived internally from the
- * unpack destination format, so callers do not pass operand-derivable dimensions.
+ * Builds the unpack/pack buffer descriptors, programs the SrcS auto-loop for one tile and inits the
+ * SFPU. SrcS geometry is derived from @p unpack_S_dst_format, not passed by the caller.
  *
- * @tparam INSTRN_COUNT: Number of unpack/pack instructions in the SrcS auto-loop (see llk_srcs.h).
- * @param l1_in_addr_16B: L1 input buffer address (16B units) unpacked into SrcS.
- * @param unpack_S_src_format: L1 input format for the unpacker.
- * @param unpack_S_dst_format: SrcS destination format (also selects 32-bit SrcS mode).
- * @param buf_desc_id_unpack: Buffer descriptor table ID for the unpack buffer (0-31).
- * @param l1_out_addr_16B: L1 output buffer address (16B units) packed from SrcS.
+ * @tparam INSTRN_COUNT: Unpack/pack instructions per SrcS auto-loop (see llk_srcs.h).
+ * @param l1_in_addr_16B: L1 input address (16B units).
+ * @param unpack_S_src_format: L1 input format.
+ * @param unpack_S_dst_format: SrcS format (also selects 32-bit SrcS mode).
+ * @param buf_desc_id_unpack: Unpack buffer descriptor ID (0-31).
+ * @param l1_out_addr_16B: L1 output address (16B units).
  * @param pack_S_src_format: SrcS source format for the packer.
- * @param pack_S_dst_format: L1 output format for the packer.
- * @param buf_desc_id_pack: Buffer descriptor table ID for the pack buffer (0-31).
+ * @param pack_S_dst_format: L1 output format.
+ * @param buf_desc_id_pack: Pack buffer descriptor ID (0-31).
  * @param implied_math_format: When false, disables implied SrcS math format for this TRISC.
  */
 template <std::uint8_t INSTRN_COUNT = 1>
@@ -96,18 +92,16 @@ inline void _llk_sfpu_srcs_init_(
 /**
  * @brief Run a unary SFPU op over num_tiles tiles on the SrcS path.
  *
- * For each tile the input is unpacked to SrcS and the output packed from SrcS; for each SrcS slice
- * the caller-supplied @p sfpu_op computes the result and the SrcS valid flags are cleared. The load
- * and store base addresses (SrcS index convention above) and the per-slice SFPU row count are
- * computed here and handed to @p sfpu_op, keeping the compute op free of SrcS bookkeeping.
+ * Per tile: unpack to SrcS, pack from SrcS, then per slice invoke @p sfpu_op and clear the SrcS
+ * valids. The load/store base addresses and per-slice row count are computed here and passed to
+ * @p sfpu_op, so the op carries no SrcS bookkeeping.
  *
- * @tparam INSTRN_COUNT: Number of unpack/pack instructions in the SrcS auto-loop (see llk_srcs.h).
- * @tparam SfpuOp: Callable invoked once per slice as
- *         sfpu_op(int load_base_addr, int store_base_addr, int num_sfpu_iterations).
+ * @tparam INSTRN_COUNT: Must match the value passed to _llk_sfpu_srcs_init_.
+ * @tparam SfpuOp: Callable sfpu_op(int load_base_addr, int store_base_addr, int num_sfpu_iterations).
  * @param num_tiles: Number of 32x32 tiles to process.
- * @param unpack_S_dst_format: SrcS destination format used to derive SrcS geometry.
- * @param buf_desc_id_unpack: Buffer descriptor table ID configured in _llk_sfpu_srcs_init_.
- * @param buf_desc_id_pack: Buffer descriptor table ID configured in _llk_sfpu_srcs_init_.
+ * @param unpack_S_dst_format: SrcS format used to derive geometry.
+ * @param buf_desc_id_unpack: Unpack buffer descriptor ID (from _llk_sfpu_srcs_init_).
+ * @param buf_desc_id_pack: Pack buffer descriptor ID (from _llk_sfpu_srcs_init_).
  * @param sfpu_op: Per-slice SFPU computation.
  */
 template <std::uint8_t INSTRN_COUNT = 1, typename SfpuOp>
