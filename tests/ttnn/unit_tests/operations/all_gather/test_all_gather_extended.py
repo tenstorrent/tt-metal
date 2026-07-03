@@ -30,7 +30,7 @@ from loguru import logger
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from ttnn.operations._op_contract import UnsupportedAxisValue
+from ttnn.operations._op_contract import ExcludedCell
 from ttnn.operations.all_gather import all_gather
 
 
@@ -94,24 +94,34 @@ def test_all_gather_preallocated_output(mesh_device):
 @pytest.mark.parametrize("device_params", [LINEAR], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_gather_validate_rejections(mesh_device):
-    """validate() gates: registry refusal for an out-of-SUPPORTED axis (Ring
-    topology) and a structural ValueError for gather_dim out of range. Both fire
-    before any fabric work, so this is fast (no gather).
+    """validate() gates: registry refusal for a still-excluded CELL and a
+    structural ValueError for gather_dim out of range. Both fire before any
+    fabric work, so this is fast (no gather).
 
-    NOTE: ROW_MAJOR_LAYOUT and bfloat8_b were promoted to SUPPORTED in Refinement 1,
-    so the still-unsupported axis exercised here is topology=Ring (a Refinement 3
-    TARGET). gather_dim in {-3,-2,-1} is the other remaining refusal (Refinement 2)."""
+    NOTE: dtype {bf16,f32,bf8b}, layout {TILE,RM}, gather_dim {-4,-3,-2,-1}
+    (Refinements 1-2) and topology {Linear,Ring} (Refinement 3) are ALL in
+    SUPPORTED now, so no single-axis value is refused. The remaining refusal is
+    the EXCLUSIONS cell {TILE, gather_dim=-2, non_tile_aligned} (a structural
+    sub-tile-repack gap), which raises ExcludedCell (a NotImplementedError
+    subclass)."""
     num_devices = prod(tuple(mesh_device.shape))
     if num_devices < 2:
         pytest.skip("all_gather requires at least 2 mesh devices")
 
-    # Ring topology is not in SUPPORTED["topology"] -> typed registry refusal.
-    tile_ring_input, _ = _make_sharded_input(mesh_device, (1, 1, 32, 64), ttnn.bfloat16)
-    with pytest.raises(UnsupportedAxisValue):
-        all_gather(tile_ring_input, 0, topology=ttnn.Topology.Ring)
+    # topology=Ring is now SUPPORTED (Refinement 3) -> validate() must NOT raise.
+    ring_input, _ = _make_sharded_input(mesh_device, (1, 1, 32, 64), ttnn.bfloat16)
+    from ttnn.operations.all_gather.all_gather import validate as _validate
+
+    _validate(ring_input, 0, topology=ttnn.Topology.Ring, output_tensor=None)  # no raise
+
+    # EXCLUSIONS cell {TILE, gather_dim=-2, non_tile_aligned}: H=48 is not %32 in
+    # (1,1,48,64), W=64 is tile-aligned -> gather_dim=-2 hits the excluded cell.
+    excluded_input, _ = _make_sharded_input(mesh_device, (1, 1, 48, 64), ttnn.bfloat16)
+    with pytest.raises(ExcludedCell):
+        all_gather(excluded_input, -2, topology=ttnn.Topology.Linear)
 
     # gather_dim out of range (rank is 4) -> structural ValueError.
     tile_input, _ = _make_sharded_input(mesh_device, (1, 1, 32, 64), ttnn.bfloat16)
     with pytest.raises(ValueError):
         all_gather(tile_input, 9, topology=ttnn.Topology.Linear)
-    logger.info("all_gather validate() rejections fire as expected (registry refusal + structural guard)")
+    logger.info("all_gather validate() rejections fire as expected (excluded cell + structural guard)")

@@ -117,3 +117,31 @@ topologies:
     applies_to_ops: [all_gather]
     required: true        # VALIDATED 2026-06-25: test_all_gather_async gather_dim_0/fabric_linear PASS on the WH all-MMIO sim
     extra_env: {}
+
+  # ── Phase 2 / Refinement 3: WH T3K RING fabric for all_gather (topology=Ring) ────────
+  # Genuine 1-D ring data plane (FABRIC_1D_RING) — the wraparound ethernet link between
+  # the ends of the (1,8) line is enabled. Reuses the SAME all-MMIO cluster (its physical
+  # T3K wiring already forms a Hamiltonian ring of 8 chips) and the SAME t3k_1x8 mesh-graph
+  # descriptor, which ALREADY declares `dim_types: [RING, RING]` (so it is already the ring
+  # mesh-graph — no new descriptor needed). VALIDATED 2026-07-03: FABRIC_1D_RING inits
+  # cleanly on the WH sim and all_gather(topology=Ring) gathers bit-exact on it
+  # (test_all_gather_ring.py::test_all_gather_ring_on_ring_fabric).
+  #
+  # NOTE on the golden grade: run_eval pins the golden grade to ONE topology
+  # (_grade_primary_topology -> topos[0] since neither all_gather entry sets grade_primary),
+  # which stays wh_t3k_allmmio_all_gather (listed FIRST). This entry is therefore NOT the
+  # golden grade topology; it is the ring-fabric verification target for the `--op all_gather`
+  # fan-out proof run and for test_all_gather_ring.py. (test_golden.py hardcodes
+  # device_params=FABRIC_1D, so the golden suite itself always exercises the line fabric;
+  # ring-fabric coverage is provided by the dedicated refinement test. Making the golden
+  # fixture topology-adaptive would be a golden-suite change, out of the op's scope.)
+  - name: wh_t3k_ring_all_gather
+    arch: wormhole_b0
+    sim_so: "{sim_wh_so}"
+    cluster_desc: "{craqsim_data}/wh/wormhole_t3k_all_mmio.yaml"
+    mesh_graph_desc: "{repo}/tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto"
+    mesh_shape: [1, 8]
+    fabric_config: FABRIC_1D_RING
+    applies_to_ops: [all_gather]
+    required: true        # VALIDATED 2026-07-03: all_gather(topology=Ring) PASS on the WH FABRIC_1D_RING sim
+    extra_env: {}

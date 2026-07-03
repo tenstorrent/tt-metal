@@ -125,7 +125,23 @@ the precision baseline stays bit-exact for a non-zero gather_dim.
 
 ---
 
-### [ ] Refinement 3 — Ring topology
+### [x] Refinement 3 — Ring topology
+
+**RESOLVED 2026-07-03 (infra block disproven).** The verifier's premise — that a
+`topology=Ring` cell would fail/hang on a line fabric and that no ring topology could be
+provisioned — turned out NOT to hold for THIS op: (1) all_gather's bidirectional
+store-and-forward only ever emits 1-hop (adjacent) fabric routes, and `ccl_dm_route`
+returns the SAME route for Ring and Linear on an adjacent pair, so the per-device program
+is byte-identical for Ring and Linear and topology=Ring gathers correctly on the existing
+FABRIC_1D line (verified). (2) `FABRIC_1D_RING` (genuine ring fabric, wraparound link on)
+initialises cleanly on the WH T3K sim using the EXISTING `t3k_1x8_mesh_graph_descriptor`
+(which already declares `dim_types: [RING, RING]`) — the cluster's physical wiring already
+forms a Hamiltonian ring of 8 chips. A `wh_t3k_ring_all_gather` (FABRIC_1D_RING) topology
+was added to `multidevice_sim_topologies.yaml` and topology=Ring gathers bit-exact on it
+(`test_all_gather_ring.py`). SUPPORTED now lists Ring; golden Ring cells pass (validated
+diverse sample; no drift). The op does NOT yet EXPLOIT the wraparound for a shorter
+single-direction gather — that is a PERF-only opportunity (not a support gap); see
+changelog "Follow-up (perf)". See changelog for details.
 
 **Goal**: add `ttnn.Topology.Ring` to `SUPPORTED["topology"]`. The design states the
 current bidirectional store-and-forward kernel already runs on a Ring (a Ring wrap lets

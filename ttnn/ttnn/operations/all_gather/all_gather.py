@@ -68,8 +68,18 @@ SUPPORTED = {
     # contiguous page range, so the contiguous-slice walk is unchanged. Interleaved
     # TensorAccessor self-aligns the DRAM page stride, so the logical page size is correct.
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    # Linear line proven (Ring is a TARGET refinement).
-    "topology": [_Topology.Linear],
+    # Linear line (Phase 0) + Ring (Refinement 3). all_gather's bidirectional
+    # store-and-forward is topology-agnostic at the routing level: every fabric
+    # hop is between IMMEDIATE neighbours (1 hop), and ccl_dm_route returns the
+    # SAME route for Ring and Linear on an adjacent pair (its ring short-way only
+    # differs for |hops| > 1, which this store-and-forward never emits). So the
+    # per-device program is identical for Ring and Linear — the design states the
+    # bidirectional line design "also runs on a Ring" (op_design.md "Ring
+    # algorithm"). The op therefore accepts Ring and produces a correct all-gather
+    # on both a FABRIC_1D line and a FABRIC_1D_RING ring fabric; it does NOT (yet)
+    # exploit the ring wraparound link for a shorter single-direction gather — that
+    # is a perf-only follow-up (see changelog / op_requirements Refinement 3b).
+    "topology": [_Topology.Linear, _Topology.Ring],
     # gather_dim is an index axis in the NEGATIVE convention. -4 == gather_dim 0 (the
     # proven contiguous-slice case); -3/-2/-1 (Refinement 2) use the non-contiguous
     # concat walk (op_design "Dataflow Strategy" stride table). For a slice from origin
