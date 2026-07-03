@@ -227,6 +227,7 @@ int main(int argc, char** argv) {
     int sock_zones = 0;                      // --sockzones: push device-zone pages + emit them to Tracy
     int realzones = 0;                       // --realzones: real workload -> profzone pairs -> socket -> Tracy
     int primeecc = 0;                        // --primeecc: one-time fresh-board L3 LIM ECC prime (then tt-smi -r)
+    int wayprobe = 0;  // --wayprobe: does the L2CPU reset clear L3 WayEnable? (metal-only prime feasibility)
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -273,6 +274,8 @@ int main(int argc, char** argv) {
             realzones = 1;
         } else if (a == "--primeecc") {
             primeecc = 1;
+        } else if (a == "--wayprobe") {
+            wayprobe = 1;
         } else {
             fprintf(stderr, "unknown arg: %s\n", a.c_str());
             return 2;
@@ -283,7 +286,7 @@ int main(int argc, char** argv) {
     }
 
     std::vector<uint8_t> bin;
-    if (!primeecc) {  // --primeecc only touches L3 cache regs; no firmware needed
+    if (!primeecc && !wayprobe) {  // --primeecc/--wayprobe only touch L3 cache regs; no firmware needed
         bin = read_file(bin_path);
         printf("[fw] %s (%zu bytes)\n", bin_path.c_str(), bin.size());
     }
@@ -302,6 +305,31 @@ int main(int argc, char** argv) {
     auto mesh = MeshDevice::create_unit_mesh(device_id);
     Cluster& cluster = MetalContext::instance().get_cluster();
     const auto& hal = MetalContext::instance().hal();
+
+    if (wayprobe) {
+        // Feasibility probe for a metal-only ECC prime: is the L3 WayEnable (set by --primeecc, the
+        // thing that "needs an ASIC reset") cleared by the *L2CPU* reset that metal already does in
+        // its X280 boot? If yes, metal could scrub + L2CPU-reset with no external tt-smi -r.
+        X280 x(cluster, device_id, l2cpu);
+        tt_cxy_pair l2 = x.l2();
+        constexpr uint64_t L3_WAYENABLE = 0x02010008ULL;
+        uint32_t before = x.reg_rd(l2, L3_WAYENABLE);
+        x.reg_wr(l2, L3_WAYENABLE, 0xF);
+        uint32_t after_set = x.reg_rd(l2, L3_WAYENABLE);
+        x.assert_reset();
+        x.release_reset();
+        uint32_t after_l2cpu_reset = x.reg_rd(l2, L3_WAYENABLE);
+        printf(
+            "[wayprobe] WayEnable: before=0x%x after_set=0x%x after_L2CPU_reset=0x%x  => L2CPU reset %s WayEnable "
+            "(so a metal-only prime is %s; a full tt-smi -r would restore it either way)\n",
+            before,
+            after_set,
+            after_l2cpu_reset,
+            (after_l2cpu_reset != after_set) ? "CLEARS/CHANGES" : "does NOT clear",
+            (after_l2cpu_reset != after_set) ? "PLAUSIBLE" : "NOT viable via L2CPU reset");
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
 
     if (primeecc) {
         // One-time fresh-board L3 LIM ECC prime (mirrors tt-llm-engine loader.prime_lim_ecc /
