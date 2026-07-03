@@ -137,9 +137,13 @@ def _resolve_intermediate_spec(input_tensor, packet_dims: PacketDims):
     return ttnn.Shape([packet_dims.total_packets, packet_page_dim])
 
 
-def validate(input_tensor, sender_coord, receiver_coord, *, topology, output_tensor, intermediate_tensor, packet_dims):
+def validate(input_tensor, sender_coord, receiver_coord, *, topology, output_tensor, intermediate_tensor):
     """Runtime gate. Structural errors raise ValueError; axis refusals raise the
-    registry-model UnsupportedAxisValue / ExcludedCell. Structural checks first."""
+    registry-model UnsupportedAxisValue / ExcludedCell. Structural checks first.
+
+    Called as the entry point's first line (before any host packet-framing or
+    program-descriptor work). packet_dims is only needed for the optional
+    intermediate-spec check, so it is computed lazily there rather than up front."""
     device = input_tensor.device()
     if not isinstance(device, ttnn.MeshDevice):
         raise ValueError("point_to_point: input must be on a MeshDevice")
@@ -182,7 +186,7 @@ def validate(input_tensor, sender_coord, receiver_coord, *, topology, output_ten
 
     # 9. supplied intermediate_tensor spec must equal the resolved intermediate spec.
     if intermediate_tensor is not None:
-        expected_shape = _resolve_intermediate_spec(input_tensor, packet_dims)
+        expected_shape = _resolve_intermediate_spec(input_tensor, _compute_packet_dims(input_tensor))
         if (
             list(intermediate_tensor.shape) != list(expected_shape)
             or intermediate_tensor.dtype != input_tensor.dtype
@@ -225,8 +229,8 @@ def point_to_point(
     only the receiver device's shard is overwritten, so the sender's own shard
     and every non-participating device's shard stay bit-identical to the input.
     """
-    packet_dims = _compute_packet_dims(input_tensor)
-
+    # validate() is the first line: all structural + axis refusals happen before
+    # any host packet-framing or program-descriptor / dispatch work.
     validate(
         input_tensor,
         sender_coord,
@@ -234,9 +238,9 @@ def point_to_point(
         topology=topology,
         output_tensor=output_tensor,
         intermediate_tensor=intermediate_tensor,
-        packet_dims=packet_dims,
     )
 
+    packet_dims = _compute_packet_dims(input_tensor)
     mesh_device = input_tensor.device()
 
     # Output defaults to the input tensor (in-place alias): only the receiver's

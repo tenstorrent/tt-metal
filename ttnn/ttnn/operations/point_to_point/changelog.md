@@ -72,3 +72,37 @@ run in batches via `scripts/run_multidevice_sim_pytest.py`):
 
 None beyond the immutable acceptance test (no deterministic debug test needed —
 the only failure was a clear host-side ValueError, fixed directly).
+
+## 2026-07-03 — Phase 0 verification (incremental-verifier)
+
+- **What was done**: Code review + registry-conformance audit + golden suite
+  (representative subset) + `eval.verify_supported` + precision baseline, all on the
+  deterministic multi-device craq-sim runner (`bh_8xP150_p2p`, mesh (2,4), FABRIC_1D).
+- **SUPPORTED at Phase 0** (unchanged — honest, no drift found):
+  dtype=[bfloat16, float32, bfloat8_b], layout=[TILE, ROW_MAJOR],
+  topology=[Linear, Ring], alignment=[tile_aligned, non_tile_aligned].
+- **Accuracy achieved**: PCC = 1.000000, max_abs = 0.0, mean_abs = 0.0, rms = 0.0
+  (bit-exact identity copy; measured on 8 cells / 4 shapes ×
+  {bfloat16, float32}-TILE via `test_point_to_point_precision_baseline.py`).
+- **Golden suite at Phase 0**: representative 72-cell subset (of 432; full run is
+  ~105 min of kHz-sim device time). 30 supported_pass / 36 xfail_expected (integer
+  dtypes) / 6 invalid_skipped (bf8b+ROW_MAJOR). **All loud categories 0** —
+  supported_fail=0, xpass_drift=0, xfail_wrong_mode=0. Subset covers every axis value
+  (see `verifier_results/verifier_report.json`).
+- **Fixes applied**:
+  - `point_to_point.py`: `validate()` is now the entry point's first line;
+    `packet_dims` made lazy inside `validate()` (only for the optional
+    intermediate-spec check). Behavior-preserving.
+  - `test_point_to_point_precision_baseline.py`: mesh shape `(1,2)` → `(2,4)` (the
+    `(1,2)` matched no sim topology and would hang fabric init); largest sweep shape
+    `512×512` → `256×128` to fit the sim wall-clock budget.
+- **Issues encountered**: no drift, no kernel bugs. Program-cache test (the semaphore
+  cache-reuse footgun) passes on both topologies. The `(1,2)` precision-baseline mesh
+  was the one real defect (a fabric-init hang), fixed. Reproducibility gotcha: the
+  multi-device runner must be launched with the clone's `python_env` activated (else
+  `sys.executable` can resolve a different checkout's venv that lacks
+  `ttnn.operations._op_contract`).
+- **Refinements queued**: 1 — integer dtype passthrough (uint16/int32/uint32); the
+  only `TARGET − SUPPORTED` gap. See `op_requirements.md`.
+- **Artifacts**: `verification_report.md`, `op_requirements.md`,
+  `verifier_results/{verifier_report.json,test_results.json,test_axes.json}`.
