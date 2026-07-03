@@ -14,6 +14,8 @@ HF weight shapes:
   down_proj.weight: [hidden_size, intermediate_size] = [2816, 2112]
 """
 
+import torch
+
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -54,32 +56,36 @@ class SharedMLP:
             col_mapper = None
             row_mapper = None
 
+        # Fuse gate+up into one column-parallel matmul. Per TP device we interleave
+        # the shards as [up_i | gate_i] so that after column sharding splits the
+        # concatenated output dim into ``tp`` contiguous chunks, each device holds
+        # its own [up_i | gate_i] pair (see __call__ for the GeGLU eval). One wide
+        # matmul replaces the two narrow gate/up matmuls — fewer op launches and
+        # better core packing — which is the decode/throughput win.
+        self.tp = tp
         if state_dict:
-            gate_proj_weight = state_dict["gate_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-            up_proj_weight = state_dict["up_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+            gate_t = state_dict["gate_proj.weight"].transpose(-2, -1)  # [hidden, inter]
+            up_t = state_dict["up_proj.weight"].transpose(-2, -1)  # [hidden, inter]
+            if tp > 1:
+                gate_shards = torch.chunk(gate_t, tp, dim=-1)
+                up_shards = torch.chunk(up_t, tp, dim=-1)
+                gate_up_t = torch.cat([torch.cat([up_shards[i], gate_shards[i]], dim=-1) for i in range(tp)], dim=-1)
+            else:
+                gate_up_t = torch.cat([up_t, gate_t], dim=-1)
+            gate_up_weight = gate_up_t.unsqueeze(0).unsqueeze(0)  # [1,1,hidden,2*inter]
             down_proj_weight = state_dict["down_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
         else:
-            gate_proj_weight = None
-            up_proj_weight = None
+            gate_up_weight = None
             down_proj_weight = None
 
-        # gate/up: column-parallel (shard output dim across TP devices)
-        self.gate_proj = ttnn.as_tensor(
-            gate_proj_weight,
+        # gate_up: column-parallel (shard fused output dim across TP devices)
+        self.gate_up_proj = ttnn.as_tensor(
+            gate_up_weight,
             device=mesh_device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=col_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj.weight{tp_suffix}{dtype_suffix}"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self.up_proj = ttnn.as_tensor(
-            up_proj_weight,
-            device=mesh_device,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=col_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj.weight{tp_suffix}{dtype_suffix}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_up_proj.weight{tp_suffix}{dtype_suffix}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # down: row-parallel (shard input dim, allreduce after)
@@ -99,14 +105,21 @@ class SharedMLP:
 
         gate/up are column-parallel, down is row-parallel + allreduce.
         """
-        # gate = GELU(x @ gate_proj)
-        gate = ttnn.linear(hidden_states, self.gate_proj)
+        # Fused gate/up projection: one matmul produces [.., 2*inter/tp] per
+        # device laid out as [up_i | gate_i]. A single wide matmul beats two
+        # narrow ones (fewer op launches, better core packing), which is the win
+        # even though we split the result back out below. ``ttnn.geglu`` would
+        # save the split ops but currently breaks the batch-1 decode trace, so we
+        # split manually and reuse the original (fast-approx GELU) math — keeping
+        # numerics identical to the unfused baseline.
+        gate_up = ttnn.linear(hidden_states, self.gate_up_proj)
+        shard = gate_up.shape[-1] // 2
+        s = gate_up.shape[-2]
+        up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, s, shard])
+        gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard])
+        gate_up.deallocate(True)
+
         gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
-
-        # up = x @ up_proj
-        up = ttnn.linear(hidden_states, self.up_proj)
-
-        # hidden = gate * up
         hidden = ttnn.mul(gate, up)
         gate.deallocate(True)
         up.deallocate(True)
