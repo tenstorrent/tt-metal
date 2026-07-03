@@ -161,7 +161,11 @@ TEST(InPlaceHaloEconomics, MaxPoolHeightSharded) {
         // Exercise the real shipping functions (the ones the op/factory/callers use).
         const uint32_t max_ref_size = compute_max_outbound_halo_sticks(tensor_meta, shard_bounds, num_cores);
         const bool activates = should_halo_be_in_place(
-            /*allow_in_place*/ true, config, in_nsticks_per_core, /*is_height_sharded*/ true, /*is_in_tiled*/ false);
+            /*allow_in_place*/ true,
+            config,
+            in_nsticks_per_core,
+            TensorMemoryLayout::HEIGHT_SHARDED,
+            /*is_in_tiled*/ false);
 
         const double ratio = in_nsticks_per_core ? (100.0 * max_ref_size / in_nsticks_per_core) : 0.0;
         const char* verdict = (max_ref_size < in_nsticks_per_core) ? "SAVE" : "LOSE";

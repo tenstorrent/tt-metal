@@ -138,6 +138,15 @@ def _worker(spec):
     # overrides these to drive the untilize-in-place path.
     in_dtype_str = spec.get("in_dtype", "bfloat16")
     in_layout_str = spec.get("in_layout", "row_major")
+    # Sharding scheme applied to the (dense) input tensor: height / width / block. Width-sharded
+    # halo is all-local (max_ref_size==0, no remote-temp CB); block-sharded uses the 2D grid +
+    # column-major NOC orientation. All three are validated corruption-safe.
+    shard_scheme_str = spec.get("shard_scheme", "height")
+    shard_scheme = {
+        "height": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        "width": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        "block": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    }[shard_scheme_str]
 
     out_dtype = ttnn.bfloat16 if out_dtype_str == "bfloat16" else ttnn.bfloat8_b
     # bf8_b output is only supported with TILE layout; bf16 uses ROW_MAJOR.
@@ -172,7 +181,7 @@ def _worker(spec):
                         padding=list(pad),
                         ceil_mode=False,
                         count_include_pad=True,
-                        applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        applied_shard_scheme=shard_scheme,
                         dtype=out_dtype,
                         output_layout=output_layout,
                     )
@@ -187,7 +196,7 @@ def _worker(spec):
                         stride=stride,
                         padding=list(pad),
                         dilation=(1, 1),
-                        applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        applied_shard_scheme=shard_scheme,
                         dtype=out_dtype,
                         output_layout=output_layout,
                     )
@@ -224,6 +233,7 @@ def _run_worker_subprocess(
     disable_inplace,
     in_dtype="bfloat16",
     in_layout="row_major",
+    shard_scheme="height",
 ):
     mode = "normal" if disable_inplace else "inplace"
     spec = {
@@ -236,6 +246,7 @@ def _run_worker_subprocess(
         "mode": mode,
         "in_dtype": in_dtype,
         "in_layout": in_layout,
+        "shard_scheme": shard_scheme,
     }
     log_file = os.path.join(outdir, f"{mode}_ttlogger.log")
 
@@ -281,7 +292,9 @@ def _nan_safe_exact_equal(a, b):
 # `require_untilize` (None | "pack_untilize" | "untilize-temp-CB") additionally asserts the
 # tiled untilize-in-place path taken (grep of the factory's diagnostic log line).
 # ===========================================================================
-def _run_and_compare(tag, shape, kernel, stride, pad, out_dtype, in_dtype, in_layout, require_untilize=None):
+def _run_and_compare(
+    tag, shape, kernel, stride, pad, out_dtype, in_dtype, in_layout, require_untilize=None, shard_scheme="height"
+):
     outdir = tempfile.mkdtemp(prefix=f"inplace_halo_{tag.replace('/', '_')}_")
 
     # ACTIVE (in-place auto-activates) and DISABLED (forced normal) in isolated processes.
@@ -296,9 +309,20 @@ def _run_and_compare(tag, shape, kernel, stride, pad, out_dtype, in_dtype, in_la
         disable_inplace=False,
         in_dtype=in_dtype,
         in_layout=in_layout,
+        shard_scheme=shard_scheme,
     )
     proc_normal, log_normal, _ = _run_worker_subprocess(
-        tag, shape, kernel, stride, pad, out_dtype, outdir, disable_inplace=True, in_dtype=in_dtype, in_layout=in_layout
+        tag,
+        shape,
+        kernel,
+        stride,
+        pad,
+        out_dtype,
+        outdir,
+        disable_inplace=True,
+        in_dtype=in_dtype,
+        in_layout=in_layout,
+        shard_scheme=shard_scheme,
     )
 
     # Surface worker crashes explicitly (never a silent pass).
@@ -435,6 +459,103 @@ def test_inplace_halo_tiled_matches_normal(shape_entry, in_dtype):
         in_dtype=in_dtype,
         in_layout="tile",
         require_untilize=expected_untilize,
+    )
+
+
+# ===========================================================================
+# WIDTH-SHARDED SAVE shapes (full-pool-support widening).
+#
+# Width sharding splits CHANNELS across cores, so each core holds ALL of NHW spatial. The halo
+# is therefore ENTIRELY LOCAL (no cross-core remote transfers): max_ref_size == 0, so the
+# remote-temp CB is skipped and the net-L1 gate always SAVEs (0 < 0.75*in_nsticks). The
+# in-place overlap-ordering still applies WITHIN each core's own shard. Both row-major
+# (skip-untilize) and tiled (untilize-in-place / pack_untilize) inputs are covered.
+# WH-probed: all activate (activate=1), full 8x8 grid, no crash/hang. The all-local / max_ref==0
+# path is what these exercise (no remote-temp CB).
+# ---------------------------------------------------------------------------
+WIDTH_SHARD_SHAPES = [
+    # name, NCHW, kernel, stride, pad(t,b,l,r), in_layout
+    ("ws_c8192_12x12_k3s1p1", [1, 8192, 12, 12], (3, 3), (1, 1), (1, 1, 1, 1), "row_major"),  # RM skip-untilize, padded
+    ("ws_c8192_12x12_k3s1p1", [1, 8192, 12, 12], (3, 3), (1, 1), (1, 1, 1, 1), "tile"),  # tiled untilize-in-place
+    ("ws_c16384_8x8_k2s1p0", [1, 16384, 8, 8], (2, 2), (1, 1), (0, 0, 0, 0), "tile"),  # tiled, 8-tile boundary
+]
+
+
+@pytest.mark.parametrize("out_dtype", OUT_DTYPES)
+@pytest.mark.parametrize("shape_entry", WIDTH_SHARD_SHAPES, ids=[f"{s[0]}_{s[5]}" for s in WIDTH_SHARD_SHAPES])
+def test_inplace_halo_width_sharded_matches_normal(shape_entry, out_dtype):
+    shape_name, shape, kernel, stride, pad, in_layout = shape_entry
+    _run_and_compare(
+        f"{shape_name}/ws_{in_layout}/{out_dtype}",
+        shape,
+        kernel,
+        stride,
+        pad,
+        out_dtype,
+        in_dtype="bfloat16",
+        in_layout=in_layout,
+        shard_scheme="width",
+    )
+
+
+# ===========================================================================
+# BLOCK-SHARDED SAVE shapes (full-pool-support widening).
+#
+# Block sharding uses a 2D core grid (channels split across one axis, NHW across the other) and
+# the column-major / transpose_mcast NOC orientation machinery. The overlap-aliasing + delta and
+# the stage-to-temp -> barrier -> distribute ordering must still hold per core. Small kernels on
+# modest spatial maps are net-L1 SAVE (halo depth < per-core input sticks); large kernels LOSE.
+#
+# The net-L1 gate decision depends on the exact per-core geometry, which shifts with the OUTPUT
+# layout: bf8_b forces a TILE output whose per-core NHW is padded to 32-stick multiples, shrinking
+# the per-core input-stick count relative to the (layout-invariant) halo depth. So small-spatial
+# 16x16 shapes SAVE with bf16 (row-major) output but LOSE with bf8_b (tiled) output. Each entry
+# therefore lists exactly the OUTPUT dtypes it was WH-probed to ACTIVATE for; combos that did NOT
+# activate (net-L1 LOSE -- gate correctly declined, NOT a bug) are intentionally excluded:
+#     * [1, 2048, 16, 16] k5s2p2 ceil (any dtype) -> LOSE (halo depth >> per-core sticks).
+#     * [1, 2048, 16, 16] k2s1p0 + bf8_b, [1, 4096, 16, 16] k2s1p0 + bf8_b -> LOSE (tile-pad shrinks sticks).
+# NOTE: the pool caller shards block inputs ROW_MAJOR (orientation is forced), so transpose_mcast
+# (column-major block NOC) is not reachable through pool here; it stays structurally supported
+# (gate does not exclude it; kernel has the is_col_major noc_orient path) but is not bitwise-
+# exercised by this pool-only harness.
+# ---------------------------------------------------------------------------
+BLOCK_SHARD_SHAPES = [
+    # name, NCHW, kernel, stride, pad(t,b,l,r), in_layout, [activating out_dtypes]
+    # larger-spatial shapes SAVE for BOTH output dtypes:
+    ("bs_c1024_32x32_k3s1p1", [1, 1024, 32, 32], (3, 3), (1, 1), (1, 1, 1, 1), "row_major", ["bfloat16", "bfloat8_b"]),
+    ("bs_c1024_32x32_k3s1p1", [1, 1024, 32, 32], (3, 3), (1, 1), (1, 1, 1, 1), "tile", ["bfloat16", "bfloat8_b"]),
+    ("bs_c512_64x64_k3s2p1", [1, 512, 64, 64], (3, 3), (2, 2), (1, 1, 1, 1), "tile", ["bfloat16", "bfloat8_b"]),
+    # 48x48 bf8_b lands on a PARTIAL block grid (8x6, 48 cores) -> exercises block grid geometry:
+    ("bs_c1024_48x48_k3s2p1", [1, 1024, 48, 48], (3, 3), (2, 2), (1, 1, 1, 1), "tile", ["bfloat16", "bfloat8_b"]),
+    # WIDE untilize-in-place path (>8 tiles -> untilize-temp-CB); SAVE only with bf16 output:
+    ("bs_c4096_16x16_k2s1p0", [1, 4096, 16, 16], (2, 2), (1, 1), (0, 0, 0, 0), "tile", ["bfloat16"]),
+]
+
+# Expand (shape_entry, out_dtype) into a flat param list so only ACTIVATING combos are exercised.
+_BLOCK_PARAMS = [
+    (name, shape, kernel, stride, pad, in_layout, od)
+    for (name, shape, kernel, stride, pad, in_layout, ods) in BLOCK_SHARD_SHAPES
+    for od in ods
+]
+
+
+@pytest.mark.parametrize(
+    "block_param",
+    _BLOCK_PARAMS,
+    ids=[f"{p[0]}_{p[5]}_{p[6]}" for p in _BLOCK_PARAMS],
+)
+def test_inplace_halo_block_sharded_matches_normal(block_param):
+    shape_name, shape, kernel, stride, pad, in_layout, out_dtype = block_param
+    _run_and_compare(
+        f"{shape_name}/bs_{in_layout}/{out_dtype}",
+        shape,
+        kernel,
+        stride,
+        pad,
+        out_dtype,
+        in_dtype="bfloat16",
+        in_layout=in_layout,
+        shard_scheme="block",
     )
 
 

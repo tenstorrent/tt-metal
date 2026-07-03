@@ -98,10 +98,13 @@ HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_te
 
     // In-place halo (silent auto-activation; see IN_PLACE_HALO_REDO.md sec 10). The SAME pure
     // decision function is used by the program factory and the pool caller so all three agree.
-    const bool is_height_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool is_in_tiled = input_tensor.layout() == Layout::TILE;
     const bool in_place = ttnn::operations::sliding_window::should_halo_be_in_place(
-        args.allow_in_place, args.config, args.in_nsticks_per_core, is_height_sharded, is_in_tiled);
+        args.allow_in_place,
+        args.config,
+        args.in_nsticks_per_core,
+        input_tensor.memory_config().memory_layout(),
+        is_in_tiled);
     if (!in_place) {
         return create_device_tensor(output_spec, input_tensor.device());
     }

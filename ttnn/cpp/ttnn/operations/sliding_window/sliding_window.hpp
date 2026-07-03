@@ -158,11 +158,14 @@ uint32_t compute_max_outbound_halo_sticks(
 // user-facing toggle -- in-place activates automatically only when it is a clear win.
 // `allow_in_place` is a per-caller capability gate: it must be true for in-place to be
 // considered at all (only the pool caller opts in; conv/upsample/fold pass false).
+// `memory_layout` selects the validated corruption-safe classes: HEIGHT_SHARDED,
+// WIDTH_SHARDED and BLOCK_SHARDED are all supported (width-sharded halo is all-local so
+// max_ref_size==0; block-sharded uses the transpose_mcast / column-major NOC orientation).
 bool should_halo_be_in_place(
     bool allow_in_place,
     const SlidingWindowConfig& config,
     uint32_t in_nsticks_per_core,
-    bool is_height_sharded,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
     bool is_in_tiled);
 
 struct HaloGatherKernelConfig {

@@ -808,12 +808,11 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
     // ---- In-place halo path (silent auto-activation; see IN_PLACE_HALO_REDO.md sec 10). ----
     // Uses the SAME pure decision function as create_output_tensors (which already deallocated
     // the input and allocated the overlapping output) and the pool caller.
-    const bool is_height_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     if (sliding_window::should_halo_be_in_place(
             operation_attributes.allow_in_place,
             operation_attributes.config,
             operation_attributes.in_nsticks_per_core,
-            is_height_sharded,
+            input_tensor.memory_config().memory_layout(),
             is_in_tiled)) {
         // Stick delta between input and output shards (MUST match create_output_tensors).
         const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
