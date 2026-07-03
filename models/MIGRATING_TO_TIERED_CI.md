@@ -542,13 +542,13 @@ entry is on the books so it's not forgotten.
 
 ### Trace region sizes
 
-Trace buffer sizes live in [`models/model_trace_region_sizes.yaml`](./model_trace_region_sizes.yaml).
-Add a `(model, SKU)` block with `trace_region_size: <bytes>` whenever a
-demo or test needs a specific reserved trace region. Unconfigured `(model,
-SKU)` pairs are **not** an error: [`resolve_trace_region_size`](./demos/utils/trace_region_sizes.py)
-logs an info message and falls back to `TRACE_REGION_SIZE_DYNAMIC` (`0`,
-dynamic allocation). Add an explicit entry when a model needs a fixed
-reserved size rather than dynamic allocation.
+Trace buffer sizes for **fixed-size exceptions** live in
+[`models/model_trace_region_sizes.yaml`](./model_trace_region_sizes.yaml).
+All other `(model, SKU)` pairs use **dynamic allocation** by default
+(`trace_region_size=0`): [`resolve_trace_region_size`](./demos/utils/trace_region_sizes.py)
+logs an info message and returns `TRACE_REGION_SIZE_DYNAMIC` when no YAML entry
+matches. Add an explicit entry only when dynamic allocation regresses for a
+specific model/SKU (see [`trace_region_size_migration.md`](./trace_region_size_migration.md), #47574).
 
 - **Model keys** — same short kebab-case + `aliases` convention as `model_targets.yaml`.
 - **SKU keys** — canonical names (`wh_n150`, `wh_llmbox_perf`, `bh_p150`, …); legacy labels like `T3K` / `P150x4` / `wh_llmbox` / `bh_galaxy` resolve via `normalize_sku` in [`model_targets.py`](./demos/utils/model_targets.py).
@@ -599,13 +599,12 @@ from models.demos.utils.trace_region_sizes import build_trace_device_params
 device_params = build_trace_device_params("deepseek-v3")
 ```
 
-#### Dynamic allocation (`trace_region_size: 0`)
+#### Dynamic allocation (`trace_region_size: 0`) — default
 
 Dynamic allocation lets the runtime size trace buffers at launch instead of
 reserving a fixed region. It is the **default** for any `(model, SKU)` pair
 not present in the YAML (resolution logs an info message and returns
-`TRACE_REGION_SIZE_DYNAMIC`). A model can also opt in explicitly by setting
-`trace_region_size: 0` (see `deepseek-v3`); use the named constant
+`TRACE_REGION_SIZE_DYNAMIC`). Use the named constant
 `TRACE_REGION_SIZE_DYNAMIC` from `trace_region_sizes.py` when referencing the
 value in code or comments. Do **not** assign `trace_region_size = …` in demo
 code — always go through the resolver or `build_trace_device_params`.

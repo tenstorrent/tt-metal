@@ -6,11 +6,10 @@
 
 This module is the single entry point for answering "how many bytes of
 ``trace_region_size`` should I reserve when opening a device for model X on
-this machine?". The values live in one source of truth,
+this machine?". Fixed-size **exceptions** live in
 ``models/model_trace_region_sizes.yaml``, keyed by model and SKU (the
 cluster/board type, e.g. ``wh_n150``, ``wh_llmbox_perf``, ``bh_p150``).
-This replaces the per-model/per-SKU literals that demos and tests used to
-hardcode.
+All other ``(model, SKU)`` pairs use dynamic allocation (``0``).
 
 Resolution:
     ``resolve_trace_region_size(model_name, sku)`` matches ``model_name``
@@ -31,13 +30,12 @@ Two ways callers consume it:
       submesh actually opened (derived from the mesh shape / ``data_parallel`` /
       ``MESH_DEVICE``), not the physical cluster.
 
-Unconfigured pairs default to dynamic allocation: if a (model, SKU) pair is
-not present in the YAML, resolution logs an info message and returns
-``TRACE_REGION_SIZE_DYNAMIC`` (``0``), which tells the runtime to allocate
-trace buffers dynamically instead of reserving a fixed region up front. A
-non-zero size is only ever returned when it is explicitly present in the YAML;
-``deepseek-v3`` also sets ``0`` explicitly to opt into the same dynamic
-behavior.
+Default is dynamic allocation: if a (model, SKU) pair is not present in the
+YAML, resolution logs an info message and returns ``TRACE_REGION_SIZE_DYNAMIC``
+(``0``), which tells the runtime to allocate trace buffers dynamically instead
+of reserving a fixed region up front. A non-zero size is only returned when it
+is explicitly present in the YAML (Galaxy e2e/decode keys, ``unet-3d`` on
+``wh_n150``, etc.). See ``models/trace_region_size_migration.md`` (#47574).
 """
 
 from __future__ import annotations

@@ -187,7 +187,7 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 
 The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` or the `decoder_config_file` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
 
-NOTE: trace region sizes are declared in [`models/model_trace_region_sizes.yaml`](../model_trace_region_sizes.yaml) and resolved at device-open time via [`get_supported_trace_region_size`](demo/trace_region_config.py) (which delegates to [`resolve_trace_region_size`](../demos/utils/trace_region_sizes.py)). A `(model, SKU)` pair without a YAML entry is not an error: resolution logs an info message and falls back to `TRACE_REGION_SIZE_DYNAMIC` (`0`, dynamic allocation). Add an explicit entry when a model needs a fixed reserved trace region.
+NOTE: fixed-size trace region **exceptions** are declared in [`models/model_trace_region_sizes.yaml`](../model_trace_region_sizes.yaml) and resolved at device-open time via [`get_supported_trace_region_size`](demo/trace_region_config.py) (which delegates to [`resolve_trace_region_size`](../demos/utils/trace_region_sizes.py)). All other `(model, SKU)` pairs use dynamic allocation (`TRACE_REGION_SIZE_DYNAMIC`, `0`). See [`trace_region_size_migration.md`](../trace_region_size_migration.md) (#47574).
 
 ## Details
 
