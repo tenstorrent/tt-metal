@@ -201,7 +201,7 @@ jobs:
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "default-chat-template-kwargs": "{\"enable_thinking\": false}",
               "multimodal": false,
-              "owner_id": "U08HL8X1ECD" # Aniruddha Tupe
+              "owner_id": "U08HL8X1ECD"
             },
             {
               "name": "[WH-GLX] GPT-OSS-120B (low-latency)",
