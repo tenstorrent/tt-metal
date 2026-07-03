@@ -161,14 +161,14 @@ jobs:
       sp-config: sp1-blitz
 
   # todo)) proven to work by itself but mess up SP1 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
-  # deepseek-single-galaxy-tests:w
-  #   name: "Single Galaxy DeepSeek Tests"
-  #   needs: build-artifact
-  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'single_galaxy_deepseek' || github.event_name == 'schedule' }}
-  #   secrets: inherit
-  #   uses: ./.github/workflows/demo-sp-multihost-impl.yaml
-  #   with:
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     sp-config: spsg
+  deepseek-single-galaxy-tests:
+    name: "Single Galaxy DeepSeek Tests"
+    needs: build-artifact
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'single_galaxy_deepseek' || github.event_name == 'schedule' }}
+    secrets: inherit
+    uses: ./.github/workflows/demo-sp-multihost-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      sp-config: spsg
