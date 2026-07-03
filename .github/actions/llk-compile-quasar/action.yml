@@ -63,6 +63,30 @@ runs:
         CHIP_ARCH: quasar
       run: |
         echo "Compiling Quasar (group ${{ inputs.test-group }}/${{ inputs.test-splits }})..."
+        # --maxschedchunk override (the binding constraint we found, NOT worker count):
+        # the repo-wide pytest.ini has `addopts = -s --maxschedchunk=10` (added
+        # 2026-02, present on main, untouched by this branch). maxschedchunk caps
+        # how many test node-ids pytest-xdist's single master hands a worker in one
+        # execnet dispatch, in BOTH the initial and steady-state refill paths
+        # (xdist src/xdist/scheduler/load.py: node_chunksize = min(items//4,
+        # maxschedchunk); floored at 2). With ~413k ultra-fast compile tests (JUnit
+        # median ~8 ms) and chunk=10, the ONE master process must originate
+        # ~413k/10 ≈ 41k dispatch round-trips AND process 413k inbound testreports
+        # serially -- it cannot feed the workers fast enough, so they starve. Two
+        # measured runs on the 40-core/78.5 GiB xlarge confirm the starvation is the
+        # cap, not memory or worker count: -n10+parallel burned only ~48% of wall on
+        # real work (wall 1173 s vs sum-of-per-test-time/10 = 606 s; CPU mean 24.6%,
+        # RAM peak 60.8%, ZERO swap -- huge headroom) and -n30 serial was WORSE
+        # (65% idle, CPU 32.8%) despite more workers, because 30 mouths share the
+        # same single-master feeder throttled to chunk=10. maxschedchunk was small
+        # by design for suites of few slow tests; it is exactly wrong for 413k fast
+        # ones. Raising the cap lets the master ship large chunks (~20 per worker
+        # here) and amortize its per-dispatch overhead, while 2000 << the ~10k
+        # initial-chunk ceiling keeps enough tests pending for the steady-state
+        # watermark to still steal-rebalance the long tail (0.9% of tests are
+        # >500 ms). CLI value wins over addopts (last --maxschedchunk parsed).
+        # Scoped to THIS job by overriding on the command line rather than editing
+        # the shared pytest.ini (which every LLK hardware-test job also consumes).
         "$GITHUB_WORKSPACE/.github/scripts/utils/host-load-sidecar.sh" \
           --interval 1 \
           --label "Quasar compile (group ${{ inputs.test-group }}/${{ inputs.test-splits }})" \
@@ -70,6 +94,7 @@ runs:
           -- pytest -q --compile-producer -n ${{ inputs.num-workers }} \
                 -m "${{ inputs.pytest-markers }}" \
                 --splits ${{ inputs.test-splits }} --group ${{ inputs.test-group }} \
+                --maxschedchunk=2000 \
                 --override-ini=log_cli=false --tb=short --timeout=60 \
                 --junitxml=pytest-report-quasar-compile.xml .
 
