@@ -164,9 +164,8 @@ class AceStepAttention(LightweightModule):
             compute_kernel_config=cfg.compute_kernel_config,
         )  # [1,nq,seq,hd]
 
-        # Concat heads back to [1,1,seq,hidden].
-        attn = ttnn.transpose(attn, 1, 2)  # [1,seq,nq,hd]
-        seq = attn.shape[1]
-        attn = ttnn.reshape(attn, (1, 1, seq, cfg.n_heads * cfg.head_dim))
+        # Concat heads back to [1,1,seq,hidden] via nlp_concat_heads (one op instead of
+        # transpose+reshape; profiling: 0.028ms vs 0.087ms). Applies to self AND cross attention.
+        attn = ttnn.experimental.nlp_concat_heads(attn)  # [1,1,seq,nq*hd]
         out = ttnn.linear(attn, self.wo, compute_kernel_config=cfg.compute_kernel_config)  # [1,1,seq,hidden]
         return out
