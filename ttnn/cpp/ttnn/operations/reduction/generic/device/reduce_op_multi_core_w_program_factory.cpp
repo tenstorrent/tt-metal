@@ -176,9 +176,9 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
-    // Int32 max/min/sum use the SFPU reduce path (GMPOOL has no Int32 support); see
-    // use_sfpu_reduce_path() in common.hpp. SUM never negates, so use_fpu_negate is unaffected.
-    const bool is_sfpu_reduce = use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op);
+    // Int32 max/min/sum use the SFPU reduce path; fp32 SUM only for the accurate mean opt-in.
+    const bool is_sfpu_reduce =
+        use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
     std::vector<uint32_t> reader_compile_time_args;
@@ -229,8 +229,17 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     if (use_post_mul) {
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
+    // Accurate fp32 mean: define REDUCE_SFPU_FP32 to route Float32 SUM through the SFPU (needs 32-bit DEST).
+    const bool fp32_sfpu_reduce = is_sfpu_reduce && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en;
+    if (fp32_sfpu_reduce) {
+        reduce_defines["REDUCE_SFPU_FP32"] = "1";
+    }
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    // UnpackToDestFp32 unpacks c_0 straight into the fp32 DEST, bypassing the SrcA tf32 truncation.
+    if (fp32_sfpu_reduce) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =

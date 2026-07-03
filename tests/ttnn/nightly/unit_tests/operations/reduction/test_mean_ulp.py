@@ -232,3 +232,62 @@ def test_mean_ulp_fp32(device, shape, dim, desc, distribution, keepdim):
     if not passed:
         logger.info(f"  {msg}")
     assert passed, f"[FP32 {desc} {distribution} keepdim={keepdim}] {msg}"
+
+
+# ---------------------------------------------------------------------------
+# FP32 accurate (SFPU) vs fast (FPU) mode
+# ---------------------------------------------------------------------------
+
+# fast_and_approximate_mode: False (default) = accurate SFPU (full fp32); True = fast FPU (tf32).
+
+
+def _fp32_ulp_max(actual: torch.Tensor, reference: torch.Tensor) -> float:
+    """Max signed-magnitude fp32 ULP distance between two same-shape fp32 tensors."""
+    a = actual.reshape(reference.shape).to(torch.float32).contiguous().view(torch.int32).to(torch.int64)
+    r = reference.to(torch.float32).contiguous().view(torch.int32).to(torch.int64)
+    same = (a & 0x80000000) == (r & 0x80000000)
+    av, rv = a & 0x7FFFFFFF, r & 0x7FFFFFFF
+    ulp = torch.where(same, (av - rv).abs(), av.abs() + rv.abs())
+    return ulp.max().item()
+
+
+@pytest.mark.parametrize(
+    "shape, dim",
+    [
+        ((1, 22, 1536), -1),  # W reduce
+        ((1, 1, 32, 2048), -1),  # W reduce
+        ((2, 4, 512, 64), -2),  # H reduce
+        ((2, 3, 256, 256), [-2, -1]),  # HW reduce
+    ],
+    ids=["W1536", "W2048", "H512", "HW256x256"],
+)
+def test_mean_fp32_fast_and_approximate_mode(device, shape, dim):
+    """Accurate SFPU fp32 mean (fast_and_approximate_mode=False) must be no further from an fp64
+    reference than the fast FPU path; the log reports the actual gap. Mean-away-from-zero input
+    keeps ULP meaningful."""
+    torch.manual_seed(0)
+    x = torch.empty(shape, dtype=torch.float32).uniform_(1.0, 2.0)
+    ref = torch.mean(x.to(torch.float64), dim=dim, keepdim=True).to(torch.float32)  # high-precision golden
+    ckc = _make_mean_compute_kernel_config(device, fp32_dest_acc_en=True)
+
+    tt_in = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    fpu = ttnn.to_torch(
+        ttnn.mean(tt_in, dim=dim, keepdim=True, fast_and_approximate_mode=True, compute_kernel_config=ckc)
+    ).reshape(ref.shape)
+    sfpu = ttnn.to_torch(
+        ttnn.mean(tt_in, dim=dim, keepdim=True, fast_and_approximate_mode=False, compute_kernel_config=ckc)
+    ).reshape(ref.shape)
+
+    fpu_ulp = _fp32_ulp_max(fpu, ref)
+    sfpu_ulp = _fp32_ulp_max(sfpu, ref)
+    logger.info(
+        f"ttnn.mean fp32 accurate-vs-fast | shape={shape} dim={dim} | "
+        f"FPU max_abs={(fpu - ref).abs().max().item():.3e} ulp={fpu_ulp:.0f} | "
+        f"SFPU max_abs={(sfpu - ref).abs().max().item():.3e} ulp={sfpu_ulp:.0f}"
+    )
+
+    # The accurate (SFPU) path must be no further from the fp64 reference than the fast (FPU) path.
+    # The log above shows the actual magnitude of the improvement.
+    assert (
+        sfpu_ulp <= fpu_ulp
+    ), f"accurate path not better than fast path: SFPU={sfpu_ulp:.0f} ulp, FPU={fpu_ulp:.0f} ulp"
