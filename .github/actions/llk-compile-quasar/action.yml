@@ -18,21 +18,32 @@ inputs:
     description: >-
       Number of pytest-xdist workers (-n). Each worker is a full Python process
       that imports numpy + torch (via golden_generators) + the config/format
-      tables — a FIXED ~0.6-1.2 GiB RSS paid once per worker for the whole run,
-      independent of compile work. With LLK_BUILD_PARALLELISM=1 each worker fans
-      out to len(KERNEL_COMPONENTS)=4 concurrent g++ (unpack/math/pack/sfpu) for
-      one variant, so total concurrent g++ = -n x 4. Bumped from 10 to 18 based
-      on real sidecar data: at -n 10 the box was only 53% RAM with ZERO swap
-      (~2x headroom) and workers ran ~99% per-worker CPU (compute-bound, not
-      memory-bound, not idle) -- only 10 of 40 cores were being fed. Per-worker
-      RSS estimated ~1.55 GiB (linear fit from -n 10 at 41 GiB used and -n 30 at
-      72 GiB used); -n 18 projects to ~69% RAM, still with real margin below the
-      -n 30 config that measured 92% mean / 100% peak and swapped hard. -n 18 is
-      a real config change to re-measure via the sidecar output, not a
-      guaranteed-safe number -- if it swaps, drop back toward 14-16. Override
-      per-call for a different runner size or target concurrency.
+      tables. With LLK_BUILD_PARALLELISM=1 each worker fans out to
+      len(KERNEL_COMPONENTS)=4 concurrent g++ (unpack/math/pack/sfpu) for one
+      variant, so total concurrent g++ = -n x 4. REVERTED from 18 back to 10:
+      -n 18 was tested and is a confirmed net negative, not just "no
+      improvement" -- JUnit comparison against the -n 10 run showed the
+      cache-hit-item (no compile at all) time distribution inflated ~29%
+      across the board (median 7ms->9ms, p99 48ms->57ms, max single item
+      3.3s), consistent with the 18x4=72 fan-out oversubscribing the 40 cores
+      and descheduling the cheap Python-bookkeeping path -- NOT extra real
+      compile work (the >=250ms "real compile" count was statistically
+      unchanged, 2507 vs 2520). Net effect: +22% total per-item CPU-time
+      wasted, wall-clock flat-to-slightly-worse, and mean RAM jumped to 85.96%
+      (peak 97.71%, right at the swap cliff) for no measured benefit. The
+      earlier "~1.55 GiB/worker" linear projection that justified the 18 bump
+      was a 2-point fit across configs with different LLK_BUILD_PARALLELISM/
+      scheduler settings and turned out to badly underestimate actual cost
+      (~3.2-3.6 GiB/worker measured between 10 and 18 workers at matched
+      config) -- treat any single-pair linear extrapolation on this job with
+      real skepticism going forward. -n 10 is the best confirmed config so
+      far: 61% peak RAM, zero swap, tied-fastest wall-clock, no wasted CPU. If
+      testing further, -n 12 is the next defensible probe (small step,
+      projected ~70% peak RAM) -- do not jump straight to a much higher
+      number again without an intermediate data point. Override per-call for
+      a different runner size or target concurrency.
     required: false
-    default: '18'
+    default: '10'
 
 runs:
   using: composite
