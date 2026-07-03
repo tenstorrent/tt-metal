@@ -6,9 +6,12 @@
 #include <gtest/gtest.h>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/soc_arch_descriptor.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+
+#include "tt_metal/test_utils/env_vars.hpp"
 
 namespace {
 
@@ -26,6 +29,10 @@ tt::umd::SocDescriptor load_quasar_2x3_soc() {
 }  // namespace
 
 TEST(DispatchEngineCoordinates, QuasarSimulation2x3SocDispatchList) {
+    if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Dispatch-engine coordinate tests require Quasar";
+    }
+
     const tt::umd::SocDescriptor soc = load_quasar_2x3_soc();
 
     const auto dispatch_noc0 = soc.get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::NOC0);
