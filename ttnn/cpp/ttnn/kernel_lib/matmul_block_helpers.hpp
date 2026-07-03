@@ -26,10 +26,13 @@ namespace compute_kernel_lib {
  * before accumulation finished and corrupted under packer_l1_acc.)
  *
  * ── Phase 1: ACCUMULATE the whole output block ──────────────────────────────
- *   packer_l1_acc ON  → in place: ONE reserve_back over the whole block before the K-loop and
- *     ONE push_back after (internal, per batch) — no per-K-block reserve/push/drain. Each K-block
- *     packs to absolute offsets in that fixed region and packer_l1_acc adds in place. Layout-
- *     agnostic: TileRowMajor row-strided, SubblockMajor contiguous. Lands in interm (l1_acc format).
+ *   packer_l1_acc ON  → in place: ONE reserve_back over the whole block before the K-loop — no
+ *     per-K-block reserve/push/drain. Each K-block packs to absolute offsets in that fixed region and
+ *     packer_l1_acc adds in place. Layout-agnostic: TileRowMajor row-strided, SubblockMajor contiguous.
+ *     Published (internal, per batch) as ONE push_back after the K-loop, EXCEPT the zero-copy alias-
+ *     into-out SubblockMajor case (Phase 2), which packs directly into out and push_backs per subblock
+ *     on the last K-block so the output writer overlaps the remaining subblocks' compute. Otherwise
+ *     lands in interm (l1_acc format).
  *   packer_l1_acc OFF → FIFO spill + software reload: per-K-block reserve/push/pop, last block
  *     reloads the accumulated partials into DST.
  *
