@@ -94,14 +94,4 @@ Case(op=MathOperation.Sqrt, spec=StimuliSpec.ramp(low=0.0, high=100.0), fmt=FP32
 
 ## Reading the output
 
-For details on how to read each plot, see SFPU Accuracy Plots & Metrics.
-
-## Logging
-
-Console and file output go through the shared loguru logger as described in [LOGGING.md](../../tests/LOGGING.md).
-
-The summary always lands in `test_run.log`. To also see it live on the terminal, pass a level:
-
-```bash
-pytest python_tests/test_sfpu_plot.py -k Log --logging-level=INFO
-```
+For details on how to read each plot, see [SFPU Accuracy Plots & Metrics](sfpu_accuracy_plots_metrics.md).
