@@ -276,6 +276,22 @@ Result conv2d_L1(
         if (parallel_config.shard_scheme != TensorMemoryLayout::WIDTH_SHARDED ||
             input_tensor_post_tm.layout() != Layout::ROW_MAJOR || sliding_window_config.get_pad_h() != 0 ||
             sliding_window_config.get_pad_w() != 0) {
+            // Compute the in-place-halo decision with the SAME pure function the halo op and its
+            // factory use (IN_PLACE_HALO_REDO.md sec 10). When in-place activates, the halo op
+            // deallocates the input and allocates the output OVER the same L1 region (the input
+            // aliases into the output), so the caller must NOT deallocate the input (double-free of
+            // the shared buffer) nor ttnn::move the output (would copy to a fresh buffer, spiking
+            // L1 and undoing the saving). Computed before the halo call while input_tensor_post_tm
+            // is still the (unmoved) sharded input. conv2d opts IN to in-place halo
+            // (allow_in_place=true), mirroring the pool caller; conv_transpose2d / fold / upsample
+            // leave allow_in_place at its default false so in-place stays scoped to conv2d + pool.
+            const bool halo_is_in_place = sliding_window::should_halo_be_in_place(
+                /*allow_in_place=*/true,
+                sliding_window_config,
+                input_tensor_post_tm.memory_config().shard_spec()->shape[0],
+                input_tensor_post_tm.memory_config().memory_layout(),
+                input_tensor_post_tm.layout() == tt::tt_metal::Layout::TILE);
+
             ttnn::Tensor halo_output = ttnn::halo(
                 input_tensor_post_tm,
                 sliding_window_config,
@@ -284,18 +300,23 @@ Result conv2d_L1(
                 false,
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 true,
-                conv_config.config_tensors_in_dram);
+                conv_config.config_tensors_in_dram,
+                /*allow_in_place=*/true);
 
             // In cases where input tensor is in DRAM and it gets sharded, we need to deallocate the sharded input
             // tensor at this point (it will be deallocated automatically because nothing is using it, but reallocating
-            // halo output will be affected so we need to deallocate it manually before reallocating halo output)
-            if (conv_config.deallocate_activation && !input_tensor_post_tm.memory_config().is_dram()) {
+            // halo output will be affected so we need to deallocate it manually before reallocating halo output).
+            // Skip both when in-place halo activated: the output aliases the input buffer, so a
+            // deallocate would double-free it and ttnn::move would copy to a fresh buffer (undoing
+            // the L1 saving). Mirrors the pool caller (generic_pools.cpp).
+            if (!halo_is_in_place && conv_config.deallocate_activation &&
+                !input_tensor_post_tm.memory_config().is_dram()) {
                 input_tensor_post_tm.deallocate(/*force*/ true);
             }
 
             input_tensor_post_tm = std::move(halo_output);
 
-            if (conv_config.reallocate_halo_output) {
+            if (!halo_is_in_place && conv_config.reallocate_halo_output) {
                 input_tensor_post_tm = ttnn::move(input_tensor_post_tm);
             }
         }

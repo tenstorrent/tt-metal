@@ -652,13 +652,15 @@ ProgramDescriptor build_inplace_halo_program(
     log_info(
         tt::LogOp,
         "in-place halo grid: active_cores={} num_cores_x={} rectangular={}x{} noop_cores={} "
-        "grid_is_partial={}",
+        "grid_is_partial={} transpose_mcast={} block_sharded={}",
         num_active_cores,
         num_cores_x,
         rectangular_x,
         rectangular_y,
         num_noop_cores,
-        (num_noop_cores > 0));
+        (num_noop_cores > 0),
+        transpose_mcast,
+        is_block_sharded);
 
     // Global barrier semaphore on the rectangular grid (incl. noop cores for the multicast).
     const uint32_t semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
