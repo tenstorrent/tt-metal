@@ -4,8 +4,6 @@
 
 #include "llama.hpp"
 
-#include <memory>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -13,7 +11,6 @@
 #include "modules/embedding_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/rms_norm_module.hpp"
-#include "ops/distributed/comm_ops.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"
 
@@ -120,7 +117,7 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
         // LM head keeps its output vocab-sharded ([B,1,S,V/tp_size] per device); pair it
         // with ttml::ops::distributed::vocab_parallel_cross_entropy_loss.
         fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-            embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true, tp_axis);
+            embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ false, tp_axis);
     } else {
         fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* has_bias */ false);
     }

@@ -4,10 +4,6 @@
 
 #include "llama_block.hpp"
 
-#include <fmt/core.h>
-
-#include <memory>
-
 #include "autograd/auto_context.hpp"
 #include "grouped_query_attention.hpp"
 #include "linear.hpp"
@@ -15,7 +11,6 @@
 #include "modules/linear_module.hpp"
 #include "modules/rms_norm_module.hpp"
 #include "ops/binary_ops.hpp"
-#include "ops/distributed/comm_ops.hpp"
 #include "ops/swiglu_op.hpp"
 #include "ops/unary_ops.hpp"
 

@@ -4,16 +4,11 @@
 
 #include "grouped_query_attention.hpp"
 
-#include <fmt/core.h>
-
-#include <memory>
-
 #include "autograd/auto_context.hpp"
 #include "linear.hpp"
 #include "modules/dropout_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/rotary_embedding.hpp"
-#include "ops/distributed/comm_ops.hpp"
 #include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
@@ -97,8 +92,6 @@ DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConf
 
 ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
     const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) {
-    auto& pctx = autograd::ctx().get_parallelism_context();
-
     auto q = (*m_q_linear)(x);
     auto kv = (*m_kv_linear)(x);
 
@@ -113,6 +106,7 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
 
     // Apply attention: use ring_attention_sdpa if CP is enabled, otherwise regular SDPA
     autograd::TensorPtr attention;
+    auto& pctx = autograd::ctx().get_parallelism_context();
     if (pctx.is_cp_enabled() && pctx.get_cp_size() > 1) {
         /*
          * TODO: add support for non-causal mask
