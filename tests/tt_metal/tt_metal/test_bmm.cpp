@@ -87,16 +87,19 @@ experimental::ProgramSpec build_bmm_program_spec(
     // On Quasar we also enable implicit sync on each DFB so the reader/writer kernels can drop
     // explicit reserve_back/wait_front/push_back/pop_front; on WH/BH implicit sync is unsupported
     // and must be disabled to match the explicit-sync kernel branch.
+    const bool is_quasar = tensors.src0.device().arch() == ARCH::QUASAR;
     experimental::DataMovementHardwareConfig reader_config = std::invoke([&] {
-        if (use_implicit_sync) {
-            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        if (is_quasar) {
+            return experimental::DataMovementHardwareConfig{
+                experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync}};
         }
         return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}};
     });
     experimental::DataMovementHardwareConfig writer_config = std::invoke([&] {
-        if (use_implicit_sync) {
-            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        if (is_quasar) {
+            return experimental::DataMovementHardwareConfig{
+                experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync}};
         }
         return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}};
