@@ -18,6 +18,7 @@ Tensor halo(
     bool remote_read = false,
     bool transpose_mcast = true,
     bool is_out_tiled = true,
-    bool config_tensors_in_dram = false);
+    bool config_tensors_in_dram = false,
+    bool allow_in_place = false);
 
 }  // namespace ttnn

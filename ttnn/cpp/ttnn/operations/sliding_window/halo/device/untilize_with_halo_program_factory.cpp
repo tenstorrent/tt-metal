@@ -479,8 +479,19 @@ ProgramDescriptor build_inplace_halo_program(
         input_npages = remapped_input_shard_shape_for_output_grid;
     }
 
-    // Byte offset of the input shard data within the (larger) output shard buffer.
-    const uint32_t delta_bytes = static_cast<uint32_t>(in_out_shard_size_delta) * out_stick_nbytes;
+    // Byte offset of the input shard data within the (larger) output shard buffer. This is the
+    // ALIASING delta (where src_cb reads the input from, and the overlap assert). It differs from
+    // the KERNEL's in_out_shard_size_delta (a stick-INDEX delta used for the overlapping local
+    // copies), which is already 0 for tiled input.
+    //   Row-major: stick delta = in_out_shard_size_delta * out_stick_nbytes.
+    //   Tiled:     buffer delta = dst.aligned_size_per_bank() - src.aligned_size_per_bank(), because
+    //              untilize writes row-major sticks into the dst buffer while the tiled input lives
+    //              (byte-for-byte) at the TAIL of that buffer -- the stick delta (0) is not the byte
+    //              offset (#27333/#30644). Mirrors the archived inplace_untilize_with_halo_multi_core.
+    const bool is_in_tiled = !skip_untilize;
+    const uint32_t stick_delta = static_cast<uint32_t>(in_out_shard_size_delta) * out_stick_nbytes;
+    const uint32_t buffer_delta = dst_buffer->aligned_size_per_bank() - src_buffer->aligned_size_per_bank();
+    const uint32_t delta_bytes = is_in_tiled ? buffer_delta : stick_delta;
 
     ProgramDescriptor desc;
     InplaceCBIndices cb_indices = InplaceCBIndices();
@@ -517,8 +528,22 @@ ProgramDescriptor build_inplace_halo_program(
             compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
         } else {
             compute_ct_args = {input_nblocks_per_core, ntiles_per_block, cb_indices.src_cb_id, input_to_writer_cb_id};
-            compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
+            // Current-main deviation from the archived factory: the archived narrow path pointed at
+            // data_movement/.../pack_untilize.cpp, which was deleted post-removal. On current main the
+            // unified compute_kernel_lib::untilize (behind untilize.cpp, single-output, same
+            // {nblocks, ntiles, in_cb, out_cb} signature) is ALWAYS pack_untilize-based and auto-selects
+            // block geometry by width -- so it serves the narrow direct-into-dst case identically.
+            compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
         }
+        // Test-only diagnostic (grep-able): prove which untilize-in-place path a shape exercises.
+        // NARROW (ntiles_per_block <= MAX_PACK_UNTILIZE_WIDTH) -> pack_untilize straight into dst;
+        // WIDE -> untilize.cpp + a one-tile-row-at-a-time temp CB (gotcha class 11).
+        log_info(
+            tt::LogOp,
+            "in-place halo untilize: wide_tensor={} ntiles_per_block={} path={}",
+            wide_tensor,
+            ntiles_per_block,
+            wide_tensor ? "untilize-temp-CB" : "pack_untilize");
         auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
             get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
         KernelDescriptor compute_desc;
@@ -785,7 +810,11 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
     // the input and allocated the overlapping output) and the pool caller.
     const bool is_height_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     if (sliding_window::should_halo_be_in_place(
-            operation_attributes.config, operation_attributes.in_nsticks_per_core, is_height_sharded, is_in_tiled)) {
+            operation_attributes.allow_in_place,
+            operation_attributes.config,
+            operation_attributes.in_nsticks_per_core,
+            is_height_sharded,
+            is_in_tiled)) {
         // Stick delta between input and output shards (MUST match create_output_tensors).
         const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
         const uint32_t nbytes = input_tensor.dtype() == DataType::FLOAT32 ? 4u : 2u;  // post-untilize width

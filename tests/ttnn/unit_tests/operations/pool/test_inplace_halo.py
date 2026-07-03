@@ -30,15 +30,25 @@ cache), dump each output tensor to a file, and compare in the parent. Each worke
 routes the C++ logger to its own TT_LOGGER_FILE so we can prove -- per process -- that the
 "in-place halo active" line APPEARS when active and is ABSENT when disabled.
 
-dtype note (why input stays bf16 row-major)
---------------------------------------------
-In-place halo requires ROW-MAJOR (non-tiled) height-sharded input -- the gate in
-should_halo_be_in_place() returns false for tiled inputs. bfloat8_b tensors are ALWAYS
-TILE-layout, so a bf8_b *input* would never activate in-place and the test would be
-meaningless. To keep in-place ACTIVE while still covering bf8_b, the pool INPUT is always
-bf16 row-major height-sharded and the `out_dtype` parameter varies the pool OUTPUT dtype
-(bf16 -> ROW_MAJOR output, bf8_b -> TILE output). Halo is pool-type- and output-dtype-
-agnostic on the input side, so in-place activates identically for every case here.
+dtype / layout note
+-------------------
+In-place halo supports height-sharded input in BOTH layouts:
+
+  * ROW-MAJOR input (skip-untilize path): the classic slice. Covered by
+    test_inplace_halo_matches_normal, which keeps the pool INPUT bf16 row-major and varies
+    the pool OUTPUT dtype (bf16 -> ROW_MAJOR output, bf8_b -> TILE output).
+
+  * TILED input (untilize-in-place path): halo untilizes the tiled input directly into the
+    (overlapping) output buffer. Covered by test_inplace_halo_tiled_matches_normal, which
+    feeds TILE-layout input in bf16 and bf8_b (bf8_b exercises class-12: after untilize
+    bf8_b becomes bf16, so the remote-temp / untilize-temp CBs are sized for the post-untilize
+    bf16 width). Structured values live in [1,2) and are multiples of 1/128, which are EXACTLY
+    representable in bf8_b (block exponent 0, 7 mantissa bits) so the tiled comparison stays
+    bitwise. The tiled matrix includes a NARROW case (ntiles_per_block <= 8 -> pack_untilize)
+    and a WIDE case (ntiles_per_block > 8 -> the untilize.cpp + one-tile-row-at-a-time temp CB).
+
+Both tests assert BITWISE equality (torch.eq) between in-place-active and in-place-disabled
+runs of the identical shape/pool/input, in isolated processes, with activation-log proof.
 """
 
 import os
@@ -124,10 +134,17 @@ def _worker(spec):
     out_dtype_str = spec["out_dtype"]
     outdir = spec["outdir"]
     mode = spec["mode"]  # "inplace" or "normal"
+    # Pool INPUT dtype/layout. Defaults keep the classic row-major bf16 slice; the tiled test
+    # overrides these to drive the untilize-in-place path.
+    in_dtype_str = spec.get("in_dtype", "bfloat16")
+    in_layout_str = spec.get("in_layout", "row_major")
 
     out_dtype = ttnn.bfloat16 if out_dtype_str == "bfloat16" else ttnn.bfloat8_b
     # bf8_b output is only supported with TILE layout; bf16 uses ROW_MAJOR.
     output_layout = ttnn.ROW_MAJOR_LAYOUT if out_dtype_str == "bfloat16" else ttnn.TILE_LAYOUT
+
+    in_dtype = ttnn.bfloat16 if in_dtype_str == "bfloat16" else ttnn.bfloat8_b
+    in_layout = ttnn.TILE_LAYOUT if in_layout_str == "tile" else ttnn.ROW_MAJOR_LAYOUT
 
     torch_input = _build_structured_input(n, c, h, w)
 
@@ -142,9 +159,7 @@ def _worker(spec):
             try:
                 # Fresh input EVERY op: in-place halo deallocates/aliases the input buffer, so
                 # it must not be reused across ops.
-                ttnn_input = ttnn.from_torch(
-                    torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-                )
+                ttnn_input = ttnn.from_torch(torch_input, dtype=in_dtype, layout=in_layout, device=device)
                 if pool_type == "avg":
                     ttnn_out = ttnn.avg_pool2d(
                         input_tensor=ttnn_input,
@@ -198,7 +213,18 @@ def _worker(spec):
 # ===========================================================================
 # PARENT-SIDE helpers
 # ===========================================================================
-def _run_worker_subprocess(shape_name, shape, kernel, stride, pad, out_dtype, outdir, disable_inplace):
+def _run_worker_subprocess(
+    shape_name,
+    shape,
+    kernel,
+    stride,
+    pad,
+    out_dtype,
+    outdir,
+    disable_inplace,
+    in_dtype="bfloat16",
+    in_layout="row_major",
+):
     mode = "normal" if disable_inplace else "inplace"
     spec = {
         "shape": shape,
@@ -208,6 +234,8 @@ def _run_worker_subprocess(shape_name, shape, kernel, stride, pad, out_dtype, ou
         "out_dtype": out_dtype,
         "outdir": outdir,
         "mode": mode,
+        "in_dtype": in_dtype,
+        "in_layout": in_layout,
     }
     log_file = os.path.join(outdir, f"{mode}_ttlogger.log")
 
@@ -249,46 +277,51 @@ def _nan_safe_exact_equal(a, b):
 
 
 # ===========================================================================
-# TEST
+# Shared core: run ACTIVE vs DISABLED in isolated processes and assert bitwise equality.
+# `require_untilize` (None | "pack_untilize" | "untilize-temp-CB") additionally asserts the
+# tiled untilize-in-place path taken (grep of the factory's diagnostic log line).
 # ===========================================================================
-@pytest.mark.parametrize("out_dtype", OUT_DTYPES)
-@pytest.mark.parametrize("shape_entry", SHAPES, ids=[s[0] for s in SHAPES])
-def test_inplace_halo_matches_normal(shape_entry, out_dtype):
-    shape_name, shape, kernel, stride, pad = shape_entry
-    outdir = tempfile.mkdtemp(prefix=f"inplace_halo_{shape_name}_{out_dtype}_")
+def _run_and_compare(tag, shape, kernel, stride, pad, out_dtype, in_dtype, in_layout, require_untilize=None):
+    outdir = tempfile.mkdtemp(prefix=f"inplace_halo_{tag.replace('/', '_')}_")
 
     # ACTIVE (in-place auto-activates) and DISABLED (forced normal) in isolated processes.
     proc_active, log_active, _ = _run_worker_subprocess(
-        shape_name, shape, kernel, stride, pad, out_dtype, outdir, disable_inplace=False
+        tag,
+        shape,
+        kernel,
+        stride,
+        pad,
+        out_dtype,
+        outdir,
+        disable_inplace=False,
+        in_dtype=in_dtype,
+        in_layout=in_layout,
     )
     proc_normal, log_normal, _ = _run_worker_subprocess(
-        shape_name, shape, kernel, stride, pad, out_dtype, outdir, disable_inplace=True
+        tag, shape, kernel, stride, pad, out_dtype, outdir, disable_inplace=True, in_dtype=in_dtype, in_layout=in_layout
     )
 
     # Surface worker crashes explicitly (never a silent pass).
     assert proc_active.returncode == 0, (
-        f"[{shape_name}/{out_dtype}] ACTIVE worker crashed (rc={proc_active.returncode})\n"
+        f"[{tag}] ACTIVE worker crashed (rc={proc_active.returncode})\n"
         f"STDOUT:\n{proc_active.stdout[-4000:]}\nSTDERR:\n{proc_active.stderr[-4000:]}"
     )
     assert proc_normal.returncode == 0, (
-        f"[{shape_name}/{out_dtype}] NORMAL worker crashed (rc={proc_normal.returncode})\n"
+        f"[{tag}] NORMAL worker crashed (rc={proc_normal.returncode})\n"
         f"STDOUT:\n{proc_normal.stdout[-4000:]}\nSTDERR:\n{proc_normal.stderr[-4000:]}"
     )
 
     # --- Log evidence: in-place actually engaged in ACTIVE and NOT in DISABLED. ---
     active_hits = log_active.count(ACTIVATION_LINE)
     normal_hits = log_normal.count(ACTIVATION_LINE)
-    print(
-        f"[{shape_name}/{out_dtype}] activation-log '{ACTIVATION_LINE}': "
-        f"ACTIVE={active_hits}  DISABLED={normal_hits}"
-    )
+    print(f"[{tag}] activation-log '{ACTIVATION_LINE}': ACTIVE={active_hits}  DISABLED={normal_hits}")
     assert active_hits >= 1, (
-        f"[{shape_name}/{out_dtype}] in-place halo did NOT activate in the ACTIVE run "
+        f"[{tag}] in-place halo did NOT activate in the ACTIVE run "
         f"(0 '{ACTIVATION_LINE}' lines) -> the test would be MEANINGLESS. "
         f"Active log tail:\n{log_active[-3000:]}"
     )
     assert normal_hits == 0, (
-        f"[{shape_name}/{out_dtype}] in-place halo unexpectedly ACTIVE in the DISABLED run "
+        f"[{tag}] in-place halo unexpectedly ACTIVE in the DISABLED run "
         f"({normal_hits} lines) -> env hook not effective. Disabled log tail:\n{log_normal[-3000:]}"
     )
 
@@ -298,7 +331,20 @@ def test_inplace_halo_matches_normal(shape_entry, out_dtype):
         if "in-place halo grid:" in ln:
             grid_line = ln[ln.index("in-place halo grid:") :]
             break
-    print(f"[{shape_name}/{out_dtype}] {grid_line or 'in-place halo grid: <not found>'}")
+    print(f"[{tag}] {grid_line or 'in-place halo grid: <not found>'}")
+
+    # --- Untilize-path evidence (tiled input only): prove pack_untilize vs the wide temp-CB path. ---
+    if require_untilize is not None:
+        untilize_line = ""
+        for ln in log_active.splitlines():
+            if "in-place halo untilize:" in ln:
+                untilize_line = ln[ln.index("in-place halo untilize:") :]
+                break
+        print(f"[{tag}] {untilize_line or 'in-place halo untilize: <not found>'}")
+        assert f"path={require_untilize}" in untilize_line, (
+            f"[{tag}] expected untilize path '{require_untilize}' but got: "
+            f"'{untilize_line or '<not found>'}' -> the intended narrow/wide path was NOT exercised."
+        )
 
     # --- Load per-pool results and compare EXACTLY. ---
     with open(os.path.join(outdir, "inplace_results.json")) as f:
@@ -321,7 +367,7 @@ def test_inplace_halo_matches_normal(shape_entry, out_dtype):
         b = torch.load(rn["path"])
         equal, first, n_mismatch = _nan_safe_exact_equal(a, b)
         if equal:
-            print(f"[{shape_name}/{out_dtype}] {pool_type}: PASS (exact match, shape={list(a.shape)})")
+            print(f"[{tag}] {pool_type}: PASS (exact match, shape={list(a.shape)})")
         else:
             va = a[first].item() if first is not None else "N/A"
             vb = b[first].item() if first is not None else "N/A"
@@ -329,12 +375,66 @@ def test_inplace_halo_matches_normal(shape_entry, out_dtype):
                 f"  [{key}] FAIL: {n_mismatch} mismatched elements; "
                 f"first at {first}: inplace={va} normal={vb} (shapes {list(a.shape)} vs {list(b.shape)})"
             )
-            print(f"[{shape_name}/{out_dtype}] {pool_type}: " + msg)
+            print(f"[{tag}] {pool_type}: " + msg)
             failures.append(msg)
 
-    assert not failures, (
-        f"[{shape_name}/{out_dtype}] in-place halo produced OUTPUT DIVERGENT from normal halo "
-        f"(a corruption bug):\n" + "\n".join(failures)
+    assert (
+        not failures
+    ), f"[{tag}] in-place halo produced OUTPUT DIVERGENT from normal halo (a corruption bug):\n" + "\n".join(failures)
+
+
+# ===========================================================================
+# TEST: row-major input (skip-untilize path) -- the original validated slice.
+# ===========================================================================
+@pytest.mark.parametrize("out_dtype", OUT_DTYPES)
+@pytest.mark.parametrize("shape_entry", SHAPES, ids=[s[0] for s in SHAPES])
+def test_inplace_halo_matches_normal(shape_entry, out_dtype):
+    shape_name, shape, kernel, stride, pad = shape_entry
+    _run_and_compare(
+        f"{shape_name}/{out_dtype}", shape, kernel, stride, pad, out_dtype, in_dtype="bfloat16", in_layout="row_major"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TILED-input SAVE shapes (untilize-in-place path). Each entry declares the expected untilize
+# path so the test proves the intended narrow (pack_untilize) vs WIDE (untilize-temp-CB) branch.
+# All are height-sharded and net-L1 SAVE (widening channels is width-independent for the gate, so
+# a widened known-SAVE shape stays SAVE). ntiles_per_block = ceil(channels/32); WIDE iff > 8.
+# ---------------------------------------------------------------------------
+TILED_SHAPES = [
+    # name, NCHW, kernel, stride, pad(t,b,l,r), expected untilize path.
+    # SAVE verdict confirmed via the gate (in/core vs max_ref). The 150x150 k2s2p0 geometry
+    # (max_ref=176 << in/core=352) is a robust SAVE region; channels are widened to reach the
+    # narrow(<=8 tiles)/WIDE(>8 tiles) untilize branches without changing the SAVE verdict
+    # (the gate is channel-width-independent).
+    ("resnet_150x150_k2s2p0", [1, 128, 150, 150], (2, 2), (2, 2), (0, 0, 0, 0), "pack_untilize"),  # 4 tiles, narrow
+    ("n8_112x112_k3s2p1", [8, 64, 112, 112], (3, 3), (2, 2), (1, 1, 1, 1), "pack_untilize"),  # 2 tiles, padded, fwd/rev
+    ("c256_150x150_k2s2p0", [1, 256, 150, 150], (2, 2), (2, 2), (0, 0, 0, 0), "pack_untilize"),  # 8 tiles (boundary)
+    ("wide320_150x150_k2s2p0", [1, 320, 150, 150], (2, 2), (2, 2), (0, 0, 0, 0), "untilize-temp-CB"),  # 10 tiles, WIDE
+]
+
+# Tiled-input dtypes: bf16 (untilize keeps bf16) and bf8_b (class-12: bf8_b -> bf16 after untilize).
+TILED_IN_DTYPES = ["bfloat16", "bfloat8_b"]
+
+
+# ===========================================================================
+# TEST: tiled input (untilize-in-place path) -- Part B. Output kept bf16 ROW_MAJOR for the most
+# sensitive (no output-quantization) bitwise comparison; the tiled-ness is on the INPUT side.
+# ===========================================================================
+@pytest.mark.parametrize("in_dtype", TILED_IN_DTYPES)
+@pytest.mark.parametrize("shape_entry", TILED_SHAPES, ids=[s[0] for s in TILED_SHAPES])
+def test_inplace_halo_tiled_matches_normal(shape_entry, in_dtype):
+    shape_name, shape, kernel, stride, pad, expected_untilize = shape_entry
+    _run_and_compare(
+        f"{shape_name}/tiled_{in_dtype}",
+        shape,
+        kernel,
+        stride,
+        pad,
+        out_dtype="bfloat16",
+        in_dtype=in_dtype,
+        in_layout="tile",
+        require_untilize=expected_untilize,
     )
 
 

@@ -16,7 +16,8 @@ Tensor halo(
     bool remote_read,
     bool transpose_mcast,
     bool is_out_tiled,
-    bool config_tensors_in_dram) {
+    bool config_tensors_in_dram,
+    bool allow_in_place) {
     return prim::halo(
         input_tensor,
         config,
@@ -25,7 +26,8 @@ Tensor halo(
         remote_read,
         transpose_mcast,
         is_out_tiled,
-        config_tensors_in_dram);
+        config_tensors_in_dram,
+        allow_in_place);
 }
 
 }  // namespace ttnn

@@ -156,8 +156,14 @@ uint32_t compute_max_outbound_halo_sticks(
 // its program factory, and the pool/conv callers all reach the same decision without
 // storing state. See IN_PLACE_HALO_REDO.md section 10. NOTE: there is intentionally no
 // user-facing toggle -- in-place activates automatically only when it is a clear win.
+// `allow_in_place` is a per-caller capability gate: it must be true for in-place to be
+// considered at all (only the pool caller opts in; conv/upsample/fold pass false).
 bool should_halo_be_in_place(
-    const SlidingWindowConfig& config, uint32_t in_nsticks_per_core, bool is_height_sharded, bool is_in_tiled);
+    bool allow_in_place,
+    const SlidingWindowConfig& config,
+    uint32_t in_nsticks_per_core,
+    bool is_height_sharded,
+    bool is_in_tiled);
 
 struct HaloGatherKernelConfig {
     std::vector<std::vector<uint16_t>> pad_config0;

@@ -101,25 +101,37 @@ HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_te
     const bool is_height_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool is_in_tiled = input_tensor.layout() == Layout::TILE;
     const bool in_place = ttnn::operations::sliding_window::should_halo_be_in_place(
-        args.config, args.in_nsticks_per_core, is_height_sharded, is_in_tiled);
+        args.allow_in_place, args.config, args.in_nsticks_per_core, is_height_sharded, is_in_tiled);
     if (!in_place) {
         return create_device_tensor(output_spec, input_tensor.device());
     }
     log_info(tt::LogOp, "halo_device_operation - in-place halo active; aliasing output onto input buffer");
 
-    // Capture the input shard address BEFORE freeing it (used to assert the overlap below).
+    // Capture the input shard address AND its aligned per-bank size BEFORE freeing it (both used
+    // to assert the overlap below). For TILED input the aliasing offset is the buffer-size delta
+    // (untilize writes into the dst buffer, so the stick-index delta is 0 and cannot be used) --
+    // that needs the input buffer's byte size before it is deallocated.
     Buffer* src_buffer = input_tensor.buffer();
     const uint32_t src_addr = src_buffer->address();
+    const uint32_t in_aligned_size_per_bank = src_buffer->aligned_size_per_bank();
 
-    // Stick delta between input and output shards (MUST match the factory). Post-untilize
-    // width bytes; row-major (gate excludes tiled) so is_in_tiled == false here.
-    const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
-    const uint32_t nbytes = input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ? 4u : 2u;
-    const uint32_t width_bytes = shard_width * nbytes;
-    const uint32_t aligned_delta_size =
-        (ttnn::operations::sliding_window::align_buffer(args.max_out_nsticks_per_core * width_bytes) / width_bytes) -
-        (ttnn::operations::sliding_window::align_buffer(args.in_nsticks_per_core * width_bytes) / width_bytes);
-    const uint32_t delta_bytes = aligned_delta_size * width_bytes;
+    // Aliasing delta between input and output shards (MUST match the factory build_inplace_halo_program).
+    //   Row-major: stick-based delta = (aligned out_nsticks - aligned in_nsticks) * post-untilize width.
+    //   Tiled:     buffer-size delta = out_buffer.aligned_size_per_bank() - in_buffer.aligned_size_per_bank(),
+    //              because the tiled input has a different byte layout than the untilized row-major output
+    //              and its tiles physically live at the TAIL of the output buffer (#27333/#30644).
+    // The tiled buffer_delta is finalized after the output buffer is allocated (needs dst size).
+    uint32_t delta_bytes = 0;
+    if (!is_in_tiled) {
+        const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
+        const uint32_t nbytes = input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ? 4u : 2u;
+        const uint32_t width_bytes = shard_width * nbytes;
+        const uint32_t aligned_delta_size =
+            (ttnn::operations::sliding_window::align_buffer(args.max_out_nsticks_per_core * width_bytes) /
+             width_bytes) -
+            (ttnn::operations::sliding_window::align_buffer(args.in_nsticks_per_core * width_bytes) / width_bytes);
+        delta_bytes = aligned_delta_size * width_bytes;
+    }
 
     // Free the input shard's L1 region so the (larger) output shard can be allocated over the
     // same top-of-L1 region (sharded L1 allocates top-down). Deallocating the underlying
@@ -132,6 +144,9 @@ HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_te
 
     auto output = create_device_tensor(output_spec, input_tensor.device());
     Buffer* dst_buffer = output.buffer();
+    if (is_in_tiled) {
+        delta_bytes = dst_buffer->aligned_size_per_bank() - in_aligned_size_per_bank;
+    }
     TT_FATAL(
         src_addr == dst_buffer->address() + delta_bytes,
         "In-place halo requires the input shard buffer to overlap the output shard buffer at the expected "
@@ -150,7 +165,8 @@ Tensor halo(
     bool remote_read,
     bool transpose_mcast,
     bool is_out_tiled,
-    bool config_tensors_in_dram) {
+    bool config_tensors_in_dram,
+    bool allow_in_place) {
     using OperationType = HaloDeviceOperation;
 
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
@@ -188,6 +204,7 @@ Tensor halo(
             .in_nsticks_per_core = in_nsticks_per_core,
             .is_out_tiled = is_out_tiled,
             .config_tensors_in_dram = config_tensors_in_dram,
+            .allow_in_place = allow_in_place,
             .compute_kernel_config = compute_kernel_config},
         input_tensor);
 }

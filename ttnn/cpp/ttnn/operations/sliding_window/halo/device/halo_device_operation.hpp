@@ -38,6 +38,7 @@ Tensor halo(
     bool remote_read,
     bool transpose_mcast,
     bool is_out_tiled,
-    bool config_tensors_in_dram);
+    bool config_tensors_in_dram,
+    bool allow_in_place);
 
 }  // namespace ttnn::prim

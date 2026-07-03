@@ -599,16 +599,29 @@ uint32_t compute_max_outbound_halo_sticks(
 }
 
 bool should_halo_be_in_place(
-    const SlidingWindowConfig& config, uint32_t in_nsticks_per_core, bool is_height_sharded, bool is_in_tiled) {
+    bool allow_in_place,
+    const SlidingWindowConfig& config,
+    uint32_t in_nsticks_per_core,
+    bool is_height_sharded,
+    // Both row-major and tiled height-sharded inputs are now supported, so this no longer gates;
+    // kept in the signature for API symmetry with the callers and possible future tiled-specific
+    // margins.
+    [[maybe_unused]] bool is_in_tiled) {
+    // Per-caller capability gate: in-place stays pool-only for now. Callers that have not
+    // opted in (conv2d, upsample, fold, ...) pass allow_in_place=false and never activate it.
+    if (!allow_in_place) {
+        return false;
+    }
     // Test-only override: when TT_METAL_DISABLE_INPLACE_HALO is set (non-empty), force the
     // trusted normal-halo path so the correctness test can capture the golden output.
     if (const char* disable = std::getenv("TT_METAL_DISABLE_INPLACE_HALO"); disable != nullptr && disable[0] != '\0') {
         return false;
     }
-    // Safety gate: only the classes validated corruption-safe so far. Start with the
-    // simplest path (row-major, height-sharded, no untilize); widen as each class is
-    // proven with the rigorous elementwise tests (see IN_PLACE_HALO_REDO.md section 11).
-    if (!is_height_sharded || is_in_tiled || config.is_transpose || config.is_bilinear) {
+    // Safety gate: only the classes validated corruption-safe so far. Height-sharded, both
+    // row-major (skip-untilize) and tiled (untilize-in-place) inputs are supported; transpose
+    // and bilinear are excluded. Widen further as each class is proven with the rigorous
+    // elementwise tests (see IN_PLACE_HALO_REDO.md section 11).
+    if (!is_height_sharded || config.is_transpose || config.is_bilinear) {
         return false;
     }
     if (in_nsticks_per_core == 0 || config.num_cores_nhw == 0) {

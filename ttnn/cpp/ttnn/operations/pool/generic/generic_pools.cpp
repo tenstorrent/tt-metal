@@ -343,7 +343,10 @@ static std::vector<Tensor> pool2d_L1(
     // the caller must NOT deallocate the input (double-free of the shared buffer) nor ttnn::move
     // the output (would copy to a fresh buffer, spiking L1 and undoing the saving). Computed
     // before the halo call while input_tensor_sharded is fully valid.
+    // Pool is the sole caller that OPTS IN to in-place halo (allow_in_place=true); every other
+    // ttnn::halo caller leaves it at the default false so in-place stays pool-only.
     const bool halo_is_in_place = ttnn::operations::sliding_window::should_halo_be_in_place(
+        /*allow_in_place=*/true,
         sliding_window_config,
         input_tensor_sharded.memory_config().shard_spec()->shape[0],
         input_tensor_sharded.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
@@ -357,7 +360,8 @@ static std::vector<Tensor> pool2d_L1(
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         is_out_tiled,
-        config_tensor_in_dram);
+        config_tensor_in_dram,
+        /*allow_in_place=*/true);
 
     if (!halo_is_in_place && (deallocate_input || is_input_tensor_in_dram)) {
         input_tensor_sharded.deallocate(/*force*/ true);
