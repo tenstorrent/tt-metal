@@ -3028,6 +3028,13 @@ class Qwen36Model:
         bucket = max(gdn_chunk, ((max(vlens) + gdn_chunk - 1) // gdn_chunk) * gdn_chunk)
         assert all(v <= bucket for v in vlens), "every valid_len must fit the single-pass bucket"
 
+        # Batched-GDN kernel L1 ceiling caps group size by bucket (NC = bucket/gdn_chunk): the
+        # gated_delta_attn_seq static CBs (~1.3MB) leave room for only BH*NC ~= 48 (BH = B*Nv_tp,
+        # Nv_tp=12), so validated ceilings are bucket<=128 -> B<=4, bucket<=256 -> B<=2. Larger
+        # buckets clash (B must be 1); callers should route those to per-user instead.
+        gdn_max_bg = 4 if bucket <= gdn_chunk else (2 if bucket <= 2 * gdn_chunk else 1)
+        group_size = max(1, min(group_size, gdn_max_bg))
+
         dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
         rep = ttnn.ReplicateTensorToMesh(self.device)
         # cos/sin for absolute positions [0, bucket) — shared by all users (single pass from pos 0).

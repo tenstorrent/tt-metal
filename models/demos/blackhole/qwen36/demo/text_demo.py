@@ -112,13 +112,15 @@ def _get_prompt(seqlen, tokenizer, max_prompt_len=None):
         )
         return tokenizer(text, add_special_tokens=False, return_tensors="pt")["input_ids"][:, :cap]
 
-    if seqlen <= 128:
-        # Shared 128-token prompt file
+    if seqlen <= 256:
         path = f"{SHARED_PROMPTS_DIR}/input_data_questions_prefill_128.json"
         with open(path) as f:
             data = json.load(f)
-        inputs = tokenizer(data[0]["prompt"], return_tensors="pt")
-        return inputs["input_ids"][:, :cap]
+        ids = tokenizer(data[0]["prompt"], return_tensors="pt")["input_ids"]
+        # The shared prompt is ~128 tokens; repeat it to guarantee >= cap tokens, then clip.
+        while ids.shape[1] < cap:
+            ids = torch.cat([ids, ids], dim=1)
+        return ids[:, :cap]
 
     # Long sequences (16k+): Frankenstein corpus + continuation task
     if seqlen in _FRANKENSTEIN_CONFIGS:
@@ -214,7 +216,10 @@ def _blocks_for(seqlen, max_generated_tokens):
         # Batched decode (TP only): B users share one paged KV + batched GDN state.
         pytest.param(128, 50, True, 8, 1, id="batched_128_b8"),
         pytest.param(128, 50, True, 32, 1, id="batched_128_b32"),
-        # Batched long prefill (TP only): T>128 routes to prefill_chunked_peruser.
+        # 128<T<=256 → grouped single-pass at B=2 groups (batched-GDN L1 ceiling for bucket 256).
+        pytest.param(256, 50, True, 8, 1, id="batched_256_b8"),
+        pytest.param(256, 50, True, 32, 1, id="batched_256_b32"),
+        # T>256 → prefill_chunked_peruser (per-user; GDN can't batch large chunks).
         pytest.param(4096, 50, True, 8, 1, id="batched_4k_b8"),
         pytest.param(4096, 50, True, 32, 1, id="batched_4k_b32"),
         # B=8 long-context ladder. Paged KV scales as B x ISL (~1 GB/device at 8k to ~8 GB at
@@ -671,25 +676,13 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=B)
     page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])  # [B, bpu]
 
-    # ---- per-user prefill (replicate the one loaded prompt to all B users) ----
-    # Three routes by prompt length T (QWEN35_TP_PREFILL_EAGER=1 forces eager for A/B):
-    #   T == 128  -> traced bucket prefill: capture one B=1 bucket(128) trace and replay it per user
-    #                (faster than 32 eager B=1 prefills: no per-layer host dispatch / per-op from_torch).
-    #   T  > 128  -> prefill_chunked_peruser: single-user chunk-outer path run per user into a B=1 GDN
-    #                scratch, assembled into row u. Handles any length with exact valid_len masking, so
-    #                the GDN decode state is correct (unlike single-pass prefill_paged_peruser, which
-    #                breaks beyond ~one chunk).
-    #   T  < 128  -> prefill_paged_peruser: eager single-pass per-user prefill (< one chunk).
-    # The traced bucket path serves only exactly-128 prompts: a short prompt padded through the GDN
-    # recurrence inside a trace would corrupt the decode state (valid_len can't be masked in a trace),
-    # so every other length takes a path that masks the recurrence exactly.
+    # Prefill routes: T<=256 grouped single-pass; T>256 prefill_chunked_peruser (per-user).
+    # QWEN_BATCHED_GROUPED=1 (default): group short prompts for ~4x (T<=128, B=4 groups) / ~1.6x
+    # (T<=256, B=2 groups) TTFT. prefill_paged_grouped auto-caps group size by the GDN kernel's
+    # per-bucket L1 ceiling. Long prompts (T>256) can't batch GDN (chunk clash) -> stay per-user.
     bucket = 128
     eager = os.environ.get("QWEN35_TP_PREFILL_EAGER") == "1"
-    # Prefill short prompts (T <= gdn_chunk 128) in GROUPS of <=4 users through one hybrid forward
-    # (batched GDN + per-user attention) instead of B sequential B=1 forwards — ~4x faster TTFT at
-    # B=32 (25.8s->6.4s), bit-identical per user vs prefill_paged_peruser incl. distinct lengths
-    # (grouped GDN kernel is PCC 1.0). Default on; QWEN_BATCHED_GROUPED=0 forces the per-user path.
-    grouped_short = os.environ.get("QWEN_BATCHED_GROUPED", "1") != "0" and T <= 128
+    grouped_short = os.environ.get("QWEN_BATCHED_GROUPED", "1") != "0" and T <= 256
     use_traced_bucket = (T == bucket) and not eager and not grouped_short
     token_list = [token_ids[:, :T] for _ in range(B)]
     if use_traced_bucket:
