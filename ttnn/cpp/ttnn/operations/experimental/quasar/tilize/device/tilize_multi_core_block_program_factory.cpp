@@ -263,13 +263,12 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         });
 
         // Compute: consumes c_0 (in), produces c_16 (out).
-        ComputeUnpackToDestModes utd;
-        if (fp32_llk_acc) {
-            utd = {{g.in, UnpackToDestMode::UnpackToDestFp32}};
-        }
         ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
             device->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_llk_acc});
-        std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, compute_hw);
+        if (fp32_llk_acc) {
+            std::visit(
+                [&](auto& c) { c.unpack_to_dest_mode.emplace(g.in, UnpackToDestMode::UnpackToDestFp32); }, compute_hw);
+        }
         spec.kernels.push_back(KernelSpec{
             .unique_id = g.compute,
             .source = BLK_COMPUTE_SRC,

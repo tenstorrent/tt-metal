@@ -135,13 +135,13 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
 
     // ---- Compute (Metal 2.0 fork; full + cliff) ----
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
-        ComputeUnpackToDestModes utd;
-        if (fp32_llk_acc) {
-            utd.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-        }
         auto hw = ttnn::to_compute_hardware_config(
             device->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_llk_acc});
-        std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, hw);
+        if (fp32_llk_acc) {
+            std::visit(
+                [&](auto& c) { c.unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
+                hw);
+        }
         return hw;
     };
     const std::filesystem::path compute_source(

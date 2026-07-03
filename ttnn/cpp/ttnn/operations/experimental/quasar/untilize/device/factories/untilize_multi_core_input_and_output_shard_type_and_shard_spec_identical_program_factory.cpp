@@ -105,13 +105,13 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    ComputeUnpackToDestModes utd;
-    if (fp32_dest_acc_en) {
-        utd.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-    }
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
         a.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
-    std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, compute_hw);
+    if (fp32_dest_acc_en) {
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
+            compute_hw);
+    }
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = kdir / "compute/untilize_metal2.cpp",

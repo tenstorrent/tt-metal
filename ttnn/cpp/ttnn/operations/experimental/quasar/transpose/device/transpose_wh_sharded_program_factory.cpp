@@ -137,13 +137,13 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
     };
 
-    ComputeUnpackToDestModes utd;
-    if (src0_cb_data_format == tt::DataFormat::Float32) {
-        utd = {{CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
-    }
     ComputeHardwareConfig compute_cfg = ttnn::to_compute_hardware_config(
         input_tensor.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
-    std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, compute_cfg);
+    if (src0_cb_data_format == tt::DataFormat::Float32) {
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
+            compute_cfg);
+    }
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE_KERNEL,

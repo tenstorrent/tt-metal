@@ -179,17 +179,18 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
         };
 
-        ComputeUnpackToDestModes utd;
+        ComputeHardwareConfig compute_cfg = ttnn::to_compute_hardware_config(
+            device->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
         if (src_is_float32) {
             // Keep the source CB and the tile-formatted intermediate (cb_tilize) in full Float32
             // on the unpack-to-dest path; both feed the transpose.
-            utd = {
-                {CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32},
-                {CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+            std::visit(
+                [&](auto& c) {
+                    c.unpack_to_dest_mode.emplace(CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+                    c.unpack_to_dest_mode.emplace(CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+                },
+                compute_cfg);
         }
-        ComputeHardwareConfig compute_cfg = ttnn::to_compute_hardware_config(
-            device->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
-        std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, compute_cfg);
 
         KernelSpec compute_spec{
             .unique_id = COMPUTE_KERNEL,
@@ -271,13 +272,15 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
         };
 
-        ComputeUnpackToDestModes utd;
-        if (src_is_float32) {
-            utd = {{CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
-        }
         ComputeHardwareConfig compute_cfg = ttnn::to_compute_hardware_config(
             device->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
-        std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, compute_cfg);
+        if (src_is_float32) {
+            std::visit(
+                [&](auto& c) {
+                    c.unpack_to_dest_mode.emplace(CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+                },
+                compute_cfg);
+        }
 
         KernelSpec compute_spec{
             .unique_id = COMPUTE_KERNEL,

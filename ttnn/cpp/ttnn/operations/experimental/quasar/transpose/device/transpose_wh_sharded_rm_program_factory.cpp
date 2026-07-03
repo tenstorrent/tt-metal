@@ -167,17 +167,18 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
     };
 
-    ComputeUnpackToDestModes utd;
+    ComputeHardwareConfig compute_cfg = ttnn::to_compute_hardware_config(
+        input_tensor.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
     if (src0_cb_data_format == tt::DataFormat::Float32) {
         // Keep both the tilize input (cb_in) and its output (cb_tilize, which feeds the transpose)
         // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32.
-        utd = {
-            {CB_IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32},
-            {CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+        std::visit(
+            [&](auto& c) {
+                c.unpack_to_dest_mode.emplace(CB_IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+                c.unpack_to_dest_mode.emplace(CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+            },
+            compute_cfg);
     }
-    ComputeHardwareConfig compute_cfg = ttnn::to_compute_hardware_config(
-        input_tensor.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
-    std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, compute_cfg);
 
     // Output binding: ht<=8 -> compute self-loops the borrowed output shard directly; ht>8 -> compute
     // is PRODUCER-only of the staging DFB (the compute kernel's producer-side wait_front does not make

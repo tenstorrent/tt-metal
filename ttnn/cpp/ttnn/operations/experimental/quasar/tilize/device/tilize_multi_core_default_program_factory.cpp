@@ -137,13 +137,13 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     };
 
     // -- Compute kernels (preserved multiplicity: per-group CTAs) --
-    ComputeUnpackToDestModes utd;
-    if (fp32_llk_acc) {
-        utd = {{MC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
-    }
     ComputeHardwareConfig compute_hw =
         ttnn::to_compute_hardware_config(device->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_llk_acc});
-    std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, compute_hw);
+    if (fp32_llk_acc) {
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(MC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32); },
+            compute_hw);
+    }
     const char* compute_src = "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/compute/tilize.cpp";
     auto make_compute = [&](const KernelSpecName& id, uint32_t nblocks_per_core_arg) {
         return KernelSpec{
