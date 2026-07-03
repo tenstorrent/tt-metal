@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -791,12 +792,7 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         KernelSpec k{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_source),
-            .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-                if (device->arch() == tt::ARCH::QUASAR) {
-                    return DataMovementGen2Config{};
-                }
-                return gen1;
-            }),
+            .hw_config = ttnn::to_datamovement_hardware_config(device->arch(), gen1),
         };
         k.tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = TensorParamName{kGenInputTensorParam}, .accessor_name = kGenInputTensorParam});

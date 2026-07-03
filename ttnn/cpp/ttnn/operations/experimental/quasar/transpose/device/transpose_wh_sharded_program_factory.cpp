@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <functional>
 #include <vector>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -121,12 +122,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = CB_IN0, .accessor_name = "cb_in0", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_reader_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
     };
 
     KernelSpec writer_spec{
@@ -137,12 +133,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = CB_OUT0, .accessor_name = "cb_out0", .endpoint_type = DFBEndpointType::CONSUMER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_writer_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
     };
 
     ComputeUnpackToDestModes utd;

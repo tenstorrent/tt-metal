@@ -20,6 +20,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -397,12 +398,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         KernelSpec reader{
             .unique_id = name,
             .source = std::filesystem::path(kReaderKernelPath),
-            .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-                if (device->arch() == tt::ARCH::QUASAR) {
-                    return DataMovementGen2Config{};
-                }
-                return DataMovementGen1Config{.processor = processor, .noc = noc};
-            }),
+            .hw_config = ttnn::to_datamovement_hardware_config(
+                device->arch(), DataMovementGen1Config{.processor = processor, .noc = noc}),
         };
 
         // Tensor bindings: OUT always (scatter-write target).  IN directly only on

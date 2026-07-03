@@ -13,6 +13,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -91,12 +92,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     reader.dfb_bindings = {
         DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}};
     reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "in"}};
-    reader.hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-        if (device->arch() == tt::ARCH::QUASAR) {
-            return DataMovementGen2Config{};
-        }
-        return create_reader_gen1_datamovement_config();
-    });
+    reader.hw_config = ttnn::create_reader_datamovement_config(device->arch());
 
     KernelSpec writer;
     writer.unique_id = WRITER;
@@ -104,12 +100,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     writer.dfb_bindings = {
         DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::CONSUMER}};
     writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "out"}};
-    writer.hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-        if (device->arch() == tt::ARCH::QUASAR) {
-            return DataMovementGen2Config{};
-        }
-        return create_writer_gen1_datamovement_config();
-    });
+    writer.hw_config = ttnn::create_writer_datamovement_config(device->arch());
 
     const auto& slice_start = args.slice_start;
     const auto& slice_end = args.slice_end;

@@ -13,6 +13,7 @@
 
 #include <functional>
 #include <vector>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -162,12 +163,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
              {"Wt", wt},
              {"W_size_bytes", stick_size_bytes},
              {"l1_write_offset_bytes", wt * input_tensor.element_size() * TILE_WIDTH}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_reader_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
     };
 
     ComputeUnpackToDestModes utd;
@@ -246,12 +242,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
                  {"W_per_tile_last", W_per_tile_last},
                  {"H_size_bytes", H * output_tensor.element_size()},
                  {"l1_read_offset_bytes", ht * output_tensor.element_size() * TILE_HEIGHT}},
-            .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-                if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
-                    return DataMovementGen2Config{};
-                }
-                return create_writer_gen1_datamovement_config();
-            }),
+            .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
         };
         kernels.push_back(std::move(writer_spec));
         wu_kernels.push_back(WRITER_KERNEL);

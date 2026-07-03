@@ -12,6 +12,7 @@
 #include <tt-metalium/allocator.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -103,12 +104,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (device->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_reader_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
     // ---- Writer kernel ----
@@ -126,12 +122,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
             {{"float32_dtype", static_cast<uint32_t>(float32_dtype)}, {"unpadded_X_size", unpadded_row_size_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"padded_X_size", "start_stick_id", "n_block_reps"}},
     };
-    writer.hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-        if (device->arch() == tt::ARCH::QUASAR) {
-            return DataMovementGen2Config{};
-        }
-        return create_writer_gen1_datamovement_config();
-    });
+    writer.hw_config = ttnn::create_writer_datamovement_config(device->arch());
 
     // ---- Compute kernels (full + cliff) ----
     KernelSpec::CompilerOptions::Defines compute_defines;

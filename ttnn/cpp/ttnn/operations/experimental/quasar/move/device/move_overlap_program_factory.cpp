@@ -20,6 +20,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
@@ -166,12 +167,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             {
                 m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
             },
-        .hw_config = std::invoke([&]() -> m2::DataMovementHardwareConfig {
-            if (device->arch() == tt::ARCH::QUASAR) {
-                return m2::DataMovementGen2Config{};
-            }
-            return m2::create_reader_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
     // Named CTA: the stick-layout kernel needs the (unaligned) page size at compile time.
@@ -214,12 +210,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             {
                 m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
             },
-        .hw_config = std::invoke([&]() -> m2::DataMovementHardwareConfig {
-            if (device->arch() == tt::ARCH::QUASAR) {
-                return m2::DataMovementGen2Config{};
-            }
-            return m2::create_writer_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     // The stick-layout writer needs the (unaligned) page size at compile time, like its reader.

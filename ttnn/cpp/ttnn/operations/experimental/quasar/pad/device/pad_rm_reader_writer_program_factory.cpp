@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -170,12 +171,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                   "num_local_unpadded_Y",
                   "full_unpadded_X_nbytes",
                   "num_local_W"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (a.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_reader_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
     // ------------------------------------------------------------------------
@@ -201,12 +197,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                   "full_padded_X_nbytes",
                   "dst_stick_offset",
                   "num_local_W"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (a.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_writer_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     // ------------------------------------------------------------------------

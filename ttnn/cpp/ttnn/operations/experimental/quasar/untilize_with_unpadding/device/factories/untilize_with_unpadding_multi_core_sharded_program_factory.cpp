@@ -15,6 +15,7 @@
 #include <tt-metalium/allocator.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -146,12 +147,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (a.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_reader_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
     // ------------------------------------------------------------------------
@@ -162,12 +158,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     // ------------------------------------------------------------------------
     KernelSpec writer{
         .unique_id = WRITER,
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (a.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_writer_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
     if (out_sharded) {
         // Both out-sharded writers consume OUT (untilized tiles) and produce the resident OUT_SHARDED

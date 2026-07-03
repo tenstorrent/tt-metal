@@ -14,6 +14,7 @@
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -146,12 +147,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
              {"W_front_pad_bytes", W_padding_front_bytes},
              {"unpadded_stick_step", unpadded_stick_step},
              {"padded_stick_step", padded_stick_step}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_reader_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
     };
 
     KernelSpec writer_spec{
@@ -166,12 +162,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
              {"padded_shard_height", shard_height_padded},
              {"padding_value_as_u32", padding_value_as_u32},
              {"padding_value_num_bytes", static_cast<uint32_t>(output.element_size())}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_writer_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
     };
 
     KernelRunArgs reader_run{.kernel = READER_KERNEL};

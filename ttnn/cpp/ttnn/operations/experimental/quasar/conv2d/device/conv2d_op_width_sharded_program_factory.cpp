@@ -28,6 +28,7 @@
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
@@ -682,13 +683,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             {
                 .runtime_arg_names = {"this_core_x", "this_core_y", "num_cores_x"},
             },
-        .hw_config = std::invoke([&]() -> m2::DataMovementHardwareConfig {
-            if (device->arch() == tt::ARCH::QUASAR) {
-                return m2::DataMovementGen2Config{};
-            }
-            return m2::DataMovementGen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
-        }),
+        .hw_config = ttnn::to_datamovement_hardware_config(
+            device->arch(),
+            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc}),
     };
     if (skip_activation_mcast) {
         act_kernel.compiler_options.defines.insert({"SKIP_MCAST", "1"});
@@ -744,13 +741,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             {
                 .runtime_arg_names = {"init_weight_start_tile_id", "is_active"},
             },
-        .hw_config = std::invoke([&]() -> m2::DataMovementHardwareConfig {
-            if (device->arch() == tt::ARCH::QUASAR) {
-                return m2::DataMovementGen2Config{};
-            }
-            return m2::DataMovementGen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc};
-        }),
+        .hw_config = ttnn::to_datamovement_hardware_config(
+            device->arch(),
+            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc}),
     };
 
     // FUSE_BIAS preprocessor define gates the conditionally-bound dfb::bias / tensor::bias references

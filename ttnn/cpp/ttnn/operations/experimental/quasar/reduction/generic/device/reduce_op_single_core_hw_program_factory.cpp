@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -149,12 +150,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args = {{"scaler_bits", std::bit_cast<uint32_t>(scaler)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (a.device().arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_reader_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_reader_datamovement_config(a.device().arch()),
     };
 
     KernelSpec writer{
@@ -164,12 +160,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
             .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (a.device().arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_writer_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_writer_datamovement_config(a.device().arch()),
     };
 
     // ---- Compute (reduce, or negate/MIN variant with INTRA self-loop acc/ineg) ----
