@@ -9,6 +9,7 @@
 # then slice out exactly the halo bands in the compact-buffer stick order and compare byte-for-byte
 # (bf16 copy, no arithmetic).
 
+import os
 import time
 import torch
 import pytest
@@ -160,15 +161,51 @@ def run_neighbor_pad_halo_2d(mesh_device, input_shape, h_dim, w_dim, h_axis, w_a
                 # Per-section diagnostic: which of [H-top | H-bot | W-left | W-right] mismatches.
                 h_sec = outer * pH * W_dev
                 w_sec = outer * (H_dev + 2 * pH) * pW
-                bounds = [("Htop", 0, h_sec), ("Hbot", h_sec, 2 * h_sec),
-                          ("Wleft", 2 * h_sec, 2 * h_sec + w_sec),
-                          ("Wright", 2 * h_sec + w_sec, 2 * h_sec + 2 * w_sec)]
+                bounds = [
+                    ("Htop", 0, h_sec),
+                    ("Hbot", h_sec, 2 * h_sec),
+                    ("Wleft", 2 * h_sec, 2 * h_sec + w_sec),
+                    ("Wright", 2 * h_sec + w_sec, 2 * h_sec + 2 * w_sec),
+                ]
                 secmsg = []
                 for name, a, b in bounds:
                     if b <= dev.shape[0]:
                         seq, _ = comp_equal(dev[a:b], ref[a:b])
                         secmsg.append(f"{name}={'OK' if seq else 'BAD'}")
                 print(f"FAIL dev({row},{col}): {pcc} | sections: {' '.join(secmsg)}")
+                if os.environ.get("NP_DIAG"):
+                    import torch as _t
+
+                    h_sec = outer * pH * W_dev
+                    for nm, a, b in [("Htop", 0, h_sec), ("Hbot", h_sec, 2 * h_sec)]:
+                        sub_d, sub_r = dev[a:b], ref[a:b]
+                        bad = (~(sub_d == sub_r).all(dim=1)).nonzero().flatten().tolist()
+                        if not bad:
+                            continue
+                        frames = sorted({i // (pH * W_dev) for i in bad})
+                        cols = sorted({(i % (pH * W_dev)) % W_dev for i in bad})
+                        print(
+                            f"  {nm} bad_sticks={len(bad)}/{b-a} frames={frames[:8]}(n={len(frames)}/{outer}) "
+                            f"cols={cols}(n={len(cols)}/{W_dev}) banks={sorted({c%8 for c in cols})}"
+                        )
+                    # W sections: rows are [frame][h_row (0..H_dev+2pH)][pw]; flag which h_rows are bad and
+                    # whether they are corner rows (h_row < pH or >= pH+H_dev) — corners come from the H exchange.
+                    hh = H_dev + 2 * pH
+                    for nm, a, b in [
+                        ("Wleft", 2 * h_sec, 2 * h_sec + w_sec),
+                        ("Wright", 2 * h_sec + w_sec, 2 * h_sec + 2 * w_sec),
+                    ]:
+                        sub_d, sub_r = dev[a:b], ref[a:b]
+                        bad = (~(sub_d == sub_r).all(dim=1)).nonzero().flatten().tolist()
+                        if not bad:
+                            continue
+                        hrows = sorted({(i // pW) % hh for i in bad})
+                        corners = [r for r in hrows if r < pH or r >= pH + H_dev]
+                        wframes = sorted({i // (hh * pW) for i in bad})
+                        print(
+                            f"  {nm} bad={len(bad)}/{b-a} frames={wframes[:8]}(n={len(wframes)}/{outer}) "
+                            f"h_rows={hrows}(corner_rows={corners})"
+                        )
             else:
                 print(f"PASS dev({row},{col})")
 
@@ -208,6 +245,22 @@ def test_neighbor_pad_halo_2d(mesh_device, device_params, padding_mode, input_sh
         padding_mode=padding_mode,
         num_links=1,
     )
+
+
+def _device_fw_us(mesh_device, run_op):
+    """Op-level device-FW duration (max core, max over devices), excluding the fixed per-program trace/
+    dispatch launch floor that trace-wall includes. Requires TT_METAL_DEVICE_PROFILER=1 (+ mid-run dump,
+    cpp post-process). Units are whatever the profiler reports; only used for halo-vs-async ratios."""
+    run_op()
+    ttnn.synchronize_device(mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
+    latest = ttnn.get_latest_programs_perf_data()
+    best = 0.0
+    for dev_id, programs in (latest or {}).items():
+        for program in programs:
+            for _name, res in program.program_analyses_results.items():
+                best = max(best, float(res.duration))
+    return best
 
 
 def run_halo_vs_async_perf(mesh_device, input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, num_links):
@@ -302,6 +355,17 @@ def run_halo_vs_async_perf(mesh_device, input_shape, h_dim, w_dim, h_axis, w_axi
             persistent_output_buffer=persist,
         )
 
+    if os.environ.get("NP_DEVTIME"):
+        # Op-level device-FW ratio: isolates op work from the fixed per-program launch floor that trace-wall
+        # includes (that floor is identical for both ops and overlaps when the op runs inside the decode trace).
+        h_dev = _device_fw_us(mesh_device, run_halo)
+        a_dev = _device_fw_us(mesh_device, run_async)
+        print(f"\n=== DEVTIME shape={input_shape} outer={outer} 2x4 ===")
+        print(f"  async device-fw: {a_dev:.1f}  halo device-fw: {h_dev:.1f}  ratio: {a_dev/max(h_dev,1e-9):.2f}x")
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
+        return
+
     halo_us = _trace_and_time(mesh_device, run_halo)
     async_us = _trace_and_time(mesh_device, run_async)
     # Per-device halo transport: the op sends its halo out + receives the neighbor's halo in (~2x the
@@ -338,9 +402,16 @@ def test_neighbor_pad_halo_perf(mesh_device, device_params, T):
 
 # Production LTX 1080p 2x4 decoder NP-bound layers, as full [B,T,H,W,C] (per-device = H/2, W/4). All k333
 # (pH=pW=1). Verifies the mux speedup holds on the real deployed shapes, not just the synthetic sweep.
+# All distinct LTX VAE-decoder NP inputs routed on the 2x4 mesh (kernel (3,3,3) => pH=pW=1). Collapsed
+# from models/tt_dit/utils/conv3d.py LTX table (lines ~414-429): 10 conv sites -> 6 unique (T, H, W, C_in).
+# H/W here are the FULL spatial dims (H = per-dev*2 on axis-0, W = per-dev*4 on axis-1).
 _LTX_PROD_2x4 = [
-    ([1, 147, 272, 480, 128], "s4_res_out_C128"),  # per-dev 136x120, C_in=128 (s4_res / s4_out)
+    ([1, 21, 34, 60, 128], "s0_conv_in_C128"),  # per-dev  17x15,  C_in=128
+    ([1, 21, 34, 60, 1024], "s0_res_up_C1024"),  # per-dev  17x15,  C_in=1024 (2048B page, largest)
+    ([1, 39, 68, 120, 512], "s1_res_up_C512"),  # per-dev  34x30,  C_in=512
+    ([1, 75, 136, 240, 512], "s2_res_C512"),  # per-dev  68x60,  C_in=512
     ([1, 147, 136, 240, 256], "s3_res_chg_C256"),  # per-dev  68x60,  C_in=256 (s3_res / s3_chg)
+    ([1, 147, 272, 480, 128], "s4_res_out_C128"),  # per-dev 136x120, C_in=128 (s4_res / s4_out)
 ]
 
 
@@ -356,6 +427,114 @@ def test_neighbor_pad_halo_prod_perf(mesh_device, device_params, input_shape, sh
     )
 
 
+# Same shapes, but with an 8 KB fabric packet payload (default is 4352 B). The factory sizes its coalesce
+# to the fabric max payload, so this ships ~2x the sticks per packet — tests whether packet count (fabric
+# forwarding overhead) is a bound on the mid/large shapes. FabricRouterConfig has no kwargs ctor; set the
+# field after default construction.
+def _fabric_router_config_8k():
+    frc = ttnn.FabricRouterConfig()
+    frc.max_packet_payload_size_bytes = int(os.environ.get("NP_FABRIC_PAYLOAD", "8192"))  # BH max 15232
+    return frc
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 90112 * 64,
+            "fabric_router_config": _fabric_router_config_8k(),
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_2x4, ids=[s[1] for s in _LTX_PROD_2x4])
+def test_neighbor_pad_halo_prod_perf_8k(mesh_device, device_params, input_shape, shape_id):
+    run_halo_vs_async_perf(
+        mesh_device, input_shape=input_shape, h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1, num_links=2
+    )
+
+
+# Byte-exact PCC with the 8 KB fabric payload: the coalesce forms larger (up to 32-stick) bank packets, so
+# this guards that the bigger-packet path is still exact.
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": _fabric_router_config_8k()}],
+    indirect=True,
+)
+@pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_2x4, ids=[s[1] for s in _LTX_PROD_2x4])
+def test_neighbor_pad_halo_prod_pcc_8k(mesh_device, device_params, input_shape, shape_id):
+    run_neighbor_pad_halo_2d(
+        mesh_device,
+        input_shape=input_shape,
+        h_dim=2,
+        w_dim=3,
+        h_axis=0,
+        w_axis=1,
+        pH=1,
+        pW=1,
+        padding_mode="zeros",
+        num_links=2,
+    )
+
+
+# Scaling to longer cluster axes than 2x4 (a 4x8 mesh needs 32 chips; on an 8-chip BH-LB the runnable proxy
+# is 4x2 = H-axis length 4 with MIDDLE devices, the case never exercised at 2x4 where both H devices are
+# edges). H div by 4, W div by 2. Validates the 1-hop neighbor exchange + startup barrier on a >2 axis.
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("mesh_device", [(4, 2)], ids=["4x2"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+@pytest.mark.parametrize("input_shape", [[1, 32, 136, 240, 128]], ids=["Hx4_mid"])
+def test_neighbor_pad_halo_4x2(mesh_device, device_params, padding_mode, input_shape):
+    run_neighbor_pad_halo_2d(
+        mesh_device,
+        input_shape=input_shape,
+        h_dim=2,
+        w_dim=3,
+        h_axis=0,
+        w_axis=1,
+        pH=1,
+        pW=1,
+        padding_mode=padding_mode,
+        num_links=2,
+    )
+
+
+# LTX-2.3 spatial latent upsampler (x2) on 2x4 (conv3d.py "spatial latent upsampler" block). Small spatial
+# (per-dev down to 9x8) and one k=(1,3,3) site — still spatial pH=pW=1. Not covered by the decoder set above.
+_LTX_UPSAMPLER_2x4 = [
+    ([1, 21, 18, 32, 128], "ups_initial_C128"),  # per-dev 9x8
+    ([1, 21, 18, 32, 1024], "ups_pre_res_C1024"),  # per-dev 9x8
+    ([1, 19, 18, 32, 1024], "ups_ups_C1024_k133"),  # per-dev 9x8, k=(1,3,3) -> spatial pH=pW=1
+    ([1, 21, 36, 64, 1024], "ups_post_res_C1024"),  # per-dev 18x16
+]
+
+
+@pytest.mark.timeout(400)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+@pytest.mark.parametrize("input_shape, shape_id", _LTX_UPSAMPLER_2x4, ids=[s[1] for s in _LTX_UPSAMPLER_2x4])
+def test_neighbor_pad_halo_upsampler_pcc(mesh_device, device_params, padding_mode, input_shape, shape_id):
+    run_neighbor_pad_halo_2d(
+        mesh_device,
+        input_shape=input_shape,
+        h_dim=2,
+        w_dim=3,
+        h_axis=0,
+        w_axis=1,
+        pH=1,
+        pW=1,
+        padding_mode=padding_mode,
+        num_links=2,
+    )
+
+
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -364,8 +543,16 @@ def test_neighbor_pad_halo_prod_perf(mesh_device, device_params, input_shape, sh
 def test_neighbor_pad_halo_prod_pcc(mesh_device, device_params, padding_mode, input_shape, shape_id):
     # Byte-exact PCC of the compact halo buffer on the production LTX 2x4 shapes (the mux path for zeros).
     run_neighbor_pad_halo_2d(
-        mesh_device, input_shape=input_shape, h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1,
-        padding_mode=padding_mode, num_links=2
+        mesh_device,
+        input_shape=input_shape,
+        h_dim=2,
+        w_dim=3,
+        h_axis=0,
+        w_axis=1,
+        pH=1,
+        pW=1,
+        padding_mode=padding_mode,
+        num_links=2,
     )
 
 

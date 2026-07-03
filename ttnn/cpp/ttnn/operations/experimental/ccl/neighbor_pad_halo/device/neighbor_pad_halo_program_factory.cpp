@@ -160,9 +160,16 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     // W-reader reads them) AND ships each row bank-major coalesced (h_coalesce_n same-bank sticks per 4KB
     // packet). Eligible when padding_h==1: the row's w=j,j+8,... land same-bank/next-offset at
     // base_row+j (valid for any base_row / W_dev, reader gathers in the same order). BH: 8 DRAM banks.
+    // Coalesce a bank's sticks into one fabric packet up to the fabric's actual max payload (not a fixed
+    // 4KB): default BH is 4352 B, and an 8K FabricRouterConfig raises it so each packet carries 2x the
+    // sticks. Cap the stick count so the send CBs stay bounded.
+    const uint32_t fabric_max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    const uint32_t max_coalesce_sticks = std::max(1u, std::min(64u, fabric_max_payload / page_size));
+    // Zeros only: the bank-major coalesced path handles the interior + zero fill, not replicate's
+    // edge-outward slice replication, so replicate stays on the per-stick direct path.
     uint32_t h_coalesce_n = 0;
-    if (op.np_padding_h == 1) {
-        h_coalesce_n = std::min(16u, 4096u / page_size);
+    if (op.np_padding_h == 1 && is_padding_zeros) {
+        h_coalesce_n = max_coalesce_sticks;
         if (h_coalesce_n < 2) {
             h_coalesce_n = 0;
         }
@@ -210,10 +217,12 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         } else if (w_bytes_per_link_dir > 4u * 1024u) {
             heuristic = 2;
         }
-        // OPT-IN ONLY (TT_NP_W_WORKERS): the mux is PCC-verified at small scale but corrupts ~2% of sticks
-        // at production scale (T=147) — do not auto-engage until that scale bug is root-caused, else the
-        // shipping default would produce wrong data. Heuristic kept for when it's re-enabled.
-        (void)heuristic;
+        // Auto-engage the W mux from the per-link byte heuristic, zeros only: the mux path does not do
+        // replicate's edge-outward slice replication, so replicate stays on the direct per-stick path.
+        // TT_NP_W_WORKERS overrides for tuning.
+        if (is_padding_zeros) {
+            num_w_workers = heuristic;
+        }
         if (const char* e = std::getenv("TT_NP_W_WORKERS")) {
             num_w_workers = std::max(1, atoi(e));
         }
@@ -351,10 +360,12 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         // fabric write to get_noc_addr(base+r) — valid for ANY base (the N sticks differ by 8, hence same
         // bank / next offset), and the reader gathers rel=r,r+8,... in the same order the writer sends. So
         // only pw==1 + halo-only (progress==0) are required; base/row-count alignment is NOT needed.
+        // Zeros only: the coalesced reader/writer don't do replicate's edge-outward slice replication, so
+        // replicate stays on the per-stick direct path (matches h_coalesce_n).
         const bool w_coalesce_ok =
-            (progress_t_batch_size == 0) && (op.np_pad2_left == 1) && (op.np_pad2_right == 1);
+            (progress_t_batch_size == 0) && (op.np_pad2_left == 1) && (op.np_pad2_right == 1) && is_padding_zeros;
         if (w_coalesce_ok) {
-            w_coalesce_n = std::min(16u, 4096u / page_size);  // sticks per <=4KB packet
+            w_coalesce_n = max_coalesce_sticks;  // sticks per fabric-max-payload packet
             if (w_coalesce_n < 2) {
                 w_coalesce_n = 0;
             }
@@ -417,10 +428,13 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                                                          num_sticks_per_halo_dim * page_size / num_links)
                                                       : 0;
     const uint32_t h_frames_per_link = (num_links > 0) ? (outer_dim_size / num_links) : 0;
-    // OPT-IN ONLY while the production-scale corruption is root-caused (see W gate above).
-    (void)h_bytes_per_link;
-    (void)h_frames_per_link;
+    // Auto-engage 2 H workers when the H send is large enough to be bandwidth-bound (>4KB/link/dir) and
+    // each worker gets >=2 frames — tiny shapes stay on the direct path. Zeros only (replicate uses the
+    // direct path, same as W). TT_NP_H_WORKERS overrides for tuning.
     uint32_t num_h_workers = 1;
+    if (is_padding_zeros && (h_bytes_per_link > 4u * 1024u) && (h_frames_per_link >= 2u)) {
+        num_h_workers = 2;
+    }
     if (const char* e = std::getenv("TT_NP_H_WORKERS")) {
         num_h_workers = std::max(1, atoi(e));
     }
@@ -454,6 +468,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     h_reader_kernel_config.compile_args.push_back(recv_cb_index);   // recv_cb_id
     h_reader_kernel_config.compile_args.push_back(hsend_cb_index);  // send_cb_id (batched H send)
     h_reader_kernel_config.compile_args.push_back(h_coalesce_n);    // H-send bank-major coalesce factor (0=off)
+    h_reader_kernel_config.compile_args.push_back(0);               // H_SIGNAL_W_RECV: direct path, np_writer signals
     h_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/"
@@ -648,9 +663,12 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         CoreRangeSet hw_crset(hw_crs);
         CoreRangeSet hm_crset(hm_crs.empty() ? std::set<CoreRange>{CoreRange({0, 0})} : hm_crs);
 
-        // Send CB (hsend) + sender CB (c_in0) on the H worker cores.
+        // Send CB (hsend) + sender CB (c_in0) on the H worker cores. hsend MUST be a whole multiple of the
+        // row size (num_sticks_per_halo_dim): the H reader reserves a full row at once and the writer reads
+        // it via get_read_ptr + m*stick, so a row must never straddle the CB wrap. 4 rows for pipelining.
         {
-            CircularBufferConfig cb_hs(16u * h_coalesce_n * l1_scratch_cb_page_size_bytes, {{hsend_cb_index, df}});
+            CircularBufferConfig cb_hs(
+                4u * num_sticks_per_halo_dim * l1_scratch_cb_page_size_bytes, {{hsend_cb_index, df}});
             cb_hs.set_page_size(hsend_cb_index, l1_scratch_cb_page_size_bytes);
             CreateCircularBuffer(program, hw_crset, cb_hs);
             CircularBufferConfig cb_s0(np_cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index, df}});
@@ -665,12 +683,17 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         hr_ct.push_back(recv_cb_index);
         hr_ct.push_back(hsend_cb_index);
         hr_ct.push_back(h_coalesce_n);
+        hr_ct.push_back(1);  // H_SIGNAL_W_RECV: this reader signals the H->W barrier after its recv drains
         auto hr_cfg = ReaderDataMovementConfig{};
         hr_cfg.compile_args = hr_ct;
         h_reader_kernel_id = CreateKernel(program, kdir + "np_h_reader.cpp", hw_crset, hr_cfg);
         SetCommonRuntimeArgs(
-            program, h_reader_kernel_id,
-            {input_buffer->address(), halo_buffer->address(), op.h_neighbor_semaphore.address()});
+            program,
+            h_reader_kernel_id,
+            {input_buffer->address(),
+             halo_buffer->address(),
+             op.h_neighbor_semaphore.address(),
+             op.barrier_semaphore.address()});
 
         // H-mux writer on worker cores. CT: is_padding_zeros, c_in0 (is_first local pad), hsend, stick.
         std::vector<uint32_t> hw_ct = {is_padding_zeros, sender_cb_index, hsend_cb_index, page_size};
@@ -737,6 +760,13 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     r_rt.push_back(dir ? is_last_device : is_first_device);
                     r_rt.push_back(dir ? is_first_device : is_last_device);
                     r_rt.push_back(dir);
+                    // H->W barrier targets: this reader signals these W-reader cores after its recv drains.
+                    constexpr uint32_t MAX_W_BARRIER_TARGETS = 16;
+                    r_rt.push_back(static_cast<uint32_t>(w_sig.size()));
+                    for (uint32_t t = 0; t < MAX_W_BARRIER_TARGETS; t++) {
+                        r_rt.push_back(t < w_sig.size() ? w_sig[t].x : 0u);
+                        r_rt.push_back(t < w_sig.size() ? w_sig[t].y : 0u);
+                    }
                     SetRuntimeArgs(program, h_reader_kernel_id, {wc}, r_rt);
                     // Writer RT args (np_h_mux_writer layout).
                     std::vector<uint32_t> w_rt = {
@@ -753,18 +783,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     ttnn::ccl::fabric_mux_connection_rt_args(
                         sends, /*is_termination_master=*/wk == 0, FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_vc, wk,
                         wc, hmux_cfg, program, term_master_vc, w_rt, std::nullopt);
-                    // H->W barrier targets.
-                    constexpr uint32_t MAX_W_BARRIER_TARGETS = 16;
-                    w_rt.push_back(static_cast<uint32_t>(w_sig.size()));
-                    for (uint32_t t = 0; t < MAX_W_BARRIER_TARGETS; t++) {
-                        if (t < w_sig.size()) {
-                            w_rt.push_back(w_sig[t].x);
-                            w_rt.push_back(w_sig[t].y);
-                        } else {
-                            w_rt.push_back(0);
-                            w_rt.push_back(0);
-                        }
-                    }
+                    // (H->W barrier targets moved to the H reader, which signals after recv.)
                     // Opp-direction H-worker coords on the neighbor (for the pairwise startup barrier).
                     CoreCoord opp_vc = hmux_worker_virtual[(link * num_directions + (1 - dir)) * num_h_workers + wk];
                     w_rt.push_back(opp_vc.x);

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_zero_pad.hpp"
 #include <cstdint>
 
@@ -24,7 +25,12 @@ constexpr uint32_t send_cb_id = get_compile_time_arg_val(ct_after_src + 2);
 // H-send bank-major coalesce factor (0 = row-contiguous). When > 0, gather the H-halo row into send_cb
 // in dst-bank-major order (w=0,8,..; 1,9,..) so the writer ships same-bank sticks as one 4KB packet.
 constexpr uint32_t H_COALESCE = get_compile_time_arg_val(ct_after_src + 3);
+// When set (H-mux path), this reader owns the H->W barrier: it signals the W-reader cores only AFTER its
+// incoming H has landed, so the W corner reads (which read this device's H-section) can't race the H
+// exchange. On the direct path (0) np_writer signals the barrier instead.
+constexpr uint32_t H_SIGNAL_W_RECV = get_compile_time_arg_val(ct_after_src + 4);
 constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
+constexpr uint32_t MAX_W_BAR_TARGETS = 16;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -50,6 +56,17 @@ void kernel_main() {
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
+    // H->W barrier targets (H-mux path only): W-reader cores this reader signals once its recv is done.
+    uint32_t num_w_bar = 0;
+    uint8_t w_bar_x[MAX_W_BAR_TARGETS];
+    uint8_t w_bar_y[MAX_W_BAR_TARGETS];
+    if constexpr (H_SIGNAL_W_RECV) {
+        num_w_bar = get_arg_val<uint32_t>(arg_idx++);
+        for (uint32_t t = 0; t < MAX_W_BAR_TARGETS; t++) {
+            w_bar_x[t] = get_arg_val<uint32_t>(arg_idx++);
+            w_bar_y[t] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
 
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address);
@@ -167,5 +184,16 @@ void kernel_main() {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), outer_dim_size);
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), 0);
         }
+    }
+
+    // H-mux path: the incoming H has now landed (recv drained above). Signal the H->W barrier on each
+    // W-reader core so the W corner reads (which read this device's H-section) see complete H data. Done
+    // here (recv-authority) not in the writer (send-done) so it holds for >2 H-axes and small shapes.
+    if constexpr (H_SIGNAL_W_RECV) {
+        const uint32_t barrier_sem = get_common_arg_val<uint32_t>(3);
+        for (uint32_t t = 0; t < num_w_bar; t++) {
+            noc_semaphore_inc(safe_get_noc_addr(w_bar_x[t], w_bar_y[t], barrier_sem, 0), 1);
+        }
+        noc_async_atomic_barrier();
     }
 }

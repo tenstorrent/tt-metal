@@ -83,16 +83,9 @@ void kernel_main() {
     const uint8_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    // H->W barrier targets: after H completes, inc barrier_sem (intra-device NOC) on each W-reader core so
-    // the W reader clears its H->W barrier wait. barrier_count on the W side = total H mux workers.
-    constexpr uint32_t MAX_W_BARRIER_TARGETS = 16;
-    const uint32_t num_w_barrier_targets = get_arg_val<uint32_t>(arg_idx++);
-    uint8_t w_bar_x[MAX_W_BARRIER_TARGETS];
-    uint8_t w_bar_y[MAX_W_BARRIER_TARGETS];
-    for (uint32_t t = 0; t < MAX_W_BARRIER_TARGETS; t++) {
-        w_bar_x[t] = get_arg_val<uint32_t>(arg_idx++);
-        w_bar_y[t] = get_arg_val<uint32_t>(arg_idx++);
-    }
+    // The H->W barrier is signaled by np_h_reader after its recv drains (recv-authority), not here — the
+    // W corner reads need this device's incoming H to have LANDED, which the writer's send-done can't
+    // guarantee for >2 H-axes or small shapes. Only the startup-barrier opp coords are read here.
     // Opposite-direction H-worker coords on the neighbor device, for the pairwise startup barrier (so the
     // non-sending edge worker on the neighbor also gets incremented). NOC coords are device-independent.
     const uint8_t opp_bar_x = get_arg_val<uint32_t>(arg_idx++);
@@ -207,6 +200,12 @@ void kernel_main() {
                             row_l1 + m * stick_size,
                             tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(base_row + w, dst_accessor)},
                             static_cast<uint16_t>(g * stick_size));
+                        // The payload copy (send_cb -> mux slot) is non-blocking and pkt_hdr is reused for
+                        // the next packet; flush per packet so neither the source row nor the header is
+                        // touched while the mux is still reading it (a dropped-packet race, worse at large
+                        // page where the copy takes longer). Measured free: the writes have drained by the
+                        // next loop iteration, so the poll returns immediately.
+                        noc_async_writes_flushed();
                         m += g;
                         w += g * NP_NUM_DRAM_BANKS;
                     }
@@ -225,13 +224,7 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
-    // H->W barrier: every H worker (incl. no-neighbor edges) increments barrier_sem on each W-reader core
-    // so the W reader clears its H->W wait after all H workers finish. Intra-device NOC inc (barrier_sem
-    // is per-core L1 at a fixed address). barrier_count on the W side = total H mux workers.
-    for (uint32_t t = 0; t < num_w_barrier_targets; t++) {
-        noc_semaphore_inc(safe_get_noc_addr(w_bar_x[t], w_bar_y[t], barrier_sem, 0), 1);
-    }
-    noc_async_atomic_barrier();
+    // H->W barrier is signaled by np_h_reader after recv (see its H_SIGNAL_W_RECV block), not here.
 
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(mux_connection);

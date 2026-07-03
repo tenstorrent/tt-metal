@@ -151,6 +151,9 @@ void kernel_main() {
                     l1_read_addr,
                     tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr},
                     static_cast<uint16_t>(g * stick_size));
+                // Flush the non-blocking mux write before releasing the group: the mux reads the payload
+                // out of send_cb asynchronously, so popping first lets the reader overwrite it mid-read.
+                noc_async_writes_flushed();
                 cb_pop_front(send_cb_id, g);
                 r += g * NP_NUM_DRAM_BANKS;
             }
