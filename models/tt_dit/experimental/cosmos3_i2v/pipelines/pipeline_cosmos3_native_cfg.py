@@ -27,6 +27,7 @@ import torch.nn as nn
 import ttnn
 from models.tt_dit.experimental.cosmos3_i2v.model_config import HF_REPO
 from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_native import (
+    _FRACTURED_TP,
     NativeLayerProxy,
     build_cosmos3_i2v_native_pipeline,
 )
@@ -144,6 +145,8 @@ def _build_second_trunk(
         _subfolder = "transformer-native-proj-out"
     else:
         _subfolder = "transformer-native"
+    if _FRACTURED_TP:
+        _subfolder += "-frac-tp"
     cache.load_model(
         trunk,
         model_name=cache_namespace,
