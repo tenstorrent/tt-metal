@@ -19,6 +19,7 @@
 #include "dispatch/command_queue_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -91,6 +92,8 @@ void issue_record_event_commands(
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+
+    CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
 
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         auto offset_index = *sub_device_ids[i];

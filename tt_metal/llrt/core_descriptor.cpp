@@ -29,6 +29,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <internal/dispatch/dispatch_engine_cores.hpp>
 
 namespace tt {
 
@@ -146,6 +147,14 @@ const core_descriptor_t& get_core_descriptor_config(
 
     tt_fabric::FabricTensixConfig fabric_tensix_config = env.get_fabric_tensix_config();
     bool fast_dispatch = env.get_rtoptions().get_fast_dispatch();
+    const bool quasar_dispatch_engine_fd =
+        arch == tt::ARCH::QUASAR && fast_dispatch &&
+        !env.get_rtoptions().get_use_quasar_tensix_dispatch_cores() &&
+        tt::tt_metal::internal::resolve_dispatch_core_type(
+            arch,
+            dispatch_core_config,
+            env.get_cluster().get_soc_desc(device_id),
+            /*use_quasar_tensix_dispatch_cores=*/false) == tt::CoreType::DISPATCH;
 
     tt_metal::DispatchCoreAxis resolved_axis =
         tt_metal::resolve_dispatch_core_axis(dispatch_core_config, arch, fabric_tensix_config);
@@ -210,14 +219,25 @@ const core_descriptor_t& get_core_descriptor_config(
     size_t start_y = compute_with_storage_start[1].as<size_t>();
 
     tt::tt_metal::CoreCoord compute_grid_size;
-    // When slow dispatch is on, use full logical grid (no dispatch cores to reserve)
-    if (!fast_dispatch && !env.get_rtoptions().is_simulator_or_emulated()) {
+    // When slow dispatch is on, use full logical grid (no dispatch cores to reserve).
+    // Quasar dispatch-engine FD uses dedicated dispatch tiles from the soc `dispatch:` list, so
+    // Tensix workers listed under dispatch_cores in the fast-dispatch core descriptor YAML are not
+    // reserved (same effective worker pool as slow dispatch).
+    if ((!fast_dispatch && !env.get_rtoptions().is_simulator_or_emulated()) || quasar_dispatch_engine_fd) {
         compute_grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-        log_info(
-            tt::LogDevice,
-            "Slow dispatch mode: Using full logical grid ({}, {})",
-            compute_grid_size.x,
-            compute_grid_size.y);
+        if (quasar_dispatch_engine_fd) {
+            log_info(
+                tt::LogDevice,
+                "Quasar dispatch-engine FD: using full worker grid ({}, {})",
+                compute_grid_size.x,
+                compute_grid_size.y);
+        } else {
+            log_info(
+                tt::LogDevice,
+                "Slow dispatch mode: Using full logical grid ({}, {})",
+                compute_grid_size.x,
+                compute_grid_size.y);
+        }
     } else {
         compute_grid_size = tt::tt_metal::CoreCoord((end_x - start_x) + 1, (end_y - start_y) + 1);
     }
@@ -286,8 +306,9 @@ const core_descriptor_t& get_core_descriptor_config(
         [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
 
     std::vector<tt::tt_metal::CoreCoord> logical_dispatch_cores;
-    // In slow dispatch mode, no cores are reserved for dispatch
-    if (fast_dispatch) {
+    // In slow dispatch mode, no cores are reserved for dispatch. Quasar dispatch-engine FD sources
+    // dispatch cores from the soc descriptor via get_quasar_dispatch_cores(), not Tensix YAML entries.
+    if (fast_dispatch && !quasar_dispatch_engine_fd) {
         logical_dispatch_cores.reserve(dispatch_cores.size());
         std::transform(
             dispatch_cores.cbegin(),
