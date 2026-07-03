@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include <algorithm>
 
 bool contains_element(uint32_t* arr, uint32_t size, uint32_t val) {
@@ -37,9 +40,6 @@ void kernel_main() {
     static_assert(elem_size == 2 || elem_size == 4, "Unsupported elem_size");
     using IntType = std::conditional_t<(elem_size == 2), uint16_t, uint32_t>;
 
-    constexpr uint32_t src_cb_id = tt::CBIndex::c_0;
-    constexpr uint32_t index_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t fill_cb_id = tt::CBIndex::c_2;
     constexpr uint32_t onepage = 1;
     // row_size: number of elements in the input shard page.
     // Used for: pre-fill loop size, and last-dim col_start bounds check.
@@ -51,22 +51,27 @@ void kernel_main() {
 
     IntType fill_value = static_cast<IntType>(fill_value_);
 
+    Noc noc;
+    CircularBuffer cb_src(tt::CBIndex::c_0);
+    CircularBuffer cb_index(tt::CBIndex::c_1);
+    CircularBuffer cb_fill(tt::CBIndex::c_2);
+
     const auto s = TensorAccessor(dst_args, output_buffer_address);
 
     // Pre-fill a page in L1 with fill_value to avoid re-filling on every row.
-    cb_reserve_back(fill_cb_id, onepage);
-    uint32_t fill_addr = get_write_ptr(fill_cb_id);
+    cb_fill.reserve_back(onepage);
+    uint32_t fill_addr = cb_fill.get_write_ptr();
     auto* fill_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(fill_addr);
     if constexpr (!is_last_dim) {
         for (uint32_t i = 0; i < row_size; ++i) {
             fill_ptr[i] = fill_value;
         }
     }
-    cb_push_back(fill_cb_id, onepage);
+    cb_fill.push_back(onepage);
 
     // Wait for index tensor to be available
-    cb_wait_front(index_cb_id, onepage);
-    uint32_t index_addr = get_read_ptr(index_cb_id);
+    cb_index.wait_front(onepage);
+    uint32_t index_addr = cb_index.get_read_ptr();
     uint32_t* index_ptr = reinterpret_cast<uint32_t*>(index_addr);
 
     // Write output pages.
@@ -81,14 +86,18 @@ void kernel_main() {
 
         if (use_filled_page) {
             for (uint32_t kout = 0; kout < out_num_col_shards; ++kout) {
-                uint64_t out_noc =
-                    s.get_noc_addr(row_id * out_row_page_stride + out_col_shard_id + kout) + out_col_byte_offset;
-                noc_async_write(fill_addr + kout * out_write_size, out_noc, out_write_size);
+                noc.async_write(
+                    cb_fill,
+                    s,
+                    out_write_size,
+                    {.offset_bytes = kout * out_write_size},
+                    {.page_id = row_id * out_row_page_stride + out_col_shard_id + kout,
+                     .offset_bytes = out_col_byte_offset});
             }
-            noc_async_write_barrier();
+            noc.async_write_barrier();
         } else {
-            cb_wait_front(src_cb_id, onepage);
-            uint32_t input_addr = get_read_ptr(src_cb_id);
+            cb_src.wait_front(onepage);
+            uint32_t input_addr = cb_src.get_read_ptr();
 
             // For last dim: fill only the columns this shard owns in the input page.
             // For INTERLEAVED/HEIGHT in → WIDTH/BLOCK out: col_start=0, row_size=full_N,
@@ -104,13 +113,17 @@ void kernel_main() {
             }
 
             for (uint32_t kout = 0; kout < out_num_col_shards; ++kout) {
-                uint64_t out_noc =
-                    s.get_noc_addr(row_id * out_row_page_stride + out_col_shard_id + kout) + out_col_byte_offset;
-                noc_async_write(input_addr + kout * out_write_size, out_noc, out_write_size);
+                noc.async_write(
+                    cb_src,
+                    s,
+                    out_write_size,
+                    {.offset_bytes = kout * out_write_size},
+                    {.page_id = row_id * out_row_page_stride + out_col_shard_id + kout,
+                     .offset_bytes = out_col_byte_offset});
             }
-            noc_async_write_barrier();
+            noc.async_write_barrier();
 
-            cb_pop_front(src_cb_id, onepage);
+            cb_src.pop_front(onepage);
         }
     }
 }
