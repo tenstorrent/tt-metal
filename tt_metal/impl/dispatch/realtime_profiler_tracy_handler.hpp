@@ -11,6 +11,10 @@
 #include <tracy/TracyTTDevice.hpp>
 #include "data_collection.hpp"
 
+namespace tracy {
+struct MarkerDetails;
+}  // namespace tracy
+
 namespace tt::tt_metal {
 
 // Manages Tracy contexts for real-time profiler.
@@ -37,17 +41,18 @@ public:
     // Used to verify host-device clock sync accuracy in the Tracy GUI.
     void PushSyncCheckMarker(uint32_t chip_id, uint64_t device_timestamp, double frequency);
 
-    // Push a kernel-zone start/end pair drained off the per-RISC SPSC rings by the X280 and
-    // paired on-device. core_x/core_y/risc identify the originating Tensix core lane; timestamps
-    // are in the device clock domain (same as program zones).
-    void PushDeviceZone(
+    // Push one raw kernel-profiler marker drained off a per-RISC SPSC ring by the X280 and relayed
+    // in ring order. core_x/core_y (NOC0) and risc identify the originating Tensix core lane; the
+    // packet type in timer_id (bits 16..18) selects ZONE_START/ZONE_END; timestamp is in the device
+    // clock domain (same as program zones). Pushing in arrival order nests zones correctly.
+    void PushDeviceMarker(
         uint32_t chip_id,
         uint32_t core_x,
         uint32_t core_y,
         uint32_t risc,
-        uint64_t start_timestamp,
-        uint64_t end_timestamp,
-        uint32_t timer_id);
+        uint32_t timer_id,
+        uint64_t timestamp,
+        const tracy::MarkerDetails* details);
 
     // Send a GpuCalibration event to Tracy, updating the host-device clock mapping.
     void CalibrateDevice(uint32_t chip_id, int64_t host_time, uint64_t device_timestamp, double frequency);

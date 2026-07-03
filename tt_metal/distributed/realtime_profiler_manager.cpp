@@ -52,6 +52,7 @@
 #include "tools/profiler/tt_metal_tracy.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
+#include "tt_metal/impl/profiler/profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/dispatch/realtime_profiler_tracy_handler.hpp"
 #include "jit_build/build_env_manager.hpp"
@@ -325,6 +326,7 @@ RealtimeProfilerManager::DeviceState::DeviceState(DeviceState&& o) noexcept :
     x280_driver(std::move(o.x280_driver)),
     x280_params_addr(o.x280_params_addr),
     x280_active(o.x280_active),
+    x280_virt_to_noc0(std::move(o.x280_virt_to_noc0)),
     realtime_profiler_program(std::move(o.realtime_profiler_program)),
     core_l1(o.core_l1),
     first_timestamp(o.first_timestamp),
@@ -665,6 +667,23 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                         std::memcpy(coord_buf.data() + idx * 8 + 4, &vy, 4);
                         x280_cluster.write_core(
                             zero_ctrl.data(), (uint32_t)zero_ctrl.size(), tt_cxy_pair(device_id, v), prof_l1);
+                        // Map the virtual coord the X280 relays back to the NOC0 coord the standard
+                        // DeviceProfiler / Tracy use, so kernel-zone lanes line up 1:1 with the DRAM
+                        // push profiler's view.
+                        const CoreCoord noc0 = x280_cluster.get_physical_coordinate_from_logical_coordinates(
+                            device_id, CoreCoord{lx, ly}, CoreType::WORKER, /*no_warn=*/true);
+                        dev_state.x280_virt_to_noc0[(static_cast<uint64_t>(vx) << 32) | vy] = {
+                            static_cast<uint32_t>(noc0.x), static_cast<uint32_t>(noc0.y)};
+                        if (lx == 0 && ly == 0) {
+                            log_debug(
+                                tt::LogMetal,
+                                "[Real-time profiler] X280 coord map sample: logical(0,0) virtual=({},{}) "
+                                "noc0=({},{})",
+                                vx,
+                                vy,
+                                noc0.x,
+                                noc0.y);
+                        }
                     }
                 }
 
@@ -993,10 +1012,16 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             return true;
         };
 
-        // Process one X280 device-zone page (64 B): [0,1]=start_ts(hi,lo) [2,3]=end_ts(hi,lo)
-        // [4]=core_x [5]=core_y [6]=risc [7]=timer_id. Paired on-device by the X280, so each page
-        // is a complete kernel zone -> emit straight to Tracy on the originating core's lane.
+        // Process one X280 raw-marker page (64 B, first 24 used): [0]=core_x(virtual) [1]=core_y(virtual)
+        // [2]=risc [3]=timer_id(type|hash) [4]=time_hi [5]=time_lo. Relayed in ring order (== emission
+        // order == correct nest order per lane), so pushing START/END per marker in arrival order lets
+        // Tracy nest them correctly. Coords are translated virtual->NOC0 to match the standard profiler.
         std::vector<uint32_t> x280_page_buf(RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t));
+        // 16-bit-hash -> zone name/file/line, resolved the same way the DRAM profiler names zones.
+        // Built lazily on the first marker (kernels have compiled + written the zone-source logs by
+        // the time any marker is drained), so device zones show real names instead of "Zone_<hash>".
+        std::unordered_map<uint16_t, tracy::MarkerDetails> x280_zone_names;
+        std::once_flag x280_zone_names_once;
         auto process_x280_page = [&](DeviceState& dev_state) -> bool {
             if (!dev_state.x280_active || !dev_state.x280_socket) {
                 return false;
@@ -1006,9 +1031,47 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             }
             dev_state.x280_socket->read(x280_page_buf.data(), 1);
             const uint32_t* p = x280_page_buf.data();
-            uint64_t start_ts = (static_cast<uint64_t>(p[0]) << 32) | p[1];
-            uint64_t end_ts = (static_cast<uint64_t>(p[2]) << 32) | p[3];
-            tracy_handler_->PushDeviceZone(dev_state.chip_id, p[4], p[5], p[6], start_ts, end_ts, p[7]);
+            const uint32_t vx = p[0], vy = p[1], risc = p[2], timer_id = p[3];
+            const uint64_t timestamp = (static_cast<uint64_t>(p[4]) << 32) | p[5];
+            // virtual -> NOC0 (built at boot); fall back to the raw virtual coord if unmapped.
+            uint32_t core_x = vx, core_y = vy;
+            if (auto it = dev_state.x280_virt_to_noc0.find((static_cast<uint64_t>(vx) << 32) | vy);
+                it != dev_state.x280_virt_to_noc0.end()) {
+                core_x = it->second.first;
+                core_y = it->second.second;
+            }
+            // Resolve the zone name/file/line from the 16-bit hash (same map the DRAM profiler uses).
+            std::call_once(x280_zone_names_once, [&] {
+                try {
+                    x280_zone_names = loadZoneSourceLocationsHashesReadOnly();
+                } catch (const std::exception& e) {
+                    log_warning(tt::LogMetal, "[Real-time profiler] X280 zone-name resolution failed: {}", e.what());
+                }
+                log_debug(
+                    tt::LogMetal, "[Real-time profiler] X280 resolved {} zone-name hashes", x280_zone_names.size());
+            });
+            const tracy::MarkerDetails* details = nullptr;
+            if (auto it = x280_zone_names.find(static_cast<uint16_t>(timer_id & 0xFFFF)); it != x280_zone_names.end()) {
+                details = &it->second;
+            }
+            // Debug/comparison (env TT_METAL_X280_ZONE_CSV=<path>): dump every relayed marker so the
+            // X280 capture can be diffed 1:1 against the DRAM profiler's profile_log_device.csv by
+            // marker identity. timer_id low-16 = zone-name hash and coords are NOC0, both matching the
+            // DRAM CSV. ptype: 0=ZONE_START, 1=ZONE_END. Off by default.
+            static std::ofstream x280_zone_csv;
+            static std::once_flag x280_zone_csv_once;
+            std::call_once(x280_zone_csv_once, [] {
+                if (const char* pth = std::getenv("TT_METAL_X280_ZONE_CSV"); pth != nullptr && *pth != '\0') {
+                    x280_zone_csv.open(pth);
+                    x280_zone_csv << "chip,core_x,core_y,risc,timer_id,ptype,cycle,name\n";
+                }
+            });
+            if (x280_zone_csv.is_open()) {
+                x280_zone_csv << dev_state.chip_id << ',' << core_x << ',' << core_y << ',' << risc << ','
+                              << (timer_id & 0xFFFF) << ',' << ((timer_id >> 16) & 0x7) << ',' << timestamp << ','
+                              << (details != nullptr ? details->marker_name : "") << '\n';
+            }
+            tracy_handler_->PushDeviceMarker(dev_state.chip_id, core_x, core_y, risc, timer_id, timestamp, details);
             pages_received++;
             x280_pages++;
             return true;
@@ -1191,14 +1254,14 @@ void RealtimeProfilerManager::shutdown() {
         if (dev_state.x280_active && dev_state.x280_driver) {
             try {
                 // Telemetry: profzone's result mailbox (results base = params_addr + 0x40).
-                // total_zones@+0x00 = device zones paired+pushed; loops@+0x08 = drain-loop passes.
-                uint64_t total_zones = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x40);
+                // total_markers@+0x00 = raw markers relayed; loops@+0x08 = drain-loop passes.
+                uint64_t total_markers = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x40);
                 uint64_t loops = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x48);
                 log_info(
                     tt::LogMetal,
-                    "[Real-time profiler] Device {}: X280 drainer paired {} device zones ({} drain passes)",
+                    "[Real-time profiler] Device {}: X280 drainer relayed {} markers ({} drain passes)",
                     dev_state.chip_id,
-                    total_zones,
+                    total_markers,
                     loops);
                 dev_state.x280_driver->assert_reset();
             } catch (const std::exception& e) {

@@ -269,30 +269,38 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
 #endif
 }
 
-void RealtimeProfilerTracyHandler::PushDeviceZone(
+void RealtimeProfilerTracyHandler::PushDeviceMarker(
     [[maybe_unused]] uint32_t chip_id,
     [[maybe_unused]] uint32_t core_x,
     [[maybe_unused]] uint32_t core_y,
     [[maybe_unused]] uint32_t risc,
-    [[maybe_unused]] uint64_t start_timestamp,
-    [[maybe_unused]] uint64_t end_timestamp,
-    [[maybe_unused]] uint32_t timer_id) {
+    [[maybe_unused]] uint32_t timer_id,
+    [[maybe_unused]] uint64_t timestamp,
+    [[maybe_unused]] const tracy::MarkerDetails* details) {
 #if defined(TRACY_ENABLE)
     if (!tracy::GetProfiler().IsConnected()) {
         return;
-    }
-    if (end_timestamp < start_timestamp) {
-        return;  // X280 paired a stray end before its start (e.g. ring wrap) — drop it
     }
     TracyTTCtx ctx = GetContext(chip_id);
     if (!ctx) {
         return;
     }
 
-    // Kernel-zone markers drained off the per-RISC SPSC rings by the X280 and paired on-device.
-    // They share the device clock domain (the X280 only relays the cores' timestamps), so the
-    // per-chip context's calibration applies directly. core_x/core_y/risc come from the page so
-    // Tracy groups them on the correct device lane.
+    // One raw kernel-profiler marker drained off a per-RISC SPSC ring by the X280 and relayed in
+    // ring order. Ring order == emission order == correct nest order for the (core,risc) lane, so
+    // pushing START/END in arrival order lets Tracy nest zones correctly (no on-device pairing).
+    // The packet type lives in the timer_id (bits 16..18): 0=ZONE_START, 1=ZONE_END; anything else
+    // (e.g. timestamped data) is not a plain zone boundary and is skipped for now. The 16-bit name
+    // hash (timer_id & 0xFFFF) identifies the zone; markers share the device clock domain so the
+    // per-chip context calibration applies directly, and NOC0 core_x/core_y (translated by the
+    // receiver) put them on the same lane the standard DeviceProfiler uses.
+    const uint32_t ptype = (timer_id >> 16) & 0x7;
+    const bool is_start = (ptype == 0);
+    const bool is_end = (ptype == 1);
+    if (!is_start && !is_end) {
+        return;
+    }
+
     static constexpr tracy::RiscType kRisc[5] = {
         tracy::RiscType::BRISC,
         tracy::RiscType::NCRISC,
@@ -300,24 +308,31 @@ void RealtimeProfilerTracyHandler::PushDeviceZone(
         tracy::RiscType::TRISC_1,
         tracy::RiscType::TRISC_2};
 
-    tracy::TTDeviceMarker start_marker;
-    start_marker.chip_id = chip_id;
-    start_marker.core_x = core_x;
-    start_marker.core_y = core_y;
-    start_marker.risc = kRisc[risc % 5];
-    start_marker.timestamp = start_timestamp;
-    start_marker.runtime_host_id = timer_id;
-    start_marker.marker_name = fmt::format("Zone_{}", timer_id);
-    start_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_START;
-    start_marker.file = "kernel_profiler";
-    start_marker.line = 0;
+    tracy::TTDeviceMarker marker;
+    marker.chip_id = chip_id;
+    marker.core_x = core_x;
+    marker.core_y = core_y;
+    marker.risc = kRisc[risc % 5];
+    marker.timestamp = timestamp;
+    marker.runtime_host_id = timer_id & 0xFFFF;
+    marker.marker_type = is_start ? tracy::TTDeviceMarkerType::ZONE_START : tracy::TTDeviceMarkerType::ZONE_END;
+    // Resolve the real zone name/file/line from the hash map (same as the DRAM profiler); fall back
+    // to a hash-tagged name if the source location wasn't logged.
+    if (details != nullptr) {
+        marker.marker_name = details->marker_name;
+        marker.file = details->source_file;
+        marker.line = details->source_line_num;
+    } else {
+        marker.marker_name = fmt::format("Zone_{}", timer_id & 0xFFFF);
+        marker.file = "kernel_profiler";
+        marker.line = 0;
+    }
 
-    tracy::TTDeviceMarker end_marker = start_marker;
-    end_marker.timestamp = end_timestamp;
-    end_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_END;
-
-    TracyTTPushStartMarker(ctx, start_marker);
-    TracyTTPushEndMarker(ctx, end_marker);
+    if (is_start) {
+        TracyTTPushStartMarker(ctx, marker);
+    } else {
+        TracyTTPushEndMarker(ctx, marker);
+    }
 #endif
 }
 

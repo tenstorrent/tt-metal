@@ -335,6 +335,20 @@ std::unordered_map<uint16_t, tracy::MarkerDetails> generateZoneSourceLocationsHa
     return hash_to_zone_src_locations;
 }
 
+std::unordered_map<uint16_t, tracy::MarkerDetails> loadZoneSourceLocationsHashesReadOnly() {
+    // Same hash->name/file/line map as generateZoneSourceLocationsHashes(), but READ-ONLY: it never
+    // appends to the shared zone-source log (push_new=false for both). Safe to call concurrently
+    // from the real-time X280 drainer's receiver thread without racing the DeviceProfiler's own
+    // close-time (writing) call.
+    std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
+    std::unordered_set<std::string> zone_src_locations;
+    populateZoneSrcLocations(
+        PROFILER_ZONE_SRC_LOCATIONS_LOG, "", false, hash_to_zone_src_locations, zone_src_locations);
+    populateZoneSrcLocations(
+        NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, "", false, hash_to_zone_src_locations, zone_src_locations);
+    return hash_to_zone_src_locations;
+}
+
 void mergeSortedDeviceMarkerChunks(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     const std::vector<uint32_t>& device_markers_chunk_offsets,
