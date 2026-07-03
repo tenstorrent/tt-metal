@@ -228,11 +228,11 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
             std::vector<size_t> rows_min_buf(*distributed_context.size());
             std::vector<size_t> cols_min_buf(*distributed_context.size());
             distributed_context.all_gather(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&rows_min), sizeof(size_t)),
-                tt::stl::as_writable_bytes(tt::stl::Span<size_t>{rows_min_buf.data(), rows_min_buf.size()}));
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&rows_min), sizeof(size_t)),
+                ttsl::as_writable_bytes(ttsl::Span<size_t>{rows_min_buf.data(), rows_min_buf.size()}));
             distributed_context.all_gather(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&cols_min), sizeof(size_t)),
-                tt::stl::as_writable_bytes(tt::stl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&cols_min), sizeof(size_t)),
+                ttsl::as_writable_bytes(ttsl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
             distributed_context.barrier();
             const auto global_rows_min = std::min_element(rows_min_buf.begin(), rows_min_buf.end());
             const auto global_cols_min = std::min_element(cols_min_buf.begin(), cols_min_buf.end());
@@ -2546,25 +2546,25 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
             // Issue the broadcast from the current process to all other processes in the world
             int local_data_size_bytes = serialized_data.size();  // Send data size first
             distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
                 distributed_context.rank());
 
             distributed_context.broadcast(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_data.data(), serialized_data.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_data.data(), serialized_data.size())),
                 distributed_context.rank());
         } else {
             // Acknowledge the broadcast issued by the root
             int remote_data_size_bytes = 0;  // Receive the size of the serialized data
             distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
             serialized_remote_data.clear();
             serialized_remote_data.resize(remote_data_size_bytes);
             distributed_context.broadcast(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_remote_data.data(), serialized_remote_data.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_remote_data.data(), serialized_remote_data.size())),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
 
             RouterPortDirectionsData deserialized_remote_data =
@@ -2720,23 +2720,23 @@ void ControlPlane::collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hos
         if (my_rank == static_cast<int>(bcast_root)) {
             int local_data_size_bytes = static_cast<int>(serialized_local.size());
             distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
                 distributed_context.rank());
 
             distributed_context.broadcast(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_local.data(), serialized_local.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_local.data(), serialized_local.size())),
                 distributed_context.rank());
         } else {
             int remote_data_size_bytes = 0;
             distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
             serialized_remote.clear();
             serialized_remote.resize(static_cast<std::size_t>(remote_data_size_bytes));
             distributed_context.broadcast(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
 
             merge_from_serialized(intermesh_exit_fabric_node_ids_, serialized_remote);
@@ -2841,23 +2841,23 @@ void ControlPlane::collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_fr
         if (my_rank == static_cast<int>(bcast_root)) {
             int local_data_size_bytes = static_cast<int>(serialized_local.size());
             distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
                 distributed_context.rank());
 
             distributed_context.broadcast(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_local.data(), serialized_local.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_local.data(), serialized_local.size())),
                 distributed_context.rank());
         } else {
             int remote_data_size_bytes = 0;
             distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
             serialized_remote.clear();
             serialized_remote.resize(static_cast<std::size_t>(remote_data_size_bytes));
             distributed_context.broadcast(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
 
             merge_from_serialized(intermesh_exit_peer_fabric_node_id_pairs_, serialized_remote);
@@ -3143,12 +3143,12 @@ void ControlPlane::forward_descriptors_to_controller(
         serialized_table = serialize_to_bytes(port_descriptors);
         serialized_table_size = serialized_table.size();
         distributed_context.send(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
             Rank{CONTROLLER_RANK},
             Tag{0});
         distributed_context.send(
-            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
+            ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
             Rank{CONTROLLER_RANK},
             Tag{0});
     } else {
@@ -3158,13 +3158,13 @@ void ControlPlane::forward_descriptors_to_controller(
             }
             auto peer_rank = physical_system_descriptor->get_rank_for_hostname(hostname);
             distributed_context.recv(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
                 Rank{static_cast<int>(peer_rank)},
                 Tag{0});
             serialized_table.resize(serialized_table_size);
             distributed_context.recv(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
                 Rank{static_cast<int>(peer_rank)},
                 Tag{0});
             auto peer_port_descriptors = deserialize_port_descriptors_from_bytes(serialized_table);
@@ -3217,26 +3217,26 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
             serialized_connections = serialize_intermesh_connections_to_bytes(intermesh_connections);
             serialized_table_size = serialized_connections.size();
             distributed_context.send(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
                 Rank{static_cast<int>(peer_rank)},
                 Tag{1});
             distributed_context.send(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
                 Rank{static_cast<int>(peer_rank)},
                 Tag{1});
         }
     } else {
         distributed_context.recv(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
             Rank{0},
             Tag{1});
         serialized_connections.resize(serialized_table_size);
         distributed_context.recv(
-            tt::stl::as_writable_bytes(
-                tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
+            ttsl::as_writable_bytes(
+                ttsl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
             Rank{0},
             Tag{1});
         intermesh_connections = deserialize_intermesh_connections_from_bytes(serialized_connections);

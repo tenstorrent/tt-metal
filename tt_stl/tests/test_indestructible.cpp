@@ -6,7 +6,7 @@
 #include <tt_stl/indestructible.hpp>
 #include <memory>
 
-namespace tt::stl {
+namespace ttsl {
 namespace {
 
 TEST(IndestructibleTest, Basic) {
@@ -21,4 +21,4 @@ TEST(IndestructibleTest, Basic) {
 }
 
 }  // namespace
-}  // namespace tt::stl
+}  // namespace ttsl

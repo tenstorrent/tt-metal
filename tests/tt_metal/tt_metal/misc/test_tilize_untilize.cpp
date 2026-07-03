@@ -66,7 +66,7 @@ void TilizeUntilizeBigBufferImpl(const TilizeUntilizeBigBuffersParams& params) {
     auto run_for_type = [&](auto type) {
         using Type = decltype(type);
         const auto& data = get_test_data<Type>(n_elements);
-        tt::stl::Span<const Type> input(data.data(), n_elements);
+        ttsl::Span<const Type> input(data.data(), n_elements);
 
         auto converted = convert_layout(
             input,
@@ -79,7 +79,7 @@ void TilizeUntilizeBigBufferImpl(const TilizeUntilizeBigBuffersParams& params) {
             transpose_of_faces);
 
         auto converted_back = convert_layout(
-            tt::stl::make_const_span(converted),
+            ttsl::make_const_span(converted),
             shape,
             to_layout,
             from_layout,
@@ -88,7 +88,7 @@ void TilizeUntilizeBigBufferImpl(const TilizeUntilizeBigBuffersParams& params) {
             transpose_within_face,
             transpose_of_faces);
 
-        auto converted_back_span = tt::stl::make_const_span(converted_back);
+        auto converted_back_span = ttsl::make_const_span(converted_back);
         ASSERT_EQ(input.size(), converted_back.size());
         ASSERT_TRUE(std::equal(input.begin(), input.end(), converted_back_span.begin()));
     };

@@ -71,7 +71,7 @@ OutboundSocketServiceSyncOperation::tensor_return_value_t OutboundSocketServiceS
     return tensor_args.backing;
 }
 
-tt::stl::hash::hash_t OutboundSocketServiceSyncOperation::compute_program_hash(
+ttsl::hash::hash_t OutboundSocketServiceSyncOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Stable across calls for a given (service, config): the changing input address is
     // a BufferBinding (patched on cache hit), NOT part of the hash.

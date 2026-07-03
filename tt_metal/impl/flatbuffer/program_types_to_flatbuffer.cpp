@@ -36,7 +36,7 @@ flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
 std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec) {
     return std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [&](const CoreCoord& spec) -> std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> {
                 return {flatbuffer::CoreSpec::CoreCoord, to_flatbuffer(builder, spec).Union()};
             },
@@ -185,7 +185,7 @@ flatbuffers::Offset<flatbuffer::RuntimeArg> create_runtime_arg(
     flatbuffer::RuntimeArgValue value_type;
 
     flatbuffers::Offset<void> value_offset = std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [&](uint32_t arg_value) -> flatbuffers::Offset<void> {
                 value_type = flatbuffer::RuntimeArgValue::UInt32Value;
                 return builder.CreateStruct(tt_metal::flatbuffer::UInt32Value{arg_value}).Union();
@@ -213,7 +213,7 @@ flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffer::RuntimeA
 }
 
 flatbuffers::Offset<flatbuffers::Vector<uint8_t>> to_flatbuffer(
-    flatbuffers::FlatBufferBuilder& builder, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    flatbuffers::FlatBufferBuilder& builder, ttsl::Span<const SubDeviceId> sub_device_ids) {
     std::vector<uint8_t> fb_sub_device_ids(sub_device_ids.size());
     for (size_t i = 0; i < sub_device_ids.size(); ++i) {
         fb_sub_device_ids[i] = *sub_device_ids[i];
