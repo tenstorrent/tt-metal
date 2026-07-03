@@ -251,3 +251,156 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
     EXPECT_EQ(results[0], param_a) << "ct_args::my_kernel::param_a should be 42 (compute path)";
     EXPECT_EQ(results[1], param_b) << "ct_args::my_kernel::param_b should be 0xBEEF (compute path)";
 }
+
+// Test 1: Mixed positional + named args coexist in the same kernel.
+// Positional per-core and common RT args are set via runtime_args / common_runtime_args;
+// named per-core and common RT args are set via named_*_runtime_args. The merge logic in
+// program.cpp appends named values after positional ones. This verifies the index mapping
+// is correct: positional at [0..N-1], named at [N..].
+TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+
+    CoreCoord core = {0, 0};
+    CoreRangeSet cores = std::set<CoreRange>({CoreRange(core, core)});
+
+    const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+
+    const uint32_t positional_per_core = 111;
+    const uint32_t positional_common = 222;
+    const uint32_t named_per_core_val = 333;
+    const uint32_t named_common_val = 444;
+
+    KernelDescriptor kernel = {
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/mixed_positional_named_args_kernel.cpp",
+        .core_ranges = cores,
+        .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
+        // Positional per-core RT arg (index 0)
+        .runtime_args = {{{core, {positional_per_core}}}},
+        // Positional common RT arg (index 0)
+        .common_runtime_args = {positional_common},
+        // Named common RT arg (appended after positional common → index 1)
+        .named_common_runtime_args = {{"my_kernel.named_common", named_common_val}},
+        // Named per-core RT arg (appended after positional per-core → index 1)
+        .named_per_core_runtime_args = {{"my_kernel.named_per_core", {{core, named_per_core_val}}}},
+        .config = DataMovementConfigDescriptor{},
+    };
+
+    distributed::MeshWorkload workload;
+    Program program(ProgramDescriptor{.kernels = {kernel}});
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+
+    std::vector<uint32_t> results;
+    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+
+    EXPECT_EQ(results[0], positional_per_core) << "Positional per-core RT arg at index 0";
+    EXPECT_EQ(results[1], positional_common) << "Positional common RT arg at index 0";
+    EXPECT_EQ(results[2], named_per_core_val) << "Named per-core RT arg (after positional)";
+    EXPECT_EQ(results[3], named_common_val) << "Named common RT arg (after positional)";
+}
+
+// Test 2a: CT arg redefinition with same value succeeds (dedup).
+// Two entries with the same name and value should be silently deduplicated.
+TEST_F(NamedArgsTest, TensixTestCTArgDedupSameValue) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+
+    CoreCoord core = {0, 0};
+    CoreRangeSet cores = std::set<CoreRange>({CoreRange(core, core)});
+
+    const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+
+    const uint32_t param_a = 42;
+    const uint32_t param_b = 0xBEEF;
+
+    KernelDescriptor kernel = {
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/named_runtime_args_kernel.cpp",
+        .core_ranges = cores,
+        // Duplicate param_a with the same value — should be silently deduplicated
+        .named_compile_time_args =
+            {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}, {"my_kernel.param_a", param_a}},
+        .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
+        .named_common_runtime_args = {{"my_kernel.marker", 0}},
+        .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
+        .config = DataMovementConfigDescriptor{},
+    };
+
+    distributed::MeshWorkload workload;
+    Program program(ProgramDescriptor{.kernels = {kernel}});
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+
+    std::vector<uint32_t> results;
+    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+
+    EXPECT_EQ(results[2], param_a) << "Deduplicated ct_args::my_kernel::param_a should be 42";
+    EXPECT_EQ(results[3], param_b) << "ct_args::my_kernel::param_b should be 0xBEEF";
+}
+
+// Test 2b: CT arg redefinition with conflicting values fails.
+// Two entries with the same name but different values should TT_FATAL.
+TEST_F(NamedArgsTest, TensixTestCTArgConflictFails) {
+    auto mesh_device = get_mesh_device();
+    auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+
+    CoreCoord core = {0, 0};
+    CoreRangeSet cores = std::set<CoreRange>({CoreRange(core, core)});
+
+    const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+
+    KernelDescriptor kernel = {
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/named_runtime_args_kernel.cpp",
+        .core_ranges = cores,
+        // Same name, conflicting values — should fatal
+        .named_compile_time_args = {{"my_kernel.param_a", 42}, {"my_kernel.param_a", 99}},
+        .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
+        .named_common_runtime_args = {{"my_kernel.marker", 0}},
+        .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
+        .config = DataMovementConfigDescriptor{},
+    };
+
+    EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel}}), std::exception);
+}
+
+// Test 3: Invalid named arg identifiers fail during Program construction.
+// Names must be valid C++ identifiers (alpha/underscore start, alphanumeric/underscore rest).
+TEST_F(NamedArgsTest, TensixTestInvalidIdentifierFails) {
+    auto mesh_device = get_mesh_device();
+    auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+
+    CoreCoord core = {0, 0};
+    CoreRangeSet cores = std::set<CoreRange>({CoreRange(core, core)});
+
+    const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+
+    // Invalid namespace: starts with a digit
+    KernelDescriptor kernel_bad_ns = {
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/named_runtime_args_kernel.cpp",
+        .core_ranges = cores,
+        .named_compile_time_args = {{"123bad.field", 1}},
+        .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
+        .named_common_runtime_args = {{"123bad.marker", 0}},
+        .named_per_core_runtime_args = {{"123bad.core_idx", {{core, 0}}}},
+        .config = DataMovementConfigDescriptor{},
+    };
+
+    EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel_bad_ns}}), std::exception);
+
+    // Invalid field: contains a hyphen
+    KernelDescriptor kernel_bad_field = {
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/named_runtime_args_kernel.cpp",
+        .core_ranges = cores,
+        .named_compile_time_args = {{"my_kernel.bad-field", 1}},
+        .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
+        .named_common_runtime_args = {{"my_kernel.marker", 0}},
+        .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
+        .config = DataMovementConfigDescriptor{},
+    };
+
+    EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel_bad_field}}), std::exception);
+}
