@@ -19,8 +19,10 @@ namespace ttnn::prim {
 
 // Reader/writer runtime-arg layout — single source of truth shared by the program factory (which EMITS the
 // args in create_descriptor) and get_dynamic_runtime_args (which RE-APPLIES the indexed-cache page offset to
-// the cached program). kv_batch_page_offset is the LAST positional arg of each kernel's list; if that order
-// changes in the factory, update these indices here, or the dynamic re-apply silently writes the wrong slot.
+// the cached program). kv_batch_page_offset sits at the fixed index below and is the only re-applied arg. If
+// the order before kv_batch_page_offset changes in the factory, update these indices here, or the dynamic
+// re-apply silently writes the wrong slot. (The block-cyclic remap constants are all compile-time defines, with
+// the cache length T folded into the program hash, so there is no block-cyclic runtime arg to track.)
 namespace sparse_sdpa_rt {
 inline constexpr uint32_t kReaderKernelIdx = 0;
 inline constexpr uint32_t kWriterKernelIdx = 1;
@@ -68,6 +70,7 @@ Tensor sparse_sdpa(
     uint32_t v_dim,
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<uint32_t> cache_batch_idx = std::nullopt);
+    std::optional<uint32_t> cache_batch_idx = std::nullopt,
+    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt);
 
 }  // namespace ttnn::prim

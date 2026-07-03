@@ -22,7 +22,7 @@ namespace tt::test_utils {
 // Pack a flat float buffer into MX tiles of the requested format.
 inline std::vector<uint32_t> pack_as_mx_tiles(
     tt::DataFormat fmt,
-    tt::stl::Span<const float> floats,
+    ttsl::Span<const float> floats,
     bool row_major_input,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     switch (fmt) {
@@ -41,7 +41,7 @@ inline std::vector<uint32_t> pack_as_mx_tiles(
 // Decode MX tiles of the requested format into a flat float buffer.
 inline std::vector<float> mx_to_floats(
     tt::DataFormat fmt,
-    tt::stl::Span<const uint32_t> packed,
+    ttsl::Span<const uint32_t> packed,
     bool row_major_output = false,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     switch (fmt) {
@@ -71,7 +71,7 @@ inline std::vector<float> mx_to_floats(
     const std::vector<uint32_t>& packed,
     bool row_major_output = false,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
-    return mx_to_floats(fmt, tt::stl::make_const_span(packed), row_major_output, tile);
+    return mx_to_floats(fmt, ttsl::make_const_span(packed), row_major_output, tile);
 }
 
 }  // namespace tt::test_utils

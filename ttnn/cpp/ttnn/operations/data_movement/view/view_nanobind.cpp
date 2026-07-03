@@ -17,7 +17,7 @@ namespace ttnn::operations::data_movement {
 
 namespace {
 
-ttnn::Tensor view_shape_vector_wrapper(const ttnn::Tensor& input_tensor, const tt::stl::SmallVector<int32_t>& shape) {
+ttnn::Tensor view_shape_vector_wrapper(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int32_t>& shape) {
     return ttnn::view(input_tensor, shape);
 }
 

@@ -519,7 +519,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     {
         tt::tt_metal::distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             [](auto&&... args) { return ttnn::add(std::forward<decltype(args)>(args)...); },
@@ -553,7 +553,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             [](auto&&... args) { return ttnn::subtract(std::forward<decltype(args)>(args)...); },
@@ -587,7 +587,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             [](auto&&... args) { return ttnn::multiply(std::forward<decltype(args)>(args)...); },
@@ -621,7 +621,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             [](auto&&... args) { return ttnn::maximum(std::forward<decltype(args)>(args)...); },
@@ -655,7 +655,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             [](auto&&... args) { return ttnn::minimum(std::forward<decltype(args)>(args)...); },
@@ -1120,7 +1120,7 @@ TYPED_TEST(DistributedTensorOpIfTest, BinaryAddWithShardedTopology) {
     ttnn::graph::DistributedTensorSpec dist_input_a{input_spec, sharded_topology};
     ttnn::graph::DistributedTensorSpec dist_input_b{input_spec, sharded_topology};
 
-    constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+    constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
     auto query = ttnn::graph::query_op_constraints(
         [](auto&&... args) { return ttnn::add(std::forward<decltype(args)>(args)...); },
         this->device_,

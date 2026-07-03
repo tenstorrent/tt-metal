@@ -68,39 +68,27 @@ def _sparse_meshes():
     return SPARSE_MESH_BY_DEVICES.get(n, [(1, max(n, 1))])
 
 
-# GLM exception (expected to be temporary): sparse_sdpa needs per-chip n_heads/tp >= 32, and GLM has
-# only 64 q-heads, so it caps at TP=2. DeepSeek (128 heads) has no such limit. Handled locally here
-# rather than as a TestVariant field, so this soon-to-be-lifted limitation doesn't leak into the
-# generic variant metadata (and the other models).
-_GLM_MAX_TP = 2
-
-
-def _mesh_ok_for_variant(variant_name, mesh):
-    return not (variant_name == "glm_5_1" and mesh[1] > _GLM_MAX_TP)
-
-
 def _seq_ok_for_mesh(seq_len, mesh):
     # kvpe ND-shard cache needs >= KVPE_MIN_TOKENS_PER_CHIP tokens per SP shard.
     return seq_len // mesh[0] >= KVPE_MIN_TOKENS_PER_CHIP
 
 
-def _anchor_mesh(variant_name, meshes):
-    """Production-closest mesh for a variant: the highest TP it supports among the box's meshes."""
-    return max((m for m in meshes if _mesh_ok_for_variant(variant_name, m)), key=lambda m: m[1])
+def _anchor_mesh(meshes):
+    """Production-closest mesh: the highest-TP mesh among the box's meshes."""
+    return max(meshes, key=lambda m: m[1])
 
 
 def _sparse_cases(seqs, anchor_only):
     """Generate (variant, mesh, seq_len) params for the CURRENT box — only valid combos, so the
     collected matrix equals the run matrix (validity is enforced here, not via runtime skips)."""
     meshes = _sparse_meshes()
+    chosen = [_anchor_mesh(meshes)] if (anchor_only and meshes) else meshes
     cases = []
-    for variant_name in SPARSE_VARIANTS:
-        usable = [m for m in meshes if _mesh_ok_for_variant(variant_name, m)]
-        chosen = [_anchor_mesh(variant_name, meshes)] if (anchor_only and usable) else usable
-        for mesh in chosen:
-            for seq_len in seqs:
-                if not _seq_ok_for_mesh(seq_len, mesh):
-                    continue
+    for mesh in chosen:
+        for seq_len in seqs:
+            if not _seq_ok_for_mesh(seq_len, mesh):
+                continue
+            for variant_name in SPARSE_VARIANTS:
                 cases.append(
                     pytest.param(variant_name, mesh, seq_len, id=f"{variant_name}-{mesh[0]}x{mesh[1]}-seq{seq_len}")
                 )
