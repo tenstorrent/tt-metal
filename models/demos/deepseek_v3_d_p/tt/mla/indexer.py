@@ -19,11 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.rope import (
-    get_cos_sin_matrix,
-    get_rot_transformation_mat,
-    interleaved_to_halfsplit_perm,
-)
+from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_perm_matrix
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
@@ -264,15 +260,9 @@ class TtIndexer:
         # reindex by rope.interleaved_to_halfsplit_perm to compare it against a half-split reference.
         self._rope_perm = None
         if self._blockcyclic and not self.index_args.index_rope_interleave:
-            # Build the half-split -> interleaved permutation matrix from rope.py's canonical convention
-            # (single source of truth). interleaved_to_halfsplit_perm() returns p with
-            # halfsplit = interleaved[p]; its inverse (argsort) maps halfsplit -> interleaved, i.e.
-            # out[j] = in[src[j]], realised as the matmul weight perm[src[j], j] = 1.
-            src = torch.argsort(interleaved_to_halfsplit_perm(64))
-            perm = torch.zeros(64, 64, dtype=torch.bfloat16)
-            perm[src, torch.arange(64)] = 1.0
+            # rope.interleaved_perm_matrix owns the half-split -> interleaved convention (single source).
             self._rope_perm = ttnn.from_torch(
-                perm,
+                interleaved_perm_matrix(64).to(torch.bfloat16),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
@@ -325,27 +315,16 @@ class TtIndexer:
         )
 
     def _build_rope_tables(self):
-        """Precompute device cos/sin for the indexer RoPE via the shared builder
-        (``get_cos_sin_matrix``). ``index_rope_interleave`` picks the layout + matching device op:
-        DS (False) -> rotate_half (halves [c0,c1,..,c0,c1,..], no trans_mat) -> rotary_embedding_hf;
-        GLM (True) -> interleaved (duplicated pairs [c0,c0,c1,c1,..] + trans_mat) ->
-        rotary_embedding_llama (matches the MLA's own rope). Tables are pure rotations (no mscale
-        baked in, matching the reference indexer). Op selection stays in ``_device_rope_pe``.
-
-        Frequencies come from the HF ``self.config`` — the single source of truth and identical to the
-        MLA's own rope (same θ / YaRN); the builder always applies YaRN, which is a no-op at
-        ``rope_factor==1`` (GLM). Tables are full-length; ``_device_rope_pe`` slices per chunk."""
-        interleave = self.index_args.index_rope_interleave
-        cos, sin = get_cos_sin_matrix(self.config, interleave=interleave)  # pure rotation tables (no mscale)
-        repl = lambda t: ttnn.from_torch(
-            t.to(torch.bfloat16),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        """Precompute the indexer's natural-path RoPE tables via RotarySetup.get_indexer_rope_tables
+        (single source of rope-convention logic). ``index_rope_interleave`` picks the layout + matching
+        device op in ``_device_rope_pe``: DS (False) -> rotate_half, no trans_mat -> rotary_embedding_hf;
+        GLM (True) -> interleaved + trans_mat -> rotary_embedding_llama (matches the MLA's own rope).
+        Full-length replicated pure rotations (no mscale); ``_device_rope_pe`` slices per chunk. (The
+        block-cyclic path instead reuses ttMLA's block-cyclic rope_tensors passed into forward.)"""
+        tables = RotarySetup(self.config, self.mesh_device, sp_axis=self.sp_axis).get_indexer_rope_tables(
+            interleave=self.index_args.index_rope_interleave
         )
-        self._idx_cos, self._idx_sin = repl(cos), repl(sin)
-        self._idx_trans = repl(get_rot_transformation_mat()) if interleave else None
+        self._idx_cos, self._idx_sin, self._idx_trans = tables["cos"], tables["sin"], tables["trans"]
 
     def _upload_weights(self, idx_host):
         """Indexer weights → device via the shared converter. `idx_host` may be a full host dict
