@@ -150,40 +150,35 @@ class TestConfig:
     PCH_AVAILABLE: ClassVar[bool] = False
     PCH_ATTEMPTED: ClassVar[bool] = False
 
-    # Test sources that must NOT force-include the math-role PCH: doing so
-    # crashes the pinned SFPI toolchain (riscv-tt-elf-g++ 7.64.0[735], GCC 15.1
-    # fork; tenstorrent/sfpi) with a hard internal compiler error, not a
-    # graceful -Winvalid-pch fallback.
+    # Sources observed to ICE the pinned SFPI toolchain when the math-role PCH
+    # is force-included. This set is NO LONGER the PCH safety mechanism -- PCH
+    # is disabled by default in build_pch(), so this denylist is currently
+    # inert -- but it is kept as a record of which sources have been seen to
+    # crash and as the gate that still applies if PCH is re-enabled via
+    # TT_LLK_ENABLE_PCH=1.
     #
-    # Root cause, reproduced directly against the pinned toolchain: the ICE
-    # requires BOTH -Os (this branch's Quasar-only opt level, see
-    # setup_compilation_options) AND a matching force-included PCH. The exact
-    # 2x2 matrix on sfpu_where_quasar_test.cpp's math .elf:
-    #     -Os + PCH  -> ICE      -O2/-O3 + PCH  -> OK
-    #     -Os no-PCH -> OK       -O2/-O3 no-PCH -> OK
-    # i.e. neither -Os alone (every pre-PCH run compiled these fine) nor PCH
-    # alone (at -O2/-O3) is sufficient; only the combination trips it. The
-    # crash is in the fork's custom RISC-V backend passes, downstream of PCH
-    # AST restore + the -Os codegen path, on the unrolled `v_if`-based SFPU
-    # bodies these two ops share:
-    #   ckernel_sfpu_where.h:71   -> in transform, at rtl-rvtt-synth.cc:123
-    #   ckernel_sfpu_binary.h:66  -> in get_def_stmt_liveness_1, at
-    #                                gimple-rvtt-live.cc:347
-    # (confirmed as the ONLY two files that ICE across a full ~2500-compile
-    # producer run; every other SFPU op -- gelu/tanh/square/exp/... -- and
-    # every non-SFPU math op compiles cleanly with -Os + math PCH, so this is
-    # scoped per-source, not per-role.)
+    # WARNING: this denylist is NOT a reliable fix and must not be treated as
+    # one. An earlier round of this investigation claimed the ICE required
+    # BOTH -Os AND a force-included PCH, asserting "-O2/-O3 + PCH -> OK" as a
+    # verified 2x2 matrix. Real CI run 28638406365 disproves that: at -O3 with
+    # PCH force-included, a source NOT in this set (eltwise_unary) ICEd 1920
+    # times (get_def_stmt_liveness_1, at gimple-rvtt-live.cc:347). Observed so
+    # far, from real CI logs:
+    #   run 28636598915 (-Os): sfpu_where (transform @ rtl-rvtt-synth.cc:123)
+    #                          + eltwise_binary (get_def_stmt_liveness_1 @
+    #                          gimple-rvtt-live.cc:347)
+    #   run 28638406365 (-O3): eltwise_unary (get_def_stmt_liveness_1 @
+    #                          gimple-rvtt-live.cc:347)
+    # i.e. the set of crashing sources changes with the opt level, so no fixed
+    # denylist covers all of them. eltwise_unary is deliberately NOT added
+    # here: doing so would just be more whack-a-mole and would re-imply this
+    # list is sufficient, which the evidence says it is not.
     #
-    # -Wno-error=invalid-pch (below) is NOT a backstop here: it only rescues a
-    # *mismatched* .gch (which GCC discards). These variants match the PCH
-    # exactly, so the .gch is accepted and consumed, and the compiler crashes
-    # anyway. The only safe option is to skip -include entirely for these
-    # sources; they then compile via the plain -Os path (proven OK above),
-    # forgoing PCH's speedup for ~2 ops while every other op keeps it.
-    #
-    # Keyed on os.path.basename(self.test_name). Revisit when the pinned SFPI
-    # version bumps -- if a newer toolchain fixes the backend passes, this set
-    # can shrink to empty and PCH re-enabled for these ops.
+    # The gate is keyed on os.path.basename(self.test_name) in
+    # build_kernel_part (that comparison itself is correct -- test_name is the
+    # full source path, e.g. "sources/quasar/sfpu_where_quasar_test.cpp", and
+    # basename() of it matches these entries). It is only the *premise* -- that
+    # a small fixed list can enumerate the crashing sources -- that is unsound.
     PCH_INCOMPATIBLE_SOURCES: ClassVar[frozenset[str]] = frozenset(
         {
             "sfpu_where_quasar_test.cpp",
@@ -504,23 +499,21 @@ class TestConfig:
         speed_of_light: bool = False,
     ):
         debug_flag = "" if no_debug_symbols else "-g "
-        # TEMPORARY TEST: forced to -O3 for all architectures (including
-        # Quasar) to let Neil directly measure PCH's speedup at -O3, matching
-        # the conditions of his earlier standalone PCH test. This is NOT a
-        # permanent reversion -- confirmed via the real pinned SFPI 7.64.0
-        # toolchain (commit ce901330ae) that -Os combined with a
-        # force-included PCH triggers a genuine compiler ICE in 2 SFPU
-        # sources (ckernel_sfpu_where.h, ckernel_sfpu_binary.h), while -O3
-        # (or -O2) + PCH is clean on the same sources. Quasar's
-        # compile-producer job never runs/perf-tests the ELF, so -O3 buys
-        # nothing there while its codegen drives peak per-compile memory --
-        # the actual ceiling on concurrent workers -- which is why it was
-        # switched to -Os in the first place. Revert this back to the
-        # CHIP_ARCH-conditional -Os once the -O3 PCH comparison is done:
-        #   opt_flag = (
-        #       "-Os" if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else "-O3"
-        #   )
-        opt_flag = "-O3"
+        # Quasar builds at -Os to lower peak per-compile memory so more xdist
+        # workers fit; every other arch uses -O3. The earlier -O3 override
+        # here was a TEMPORARY test to check whether -O3 avoided the PCH ICE;
+        # it did not (see below), so it is reverted.
+        #
+        # Do NOT re-introduce a global -O3 override as a PCH workaround: real
+        # CI run 28638406365 compiled at -O3 with PCH force-included and still
+        # produced 1920 identical internal compiler errors
+        # (get_def_stmt_liveness_1, at config/riscv/tt/gimple-rvtt-live.cc:347,
+        # during GIMPLE pass: rvtt_live) on eltwise_unary_sfpu_quasar_test.cpp.
+        # The opt level only changes WHICH source ICEs, not whether PCH ICEs.
+        # PCH is disabled by default for this reason -- see build_pch().
+        opt_flag = (
+            "-Os" if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else "-O3"
+        )
         TestConfig.OPTIONS_ALL = (
             f"{debug_flag}{opt_flag} "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
@@ -1080,9 +1073,10 @@ class TestConfig:
         precompile that prefix once per role into `.gch` files under PCH_DIR and
         force-include them from build_kernel_part.
 
-        Safety: this is Quasar-only, opt-outable via TT_LLK_DISABLE_PCH=1, and
-        fail-open — any error leaves PCH_AVAILABLE False so compiles run exactly
-        as before. The `.gch` are built with the same compute flags as the
+        Safety: PCH is DISABLED BY DEFAULT (opt-in via TT_LLK_ENABLE_PCH=1;
+        see the gate below for why), this is Quasar-only, and it is fail-open —
+        any error leaves PCH_AVAILABLE False so compiles run exactly as before.
+        The `.gch` are built with the same compute flags as the
         common-case variant; build_kernel_part only force-includes them for
         variants whose flags match (see there), and even a stale/mismatched
         `.gch` would be silently ignored by GCC (`-include` falls back to
@@ -1092,6 +1086,34 @@ class TestConfig:
             return
         # Quasar-only: the checked-in PCH headers and role set are Quasar-specific.
         if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            return
+        # PCH is DISABLED BY DEFAULT (opt-in via TT_LLK_ENABLE_PCH=1).
+        #
+        # Once build_pch() was fixed to actually stage the common header
+        # (commit 6099c3b39f), force-including the generated .gch was found to
+        # crash the pinned SFPI toolchain with a hard internal compiler error
+        # in the fork's custom RISC-V backend passes, NOT a graceful
+        # -Winvalid-pch fallback. Two real CI runs demonstrate this:
+        #   * run 28636598915 (-Os): 346 ICEs on sfpu_where + eltwise_binary
+        #     (transform @ rtl-rvtt-synth.cc:123; get_def_stmt_liveness_1 @
+        #     gimple-rvtt-live.cc:347).
+        #   * run 28638406365 (-O3): 1920 ICEs on eltwise_unary
+        #     (get_def_stmt_liveness_1 @ gimple-rvtt-live.cc:347).
+        # Every failing compile in both runs had -include of the math .gch and
+        # emitted zero -Winvalid-pch warnings, i.e. the .gch was accepted and
+        # consumed and the compiler then crashed in codegen.
+        #
+        # The two runs crash on DIFFERENT source files at different opt levels,
+        # so neither a per-source denylist (PCH_INCOMPATIBLE_SOURCES) nor an
+        # opt-level change is a reliable fix: the set of sources that ICE is
+        # not stable, so any fixed exclusion list will miss some. Until the
+        # toolchain backend bug is fixed (or a reliable predicate for the
+        # crashing shape is found), the only safe default is to not
+        # force-include PCH at all -- which is exactly the proven pre-PCH path
+        # that every run before 6099c3b39f took. Set TT_LLK_ENABLE_PCH=1 to
+        # re-enable for local experiments.
+        if os.environ.get("TT_LLK_ENABLE_PCH") != "1":
+            logger.debug("PCH disabled by default (set TT_LLK_ENABLE_PCH=1 to enable)")
             return
         if os.environ.get("TT_LLK_DISABLE_PCH") == "1":
             logger.debug("PCH disabled via TT_LLK_DISABLE_PCH=1")
