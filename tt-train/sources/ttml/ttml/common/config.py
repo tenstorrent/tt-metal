@@ -37,23 +37,11 @@ class DeviceConfig:
         if self.enable_sp and not self.enable_tp:
             raise ValueError("device_config.enable_sp requires device_config.enable_tp=true")
         # MoE tensor-parallel axis index in `mesh_shape`. -1 (default)
-        # disables MoE TP; 0/1/... selects which mesh axis to shard the
-        # MoE expert intermediate dim on. The axis is registered on the
-        # mesh under the name "moe_tp".
+        # disables MoE-only TP; 0/1/... selects which mesh axis to shard the
+        # MoE experts on. The axis is registered on the mesh under the name
+        # "moe_tp". Whether that axis is used as tensor- or expert-parallel is
+        # chosen by the model's moe_type (sparse_tp vs sparse_ep), not here.
         self.moe_tp_axis = int(device_config.get("moe_tp_axis", -1))
-        # How the MoE axis (the "tp" axis when enable_tp=true, or the
-        # axis named by moe_tp_axis otherwise) is used for MoE sharding:
-        #   "tp" — shard each expert's intermediate dim across the axis
-        #          (every chip holds all E experts, sharded weights);
-        #          one all_reduce after the FFN combines partials.
-        #   "ep" — partition the expert list across the axis; each chip
-        #          holds and runs E / D experts with full weights. One
-        #          all_reduce after moe_ungroup sums per-chip partials.
-        # Use "ep" only when this MoE axis is independent from DP — DP+EP
-        # on the same axis needs a CCL on routing that isn't in place yet.
-        self.moe_parallel_type = str(device_config.get("moe_parallel_type", "tp")).lower()
-        if self.moe_parallel_type not in ("tp", "ep"):
-            raise ValueError(f"DeviceConfig.moe_parallel_type must be 'tp' or 'ep', " f"got {self.moe_parallel_type!r}")
         self.enable_fsdp = device_config.get("enable_fsdp", False)
         # Defaults to True: build as deferred metadata -> fully_shard -> materialize already-sharded,
         # so large models (e.g. 32B) never materialize a full replicated copy on one chip.

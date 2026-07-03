@@ -22,16 +22,19 @@ transformer_config:
   qk_rope_head_dim: 64
   v_head_dim: 128
   theta: 10000.0
-  # DeepSeek MoE (no group routing — n_expert_groups=1)
   # first_k_dense_replace=1 in HF config means first 1 layer is dense
   n_dense_layers: 1
   inter_dim: 10944
-  moe_inter_dim: 1408
-  n_routed_experts: 64
-  n_shared_experts: 2
-  n_activated_experts: 6
-  n_expert_groups: 1
-  n_limited_groups: 1
-  score_func: "softmax"
-  route_scale: 1.0
+  # DeepSeek MoE FFN variant: dense | sparse | sparse_tp | sparse_ep
+  # (no group routing — n_expert_groups=1)
+  moe_type: "sparse"
+  moe_hyperparam:
+    moe_inter_dim: 1408
+    n_routed_experts: 64
+    n_shared_experts: 2
+    n_activated_experts: 6
+    n_expert_groups: 1
+    n_limited_groups: 1
+    score_func: "softmax"
+    route_scale: 1.0
   runner_type: "memory_efficient"

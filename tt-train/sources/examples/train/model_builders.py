@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Literal, NamedTuple
 
 import ttml
@@ -53,11 +53,10 @@ class _LlamaSpec:
 
 
 @dataclass
-class _DeepSeekSpec:
-    theta: float = 10000.0
-    inter_dim: int | None = None
+class _MoEHyperparam:
+    """DeepSeek MoE expert/routing hyperparameters — the YAML ``moe_hyperparam`` block."""
+
     moe_inter_dim: int = 256
-    n_dense_layers: int = 2
     n_routed_experts: int = 8
     n_shared_experts: int = 1
     n_activated_experts: int = 2
@@ -65,19 +64,30 @@ class _DeepSeekSpec:
     n_limited_groups: int = 1
     score_func: str = "sigmoid"
     route_scale: float = 2.5
-    # "sparse" uses moe_group/moe_ungroup; "dense" uses on-device masked experts.
-    moe_type: Literal["sparse", "dense"] = "sparse"
+
+
+@dataclass
+class _DeepSeekSpec:
+    theta: float = 10000.0
+    inter_dim: int | None = None
+    n_dense_layers: int = 2
     q_lora_rank: int = 256
     kv_lora_rank: int = 128
     qk_nope_head_dim: int = 64
     qk_rope_head_dim: int = 32
     v_head_dim: int = 64
-    # MoE tensor parallelism. Not parsed from YAML: set from DeviceConfig after
-    # the mesh is built (see train.py:main). ``moe_tp_axis_name`` names the mesh
-    # axis to shard the expert intermediate dim on (None disables MoE-only TP);
-    # ``moe_parallel_type`` selects SparseMoETP ("tp") vs SparseMoEEP ("ep").
+    # MoE FFN variant (applies to layers >= n_dense_layers):
+    #   dense     — on-device masked experts (no token grouping)
+    #   sparse    — moe_group/ungroup, single-chip (no MoE parallelism)
+    #   sparse_tp — sparse + tensor-parallel experts (shard the intermediate dim)
+    #   sparse_ep — sparse + expert-parallel (partition the expert list)
+    # sparse_tp / sparse_ep shard across the "tp" axis (full-model TP) or the mesh axis
+    # named by device_config.moe_tp_axis; with no such axis they degrade to plain sparse.
+    moe_type: Literal["dense", "sparse", "sparse_tp", "sparse_ep"] = "sparse"
+    moe_hyperparam: _MoEHyperparam = field(default_factory=_MoEHyperparam)
+    # Resolved MoE-parallel mesh axis name, filled from device_config.moe_tp_axis in
+    # train.py:main() (not parsed from YAML). None => no MoE-only TP axis.
     moe_tp_axis_name: str | None = None
-    moe_parallel_type: str = "tp"
 
 
 @dataclass
@@ -205,48 +215,75 @@ def _parse_deepseek(tc: dict) -> _DeepSeekSpec:
     spec = _DeepSeekSpec()
     spec.theta = tc.get("theta", spec.theta)
     spec.inter_dim = tc.get("inter_dim", spec.inter_dim)
-    spec.moe_inter_dim = tc.get("moe_inter_dim", spec.moe_inter_dim)
     spec.n_dense_layers = tc.get("n_dense_layers", spec.n_dense_layers)
-    spec.n_routed_experts = tc.get("n_routed_experts", spec.n_routed_experts)
-    spec.n_shared_experts = tc.get("n_shared_experts", spec.n_shared_experts)
-    spec.n_activated_experts = tc.get("n_activated_experts", spec.n_activated_experts)
-    spec.n_expert_groups = tc.get("n_expert_groups", spec.n_expert_groups)
-    spec.n_limited_groups = tc.get("n_limited_groups", spec.n_limited_groups)
-    spec.score_func = tc.get("score_func", spec.score_func)
-    spec.route_scale = tc.get("route_scale", spec.route_scale)
-    spec.moe_type = tc.get("moe_type", spec.moe_type)
     spec.q_lora_rank = tc.get("q_lora_rank", spec.q_lora_rank)
     spec.kv_lora_rank = tc.get("kv_lora_rank", spec.kv_lora_rank)
     spec.qk_nope_head_dim = tc.get("qk_nope_head_dim", spec.qk_nope_head_dim)
     spec.qk_rope_head_dim = tc.get("qk_rope_head_dim", spec.qk_rope_head_dim)
     spec.v_head_dim = tc.get("v_head_dim", spec.v_head_dim)
+
+    spec.moe_type = tc.get("moe_type", spec.moe_type)
+    # Expert/routing knobs live under `moe_hyperparam`; fall back to flat top-level
+    # keys so legacy configs keep parsing.
+    moe = tc.get("moe_hyperparam", tc)
+    h = spec.moe_hyperparam
+    h.moe_inter_dim = moe.get("moe_inter_dim", h.moe_inter_dim)
+    h.n_routed_experts = moe.get("n_routed_experts", h.n_routed_experts)
+    h.n_shared_experts = moe.get("n_shared_experts", h.n_shared_experts)
+    h.n_activated_experts = moe.get("n_activated_experts", h.n_activated_experts)
+    h.n_expert_groups = moe.get("n_expert_groups", h.n_expert_groups)
+    h.n_limited_groups = moe.get("n_limited_groups", h.n_limited_groups)
+    h.score_func = moe.get("score_func", h.score_func)
+    h.route_scale = moe.get("route_scale", h.route_scale)
     return spec
 
 
+# Maps the example's moe_type onto the library DeepSeekConfig's (moe_type, moe_parallel_type).
+# A None parallel_type means "not MoE-parallel" (no expert sharding axis is requested).
+_MOE_TYPE_TO_LIB: dict[str, tuple[str, str | None]] = {
+    "dense": ("dense", None),
+    "sparse": ("sparse", None),
+    "sparse_tp": ("sparse", "tp"),
+    "sparse_ep": ("sparse", "ep"),
+}
+
+
 def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
-    # DeepSeek integrates with the named-mesh TP path (MLA, dense MLP, LM head, sparse
-    # MoE shard across the "tp" axis when use_tp=True). MoE-only TP without full-model TP
-    # is configured via moe_tp_axis_name / moe_parallel_type (set on the spec in main()).
+    # DeepSeek integrates with the named-mesh TP path (MLA, dense MLP, LM head, and — under
+    # full-model TP — sparse MoE all shard across the "tp" axis). moe_type selects the MoE FFN
+    # variant; sparse_tp/sparse_ep additionally shard experts across a mesh axis.
     assert isinstance(cfg.spec, _DeepSeekSpec)
     spec = cfg.spec
+    if spec.moe_type not in _MOE_TYPE_TO_LIB:
+        raise ValueError(f"Unknown moe_type={spec.moe_type!r}; expected one of {sorted(_MOE_TYPE_TO_LIB)}")
+    lib_moe_type, parallel_type = _MOE_TYPE_TO_LIB[spec.moe_type]
+
+    # Resolve the expert-sharding axis for sparse_tp/sparse_ep: "tp" under full-model TP, else
+    # the axis resolved from device_config.moe_tp_axis (set on the spec in main()). If neither is
+    # available the library falls back to single-chip SparseMoE, so no axis is not an error.
+    moe_tp_axis_name = None
+    if parallel_type is not None:
+        moe_tp_axis_name = "tp" if use_tp else spec.moe_tp_axis_name
+
+    h = spec.moe_hyperparam
     inter_dim = spec.inter_dim or _default_mlp_inter_dim(cfg.embedding_dim)
     return DeepSeek(
         DeepSeekConfig(
             vocab_size=round_up_to_tile(cfg.vocab_size, 32),
             dim=cfg.embedding_dim,
             inter_dim=inter_dim,
-            moe_inter_dim=spec.moe_inter_dim,
+            moe_inter_dim=h.moe_inter_dim,
             n_layers=cfg.num_blocks,
             n_dense_layers=spec.n_dense_layers,
             n_heads=cfg.num_heads,
-            n_routed_experts=spec.n_routed_experts,
-            n_shared_experts=spec.n_shared_experts,
-            n_activated_experts=spec.n_activated_experts,
-            n_expert_groups=spec.n_expert_groups,
-            n_limited_groups=spec.n_limited_groups,
-            score_func=spec.score_func,
-            route_scale=spec.route_scale,
-            moe_type=spec.moe_type,
+            n_routed_experts=h.n_routed_experts,
+            n_shared_experts=h.n_shared_experts,
+            n_activated_experts=h.n_activated_experts,
+            n_expert_groups=h.n_expert_groups,
+            n_limited_groups=h.n_limited_groups,
+            score_func=h.score_func,
+            route_scale=h.route_scale,
+            moe_type=lib_moe_type,
             q_lora_rank=spec.q_lora_rank,
             kv_lora_rank=spec.kv_lora_rank,
             qk_nope_head_dim=spec.qk_nope_head_dim,
@@ -255,8 +292,8 @@ def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
             max_seq_len=cfg.max_sequence_length,
             rope_theta=spec.theta,
             runner_type=cfg.runner_type,
-            moe_tp_axis_name=spec.moe_tp_axis_name or None,
-            moe_parallel_type=spec.moe_parallel_type,
+            moe_tp_axis_name=moe_tp_axis_name,
+            moe_parallel_type=parallel_type or "tp",
             use_tp=use_tp,
         )
     )

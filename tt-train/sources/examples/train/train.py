@@ -814,11 +814,10 @@ def main() -> None:
         else:
             resolved_moe_axis = logical
 
-    # Plumb the resolved MoE axis + parallel type onto the DeepSeek spec so the transformer
-    # dispatcher can pick SparseMoETP vs SparseMoEEP. No-op for non-DeepSeek models.
+    # Record the resolved MoE axis on the DeepSeek spec so sparse_tp/sparse_ep shard experts
+    # across it (tp-vs-ep comes from the spec's moe_type). No-op for non-DeepSeek models.
     if model_cfg.model_type == "deepseek":
         model_cfg.spec.moe_tp_axis_name = resolved_moe_axis
-        model_cfg.spec.moe_parallel_type = device_cfg.moe_parallel_type
 
     if device_cfg.enable_ddp or device_cfg.enable_tp or moe_ax != -1:
         print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
