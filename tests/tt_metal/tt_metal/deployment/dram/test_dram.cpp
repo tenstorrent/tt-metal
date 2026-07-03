@@ -80,9 +80,9 @@ static std::vector<std::string> get_tenstorrent_pci_bdf_lines() {
         }
 
         const std::string pci_device = test_dram_read_text_file_trimmed(base + "/device");
-        const std::string bus = (bdf.size() >= 7) ? bdf.substr(bdf.size() - 7, 2) : "??";
-        const std::string device = (bdf.size() >= 4) ? bdf.substr(bdf.size() - 4, 2) : "??";
-        const std::string function = (bdf.size() >= 1) ? bdf.substr(bdf.size() - 1, 1) : "?";
+        const std::string bus = bdf.size() >= 7 ? bdf.substr(bdf.size() - 7, 2) : "??";
+        const std::string device = bdf.size() >= 4 ? bdf.substr(bdf.size() - 4, 2) : "??";
+        const std::string function = !bdf.empty() ? bdf.substr(bdf.size() - 1, 1) : "?";
 
         lines.push_back(
             fmt::format("bdf={} bus={} device={} function={} pci_device={}", bdf, bus, device, function, pci_device));
@@ -192,8 +192,8 @@ static void log_pattern_timing_summary(
 
     bool any = false;
 
-    for (uint32_t pattern_id = 0; pattern_id < DramPatternTimingSummary::kMaxPatternId; ++pattern_id) {
-        if (summary.jobs[pattern_id]) {
+    for (auto job : summary.jobs) {
+        if (job) {
             any = true;
             break;
         }
@@ -210,8 +210,8 @@ static void log_pattern_timing_summary(
 
     double raw_total_ms = 0.0;
 
-    for (uint32_t pattern_id = 0; pattern_id < DramPatternTimingSummary::kMaxPatternId; ++pattern_id) {
-        raw_total_ms += summary.ticks[pattern_id] * 1000.0 / kBlackholeClockHz;
+    for (auto tick : summary.ticks) {
+        raw_total_ms += tick * 1000.0 / kBlackholeClockHz;
     }
 
     const double scale = raw_total_ms > 0.0 && test_wall_ms > 0.0 ? test_wall_ms / raw_total_ms : 1.0;

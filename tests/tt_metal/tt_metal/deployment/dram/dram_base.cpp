@@ -1039,7 +1039,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         uint32_t host_tail_shadow = 0;
         bool stop_sent = false;
 
-        std::chrono::steady_clock::time_point last_monitor_print_time{};
+        std::chrono::steady_clock::time_point last_monitor_print_time;
         uint32_t prev_heartbeat_tick = 0;
         uint32_t prev_jobs_completed = 0;
         uint64_t prev_arc_tick = 0;
@@ -1047,7 +1047,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         bool monitor_initialized = false;
         bool stall_watchdog_armed = false;
         uint32_t stall_watchdog_reason = 0;
-        std::chrono::steady_clock::time_point stall_watchdog_start_time{};
+        std::chrono::steady_clock::time_point stall_watchdog_start_time;
     };
 
     std::vector<PerCorePersistentResources> per_core;
@@ -1186,7 +1186,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         const auto now = std::chrono::steady_clock::now();
         r.last_monitor_print_time = now;
 
-        per_core.push_back(std::move(r));
+        per_core.push_back(r);
     }
 
     for (const auto& r : per_core) {
