@@ -299,8 +299,11 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         });
     }
 
-    // Per-reader pad scratch (only used when pad_val != 0).
-    const bool use_pad_scratch = enable_padding && (pad_val != 0);
+    // Per-reader pad scratch. Always allocate it when padding is enabled: Quasar has no static
+    // MEM_ZEROS L1 region (WH/BH-only) for the zero-pad case to copy from, so the kernel always
+    // sources padding from this scratch DFB -- filled via noc.async_write_zeros for pad_val==0, or
+    // the immediate value otherwise.
+    const bool use_pad_scratch = enable_padding;
     const uint32_t pad_cb_pagesize = aligned_stick_nbytes;
     if (use_pad_scratch) {
         dataflow_buffers.push_back(DataflowBufferSpec{
