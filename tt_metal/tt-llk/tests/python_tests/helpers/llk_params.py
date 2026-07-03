@@ -39,6 +39,10 @@ class MathOpType(Enum):
     SFPU_BINARY = auto()
     SFPU_BINARY_INT = auto()
     SFPU_TERNARY = auto()
+    # Float unary-with-scalar binops (binop_with_unary.h: add/sub/mul/div/rsub).
+    # Dispatched by a compile-time BINOP_MODE via a dedicated test source rather
+    # than a SfpuType, so these do not go through the SfpuType-keyed MATH_OP.
+    SFPU_BINOP_SCALAR = auto()
 
     FPU_BINARY = auto()
     REDUCE = auto()
@@ -189,6 +193,20 @@ class MathOperation(Enum):
     SfpuSnakeBeta = OpSpec("snake_beta", MathOpType.SFPU_TERNARY)
 
     # =============================================================================
+    # SFPU FLOAT UNARY-WITH-SCALAR BINOPS (binop_with_unary.h)
+    # =============================================================================
+    # out = binop(x, scalar). Dispatched by BINOP_MODE (ADD=0, SUB=1, MUL=2,
+    # DIV=3, RSUB=4) through sfpu_binop_scalar_{test,perf}.cpp. The cpp_enum_value
+    # is the human-readable mode name (not a SfpuType) — SFPU_BINOP_MODE maps it
+    # to the integer BINOP_MODE. DIV multiplies by the host-inverted scalar
+    # (1/divisor), matching calculate_binop_with_scalar's DIV branch.
+    ScalarAdd = OpSpec("ADD", MathOpType.SFPU_BINOP_SCALAR)
+    ScalarSub = OpSpec("SUB", MathOpType.SFPU_BINOP_SCALAR)
+    ScalarMul = OpSpec("MUL", MathOpType.SFPU_BINOP_SCALAR)
+    ScalarDiv = OpSpec("DIV", MathOpType.SFPU_BINOP_SCALAR)
+    ScalarRsub = OpSpec("RSUB", MathOpType.SFPU_BINOP_SCALAR)
+
+    # =============================================================================
     # REDUCE OPERATIONS
     # =============================================================================
     ReduceColumn = OpSpec("REDUCE_COL", MathOpType.REDUCE)
@@ -234,6 +252,11 @@ class MathOperation(Enum):
         return cls._get_operations_by_type(MathOpType.SFPU_TERNARY)
 
     @classmethod
+    def get_sfpu_binop_scalar_operations(cls):
+        """Get all SFPU float unary-with-scalar binop operations."""
+        return cls._get_operations_by_type(MathOpType.SFPU_BINOP_SCALAR)
+
+    @classmethod
     def get_reduce_operations(cls):
         """Get all reduce operations."""
         return cls._get_operations_by_type(MathOpType.REDUCE)
@@ -242,6 +265,7 @@ class MathOperation(Enum):
 SFPU_UNARY_OPERATIONS = MathOperation.get_sfpu_unary_operations()
 SFPU_BINARY_OPERATIONS = MathOperation.get_sfpu_binary_operations()
 SFPU_TERNARY_OPERATIONS = MathOperation.get_sfpu_ternary_operations()
+SFPU_BINOP_SCALAR_OPERATIONS = MathOperation.get_sfpu_binop_scalar_operations()
 FPU_BINARY_OPERATIONS = MathOperation.get_fpu_binary_operations()
 REDUCE_OPERATIONS = MathOperation.get_reduce_operations()
 

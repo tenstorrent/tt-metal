@@ -3870,3 +3870,49 @@ class TernarySFPUGolden:
             raise ValueError(f"Unsupported ternary SFPU operation: {operation}")
 
         return result.to(format_dict[data_format]).flatten()
+
+
+@register_golden
+class ScalarBinopGolden:
+    """Golden for the float unary-with-scalar binops in binop_with_unary.h
+    (add / sub / mul / div / rsub).
+
+    Each is element-wise on a single operand plus a scalar, so — like the
+    other SFPU element-wise goldens — no tilize is needed: the kernel copies
+    the input tile into Dest and processes rows in place, so a row-major
+    reference matches the packed result.
+
+        add:  out = x + s
+        sub:  out = x - s
+        mul:  out = x * s
+        div:  out = x * s      (s is the host-inverted divisor 1/d; the kernel
+                                multiplies, so this reproduces x / d exactly)
+        rsub: out = s - x      (kernel rounds fp32->bf16 RNE for a 16-bit dest;
+                                the final cast to a bf16 output format is RNE
+                                and reproduces it)
+    """
+
+    def __call__(
+        self,
+        operation: MathOperation,
+        operand_a,
+        value_bits: int,
+        data_format: DataFormat,
+    ):
+        # Decode the scalar the same way the kernel does (Converter::as_float).
+        value = struct.unpack("<f", struct.pack("<I", value_bits & 0xFFFFFFFF))[0]
+
+        a = operand_a.flatten().to(torch.float32)
+
+        if operation == MathOperation.ScalarAdd:
+            result = a + value
+        elif operation == MathOperation.ScalarSub:
+            result = a - value
+        elif operation in (MathOperation.ScalarMul, MathOperation.ScalarDiv):
+            result = a * value
+        elif operation == MathOperation.ScalarRsub:
+            result = value - a
+        else:
+            raise ValueError(f"Unsupported scalar binop operation: {operation}")
+
+        return result.to(format_dict[data_format]).flatten()

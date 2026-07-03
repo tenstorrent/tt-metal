@@ -245,6 +245,41 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class SFPU_BINOP_MODE(TemplateParameter):
+    """Select the float unary-with-scalar binop at compile time.
+
+    Emits ``constexpr int SFPU_BINOP_MODE = <n>;`` consumed by
+    ``sfpu_binop_scalar_{test,perf}.cpp``, matching the BINOP_MODE enum in
+    ``ckernel_sfpu_binop_with_unary.h`` (ADD=0, SUB=1, MUL=2, DIV=3, RSUB=4).
+    """
+
+    # Maps MathOperation.cpp_enum_value -> the kernel's BINOP_MODE integer.
+    _MODE = {"ADD": 0, "SUB": 1, "MUL": 2, "DIV": 3, "RSUB": 4}
+
+    mathop: MathOperation = None
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr int SFPU_BINOP_MODE = {self._MODE[self.mathop.cpp_enum_value]};"
+        )
+
+
+@dataclass
+class SFPU_UNARY_SCALAR(TemplateParameter):
+    """Scalar operand for the float unary-with-scalar binops, as raw fp32 bits.
+
+    ``calculate_binop_with_scalar`` decodes it via ``Converter::as_float``; emit
+    the bit pattern so the C++ and torch golden agree exactly. For DIV this is
+    the host-inverted divisor (1/divisor), since the kernel multiplies.
+    """
+
+    value_bits: int = 0x40000000  # 2.0f
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SFPU_UNARY_SCALAR = {self.value_bits}u;"
+
+
+@dataclass
 class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
     disable_src_zero_flag: bool
 
