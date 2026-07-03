@@ -13,6 +13,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/common/constants.hpp"
@@ -620,6 +621,19 @@ ProgramDescriptor build_inplace_halo_program(
     CoreRangeSet rectangular_cores(rectangular_cores_set);
     CoreCoord noc_BR =
         is_block_sharded ? last_active_coord : core_id_to_noc_coords((rectangular_x * rectangular_y) - 1);
+
+    // Test-only diagnostic (grep-able): expose the in-place grid geometry so the correctness
+    // harness can prove whether a shape exercises NOOP cores / a partial (non-full) grid.
+    log_info(
+        tt::LogOp,
+        "in-place halo grid: active_cores={} num_cores_x={} rectangular={}x{} noop_cores={} "
+        "grid_is_partial={}",
+        num_active_cores,
+        num_cores_x,
+        rectangular_x,
+        rectangular_y,
+        num_noop_cores,
+        (num_noop_cores > 0));
 
     // Global barrier semaphore on the rectangular grid (incl. noop cores for the multicast).
     const uint32_t semaphore_id = static_cast<uint32_t>(desc.semaphores.size());

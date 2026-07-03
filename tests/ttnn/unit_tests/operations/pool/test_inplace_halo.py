@@ -57,10 +57,23 @@ import pytest
 # ---------------------------------------------------------------------------
 SHAPES = [
     # name, NCHW, kernel(h,w), stride(h,w), padding(t,b,l,r)
+    # --- original validated SAVE shapes ---
     ("resnet_150x150_k2s2p0", [1, 128, 150, 150], (2, 2), (2, 2), (0, 0, 0, 0)),
     ("massive_400x544_k3s2p1", [1, 64, 400, 544], (3, 3), (2, 2), (1, 1, 1, 1)),
     ("n8_112x112_k3s2p1", [8, 64, 112, 112], (3, 3), (2, 2), (1, 1, 1, 1)),
     ("n32_264x40_k5s2p2", [32, 32, 264, 40], (5, 5), (2, 2), (2, 2, 2, 2)),
+    # --- broadened coverage: large-feature-map + small-kernel candidates that were verified
+    #     to auto-activate in-place (the "in-place halo active" log appears in the ACTIVE run).
+    #     Two proposed candidates were DROPPED because in-place did NOT activate for them
+    #     (gate verdict LOSE -- too few sticks/core relative to halo depth), so recording them
+    #     would be meaningless:
+    #       * [1, 512, 56, 56] k3s2p1  -> did NOT activate (dropped)
+    #       * [1, 96, 180, 320] k3s2p1 -> did NOT activate (dropped)
+    ("c256_112x112_k2s2p0", [1, 256, 112, 112], (2, 2), (2, 2), (0, 0, 0, 0)),
+    ("c64_300x300_k3s2p1", [1, 64, 300, 300], (3, 3), (2, 2), (1, 1, 1, 1)),
+    ("n2_c96_160x160_k3s1p1", [2, 96, 160, 160], (3, 3), (1, 1), (1, 1, 1, 1)),
+    ("c128_224x224_k3s2p1", [1, 128, 224, 224], (3, 3), (2, 2), (1, 1, 1, 1)),
+    ("n4_c32_128x128_k2s2p0", [4, 32, 128, 128], (2, 2), (2, 2), (0, 0, 0, 0)),
 ]
 
 POOL_TYPES = ["avg", "max"]
@@ -278,6 +291,14 @@ def test_inplace_halo_matches_normal(shape_entry, out_dtype):
         f"[{shape_name}/{out_dtype}] in-place halo unexpectedly ACTIVE in the DISABLED run "
         f"({normal_hits} lines) -> env hook not effective. Disabled log tail:\n{log_normal[-3000:]}"
     )
+
+    # --- Grid-geometry evidence: does this shape exercise NOOP cores / a partial grid? ---
+    grid_line = ""
+    for ln in log_active.splitlines():
+        if "in-place halo grid:" in ln:
+            grid_line = ln[ln.index("in-place halo grid:") :]
+            break
+    print(f"[{shape_name}/{out_dtype}] {grid_line or 'in-place halo grid: <not found>'}")
 
     # --- Load per-pool results and compare EXACTLY. ---
     with open(os.path.join(outdir, "inplace_results.json")) as f:
