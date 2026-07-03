@@ -584,7 +584,14 @@ class TestConfig:
 
         if compile_producer:
             TestConfig.BUILD_MODE = BuildMode.PRODUCE
+            # Two guards, on purpose. The module-attribute swap keeps the
+            # historical behaviour for module-qualified callers; set_producer_mode
+            # makes the short-circuit order-independent so the many tests that do
+            # `from helpers.golden_generators import get_golden_generator` also get
+            # the dummy even though they bound the name at import time (see the
+            # _PRODUCER_MODE note in golden_generators.py).
             golden_generators_module.get_golden_generator = dummy_golden_generator
+            golden_generators_module.set_producer_mode(True)
 
         if compile_consumer:
             TestConfig.BUILD_MODE = BuildMode.CONSUME
