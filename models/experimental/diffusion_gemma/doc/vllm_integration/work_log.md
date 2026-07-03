@@ -216,6 +216,32 @@ plus the deferred F1/R-new decode-isolation item), not introduced by this stage.
   disabled on close). No profiler/Tracy in the serving stage (per skill). No leftover
   processes after runs.
 
+## Stage review
+
+`stage-review` (fresh independent xhigh subagent, 2026-07-03): **clean-pass**, no required work.
+Re-derived the delegation chain (adapter → `BlockDiffusionServingSession` →
+`denoise_and_commit_block` → `denoise_block` on-device sampling + `commit_canvas_tokens`), the
+block-granular contract, the #47488 scope vs the runner code, the plugin patch, context contract,
+per-block metrics, qualitative control, and the gemma4 stage-gate. Two P3 concerns (disclosed
+residual risk, not blockers) were then tightened:
+
+- Unified both KV allocators to return model-owned handles via `_model_owned_kv_handles`
+  (fixed the legacy `allocate_kv_cache` "no new DRAM" docstring/behavior mismatch; dropped the now
+  unused `allocate_vllm_kv_cache` import).
+- Documented the adapter-class execution-coverage gap in README limitations (adapter methods
+  import `vllm.*`; proven by inspection + the device-tested session core; full coverage lands with
+  #47488 + installed plugin).
+
+Anomalies were classified as controlled: the 4-step degenerate/empty block and the reduced
+`<unused*>` output are the RUN-first #48291 fidelity limitation (the 16-step full-depth run
+reproduces the coherent RUN control), and the 1-block early stop at 4 steps is correct EOS-stop
+behavior (`stop` distinct from denoise `halted`).
+
 ## SHAs
 
-<!-- filled in at commit time -->
+- `faebfbcc358` — feat(diffusion_gemma): block-granular vLLM serving adapter (#47466/#47488).
+  Pushed to `diffusion-gemma-function` (194dbd432db..faebfbcc358). All pre-commit hooks passed.
+  Adds `tt/serving.py`, `tt/generator_vllm.py`, `demo/serving_smoke.py`,
+  `tests/test_serving_block_contract.py`, `doc/context_contract.json`, `doc/vllm_integration/*`.
+- `<post-review>` — post-clean-pass touch-ups (unify KV allocators, docstring fix, README
+  coverage-gap note). SHA recorded after commit below.

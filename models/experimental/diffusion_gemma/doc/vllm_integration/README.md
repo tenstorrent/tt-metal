@@ -119,6 +119,13 @@ DG_RUN_DEVICE=1 python -m pytest models/experimental/diffusion_gemma/tests/test_
   container/image gating (stale image, no `run_vllm_server`, no host vLLM). The adapter is
   written to the block contract and proven via the reduced-surface driver.
 - Single active sequence per contiguous model cache; concurrent batched serving = #47488 + #47557.
-- Text quality is RUN-first / degenerate until #48291 (not a serving regression — no
-  prompt-correct control beats it yet; see `plan.md` R0.5).
+- Text quality is RUN-first / degenerate until #48291 (not a serving regression — the serving
+  path reproduces the RUN-path visible-dialogue control; see `plan.md` R0.5 and the visible-text
+  run above).
+- The vLLM adapter *class* methods (`prefill_forward`, `decode_forward`, `get_kv_cache_spec`,
+  `allocate_kv_cache*`, `initialize_vllm_model`) import `vllm.*` / need the runner, so they are
+  proven by static inspection + `py_compile` + the device-tested block-emission core
+  (`BlockDiffusionServingSession`, driven by `serving_smoke.py` / the block-contract test), not by
+  running the adapter class itself. Adapter-class execution coverage lands when #47488 + the
+  installed plugin make the engine path runnable.
 - No Tracy / tt-perf-report / device-profiler collection in the vLLM stage (per skill).

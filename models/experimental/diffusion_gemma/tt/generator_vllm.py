@@ -68,7 +68,7 @@ import ttnn
 from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_checkpoint_dir
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
-from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM, allocate_vllm_kv_cache
+from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
 
 def _resolve_checkpoint_dir(hf_config):
@@ -248,17 +248,27 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 raise ValueError(f"Unsupported layer_type {lt!r} at layer {i}")
         return spec_per_layer
 
+    def _model_owned_kv_handles(self):
+        """``[submesh][layer][k_or_v]`` handles into the model's own contiguous cache.
+
+        Serving runs on the model-owned contiguous cache the model allocated at
+        build time (`create_kv_cache=True`); both allocator entry points return
+        those existing handles so vLLM's `kv_cache` arg points at the physical
+        cache the diffusion forward actually reads/writes — no fresh DRAM, no
+        double allocation (see the module docstring on cache ownership / #47488).
+        """
+        return [[[k, v] for (k, v) in model.tt_kv_cache] for model in self.model]
+
     def allocate_kv_cache(self, *args, **kwargs):
-        # Legacy uniform path; hybrid uses allocate_kv_cache_per_layer. Serving
-        # runs on the model-owned contiguous cache, so this exists to satisfy the
-        # interface — the returned handles are the model's own (no new DRAM).
-        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+        # Legacy uniform entry point; the hybrid model uses allocate_kv_cache_per_layer.
+        # Both return the model's own handles (no new DRAM) for the model-owned-cache
+        # serving mode.
+        del args, kwargs
+        return self._model_owned_kv_handles()
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         del per_layer_specs  # sizing bookkeeping only; physical cache is model-owned
-        # Return the model's own per-layer [k, v] handles so vLLM's kv_cache arg
-        # points at the physical cache the diffusion forward actually reads/writes.
-        return [[[k, v] for (k, v) in model.tt_kv_cache] for model in self.model]
+        return self._model_owned_kv_handles()
 
     # ── warmup ──────────────────────────────────────────────────────────
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
