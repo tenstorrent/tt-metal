@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"  // ttnn::typecast (addmm dtype-match, port of c3da306a7dd)
 #include "ttnn/operations/creation/creation.hpp"
 
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
@@ -518,7 +519,12 @@ Tensor addmm(
     }
 
     if (beta != 0.0) {
-        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta) : input_tensor;
+        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta, out_tensor.dtype()) : input_tensor;
+        // Port of tt-metal c3da306a7dd: the matmul output dtype can differ from input_tensor's when
+        // `dtype` overrides it; binary_ng's in-place add_ requires both operands share a dtype.
+        if (add_tensor.dtype() != out_tensor.dtype()) {
+            add_tensor = ttnn::typecast(add_tensor, out_tensor.dtype());
+        }
         add_(out_tensor, add_tensor);
     }
 

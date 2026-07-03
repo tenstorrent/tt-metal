@@ -1798,6 +1798,20 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
+    // W-dim padding parameters for the last block in X (ported from tt-metal PR #48923). Without these,
+    // the receiver-writer emits full per_core_N-wide writes for the last X block even when N is not
+    // divisible by per_core_N, sending pages past the tensor's logical extent -> OOB writes past the L1
+    // allocation on the far banks (can manifest as a hang). The 2D factory already handles this.
+    uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
+    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
+    uint32_t last_subblock_of_last_block_w =
+        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
+    uint32_t last_block_padded_subblock_tiles_addr_skip =
+        output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_block_tiles_w_skip =
+        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
+
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
     if (in1_noc == tt::tt_metal::NOC::NOC_0) {
@@ -1874,28 +1888,22 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                     (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
             };
 
-            if (output_idx_y == num_blocks_y - 1) {
-                // padding args (WRITER)
+            {
+                // padding args (WRITER): H-dim tail depends on output_idx_y == num_blocks_y - 1;
+                // W-dim tail depends on output_idx_x == num_blocks_x - 1. Independent (PR #48923).
+                bool last_y = (output_idx_y == num_blocks_y - 1);
+                bool last_x = (output_idx_x == num_blocks_x - 1);
                 mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
-                mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
-                mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                mm_in1_receiver_writer_args.push_back(
+                    last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h);
+                mm_in1_receiver_writer_args.push_back(last_y ? last_subblock_of_last_block_h : out_subblock_h);
+                mm_in1_receiver_writer_args.push_back(last_y ? last_block_padded_block_tiles_h_skip : 0);
                 mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(0);
-                mm_in1_receiver_writer_args.push_back(0);
-            } else {
-                // padding args (WRITER)
-                mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(0);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(0);
-                mm_in1_receiver_writer_args.push_back(0);
+                mm_in1_receiver_writer_args.push_back(
+                    last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w);
+                mm_in1_receiver_writer_args.push_back(last_x ? last_subblock_of_last_block_w : out_subblock_w);
+                mm_in1_receiver_writer_args.push_back(last_x ? last_block_padded_subblock_tiles_addr_skip : 0);
+                mm_in1_receiver_writer_args.push_back(last_x ? last_block_padded_block_tiles_w_skip : 0);
             }
             if (!output_is_sharded) {
                 if (output_idx_y == num_blocks_y - 1) {
@@ -4619,6 +4627,20 @@ void override_program_parameters(
     uint32_t last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
+    // W-dim padding parameters for the last block in X (ported from tt-metal PR #48923). Without these,
+    // the receiver-writer emits full per_core_N-wide writes for the last X block even when N is not
+    // divisible by per_core_N, sending pages past the tensor's logical extent -> OOB writes past the L1
+    // allocation on the far banks (can manifest as a hang). The 2D factory already handles this.
+    uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
+    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
+    uint32_t last_subblock_of_last_block_w =
+        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
+    uint32_t last_block_padded_subblock_tiles_addr_skip =
+        output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_block_tiles_w_skip =
+        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
+
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
     if (in1_noc == tt::tt_metal::NOC::NOC_0) {
@@ -4704,28 +4726,22 @@ void override_program_parameters(
                         (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
                 };
 
-            if (output_idx_y == num_blocks_y - 1) {
-                // padding args (WRITER)
+            {
+                // padding args (WRITER): H-dim tail depends on output_idx_y == num_blocks_y - 1;
+                // W-dim tail depends on output_idx_x == num_blocks_x - 1. Independent (PR #48923).
+                bool last_y = (output_idx_y == num_blocks_y - 1);
+                bool last_x = (output_idx_x == num_blocks_x - 1);
                 mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
-                mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
-                mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
+                mm_in1_receiver_writer_args.push_back(
+                    last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h);
+                mm_in1_receiver_writer_args.push_back(last_y ? last_subblock_of_last_block_h : out_subblock_h);
+                mm_in1_receiver_writer_args.push_back(last_y ? last_block_padded_block_tiles_h_skip : 0u);
                 mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(0u);
-                mm_in1_receiver_writer_args.push_back(0u);
-            } else {
-                // padding args (WRITER)
-                mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(0u);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(0u);
-                mm_in1_receiver_writer_args.push_back(0u);
+                mm_in1_receiver_writer_args.push_back(
+                    last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w);
+                mm_in1_receiver_writer_args.push_back(last_x ? last_subblock_of_last_block_w : out_subblock_w);
+                mm_in1_receiver_writer_args.push_back(last_x ? last_block_padded_subblock_tiles_addr_skip : 0u);
+                mm_in1_receiver_writer_args.push_back(last_x ? last_block_padded_block_tiles_w_skip : 0u);
             }
             if (!output_is_sharded) {
                 if (output_idx_y == num_blocks_y - 1) {
@@ -7137,6 +7153,19 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     uint32_t last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
+    // W-dim padding parameters for the last block in X (ported from tt-metal PR #48923). Without these,
+    // the receiver-writer emits full per_core_N-wide writes for the last X block when N % per_core_N != 0,
+    // -> OOB writes past the tensor extent on the far banks (can hang). The 2D factory already handles this.
+    uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
+    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
+    uint32_t last_subblock_of_last_block_w =
+        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
+    uint32_t last_block_padded_subblock_tiles_addr_skip =
+        output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
+    uint32_t last_block_padded_block_tiles_w_skip =
+        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
+
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
     // in1_noc is defined above (hoisted before kernel creation so the in1 writers pin the same NOC).
@@ -7188,26 +7217,25 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 {"in1_mcast_sender_noc_y", (uint32_t)top_left_core_physical.y},
                 {"out_tensor_start_tile_id", ((uint32_t)output_idx_x * per_core_N) + (output_idx_y * per_core_M * N)},
             };
-            if (output_idx_y == num_blocks_y - 1) {
+            {
+                // H-dim tail depends on output_idx_y == num_blocks_y - 1; W-dim tail depends on
+                // output_idx_x == num_blocks_x - 1. Independent (PR #48923).
+                bool last_y = (output_idx_y == num_blocks_y - 1);
+                bool last_x = (output_idx_x == num_blocks_x - 1);
                 args.insert({"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h});
-                args.insert({"out_last_num_nonzero_subblocks_h", last_block_num_nonzero_subblocks_h});
-                args.insert({"out_last_subblock_h", last_subblock_of_last_block_h});
-                args.insert({"padded_block_tiles_h_skip", last_block_padded_block_tiles_h_skip});
+                args.insert(
+                    {"out_last_num_nonzero_subblocks_h",
+                     last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h});
+                args.insert({"out_last_subblock_h", last_y ? last_subblock_of_last_block_h : out_subblock_h});
+                args.insert({"padded_block_tiles_h_skip", last_y ? last_block_padded_block_tiles_h_skip : 0u});
                 args.insert({"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w});
-                args.insert({"out_last_num_nonzero_subblocks_w", out_block_w / out_subblock_w});
-                args.insert({"out_last_subblock_w", out_subblock_w});
-                args.insert({"padded_subblock_tiles_addr_skip", 0u});
-                args.insert({"padded_block_tiles_w_skip", 0u});
-            } else {
-                args.insert({"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h});
-                args.insert({"out_last_num_nonzero_subblocks_h", out_block_h / out_subblock_h});
-                args.insert({"out_last_subblock_h", out_subblock_h});
-                args.insert({"padded_block_tiles_h_skip", 0u});
-                args.insert({"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w});
-                args.insert({"out_last_num_nonzero_subblocks_w", out_block_w / out_subblock_w});
-                args.insert({"out_last_subblock_w", out_subblock_w});
-                args.insert({"padded_subblock_tiles_addr_skip", 0u});
-                args.insert({"padded_block_tiles_w_skip", 0u});
+                args.insert(
+                    {"out_last_num_nonzero_subblocks_w",
+                     last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w});
+                args.insert({"out_last_subblock_w", last_x ? last_subblock_of_last_block_w : out_subblock_w});
+                args.insert(
+                    {"padded_subblock_tiles_addr_skip", last_x ? last_block_padded_subblock_tiles_addr_skip : 0u});
+                args.insert({"padded_block_tiles_w_skip", last_x ? last_block_padded_block_tiles_w_skip : 0u});
             }
             if (!output_is_sharded) {
                 args.insert(

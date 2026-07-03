@@ -3543,6 +3543,34 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         std::swap(num_x_bs, num_y_bs);
     }
 
+    // [DEBUG mcast2d hang] The in0 sender counts num_dests along num_blocks_x (a ROW), but the observed
+    // deadlock has receivers acking a COLUMN. If in0_sender_num_cores_along_width (= in0_shard_grid.x for
+    // non-transpose) != num_blocks_x, or if in0_mcast_noc_x/y describe a column, that's the mismatch.
+    if (in0_block_sharded) {
+        std::string noc_x_str, noc_y_str;
+        for (auto v : in0_mcast_noc_x) {
+            noc_x_str += std::to_string(v) + ",";
+        }
+        for (auto v : in0_mcast_noc_y) {
+            noc_y_str += std::to_string(v) + ",";
+        }
+        log_warning(
+            tt::LogOp,
+            "[QSR-MCAST2D-DBG] transpose_mcast={} in0_sender_num_cores_along_width={} num_x_bs={} "
+            "num_y_bs={} num_blocks_x(=in0_mcast_num_dests)={} num_blocks_y={} num_cores_c={} num_cores_r={} "
+            "in0_mcast_noc_x=[{}] in0_mcast_noc_y=[{}]",
+            transpose_mcast,
+            in0_sender_num_cores_along_width,
+            num_x_bs,
+            num_y_bs,
+            num_blocks_x,
+            num_blocks_y,
+            num_cores_c,
+            num_cores_r,
+            noc_x_str,
+            noc_y_str);
+    }
+
     // ---- Defines ----
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_sharded_defines;

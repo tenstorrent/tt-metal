@@ -206,8 +206,14 @@ Tensor reduce(
         // Multi-core HW reduction: first reduce W, then reduce H on the result.
         // For the Sum chain's terminal fp32->bf16 stage, keep W in fp32 so only H packs to bf16.
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
-        const bool keep_w_fp32 = output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
-                                 tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32;
+        // Port of tt-metal 4eed5a8b8c7 (#48578): keep the W intermediate FP32 (only H packs to BF16) to
+        // preserve accumulation precision — SUM only. MAX/MIN must NOT (MIN = MAX+negate; the fused-negate
+        // W step gives wrong results with an FP32 intermediate, #40854; and select ops gain no precision).
+        const bool keep_w_fp32 =
+            reduce_math == tt::tt_metal::ReduceOpMath::SUM &&
+            ((output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
+              tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32) ||
+             (tilized_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en));
         const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
 
         const Tensor output_tensor = ttnn::prim::qsr::reduce(
