@@ -103,6 +103,10 @@ DIT_ON_HOST = os.environ.get("HY_DIT_HOST", "0") == "1"
 USE_DISTIL = os.environ.get("HY_DISTIL", "0") == "1"
 SCALING = 0.562679178327931
 
+# Persist pre-tilized mesh weights across runs (see README § Weight cache).
+if not os.environ.get("TT_DIT_CACHE_DIR"):
+    os.environ["TT_DIT_CACHE_DIR"] = str(Path.home() / ".cache" / "tt-dit")
+
 # --- lightweight per-stage timing (mirrors demo.py) -------------------------
 _TIMINGS = []
 
@@ -530,7 +534,7 @@ def main():
         t = _mark("2_recaption_ar", t)
 
     denoise_system = get_system_prompt("en_unified", "image")
-    guidance_emb = load_timestep_embedder("timestep_emb", model_dir, hidden_size=H) if cfg_distilled else None
+    guidance_emb = load_timestep_embedder("guidance_emb", model_dir, hidden_size=H) if cfg_distilled else None
     timestep_r_emb = load_timestep_embedder("timestep_r_emb", model_dir, hidden_size=H) if use_meanflow else None
 
     # Cond encode (VAE + ViT + cond patch/time embed) on its own mesh so weights are
@@ -741,6 +745,7 @@ def main():
             vae_mesh,
             latent,
             scaling_factor=SCALING,
+            grid_hw=grid,
             ccl_manager=vae_ccl,
             h_mesh_axis=0,
             w_mesh_axis=1,

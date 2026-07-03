@@ -19,11 +19,14 @@
 # The whole pipeline runs on the TT mesh: the backbone with the model that fits
 # DRAM (bf8 + 4-way expert sharding, first/last 3 layers bf16), and the VAE decode
 # sharded H/W-spatial across the 2x2 mesh (each device a 512x512 quadrant of the
-# 1024x1024 image; validated end-to-end vs the fp32 reference — see
-# MEMORY_FIT_PLAN.md). No host round-trip for the VAE.
+# 1024x1024 image). No host round-trip for the VAE.
 #
 # Run:
 #   HY_STEPS=8 HY_NUM_LAYERS=32 python_env/bin/python \
+#     models/experimental/hunyuan_image_3_0/demo/demo.py "a photo of a cat"
+#
+# Host PyTorch DiT (debug TT DiT bugs; slow ~20-30 min for 32 layers):
+#   HY_TORCH_BACKBONE=1 HY_STEPS=8 HY_NUM_LAYERS=32 python_env/bin/python \
 #     models/experimental/hunyuan_image_3_0/demo/demo.py "a photo of a cat"
 #
 # Optional recaption (off by default; slow — full forward per AR token):
@@ -84,6 +87,7 @@ SCALING = 0.562679178327931
 _DEMO_DIR = Path(__file__).resolve().parent
 _PKG_DIR = _DEMO_DIR.parent
 OUT_PNG = os.environ.get("HY_OUT", str(_PKG_DIR / "output.png"))
+SAVE_LATENT = os.environ.get("HY_SAVE_LATENT")  # optional .pt path to dump denoised latent
 
 # AR recaption (text-sampling loop) — off by default (upstream base bot_task=image).
 RECAPTION = os.environ.get("HY_RECAPTION", "0") != "0"
@@ -97,6 +101,9 @@ TEMPERATURE = float(os.environ.get("HY_TEMPERATURE", str(_SAMPLE_DEFAULTS.temper
 TOP_K = int(os.environ.get("HY_TOP_K", str(_SAMPLE_DEFAULTS.top_k)))
 TOP_P = float(os.environ.get("HY_TOP_P", str(_SAMPLE_DEFAULTS.top_p)))
 REP_PENALTY = float(os.environ.get("HY_REP_PENALTY", str(_SAMPLE_DEFAULTS.repetition_penalty)))
+
+# Debug: run denoise on host PyTorch reference instead of TT DiT.
+TORCH_DENOISE = os.environ.get("HY_TORCH_BACKBONE", os.environ.get("HY_DIT_HOST", "0")) == "1"
 
 _INDEX = WEIGHTS / "model.safetensors.index.json"
 # Persist pre-tilized mesh weights across runs (see README § Weight cache).
@@ -301,7 +308,10 @@ def _run_recaption(c, tok, proc, wte, prompt, generator):
 def main():
     t_start = time.time()
     t = t_start
-    print(f"[demo] prompt={PROMPT!r}  steps={STEPS}  layers={NUM_LAYERS}  guidance={GUIDANCE}  recaption={RECAPTION}")
+    print(
+        f"[demo] prompt={PROMPT!r}  steps={STEPS}  layers={NUM_LAYERS}  guidance={GUIDANCE}  "
+        f"recaption={RECAPTION}  torch_dit={TORCH_DENOISE}"
+    )
     c = _cfg()
     H = c["H"]
     down_sd, up_sd = _load_prefix("patch_embed"), _load_prefix("final_layer")
@@ -334,107 +344,165 @@ def main():
     print(f"[demo] seq_len={S} image_span={span} grid={grid}  (max_position_embeddings={c['MAX_SEQ']})")
     assert S <= c["MAX_SEQ"], f"seq_len {S} (image_size {image_size}) exceeds max_position_embeddings {c['MAX_SEQ']}"
 
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    # 2x2 mesh (full QB2): SP=axis0 / TP=axis1 layout. Phase 1 wires 4-way expert
-    # parallelism across BOTH axes (16 experts/device, ~19GB bf8) so the 80GB model
-    # fits; attention/dense stay replicated until the TP and SP phases land.
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), l1_small_size=32768)
-    try:
-        mesh_device.enable_program_cache()
-        ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    torch.manual_seed(SEED)
+    init_latent = torch.randn(1, LATENT, grid[0], grid[1])
 
-        def rep(t):
-            return ttnn.from_torch(
-                t,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
+    if TORCH_DENOISE:
+        from models.experimental.hunyuan_image_3_0.ref.host_denoise import HostDenoiseRunner, denoise_loop_host
+        from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import bundle_to_denoise_cond
 
-        # 2) text embeddings (on-device HunyuanTtWte) for cond/uncond rows.
-        wte_tt = HunyuanTtWte(
-            mesh_device,
-            wte,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        class _WeightLoader:
+            model_dir = WEIGHTS
+
+            @staticmethod
+            def load_prefix(prefix):
+                return _load_prefix(prefix)
+
+        cond = bundle_to_denoise_cond(bundle, wte, proc, row=0)
+        uncond = bundle_to_denoise_cond(bundle, wte, proc, row=1)
+        img_slice = cond["gen_slice"]
+        print(
+            f"[demo] denoising {STEPS} steps on host PyTorch "
+            f"(HY_TORCH_BACKBONE=1, CFG={GUIDANCE}, seq_len={S}) ...",
+            flush=True,
         )
-        emb = wte_tt.embedding_torch(ids)  # [2, S, H]
-
-        patch_embed = HunyuanTtUNetDown(
-            mesh_device,
-            {f"patch_embed.{k}": v for k, v in down_sd.items()},
-            in_channels=LATENT,
-            hidden_channels=HID,
-            out_channels=HSZ,
+        t0 = time.time()
+        runner = HostDenoiseRunner(
+            _WeightLoader(),
+            WEIGHTS,
+            num_layers=NUM_LAYERS,
+            down_sd=down_sd,
+            up_sd=up_sd,
+            model_cfg=c,
         )
-        final_layer = HunyuanTtUNetUp(
-            mesh_device,
-            {f"final_layer.{k}": v for k, v in up_sd.items()},
-            in_channels=HSZ,
-            hidden_channels=HID,
-            out_channels=LATENT,
-        )
-        backbone = _build_backbone(mesh_device, ccl, c, num_layers=NUM_LAYERS, apply_final_norm=False)
-        te1 = HunyuanTtTimestepEmbedder(
-            mesh_device, H, {f"time_embed.{k}": v for k, v in _load_prefix("time_embed").items()}, "time_embed"
-        )
-        te2 = HunyuanTtTimestepEmbedder(
-            mesh_device, H, {f"time_embed_2.{k}": v for k, v in _load_prefix("time_embed_2").items()}, "time_embed_2"
-        )
-        step = HunyuanTtDenoiseStep(
-            mesh_device,
-            patch_embed=patch_embed,
-            backbone=backbone,
-            final_layer=final_layer,
-            img_slice=span,
-            grid_hw=grid,
-            seq_len=S,
-        )
-
-        # Attention mask built entirely on device (TTNN ops, replicated across the mesh)
-        # — no host torch build + upload. Causal text + bidirectional image span.
-        mask_tt = build_attention_mask_tt(mesh_device, S, image_slices=[span], bsz=1, dtype=ttnn.bfloat16)
-        image_infos = [[(span, grid)]]
-
-        def cond_dict(row):
-            return dict(
-                text_pre=rep(emb[row : row + 1, : span.start, :]),
-                text_post=rep(emb[row : row + 1, span.stop :, :]),
-                image_infos=image_infos,
-                attention_mask=mask_tt,
-                batch=1,
-            )
-
-        cond, uncond = cond_dict(0), cond_dict(1)
-
-        torch.manual_seed(SEED)
-        init_latent = torch.randn(1, LATENT, grid[0], grid[1])
-
-        sched = HunyuanTtScheduler(mesh_device)
-        sched.set_timesteps(STEPS)
-        t = _mark("4_build_denoise_mesh_backbone", t)
-        print(f"[demo] denoising {STEPS} steps (CFG={GUIDANCE}) on resident backbone ...")
-        latent = denoise_loop(
-            step,
-            sched,
-            init_latent,
-            time_embed=te1,
-            time_embed_2=te2,
+        latent = denoise_loop_host(
+            runner,
+            init_latent=init_latent,
             cond=cond,
             uncond=uncond,
+            img_slice=img_slice,
+            steps=STEPS,
             guidance_scale=GUIDANCE,
-            mesh_device=mesh_device,
         )
-        print(f"[demo] denoised latent {tuple(latent.shape)}  (finite={bool(torch.isfinite(latent).all())})")
+        print(f"[demo] host denoise done ({time.time() - t0:.0f}s), latent {tuple(latent.shape)}")
         t = _mark("5_denoise_loop", t)
-    finally:
-        ttnn.close_mesh_device(mesh_device)
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    else:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+        # 2x2 mesh (full QB2): SP=axis0 / TP=axis1 layout. Phase 1 wires 4-way expert
+        # parallelism across BOTH axes (16 experts/device, ~19GB bf8) so the 80GB model
+        # fits; attention/dense stay replicated until the TP and SP phases land.
+        mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), l1_small_size=32768)
+        try:
+            mesh_device.enable_program_cache()
+            ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
-    # VAE decode on device (TTNN), H/W-spatial-parallel on the 2x2 mesh: H->axis0,
-    # W->axis1. Convs keep a neighbor-pad halo; GroupNorm/attention gather to full
-    # spatial. Shrinks the conv im2col 4x vs the replicated path.
+            def rep(t):
+                return ttnn.from_torch(
+                    t,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+
+            # 2) text embeddings (on-device HunyuanTtWte) for cond/uncond rows.
+            wte_tt = HunyuanTtWte(
+                mesh_device,
+                wte,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            emb = wte_tt.embedding_torch(ids)  # [2, S, H]
+
+            patch_embed = HunyuanTtUNetDown(
+                mesh_device,
+                {f"patch_embed.{k}": v for k, v in down_sd.items()},
+                in_channels=LATENT,
+                hidden_channels=HID,
+                out_channels=HSZ,
+            )
+            final_layer = HunyuanTtUNetUp(
+                mesh_device,
+                {f"final_layer.{k}": v for k, v in up_sd.items()},
+                in_channels=HSZ,
+                hidden_channels=HID,
+                out_channels=LATENT,
+            )
+            backbone = _build_backbone(mesh_device, ccl, c, num_layers=NUM_LAYERS, apply_final_norm=False)
+            te1 = HunyuanTtTimestepEmbedder(
+                mesh_device, H, {f"time_embed.{k}": v for k, v in _load_prefix("time_embed").items()}, "time_embed"
+            )
+            te2 = HunyuanTtTimestepEmbedder(
+                mesh_device,
+                H,
+                {f"time_embed_2.{k}": v for k, v in _load_prefix("time_embed_2").items()},
+                "time_embed_2",
+            )
+            step = HunyuanTtDenoiseStep(
+                mesh_device,
+                patch_embed=patch_embed,
+                backbone=backbone,
+                final_layer=final_layer,
+                img_slice=span,
+                grid_hw=grid,
+                seq_len=S,
+            )
+
+            # Attention mask built entirely on device (TTNN ops, replicated across the mesh)
+            # — no host torch build + upload. Causal text + bidirectional image span.
+            mask_tt = build_attention_mask_tt(mesh_device, S, image_slices=[span], bsz=1, dtype=ttnn.bfloat16)
+            image_infos = [[(span, grid)]]
+
+            def cond_dict(row):
+                return dict(
+                    text_pre=rep(emb[row : row + 1, : span.start, :]),
+                    text_post=rep(emb[row : row + 1, span.stop :, :]),
+                    image_infos=image_infos,
+                    attention_mask=mask_tt,
+                    batch=1,
+                )
+
+            cond, uncond = cond_dict(0), cond_dict(1)
+
+            sched = HunyuanTtScheduler(mesh_device)
+            sched.set_timesteps(STEPS)
+            t = _mark("4_build_denoise_mesh_backbone", t)
+            print(f"[demo] denoising {STEPS} steps (CFG={GUIDANCE}) on resident backbone ...")
+            latent = denoise_loop(
+                step,
+                sched,
+                init_latent,
+                time_embed=te1,
+                time_embed_2=te2,
+                cond=cond,
+                uncond=uncond,
+                guidance_scale=GUIDANCE,
+                mesh_device=mesh_device,
+            )
+            print(f"[demo] denoised latent {tuple(latent.shape)}  (finite={bool(torch.isfinite(latent).all())})")
+            t = _mark("5_denoise_loop", t)
+        finally:
+            ttnn.close_mesh_device(mesh_device)
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+    if SAVE_LATENT:
+        payload = {
+            "latent": latent.cpu().float(),
+            "prompt": PROMPT,
+            "seed": SEED,
+            "steps": STEPS,
+            "num_layers": NUM_LAYERS,
+            "guidance": GUIDANCE,
+            "image_size": image_size,
+            "grid": grid,
+            "scaling_factor": SCALING,
+        }
+        save_path = Path(SAVE_LATENT)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(payload, save_path)
+        print(f"[demo] saved latent -> {save_path.resolve()}", flush=True)
+
+    # VAE decode on device (TTNN), H/W-spatial-parallel on the 2x2 mesh.
     print("[demo] VAE decode (TTNN, on device, 2x2 H/W-spatial-parallel) ...")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     vae_mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2))
@@ -445,11 +513,11 @@ def main():
             vae_mesh,
             latent,
             scaling_factor=SCALING,
-            grid_hw=grid,  # rebuild the VAE for the actual latent grid (1024 -> 64x64)
+            grid_hw=grid,
             ccl_manager=vae_ccl,
             h_mesh_axis=0,
             w_mesh_axis=1,
-        )  # [1, 3, grid*16, grid*16] in [0,1]
+        )
     finally:
         ttnn.close_mesh_device(vae_mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
