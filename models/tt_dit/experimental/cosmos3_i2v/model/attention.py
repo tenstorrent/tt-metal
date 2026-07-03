@@ -364,13 +364,11 @@ class Cosmos3JointAttention(Module):
         norm_k: RMSNorm,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Project + norm + RoPE for one pathway. Returns (q, k, v) in [B, H_local, N, head_dim]."""
-        # ColParallelLinear: without parallel_config, each chip multiplies replicated input by its
-        # weight slice (no CCL). With parallel_config (fractured_tp=True), input is TP-fractured
-        # and the fused all_gather_minimal_matmul_async overlaps AG with the matmul.
-        _pc = self.parallel_config if getattr(self, "_fractured_tp", False) else None
-        q_11NF = proj_q(x_11NH, parallel_config=_pc)
-        k_11NF = proj_k(x_11NH, parallel_config=_pc)
-        v_11NF = proj_v(x_11NH, parallel_config=_pc)
+        # ColParallelLinear with parallel_config=None: each chip uses replicated input + its sharded
+        # weight slice → output is per-chip TP-fractured on out_features.
+        q_11NF = proj_q(x_11NH)
+        k_11NF = proj_k(x_11NH)
+        v_11NF = proj_v(x_11NH)
         if getattr(self, "_capture_pathway", False) and proj_q is self.to_q:
             # Fine-grained bisect: capture und proj outputs BEFORE split_heads/norm/RoPE.
             self._cap_x_und_in = ttnn.to_torch(ttnn.get_device_tensors(x_11NH)[0])
@@ -413,11 +411,6 @@ class Cosmos3JointAttention(Module):
         ttnn.deallocate(heads_11NF)
 
         if self._tp_factor() <= 1:
-            return out_fractured
-
-        if getattr(self, "_fractured_tp", False):
-            # TP-fractured residual: caller keeps the [1,1,N,hidden/tp] fractured output;
-            # the layer-level residual add works element-wise across TP devices.
             return out_fractured
 
         # All-gather on TP axis to replicate so the tt-symbiote-wrapped caller (host PyTorch

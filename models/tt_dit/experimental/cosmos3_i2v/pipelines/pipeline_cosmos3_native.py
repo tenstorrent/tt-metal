@@ -46,7 +46,6 @@ BH Galaxy 4x8 with TP=8 on axis 1 ✓.
 
 from __future__ import annotations
 
-import os as _os_pipe
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -56,8 +55,6 @@ import torch.nn as nn
 import ttnn
 from models.tt_dit.experimental.cosmos3_i2v.model_config import HF_REPO
 from models.tt_dit.experimental.cosmos3_i2v.pipelines.cosmos3_prompt import install_json_prompt_parsing
-
-_FRACTURED_TP = _os_pipe.environ.get("TT_COSMOS3_FRACTURED_TP") in ("1", "true", "True")
 
 if TYPE_CHECKING:
     from models.tt_dit.experimental.cosmos3_i2v.model.transformer import Cosmos3OmniTransformer as NativeTransformer
@@ -216,29 +213,11 @@ class NativeLayerProxy(nn.Module):
         und_shape = tuple(und_seq.shape)
         gen_shape = tuple(gen_seq.shape)
 
+        und_tt = self._to_tile_ttnn(und_seq, mesh_device)
+
         sp_factor = self._sp_factor
         sp_axis = self._sp_axis
         gen_seq_multiple = self._gen_seq_multiple
-
-        _frac_tp = _FRACTURED_TP and self._native_trunk.parallel_config.tensor_parallel.factor > 1
-        _tp_axis = self._native_trunk.parallel_config.tensor_parallel.mesh_axis if _frac_tp else None
-
-        if _frac_tp:
-            # TP-fractured upload: und_seq sharded on tp_axis only; sp_axis is replicated
-            # (und tokens are not SP-partitioned — text is short and replicated across SP).
-            und_host = und_seq.unsqueeze(0).unsqueeze(0)  # [1, 1, N_und, hidden]
-            _und_dims = [None, None]
-            _und_dims[_tp_axis] = -1
-            und_tt = ttnn.from_torch(
-                und_host,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=_und_dims),
-            )
-        else:
-            und_tt = self._to_tile_ttnn(und_seq, mesh_device)
 
         # The ring SDPA masks the padded gen boundary only at k_chunk granularity, so a
         # gen sequence whose length isn't a multiple of k_chunk_size corrupts attention
@@ -256,42 +235,8 @@ class NativeLayerProxy(nn.Module):
                 )
                 raise ValueError(msg)
 
-        if _frac_tp and sp_factor > 1:
-            # 2D shard: sp_axis → sequence dim -2, tp_axis → hidden dim -1.
-            n = gen_seq.shape[0]
-            pad_n = (-n) % gen_seq_multiple
-            if pad_n > 0:
-                import torch as _torch
-
-                gen_seq = _torch.nn.functional.pad(gen_seq, (0, 0, 0, pad_n))
-            pad_n_gen = pad_n
-            gen_host = gen_seq.unsqueeze(0).unsqueeze(0)  # [1, 1, N_gen_padded, hidden]
-            _gen_dims = [None, None]
-            _gen_dims[sp_axis] = -2
-            _gen_dims[_tp_axis] = -1
-            gen_tt = ttnn.from_torch(
-                gen_host,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=_gen_dims),
-            )
-        elif sp_factor > 1:
+        if sp_factor > 1:
             gen_tt, pad_n_gen = self._to_tile_ttnn_sharded(gen_seq, mesh_device, sp_axis, gen_seq_multiple)
-        elif _frac_tp:
-            gen_host = gen_seq.unsqueeze(0).unsqueeze(0)
-            _gen_dims = [None, None]
-            _gen_dims[_tp_axis] = -1
-            gen_tt = ttnn.from_torch(
-                gen_host,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=_gen_dims),
-            )
-            pad_n_gen = 0
         else:
             gen_tt = self._to_tile_ttnn(gen_seq, mesh_device)
             pad_n_gen = 0

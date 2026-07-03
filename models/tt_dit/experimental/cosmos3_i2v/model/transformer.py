@@ -214,15 +214,6 @@ class Cosmos3OmniTransformer(Module):
             if do_dump:
                 self._dump_layer_tensor(gen_seq, f"{per_layer_dir}/{trunk_tag}_layer_{i:02d}.pt")
 
-        import os as _os_frac
-
-        if _os_frac.environ.get("TT_COSMOS3_FRACTURED_TP") in ("1", "true", "True") and (
-            self.parallel_config.tensor_parallel.factor > 1
-        ):
-            tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-            und_seq = self.ccl_manager.all_gather_persistent_buffer(und_seq, dim=3, mesh_axis=tp_axis)
-            gen_seq = self.ccl_manager.all_gather_persistent_buffer(gen_seq, dim=3, mesh_axis=tp_axis)
-
         und_out = self.norm(und_seq)
         gen_out = self.norm_moe_gen(gen_seq)
 

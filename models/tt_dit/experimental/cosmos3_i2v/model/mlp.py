@@ -151,21 +151,16 @@ class Cosmos3VLTextMLP(Module):
     def _tp_axis(self) -> int:
         return self.parallel_config.tensor_parallel.mesh_axis
 
-    def forward(self, x_11NH: ttnn.Tensor, fractured_tp: bool = False) -> ttnn.Tensor:
-        """Replicated `[1, 1, N, hidden_size]` → replicated (or fractured when fractured_tp) output."""
-        # ColParallel with fused AG-MM when input is TP-fractured.
-        _pc = self.parallel_config if fractured_tp else None
-        h = self.fused_gate_up(x_11NH, parallel_config=_pc)
+    def forward(self, x_11NH: ttnn.Tensor) -> ttnn.Tensor:
+        """Replicated `[1, 1, N, hidden_size]` → replicated `[1, 1, N, hidden_size]`."""
+        # Fused gate+up + swiglu: per chip output is [1, 1, N, intermediate_size / tp].
+        h = self.fused_gate_up(x_11NH)
         # RowParallelLinear: partial-sum matmul + reduce-scatter on TP axis.
         # Result per chip: [1, 1, N, hidden_size / tp].
         out_fractured = self.down_proj(h)
         ttnn.deallocate(h)
 
         if self._tp_factor() <= 1:
-            return out_fractured
-
-        if fractured_tp:
-            # TP-fractured residual: return [1,1,N,hidden/tp]; layer-level add stays fractured.
             return out_fractured
 
         # All-gather on TP axis → replicated [1, 1, N, hidden_size] for the tt-symbiote caller.

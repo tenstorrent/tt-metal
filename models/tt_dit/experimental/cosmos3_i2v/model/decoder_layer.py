@@ -38,17 +38,13 @@ the reference's `forward(und_seq, gen_seq, rotary_emb)` where
 
 from __future__ import annotations
 
-import os
-
 import ttnn
 
 from ....layers.module import Module
-from ....layers.normalization import DistributedRMSNorm, RMSNorm
+from ....layers.normalization import RMSNorm
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from .attention import Cosmos3JointAttention
 from .mlp import Cosmos3VLTextMLP
-
-_FRACTURED_TP = os.environ.get("TT_COSMOS3_FRACTURED_TP") in ("1", "true", "True")
 
 
 def _default_parallel_config() -> DiTParallelConfig:
@@ -87,30 +83,13 @@ class Cosmos3VLTextMoTDecoderLayer(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
-        tp_axis = parallel_config.tensor_parallel.mesh_axis
-        tp_factor = parallel_config.tensor_parallel.factor
-
-        if _FRACTURED_TP and tp_factor > 1:
-            norm_kw = {
-                "embedding_dim": hidden_size,
-                "norm_eps": rms_norm_eps,
-                "norm_elementwise_affine": True,
-                "bias": False,
-                "mesh_axis": tp_axis,
-                "mesh_device": mesh_device,
-                "ccl_manager": ccl_manager,
-            }
-            NormClass = DistributedRMSNorm
-        else:
-            norm_kw = {
-                "embedding_dim": hidden_size,
-                "norm_eps": rms_norm_eps,
-                "norm_elementwise_affine": True,
-                "bias": False,
-                "mesh_device": mesh_device,
-                "dtype": dtype,
-            }
-            NormClass = RMSNorm
+        norm_kw = {
+            "norm_eps": rms_norm_eps,
+            "norm_elementwise_affine": True,
+            "bias": False,
+            "mesh_device": mesh_device,
+            "dtype": dtype,
+        }
         attn_kw = {
             "hidden_size": hidden_size,
             "head_dim": head_dim,
@@ -132,19 +111,13 @@ class Cosmos3VLTextMoTDecoderLayer(Module):
             "dtype": dtype,
         }
 
-        self.input_layernorm = NormClass(**norm_kw)
-        self.input_layernorm_moe_gen = NormClass(**norm_kw)
+        self.input_layernorm = RMSNorm(hidden_size, **norm_kw)
+        self.input_layernorm_moe_gen = RMSNorm(hidden_size, **norm_kw)
         self.self_attn = Cosmos3JointAttention(**attn_kw)
-        self.post_attention_layernorm = NormClass(**norm_kw)
-        self.post_attention_layernorm_moe_gen = NormClass(**norm_kw)
+        self.post_attention_layernorm = RMSNorm(hidden_size, **norm_kw)
+        self.post_attention_layernorm_moe_gen = RMSNorm(hidden_size, **norm_kw)
         self.mlp = Cosmos3VLTextMLP(**mlp_kw)
         self.mlp_moe_gen = Cosmos3VLTextMLP(**mlp_kw)
-
-        if _FRACTURED_TP and tp_factor > 1:
-            object.__setattr__(self.self_attn, "_fractured_tp", True)
-            self._fractured_tp = True
-        else:
-            self._fractured_tp = False
 
     def forward(
         self,
@@ -189,8 +162,8 @@ class Cosmos3VLTextMoTDecoderLayer(Module):
         mlp_und_in = self.post_attention_layernorm(residual_und)
         mlp_gen_in = self.post_attention_layernorm_moe_gen(residual_gen)
 
-        mlp_und_out = self.mlp(mlp_und_in, fractured_tp=self._fractured_tp)
-        mlp_gen_out = self.mlp_moe_gen(mlp_gen_in, fractured_tp=self._fractured_tp)
+        mlp_und_out = self.mlp(mlp_und_in)
+        mlp_gen_out = self.mlp_moe_gen(mlp_gen_in)
 
         und_out = ttnn.add(residual_und, mlp_und_out)
         gen_out = ttnn.add(residual_gen, mlp_gen_out)
