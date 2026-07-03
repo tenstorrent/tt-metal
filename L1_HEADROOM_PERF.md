@@ -113,6 +113,23 @@ output over the input → in-place; else → normal halo (never crash). Must han
 freed-input-lifetime safety carefully. Alternatives: over-allocate input at output size in the
 caller (deterministic reuse, costs L1 during input life); or gate in-place to guaranteed-overlap
 cases only.
+
+### ▶ DECISION (user-agreed 2026-07-03) + RESUME POINT
+**Session PAUSED here** (user disconnected). Agreed next step: implement the **graceful-fallback
+fix** — in-place halo activates only when the allocator actually places the output over the input
+(containment holds); otherwise fall back to normal halo instead of `TT_FATAL`. Never crash.
+Design care needed:
+- The containment check must be done on the ACTUAL allocated addresses and drive BOTH
+  `create_output_tensors` (whether to alias) and the factory (which program to build) consistently
+  — the factory can re-do the same `dst contains src` check so no state is stored.
+- **Freed-input-lifetime hazard:** `create_output_tensors` dealloc's the input before allocating
+  the output; if it then falls back to normal halo it must still be able to read the input data.
+  Verify nothing (output alloc, config-tensor alloc in l1_small) reuses the freed input region
+  before the kernel reads it — or restructure so the input isn't dealloc'd until containment is
+  confirmed (safer). This is the crux of the fix.
+Then: re-measure real-model in-place activation across BH models (it's far lower than the isolated
+−29..−34%), recalibrate the perf headroom, and continue workstreams A/B only where real headroom
+exists. Branch @ `2c2a05a7ff0`; tree clean; all pushed.
 | SDXL VAE (BH) | A: credit in-place in conv2d.cpp:618 → reduce DRAM slices / L1_FULL | TBD | — | — | 🔜 candidate | uses DRAM-interleaved conv tensors + huge spatial → likely auto-slices; needs device confirm + the code change |
 
 ### Workstream sequencing
