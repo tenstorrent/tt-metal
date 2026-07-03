@@ -511,12 +511,16 @@ tighten once real peak-L1 is measured.
 4. ✅ DONE (aacb4e1cdd8) `halo_gather_in_place.cpp` — faithful port (only include paths changed).
 5. ✅ DONE (aacb4e1cdd8) Factory in-place path `build_inplace_halo_program` (ProgramDescriptor).
 6. ✅ DONE (aacb4e1cdd8) Caller adaptation in `generic_pools` (skip dealloc/move when gate true).
-7. ⏳ IN PROGRESS Rigorous tests (§11). **WH: PASS** (commit 8f0f8effdd1) — 4 SAVE
-   height-sharded RM shapes × {avg,max} × {bf16,bf8_b out} = 16/16 **bitwise-exact**
-   in-place vs normal (incl. the fwd/rev-read edge shapes n8_112, n32_264); proven in-place
-   actually engaged. **Remaining:** wider edge matrix (partial/noop grids, wide untilize,
-   non-tile-multiple NHW, more SAVE shapes) and **Blackhole** (alignment class 1 / NoC-order
-   class 7 can be WH-clean but BH-broken).
+7. ⏳ IN PROGRESS Rigorous tests (§11). **WH: PASS** (commits 8f0f8effdd1, 5501d8a38c6) —
+   **9 SAVE height-sharded RM shapes × {avg,max} × {bf16,bf8_b out} = 36/36 bitwise-exact**
+   in-place vs normal (incl. fwd/rev-read edge shapes n8_112, n32_264, and stride-1). Proven
+   in-place engaged every case. **Partial-grid + NOOP-core coverage CONFIRMED** via the bf8_b
+   (tiled-output) variants (e.g. c256: 49 active / 8×7 rect / 7 noop) — exercises gotcha
+   classes 7/8 (partial-grid NOC coords + multicast/noop-release) and passes bitwise; bf16
+   variants all used the full 64-core grid. **Remaining:** wide untilize; even more SAVE
+   shapes if desired; and **Blackhole** (alignment class 1 / NoC-order class 7 can be WH-clean
+   but BH-broken). The factory has a grep-able grid-geometry `log_info` diagnostic (downgrade
+   to `log_debug` before PR).
 
 **Status:** the RM/height-sharded vertical slice is COMPLETE and WH-verified bitwise-exact.
 In-place halo silently auto-activates on the SAVE shapes and saves 28–96% of the input-shard
