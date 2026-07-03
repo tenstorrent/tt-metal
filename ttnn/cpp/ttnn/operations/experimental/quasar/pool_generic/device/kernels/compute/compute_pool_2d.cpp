@@ -14,6 +14,7 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "api/debug/ring_buffer.h"  // DEBUG pool compute-stall: ring-buffer markers (remove after)
 
 #define DEBUG_PRINT 0
 
@@ -187,7 +188,14 @@ void kernel_main() {
                  (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face))
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
+            // [DEBUG pool compute stall] Which call blocks the WFD/UPTW deadlock? Newest ring marker per
+            // thread: 0xC0FFEE10 -> out_cb.reserve_back (output CB full); 0xC0FFEE11 -> tile_regs_acquire
+            // (dest register busy); 0xC0FFEE12 -> curr_in_cb.wait_front (input starved — reader can't fill);
+            // 0xC0FFEE13 -> tile_regs_wait (math never committed the reduce). n/c_i/chunk give the position.
             if constexpr (!is_output_tiled) {
+                PACK((WATCHER_RING_BUFFER_PUSH(0xC0FFEE10u)));
+                PACK((WATCHER_RING_BUFFER_PUSH((uint32_t)n)));
+                PACK((WATCHER_RING_BUFFER_PUSH((uint32_t)c_i)));
                 out_cb.reserve_back(output_faces);
             }
             if constexpr (tilize_reconfig) {
@@ -196,8 +204,11 @@ void kernel_main() {
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
                 }
             }
+            MATH((WATCHER_RING_BUFFER_PUSH(0xC0FFEE11u)));
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
+                UNPACK((WATCHER_RING_BUFFER_PUSH(0xC0FFEE12u)));
+                UNPACK((WATCHER_RING_BUFFER_PUSH((uint32_t)chunk)));
                 curr_in_cb.wait_front(1);
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
@@ -210,6 +221,7 @@ void kernel_main() {
                 curr_in_cb.pop_front(1);
             }
             tile_regs_commit();
+            PACK((WATCHER_RING_BUFFER_PUSH(0xC0FFEE13u)));
             tile_regs_wait();
             if constexpr (is_output_tiled) {
                 // TILED output: accumulate sticks and perform tilization when needed.

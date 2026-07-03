@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import _nearest_y, is_blackhole, is_wormhole_b0, nearest_32
+from models.common.utility_functions import _nearest_y, is_blackhole, is_quasar, is_wormhole_b0, nearest_32
 from models.demos.vision.classification.resnet50.quasar.tt.ttnn_functional_resnet50_model_utils import is_blackhole_p100
 
 
@@ -849,7 +849,14 @@ class resnet50:
             layer_module="layer2_module4",
         )
 
-        reshard = is_blackhole()
+        # Quasar: block-shard layer3 like WH does. height_shard is already False here (block config, via
+        # is_blackhole()==False), but the WH block-input reshard below is gated on is_wormhole_b0() and
+        # skips Quasar, leaving the input height-sharded -> the 512->1024 conv keeps the full 1024-ch
+        # weight matrix per core (1 MB) and overflows the uint16_t DFB ring. Enable reshard_if_not_optimal
+        # so the op reshards the height-sharded input to the optimal block layout (grid-agnostic; the
+        # reshard_if_not_optimal path is the one BH uses here). Splitting output channels across the grid
+        # keeps the per-core weights DFB well under 1 MB.
+        reshard = is_blackhole() or is_quasar()
         height_shard = is_blackhole()
         if is_wormhole_b0():
             x = ttnn.experimental.quasar.to_memory_config(
@@ -918,7 +925,11 @@ class resnet50:
             layer_module="layer3_module6",
         )
 
-        reshard = False
+        # Quasar: same block-shard gap as layer3 (the WH/BH block-input reshards below skip Quasar).
+        # height_shard is already False (block config); enable reshard_if_not_optimal so the op reshards
+        # the input to the optimal block layout, keeping the 1024->2048 conv's per-core weights DFB
+        # under the uint16_t ring limit.
+        reshard = is_quasar()
         height_shard = False
 
         if is_wormhole_b0():
