@@ -84,7 +84,6 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     return sfpi::copysgn(y, x);
 }
 
-template <bool is_fp32_acc_to_dest_mode>
 sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // For negative numbers, we compute tanh(-x) = -tanh(x)
     sfpi::vFloat val = sfpi::abs(x);  // set positive
@@ -142,7 +141,7 @@ inline void calculate_tanh() {
             if constexpr (is_fp32_dest_acc_en) {
                 result = _sfpu_tanh_fp32_accurate_(val);
             } else {
-                result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
+                result = _sfpu_tanh_polynomial_(val);
                 result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
             }
 
