@@ -34,9 +34,6 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
     const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(a.device().arch(), operation_attributes.compute_kernel_config);
-
     uint32_t Wt = W / tile_width;
     uint32_t Ht = H / tile_height;
     TT_FATAL(Ht != 0 && Wt != 0, "Height and width in tiles must be non-zero (Ht={}, Wt={}, H={}, W={})", Ht, Wt, H, W);
@@ -201,12 +198,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings = std::move(compute_bindings),
         .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"NC", NC}, {"post_mul_scaler_bits", post_mul_scaler_bits}},
-        .hw_config = std::invoke([&]() -> ComputeHardwareConfig {
-            if (a.device().arch() == tt::ARCH::QUASAR) {
-                return ComputeGen2Config{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en};
-            }
-            return ComputeGen1Config{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en};
-        }),
+        .hw_config = ttnn::to_compute_hardware_config(a.device().arch(), operation_attributes.compute_kernel_config),
     };
 
     Group<KernelSpec> kernels = {reader, writer, compute};

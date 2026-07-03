@@ -182,18 +182,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                  DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
                 {{"Ht", Ht}, {"Wt", compute_Wt}, {"NC", 1u}, {"post_mul_scaler_bits", post_mul_scaler_bits}},
-            .hw_config = std::invoke([&]() -> ComputeHardwareConfig {
-                if (device->arch() == tt::ARCH::QUASAR) {
-                    return ComputeGen2Config{
-                        .math_fidelity = math_fidelity,
-                        .fp32_dest_acc_en = fp32_dest_acc_en,
-                        .dst_full_sync_en = dst_full_sync_en};
-                }
-                return ComputeGen1Config{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .dst_full_sync_en = dst_full_sync_en};
-            }),
+            .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
         };
     };
 

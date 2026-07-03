@@ -95,7 +95,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
 
     tt_metal::IDevice* device = &in0_buffer.mutable_device();
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+    [[maybe_unused]] auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
 
     if (fp32_dest_acc_en) {
@@ -471,22 +471,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         }),
     };
 
-    ComputeHardwareConfig compute_hw_config = std::invoke([&]() -> ComputeHardwareConfig {
-        if (device->arch() == tt::ARCH::QUASAR) {
-            return ComputeGen2Config{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = dst_full_sync_en,
-                .math_approx_mode = math_approx_mode,
-            };
-        }
-        return ComputeGen1Config{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode,
-        };
-    });
+    ComputeHardwareConfig compute_hw_config =
+        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config.value());
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group block-count CTA ----
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_blocks_per_core_group) {

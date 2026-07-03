@@ -1192,22 +1192,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         /*default_l1_acc=*/false,
         /*default_dst_full_sync_en=*/(params.is_large_kernel && return_indices) || indexes_32_bit);
 
-    ComputeHardwareConfig compute_hw = std::invoke([&]() -> ComputeHardwareConfig {
-        if (device_arch == tt::ARCH::QUASAR) {
-            return ComputeGen2Config{
-                .math_fidelity = get_math_fidelity(device_compute_kernel_config),
-                .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
-                .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config),
-                .math_approx_mode = false,
-            };
-        }
-        return ComputeGen1Config{
-            .math_fidelity = get_math_fidelity(device_compute_kernel_config),
-            .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
-            .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config),
-            .math_approx_mode = false,
-        };
-    });
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device_arch, device_compute_kernel_config);
 
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,

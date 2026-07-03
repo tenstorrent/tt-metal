@@ -130,7 +130,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
 
     const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+    [[maybe_unused]] auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     TT_FATAL(
@@ -611,22 +611,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 {"tilized_cb_second_reader_offset", 0u},
                 {"split_reader_cb_shared", 0u},
             },
-        .hw_config = std::invoke([&]() -> m2::ComputeHardwareConfig {
-            if (device->arch() == tt::ARCH::QUASAR) {
-                return m2::ComputeGen2Config{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .math_approx_mode = math_approx_mode,
-                };
-            }
-            return m2::ComputeGen1Config{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = dst_full_sync_en,
-                .math_approx_mode = math_approx_mode,
-            };
-        }),
+        .hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
     };
 
     // ---- Activation reader kernel ----

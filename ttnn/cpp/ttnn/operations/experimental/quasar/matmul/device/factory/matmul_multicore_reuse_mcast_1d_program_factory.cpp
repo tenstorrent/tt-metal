@@ -5737,22 +5737,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         m2::SemaphoreSpec{.unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = all_cores},
     };
 
-    m2::ComputeHardwareConfig compute_hw_config = std::invoke([&]() -> m2::ComputeHardwareConfig {
-        if (device->arch() == tt::ARCH::QUASAR) {
-            return m2::ComputeGen2Config{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = false,
-                .math_approx_mode = math_approx_mode,
-            };
-        }
-        return m2::ComputeGen1Config{
+    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
+        device->arch(),
+        ttnn::ComputeKernelConfig{
             .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = false,
             .math_approx_mode = math_approx_mode,
-        };
-    });
+            .fp32_dest_acc_en = fp32_dest_acc_en});
 
     // ---- in0 sender kernel CTAs (named) ----
     auto make_in0_sender_cta = [&](uint32_t core_has_output_block_work,
@@ -6758,22 +6748,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = CoreRangeSet(in1_mcast_receiver_cores_bounding_box)},
     };
 
-    m2::ComputeHardwareConfig compute_hw_config = std::invoke([&]() -> m2::ComputeHardwareConfig {
-        if (device->arch() == tt::ARCH::QUASAR) {
-            return m2::ComputeGen2Config{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = false,
-                .math_approx_mode = math_approx_mode,
-            };
-        }
-        return m2::ComputeGen1Config{
+    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
+        device->arch(),
+        ttnn::ComputeKernelConfig{
             .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = false,
             .math_approx_mode = math_approx_mode,
-        };
-    });
+            .fp32_dest_acc_en = fp32_dest_acc_en});
 
     // The in1 sender multicasts weights/bias over a dest rectangle whose start/end are swapped based
     // on in1_noc (below). The in1 sender/receiver writer kernels MUST issue NoC ops on that same NOC,
