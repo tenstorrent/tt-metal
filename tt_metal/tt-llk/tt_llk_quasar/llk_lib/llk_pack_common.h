@@ -126,57 +126,44 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
     // Wait for packer to finish to avoid breaking its current configuration
     TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
 
-    // This register specifies edge masking mode.
-    //  0x0 -> mask to 0
-    //  0x1 -> mask to -inf
-    cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK_MODE_RMW, 0x0);
+    cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK_MODE_RMW, ckernel::pack::EDGE_MASK_MODE_ZERO);
 
+    cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_ALL);
     // TODO: (RT) Clean this up using pack edge struct to match addresses
     //  Make it unified
     if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW)
     {
-        // This register specifies which datums will not have the mask applied
-        // The register is 16 bits, each bit corresponds to a datum in the 1x16 row in dest
-        // 0xFFFE below means datum[0] preserves its values, datums[1:15] = 0
-        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, 0xFFFF);
-        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0xFFFE);
+        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_EXCEPT_0);
 
-        // The registers below are 32 bits each, each 2 bits correspond to a row in a face
-        // each 2 bits specify the mask that will be applied (there are 4 masks possible)
-        // the registers below will have mask 01 applied to every row in the face
-        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x55555555);
-        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x55555555);
-        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x55555555);
-        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x55555555);
+        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_1);
+        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_1);
+        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_1);
+        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_1);
     }
     else
     {
-        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, 0xFFFF);
-
         if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
         {
-            // The below mask mean all datums in a row preserve their value
-            cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0x0000);
+            cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_NONE);
         }
         else
         {
-            // 0xFFFE below means datum[0] preserves its values, datums[1:15] = 0
-            cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0xFFFE);
+            cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_EXCEPT_0);
         }
 
         if (tensor_shape.face_r_dim < FACE_R_DIM)
         {
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x00010001);
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x00010001);
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x00010001);
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x00010001);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_ROW8_MASK_1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_ROW8_MASK_1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_ROW8_MASK_1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_ROW8_MASK_1);
         }
         else
         {
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x1);
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x1);
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x1);
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_MASK_1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_MASK_1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_MASK_1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_MASK_1);
         }
     }
 
@@ -195,14 +182,12 @@ inline void _llk_pack_reduce_mask_clear_()
     TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
 
     // Edge mask mode is disabled
-    // Mask0 is cleared to preserve values of all datums in a row
-    cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, 0x0000);
+    cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_NONE);
 
-    // All packer faces are set to point to Mask0, which preserves all datums
-    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x0);
-    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x0);
-    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x0);
-    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x0);
+    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
+    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
+    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
+    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
 
     // Stall until all config instructions are done
     TTI_STALLWAIT(p_stall::PACK0, 0, 0, p_stall::TRISC_CFG);

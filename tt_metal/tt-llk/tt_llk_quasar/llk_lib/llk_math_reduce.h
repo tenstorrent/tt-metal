@@ -72,7 +72,7 @@ inline void _llk_math_reduce_col_mop_config_(const TensorShape& tensor_shape)
         0,
         []
         {
-            // <<< Starting Point = 0: For num_faces > 1 && !narrow_tile >>> //
+            // <<< Starting Point = 0: For num_faces > 1 && num_faces_r_dim <= num_faces_c_dim >>> //
             if constexpr (RUN_FID_LOOPS)
             {
                 for (std::uint32_t fid_phase_idx = 0; fid_phase_idx < NUM_FIDELITY_PHASES; fid_phase_idx++)
@@ -83,7 +83,7 @@ inline void _llk_math_reduce_col_mop_config_(const TensorShape& tensor_shape)
             // This increments dest by 8 rows for face_r_dim <= 8, and 16 otherwise
             tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0x0>();
 
-            // <<< Starting Point = NUM_FIDELITY_PHASES + 1: For num_faces = 1 || narrow_tile >>> //
+            // <<< Starting Point = NUM_FIDELITY_PHASES + 1: For total_num_faces() == 1 || num_faces_c_dim < num_faces_r_dim >>> //
             if constexpr (RUN_FID_LOOPS)
             {
                 for (std::uint32_t fid_phase_idx = 0; fid_phase_idx < NUM_FIDELITY_PHASES; fid_phase_idx++)
