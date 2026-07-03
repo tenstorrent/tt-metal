@@ -1071,7 +1071,12 @@ class ModelArgs:
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
             default_sampling_force_argmax = {
-                "allow_force_argmax": False,
+                # Enable the in-trace argmax fast-path on non-Galaxy (e.g. single-chip P150) too.
+                # For greedy decode (temp=0 -> k=1) this routes to 1 all-gather + on-device argmax
+                # instead of the full sampling op (3 gathers + top-k + softmax + RNG over padded vocab),
+                # which dominates per-token decode latency on single-chip. Measured on P150 Llama-3.1-8B:
+                # ~22 -> ~38 t/s/u. Was previously Galaxy-gated only.
+                "allow_force_argmax": True,
                 "num_links": 1,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
