@@ -22,7 +22,7 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "llrt.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
-#include <internal/dispatch/dispatch_engine_cores.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "llrt/hal.hpp"
 #include "internal/tt-2xx/quasar/error_handling.h"
@@ -69,7 +69,7 @@ inline static CoreDescriptorSet GetAllCores(
     // `dispatch:` list (see dispatch_engine_cores). They are printable just like worker/eth/dram cores.
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
         const auto& soc_desc = cluster.get_soc_desc(device_id);
-        for (const auto& logical_core : internal::get_quasar_soc_dispatch_engine_logical_cores(soc_desc)) {
+        for (const auto& logical_core : detail::get_quasar_soc_dispatch_engine_logical_cores(soc_desc)) {
             all_cores.insert({{logical_core.x, logical_core.y}, CoreType::DISPATCH});
         }
     }

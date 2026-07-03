@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "hw/inc/internal/tt-2xx/quasar/dev_mem_map.h"
+#include "impl/context/metal_context.hpp"
 #include "llrt/rtoptions.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -50,6 +51,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     const experimental::KernelSpecName KERNEL_2{"kernel_2"};
     const experimental::KernelSpecName KERNEL_3{"kernel_3"};
 
+    const uint32_t result_base = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t dm_result_base = result_base + MEM_L1_UNCACHED_BASE;
+
     auto make_dm_kernel_spec = [](const experimental::KernelSpecName& id, uint32_t num_threads, uint32_t l1_addr) {
         return experimental::KernelSpec{
             .unique_id = id,
@@ -68,10 +73,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         };
     };
 
-    auto k0 = make_dm_kernel_spec(KERNEL_0, 2, MEM_L1_UNCACHED_BASE);
-    auto k1 = make_dm_kernel_spec(KERNEL_1, 2, MEM_L1_UNCACHED_BASE + sizeof(int));
-    auto k2 = make_dm_kernel_spec(KERNEL_2, 2, MEM_L1_UNCACHED_BASE + (2 * sizeof(int)));
-    auto k3 = make_dm_kernel_spec(KERNEL_3, 2, MEM_L1_UNCACHED_BASE + (2 * sizeof(int)));
+    auto k0 = make_dm_kernel_spec(KERNEL_0, 2, dm_result_base);
+    auto k1 = make_dm_kernel_spec(KERNEL_1, 2, dm_result_base + sizeof(int));
+    auto k2 = make_dm_kernel_spec(KERNEL_2, 2, dm_result_base + (2 * sizeof(int)));
+    auto k3 = make_dm_kernel_spec(KERNEL_3, 2, dm_result_base + (2 * sizeof(int)));
 
     experimental::WorkUnitSpec wu_core0{
         .name = "wu_core0",
@@ -114,10 +119,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> result_core_0(3, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, CoreCoord(0, 0), 0, sizeof(uint32_t) * 3, result_core_0);
+    tt_metal::detail::ReadFromDeviceL1(
+        dev, CoreCoord(0, 0), result_base, sizeof(uint32_t) * 3, result_core_0);
 
     std::vector<uint32_t> result_core_1(3, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, CoreCoord(1, 0), 0, sizeof(uint32_t) * 3, result_core_1);
+    tt_metal::detail::ReadFromDeviceL1(
+        dev, CoreCoord(1, 0), result_base, sizeof(uint32_t) * 3, result_core_1);
 
     ASSERT_EQ(result_core_0, (std::vector<uint32_t>{3, 7, 11}));
     ASSERT_EQ(result_core_1, (std::vector<uint32_t>{3, 7, 15}));

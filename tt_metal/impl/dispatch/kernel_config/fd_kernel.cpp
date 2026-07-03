@@ -20,7 +20,7 @@
 #include "prefetch.hpp"
 #include "impl/context/context_descriptor.hpp"
 // #include "impl/context/metal_context.hpp"
-#include <internal/dispatch/dispatch_engine_cores.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "kernels/kernel.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/debug/dprint_server.hpp>
@@ -326,7 +326,7 @@ KernelHandle FDKernel::configure_kernel_variant(
             device_->arch() == tt::ARCH::QUASAR,
             "Dispatch-engine FD kernels are only supported on Quasar (device {})",
             device_->id());
-        kernel_handle_ = internal::CreateDispatchEngineKernel(
+        kernel_handle_ = detail::CreateDispatchEngineKernel(
             *program_,
             path,
             CoreCoord(logical_core_.x, logical_core_.y),

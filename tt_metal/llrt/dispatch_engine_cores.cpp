@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <internal/dispatch/dispatch_engine_cores.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 
 #include <functional>
 #include <unordered_map>
@@ -20,7 +20,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt::tt_metal::internal {
+namespace tt::tt_metal::detail {
 
 std::vector<CoreCoord> get_quasar_soc_dispatch_engine_logical_cores(const metal_SocDescriptor& soc_desc) {
     const auto dispatch_noc0_cores = soc_desc.get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::NOC0);
@@ -268,4 +268,4 @@ DataMovementProcessor prefetch_dm_processor() { return DataMovementProcessor::RI
 
 DataMovementProcessor dispatch_dm_processor() { return DataMovementProcessor::RISCV_1; }
 
-}  // namespace tt::tt_metal::internal
+}  // namespace tt::tt_metal::detail

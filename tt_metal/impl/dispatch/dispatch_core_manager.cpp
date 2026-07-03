@@ -18,7 +18,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <internal/service/service_core_manager.hpp>
-#include <internal/dispatch/dispatch_engine_cores.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -246,7 +246,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
     this->dispatch_core_config_ = dispatch_core_config;
     for (ChipId device_id : env.get_cluster().all_chip_ids()) {
         if (env.get_cluster().arch() == tt::ARCH::QUASAR && env.get_rtoptions().get_fast_dispatch()) {
-            tt::tt_metal::internal::validate_quasar_dispatch_cores_for_fd(
+            tt::tt_metal::detail::validate_quasar_dispatch_cores_for_fd(
                 env, device_id, num_hw_cqs, dispatch_core_config);
         }
 
