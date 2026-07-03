@@ -11234,6 +11234,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "on a fresh branch so your working tree stays untouched. Planner-emitted demos are always in-place.",
     )
     popt.add_argument(
+        "--e2e-only",
+        action="store_true",
+        dest="e2e_only",
+        help="cc engine: skip ALL optimization — just measure + print the FULL-model end-to-end time (all "
+        "layers, trace-replay when a cached decode exists, else eager full-depth). Use to recover the "
+        "before/after full-model number if a prior run stopped/was killed before its AFTER bookend fired.",
+    )
+    popt.add_argument(
         "--sync-catalog",
         action="store_true",
         dest="sync_catalog",

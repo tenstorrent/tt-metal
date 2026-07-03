@@ -50,16 +50,19 @@ def warm_wall_ms(walls: Sequence[float]) -> float:
 
 
 _FORWARD_WALL_RE = re.compile(r"FORWARD_WALL_MS=([0-9]+\.?[0-9]*)")
+_PER_TOKEN_RE = re.compile(r"TRACE_PER_TOKEN_MS=([0-9]+\.?[0-9]*)")
+_TRACE_SKIP_RE = re.compile(r"TRACE_REPLAY_SKIPPED=")
 
 
-def forward_wall_ms(profiles_dir: str | Path, runs: int) -> float | None:
+def _scan_log_sentinel(pattern: re.Pattern, profiles_dir: str | Path, runs: int) -> float | None:
+    """Median (warm run) of the LAST match of `pattern` across each run's tracy log."""
     vals: list[float] = []
     for i in range(max(runs, 1)):
         lp = Path(profiles_dir) / ("run%d_tracy.log" % i)
         if not lp.is_file():
             continue
         try:
-            hits = _FORWARD_WALL_RE.findall(lp.read_text(errors="ignore"))
+            hits = pattern.findall(lp.read_text(errors="ignore"))
         except OSError:
             continue
         if hits:
@@ -68,6 +71,46 @@ def forward_wall_ms(profiles_dir: str | Path, runs: int) -> float | None:
         return None
     warm = vals[1:] if len(vals) > 1 else vals
     return round(median(warm), 4)
+
+
+def forward_wall_ms(profiles_dir: str | Path, runs: int) -> float | None:
+    return _scan_log_sentinel(_FORWARD_WALL_RE, profiles_dir, runs)
+
+
+def per_token_ms(profiles_dir: str | Path, runs: int) -> float | None:
+    """Clean per-token wall latency (ms) emitted by a trace-replay harness, or None if absent."""
+    return _scan_log_sentinel(_PER_TOKEN_RE, profiles_dir, runs)
+
+
+def decode_trace_status(profiles_dir: str | Path, runs: int) -> str:
+    """Generic detector: read the perf run log and classify the pipeline's decode path.
+
+    'traced'         -> a trace-capturable single-token step ran; per_token_ms is a clean number.
+    'repeat_prefill' -> trace-replay was attempted but skipped (no cached step) -> structural decode
+                        lever is the way to a clean per-token number for this model.
+    'off'            -> neither sentinel present (trace disabled or non-generative pipeline).
+    """
+    for i in range(max(runs, 1)):
+        lp = Path(profiles_dir) / ("run%d_tracy.log" % i)
+        if not lp.is_file():
+            continue
+        try:
+            text = lp.read_text(errors="ignore")
+        except OSError:
+            continue
+        if _PER_TOKEN_RE.search(text):
+            return "traced"
+        if _TRACE_SKIP_RE.search(text):
+            return "repeat_prefill"
+    return "off"
+
+
+def throughput(per_token_ms_val: float | None, batch_size: int) -> dict[str, float | None]:
+    """Derive GPU-comparable T/S/U + T/S from a per-token wall latency (ms)."""
+    if not per_token_ms_val or per_token_ms_val <= 0:
+        return {"tokens_per_sec_per_user": None, "tokens_per_sec": None}
+    tsu = round(1000.0 / per_token_ms_val, 4)
+    return {"tokens_per_sec_per_user": tsu, "tokens_per_sec": round(tsu * max(batch_size, 1), 4)}
 
 
 def host_overhead_bucket(buckets: Sequence[dict[str, Any]], device_ms: float) -> dict[str, Any]:
@@ -477,9 +520,15 @@ def tracy_tool(
         "count": churn_n,
         "pct_device": round(churn_ms / device_ms * 100.0, 1) if device_ms else 0.0,
     }
+    pt_ms = per_token_ms(profiles_dir, runs)
+    tput = throughput(pt_ms, batch_size)
     return {
         "wall_ms": wall_ms,
         "forward_wall_ms": forward_wall_ms(profiles_dir, runs),
+        "per_token_ms": pt_ms,
+        "tokens_per_sec_per_user": tput["tokens_per_sec_per_user"],
+        "tokens_per_sec": tput["tokens_per_sec"],
+        "decode_status": decode_trace_status(profiles_dir, runs),
         "device_ms": device_ms,
         "host_ms": host_ms,
         "host_fraction": round(host_ms / wall_ms, 4) if wall_ms else 0.0,
