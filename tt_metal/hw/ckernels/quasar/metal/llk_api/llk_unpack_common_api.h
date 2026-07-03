@@ -51,7 +51,15 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         bd_val.f.format = static_cast<std::uint8_t>(l1_data_format);
         bd_val.f.x_dim = ckernel::trisc::FACE_C_DIM;
         bd_val.f.y_dim = unpack_tile_face_r_dim[i];
-        bd_val.f.z_dim = unpack_tile_num_faces[i];
+        // [Local LLK bring-up fix — issue filed] Mirror of the pack-side fix in llk_pack_common_api.h:
+        // map {nf_r,nf_c} to a valid z via construct_tdma_desc's logic instead of copying total num_faces
+        // raw (z must be {1,4}). Input CBs are usually reprogrammed to z=1 by tilizeA_B_init so this side
+        // is normally masked, but fix it for correctness/consistency.
+        const ckernel::TensorShape unpack_ts = get_operand_tensor_shape(i);
+        bd_val.f.z_dim =
+            (unpack_ts.num_faces_r_dim == unpack_ts.num_faces_c_dim)
+                ? unpack_ts.total_num_faces()
+                : ckernel::trisc::compute_square_of_min(unpack_ts.num_faces_r_dim, unpack_ts.num_faces_c_dim);
 
         ckernel::trisc::_configure_buf_desc_table_(i, bd_val);
     }
