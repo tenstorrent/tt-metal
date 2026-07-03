@@ -515,6 +515,12 @@ class ttMLA:
         # variant at the same seq_len_local doesn't pick up a dimensionally-invalid program_config.
         if cfg is not None and cfg.get("num_heads") not in (None, self.num_heads):
             cfg = None
+        # Some of those configs are additionally q_lora_rank-specific: the 640 set's program_configs are
+        # dimensionally valid at Kimi's q_lora_rank (1536) but overflow the grid at GLM-5.1's (2048), even
+        # though both have 64 heads. When a config declares a q_lora_rank that doesn't match this model,
+        # fall back so a same-heads/same-seq variant doesn't pick up an invalid program_config.
+        if cfg is not None and cfg.get("q_lora_rank") not in (None, self.q_lora_rank):
+            cfg = None
         # The chunked-prefill 640 set is only dimensionally valid in chunked mode (e.g. wkv_b1/wkv_b2
         # are true batched per-head matmuls over the per-head SDPA output; the single-shot path applies
         # them to a batch=1 latent). Fall back to defaults when this ttMLA was not built for chunked.
