@@ -23,7 +23,7 @@ namespace ckernel::sfpu {
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vFloat a, r, s, f, w, y, scale, bias0, bias1, c0;
     sfpi::vFloat j, t, rcp, x0, x1, y0, tmp;
-    sfpi::vInt i, magic_seed, x_exp;
+    sfpi::vInt i, magic_seed, e, x_exp;
     sfpi::vMag m;
 
     // Calculate j = x * (2 * log2(e)), interleaved with a = abs(2*x), and i = round(abs(j)), clamped to [0, 255].
@@ -32,7 +32,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     a = x + x;
     // i = round(abs(j)), clamped to [0, 255].
     m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
-    i = sfpi::as<sfpi::vInt>(m);
+    i = m;
     j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
 
     a = sfpi::setsgn(a, 0);
@@ -48,7 +48,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     w = 0.5f;
     r = __builtin_rvtt_sfpmad(r.get(), f.get(), w.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
-    sfpi::vInt e = i + 126;
+    e = i + 126;
     r = r * s + f;
     scale = sfpi::setexp(sfpi::vConst0, e);
     bias0 = scale - w;

@@ -22,17 +22,18 @@ namespace ckernel::sfpu {
 // tanh(x): t = 0.5*expm1(abs(2*x)); sgn(x) * t / (t + 1)
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vFloat a, r, s, f, w, y, scale, bias0, bias1, c0;
-    sfpi::vFloat t, rcp, x0, x1, tmp, y0;
-    sfpi::vInt x_exp;
+    sfpi::vFloat j, t, rcp, x0, x1, tmp, y0;
+    sfpi::vInt i, e, x_exp;
+    sfpi::vMag m;
 
     // Calculate j = x * (2 * log2(e)), interleaved with a = abs(2*x), and i = round(abs(j)), clamped to [0, 255].
 
-    sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * 2 * log2(e)
+    j = x * sfpi::vConstFloatPrgm0;  // j = x * 2 * log2(e)
     a = x + x;
     // i = round(abs(j)), clamped to [0, 255].
-    sfpi::vMag m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
+    m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
+    i = m;
     j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
-    sfpi::vInt i = m;
 
     a = sfpi::setsgn(a, 0);
     f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
@@ -47,7 +48,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     w = 0.5f;
     r = __builtin_rvtt_sfpmad(r.get(), f.get(), w.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
-    sfpi::vInt e = i + 126;
+    e = i + 126;
     r = r * s + f;
     scale = sfpi::setexp(sfpi::vConst0, e);
     bias0 = scale - w;
