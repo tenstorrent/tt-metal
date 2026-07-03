@@ -50,7 +50,11 @@ _LONG_SEQ_LINEAR_DRAM_ROWS = 256
 # 512 subsampled frames (≈4096 mel): sharded LN persistent L1 clashes with decode-trace + T2U/vocoder.
 _LONG_AUDIO_RES_DRAM_THRESHOLD = 512
 # Query-block relative attention above this seq (avoids O(S²) L1 use).
-_ATTN_QUERY_CHUNK_THRESHOLD = 3072
+# Must stay <= 1024: the full [B,H,S,S] path loses bf16 precision as S grows — at S=2048 the
+# conformer speech-encoder output diverges from HF (PCC ~0.94 vs ~0.999 at 512/1024), which the
+# query-block path avoids (PCC 0.9996 at S=2048). The full path is validated only to S=1024, so
+# route everything larger through chunking. (Was 3072, which wrongly kept S=2048 on the full path.)
+_ATTN_QUERY_CHUNK_THRESHOLD = 1024
 _ATTN_QUERY_CHUNK = 512
 # Adapter self-attn (non-relative fused SDPA): smaller chunks above this seq avoid L1 CB clash
 # with decode-trace reservation at ~512 subsampled frames (input ≈4096 mel).

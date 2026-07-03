@@ -45,6 +45,7 @@ from typing import Any, TextIO
 import numpy as np
 import torch
 import ttnn
+from loguru import logger
 from transformers import AutoProcessor, AutoTokenizer
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -67,7 +68,16 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model impor
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 DEFAULT_LOG = OUTPUT_DIR / "perf_sweep.txt"
 STORY_SOURCE = _REPO_ROOT / "models/tt_transformers/tests/tale-of-two-cities.txt.bz2"
-LONG_AUDIO_WAV = OUTPUT_DIR / "long_speech_input.wav"
+LONG_AUDIO_WAV = OUTPUT_DIR / "long_speech_input_librispeech.wav"
+PREAMBLE_LONG_AUDIO_WAV = OUTPUT_DIR / "long_speech_input_preamble.wav"
+# Non-repeating English source for speech sweeps: distinct LibriSpeech utterances (same dataset the
+# whisper demo uses). The old repeated-preamble loop gave short, degenerate references (~26 words at
+# 512 mel), making WER hypersensitive to a couple of near-tie token flips; concatenating distinct
+# utterances yields a long, varied translation so the WER denominator grows and smooths out.
+LIBRISPEECH_DATASET = "hf-internal-testing/librispeech_asr_dummy"
+# S2ST WER refs: mel <= this use the preamble (its <1 s opening translates cleanly, so short refs
+# aren't degenerate); longer mel use LibriSpeech (coherent, non-repeating, long enough to be stable).
+S2ST_PREAMBLE_MAX_MEL = 128
 
 SRC_LANG = "eng"
 TGT_TRANSLATE = "hin"
@@ -126,37 +136,109 @@ def _mel_frame_count(processor: AutoProcessor, waveform: np.ndarray, sample_rate
     return int(audio["attention_mask"].sum().item())
 
 
+def _librispeech_long_audio(sample_rate: int) -> list[np.ndarray]:
+    """Distinct LibriSpeech-dummy utterances (fixed dataset order) as mono float32 at ``sample_rate``.
+
+    Non-repeating, coherent English read speech; ~481 s / ~24k mel frames total (≈6× the 4096 max).
+    """
+    from datasets import load_dataset
+
+    ds = load_dataset(LIBRISPEECH_DATASET, "clean", split="validation")
+    utts: list[np.ndarray] = []
+    for row in ds:
+        audio = row["audio"]
+        arr = np.asarray(audio["array"], dtype=np.float32)
+        src_sr = int(audio["sampling_rate"])
+        if src_sr != sample_rate:
+            # LibriSpeech dummy is already 16 kHz; resample defensively if a variant differs.
+            n_out = int(round(arr.shape[0] * sample_rate / src_sr))
+            arr = np.interp(
+                np.linspace(0.0, 1.0, n_out, endpoint=False),
+                np.linspace(0.0, 1.0, arr.shape[0], endpoint=False),
+                arr,
+            ).astype(np.float32)
+        if arr.size:
+            utts.append(arr)
+    if not utts:
+        raise RuntimeError(f"{LIBRISPEECH_DATASET} yielded no audio")
+    return utts
+
+
+def _preamble_long_audio(processor: AutoProcessor, sample_rate: int, min_mel_frames: int) -> np.ndarray:
+    """Loop the demo preamble WAV until it reaches ``min_mel_frames`` mel frames."""
+    preamble_path = demo_mod.ensure_demo_audio(dest=demo_mod.PREAMBLE_WAV)
+    chunk, _ = demo_mod._load_mono_wav_resampled(preamble_path, sample_rate)
+    if chunk.size == 0:
+        raise RuntimeError(f"Preamble audio at {preamble_path} is empty")
+    wav = chunk.copy()
+    while _mel_frame_count(processor, wav, sample_rate) < min_mel_frames:
+        wav = np.concatenate([wav, chunk])
+    return wav
+
+
 def ensure_long_audio(
     processor: AutoProcessor,
     sample_rate: int,
     *,
     min_mel_frames: int = SEQ_LEN_MAX,
-    dest: Path = LONG_AUDIO_WAV,
+    dest: Path | None = None,
+    source: str = "librispeech",
 ) -> tuple[np.ndarray, Path]:
-    """Build a mono 16 kHz waveform with at least ``min_mel_frames`` mel frames.
+    """Build a mono 16 kHz waveform with at least ``min_mel_frames`` mel frames, then cache it.
 
-    Uses the demo preamble WAV (fetched once by ``demo.ensure_demo_audio`` if missing) and
-    concatenates copies until the processor timeline is long enough, then caches ``dest``.
+    ``source``:
+      * ``"librispeech"`` (default) — concatenate *distinct* LibriSpeech-dummy utterances
+        (non-repeating English speech); falls back to the preamble loop if the dataset is
+        unavailable (offline CI).
+      * ``"preamble"`` — loop the demo preamble WAV (short, clean opening; used for the very short
+        sweep lengths where its truncated opening translates cleanly).
+
+    Each source caches to its own file so switching sources never reuses the other's audio.
     """
+    if dest is None:
+        dest = LONG_AUDIO_WAV if source == "librispeech" else PREAMBLE_LONG_AUDIO_WAV
     if dest.is_file() and dest.stat().st_size > 0:
         wav, _ = demo_mod._load_mono_wav_resampled(dest, sample_rate)
         if _mel_frame_count(processor, wav, sample_rate) >= min_mel_frames:
             return wav, dest
 
-    preamble_path = demo_mod.ensure_demo_audio(dest=demo_mod.PREAMBLE_WAV)
-    chunk, _ = demo_mod._load_mono_wav_resampled(preamble_path, sample_rate)
-    if chunk.size == 0:
-        raise RuntimeError(f"Preamble audio at {preamble_path} is empty")
-
-    wav = chunk.copy()
-    while _mel_frame_count(processor, wav, sample_rate) < min_mel_frames:
-        wav = np.concatenate([wav, chunk])
+    if source == "preamble":
+        wav = _preamble_long_audio(processor, sample_rate, min_mel_frames)
+    else:
+        try:
+            wav = np.zeros(0, dtype=np.float32)
+            for utt in _librispeech_long_audio(sample_rate):
+                wav = np.concatenate([wav, utt])
+                if _mel_frame_count(processor, wav, sample_rate) >= min_mel_frames:
+                    break
+            if _mel_frame_count(processor, wav, sample_rate) < min_mel_frames:
+                raise RuntimeError(f"{LIBRISPEECH_DATASET} exhausted before reaching {min_mel_frames} mel frames")
+        except Exception as e:  # dataset/network unavailable → keep the sweep working on the preamble loop
+            logger.warning(f"LibriSpeech long audio unavailable ({e}); falling back to repeated preamble")
+            wav = _preamble_long_audio(processor, sample_rate, min_mel_frames)
 
     demo_mod._save_wav(dest, wav, sample_rate=sample_rate)
     got = _mel_frame_count(processor, wav, sample_rate)
     if got < min_mel_frames:
         raise RuntimeError(f"Long audio has {got} mel frames, need >= {min_mel_frames}")
     return wav, dest
+
+
+# A Tale of Two Cities opens with this line; anchoring here skips the Project Gutenberg
+# header + title + CONTENTS/TOC boilerplate (degenerate for translation). ~30k chars is > 4096
+# tokens (~3.8 chars/token), so the sweep uses one CONSECUTIVE coherent span with NO repetition —
+# the old ``story[:4096]`` was the TOC boilerplate, looped, which produced degenerate translations.
+_STORY_PROSE_ANCHOR = "It was the best of times"
+_STORY_PROSE_MAX_CHARS = 30000
+
+
+def _story_prose_body(story: str) -> str:
+    """Coherent narrative body with the Gutenberg front matter / TOC stripped."""
+    i = story.find(_STORY_PROSE_ANCHOR)
+    if i < 0:
+        m = re.search(r"\*\*\* ?START OF TH(E|IS) PROJECT GUTENBERG[^\n]*\n", story)
+        i = m.end() if m else 0
+    return story[i : i + _STORY_PROSE_MAX_CHARS]
 
 
 def text_inputs_for_len(
@@ -166,9 +248,12 @@ def text_inputs_for_len(
     *,
     src_lang: str = SRC_LANG,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Tokenize ``story`` to exactly ``target_tokens`` source tokens."""
-    unit = story if len(story) <= 4096 else story[:4096]
-    return source_text_for_enc_len(processor, target_tokens, src_lang=src_lang, unit=unit + " ")
+    """Tokenize a coherent consecutive prose span (front matter stripped) to ``target_tokens`` tokens.
+
+    The prose body is > 4096 tokens, so ``source_text_for_enc_len`` trims to ``target_tokens`` from a
+    single non-repeating span (no degenerate looping).
+    """
+    return source_text_for_enc_len(processor, target_tokens, src_lang=src_lang, unit=_story_prose_body(story))
 
 
 def speech_inputs_for_len(

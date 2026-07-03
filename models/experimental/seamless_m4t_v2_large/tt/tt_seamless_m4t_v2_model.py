@@ -249,7 +249,11 @@ def _subsampled_lens_dev(attention_mask_2d: ttnn.Tensor, kernel_size: int, strid
     Formula: ``floor((real_len + 2 * pad - kernel) / stride) + 1`` with ``pad = kernel // 2``.
     """
     pad = kernel_size // 2
-    # Use uint32 → int32 → bf16 (direct uint32→bf16 typecast is incorrect on device).
+    # Use uint32 → int32 → float32 (direct uint32→float typecast is incorrect on device).
+    # float32 (not bf16): the on-device reduction accumulates in the mask dtype, and bf16's 8-bit
+    # mantissa cannot represent a sum of >256 ones exactly, so ``ttnn.sum`` returns an off-by-one
+    # count for long inputs (e.g. 2048 mel → 2058 instead of 2048), corrupting the subsampled length
+    # and the whole S2ST/S2TT/ASR encoder timeline. float32 is exact for counts up to 2**24.
     tile_u = (
         ttnn.to_layout(attention_mask_2d, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if attention_mask_2d.get_layout() != ttnn.TILE_LAYOUT
@@ -258,9 +262,9 @@ def _subsampled_lens_dev(attention_mask_2d: ttnn.Tensor, kernel_size: int, strid
     tile_i = ttnn.typecast(tile_u, ttnn.int32)
     if tile_u is not attention_mask_2d:
         ttnn.deallocate(tile_u)
-    mask_f = ttnn.typecast(tile_i, ttnn.bfloat16)
+    mask_f = ttnn.typecast(tile_i, ttnn.float32)
     ttnn.deallocate(tile_i)
-    real_count = ttnn.sum(mask_f, dim=1)  # [B] bf16 — count of 1s per row
+    real_count = ttnn.sum(mask_f, dim=1)  # [B] float32 — exact count of 1s per row
     ttnn.deallocate(mask_f)
     adj = ttnn.add(real_count, float(2 * pad - kernel_size), memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(real_count)
@@ -760,6 +764,63 @@ class TTSeamlessM4Tv2Model:
         self.t2u.release_forward_trace()
         self.vocoder.release_forward_trace()
         self.release_generation_runtime()
+
+    def vocode_units(
+        self,
+        vocoder_input_ids: "torch.Tensor",
+        tgt_lang: str,
+        speaker_id: int = 0,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Teacher-force the T2U: run ONLY the vocoder on pre-computed unit ids.
+
+        ``vocoder_input_ids`` must already be the *vocoder input* — eos/pad positions set to the
+        T2U pad id and real units shifted by ``-vocoder_offset`` (i.e. HF's ``unit_ids`` right before
+        ``self.vocoder(...)``, or TT's own ``vocoder_input``). Returns ``(wav_tt, lengths_tt)`` exactly
+        like the vocoder branch of ``generate(generate_speech=True)``, isolating vocoder fidelity from
+        the free-running T2U (text→units) divergence.
+        """
+        import torch as _torch
+
+        gc = self.generation_config
+        voc = _torch.as_tensor(vocoder_input_ids).to(_torch.int32)
+        if voc.dim() == 1:
+            voc = voc.unsqueeze(0)
+        vocoder_input = ttnn.from_torch(
+            voc,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        voc_id = int(gc.vocoder_lang_code_to_id[tgt_lang])
+        voc_tt = ttnn.full(
+            [1, 1],
+            float(voc_id),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        spk_tt = ttnn.full(
+            [1, 1],
+            float(int(speaker_id)),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Match generate()'s vocoder branch: drop decode/T2U programs for L1 headroom, keep vocoder prep.
+        self._clear_decode_and_t2u_programs(preserve_vocoder=True)
+        ttnn.synchronize_device(self.device)
+        wav_tt, lengths_tt = self.vocoder.forward(vocoder_input, spk_tt, voc_tt)
+        if len(tuple(lengths_tt.shape)) == 1:
+            lengths_tt = ttnn.reshape(lengths_tt, (1, int(lengths_tt.shape[0])))
+        ttnn.deallocate(vocoder_input)
+        ttnn.deallocate(voc_tt)
+        ttnn.deallocate(spk_tt)
+        self._release_speech_generate_runtime()
+        ttnn.synchronize_device(self.device)
+        return wav_tt, lengths_tt
 
     # ------------------------------------------------------------------
     # Internal pieces
