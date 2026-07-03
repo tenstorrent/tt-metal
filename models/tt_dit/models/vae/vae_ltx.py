@@ -154,6 +154,17 @@ class LTXCausalConv3d(Module):
         self._use_fused = (
             use_fused and self._needs_halo and (self.conv_config.halo_last or self.conv_config.force_spatial_parallel)
         )
+        # Halo-aware two-dispatch (neighbor_pad_halo -> conv3d halo mode): for the NP-light shapes that skip
+        # the fused op, avoid the full-pad interior copy by feeding conv3d the compact halo buffer directly.
+        # Valid only when ALL spatial padding is external (halo-exchanged) — i.e. both spatial axes' internal
+        # padding is 0 — so every conv boundary read maps to a halo section. Off via NP_NO_HALO_CONV.
+        self._use_halo_conv = (
+            self._needs_halo
+            and not self._use_fused
+            and self.internal_padding[1] == 0
+            and self.internal_padding[2] == 0
+            and os.environ.get("NP_NO_HALO_CONV") is None
+        )
         if self._use_fused:
             # Some shapes run fastest with a finer blocking on the fused op than the standalone-optimal
             # one in _BLOCKINGS; apply it only here, on the fused path, so standalone conv3d is untouched.
@@ -272,6 +283,9 @@ class LTXCausalConv3d(Module):
                 _get_w_mask(self._w_mask_cache, x_BTHWC, logical_w, self.parallel_config, self.mesh_device, self.dtype),
             )
 
+        # conv3d args set by the dispatch below (halo path fills halo_buffer + spatial conv_padding).
+        halo_buffer = None
+        conv_padding = self.internal_padding
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
@@ -317,18 +331,33 @@ class LTXCausalConv3d(Module):
                     compute_kernel_config=self.compute_kernel_config,
                 )
 
-            x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
-                x_BTHWC,
-                dims=dims,
-                pad_left=pad_left,
-                pad_right=pad_right,
-                padding_mode="zeros",
-                axes=axes,
-                neighbor_sems=neighbor_sems,
-                num_links=links,
-                logical_h=(logical_h if h_pad_needed else 0),
-                t_front_pad=0,
-            )
+            if self._use_halo_conv:
+                # Compact halo -> conv3d halo mode: conv does the spatial (external) padding by reading the
+                # neighbor's pixels from the halo buffer, skipping the full-pad interior copy.
+                halo_buffer = self.ccl_manager.neighbor_pad_halo_only(
+                    x_BTHWC,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    padding_mode="zeros",
+                )
+                conv_padding = (self.internal_padding[0], self.external_padding[1], self.external_padding[2])
+            else:
+                x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+                    x_BTHWC,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    padding_mode="zeros",
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    logical_h=(logical_h if h_pad_needed else 0),
+                    t_front_pad=0,
+                )
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -339,10 +368,11 @@ class LTXCausalConv3d(Module):
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
             stride=self.stride,
-            padding=self.internal_padding,
+            padding=conv_padding,
             padding_mode="zeros",
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
+            halo_buffer=halo_buffer,
         )
 
         return x_BTHWC

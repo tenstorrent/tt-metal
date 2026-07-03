@@ -446,6 +446,54 @@ class CCLManager:
             compute_kernel_config=compute_kernel_config,
         )
 
+    def neighbor_pad_halo_only(
+        self,
+        tensor: ttnn.Tensor,
+        *,
+        dims: list,
+        pad_left: list,
+        pad_right: list,
+        axes: list,
+        neighbor_sems: list,
+        num_links: list,
+        padding_mode: str = "zeros",
+    ) -> ttnn.Tensor:
+        """Fill and return the compact [H-top|H-bot|W-left|W-right] halo buffer via the standalone
+        neighbor_pad_halo op. Pair with ttnn.experimental.conv3d(halo_buffer=...) for the two-dispatch
+        halo-aware path (no full-pad interior copy). Mirrors neighbor_pad_conv3d_fused's param derivation."""
+        barrier_sem = self.get_barrier_semaphore(axes[0])
+        dim2 = dims[1] if len(dims) > 1 else None
+        padding2 = pad_left[1] if dim2 is not None else 0
+        halo_buf = self.get_np_halo_buffer(
+            tensor.shape, dims[0], pad_left[0], dtype=tensor.get_dtype(), dim2=dim2, padding2=padding2
+        )
+        pw = pad_left[1] if dim2 is not None and len(pad_left) > 1 else 0
+        w_sem = neighbor_sems[1] if len(neighbor_sems) > 1 else neighbor_sems[0]
+        np_pad2_left = pad_left[1] if dim2 is not None and len(pad_left) > 1 else 0
+        np_pad2_right = pad_right[1] if dim2 is not None and len(pad_right) > 1 else 0
+        np_pad_dim2_val = dim2 if dim2 is not None else 0
+        np_pad2_cluster_axis_val = axes[1] if dim2 is not None and len(axes) > 1 else 0
+        np_pad2_num_links = num_links[1] if dim2 is not None and len(num_links) > 1 else 1
+        ttnn.experimental.neighbor_pad_halo(
+            tensor,
+            halo_buf,
+            np_padding_h=pad_left[0],
+            np_padding_w=pw,
+            np_cluster_axis=axes[0],
+            np_num_links=num_links[0],
+            np_topology=self.topology,
+            h_neighbor_semaphore=neighbor_sems[0],
+            barrier_semaphore=barrier_sem,
+            w_neighbor_semaphore=w_sem,
+            np_pad_dim2=np_pad_dim2_val,
+            np_pad2_left=np_pad2_left,
+            np_pad2_right=np_pad2_right,
+            np_pad2_cluster_axis=np_pad2_cluster_axis_val,
+            np_pad2_num_links=np_pad2_num_links,
+            padding_mode=padding_mode,
+        )
+        return halo_buf
+
     def get_barrier_semaphore(self, mesh_axis):
         """
         Get semaphore for barrier operations.
