@@ -682,6 +682,7 @@ def main() -> None:
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         use_trace=USE_TRACE,
+        overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)

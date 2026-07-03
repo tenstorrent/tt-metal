@@ -65,6 +65,11 @@ class TtPrefillRuntimeConfig:
     # captured command stream carries no host transfers. Collapses the per-op host-dispatch (op2op) gaps.
     # Requires the mesh opened with trace_region_size > 0. Off by default (eager per-op dispatch).
     use_trace: bool = False
+    # MoE shared-expert ∥ dispatch overlap. Keeps the optimization ON by default, but it loads/clears a
+    # 2-sub-device manager around each MoE layer — which forces the segmented trace to split there, adding
+    # ~2*(MoE layers) host load/clear round-trips per replay. Set False (PREFILL_OVERLAP_SHARED_EXPERT=0) to
+    # capture the forward as ONE trace segment (no per-chunk swaps -> faster replay); costs the overlap.
+    overlap_shared_expert_with_dispatch: bool = True
 
     @property
     def sp_factor(self) -> int:
@@ -183,6 +188,7 @@ class TtPrefillRuntime:
             first_layer_idx=self.config.first_layer_idx,
             is_first_rank=self.config.is_first_rank,
             is_last_rank=self.config.is_last_rank,
+            overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
         )
         self.model_built = True
 

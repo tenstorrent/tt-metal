@@ -130,6 +130,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             kv_only_last_layer=params.kv_only_last_layer,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
             use_trace=params.use_trace,
+            overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,
