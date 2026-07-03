@@ -673,8 +673,13 @@ def run_decoder_layer_prefill_update_cache_tt(
     # by the same env var as decode.
     mlp_compute_kernel_config = None
     if os.environ.get("GLM4_MOE_LITE_MOE_FP32_ACC", "").strip() == "1":
+        # WH: HiFi4+fp32-accum HW bug -> HiFi3 is faster and more accurate (ttnn warns to prefer
+        # HiFi3 w/ fp32 accum on WH). BH keeps HiFi4 (genuinely higher precision; production path).
+        from models.common.utility_functions import is_wormhole_b0
+
+        _fp32_fidelity = ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4
         mlp_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=_fp32_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,

@@ -243,8 +243,14 @@ class Glm4RuntimeConfig:
     def mlp_compute_kernel_config(self) -> ttnn.WormholeComputeKernelConfig:
         """Compute kernel config for MLP/router matmuls."""
         if self.moe_fp32_acc:
+            # On Wormhole, HiFi4 + fp32 accumulation hits a HW bug that makes it both slower and
+            # *less* accurate than HiFi3 (ttnn warns to prefer HiFi3 w/ fp32 accum on WH). Keep
+            # HiFi4 on Blackhole where it is genuinely higher precision (BH production path).
+            from models.common.utility_functions import is_wormhole_b0
+
+            fp32_fidelity = ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4
             return ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_fidelity=fp32_fidelity,
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=False,
