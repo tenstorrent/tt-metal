@@ -84,7 +84,35 @@ config change, new µs, verdict win/loss/noise, why)_
 
 | trace | lever | headroom? | before | after | verdict | notes |
 |---|---|---|---|---|---|---|
-| UFLD-v2 HS convs (BH) | B: enable act/weights double-buffer (+act_block_h, +packer_l1_acc) | TBD | — | — | ⏳ optimizer running | double-buffer OFF on height-sharded convs today |
+| UFLD-v2 HS convs (BH) | B: enable act/weights double-buffer | N/A | — | — | ⛔ BLOCKED | see CRITICAL bug below; also in-place DECLINES at all UFLD HS convs (no headroom) — activates only at 1 block-sharded conv |
+
+## ⛔ CRITICAL: in-place halo full-model robustness bug (found 2026-07-03)
+Running the **full UFLD-v2 model** on BH deterministically `TT_FATAL`s in the in-place-halo
+containment backstop (`halo_device_operation.cpp:154`): the L1 allocator placed the output
+shard `[1472704,1522176)` (49472 B) so it does NOT contain the freed input shard
+`[1530880,1548288)` (17408 B) — the input overhangs by 26112 B. **Root cause:** the aliasing
+assumes `create_output_tensors` dealloc-then-`create_device_tensor` lands the (larger) output
+*over* the freed input (top-down reuse). In a **fragmented full-model free-list** the allocator
+picks a different, larger free block → no overlap → the backstop fires (safe: caught, no
+corruption, but crashes the model). Confirmed repro (with & without profiler; input is
+allocated at input size 17408, output needs 49472 → different block).
+
+**Why isolated tests missed it:** the pool/conv unit tests run as standalone ops on a CLEAN
+free-list (input at top → dealloc+realloc reuses it). Full models fragment L1 → the assumption
+breaks. This is exactly the "subtle, only-under-specific-conditions" hazard flagged at project
+start — surfaced on BH in a real model.
+
+**Consequences:** (1) in-place halo (auto-activates for conv2d/pool) can crash real BH models →
+correctness fix required before the perf effort can run any model. (2) Real-model headroom is
+much smaller than the isolated −29..−34%: in UFLD-v2 in-place ACTIVATES at only ONE conv (a
+block-sharded layer) and DECLINES at every height-sharded target → workstream B's premise is
+largely void there.
+
+**Fix direction (recommended): opportunistic graceful fallback** — if the allocator places the
+output over the input → in-place; else → normal halo (never crash). Must handle the
+freed-input-lifetime safety carefully. Alternatives: over-allocate input at output size in the
+caller (deterministic reuse, costs L1 during input life); or gate in-place to guaranteed-overlap
+cases only.
 | SDXL VAE (BH) | A: credit in-place in conv2d.cpp:618 → reduce DRAM slices / L1_FULL | TBD | — | — | 🔜 candidate | uses DRAM-interleaved conv tensors + huge spatial → likely auto-slices; needs device confirm + the code change |
 
 ### Workstream sequencing
