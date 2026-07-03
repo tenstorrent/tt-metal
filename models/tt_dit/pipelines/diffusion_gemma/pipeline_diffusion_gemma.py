@@ -237,6 +237,20 @@ class DiffusionGemmaPipeline:
             final_logit_softcapping=text_cfg.final_logit_softcapping,
             mesh_device=mesh_device,
         )
+        # ``lm_head`` is HF-tied to ``model.decoder.embed_tokens.weight`` and HF may not emit
+        # both keys separately (state_dict de-dupes tied groups). Our ``DiffusionGemmaForBlockDiffusion.
+        # _prepare_torch_state`` normally synthesizes ``lm_head.weight`` from the decoder embed
+        # key, but we're about to strip that. Synthesize now from whichever tied source is
+        # present so lm_head still gets loaded.
+        if "lm_head.weight" not in hf_state:
+            for src in (
+                "model.decoder.embed_tokens.weight",
+                "model.encoder.language_model.embed_tokens.weight",
+            ):
+                if src in hf_state:
+                    hf_state["lm_head.weight"] = hf_state[src]
+                    break
+
         # Strip the decoder-prefixed layer/norm/embed keys from the state dict — the decoder's
         # shared submodules will be loaded via the encoder prefix, and re-loading via the
         # decoder prefix would try to re-allocate the same tensors.
