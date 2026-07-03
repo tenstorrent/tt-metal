@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_wormhole_b0
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.mistral_24b.vision_pixtral_transformer import TtPixtralTransformer
@@ -32,6 +32,7 @@ from models.tt_transformers.tt.multimodal.mistral_24b.vision_pixtral_transformer
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "num_command_queues": 1}],
     indirect=True,
 )
+@skip_for_wormhole_b0("Circular buffer region clashes with L1 buffers on T3K, refs #47960")
 def test_image_transformer_inference(batch, num_chunks, mesh_device):
     pcc_required = 0.99
 
