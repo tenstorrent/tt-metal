@@ -114,6 +114,12 @@ inline bool RiscEnabled(
     return processors.contains(core_type, risc_index);
 }
 
+// Quasar DevicePrintMemoryLayout (tt_metal/hw/inc/internal/tt-2xx/quasar/device_print_mem.h) lays out two
+// contiguous sub-buffers: buffer_triscs (buffer_size_triscs) then buffer_dms (buffer_size_dms). The host
+// DPRINT server must use the same split when locating compute vs DM print regions in L1.
+constexpr uint16_t kQuasarDprintComputeSubbufferSize = 3264;  // buffer_size_triscs
+constexpr uint16_t kQuasarDprintDmSubbufferSize = 1632;       // buffer_size_dms
+
 // A null stream for when the print server is muted.
 class NullBuffer : public std::streambuf {
 public:
@@ -223,36 +229,41 @@ public:
                 programmable_core_type, static_cast<uint32_t>(HalProcessorClassType::DM)));
             const uint16_t compute_count = static_cast<uint16_t>(hal.get_processor_types_count(
                 programmable_core_type, static_cast<uint32_t>(HalProcessorClassType::COMPUTE)));
-            const uint16_t compute_size = 3264;
-            const uint16_t dm_size = 1632;
             TT_FATAL(
-                static_cast<uint32_t>(compute_size) + dm_size == structure_size,
+                static_cast<uint32_t>(kQuasarDprintComputeSubbufferSize) + kQuasarDprintDmSubbufferSize ==
+                    structure_size,
                 "Quasar TENSIX DPRINT buffer split (compute {} + DM {}) doesn't match region size {}",
-                compute_size,
-                dm_size,
+                kQuasarDprintComputeSubbufferSize,
+                kQuasarDprintDmSubbufferSize,
                 structure_size);
             return {
-                make_buffer(structure_address, compute_size, compute_count, dm_count),
-                make_buffer(structure_address + compute_size, dm_size, dm_count, 0),
+                make_buffer(
+                    structure_address, kQuasarDprintComputeSubbufferSize, compute_count, dm_count),
+                make_buffer(
+                    structure_address + kQuasarDprintComputeSubbufferSize,
+                    kQuasarDprintDmSubbufferSize,
+                    dm_count,
+                    0),
             };
         }
 
         // Quasar dispatch-engine cores run DM-only firmware (COMPILE_FOR_DM), but the on-device
         // DevicePrintMemoryLayout still reserves the TRISC sub-buffer first, so the DM print buffer
-        // (the one get_device_print_buffer() returns) lives at structure_address + compute_size. Only
-        // the DM sub-buffer is populated; mirror the DM half of the Quasar TENSIX split above.
+        // (the one get_device_print_buffer() returns) lives at structure_address +
+        // kQuasarDprintComputeSubbufferSize. Only the DM sub-buffer is populated; mirror the DM half of
+        // the Quasar TENSIX split above.
         if (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type == HalProgrammableCoreType::DISPATCH) {
             const uint16_t dm_count = static_cast<uint16_t>(hal.get_processor_types_count(
                 programmable_core_type, static_cast<uint32_t>(HalProcessorClassType::DM)));
-            const uint16_t compute_size = 3264;
-            const uint16_t dm_size = 1632;
             TT_FATAL(
-                static_cast<uint32_t>(compute_size) + dm_size == structure_size,
+                static_cast<uint32_t>(kQuasarDprintComputeSubbufferSize) + kQuasarDprintDmSubbufferSize ==
+                    structure_size,
                 "Quasar DISPATCH DPRINT buffer split (compute {} + DM {}) doesn't match region size {}",
-                compute_size,
-                dm_size,
+                kQuasarDprintComputeSubbufferSize,
+                kQuasarDprintDmSubbufferSize,
                 structure_size);
-            return {make_buffer(structure_address + compute_size, dm_size, dm_count, 0)};
+            return {make_buffer(
+                structure_address + kQuasarDprintComputeSubbufferSize, kQuasarDprintDmSubbufferSize, dm_count, 0)};
         }
 
         const uint16_t num_processors = static_cast<uint16_t>(hal.get_num_risc_processors(programmable_core_type));
