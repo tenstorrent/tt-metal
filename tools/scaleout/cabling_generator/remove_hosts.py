@@ -59,11 +59,12 @@ def validate_build_dir(build_dir):
     return build_dir
 
 
-def resolve_input_file(name, raw_path):
-    """Resolve an input path to an absolute, existing regular file (normalizes traversal)."""
+def resolve_input_path(name, raw_path, *, allow_dir=False):
+    """Resolve an input path to an absolute, existing file (or dir) (normalizes traversal)."""
     resolved = Path(raw_path).resolve()
-    if not resolved.is_file():
-        print(f"Error: {name} not found or not a regular file: {raw_path}", file=sys.stderr)
+    if not (resolved.is_file() or (allow_dir and resolved.is_dir())):
+        expected = "a regular file or directory" if allow_dir else "a regular file"
+        print(f"Error: {name} not found or not {expected}: {raw_path}", file=sys.stderr)
         sys.exit(1)
     return str(resolved)
 
@@ -140,8 +141,9 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # The C++ tool runs with cwd=repo_root, so pass absolute (resolved, existing) input paths.
-    cabling_path = resolve_input_file("cabling", args.cabling)
-    deployment_path = resolve_input_file("deployment", args.deployment)
+    # --cabling may be a file or a directory of descriptors to merge; --deployment is file-only.
+    cabling_path = resolve_input_path("cabling", args.cabling, allow_dir=True)
+    deployment_path = resolve_input_path("deployment", args.deployment)
 
     cmd = [
         str(cabling_gen),
