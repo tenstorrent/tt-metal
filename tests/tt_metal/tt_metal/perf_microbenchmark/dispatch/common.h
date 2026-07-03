@@ -35,7 +35,7 @@
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include <internal/dispatch/dispatch_engine_cores.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
 
 namespace tt::tt_metal::tt_dispatch_tests::Common {
@@ -960,31 +960,31 @@ static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::P
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 inline CoreCoord sd_prefetch_core(const tt_metal::IDevice* device) {
-    return tt::tt_metal::internal::sd_cq_prefetch_core(device);
+    return tt::tt_metal::detail::sd_cq_prefetch_core(device);
 }
 
 inline CoreCoord sd_spoof_prefetch_core(const tt_metal::IDevice* device) { return sd_prefetch_core(device); }
 
 inline CoreCoord sd_dispatch_core(const tt_metal::IDevice* device) {
-    return tt::tt_metal::internal::sd_cq_dispatch_core(device);
+    return tt::tt_metal::detail::sd_cq_dispatch_core(device);
 }
 
 inline CoreCoord dispatch_core(const tt_metal::IDevice* device) { return sd_dispatch_core(device); }
 
 inline CoreCoord sd_virtual_core(const tt_metal::IDevice* device, const CoreCoord& logical_core) {
-    return tt::tt_metal::internal::sd_cq_virtual_core(device, logical_core);
+    return tt::tt_metal::detail::sd_cq_virtual_core(device, logical_core);
 }
 
 inline tt::CoreType sd_cq_kernel_core_type(const tt_metal::IDevice* device) {
-    return tt::tt_metal::internal::resolve_sd_cq_kernel_core_type(device);
+    return tt::tt_metal::detail::resolve_sd_cq_kernel_core_type(device);
 }
 
 inline tt_metal::DataMovementProcessor prefetch_dm() {
-    return tt::tt_metal::internal::prefetch_dm_processor();
+    return tt::tt_metal::detail::prefetch_dm_processor();
 }
 
 inline tt_metal::DataMovementProcessor dispatch_dm() {
-    return tt::tt_metal::internal::dispatch_dm_processor();
+    return tt::tt_metal::detail::dispatch_dm_processor();
 }
 
 inline const tt_metal::DispatchMemMap& sd_dispatch_mem_map(const tt_metal::IDevice* device) {
@@ -1001,7 +1001,7 @@ inline tt_metal::KernelHandle create_sd_cq_kernel(
     const std::vector<uint32_t>& compile_args = {}) {
     const tt::CoreType core_type = sd_cq_kernel_core_type(device);
     if (device->arch() == tt::ARCH::QUASAR && core_type == tt::CoreType::DISPATCH) {
-        return tt::tt_metal::internal::CreateDispatchEngineKernel(
+        return tt::tt_metal::detail::CreateDispatchEngineKernel(
             program,
             kernel_path,
             logical_core,
@@ -1490,7 +1490,7 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
         {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
-        {"FD_CORE_TYPE", std::to_string(tt::tt_metal::internal::fd_core_type_define_value(device_))},
+        {"FD_CORE_TYPE", std::to_string(tt::tt_metal::detail::fd_core_type_define_value(device_))},
         {"IS_D_VARIANT", "1"},
         {"IS_H_VARIANT", "1"},
     };
@@ -1597,7 +1597,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"OFFSETOF_TO_DEV_ID", "1"},
         {"OFFSETOF_ROUTER_DIRECTION", "2"},
         {"DISPATCH_KERNEL", "1"},
-        {"FD_CORE_TYPE", std::to_string(tt::tt_metal::internal::fd_core_type_define_value(device))},
+        {"FD_CORE_TYPE", std::to_string(tt::tt_metal::detail::fd_core_type_define_value(device))},
         {"PREFETCH_Q_ENTRY_BITS", std::to_string(entry_size * 8)},
         // FABRIC_RELAY intentionally omitted - must be undefined for #if defined(FABRIC_RELAY) to be false
     };

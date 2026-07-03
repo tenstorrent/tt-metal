@@ -30,7 +30,7 @@
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "dispatch_core_common.hpp"
-#include <internal/dispatch/dispatch_engine_cores.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hal_types.hpp"
 #include "api/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
@@ -450,7 +450,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         const auto& hal = env.get_hal();
         if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
             const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
-            for (const auto& logical_dispatch_core : tt::tt_metal::internal::get_quasar_soc_dispatch_engine_logical_cores(
+            for (const auto& logical_dispatch_core : tt::tt_metal::detail::get_quasar_soc_dispatch_engine_logical_cores(
                      soc_d)) {
                 Core::Create(logical_dispatch_core, HalProgrammableCoreType::DISPATCH, *this, dump_data).Dump();
             }

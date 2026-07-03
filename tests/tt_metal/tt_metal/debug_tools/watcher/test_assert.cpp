@@ -29,7 +29,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "internal/tt-2xx/quasar/error_handling.h"
 #include "impl/debug/debug_helpers.hpp"
-#include <internal/dispatch/dispatch_engine_cores.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -186,7 +186,7 @@ static void RunTest(
                 log_info(LogTest, "Skipping: dispatch-engine programmable cores not available on this architecture.");
                 GTEST_SKIP();
             }
-            if (tt::tt_metal::internal::sd_cq_kernel_tests_should_skip(device)) {
+            if (tt::tt_metal::detail::sd_cq_kernel_tests_should_skip(device)) {
                 log_info(LogTest, "Skipping: soc descriptor has no dispatch-engine cores.");
                 GTEST_SKIP();
             }
@@ -197,10 +197,10 @@ static void RunTest(
                     "TT_METAL_TENSIX_DISPATCH_CORES).");
                 GTEST_SKIP();
             }
-            logical_core = tt::tt_metal::internal::dispatch_engine_core(device, 0);
-            virtual_core = tt::tt_metal::internal::dispatch_engine_virtual_core(device, 0);
+            logical_core = tt::tt_metal::detail::dispatch_engine_core(device, 0);
+            virtual_core = tt::tt_metal::detail::dispatch_engine_virtual_core(device, 0);
             const auto dm_processor = static_cast<DataMovementProcessor>(processor.processor_type);
-            assert_kernel = tt::tt_metal::internal::CreateDispatchEngineKernel(
+            assert_kernel = tt::tt_metal::detail::CreateDispatchEngineKernel(
                 program,
                 kernel,
                 logical_core,

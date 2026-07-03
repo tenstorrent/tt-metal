@@ -315,9 +315,9 @@ HalCoreInfoType create_dispatch_mem_map() {
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(1);
     processor_classes[0].reserve(NUM_DM_CORES);
-    for (size_t dm = 0; dm < NUM_DM_CORES; ++dm) {
+    for (unsigned long dispatch_dm_kernel_base : dispatch_dm_kernel_bases) {
         processor_classes[0].push_back({
-            .fw_base_addr = dispatch_dm_kernel_bases[dm],
+            .fw_base_addr = dispatch_dm_kernel_base,
             .local_init_addr = UINT32_MAX,
             .fw_launch_addr = 0x0,
             // DM firmware is linked/loaded at MEM_DM_FIRMWARE_BASE (main.ld); per-DM fw_base_addr is the

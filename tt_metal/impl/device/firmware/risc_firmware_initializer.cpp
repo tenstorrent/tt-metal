@@ -26,7 +26,7 @@
 #include "dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/topology.hpp"
-#include <internal/dispatch/dispatch_engine_cores.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/llrt.hpp"
@@ -416,7 +416,7 @@ void RiscFirmwareInitializer::assert_dispatch_cores(tt::ChipId device_id) {
         return;
     }
     for (const CoreCoord& logical_dispatch_core :
-         internal::get_quasar_soc_dispatch_engine_logical_cores(cluster_.get_soc_desc(device_id))) {
+         detail::get_quasar_soc_dispatch_engine_logical_cores(cluster_.get_soc_desc(device_id))) {
         CoreCoord virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
             device_id, logical_dispatch_core, CoreType::DISPATCH);
         cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
@@ -1380,7 +1380,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         dispatch_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
         for (const CoreCoord& logical_dispatch_core :
-             internal::get_quasar_soc_dispatch_engine_logical_cores(cluster_.get_soc_desc(device_id))) {
+             detail::get_quasar_soc_dispatch_engine_logical_cores(cluster_.get_soc_desc(device_id))) {
             CoreCoord virtual_dispatch_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_dispatch_core, CoreType::DISPATCH);
             dispatch_core_info.view().absolute_logical_x() = logical_dispatch_core.x;

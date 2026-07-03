@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <internal/dispatch/dispatch_engine_cores.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 
 #include <memory>
 #include <string>
@@ -16,7 +16,7 @@
 #include "impl/kernels/kernel_source.hpp"
 #include "impl/program/program_impl.hpp"
 
-namespace tt::tt_metal::internal {
+namespace tt::tt_metal::detail {
 
 KernelHandle CreateDispatchEngineKernel(
     Program& program,
@@ -34,4 +34,4 @@ KernelHandle CreateDispatchEngineKernel(
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::DISPATCH);
 }
 
-}  // namespace tt::tt_metal::internal
+}  // namespace tt::tt_metal::detail

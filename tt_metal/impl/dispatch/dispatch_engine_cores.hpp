@@ -25,7 +25,7 @@ class MetalEnvImpl;
 class Program;
 }  // namespace tt::tt_metal
 
-namespace tt::tt_metal::internal {
+namespace tt::tt_metal::detail {
 
 // Returns synthetic logical dispatch-engine cores CoreCoord(index, 0) from the ordered soc `dispatch:` list.
 std::vector<CoreCoord> get_quasar_soc_dispatch_engine_logical_cores(const metal_SocDescriptor& soc_desc);
@@ -51,11 +51,6 @@ CoreType resolve_dispatch_core_type(
     const metal_SocDescriptor& soc_desc,
     bool use_quasar_tensix_dispatch_cores);
 
-CoreType resolve_dispatch_core_type(
-    tt::tt_metal::MetalEnvImpl& env,
-    ChipId device_id,
-    const tt_metal::DispatchCoreConfig& dispatch_core_config);
-
 // Explicit DM pinning for dispatch-engine cq kernels (SD + FD).
 KernelHandle CreateDispatchEngineKernel(
     Program& program,
@@ -76,4 +71,4 @@ uint32_t fd_core_type_define_value(const tt::tt_metal::IDevice* device);
 DataMovementProcessor prefetch_dm_processor();
 DataMovementProcessor dispatch_dm_processor();
 
-}  // namespace tt::tt_metal::internal
+}  // namespace tt::tt_metal::detail

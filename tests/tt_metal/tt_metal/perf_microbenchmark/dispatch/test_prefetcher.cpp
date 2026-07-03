@@ -2619,7 +2619,7 @@ public:
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
         this->device_ = tt_metal::CreateDevice(0);
-        if (tt::tt_metal::internal::sd_cq_kernel_tests_should_skip(this->device_)) {
+        if (tt::tt_metal::detail::sd_cq_kernel_tests_should_skip(this->device_)) {
             GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
         }
 
