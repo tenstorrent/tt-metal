@@ -231,9 +231,19 @@ class Cosmos3JointAttention(Module):
         # scale — exp() on slightly-out-of-range logits saturates fast in bf16. fp32 destination
         # accumulation gives the softmax enough headroom; HiFi4 matches what diffusers uses
         # downstream for the attention math.
+        # The NaN was attributed to bf16 accumulation, not the math fidelity. fp32_dest_acc
+        # is kept unconditionally; TT_COSMOS3_SDPA_HIFI2=1 drops the QK/PV matmul fidelity to
+        # HiFi2 (~half the math cycles) to test whether HiFi4 is actually required for parity.
+        import os as _os_sdpa
+
+        _sdpa_fidelity = (
+            ttnn.MathFidelity.HiFi2
+            if _os_sdpa.environ.get("TT_COSMOS3_SDPA_HIFI2") in ("1", "true", "True")
+            else ttnn.MathFidelity.HiFi4
+        )
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=_sdpa_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
