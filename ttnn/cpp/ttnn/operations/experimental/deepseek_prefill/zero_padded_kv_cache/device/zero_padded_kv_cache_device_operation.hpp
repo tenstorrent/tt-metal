@@ -28,10 +28,12 @@ struct ZeroPaddedKvCacheDeviceOperation {
         //
         // Cache slot is linearized as users-outer, layers-inner: batch_idx = slot_idx*num_layers + layer_idx.
         // layer_idx is hashed (structural): one cached program per layer, reused across users/chunks.
-        // slot_idx and valid_global are per-call scalars held in common runtime args and patched on
-        // cache hits by override_runtime_arguments, so they stay out of the program hash.
-        uint32_t slot_idx;           // per-call (patched, not hashed)
-        uint32_t valid_global;       // per-call (patched, not hashed): # real tokens; window starts here
+        // slot_idx and valid_global are the per-call values for the SCALAR path (used only when no
+        // `metadata` tensor is supplied): common runtime args patched on cache hits, out of the program
+        // hash. On the METADATA path they are unused (0); the reader/writer read slot_idx (= metadata
+        // index 0) and valid_global (= actual_end = metadata index 2) on-device.
+        uint32_t slot_idx;           // scalar path only
+        uint32_t valid_global;       // scalar path only: # real tokens; window starts here
         uint32_t chunk_size_global;  // structural: block-cyclic chunk size (= sp_factor * chunk_local)
         uint32_t pad_align;          // structural: migration read alignment (128); window end = ceil
         uint32_t layer_idx;          // hashed (structural)
@@ -43,6 +45,14 @@ struct ZeroPaddedKvCacheDeviceOperation {
         // In-place: the op reads the boundary tile from the cache, masks it, and writes it back; the
         // full pad tiles are written from the L1 zeros buffer. No separate input tensor.
         const Tensor& cache;
+        // Optional traceable path. When set: two 1-element uint32 DRAM tensors (each replicated across
+        // the mesh, identical [1,1,1,1] layout) — the un-packed per-element views of the runner's
+        // h2d_socket_sync payload [slot_id, actual_start, actual_end]. `slot_idx` holds element 0 and
+        // `valid_global` holds element 2 (= actual_end). The reader/writer read element 0 of each
+        // tensor on-device (traceable path). When empty, the op uses the scalar `slot_idx`/`valid_global`
+        // attributes. Both are set together or both empty.
+        std::optional<Tensor> slot_idx;
+        std::optional<Tensor> valid_global;
     };
 
     using spec_return_value_t = TensorSpec;
@@ -99,8 +109,13 @@ struct ZeroPaddedKvCacheDeviceOperation {
 
 namespace ttnn::prim {
 
+// Unified primitive. The tensors select the path: when both `slot_idx_tensor` and
+// `valid_global_tensor` are set -> traceable on-device read of element 0 of each (the scalar args are
+// ignored, pass 0). Both empty -> scalar path using slot_idx/valid_global.
 ttnn::Tensor zero_padded_kv_cache(
     const ttnn::Tensor& cache,
+    const std::optional<ttnn::Tensor>& slot_idx_tensor,
+    const std::optional<ttnn::Tensor>& valid_global_tensor,
     uint32_t slot_idx,
     uint32_t layer_idx,
     uint32_t num_layers,

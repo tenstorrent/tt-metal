@@ -33,7 +33,9 @@ def _create_fabric_router_config(max_payload_size):
 # ---------------------------------------------------------------------------
 # Device / H2D-service setup
 # ---------------------------------------------------------------------------
-def open_mesh_device(mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0) -> ttnn.MeshDevice:
+def open_mesh_device(
+    mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0, trace_region_size: int = 0
+) -> ttnn.MeshDevice:
     """Configure fabric and open the mesh device.
 
     Default fabric is 1D for sp<=8, else 2D. PREFILL_FABRIC_MODE (1d|2d) overrides
@@ -41,7 +43,10 @@ def open_mesh_device(mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0)
     over 2D fabric, and set_fabric_config is one global config for the whole run.
 
     `l1_small_size` > 0 carves an L1_SMALL region (needed when an op routes its
-    semaphores there, e.g. the Kimi MoE routing all-gather with use_l1_small_for_semaphores)."""
+    semaphores there, e.g. the Kimi MoE routing all-gather with use_l1_small_for_semaphores).
+
+    `trace_region_size` > 0 reserves device DRAM for ttnn trace capture — needed when the runtime
+    replays a captured forward (TtPrefillRuntime use_trace). 0 = no trace region (default)."""
     sp = mesh_shape[0]
     fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
     if fabric_mode == "2d":
@@ -67,7 +72,9 @@ def open_mesh_device(mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0)
         ttnn.FabricManagerMode.DEFAULT,
         fabric_router_config,
     )
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size)
+    return ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size, trace_region_size=trace_region_size
+    )
 
 
 def make_global_spec(mesh_shape: tuple, chunk_size: int) -> ttnn.TensorSpec:

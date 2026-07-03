@@ -115,7 +115,19 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
-    std::optional<uint32_t> kv_actual_isl = std::nullopt);
+    std::optional<uint32_t> kv_actual_isl = std::nullopt,
+    // Trace-safe metadata path: when set (both together), the per-chunk scalars (kv_cache_batch_idx /
+    // kv_actual_isl / logical_n) are read on-device from these two 1-element uint32 DRAM tensors instead
+    // of being baked into the program, so one captured ttnn trace replays across chunks. slot_id holds
+    // the cache-user slot (was metadata[0]); kv_actual_isl_tensor holds the prior valid global KV length
+    // (was metadata[1]).
+    const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
+    // (user, layer)-major KV-cache batch dim (metadata path only). The readers compute the cache slot
+    // on-device as slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx (mirrors
+    // update_padded_kv_cache). Resolve to 1/0 when nullopt -> slot = slot_id[0] (existing behavior).
+    std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
 
 struct ExecuteExpRingJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
