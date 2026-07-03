@@ -15,16 +15,18 @@ install_hf_compat()
 
 from transformers import AutoModelForCausalLM  # noqa: E402
 
+HF_MODEL_ID = pl.HF_MODEL_ID
+
 PERF_MAX_NEW_TOKENS = int(os.environ.get("TT_PERF_MAX_NEW_TOKENS", "4"))
 PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
-# small representative prefill length — do NOT use the model's production/max seq under tracy.
-PERF_SEQ_LEN = int(os.environ.get("TT_PERF_SEQ_LEN", "128"))
 # perf-only depth cap: profile a few blocks so a deep model's marker stream (x mesh chips) does not
 # overflow / bloat the profiler; pipelines that read TT_PERF_LAYERS honor it, others ignore it. This
 # is set in-process here so ONLY the perf run is capped (the correctness/e2e gate runs the full model).
 os.environ.setdefault("TT_PERF_LAYERS", "2")
 
-HF_MODEL_ID = pl.HF_MODEL_ID
+# Perf caps: a SMALL representative sequence, NOT the model's production/max shape. Under tracy every
+# device op is instrumented, so a max-seq forward would stall the host in synchronize_device for minutes.
+PERF_SEQ = int(os.environ.get("TT_PERF_SEQ", "128"))
 
 
 def _compose():
@@ -39,31 +41,24 @@ def _load_hf():
     return model
 
 
-def _small_input_ids():
-    # small fixed prefill (valid low token ids); NOT the golden / max-seq input.
-    return (torch.arange(PERF_SEQ_LEN, dtype=torch.long) % 4096).unsqueeze(0)
-
-
-def test_main_perf():
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_main_perf(device_params, device):
     compose = _compose()
 
-    # 1) build the TTNN pipeline EXACTLY as the e2e test does (mesh + HF-sourced weights),
-    #    keeping ONLY the on-device forward — no golden load, no PCC.
-    dev, is_mesh = pl.open_pipeline_mesh(l1_small_size=24576)
+    # Build the TTNN pipeline EXACTLY as the e2e test does (hf = weight source for the on-device
+    # model, NOT a PCC reference). No torch/PCC comparison here — perf only.
     hf = _load_hf()
-    pipe = pl.build_pipeline(dev, hf, compose=compose)
-    eos = int(getattr(hf.config, "eos_token_id", 2))
-    print(
-        f"[perf] mesh={is_mesh} shape={list(dev.shape) if is_mesh else [1, 1]} "
-        f"shard_active={pipe.shard_active} compose={compose} seq_len={PERF_SEQ_LEN}",
-        flush=True,
-    )
+    pipe = pl.build_pipeline(device, hf, compose=compose)
+    _invocation.reset()
 
-    # 2) drain the device profiler every PERF_FLUSH_EVERY ops. MODEL-AGNOSTIC: wrap EVERY ttnn
-    #    operation (type 'FastOperation') across ttnn + its op submodules, so the flush counter
-    #    tracks TOTAL device dispatch for ANY op mix. A curated op list under-counts (sdpa/eltwise/
-    #    transpose/reduction slip through) and the 12000-marker buffer overflows on some device,
-    #    dropping ops -> non-reproducible device_ms. Wrapping by TYPE never misses an op.
+    vocab = int(getattr(hf.config, "vocab_size", 32000))
+    ids = torch.randint(0, vocab, (1, PERF_SEQ), dtype=torch.long)
+
+    # Drain the device profiler every PERF_FLUSH_EVERY ops. MODEL-AGNOSTIC: wrap EVERY ttnn
+    # operation (type 'FastOperation') across ttnn + its op submodules, so the flush counter
+    # tracks TOTAL device dispatch for ANY op mix. A curated op list under-counts (sdpa/eltwise/
+    # transpose/reduction slip through) and the 12000-marker buffer overflows on some device,
+    # dropping ops -> non-reproducible device_ms. Wrapping by TYPE never misses an op.
     counter = [0]
     _orig = []
 
@@ -73,7 +68,7 @@ def test_main_perf():
             counter[0] += 1
             if PERF_FLUSH_EVERY and counter[0] % PERF_FLUSH_EVERY == 0:
                 try:
-                    ttnn.ReadDeviceProfiler(dev)
+                    ttnn.ReadDeviceProfiler(device)
                 except Exception:
                     pass
             return r
@@ -88,24 +83,17 @@ def test_main_perf():
                 _orig.append((_mod, _n, _op))
                 setattr(_mod, _n, _draining(_op))
 
-    _invocation.reset()
-    ids = _small_input_ids()
     _fw0 = time.monotonic()
     try:
-        # bounded greedy decode: small prefill + PERF_MAX_NEW_TOKENS steps.
-        tt_new_ids, _tt_step_logits = pipe.generate(ids, PERF_MAX_NEW_TOKENS, eos_token_id=eos)
-        out = tt_new_ids
+        # Bounded forward: a single prefill pass over the small capped sequence.
+        out = pipe.forward_logits(ids)
         try:
-            ttnn.ReadDeviceProfiler(dev)
+            ttnn.ReadDeviceProfiler(device)
         except Exception:
             pass
     finally:
         for _mod, _n, _f in _orig:
             setattr(_mod, _n, _f)
-        try:
-            pl.close_pipeline_mesh(dev, is_mesh)
-        except Exception:
-            pass
 
     print("FORWARD_WALL_MS=%.4f" % ((time.monotonic() - _fw0) * 1000.0))
     assert out is not None  # perf only — NO PCC
