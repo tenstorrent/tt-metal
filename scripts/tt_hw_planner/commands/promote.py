@@ -85,6 +85,17 @@ def cmd_promote(args) -> int:
         )
         return 2
 
+    if (getattr(args, "engine", "cc") or "cc") == "cc":
+        from .._cli_helpers.bringup_cc import run_bringup_cc
+
+        banner(f"PROMOTE (cc engine) — harness loop on the per-component gate for {MODEL}")
+        return run_bringup_cc(
+            model_id=MODEL,
+            demo_dir=demo_dir,
+            agent_bin=(getattr(args, "auto_agent_bin", None) or "claude"),
+            mesh=getattr(args, "mesh", None),
+        )
+
     mem_fit_rc = _enforce_memory_fit_or_abort(
         MODEL,
         box_name=BOX,

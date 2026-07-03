@@ -26,10 +26,21 @@ def cmd_compat(args) -> int:
         tp_grid = args.tp_grid if args.tp_grid else None
         kernel_report = evaluate_kernels(probe.raw_config, tp_grid=tp_grid)
 
+    _chips = None
+    _mesh_arg = getattr(args, "mesh", None)
+    if _mesh_arg:
+        try:
+            _prod = 1
+            for _x in str(_mesh_arg).lower().split("x"):
+                _prod *= int(_x)
+            _chips = _prod
+        except Exception:
+            _chips = None
+
     if args.format == "json":
         print(render_compat_json(report, kernel_report))
     else:
-        print(render_compat_table(report, kernel_report, verbose=args.verbose))
+        print(render_compat_table(report, kernel_report, verbose=args.verbose, chips=_chips))
 
     if report.overall == "BLOCKED":
         return 2
