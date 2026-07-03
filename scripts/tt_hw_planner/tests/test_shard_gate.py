@@ -96,6 +96,32 @@ def test_termination_check_emits_shard_rung_when_flag_on(bmcp, monkeypatch):
     assert r["next_target"]["unit"] == "self_attn"
 
 
+def test_single_phase_fresh_shard_eligible_goes_straight_to_shard(bmcp, monkeypatch):
+    m, tmp = bmcp
+    monkeypatch.setenv("TT_HW_PLANNER_SHARD", "1")
+    monkeypatch.setattr(m, "_components", lambda: ["self_attn"])
+    r = m.termination_check()
+    assert r["can_stop"] is False
+    assert r["next_target"]["rung"] == "shard"
+    assert r["next_target"]["unit"] == "self_attn"
+
+
+def test_single_phase_flag_off_fresh_component_is_single_device(bmcp, monkeypatch):
+    m, tmp = bmcp
+    monkeypatch.delenv("TT_HW_PLANNER_SHARD", raising=False)
+    monkeypatch.setattr(m, "_components", lambda: ["self_attn"])
+    r = m.termination_check()
+    assert r["next_target"]["rung"] in ("emit", "repair")
+
+
+def test_single_phase_replicate_only_stays_single_device_when_tp_gt_1(bmcp, monkeypatch):
+    m, tmp = bmcp
+    monkeypatch.setenv("TT_HW_PLANNER_SHARD", "1")
+    monkeypatch.setattr(m, "_components", lambda: ["input_layernorm"])
+    r = m.termination_check()
+    assert r["next_target"]["rung"] in ("emit", "repair")
+
+
 def test_get_shard_plan_eligible_returns_guidance(bmcp):
     m, _ = bmcp
     p = m.get_shard_plan("self_attn")
