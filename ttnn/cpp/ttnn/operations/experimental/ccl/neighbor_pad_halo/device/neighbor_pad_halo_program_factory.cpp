@@ -1210,6 +1210,12 @@ void NpHaloMeshWorkloadFactory::override_runtime_arguments(
         hr[0] = input_addr;
         hr[1] = halo_buffer_addr;
         hr[2] = h_sem_addr;
+        // Mux path (H_SIGNAL_W_RECV): np_h_reader signals the H->W barrier from CRTA[3]. It ping-pongs
+        // per dispatch, so refresh it or a cache hit signals the prior barrier while the W-reader waits
+        // on the current one -> deadlock. Direct path has only 3 CRTA (np_writer owns the barrier).
+        if (hr.size() > 3) {
+            hr[3] = barrier_sem_addr;
+        }
 
         // --- NP H-fabric writer CRTA ---
         // CRTA[0] = input_addr, CRTA[1] = halo_buffer_addr, CRTA[2] = h_sem_addr,

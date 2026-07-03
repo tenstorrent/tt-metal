@@ -118,32 +118,11 @@ void kernel_main() {
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         pkt_hdr_sem, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, outer_dim_count});
 
-    // Startup barrier (2-device H-axis: 1-hop pairwise fully syncs). Without it, the W reader's H->W
-    // barrier (= this device's H-send done) can fire before the neighbor's incoming H lands, so the W
-    // reader snapshots stale H-section corners. Each sending worker incs the neighbor's barrier_sem at
-    // BOTH the same-dir and opp-dir H-worker cores (so the neighbor's non-sending edge worker is covered);
-    // every worker waits one inc per existing neighbor, then resets. Mirrors np_writer's W pairwise barrier.
-    auto pkt_hdr_bar = PacketHeaderPool::allocate_header();
-    fabric_unicast_noc_unicast_atomic_inc_set_state<
-        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-        pkt_hdr_bar, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1u});
-    volatile tt_l1_ptr uint32_t* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
-    if (has_neighbor && mux_connection_valid) {
-        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            &mux_connection, pkt_hdr_bar,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, barrier_sem, 0), 0});
-        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            &mux_connection, pkt_hdr_bar,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{safe_get_noc_addr(opp_bar_x, opp_bar_y, barrier_sem, 0), 0});
-    }
-    {
-        const uint32_t bwait = (is_first_chip ? 0u : 1u) + (is_last_chip ? 0u : 1u);
-        if (bwait > 0) {
-            noc_semaphore_wait_min(barrier_ptr, bwait);
-        }
-        noc_semaphore_set(barrier_ptr, 0);
-    }
+    // No startup barrier: it was a cross-device start-of-op sync needed when the writer signaled the H->W
+    // barrier on H-SEND (to make send~=recv). np_h_reader now signals that barrier AFTER its recv drains,
+    // so W corners already wait for real H-recv and the startup barrier is redundant.
+    (void)opp_bar_x;
+    (void)opp_bar_y;
 
     // Compact H-section layout: rows are [frame][pad_id][W], stride padding rows per frame. h_base already
     // includes this worker's outer_dim_start offset + the h_top/h_bot section base. Per frame the reader
