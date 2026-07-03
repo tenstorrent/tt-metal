@@ -1,0 +1,2 @@
+{"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find NOC coord + route host helpers","ts":"2026-07-03T03:29:18+00:00"}
+{"event":"fix_applied","summary":"Initial all_gather implementation: reader/writer kernels, program descriptor, op entry, registry decls","ts":"2026-07-03T03:45:56+00:00"}
