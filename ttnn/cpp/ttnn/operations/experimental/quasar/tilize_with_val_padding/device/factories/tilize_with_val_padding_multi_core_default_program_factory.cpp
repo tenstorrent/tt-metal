@@ -134,7 +134,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
 
     // ---- Compute (Metal 2.0 fork; full + cliff) ----
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
-        auto hw = ttnn::to_compute_hardware_config(
+        ComputeHardwareConfig hw = ttnn::to_compute_hardware_config(
             device->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_llk_acc});
         if (fp32_llk_acc) {
             std::visit(
