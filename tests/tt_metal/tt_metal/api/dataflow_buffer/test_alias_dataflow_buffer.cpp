@@ -115,14 +115,16 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
     const DataMovementHardwareConfig producer_cfg = std::invoke([&] {
         if (mesh_device->arch() == ARCH::QUASAR) {
             return DataMovementHardwareConfig{DataMovementGen2Config{
-                .disable_implicit_sync_for = {experimental::DFBSpecName{"dfb_a"}, experimental::DFBSpecName{"dfb_b"}}}};
+                .disable_dfb_implicit_sync_for = {
+                    experimental::DFBSpecName{"dfb_a"}, experimental::DFBSpecName{"dfb_b"}}}};
         }
         return DataMovementHardwareConfig{DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}};
     });
     const DataMovementHardwareConfig consumer_cfg = std::invoke([&] {
         if (mesh_device->arch() == ARCH::QUASAR) {
             return DataMovementHardwareConfig{DataMovementGen2Config{
-                .disable_implicit_sync_for = {experimental::DFBSpecName{"dfb_a"}, experimental::DFBSpecName{"dfb_b"}}}};
+                .disable_dfb_implicit_sync_for = {
+                    experimental::DFBSpecName{"dfb_a"}, experimental::DFBSpecName{"dfb_b"}}}};
         }
         return DataMovementHardwareConfig{DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1}};
     });
@@ -331,7 +333,7 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     const DataMovementHardwareConfig producer_cfg = std::invoke([&] {
         if (mesh_device->arch() == ARCH::QUASAR) {
             return DataMovementHardwareConfig{DataMovementGen2Config{
-                .disable_implicit_sync_for = {
+                .disable_dfb_implicit_sync_for = {
                     experimental::DFBSpecName{"dfb_borrowed"}, experimental::DFBSpecName{"dfb_alias"}}}};
         }
         return DataMovementHardwareConfig{DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}};
@@ -339,7 +341,7 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     const DataMovementHardwareConfig consumer_cfg = std::invoke([&] {
         if (mesh_device->arch() == ARCH::QUASAR) {
             return DataMovementHardwareConfig{DataMovementGen2Config{
-                .disable_implicit_sync_for = {
+                .disable_dfb_implicit_sync_for = {
                     experimental::DFBSpecName{"dfb_borrowed"}, experimental::DFBSpecName{"dfb_alias"}}}};
         }
         return DataMovementHardwareConfig{DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1}};

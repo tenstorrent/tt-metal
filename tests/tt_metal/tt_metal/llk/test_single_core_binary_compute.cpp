@@ -338,7 +338,7 @@ bool single_core_binary(
             std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
-                        .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB}}};
+                        .disable_dfb_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB}}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
@@ -357,7 +357,7 @@ bool single_core_binary(
             std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
-                        experimental::DataMovementGen2Config{.disable_implicit_sync_for = {OUT_DFB}}};
+                        experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {OUT_DFB}}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};

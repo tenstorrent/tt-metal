@@ -623,7 +623,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
             std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
-                        .disable_implicit_sync_for = {INP_DATA_DFB, INP_SCALER_DFB}}};
+                        .disable_dfb_implicit_sync_for = {INP_DATA_DFB, INP_SCALER_DFB}}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
@@ -641,7 +641,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
             std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
-                        experimental::DataMovementGen2Config{.disable_implicit_sync_for = {OUT_DFB}}};
+                        experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {OUT_DFB}}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};

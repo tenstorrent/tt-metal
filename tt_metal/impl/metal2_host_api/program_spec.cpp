@@ -671,13 +671,13 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
 // Whether a Gen2 DM kernel opts out of implicit sync for a particular DFB.
 // Two routes lead to the same opt-out:
 //   - disable_dfb_implicit_sync_for_all: the per-kernel hammer, covering every DFB the kernel binds.
-//   - disable_implicit_sync_for: an explicit per-DFB list.
+//   - disable_dfb_implicit_sync_for: an explicit per-DFB list.
 // Precondition: the caller has already established this is a DM kernel with a gen2_config.
 bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, const DFBSpecName& dfb_name) {
     if (gen2_config.disable_dfb_implicit_sync_for_all) {
         return true;
     }
-    const auto& vec = gen2_config.disable_implicit_sync_for;
+    const auto& vec = gen2_config.disable_dfb_implicit_sync_for;
     return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
 }
 
@@ -991,11 +991,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             kernel.unique_id);
     }
 
-    // Validate DM kernel disable_implicit_sync_for entries.
+    // Validate DM kernel disable_dfb_implicit_sync_for entries.
     //
     // Implicit sync is a Gen2-only, DM-only mechanism (ISR-based credit posting from NoC
     // transaction completion). A DM kernel can opt out per-DFB by listing the DFB's name in
-    // its Gen2Config::disable_implicit_sync_for vector, or opt out of all the DFBs it binds at
+    // its Gen2Config::disable_dfb_implicit_sync_for vector, or opt out of all the DFBs it binds at
     // once via Gen2Config::disable_dfb_implicit_sync_for_all. Either way the opt-out applies to the
     // side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
     //
@@ -1019,10 +1019,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             for (const auto& binding : kernel.dfb_bindings) {
                 bound_dfbs.insert(binding.dfb_spec_name);
             }
-            for (const auto& dfb_name : std::get<DataMovementGen2Config>(dm_config).disable_implicit_sync_for) {
+            for (const auto& dfb_name : std::get<DataMovementGen2Config>(dm_config).disable_dfb_implicit_sync_for) {
                 TT_FATAL(
                     bound_dfbs.contains(dfb_name),
-                    "Kernel '{}' disable_implicit_sync_for entry references DFB '{}', which the kernel does not "
+                    "Kernel '{}' disable_dfb_implicit_sync_for entry references DFB '{}', which the kernel does not "
                     "bind",
                     kernel.unique_id,
                     dfb_name);
