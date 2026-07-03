@@ -227,15 +227,8 @@ jobs:
 
       - name: 🔧 CMake configure
         run: |
-          # --warnings-as-errors=* makes a clang-tidy diagnostic fail the ninja
-          # compile edge, which makes `cmake --build` exit non-zero. The build
-          # preset uses -k0 (keep-going), so the build still runs every TU to
-          # completion and exports all diagnostics to the fixes YAMLs despite the
-          # failing edges. We capture the build exit code but do not fail on it
-          # directly; instead, the "Count clang-tidy violations" step counts the
-          # exported fixes and the "Fail on clang-tidy violations" step decides
-          # pass/fail: violations > 0 → fail with count; else a non-zero build exit
-          # with zero violations → genuine build failure.
+          # --warnings-as-errors=* turns each clang-tidy diagnostic into a failing
+          # compile edge; the build preset's -k0 keeps going so all fixes still export.
           cmake --preset clang-tidy-fix-parallel \
             -DCMAKE_CXX_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*" \
             -DCMAKE_C_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*"
@@ -268,59 +261,24 @@ jobs:
       - name: 🔍 Analyze code with clang-tidy
         timeout-minutes: 120
         run: |
-          # clang-tidy is configured WITH --warnings-as-errors=* (see CMake
-          # configure step), so a clang-tidy diagnostic fails its ninja compile
-          # edge and `cmake --build` exits non-zero. The build preset uses -k0
-          # (keep-going), so the build still runs every TU to completion and
-          # exports all diagnostics to the fixes YAMLs. We therefore capture the
-          # build exit code here but do NOT fail the step on it — the
-          # "Fail on clang-tidy violations" step decides pass/fail using the
-          # violation count (from the fixes YAMLs) together with this exit code:
-          # a non-zero exit with zero exported violations is a genuine build
-          # failure, while a non-zero exit with violations is just clang-tidy
-          # diagnostics. The exit code is saved to $GITHUB_ENV for that gate.
-          set +e
-          if [ -n "${{ inputs.scan-targets }}" ]; then
-            echo "Scanning specific targets: ${{ inputs.scan-targets }}"
-            build_exit=0
-            for target in ${{ inputs.scan-targets }}; do
-              echo "Scanning target: $target"
-              cmake --build --preset clang-tidy-fix-parallel --target "$target"
-              rc=$?
-              # Remember the first non-zero exit across all scanned targets.
-              if [ "$rc" -ne 0 ] && [ "$build_exit" -eq 0 ]; then
-                build_exit=$rc
-              fi
-            done
-          else
-            echo "Scanning all targets"
-            cmake --build --preset clang-tidy-fix-parallel
-            build_exit=$?
-          fi
-          set -e
+          # Record the exit code rather than failing here: violations fail compile
+          # edges but still export, so the gate below decides pass/fail from counts.
+          targets=()
+          for target in ${{ inputs.scan-targets }}; do
+            targets+=(--target "$target")
+          done
+          echo "Scanning ${{ inputs.scan-targets || 'all targets' }}"
+          build_exit=0
+          cmake --build --preset clang-tidy-fix-parallel "${targets[@]}" || build_exit=$?
           echo "cmake --build exited with code ${build_exit}"
           echo "CLANG_TIDY_BUILD_EXIT=${build_exit}" >> "$GITHUB_ENV"
 
       - name: Count clang-tidy violations
-        # The Analyze step captures the build exit code instead of failing, so this
-        # step runs on the default success() gate. With --warnings-as-errors=* a
-        # clang-tidy diagnostic fails its compile edge (non-zero build exit), but
-        # -k0 means every TU still runs and exports its diagnostics. We count those
-        # exported diagnostics from the per-TU fix YAMLs. Each top-level diagnostic
-        # is a single "- DiagnosticName:" list item; notes are nested and don't
-        # carry their own DiagnosticName at that indentation, so this counts
-        # distinct violations (not notes). The result is published for the posting
-        # steps and the final "Fail on clang-tidy violations" gate.
         run: |
           FIXES_DIR=".build/clang-tidy/fixes"
-          VIOLATIONS=0
-          if ls "$FIXES_DIR"/*.yaml >/dev/null 2>&1; then
-            # Match the list-item form "  - DiagnosticName:" so we count diagnostics,
-            # not nested Notes or other keys. grep -c sums across all files via cat.
-            VIOLATIONS=$(cat "$FIXES_DIR"/*.yaml 2>/dev/null \
-              | grep -cE '^[[:space:]]*-[[:space:]]+DiagnosticName:' || true)
-          fi
-          # grep returns nothing on no match with || true; normalize empty to 0.
+          # Each diagnostic is one "- DiagnosticName:" list item; nested notes are not.
+          VIOLATIONS=$(cat "$FIXES_DIR"/*.yaml 2>/dev/null \
+            | grep -cE '^[[:space:]]*-[[:space:]]+DiagnosticName:' || true)
           VIOLATIONS=${VIOLATIONS:-0}
           echo "CLANG_TIDY_VIOLATIONS=${VIOLATIONS}" >> "$GITHUB_ENV"
           echo "clang-tidy found ${VIOLATIONS} violation(s)"
@@ -330,9 +288,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Apply clang-tidy fixes to working tree
-        # success() (not !cancelled()): only apply/post fixes when the build and the
-        # violation count completed cleanly. On a genuine build failure the fixes dir
-        # may hold only partial YAMLs, so posting them would be misleading — skip it.
+        # success() so a genuine build failure (partial YAMLs) doesn't post misleading fixes.
         if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && success() }}
         run: |
           FIXES_DIR=".build/clang-tidy/fixes"
@@ -364,40 +320,18 @@ jobs:
             -fail-on-error false
 
       - name: Fail on clang-tidy violations
-        # Runs after suggestion posting (so violations both post inline comments AND
-        # fail the job). !cancelled() ensures it runs even when the posting steps
-        # were skipped (non-PR runs) or a posting step errored — but not on cancel.
-        #
-        # Decides pass/fail from the violation count and the captured build exit:
-        #   - violations > 0           → fail with the violation count;
-        #   - violations == 0, exit != 0 → genuine build failure (no clang-tidy
-        #                                  diagnostics were exported, so the
-        #                                  non-zero build exit is a real compile/
-        #                                  link error) → fail with build error;
-        #   - violations == 0, exit == 0 → pass.
-        # If the count is unavailable (Count step never ran), fall back to the
-        # build exit code alone.
+        # !cancelled() so it still gates when posting steps are skipped (non-PR runs).
         if: ${{ !cancelled() }}
         run: |
-          VIOLATIONS="${CLANG_TIDY_VIOLATIONS:-}"
-          BUILD_EXIT="${CLANG_TIDY_BUILD_EXIT:-}"
-          if [ -z "$VIOLATIONS" ]; then
-            echo "Violation count unavailable (build did not complete)."
-            if [ -n "$BUILD_EXIT" ] && [ "$BUILD_EXIT" -ne 0 ]; then
-              echo "::error::clang-tidy build failed (exit ${BUILD_EXIT})"
-              exit 1
-            fi
-            exit 0
-          fi
+          VIOLATIONS="${CLANG_TIDY_VIOLATIONS:-0}"
+          BUILD_EXIT="${CLANG_TIDY_BUILD_EXIT:-0}"
           if [ "$VIOLATIONS" -gt 0 ]; then
             echo "::error::clang-tidy found ${VIOLATIONS} violation(s)"
-            echo "clang-tidy found ${VIOLATIONS} violations"
             exit 1
           fi
-          if [ -n "$BUILD_EXIT" ] && [ "$BUILD_EXIT" -ne 0 ]; then
-            # No clang-tidy diagnostics were exported but the build still failed —
-            # this is a genuine compile/link error, not a clang-tidy violation.
-            echo "::error::clang-tidy build failed (exit ${BUILD_EXIT}) with no clang-tidy violations — genuine build error"
+          # No violations but the build failed: a real compile/link error, not a diagnostic.
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo "::error::clang-tidy build failed (exit ${BUILD_EXIT}) with no violations"
             exit 1
           fi
           echo "clang-tidy found no violations"
