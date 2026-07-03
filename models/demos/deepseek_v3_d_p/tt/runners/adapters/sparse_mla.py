@@ -96,9 +96,12 @@ class GLM51Adapter(SparseMLAPrefillAdapter):
 
     # --- full-transformer / chunked pytest path ---
     # GLM runs the same test set as Kimi (single-shot + chunked transformer) against a vLLM golden trace
-    # (approach B: no reference_model_cls — glm_moe_dsa isn't AutoConfig-loadable). Serving is still NOT
-    # wired (base's allocate_kv_cache / build_runtime raise); these fields only enable the pytest
-    # pretrained path (supports_pretrained gates it, and it's consumed exclusively by the test files).
+    # (approach B). No reference_model_cls: not because glm_moe_dsa is unloadable (transformers >=5.10 ships
+    # GlmMoeDsaModel and it IS AutoConfig-loadable) but because the DSA family validates by composing the
+    # CPU references it already has — sparse-MLA (reference.cpu_deepseek_v32) + TorchMoe — rather than a
+    # single HF decoder-layer forward (the block test uses that composition; see test_glm_prefill_block).
+    # Serving is still NOT wired (base's allocate_kv_cache / build_runtime raise); these fields only enable
+    # the pytest pretrained path (supports_pretrained gates it, and it's consumed exclusively by the tests).
     supports_pretrained = True
     ttnn_cache_env = "TT_GLM51_PREFILL_TTNN_CACHE"
     ref_cache_env = "TT_GLM51_PREFILL_HOST_REF_CACHE"
