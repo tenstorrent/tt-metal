@@ -63,30 +63,45 @@ runs:
         CHIP_ARCH: quasar
       run: |
         echo "Compiling Quasar (group ${{ inputs.test-group }}/${{ inputs.test-splits }})..."
-        # --maxschedchunk override (the binding constraint we found, NOT worker count):
-        # the repo-wide pytest.ini has `addopts = -s --maxschedchunk=10` (added
-        # 2026-02, present on main, untouched by this branch). maxschedchunk caps
-        # how many test node-ids pytest-xdist's single master hands a worker in one
-        # execnet dispatch, in BOTH the initial and steady-state refill paths
-        # (xdist src/xdist/scheduler/load.py: node_chunksize = min(items//4,
-        # maxschedchunk); floored at 2). With ~413k ultra-fast compile tests (JUnit
-        # median ~8 ms) and chunk=10, the ONE master process must originate
-        # ~413k/10 ≈ 41k dispatch round-trips AND process 413k inbound testreports
-        # serially -- it cannot feed the workers fast enough, so they starve. Two
-        # measured runs on the 40-core/78.5 GiB xlarge confirm the starvation is the
-        # cap, not memory or worker count: -n10+parallel burned only ~48% of wall on
-        # real work (wall 1173 s vs sum-of-per-test-time/10 = 606 s; CPU mean 24.6%,
-        # RAM peak 60.8%, ZERO swap -- huge headroom) and -n30 serial was WORSE
-        # (65% idle, CPU 32.8%) despite more workers, because 30 mouths share the
-        # same single-master feeder throttled to chunk=10. maxschedchunk was small
-        # by design for suites of few slow tests; it is exactly wrong for 413k fast
-        # ones. Raising the cap lets the master ship large chunks (~20 per worker
-        # here) and amortize its per-dispatch overhead, while 2000 << the ~10k
-        # initial-chunk ceiling keeps enough tests pending for the steady-state
-        # watermark to still steal-rebalance the long tail (0.9% of tests are
-        # >500 ms). CLI value wins over addopts (last --maxschedchunk parsed).
-        # Scoped to THIS job by overriding on the command line rather than editing
-        # the shared pytest.ini (which every LLK hardware-test job also consumes).
+        # --dist=worksteal (supersedes the earlier --maxschedchunk=2000 experiment).
+        #
+        # What the JUnit + sidecar data actually showed (three runs, 40-core/78.5 GiB
+        # xlarge, 413,234 tests each):
+        #  * ~99.2% of test items finish <100 ms and ~65% <10 ms -- they are CACHE
+        #    HITS (build_elfs hits the .build_complete done-marker and returns without
+        #    compiling). Only ~0.6-0.8% (~2500-3200 items) are real g++ compiles
+        #    (300-1000 ms). So this job is NOT compile-bound in aggregate.
+        #  * With -n 10 the workers run at ~99% per-worker CPU (9.9 of 10 cores busy);
+        #    they are NOT starved/idle. Low box CPU (~25% of 40) is purely because
+        #    only 10 of 40 cores are fed. The real bottleneck is per-worker single-
+        #    thread Python/pytest per-item overhead x 413k items, gated by -n.
+        #  * The prior --maxschedchunk 10->2000 change helped only a little (~23 s),
+        #    and for a reason we can now name precisely -- NOT "master feeder
+        #    starvation": LoadScheduling's initial chunk = min(items//4, maxschedchunk)
+        #    (floor 2). At chunk=10 all 10 workers pull tiny chunks off the SAME front
+        #    of pending, so they cold-compile OVERLAPPING variant_ids at once (items
+        #    that share a variant_id are adjacent in collection order). One compiles;
+        #    the others block ~700 ms on the per-variant FileLock then cache-hit. That
+        #    redundant simultaneous compilation is what pushed peak CPU to 88.7% and
+        #    wasted ~600 s of duplicated compile-wait. chunk=2000 kept same-variant
+        #    runs on ONE worker (compile once, same-worker cache-hit the rest): ~700
+        #    fewer collisions and a LOWER peak CPU (78%) -- a GOOD sign, not worse
+        #    utilisation.
+        #
+        # worksteal takes that locality to the limit AND fixes the tail risk of a big
+        # static chunk (xdist src/xdist/scheduler/worksteal.py, v3.8.0): it hands each
+        # worker ONE contiguous ~1/10 block up front (max same-variant locality -> min
+        # cross-worker cold-cache FileLock collisions, especially the startup burst),
+        # then when a worker drops below 2 pending it STEALS half the busiest worker's
+        # tail -> rebalances the slow long tail a static chunk cannot. Fewer
+        # simultaneous cold compiles also mean a lower startup memory spike, which
+        # de-risks a future num-workers increase (mem at -n 10 is only ~53% with ZERO
+        # swap: ~2x headroom, and workers are compute-bound, so raising -n toward ~18
+        # is the next lever to test once this run is measured).
+        # Expected effect is modest (collisions cost only ~15-30 s of wall); this is
+        # the strictly-better scheduler + an enabler, not a fix for the ~25% CPU
+        # ceiling, which needs more workers and/or fewer/cheaper per-item Python items.
+        # worksteal ignores maxschedchunk, so the shared pytest.ini addopts is moot.
         "$GITHUB_WORKSPACE/.github/scripts/utils/host-load-sidecar.sh" \
           --interval 1 \
           --label "Quasar compile (group ${{ inputs.test-group }}/${{ inputs.test-splits }})" \
@@ -94,7 +109,7 @@ runs:
           -- pytest -q --compile-producer -n ${{ inputs.num-workers }} \
                 -m "${{ inputs.pytest-markers }}" \
                 --splits ${{ inputs.test-splits }} --group ${{ inputs.test-group }} \
-                --maxschedchunk=2000 \
+                --dist=worksteal \
                 --override-ini=log_cli=false --tb=short --timeout=60 \
                 --junitxml=pytest-report-quasar-compile.xml .
 
