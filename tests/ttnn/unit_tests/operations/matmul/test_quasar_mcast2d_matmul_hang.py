@@ -44,17 +44,21 @@ import ttnn
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("out_subblock_h", [1, 7])
-def test_quasar_mcast2d_matmul_hang(mesh_device):
+def test_quasar_mcast2d_matmul_hang(mesh_device, out_subblock_h):
     device = mesh_device
 
-    M, K, N = 784, 512, 256
-    grid_x, grid_y = 8, 4  # in0 block-sharded across an 8x4 grid (rows over y, K over x)
+    # Resized for the 2-compute-core emulator (was 8x4=32 cores; over-sharded -> bank_manager TT_FATAL
+    # "num_shards 32 <= 2 L1 banks"). Same 2D block-sharded mcast shape on a 2x1 grid: M over grid_y=1,
+    # K over grid_x=2, N tiled over grid_x=2. The matmul kernels are currently no-op'd (LLK dest-sync
+    # deadlock, issue filed), so this only needs to allocate + launch, not reproduce the hang.
+    M, K, N = 224, 128, 64
+    grid_x, grid_y = 2, 1  # in0 block-sharded across a 2x1 grid (M over y, K over x)
 
     a_torch = torch.randn((1, 1, M, K), dtype=torch.bfloat16)
     b_torch = torch.randn((1, 1, K, N), dtype=torch.bfloat16)
 
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
-    # BLOCK_SHARDED A: 784 rows over grid_y=4 -> 224 (7 tiles); 512 cols over grid_x=8 -> 64 (2 tiles).
+    # BLOCK_SHARDED A: 224 rows over grid_y=1 -> 224 (7 tiles); 128 cols over grid_x=2 -> 64 (2 tiles).
     # With a CoreRangeSet, pass the per-core SHARD shape + use_height_and_width_as_shard_shape=True.
     a_mem_config = ttnn.create_sharded_memory_config(
         shape=(1, 1, 224, 64),
@@ -69,6 +73,7 @@ def test_quasar_mcast2d_matmul_hang(mesh_device):
     b = ttnn.from_torch(b_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Config classes live under the raw binding path (as the resnet model uses for the 1D variant).
+    # grid=2x1: num_blocks_x = N_tiles(2)/per_core_N(1) = 2 = grid_x; num_blocks_y = per_core_M/out_block_h = 1.
     program_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=2,
@@ -83,7 +88,7 @@ def test_quasar_mcast2d_matmul_hang(mesh_device):
         fuse_batch=True,
     )
 
-    # Output BLOCK_SHARDED, matching the run: shard [224,32] per core on the 8x4 grid.
+    # Output BLOCK_SHARDED: shard [224,32] per core on the 2x1 grid.
     out_mem_config = ttnn.create_sharded_memory_config(
         shape=(1, 1, 224, 32),
         core_grid=core_grid,
