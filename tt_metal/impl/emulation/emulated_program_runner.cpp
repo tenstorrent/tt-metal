@@ -828,7 +828,12 @@ static void preprocess_tu_recursive(
             std::filesystem::weakly_canonical(std::filesystem::path(out_dir) / inc_name);
         const std::string out_inc_str = out_inc.string();
         const std::string& out_dir_str = out_dir_canon.string();
-        if (out_inc_str.compare(0, out_dir_str.size(), out_dir_str) == 0) {
+        // Path-boundary-aware containment: a bare string-prefix compare would treat
+        // /tmp/dir2/x as under /tmp/dir, so require the match to end on a separator.
+        const bool under_out_dir = out_inc_str.size() > out_dir_str.size() &&
+                                   out_inc_str.compare(0, out_dir_str.size(), out_dir_str) == 0 &&
+                                   out_inc_str[out_dir_str.size()] == '/';
+        if (under_out_dir) {
             // Maps cleanly UNDER out_dir (relative include): write the shadow copy and
             // let `-I out_dir` make the compiler find it before the original. Directive
             // stays as-is.
@@ -838,27 +843,32 @@ static void preprocess_tu_recursive(
             std::filesystem::create_directories(out_inc.parent_path(), ec);
             preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, done);
         } else {
-            // ESCAPES out_dir — an absolute include (blaze.kernel_codegen emits
+            // ESCAPES out_dir — an absolute include (kernel codegen can emit
             // `#include "/abs/.../op.hpp"`) or a ".." path. The compiler resolves the
             // absolute directive directly, bypassing `-I out_dir`, so a shadow copy
             // can't redirect it. Mirror the real file under out_dir and REPOINT the
-            // #include directive at the patched mirror — otherwise blaze op headers
-            // keep their raw `reinterpret_cast<tt_l1_ptr T*>(<persistent L1 addr>)`
-            // derefs, which segfault on the host. The mirror's `#line` still names the
-            // real file, so DWARF / ASAN backtraces are unaffected.
-            if (canon[0] != '/') {
+            // #include directive at the patched mirror — otherwise op headers keep
+            // their raw `reinterpret_cast<tt_l1_ptr T*>(<persistent L1 addr>)` derefs,
+            // which segfault on the host. The mirror's `#line` still names the real
+            // file, so DWARF / ASAN backtraces are unaffected.
+            if (!std::filesystem::path(canon).is_absolute()) {
                 continue;  // only mirror real absolute paths
             }
             // Only mirror an escaping include that the L1 rewrite above will actually
             // change — i.e. one carrying a bare-identifier `reinterpret_cast<tt_l1_ptr
-            // T*>(ident)` persistent-address deref (blaze op.hpp). Mirroring a shared
-            // header reached elsewhere via -I (e.g. kernel_utils.hpp, whose only
-            // tt_l1_ptr cast takes `&cb_config[..]` and is deliberately NOT rewritten)
-            // would create a second copy that `#pragma once` can't dedupe against the
-            // original → redefinition errors. Probe with the SAME operand constraint
-            // as l1_ptr_cast_re so the two stay in lockstep.
+            // T*>(ident)` persistent-address deref (an op header). Mirroring a shared
+            // header reached elsewhere via -I (whose only tt_l1_ptr cast takes `&buf[i]`
+            // and is deliberately NOT rewritten) would create a second copy that
+            // `#pragma once` can't dedupe against the original → redefinition errors.
+            // Probe with the SAME operand constraint as l1_ptr_cast_re so the two stay
+            // in lockstep. The file exists (checked above); if it cannot be read here,
+            // do NOT silently skip — that would leave a persistent-L1 deref unpatched
+            // and reintroduce the segfault — so fail loudly instead.
             {
                 std::ifstream probe(canon);
+                if (!probe) {
+                    throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + canon);
+                }
                 std::stringstream pss;
                 pss << probe.rdbuf();
                 const std::string content = pss.str();
