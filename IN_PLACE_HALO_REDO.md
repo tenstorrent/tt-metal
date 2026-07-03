@@ -522,10 +522,23 @@ tighten once real peak-L1 is measured.
    but BH-broken). The factory has a grep-able grid-geometry `log_info` diagnostic (downgrade
    to `log_debug` before PR).
 
-**Status:** the RM/height-sharded vertical slice is COMPLETE and WH-verified bitwise-exact.
-In-place halo silently auto-activates on the SAVE shapes and saves 28–96% of the input-shard
-buffer with zero output difference. The good outcome is demonstrated on WH; hardening
-(edge matrix + BH) and widening (tiled/untilize, width/block sharding) remain.
+**STATUS — STEP 1 (full pool support on Wormhole) COMPLETE** (branch @ 3f46dbde9d1).
+In-place halo silently auto-activates on SAVE shapes (28–96% input-shard L1 saved, zero
+output difference), scoped pool-only (conv/others stay off until step 3 via `allow_in_place`).
+WH bitwise-exact (`torch.eq`, in-place vs normal, avg+max pool, bf16 + bf8_b) across the FULL
+pool matrix:
+- HEIGHT-sharded: row-major (36/36) + tiled/untilize incl. wide untilize-temp path.
+- WIDTH-sharded: all-local halo (max_ref==0, no remote-temp CB), RM + tiled (6/6).
+- BLOCK-sharded: 2D grid incl. partial 8×6 grid + wide untilize (9/9).
+Partial-grid + NOOP-core multicast path exercised (via bf8_b tiled output) and passing.
+Known untested-but-unreachable-via-pool: column-major block (transpose_mcast) NOC path —
+cover in step 3 (conv). The removal premise ("can't net-save L1") is REFUTED for pools.
+
+**Sequence (user-set):** 1. full pool on WH ✅ · 2. full pool on **Blackhole** (needs machine
+switch — alignment class-1 / NoC-order class-7 can be WH-clean/BH-broken) · 3. extend to
+conv / matmul / other ops on both. Plus the deferred DRAM-slicing L1-estimate.
+
+**Earlier status (superseded):** the RM/height-sharded vertical slice was the first milestone.
 
 **Test entry:** `tests/ttnn/unit_tests/operations/pool/test_inplace_halo.py`
 (`TT_METAL_DISABLE_INPLACE_HALO=1` forces the normal golden). The economics/gate gtest is
