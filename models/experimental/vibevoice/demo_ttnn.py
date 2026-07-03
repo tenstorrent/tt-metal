@@ -22,7 +22,7 @@ Usage (from tt-metal root):
     python models/experimental/vibevoice/demo_ttnn.py --demo 2p_goat
     python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --output_dir ~/vv_ttnn_long
     python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --max_new_tokens 256
-    python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --trace
+    python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --max_new_tokens 32 --trace
     python models/experimental/vibevoice/demo_ttnn.py --text ... --voice alice.wav carter.wav frank.wav --max_new_tokens 64 --debug
 """
 
