@@ -86,7 +86,8 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        # TEMP (refs #47718): mount rw so run_t3000_tttv2_fast_unit_tests can (re)generate the tttv2 tensor cache. REVERT to :ro after cache is populated.
+        - /mnt/MLPerf:/mnt/MLPerf:rw
       options: "--device /dev/tenstorrent"
     defaults:
       run:
