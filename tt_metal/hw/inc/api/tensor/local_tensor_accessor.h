@@ -14,12 +14,12 @@
 /**
  * @brief A minimal accessor for a tensor's node-local L1 shard.
  *
- * LocalTensorAccessor is the local-only counterpart to TensorAccessor. Unlike TensorAccessor it carries
- * no NOC machinery, so it can be used on both data movement and compute kernels. It replaces the legacy
- * "pinned CB as L1 pointer" pattern (get_pointer_to_cb_data<T>).
+ * LocalTensorAccessor is the local-only counterpart to TensorAccessor.
+ * Unlike TensorAccessor, it can be used on both data movement and compute kernels.
  *
- * Construct one from the accessor name your host code declared on the kernel's tensor binding, or from a
- * raw L1 base address (legacy):
+ * To construct a LocalTensorAccessor:
+ *  - Metal 2.0: use the token name your host code declared on the kernel's tensor binding
+ *  - Legacy: construct from a raw L1 base address
  * @code
  *   // T is the element type of the local shard, chosen by the kernel author.
  *   LocalTensorAccessor<T> a(tensor::my_host_declared_accessor_name); // Metal 2.0
@@ -27,35 +27,36 @@
  *   auto& elem = a[0];                                                // read or write
  * @endcode
  *
- * Element access is not bounds-checked against the shard extent: a LocalTensorAccessor is a view whose
- * extent lives in tensor metadata and is not (currently) known here. (Its Program-scope sibling,
- * Scratchpad, owns its extent and does bounds-check — see scratchpad.h.)
+ * Notes:
+ *  - LocalTensorAccessor replaces the legacy "pinned CB as L1 pointer" pattern.
+ *  - The current API is deliberately minimal; more features will be added as use cases arise.
+ *  - Element access is currently NOT bounds-checked against the shard extent
+ *    (this should be added in the future).
  *
- * The surface is deliberately small — operator[], get_bank_base_address(), and local_mem() (the full
- * CoreLocalMem<T> view, including the raw-pointer escape hatch); more will be added as use cases arise.
- *
+ * Template parameters:
  * @tparam T  Element type stored in the local shard.
- * @see scratchpad.h (Scratchpad, the Program-scope sibling)
  */
 template <typename T>
 class LocalTensorAccessor {
 public:
-    // Construct from the binding token your host code declared on the kernel's tensor binding (exposed as
-    // the tensor::<accessor_name> constant in the generated kernel_bindings_generated.h). Reads the
-    // shard's L1 base address from the binding's CRTA slot; delegates to the raw-address ctor below.
+    // Construct from a Metal 2.0 binding token, from the host-declared accessor name.
+    // (tensor::<accessor_name> constant is in the generated, auto-included kernel_bindings_generated.h.)
+    // e.g.
+    // LocalTensorAccessor<T> my_local_accessor(tensor::my_host_declared_accessor_name);
+    //
     template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
     [[nodiscard]] explicit LocalTensorAccessor(
         tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) noexcept :
+        // The shard's L1 base address is stored in the CRTA at the token-supplied offset.
+        // Delegates to the legacy constructor, which takes a raw L1 base address.
         LocalTensorAccessor(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t))) {
-        // ADDR_CRTA_OFFSET is a byte offset (codegen emits crta_word_index * sizeof(u32)); dividing
-        // recovers the word index, and would silently truncate a non-word-aligned value otherwise.
+        // ADDR_CRTA_OFFSET is a byte offset; dividing recovers the word index
         static_assert(
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
     }
 
-    // Legacy constructor: from a raw node-local L1 base address (a byte address) — typically a legacy
-    // Buffer's address passed into the kernel as a CRTA. Both constructors funnel through here, so this is
-    // the single point where the shard's base alignment is checked.
+    // Legacy constructor: from a raw node-local L1 base address (a byte address).
+    // (Typically a legacy Buffer's address passed into the kernel as a CRTA.)
     [[nodiscard]] explicit LocalTensorAccessor(uint32_t bank_base_address) noexcept :
         mem_(static_cast<uintptr_t>(bank_base_address)) {
         ASSERT(mem_.get_address() % alignof(T) == 0);
@@ -63,9 +64,8 @@ public:
 
     /** @brief Access the element at the given index (read or write).
      *
-     * The target L1 address is sanitized in debug builds (see api/debug/assert.h for when that is
-     * active), but the index is NOT checked against the shard extent — a LocalTensorAccessor does not
-     * know its size (unlike Scratchpad).
+     * Watcher validates the addresses in debug builds.
+     * Currently NOT bounds-checked against the shard extent.
      *
      * @param index Element index into the local shard.
      * @return Reference to the element at the given index.
@@ -79,14 +79,14 @@ public:
      * @return the local shard's L1 base address (as uint32_t).
      */
     [[nodiscard]] uint32_t get_bank_base_address() const noexcept {
-        // static_cast narrows uintptr_t -> uint32_t (uintptr_t is 64-bit on Gen2); an L1 address always fits.
+        // static_cast narrows to uint32_t (uintptr_t is 64-bit on Gen2); an L1 address always fits.
         return static_cast<uint32_t>(mem_.get_address());
     }
 
     /** @brief The underlying typed L1 view, for callers wanting the full CoreLocalMem<T> surface
      * (pointer arithmetic, scoped_lock, comparisons, ...).
      *
-     * For element access, prefer operator[]; reach for this only when you need the raw underlying handle
+     * For element access, prefer operator[]; use this only when you need the raw underlying handle
      * (e.g. local_mem().get_unsafe_ptr()).
      */
     // Returned by value: CoreLocalMem<T> is trivially copyable and pointer-sized.
