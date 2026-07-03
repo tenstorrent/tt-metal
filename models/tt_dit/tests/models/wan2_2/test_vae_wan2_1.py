@@ -30,7 +30,7 @@ from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width, conv_unpad_height, count_convs
 from ....utils.golden import load_golden, save_golden
-from ....utils.tensor import bf16_tensor_2dshard, typed_tensor_2dshard
+from ....utils.tensor import typed_tensor_2dshard
 
 VAE_MODEL_NAME = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 VAE_COMMIT_HASH_PLACEHOLDER = "local"
@@ -213,15 +213,54 @@ def trim_tensors_with_warnings(tt_output_torch, torch_output, new_logical_h, new
     return tt_output_torch
 
 
-def pad_tensor_with_warning(tt_input_tensor, torch_input_tensor, parallel_config):
-    tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
-    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
-    if logical_h != tt_input_tensor.shape[2]:
-        logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
-    tt_input_tensor, logical_w = conv_pad_width(tt_input_tensor, parallel_config.width_parallel.factor)
-    if logical_w != tt_input_tensor.shape[3]:
-        logger.info(f"width padding from {logical_w} to {tt_input_tensor.shape[3]}")
-    return tt_input_tensor, logical_h, logical_w
+def torch_to_tt_input(
+    torch_tensor,
+    *,
+    mesh_device,
+    parallel_config,
+    h_axis,
+    w_axis,
+    dtype=ttnn.bfloat16,
+    pad_channels=False,
+    pad_width=False,
+    height_factor_multiplier=1,
+    width_factor_multiplier=1,
+    tile_layout=False,
+):
+    """Convert a torch BCTHW tensor to a sharded tt BTHWC tensor on device.
+
+    Returns:
+        (tt_tensor, logical_h, logical_w) — logical_w is None when pad_width=False.
+    """
+    tt_tensor = torch_tensor.permute(0, 2, 3, 4, 1)
+
+    if pad_channels:
+        tt_tensor = conv_pad_in_channels(tt_tensor)
+
+    height_factor = parallel_config.height_parallel.factor * height_factor_multiplier
+    tt_tensor, logical_h = conv_pad_height(tt_tensor, height_factor)
+    if logical_h != tt_tensor.shape[2]:
+        logger.info(f"padding from {logical_h} to {tt_tensor.shape[2]}")
+
+    logical_w = None
+    if pad_width:
+        width_factor = parallel_config.width_parallel.factor * width_factor_multiplier
+        tt_tensor, logical_w = conv_pad_width(tt_tensor, width_factor)
+        if logical_w != tt_tensor.shape[3]:
+            logger.info(f"width padding from {logical_w} to {tt_tensor.shape[3]}")
+
+    tt_tensor = typed_tensor_2dshard(
+        tt_tensor,
+        mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        shard_mapping={h_axis: 2, w_axis: 3},
+        dtype=dtype,
+    )
+
+    if tile_layout:
+        tt_tensor = ttnn.to_layout(tt_tensor, ttnn.TILE_LAYOUT)
+
+    return tt_tensor, logical_h, logical_w
 
 
 def get_concat_dims(h_axis, w_axis, is_channels_last):
@@ -494,20 +533,16 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
             {"torch_input_tensor": torch_input_tensor, "torch_output": torch_output},
         )
 
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
-    if logical_h != tt_input_tensor.shape[2]:
-        logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
-
-    tt_input_tensor = typed_tensor_2dshard(
-        tt_input_tensor,
-        mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        shard_mapping={h_axis: 2, w_axis: 3},
+    tt_input_tensor, logical_h, _ = torch_to_tt_input(
+        torch_input_tensor,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        h_axis=h_axis,
+        w_axis=w_axis,
         dtype=tt_input_dtype,
+        tile_layout=True,
     )
 
-    tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
     tt_output = tt_model(tt_input_tensor, logical_h=logical_h)
     tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -617,31 +652,27 @@ def test_wan_conv3d(
         else:
             torch_cache_tensor = None
 
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-    tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
-    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
-    if logical_h != tt_input_tensor.shape[2]:
-        logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
-    tt_input_tensor = typed_tensor_2dshard(
-        tt_input_tensor,
-        mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        shard_mapping={h_axis: 2, w_axis: 3},
+    tt_input_tensor, logical_h, _ = torch_to_tt_input(
+        torch_input_tensor,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        h_axis=h_axis,
+        w_axis=w_axis,
         dtype=tt_input_dtype,
+        pad_channels=True,
     )
     logger.info(f"torch_input_tensor.shape: {torch_input_tensor.shape}")
     logger.info(f"tt_input_tensor.shape: {tt_input_tensor.shape}")
 
     if torch_cache_tensor is not None:
-        tt_cache_tensor = torch_cache_tensor.permute(0, 2, 3, 4, 1)
-        tt_cache_tensor = conv_pad_in_channels(tt_cache_tensor)
-        tt_cache_tensor, logical_h = conv_pad_height(tt_cache_tensor, parallel_config.height_parallel.factor)
-        tt_cache_tensor = typed_tensor_2dshard(
-            tt_cache_tensor,
-            mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            shard_mapping={h_axis: 2, w_axis: 3},
+        tt_cache_tensor, _, _ = torch_to_tt_input(
+            torch_cache_tensor,
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            h_axis=h_axis,
+            w_axis=w_axis,
             dtype=tt_input_dtype,
+            pad_channels=True,
         )
     else:
         tt_cache_tensor = None
@@ -746,18 +777,15 @@ def test_wan_residual_block(
             torch_cache_tensor_1 = None
             torch_cache_tensor_2 = None
 
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
-    if logical_h != tt_input_tensor.shape[2]:
-        logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
-    tt_input_tensor = typed_tensor_2dshard(
-        tt_input_tensor,
-        mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        shard_mapping={h_axis: 2, w_axis: 3},
+    tt_input_tensor, logical_h, _ = torch_to_tt_input(
+        torch_input_tensor,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        h_axis=h_axis,
+        w_axis=w_axis,
         dtype=tt_input_dtype,
+        tile_layout=True,
     )
-    tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
     logger.info(f"torch_input_tensor.shape: {torch_input_tensor.shape}")
     logger.info(f"tt_input_tensor.shape: {tt_input_tensor.shape}")
 
@@ -765,22 +793,20 @@ def test_wan_residual_block(
         torch_feat_cache = [torch_cache_tensor_1, torch_cache_tensor_2]
         torch_feat_idx = [0]
 
-        tt_cache_tensor_1 = torch_cache_tensor_1.permute(0, 2, 3, 4, 1)
-        tt_cache_tensor_2 = torch_cache_tensor_2.permute(0, 2, 3, 4, 1)
-        tt_cache_tensor_1, _ = conv_pad_height(tt_cache_tensor_1, parallel_config.height_parallel.factor)
-        tt_cache_tensor_2, _ = conv_pad_height(tt_cache_tensor_2, parallel_config.height_parallel.factor)
-        tt_cache_tensor_1 = typed_tensor_2dshard(
-            tt_cache_tensor_1,
-            mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            shard_mapping={h_axis: 2, w_axis: 3},
+        tt_cache_tensor_1, _, _ = torch_to_tt_input(
+            torch_cache_tensor_1,
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            h_axis=h_axis,
+            w_axis=w_axis,
             dtype=tt_input_dtype,
         )
-        tt_cache_tensor_2 = typed_tensor_2dshard(
-            tt_cache_tensor_2,
-            mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            shard_mapping={h_axis: 2, w_axis: 3},
+        tt_cache_tensor_2, _, _ = torch_to_tt_input(
+            torch_cache_tensor_2,
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            h_axis=h_axis,
+            w_axis=w_axis,
             dtype=tt_input_dtype,
         )
         tt_feat_cache = [tt_cache_tensor_1, tt_cache_tensor_2]
@@ -914,18 +940,15 @@ def test_wan_mid_block(
             else:
                 torch_cache_tensors.append(None)
 
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
-    if logical_h != tt_input_tensor.shape[2]:
-        logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
-    tt_input_tensor = typed_tensor_2dshard(
-        tt_input_tensor,
-        mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        shard_mapping={h_axis: 2, w_axis: 3},
+    tt_input_tensor, logical_h, _ = torch_to_tt_input(
+        torch_input_tensor,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        h_axis=h_axis,
+        w_axis=w_axis,
         dtype=tt_input_dtype,
+        tile_layout=True,
     )
-    tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
 
     torch_feat_cache = []
     tt_feat_cache = []
@@ -934,13 +957,12 @@ def test_wan_mid_block(
     for i in range(num_convs):
         if torch_cache_tensors[i] is not None:
             torch_feat_cache.append(torch_cache_tensors[i])
-            tt_cache_tensor = torch_cache_tensors[i].permute(0, 2, 3, 4, 1)
-            tt_cache_tensor, _ = conv_pad_height(tt_cache_tensor, parallel_config.height_parallel.factor)
-            tt_cache_tensor = typed_tensor_2dshard(
-                tt_cache_tensor,
-                mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                shard_mapping={h_axis: 2, w_axis: 3},
+            tt_cache_tensor, _, _ = torch_to_tt_input(
+                torch_cache_tensors[i],
+                mesh_device=mesh_device,
+                parallel_config=parallel_config,
+                h_axis=h_axis,
+                w_axis=w_axis,
                 dtype=tt_input_dtype,
             )
             tt_feat_cache.append(tt_cache_tensor)
@@ -1083,14 +1105,13 @@ def test_wan_resample(
             else:
                 torch_cache_tensors.append(None)
 
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-    tt_input_tensor, logical_h = conv_pad_height(
-        tt_input_tensor, parallel_config.height_parallel.factor * pad_factor_multiplier
-    )
-    if logical_h != tt_input_tensor.shape[2]:
-        logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
-    tt_input_tensor = typed_tensor_2dshard(
-        tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+    tt_input_tensor, logical_h, _ = torch_to_tt_input(
+        torch_input_tensor,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        h_axis=h_axis,
+        w_axis=w_axis,
+        height_factor_multiplier=pad_factor_multiplier,
     )
 
     torch_feat_cache = []
@@ -1100,10 +1121,12 @@ def test_wan_resample(
     for i in range(num_convs):
         if torch_cache_tensors[i] is not None:
             torch_feat_cache.append(torch_cache_tensors[i])
-            tt_cache_tensor = torch_cache_tensors[i].permute(0, 2, 3, 4, 1)
-            tt_cache_tensor, _ = conv_pad_height(tt_cache_tensor, parallel_config.height_parallel.factor)
-            tt_cache_tensor = bf16_tensor_2dshard(
-                tt_cache_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+            tt_cache_tensor, _, _ = torch_to_tt_input(
+                torch_cache_tensors[i],
+                mesh_device=mesh_device,
+                parallel_config=parallel_config,
+                h_axis=h_axis,
+                w_axis=w_axis,
             )
             tt_feat_cache.append(tt_cache_tensor)
         else:
@@ -1248,27 +1271,17 @@ def test_wan_upblock(
         else:
             torch_input_tensor = torch.randn(B, in_dim, T, H, W, dtype=torch_dtype) * std + mean
 
-        torch_input_tensor = torch.randn(B, in_dim, T, H, W, dtype=torch_dtype) * std + mean
         logger.info(f"Torch input shape {torch_input_tensor.shape}")
 
-        tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-        logger.info(f"Theoretical TT input shape {tt_input_tensor.shape}")
-
-        tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
-        logger.info(f"Theoretical input shape after pad {tt_input_tensor.shape}")
-
-        if logical_h != tt_input_tensor.shape[2]:
-            logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
-        tt_input_tensor = typed_tensor_2dshard(
-            tt_input_tensor,
-            mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            shard_mapping={h_axis: 2, w_axis: 3},
+        tt_input_tensor, logical_h, _ = torch_to_tt_input(
+            torch_input_tensor,
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            h_axis=h_axis,
+            w_axis=w_axis,
             dtype=tt_input_dtype,
+            tile_layout=True,
         )
-        tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
-
-        logger.info(f"Actual TT input shape {tt_input_tensor.shape}")
 
         if golden is None:
             logger.info(f"running torch model")
@@ -1483,15 +1496,14 @@ def test_wan_decoder3d(
         else:
             torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
 
-        tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-        tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
-        tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
-        tt_input_tensor = typed_tensor_2dshard(
-            tt_input_tensor,
-            mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            shard_mapping={h_axis: 2, w_axis: 3},
+        tt_input_tensor, logical_h, _ = torch_to_tt_input(
+            torch_input_tensor,
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            h_axis=h_axis,
+            w_axis=w_axis,
             dtype=tt_input_dtype,
+            pad_channels=True,
         )
 
         if golden is None:
@@ -1625,17 +1637,15 @@ def test_wan_decoder(
         logger.warning("Computing reference results from scratch (wan_decoder).")
         torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
 
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-
-    tt_input_tensor, logical_h, logical_w = pad_tensor_with_warning(
-        tt_input_tensor, torch_input_tensor, parallel_config
-    )
-    tt_input_tensor = typed_tensor_2dshard(
-        tt_input_tensor,
-        mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        shard_mapping={h_axis: 2, w_axis: 3},
+    tt_input_tensor, logical_h, logical_w = torch_to_tt_input(
+        torch_input_tensor,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        h_axis=h_axis,
+        w_axis=w_axis,
         dtype=tt_input_dtype,
+        pad_channels=True,
+        pad_width=True,
     )
 
     logger.info(f"running tt model (t_chunk_size={t_chunk_size})")
@@ -1776,16 +1786,14 @@ def test_wan_decoder_production_blocking(
         logger.warning("Computing reference results from scratch (wan_decoder_production_blocking).")
         torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype)
 
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-    tt_input_tensor, logical_h, logical_w = pad_tensor_with_warning(
-        tt_input_tensor, torch_input_tensor, parallel_config
-    )
-    tt_input_tensor = typed_tensor_2dshard(
-        tt_input_tensor,
-        mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        shard_mapping={h_axis: 2, w_axis: 3},
-        dtype=ttnn.bfloat16,
+    tt_input_tensor, logical_h, logical_w = torch_to_tt_input(
+        torch_input_tensor,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        h_axis=h_axis,
+        w_axis=w_axis,
+        pad_channels=True,
+        pad_width=True,
     )
 
     logger.info(f"running tt model with production blocking (t_chunk_size={t_chunk_size})")
@@ -1927,16 +1935,16 @@ def test_wan_encoder_production_blocking(
         logger.warning("Computing reference results from scratch (wan_encoder_production_blocking).")
         torch_input_tensor = torch.randn(B, C, T, height, width, dtype=torch_dtype)
 
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-    tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
-    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor * 8)
-    if logical_h != tt_input_tensor.shape[2]:
-        logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
-    tt_input_tensor, logical_w = conv_pad_width(tt_input_tensor, parallel_config.width_parallel.factor * 8)
-    if logical_w != tt_input_tensor.shape[3]:
-        logger.info(f"width padding from {logical_w} to {tt_input_tensor.shape[3]}")
-    tt_input_tensor = bf16_tensor_2dshard(
-        tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+    tt_input_tensor, logical_h, logical_w = torch_to_tt_input(
+        torch_input_tensor,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        h_axis=h_axis,
+        w_axis=w_axis,
+        pad_channels=True,
+        pad_width=True,
+        height_factor_multiplier=8,
+        width_factor_multiplier=8,
     )
 
     logger.info(f"running tt encoder (encoder_t_chunk_size={encoder_t_chunk_size}, forward_chunk={forward_chunk})")
@@ -2224,13 +2232,14 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         else:
             torch_input_tensor = torch.randn(B, C, (1 if iter_idx == 0 else T), H, W, dtype=torch_dtype) * std + mean
 
-        tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-        tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
-        tt_input_tensor, logical_h = conv_pad_height(
-            tt_input_tensor, parallel_config.height_parallel.factor * 8
-        )  # Ensure each shard is divisible by the VAE spatial factor of 8.
-        tt_input_tensor = bf16_tensor_2dshard(
-            tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+        tt_input_tensor, logical_h, _ = torch_to_tt_input(
+            torch_input_tensor,
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            h_axis=h_axis,
+            w_axis=w_axis,
+            pad_channels=True,
+            height_factor_multiplier=8,
         )
 
         if golden is None:
@@ -2337,16 +2346,16 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         logger.warning("Computing reference results from scratch (wan_encoder).")
         torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
 
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-    tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
-    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor * 8)
-    if logical_h != tt_input_tensor.shape[2]:
-        logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
-    tt_input_tensor, logical_w = conv_pad_width(tt_input_tensor, parallel_config.width_parallel.factor * 8)
-    if logical_w != tt_input_tensor.shape[3]:
-        logger.info(f"width padding from {logical_w} to {tt_input_tensor.shape[3]}")
-    tt_input_tensor = bf16_tensor_2dshard(
-        tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
+    tt_input_tensor, logical_h, logical_w = torch_to_tt_input(
+        torch_input_tensor,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        h_axis=h_axis,
+        w_axis=w_axis,
+        pad_channels=True,
+        pad_width=True,
+        height_factor_multiplier=8,
+        width_factor_multiplier=8,
     )
 
     logger.info(f"running tt model")
