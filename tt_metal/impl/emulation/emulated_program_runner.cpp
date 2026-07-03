@@ -188,6 +188,29 @@ static constexpr uint32_t NOC_NODE_MASK = (1 << NOC_NODE_ID_BITS) - 1;
 // checks below and the JIT kernel .so files resolve it at link/dlopen.
 extern "C" [[noreturn]] void __emule_asan_panic(const char* fmt, ...);
 
+namespace {
+// Populates the tt_emule caller-context hints for the duration of a scope so
+// Core::l1_ptr OOB messages carry the raw NOC address + sender coord + tag.
+// Clears them on exit. Zero-cost when Core::l1_ptr doesn't abort: it only
+// reads the thread_locals inside the OOB branch.
+struct L1PtrHintScope {
+    L1PtrHintScope(uint64_t noc_addr, uint32_t self_x, uint32_t self_y, const char* tag) {
+        tt_emule::l1_ptr_hint_noc_addr = noc_addr;
+        tt_emule::l1_ptr_hint_self_x = self_x;
+        tt_emule::l1_ptr_hint_self_y = self_y;
+        tt_emule::l1_ptr_hint_tag = tag;
+    }
+    ~L1PtrHintScope() {
+        tt_emule::l1_ptr_hint_noc_addr = 0;
+        tt_emule::l1_ptr_hint_self_x = 0;
+        tt_emule::l1_ptr_hint_self_y = 0;
+        tt_emule::l1_ptr_hint_tag = nullptr;
+    }
+    L1PtrHintScope(const L1PtrHintScope&) = delete;
+    L1PtrHintScope& operator=(const L1PtrHintScope&) = delete;
+};
+}  // namespace
+
 // C-linkage bridge/fabric hooks for JIT kernels. Every one runs inside a kernel fiber, so
 // __emule_self is always set; a null means the hook ran outside a fiber — a contract violation,
 // not a recoverable state. Fail loudly (uniform across the whole bridge surface).
@@ -243,6 +266,12 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
         uint64_t key = (uint64_t(x) << 32) | y;
         auto it = __emule_self->core_map->find(key);
         if (it != __emule_self->core_map->end()) {
+            L1PtrHintScope hint(
+                (uint64_t(y) << (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) | (uint64_t(x) << NOC_LOCAL_BITS) |
+                    (addr & NOC_LOCAL_MASK),
+                my_x[0],
+                my_y[0],
+                "__emule_noc_resolve");
             return it->second->l1_ptr(static_cast<uint32_t>(addr));
         }
     }
@@ -297,6 +326,7 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
             uint32_t offset = (it->second->role() == tt_emule::CoreRole::WORKER)
                                   ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
                                   : static_cast<uint32_t>(local_addr);
+            L1PtrHintScope hint(noc_addr, my_x[0], my_y[0], "__emule_resolve_noc_addr");
             return it->second->l1_ptr(offset);
         }
     }
@@ -353,6 +383,9 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     uint32_t self_x = my_x[0];
     uint32_t self_y = my_y[0];
 
+    // Hint the mcast context to Core::l1_ptr so an OOB in the delivery loop
+    // points back to the raw mcast_addr + sender coord, not just the target.
+    L1PtrHintScope mcast_hint(mcast_addr, self_x, self_y, "__emule_multicast_write");
     uint32_t delivered = 0;
     for (uint32_t x = std::min(x_start, x_end); x <= std::max(x_start, x_end); x++) {
         for (uint32_t y = std::min(y_start, y_end); y <= std::max(y_start, y_end); y++) {
