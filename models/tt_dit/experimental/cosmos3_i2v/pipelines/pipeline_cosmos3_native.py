@@ -906,8 +906,6 @@ def build_cosmos3_i2v_native_pipeline(
         _cache_subfolder = "transformer-native-proj-out"
     else:
         _cache_subfolder = "transformer-native"
-    if _FRACTURED_TP:
-        _cache_subfolder += "-frac-tp"
     cache.load_model(
         native_trunk,
         model_name=cache_namespace,
