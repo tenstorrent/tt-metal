@@ -127,6 +127,9 @@ def test_untilize_with_unpadding_reuses_cache_when_only_width_l1_heuristic_chang
         # 2 cores
         ([1, 1, 128, 64], [0, 0, 127, 63], (64, 64), 2),
         ([1, 1, 128, 64], [0, 0, 100, 50], (64, 64), 2),
+        ([1, 1, 128, 2], [0, 0, 127, 1], (32, 32), 4),  # issue #19475: 4 bytes, below 16-byte NOC alignment
+        ([1, 1, 128, 4], [0, 0, 127, 3], (32, 32), 4),  # issue #19475: 8 bytes, below 16-byte NOC alignment
+        ([1, 1, 128, 8], [0, 0, 127, 7], (32, 32), 4),  # issue #19475: 16 bytes, at alignment boundary
     ],
 )
 @pytest.mark.parametrize("output_sharded", [True, False])
@@ -169,6 +172,42 @@ def test_untilize_with_unpadding_height_sharded(
     torch_result = torch_tensor[slices]
 
     assert_equal(result, torch_result)
+
+
+@pytest.mark.parametrize(
+    "hw, out_channels",
+    [
+        (2048, 2),  # issue #19475: 4 bytes, below 16-byte NOC alignment
+        (2048, 4),  # issue #19475: 8 bytes, below 16-byte NOC alignment
+        (2048, 8),  # issue #19475: 16 bytes, at alignment boundary
+    ],
+)
+def test_untilize_with_unpadding_height_sharded_narrow_width_regression(device, hw, out_channels):
+    """Regression test for issue #19475 / PR #38428.
+
+    HEIGHT_SHARDED TILE → ROW_MAJOR where the actual output row width is below
+    the 16-byte L1 NOC alignment boundary.  The CB page size must be
+    aligned_page_size (≥ 16 bytes), not block_row_size, to avoid overflow.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.rand((hw, out_channels), dtype=torch.bfloat16)
+
+    num_cores = 64
+    shard_shape = [hw // num_cores, max(out_channels, 32)]  # pad width to TILE_WIDTH
+    core_range_set = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size())
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_range_set, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    output_tensor_end = [hw - 1, out_channels - 1]
+
+    tt_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    tt_out = ttnn.untilize_with_unpadding(tt_tensor, output_tensor_end=output_tensor_end)
+    result = ttnn.to_torch(tt_out)
+
+    assert_equal(result, torch_input)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
