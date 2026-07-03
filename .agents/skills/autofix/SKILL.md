@@ -56,6 +56,10 @@ For accuracy bugs, use a localization ladder before broad changes: compare modul
 
 Treat "higher precision" or "safer numerics" as a hypothesis, not a fix. Test precision, compute-kernel, math-mode, and dtype changes with focused A/B runs, and revert them when they are unchanged or worse.
 
+For dtype or cache-related accuracy failures, do not collapse a passing higher-precision run into a claim of inherent numerical instability. Keep a precision-policy ledger for the failing and passing runs: activation dtype, weight dtype groups, math fidelities, cache dtype, CCL payload dtype, page/block size, cache layout, page-table policy, and update/read ops. A passing BF16 cache run proves only that the failure is sensitive to that boundary. Before blaming a low-precision cache or kernel, run at least one same-cache high-precision control and one exact-shape cache/page-table probe. Exact-shape means the probe imports the model's page block size, local KV heads, batch slots, cache allocation helper, mapper, and update row contract; hard-coded near misses are smoke tests, not proof.
+
+For paged-cache decode failures, also check allocation coverage against the attention op's rounded read window. Compute and log the first top-k miss index, absolute sequence position, page/block id, and dynamic chunk boundary. If the miss is a cliff at a page, tile, power-of-two, or chunk boundary, run an over-allocation control before pursuing numerical-instability explanations.
+
 If every AutoTriage hypothesis has been refuted or fixed and the original hang remains, do not keep guessing from the stale report. Update the visible evidence and try another `$autotriage` pass if fresh triage can be captured; otherwise run `$autodebug` in a fresh forked subagent from the new state. Continue with the new report.
 
 If every AutoDebug hypothesis has been refuted or fixed and the original problem remains, do not keep guessing from the stale report. Update the visible evidence, then run `$autodebug` again in a fresh forked subagent from the new state. Continue with the new report.
