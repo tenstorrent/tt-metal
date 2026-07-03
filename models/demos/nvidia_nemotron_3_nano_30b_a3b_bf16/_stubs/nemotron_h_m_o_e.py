@@ -108,12 +108,12 @@ class TtNemotronHMOE:
             )
             _hid, _inter = up_stack.shape[1], up_stack.shape[2]
             up_sh = ttnn.from_torch(
-                up_stack, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                up_stack, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(dev, mesh_shape=_mesh_shape, dims=(None, 0)),
             )
             up_sh = ttnn.to_device(up_sh, dev)
             dn_sh = ttnn.from_torch(
-                dn_stack, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                dn_stack, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(dev, mesh_shape=_mesh_shape, dims=(None, 0)),
             )
             dn_sh = ttnn.to_device(dn_sh, dev)
