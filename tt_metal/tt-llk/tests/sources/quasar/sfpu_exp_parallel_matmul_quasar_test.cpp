@@ -100,6 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_sfpu_srcs.h"
 #include "llk_srcs.h"
 #include "params.h"
 
@@ -114,60 +115,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t num_tiles = params.TILE_CNT;
 
-    const bool PARAM_SRCS_32BIT_MODE                = _is_srcs_32bit_mode_(static_cast<DataFormat>(formats.unpack_S_dst));
-    constexpr std::uint32_t PARAM_SRCS_XDIM         = srcs_dims::XDIM;
-    constexpr std::uint32_t PARAM_SRCS_ZDIM         = srcs_dims::ZDIM;
-    const std::uint32_t PARAM_SRCS_YDIM             = srcs_dims::ydim(PARAM_SRCS_32BIT_MODE);
-    const std::uint32_t PARAM_SRCS_SLICE_COUNT      = srcs_dims::slice_count(PARAM_SRCS_32BIT_MODE);
-    constexpr std::uint32_t PARAM_SRCS_INSTRN_COUNT = 1;
-
     constexpr std::uint32_t buf_desc_id_unpack = 0;
     constexpr std::uint32_t buf_desc_id_pack   = 8;
 
-    buffer_descriptor_u bd_unpack = {0};
-    tdma_descriptor_t td_unpack;
-    buffer_descriptor_u bd_pack = {0};
-    tdma_descriptor_t td_pack;
+    _llk_sfpu_srcs_init_(
+        L1_ADDRESS(params.buffer_S[0]),
+        static_cast<DataFormat>(formats.unpack_S_src),
+        static_cast<DataFormat>(formats.unpack_S_dst),
+        buf_desc_id_unpack,
+        L1_ADDRESS(params.buffer_Res[0]),
+        static_cast<DataFormat>(formats.pack_S_src),
+        static_cast<DataFormat>(formats.pack_S_dst),
+        buf_desc_id_pack,
+        IMPLIED_MATH_FORMAT);
 
-    bd_unpack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_S[0]);
-    bd_unpack.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
-    bd_unpack.f.x_dim         = PARAM_SRCS_XDIM;
-    bd_unpack.f.y_dim         = PARAM_SRCS_YDIM;
-    bd_unpack.f.z_dim         = PARAM_SRCS_ZDIM;
-    td_unpack.buf_desc        = bd_unpack;
-    td_unpack.buf_desc_id     = buf_desc_id_unpack;
-    td_unpack.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
-    _configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
-    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack);
-
-    bd_pack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_Res[0]);
-    bd_pack.f.format        = static_cast<std::uint8_t>(formats.pack_S_dst);
-    bd_pack.f.x_dim         = PARAM_SRCS_XDIM;
-    bd_pack.f.y_dim         = PARAM_SRCS_YDIM;
-    bd_pack.f.z_dim         = PARAM_SRCS_ZDIM;
-    td_pack.buf_desc        = bd_pack;
-    td_pack.buf_desc_id     = buf_desc_id_pack;
-    td_pack.reg_data_format = static_cast<std::uint8_t>(formats.pack_S_src);
-    _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK1>(td_pack);
-
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
-
-    _llk_unpack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
-    _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
-    _llk_math_eltwise_sfpu_init_();
-
-    const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1;
-    for (std::uint32_t i = 0; i < num_tiles; ++i)
-    {
-        _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT);
-        _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
-
-        for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
+    _llk_sfpu_srcs_(
+        num_tiles,
+        static_cast<DataFormat>(formats.unpack_S_dst),
+        buf_desc_id_unpack,
+        buf_desc_id_pack,
+        [](const int load_base_addr, const int store_base_addr, const int num_sfpu_iterations)
         {
-            const int load_base_addr  = ckernel::math::SFPU_SRCS_BASE_ADDR;
-            const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
-
 #pragma GCC unroll 8
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
@@ -175,10 +143,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::EXP_MODE);
                 TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_base_addr + (d << 1));
             }
-
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
-        }
-    }
+        });
 
     wait_sfpu_idle();
     wait_unpack_idle();
