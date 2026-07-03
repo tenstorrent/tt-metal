@@ -354,21 +354,48 @@ void kernel_main() {
                     uint32_t token_idx = route_info[2];
                     uint32_t dest_pages[4];
                     uint32_t dest_dist[4];
+                    uint8_t counts[4] = {0, 0, 0, 0};
+                    uint8_t num_chips = 0;
                     uint16_t hop_mask = 0;
                     for (uint32_t i = 0; i < num_dests; ++i) {
                         dest_pages[i] = route_info[3 + i];
                         dest_dist[i] = route_info[7 + i];
                         hop_mask |= static_cast<uint16_t>(1u << (dest_dist[i] - 1));  // bit (hops-1) per writing chip
+                        // dest_dist is ascending with each chip's pages contiguous (producer packing), so a
+                        // new distance opens a writing chip; a repeat extends the current chip's page count.
+                        if (i == 0 || dest_dist[i] != dest_dist[i - 1]) {
+                            counts[num_chips++] = 1;
+                        } else {
+                            counts[num_chips - 1]++;
+                        }
+                    }
+                    // TEMP observability (remove before merge): fires only when this single sparse-multicast
+                    // call carries more pages than chips, i.e. at least one chip receives >1 page. counts[c]
+                    // is that chip's page count; num_chips>1 with some counts[c]>1 is the mixed case (multiple
+                    // pages to one chip AND pages to other chips, all in one fabric call).
+                    if (num_dests > num_chips) {
+                        DPRINT(
+                            "[SND-TILE] one-call multipage: num_dests={} num_chips={} counts=[{},{},{},{}] "
+                            "hop_mask={}\n",
+                            num_dests,
+                            (uint32_t)num_chips,
+                            (uint32_t)counts[0],
+                            (uint32_t)counts[1],
+                            (uint32_t)counts[2],
+                            (uint32_t)counts[3],
+                            (uint32_t)hop_mask);
                     }
                     uint32_t payload_addr = ring_payload_base[s] + slot * aligned_output_page_size;
                     DPRINT_DISPATCH(
-                        "[SND] SPARSE_MCAST_FIRED ring={} dir={} num_dests={} hop_mask={}\n",
+                        "[SND] SPARSE_MCAST_FIRED ring={} dir={} num_dests={} num_chips={} hop_mask={}\n",
                         s,
                         direction,
                         num_dests,
+                        (uint32_t)num_chips,
                         (uint32_t)hop_mask);
 
-                    // One payload write fanned out to all co-directional destinations, each at its own page.
+                    // One payload write fanned out to all co-directional destinations; a chip hit by
+                    // multiple pages (counts[c] > 1) receives them all from this single multicast.
                     fabric_send_chip_sparse_multicast_noc_scatter_write_1d_in_direction<fabric_max_packet_size>(
                         output_addr_gen,
                         fabric_connections,
@@ -377,6 +404,8 @@ void kernel_main() {
                         direction,
                         dest_pages,
                         static_cast<uint8_t>(num_dests),
+                        counts,
+                        num_chips,
                         payload_addr,
                         (int)aligned_output_page_size,
                         l1_alignment);
@@ -499,11 +528,35 @@ void kernel_main() {
         uint32_t num_dests = route_info[1];
         uint32_t dest_pages[4];
         uint32_t dest_dist[4];
+        uint8_t counts[4] = {0, 0, 0, 0};
+        uint8_t num_chips = 0;
         uint16_t hop_mask = 0;
         for (uint32_t i = 0; i < num_dests; ++i) {
             dest_pages[i] = route_info[2 + i];
             dest_dist[i] = route_info[6 + i];
             hop_mask |= static_cast<uint16_t>(1u << (dest_dist[i] - 1));  // bit (hops-1) per writing chip
+            // dest_dist is ascending with each chip's pages contiguous (producer packing), so a new
+            // distance opens a writing chip; a repeat extends the current chip's page count.
+            if (i == 0 || dest_dist[i] != dest_dist[i - 1]) {
+                counts[num_chips++] = 1;
+            } else {
+                counts[num_chips - 1]++;
+            }
+        }
+        // TEMP observability (remove before merge): fires only when this single sparse-multicast call
+        // carries more pages than chips, i.e. at least one chip receives >1 page. counts[c] is that chip's
+        // page count; num_chips>1 with some counts[c]>1 is the mixed case (multiple pages to one chip AND
+        // pages to other chips, all in one fabric call).
+        if (num_dests > num_chips) {
+            DPRINT(
+                "[SND-RM] one-call multipage: num_dests={} num_chips={} counts=[{},{},{},{}] hop_mask={}\n",
+                num_dests,
+                (uint32_t)num_chips,
+                (uint32_t)counts[0],
+                (uint32_t)counts[1],
+                (uint32_t)counts[2],
+                (uint32_t)counts[3],
+                (uint32_t)hop_mask);
         }
         cb_pop_front(cb_route_info_id, 1);
 
@@ -511,9 +564,14 @@ void kernel_main() {
         uint32_t payload_addr = get_read_ptr(cb_payload_for_writer_id);
 
         DPRINT_DISPATCH(
-            "SPARSE_MCAST_FIRED dir={} num_dests={} hop_mask={}\n", direction, num_dests, (uint32_t)hop_mask);
+            "SPARSE_MCAST_FIRED dir={} num_dests={} num_chips={} hop_mask={}\n",
+            direction,
+            num_dests,
+            (uint32_t)num_chips,
+            (uint32_t)hop_mask);
 
-        // One payload write fanned out to all co-directional destinations, each at its own DRAM page.
+        // One payload write fanned out to all co-directional destinations; a chip hit by multiple pages
+        // (counts[c] > 1) receives them all from this single multicast.
         fabric_send_chip_sparse_multicast_noc_scatter_write_1d_in_direction<fabric_max_packet_size>(
             output_addr_gen,
             fabric_connections,
@@ -522,6 +580,8 @@ void kernel_main() {
             direction,
             dest_pages,
             static_cast<uint8_t>(num_dests),
+            counts,
+            num_chips,
             payload_addr,
             (int)aligned_output_page_size,
             l1_alignment);

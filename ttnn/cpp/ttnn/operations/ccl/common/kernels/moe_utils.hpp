@@ -1055,10 +1055,12 @@ inline void fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction(
         offset);
 }
 
-// Sparse multicast where each writing chip receives the payload at its OWN destination page.
-// dest_pages must be ordered by ascending hop distance from the source (nearest first): the router
-// advances write_idx on each writing hop, so slot i is consumed by the i-th writing chip along the line.
-// Currently supports 1D Ring topology, single direction.
+// Sparse multicast that delivers one payload to a flat, hop-ordered list of destination pages, grouped
+// per writing chip by counts[]: chip c receives counts[c] pages, so a single chip can be written multiple
+// pages. dest_pages must be ordered by ascending hop distance (nearest first) with each chip's pages
+// contiguous, matching counts[] (num_chips entries, sum == num_dests): the router advances write_idx by
+// counts[chip_idx] and chip_idx by one on each writing hop. Currently supports 1D Ring topology, single
+// direction.
 template <int32_t FabricMaxPacketSzBytes, typename AddrGenType, typename FabricConnectionsArrayType>
 inline void fabric_send_chip_sparse_multicast_noc_scatter_write_1d_in_direction(
     AddrGenType addrgen,
@@ -1068,6 +1070,8 @@ inline void fabric_send_chip_sparse_multicast_noc_scatter_write_1d_in_direction(
     uint32_t fabric_direction,  // eth_chan_directions index
     const uint32_t* dest_pages,
     uint8_t num_dests,
+    const uint8_t* counts,
+    uint8_t num_chips,
     uint32_t payload_l1_address,
     int32_t size_bytes,
     const uint32_t alignment,
@@ -1078,7 +1082,14 @@ inline void fabric_send_chip_sparse_multicast_noc_scatter_write_1d_in_direction(
     while (size_bytes > 0) {
         uint32_t curr_packet_size = std::min(static_cast<uint32_t>(FabricMaxPacketSzBytes), (uint32_t)size_bytes);
         tt::tt_fabric::linear::to_noc_sparse_mcast_write(
-            align(curr_packet_size, alignment), packet_header, dest_pages, num_dests, addrgen, offset);
+            align(curr_packet_size, alignment),
+            packet_header,
+            dest_pages,
+            num_dests,
+            counts,
+            num_chips,
+            addrgen,
+            offset);
         perform_payload_send<true, true>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
         payload_l1_address += curr_packet_size;
         offset += curr_packet_size;

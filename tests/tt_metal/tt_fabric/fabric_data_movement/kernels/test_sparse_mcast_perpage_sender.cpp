@@ -50,12 +50,15 @@ void kernel_main() {
 
         // Distinct destination address per writing chip; slot i (ascending hop order) lands at
         // target_base + i * payload. num_packets is assumed 1 (see host) so streaming does not overlap.
+        // One page per chip: counts are all 1 and num_chips == num_dests.
         tt::tt_fabric::NocSparseMulticastWriteCommandHeader cmd;
         for (uint8_t i = 0; i < num_dests; i++) {
             cmd.noc_address[i] =
                 get_noc_addr(recv_noc_x, recv_noc_y, target_base_address + i * packet_payload_size_bytes);
+            cmd.counts[i] = 1;
         }
         cmd.num_dests = num_dests;
+        cmd.num_chips = num_dests;
 
         PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* hdr, uint8_t) {
             fabric_sparse_multicast_noc_scatter_write(

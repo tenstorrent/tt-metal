@@ -323,12 +323,19 @@ struct NocMulticastAtomicIncCommandHeader {
 };
 #define NOC_SPARSE_MCAST_WRITE_MAX_DESTS 4
 struct NocSparseMulticastWriteCommandHeader {
-    // One fully-resolved destination NOC address per writing chip along the sparse-multicast line.
-    // The router indexes this array by write_idx and advances write_idx as it forwards, so each
-    // writing chip consumes its own address while a single payload is delivered to all of them.
+    // Flat list of fully-resolved destination NOC addresses, one per page, grouped by writing chip in
+    // ascending hop order: counts[c] consecutive addresses belong to the c-th writing chip. A single
+    // payload is delivered to every address, so one chip can receive multiple pages. The router walks
+    // chip_idx over the writing hops; at each it writes counts[chip_idx] pages starting at write_idx,
+    // then advances write_idx by that count and chip_idx by one before forwarding the mutated header
+    // downstream. num_dests is the total page count (== sum of counts, <= MAX_DESTS); num_chips is the
+    // number of writing chips (== set bits in the hop mask).
     uint64_t noc_address[NOC_SPARSE_MCAST_WRITE_MAX_DESTS];
+    uint8_t counts[NOC_SPARSE_MCAST_WRITE_MAX_DESTS];
     uint8_t num_dests;
+    uint8_t num_chips;
     uint8_t write_idx;
+    uint8_t chip_idx;
 };
 static_assert(sizeof(NocUnicastCommandHeader) == 8, "NocUnicastCommandHeader size is not 8 bytes");
 static_assert(sizeof(NocMulticastCommandHeader) == 8, "NocMulticastCommandHeader size is not 8 bytes");
@@ -673,9 +680,9 @@ public:
         return static_cast<volatile Derived*>(this);
     }
 
-    // Pairs with to_chip_sparse_multicast: carries one destination address per writing chip.
-    // Addresses must be listed in hop order (nearest writing chip first) so write_idx, which the
-    // router advances only on writing hops, selects each chip's own address.
+    // Pairs with to_chip_sparse_multicast: carries a flat, hop-ordered list of destination addresses
+    // grouped per writing chip by counts[]. Addresses must be listed nearest writing chip first, with a
+    // chip's pages contiguous, so the router's write_idx/chip_idx advance selects each chip's own pages.
     volatile Derived* to_noc_sparse_mcast_write(
         const NocSparseMulticastWriteCommandHeader& sparse_mcast_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -690,8 +697,15 @@ public:
                 noc_address_components.second,
                 edm_to_local_chip_noc);
         }
+        const uint8_t num_chips = sparse_mcast_command_header.num_chips;
+        ASSERT(num_chips > 0 && num_chips <= num_dests);
+        for (uint8_t i = 0; i < num_chips; i++) {
+            this->command_fields.sparse_mcast_write.counts[i] = sparse_mcast_command_header.counts[i];
+        }
         this->command_fields.sparse_mcast_write.num_dests = num_dests;
+        this->command_fields.sparse_mcast_write.num_chips = num_chips;
         this->command_fields.sparse_mcast_write.write_idx = 0;
+        this->command_fields.sparse_mcast_write.chip_idx = 0;
         this->payload_size_bytes = static_cast<uint16_t>(payload_size_bytes);
 #else
         TT_THROW("Calling to_noc_sparse_mcast_write from host is unsupported");

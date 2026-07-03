@@ -166,10 +166,10 @@ void kernel_main() {
     // route_info carries everything the sender needs to rebuild each destination's metadata, so no
     // metadata is staged here.
     //
-    // Two independent bounds shape a slot: distinct hop distances (a hop_mask bit is distance-1, so two
-    // same-distance destinations can't share one multicast) and at most MCAST_MAX_DESTS destinations
-    // (the fabric packet header holds that many address slots). A direction whose destinations exceed
-    // either bound spills into additional slots.
+    // One bound shapes a slot: at most MCAST_MAX_DESTS total pages (the fabric packet header holds that
+    // many address slots). Same-distance (same-chip) destinations may share a slot — the sender emits
+    // them as multiple pages to that one chip in a single sparse multicast. A direction whose pages
+    // exceed the cap spills into additional slots.
     constexpr uint32_t MCAST_NUM_DIRS = 4;
     constexpr uint32_t MCAST_MAX_DESTS = 4;  // == NOC_SPARSE_MCAST_WRITE_MAX_DESTS and the 4-dest slot layout
     // A token can route all its top-k picks through a single direction, so each per-direction bucket
@@ -241,7 +241,7 @@ void kernel_main() {
                 continue;
             }
             // Sort this direction's destinations by hop distance (ascending) so equal-distance
-            // (same-chip) destinations become adjacent for the collision split below.
+            // (same-chip) destinations become adjacent for run-aware packing below.
             for (uint32_t a = 1; a < n; a++) {
                 uint32_t dv = bk_dist[dir][a], pv = bk_page[dir][a], ev = bk_expert[dir][a], kv = bk_k[dir][a];
                 int32_t wv = bk_weight[dir][a];
@@ -260,43 +260,41 @@ void kernel_main() {
                 bk_k[dir][b + 1] = kv;
                 bk_weight[dir][b + 1] = wv;
             }
-            // Collision split: assign each destination a group index = its rank within its equal-distance
-            // run, so every group has strictly distinct distances (one hop_mask bit each).
-            uint32_t group_id[MCAST_BUCKET_CAP];
-            uint32_t max_group = 0;
-            for (uint32_t a = 0; a < n; a++) {
-                group_id[a] = (a > 0 && bk_dist[dir][a] == bk_dist[dir][a - 1]) ? group_id[a - 1] + 1 : 0;
-                if (group_id[a] > max_group) {
-                    max_group = group_id[a];
-                }
-            }
-            // Within a group all distances are distinct; pack its members into route_info slots of at
-            // most MCAST_MAX_DESTS (the fabric per-call cap), emitting a fresh slot whenever one fills.
-            for (uint32_t gg = 0; gg <= max_group; gg++) {
+            // Pack up to MCAST_MAX_DESTS total pages per slot, keeping the ascending-distance order from
+            // the sort above. A chip hit by multiple experts of this token (equal distance, different
+            // pages) keeps all its pages in one slot: the fabric writes them to that chip in a single
+            // sparse multicast, and the sender derives the per-chip page count from the repeated
+            // distances. Equal distances are adjacent, so each run is one chip; keep a run intact unless
+            // it alone exceeds the per-slot cap (only reachable when top-k > MCAST_MAX_DESTS).
+            uint32_t a = 0;
+            while (a < n) {
                 uint32_t gcount = 0;
                 uint16_t hop_mask = 0;
-                for (uint32_t a = 0; a < n; a++) {
-                    if (group_id[a] != gg) {
-                        continue;
+                while (a < n && gcount < MCAST_MAX_DESTS) {
+                    uint32_t run = 1;
+                    while (a + run < n && bk_dist[dir][a + run] == bk_dist[dir][a]) {
+                        run++;
                     }
-                    // Grouped route_info (23 u32): [0]=direction, [1]=num_dests, [2]=token_idx,
-                    // [3..6]=page[4], [7..10]=dist[4], [11..14]=expert[4], [15..18]=k[4], [19..22]=weight[4].
-                    route_info_scratch[3 + gcount] = bk_page[dir][a];
-                    route_info_scratch[7 + gcount] = bk_dist[dir][a];
-                    route_info_scratch[11 + gcount] = bk_expert[dir][a];
-                    route_info_scratch[15 + gcount] = bk_k[dir][a];
-                    route_info_scratch[19 + gcount] = (uint32_t)bk_weight[dir][a];
-                    hop_mask |= static_cast<uint16_t>(1u << (bk_dist[dir][a] - 1));
-                    gcount++;
-                    if (gcount == MCAST_MAX_DESTS) {
-                        emit_slot(dir, gcount, hop_mask);
-                        gcount = 0;
-                        hop_mask = 0;
+                    if (gcount + run > MCAST_MAX_DESTS) {
+                        if (gcount > 0) {
+                            break;  // close this slot so the chip's run stays intact in the next
+                        }
+                        run = MCAST_MAX_DESTS;  // one chip with more pages than a slot holds: hard-split
                     }
+                    for (uint32_t r = 0; r < run; r++) {
+                        // Grouped route_info (23 u32): [0]=direction, [1]=num_dests, [2]=token_idx,
+                        // [3..6]=page[4], [7..10]=dist[4], [11..14]=expert[4], [15..18]=k[4], [19..22]=weight[4].
+                        route_info_scratch[3 + gcount] = bk_page[dir][a + r];
+                        route_info_scratch[7 + gcount] = bk_dist[dir][a + r];
+                        route_info_scratch[11 + gcount] = bk_expert[dir][a + r];
+                        route_info_scratch[15 + gcount] = bk_k[dir][a + r];
+                        route_info_scratch[19 + gcount] = (uint32_t)bk_weight[dir][a + r];
+                        hop_mask |= static_cast<uint16_t>(1u << (bk_dist[dir][a + r] - 1));
+                        gcount++;
+                    }
+                    a += run;
                 }
-                if (gcount > 0) {
-                    emit_slot(dir, gcount, hop_mask);
-                }
+                emit_slot(dir, gcount, hop_mask);
             }
             bk_count[dir] = 0;
         }

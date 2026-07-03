@@ -418,12 +418,12 @@ def dispatch_shape_params():
         )
         params.append(
             pytest.param(
-                3200,
+                640,
                 config.EMB_SIZE,
                 config.NUM_ROUTED_EXPERTS // 4,
                 8,
                 8,
-                True,
+                False,
                 marks=marks,
                 id=f"{name}-perf_no_pcc",
             )

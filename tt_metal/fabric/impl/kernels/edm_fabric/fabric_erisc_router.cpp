@@ -883,11 +883,14 @@ FORCE_INLINE void receiver_forward_packet(
                 break;
             case LowLatencyFields::WRITE_AND_FORWARD:
                 if (packet_start->noc_send_type == tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE) {
-                    // Per-chip destination address: this chip writes its own slot, then write_idx is
-                    // advanced so the downstream chip picks the next address. The increment must precede
-                    // the forward because forwarding sends the (mutated) header downstream.
+                    // This chip writes its own page group (counts[chip_idx] pages from write_idx), then
+                    // write_idx/chip_idx advance so the downstream chip picks the next group. The advance
+                    // must precede the forward because forwarding sends the (mutated) header downstream,
+                    // and must follow the write because the write reads the pre-advance chip_idx.
                     execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-                    packet_start->command_fields.sparse_mcast_write.write_idx++;
+                    auto& sparse = packet_start->command_fields.sparse_mcast_write;
+                    sparse.write_idx += sparse.counts[sparse.chip_idx];
+                    sparse.chip_idx++;
                     forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                         packet_start,
                         payload_size_bytes,

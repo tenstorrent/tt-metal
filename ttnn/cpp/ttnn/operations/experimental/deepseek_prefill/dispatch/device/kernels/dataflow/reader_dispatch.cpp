@@ -414,19 +414,29 @@ void kernel_main() {
                     mcast_weight[d][b + 1] = ww;
                 }
 
-                // Emit groups of DISTINCT hops. A sparse multicast writes at most once per hop, so a
-                // chip hit by multiple experts of this token (same distance, different pages) must be
-                // split across separate groups — one write per page. Entries are sorted by distance, so
-                // equal distances are adjacent and break the current group.
+                // Pack up to MCAST_MAX_DESTS total pages per slot, keeping ascending-distance order. A
+                // chip hit by multiple experts of this token (equal distance, different pages) keeps all
+                // its pages in one slot: the fabric writes them to that chip in a single sparse multicast,
+                // and the sender derives the per-chip page count from the repeated distances. Equal
+                // distances are adjacent (sorted above), so each run is one chip; keep a run intact unless
+                // it alone exceeds the per-slot cap (only reachable when top-k > MCAST_MAX_DESTS).
                 uint32_t gi = 0;
                 while (gi < n) {
                     uint32_t g_start = gi;
                     uint32_t g_count = 0;
-                    uint32_t last_dist = 0xFFFFFFFFu;
-                    while (gi < n && mcast_dist[d][gi] != last_dist && g_count < MCAST_MAX_DESTS) {
-                        last_dist = mcast_dist[d][gi];
-                        g_count++;
-                        gi++;
+                    while (gi < n && g_count < MCAST_MAX_DESTS) {
+                        uint32_t run = 1;
+                        while (gi + run < n && mcast_dist[d][gi + run] == mcast_dist[d][gi]) {
+                            run++;
+                        }
+                        if (g_count + run > MCAST_MAX_DESTS) {
+                            if (g_count > 0) {
+                                break;  // close this slot so the chip's run stays intact in the next
+                            }
+                            run = MCAST_MAX_DESTS;  // one chip with more pages than a slot holds: hard-split
+                        }
+                        g_count += run;
+                        gi += run;
                     }
 
                     // Grouped route_info (resized slot): [0]=direction, [1]=num_dests,

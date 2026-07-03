@@ -2315,10 +2315,11 @@ FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
 
 // clang-format off
 /**
- * Sparse multicast with a distinct destination address per writing chip: delivers a single payload to
- * the non-contiguous colinear chips selected by the hop bitmask, writing it to sparse_mcast_command_header
- * .noc_address[i] on the i-th writing chip (in ascending hop order). Unlike scatter (many addresses, one
- * chip), each address here targets a different chip. 1D only.
+ * Sparse multicast delivering a single payload to a flat, hop-ordered list of destination addresses,
+ * grouped per writing chip by sparse_mcast_command_header.counts[] (num_chips chips, sum == num_dests):
+ * chip c receives its counts[c] pages. Unlike scatter (many addresses, one chip), addresses here span
+ * the non-contiguous colinear chips selected by the hop bitmask, and one chip may take multiple pages.
+ * The caller must set noc_address[0..num_dests), counts[0..num_chips), num_dests and num_chips. 1D only.
  *
  * Return value: None
  *
@@ -2328,7 +2329,7 @@ FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
  * | packet_header              | Packet header to use                             | volatile PACKET_HEADER_TYPE*                  | True     |
  * | src_addr                   | Source L1 address                                | uint32_t                                      | True     |
  * | size                       | Payload size in bytes                            | uint32_t                                      | True     |
- * | sparse_mcast_command_header| Per-writing-chip destination addresses (hop order)| tt::tt_fabric::NocSparseMulticastWriteCommandHeader | True |
+ * | sparse_mcast_command_header| Flat hop-ordered addresses + per-chip counts     | tt::tt_fabric::NocSparseMulticastWriteCommandHeader | True |
  * | hops                       | Sparse multicast hop bitmask                     | uint16_t                                      | True     |
  */
 // clang-format on
