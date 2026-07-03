@@ -26,7 +26,7 @@ tt/generator.py
 
 If they do not, use `$full-model` first. During vLLM integration you may make small, evidence-backed changes to `model.py` or `generator.py` when the serving adapter exposes a real contract gap, but avoid turning this stage back into full-model bringup.
 
-Before writing adapter code, load the datatype-sweep selection and confirm the generator constructs that exact policy: weight groups, activation/residual dtype, CCL dtype, KV-cache dtype, compute fidelities, and layer exceptions. Serving uses the selected full-model policy. Serving a reduced-speed model does not satisfy completion.
+Before writing adapter code, load the active full-model precision policy and confirm the generator constructs that exact policy: weight groups, activation/residual dtype, CCL dtype, KV-cache dtype, compute fidelities, and layer exceptions. During stages 07-09 this is the conservative pre-release policy; after stage 10 it may be the selected datatype-sweep policy. Serving a different policy from the one under test does not satisfy completion. Do not lower dtype or fidelity for serving performance before TTI release unless memory-fit evidence requires it.
 
 Load `models/autoports/<model>/doc/context_contract.json` and serve the recorded supported context. The default target is the HF-advertised context. Do not lower `--max-model-len`, model config context, benchmark context, API context, or any other advertised serving capability to work around a model bug. A smaller value is valid only when the context contract records evidence that a hard physical device limit prevents the advertised capability from fitting or running and that the selected value is the largest feasible one.
 
@@ -188,7 +188,7 @@ If the tokenizer has no chat template, say so explicitly, treat the checkpoint a
 Done means all of these are true and recorded:
 
 - Full-model generator readiness baseline used before adding vLLM.
-- Selected datatype policy loaded by serving, including KV-cache and CCL dtype.
+- Active precision policy loaded by serving, including KV-cache and CCL dtype, and whether it is the conservative pre-release policy or post-release datatype-sweep selection.
 - Adapter class, low-level generator methods it delegates to, and KV-cache ownership contract.
 - Plugin registration path and architecture name.
 - Exact successful `run_vllm_server` invocation.

@@ -2,12 +2,13 @@
 
 Subagents are authorized when a selected skill requests or recommends them.
 
-Start from completed vLLM integration and the selected datatype-sweep config; optimize serving in place.
+Start from completed vLLM integration and the active conservative precision policy; optimize serving in place.
 
 Goal completion requirements:
 - The measured path is real vLLM TT plugin serving through models/autoports/<model>/tt/generator_vllm.py.
 - vLLM sampling tests, qualitative outputs, primary single-user benchmarks, and CI serving-burst benchmarks pass.
 - Warmed primary single-user TTFT, TPOT, ITL, aggregate throughput, and TPOT-derived decode t/s/u are measured before and after using the same run_vllm_server workload, generation mode, max-num-seqs, max-model-len, mesh, sampling mode, and TT config.
+- Do not lower dtypes or fidelity for performance in this pre-release serving stage unless required for memory fit, with evidence. Optimize async decode, trace reuse, on-device sampling, stale-input safety, host boundaries, and serving orchestration under the conservative policy.
 - CI serving-burst metrics are measured before and after as capacity/nightly-parity evidence. Do not use CI burst as headline decode t/s/u.
 - Preserve the context contract. Do not lower `max_model_len`, benchmark context, or eval context below doc/context_contract.json except for a proven hard physical limit.
 - Preserve valid non-aligned prompt-length serving support while optimizing. Do not trade it away for an aligned-only faster path.

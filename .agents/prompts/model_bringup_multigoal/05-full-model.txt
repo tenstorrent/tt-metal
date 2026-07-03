@@ -6,7 +6,7 @@ This goal creates the full-model state for the repo-local TTNN autoport pipeline
 
 Goal completion requirements:
 - models/autoports/<model>/tt/model.py and tt/generator.py implement the full HF autoregressive path and standard Metal readiness generator contract.
-- The full model preserves the optimized multichip decoder strategy, dtype/fidelity/KV-cache/activation/CCL policy, paged-cache dtype split, rejection ledger, and inter-layer residual layout. Fallback to single-chip, replicated, host-side, or less optimized behavior is not acceptable.
+- The full model preserves the optimized multichip decoder strategy, conservative dtype/fidelity/KV-cache/activation/CCL policy, paged-cache dtype split, rejection ledger, and inter-layer residual layout. Fallback to single-chip, replicated, host-side, or less optimized behavior is not acceptable. Do not lower dtypes or fidelity for performance in this stage unless required for memory fit, with evidence.
 - Preserve the full-stack context contract. Recompute weight plus KV-cache DRAM capacity in doc/context_contract.json. Reduce advertised capability only for a hard physical limit, with evidence and the largest feasible value.
 - The model/generator accepts valid prompt lengths up to the supported context, including non-aligned lengths. If prefill chunks internally, the public generator owns padding, masking, cache fill, position handling, and output slicing.
 - Expose serving-ready low-level prefill/decode with explicit cache/page-table/position/prompt-length/batch state, mixed prompts, fixed slots, and inactive rows where used.

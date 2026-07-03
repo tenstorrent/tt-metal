@@ -7,20 +7,21 @@ This goal creates the optimized-decoder state for the repo-local TTNN autoport p
 Goal completion requirements:
 - models/autoports/<model>/tt/optimized_decoder.py exists and the delivered tests exercise the optimized path, not a functional fallback.
 - The optimized decoder preserves the functional decoder's prefill/decode semantics, paged KV-cache behavior, determinism, and representative layer-kind coverage.
-- The optimized decoder preserves the context contract from functional decoder. If optimization changes memory layout, sharding, or KV-cache dtype enough to change capacity, update doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
+- Preserve the context contract; reductions require hard DRAM/capacity evidence and the largest feasible value.
+- Use the conservative pre-release precision baseline: BF16 activations/residuals/norms/logits, conservative fidelity, and the least-reduced weight/KV/cache policy that fits. Lower dtype/fidelity only for memory fit, with byte/probe evidence; no performance-driven BFP4/LoFi/KV/activation/CCL sweeps here. If a matmul program or compute-kernel config includes math fidelity, accumulator precision, or another precision-bearing field, hold that field at the conservative baseline too.
 - The optimized decoder preserves support for valid non-aligned logical sequence lengths; internal padding/chunking is fine, public `seq_len % chunk_size == 0` restrictions are not.
 - Prefill and decode PCC remain at the functional acceptance bar for every meaningful layer kind, with any material delta explained.
 - Warmed prefill and traced warmed decode latency are reported before and after optimization.
 - Final code must beat the best correct traced-decode baseline/candidates; fewer ops or cleaner topology is not enough.
-- If MLP/expert matmuls dominate decode, try BFP4/LoFi across material core/shard geometries; synthetic/random PCC cannot veto real-weight wins; perf rows must prove it.
-- tt-perf-report tables/CSV exist for prefill and decode. Try actionable advice; rejected advice has before/after evidence. A first TTNN/API error is not enough to reject a material op, reshard, layout, or host-fallback optimization.
-- The optimization pass starts with an operation-topology audit of the measured path: repeated same-input matmuls, avoidable reshard/layout conversions, candidate fused/packed projections, optimized composite ops, and lower-movement replacements. The README or work log records current ops, candidate replacements, action taken, and evidence.
-- The optimization pass addresses model-applicable decoder opportunities now: canonical precision/fidelity policy, sharded layouts, fused or packed same-input projections, DRAM-sharded decode matmuls, large prefill program configs, SDPA/composite ops, memory/program/compute-kernel configs, runtime data movement, and MoE active-expert execution. Completed and rejected options have evidence. Keep packed/fused same-input projections only when they beat a well-tuned legal separate candidate or the separate candidate is invalid.
+- If MLP/expert matmuls dominate decode, optimize topology, sharding, precision-neutral program geometry, DRAM-sharded matmuls, fusion/packing, and data movement under the conservative baseline; record dtype/fidelity opportunities as stage-10 candidates.
+- tt-perf-report tables/CSV exist for prefill and decode. Try actionable advice; rejected material ops/reshards/layouts need before/after evidence, not a first API error.
+- Start with an operation-topology audit: repeated same-input matmuls, avoidable reshard/layout conversions, fused/packed projections, composite ops, lower-movement replacements, action taken, and evidence.
+- Address model-applicable decoder work in this stage: conservative precision policy, sharded layouts, fused/packed projections, DRAM-sharded decode matmuls, large prefill configs, SDPA/composite ops, memory configs, precision-neutral program geometry, non-precision compute-kernel knobs, data movement, and MoE active-expert execution.
 - The final optimized runtime path has no unnecessary torch/from_torch/to_torch, tilize/untilize, reshard, or host fallback in measured prefill/decode.
 - Stress or repeated-run coverage and a watcher-clean optimized correctness run exist.
 - models/autoports/<model>/doc/optimized_decoder/README.md and work_log.md record commands, before/after PCC and perf, chosen configs, tt-perf-report conclusions, rejected options, limitations, and exact artifacts.
 - The checklist in the $optimize skill has been completed with evidence
-- The decoder is genuinely optimized for the current hardware within TTNN's available capabilities. No remaining decoder optimization work is deferred to a later stage.
+- The decoder is genuinely optimized for current hardware under the conservative precision baseline; broad datatype/fidelity Pareto selection belongs to stage 10.
 - $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

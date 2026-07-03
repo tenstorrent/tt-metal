@@ -2,14 +2,14 @@
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
-This goal creates the optimized-full-model state. Start from the completed full model and optimize the complete model/generator path across the target mesh; do not begin vLLM integration work.
+This goal creates the optimized-full-model state. Start from the completed full model and optimize model/generator path across the mesh; do not begin vLLM integration work.
 
 Goal completion requirements:
 - Parallelize/optimize the full path, not just the decoder: embeddings, norms, LM head, logits, sampling, cache, trace replay, collectives, residual layouts, host boundaries, and generator orchestration.
 - Preserve canonical split-sampling token-out from $full-model/$tt-enable-tracing: sampler-ready logits, `tt_out_tok` feedback, device-side position/RoPE advance, changed-only page tables, and traced greedy plus top-k/top-p-capable sampling.
 - Preserve the serving-ready generator contract while making it fast: explicit cache/page-table/position/prompt-length/batch state, mixed prompts, fixed slots, and inactive rows still work.
 - Greedy decode must stay on device. Benchmark correct greedy sampler choices for this mesh. Do not accept force-argmax just because an incorrectly shaped generic sampled path is slower; fix split greedy or leave a repro.
-- Preserve the decoder stack's selected dtype/fidelity/KV-cache/activation/CCL policy, rejection ledger, and inter-layer residual layout. Do not switch to a faster rejected policy or replicated stream.
+- Preserve the decoder stack's conservative dtype/fidelity/KV-cache/activation/CCL policy, rejection ledger, and inter-layer residual layout. Lower dtype/fidelity only for memory fit, with byte/probe evidence.
 - Preserve or improve doc/context_contract.json. Reduce advertised capability only for a hard physical limit, with evidence and the largest feasible value.
 - Preserve valid non-aligned prompt-length support through the optimized generator path. Faster code that only accepts aligned chunk/page/tile lengths is not complete.
 - Refresh AIME24 chat-template prefill, teacher-forcing decode, and autoregressive evidence. run_prefill_check and run_teacher_forcing meet top-5 >= 98% and top-100 = 100%.
@@ -18,8 +18,8 @@ Goal completion requirements:
 - If token-out decode is >10-15% slower than layer-stack lower bound plus terminal work, split and close the largest avoidable gap.
 - If force-argmax, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampler op dominates token-out decode, fix the LM-head/sampling contract before completing the goal.
 - Leave tt-perf-report tables plus CSV/provenance logs for the full-model path.
-- Applicable $multichip and $optimize checklist items have evidence for full-model sharding, CCL, matmuls, program configs, and kernels.
-- Do not run a broad full-model datatype frontier search here; $datatype-sweep owns Pareto selection.
+- Applicable $multichip and $optimize checklist items have evidence for full-model sharding, CCL, matmuls, precision-neutral program geometry, and non-precision kernel knobs.
+- Do not run datatype frontier search here; $datatype-sweep owns Pareto selection, including precision-bearing program/compute-kernel fields. Keep optimizing tracing, sharding, topology, precision-neutral program geometry, LM-head/sampling, CCL placement, persistent buffers, and host-boundary removal.
 - Runtime fallback audit is clean for the measured path. Token-out decode is fully traced with split sampling and has no host boundary.
 - models/autoports/<model>/doc/optimized_full_model/README.md and work_log.md record commands, before/after accuracy and perf, mesh/optimization decisions, tt-perf-report conclusions, limitations, and exact artifacts.
 - $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.

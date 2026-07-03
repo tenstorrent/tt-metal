@@ -135,6 +135,7 @@ def checked_files(model_dir: Path) -> list[Path]:
         "doc/vllm_integration",
         "doc/optimized_vllm",
         "doc/tti_release",
+        "doc/datatype_sweep",
     ):
         root = model_dir / rel
         if root.is_file():

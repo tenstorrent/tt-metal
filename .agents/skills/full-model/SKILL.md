@@ -203,7 +203,7 @@ Compare full-model decode against the best decoder-layer stack lower bound befor
 - compare the summed layer-stack ms/token with the measured full-model token-out ms/token;
 - optimize the named full-model-only costs before accepting the result: final norm, LM head, sampling strategy, sampler all-gather/top-k/argmax work, trace replay, host input refresh, page-table refresh, RoPE/current-position refresh, synchronizations, token readback, and disabled CCL/persistent-buffer optimizations.
 
-If the lower bound says the requested target is plausible but the full model misses it, the optimized-full-model pass must close that specific gap. If the lower bound itself misses the target, return to decoder/multichip optimization or a targeted precision/fidelity policy rather than spending the budget on generator code.
+If the lower bound says the requested target is plausible but the full model misses it, the optimized-full-model pass must close that specific gap. If the lower bound itself misses the target before TTI release, return to decoder/multichip topology, sharding, precision-neutral program geometry, CCL, or tracing optimization rather than spending the budget on generator code. Targeted precision/fidelity changes, including math-fidelity or other precision-bearing program/compute-kernel fields, are allowed before release only for memory fit; performance-driven precision policy selection belongs to the post-release datatype sweep.
 
 ## Evidence To Leave
 

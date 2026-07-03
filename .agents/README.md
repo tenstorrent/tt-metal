@@ -8,7 +8,7 @@ It has three parts:
 
 ```text
 .agents/
-  prompts/model_bringup_multigoal/   # the ten stage goals, one prompt file each
+  prompts/model_bringup_multigoal/   # release-pass goals plus post-release sweep
   skills/                            # the knowledge the agent works from
   scripts/multigoal                  # the runner that chains the stages together
 ```
@@ -26,8 +26,8 @@ python .agents/scripts/multigoal \
   .agents/prompts/model_bringup_multigoal/*.txt
 ```
 
-That runs all ten stages back to back. Expect a full bringup to take several
-hours of unattended work. Results land in `models/autoports/<model>/`, where
+That runs the conservative release pass and then the post-release datatype
+sweep. Expect a full bringup to take several hours of unattended work. Results land in `models/autoports/<model>/`, where
 `<model>` is the HF model id lowercased with non-alphanumerics replaced by
 underscores.
 
@@ -41,15 +41,22 @@ stages build on each other:
 | Stage | Delivers |
 |---|---|
 | 01 functional-decoder | A correct TTNN decoder layer, validated against the HF reference (PCC) |
-| 02 optimized-decoder | The same layer made fast on one chip: precision, sharding, program configs |
+| 02 optimized-decoder | The same layer made fast on one chip: tracing, sharding, precision-neutral program geometry, data movement |
 | 03 multichip-decoder | The layer parallelized across the chip mesh |
 | 04 optimized-multichip-decoder | The multichip layer optimized: async collectives, fused ops |
 | 05 full-model | The whole model end to end: embeddings, layer stack, LM head, generation |
-| 06 optimized-full-model | The full model traced and optimized, with honest perf accounting |
-| 07 datatype-sweep | The fastest weight/activation/KV datatype config that still meets accuracy |
-| 08 vllm | The model serving real requests through the Tenstorrent vLLM plugin |
-| 09 optimized-vllm | The serving path optimized: async decode, trace reuse, on-device sampling |
-| 10 tti-release | The tt-inference-server release workflow run and customer-facing readiness report |
+| 06 optimized-full-model | The full model traced and optimized under a conservative pre-release precision policy |
+| 07 vllm | The model serving real requests through the Tenstorrent vLLM plugin |
+| 08 optimized-vllm | The serving path optimized: async decode, trace reuse, on-device sampling |
+| 09 tti-release | The tt-inference-server release workflow run and customer-facing readiness report |
+| 10 datatype-sweep | Post-release dtype/fidelity Pareto sweep using a smaller TTI-release benchmark, then full benchmark rerun for the selected config |
+
+Stages 01-09 use conservative dtype and compute-fidelity policies. They may
+lower precision only when a byte calculation or failed capacity probe shows that
+the advertised model capability cannot fit otherwise. Precision-bearing program
+or compute-kernel fields, including matmul math fidelity, are part of that
+policy. Stage 10 handles BFP4/LoFi, KV-cache, activation, CCL, and
+compute-fidelity Pareto exploration after the TTI release stage has passed.
 
 The `$skill` references inside each prompt attach the matching skill from
 `.agents/skills/` — that is where the engineering knowledge lives (how to
@@ -80,9 +87,10 @@ models/autoports/<model>/doc/context_contract.json
 
 The artifact records the HF-advertised context, the current supported context,
 any DRAM limit, and the evidence behind it. Functional decoder bringup creates
-it. Multichip, full-model, optimized-full-model, datatype-sweep, vLLM, and
-release stages update or verify it because tensor parallelism, full-stack memory
-use, and KV-cache dtype can change the feasible context.
+it. Multichip, full-model, optimized-full-model, vLLM, release, and
+post-release datatype-sweep stages update or verify it because tensor
+parallelism, full-stack memory use, and KV-cache dtype can change the feasible
+context.
 
 Each stage leaves its evidence under `models/autoports/<model>/doc/<stage>/`:
 a `README.md` with the results, a `work_log.md` with the journey, and the

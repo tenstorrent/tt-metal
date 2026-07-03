@@ -1,0 +1,20 @@
+/goal Use $datatype-sweep and $tt-device-usage for the HF_MODEL post-release autoport in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the post-release datatype-sweep state. Start only after the TTI release stage has passed and use models/autoports/<model>/doc/tti_release/post_release_sweep_benchmark.json as the screening contract. Sweep weight, activation, CCL, KV-cache datatype, precision-bearing program/compute-kernel fields, and compute-fidelity configurations.
+
+Goal completion requirements:
+- Refresh the conservative baseline from the TTI release stage: selected code path, active dtype/fidelity policy, context contract, small screening benchmark score, full release benchmark/eval status, and serving performance.
+- Evaluate candidate dtype/fidelity configs on the smaller TTI-release screening benchmark named in post_release_sweep_benchmark.json. PCC, layer tests, and component timing are smoke/debug evidence only; they are not the selection gate.
+- Candidate results are captured in models/autoports/<model>/doc/datatype_sweep/sweep_results.json and sweep_results.csv, including config id, complete dtype/fidelity policy, precision-bearing program/compute-kernel fields, screening benchmark metric, pass/fail status, primary performance metric, command, hardware, mesh, context, and propagation evidence.
+- Produce benchmark_perf_pareto.png plotting evaluated configs as performance vs screening benchmark quality/accuracy, drawing the Pareto frontier, marking the selected point, and showing the pass threshold.
+- Select the most performant evaluated config that passes the screening benchmark and preserves the context/capability contract. If two configs are within measurement noise, prefer the simpler safer one.
+- Write selected_precision_config.json with weight groups, layer exceptions, compute fidelities, precision-bearing program/compute-kernel fields, activation/residual dtype, CCL dtype, KV-cache dtype, logits/sampling dtype assumptions, and loader/runtime flags. Prove build_generator and vLLM serving consume every selected field through the normal construction path.
+- Recompute doc/context_contract.json for selected KV-cache/persistent-buffer changes. Reductions require hard physical evidence and the largest feasible value.
+- After selecting the winner, rerun all other TTI-release benchmarks/evals/tests named in the TTI handoff through the selected-config construction path. If the fastest screening winner fails a required full benchmark/eval without a valid waiver, try the next fastest screening-passing config or record a readiness failure.
+- Record post-selection primary vLLM single-user TTFT/TPOT/decode t/s/u and the full release benchmark/eval verdict separately from screening results.
+- models/autoports/<model>/doc/datatype_sweep/README.md and work_log.md record the screening benchmark, thresholds, selected config, rejected configs, Pareto interpretation, commands, full rerun results, performance, limitations, and exact artifacts.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

@@ -7,19 +7,20 @@ This creates optimized-multichip-decoder state for the repo-local TTNN autoport 
 Goal completion requirements:
 - The measured path is the multichip decoder path on the target mesh. Single-chip or replicated fallback does not satisfy completion.
 - Multi-chip prefill and decode PCC remain at the accepted baseline for every meaningful layer kind.
+- Use the conservative pre-release precision baseline: BF16 activations/residuals/norms/logits, conservative fidelity, and the least-reduced weight/KV/cache policy that fits. Lower dtype/fidelity only for memory fit, with byte/probe evidence; no performance-driven BFP4/LoFi/KV/activation/CCL sweeps here. If a matmul program or compute-kernel config includes math fidelity, accumulator precision, or another precision-bearing field, hold that field at the conservative baseline too.
 - Warmed prefill and traced warmed decode latency are reported before and after this multichip optimization pass.
-- tt-perf-report tables and CSV/provenance logs exist. Actionable advice is tried. Rejections have before/after evidence. A first TTNN/API error is not enough to reject an optimization that would remove a material op, collective, reshard, or layout conversion.
-- The pass starts with an operation-topology audit: repeated same-input matmuls, material collectives, reshard/layout conversions, fused/packed projections, fused matmul-CCL paths, lower-movement residual layouts, action taken, and evidence.
-- Dominant multi-device costs are compared as coherent families: residual layout, collective placement, fused CCL+matmul, packed vs separate projections, activation/CCL dtype, and persistent buffers. A lower-movement family is not rejected by measuring it only with an immediate restore to the old replicated residual contract.
-- Model-applicable async CCLs, fused matmul-CCL paths, collective placement, preallocated buffers, residual layout, activation sharding, DRAM-sharded decode matmuls, and precision/fidelity reductions have evidence. For material rejections, adapt shape/layout/padding/weights and retry, or use `$autofix`.
+- tt-perf-report tables and CSV/provenance logs exist. Try actionable advice; material rejections need adapted before/after evidence, not a first API error.
+- Start with an operation-topology audit: repeated matmuls, material collectives, reshard/layout conversions, fused/packed projections, fused matmul-CCL paths, lower-movement residual layouts, action taken, and evidence.
+- Compare dominant multi-device costs as coherent families: residual layout, collective placement, fused CCL+matmul, packed vs separate projections, activation sharding, conservative CCL payload policy, and persistent buffers.
+- Model-applicable async CCLs, fused matmul-CCL paths, collective placement, preallocated buffers, residual layout, activation sharding, precision-neutral matmul program geometry, and DRAM-sharded decode matmuls have evidence; precision reductions belong to stage 10 unless needed for memory fit.
 - Preserve or improve the multichip context contract. If KV-cache dtype/layout, activation sharding, or per-device memory changes max context, update doc/context_contract.json. Reductions require hard physical evidence and the largest feasible value.
 - Preserve support for valid non-aligned logical sequence lengths; optimization may add internal alignment, but it must own padding/masking/slicing rather than requiring aligned public inputs.
 - The final path avoids gather/reshard/all-reduce between decoder layers. Any remaining inter-layer collective has measured evidence showing it is faster overall. Write down the inter-layer residual layout contract so full-model bringup can preserve it instead of rediscovering it.
 - Runtime fallback audit is clean, stress coverage matches risk, and watcher-clean evidence exists.
 - models/autoports/<model>/doc/optimized_multichip_decoder/README.md and work_log.md record commands, before/after PCC/perf, CCL findings, rejected options, limitations, and artifacts.
-- Every applicable item in this prompt and `$optimize` has been tried with evidence. No optimization is deferred.
+- Every applicable non-datatype-frontier item in this prompt and `$optimize` has evidence. Broad datatype/fidelity Pareto selection belongs to stage 10.
 - For MoE models, the final path keeps gate-selected active-expert execution. Dense all-expert execution does not satisfy completion unless evidence proves it is faster during decode.
 - $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
-- Final optimized numbers come from the final default path, not from an earlier candidate that the default no longer reproduces.
+- Final optimized numbers come from the final default path, not from an earlier candidate that the default does not reproduce.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

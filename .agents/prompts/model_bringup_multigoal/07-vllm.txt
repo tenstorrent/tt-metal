@@ -2,12 +2,12 @@
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
-This goal creates the vLLM state. Start from the completed datatype-sweep stage and work on models/autoports/<model>/tt/generator_vllm.py plus vLLM TT plugin registration.
+This goal creates the vLLM state. Start from the completed optimized-full-model stage using the conservative pre-release precision policy, and work on models/autoports/<model>/tt/generator_vllm.py plus vLLM TT plugin registration.
 
 Goal completion requirements:
 - models/autoports/<model>/tt/generator_vllm.py exists and delegates to tt/generator.py low-level methods whenever possible.
 - The adapter reuses the full-model generator's canonical split-sampling token-out path. It has no separate sampling path, host argmax path, full-logits readback path, generic top-k greedy fallback, or Python readback/writeback token-feedback loop.
-- The vLLM path uses the selected precision config, including weight groups, activation/CCL dtype, KV-cache dtype, compute fidelities, and layer exceptions.
+- The vLLM path uses the active conservative precision policy from optimized-full-model, including weight groups, activation/CCL dtype, KV-cache dtype, compute fidelities, and layer exceptions. Do not lower dtypes or fidelity for performance in this stage unless required for memory fit, with evidence.
 - The model is registered in vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py::register_tt_models().
 - vLLM owns the serving cache; the adapter passes it through without hidden standalone-cache assumptions.
 - Served `max_model_len` matches doc/context_contract.json. Reduce advertised capability only for a hard physical limit, with evidence and the largest feasible value.

@@ -50,6 +50,58 @@ if ! grep -Eiq 'autoport implementation check.*models/autoports|models/autoports
   exit 2
 fi
 
+sweep_handoff="$release_dir/post_release_sweep_benchmark.json"
+if [ ! -s "$sweep_handoff" ]; then
+  echo "Missing post-release datatype-sweep handoff: $sweep_handoff" >&2
+  exit 2
+fi
+
+sweep_handoff_output=$(python3 - "$sweep_handoff" 2>&1 <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text())
+except Exception as exc:
+    raise SystemExit(f"Could not parse {path}: {exc}")
+if not isinstance(data, dict):
+    raise SystemExit(f"{path} must contain a JSON object.")
+
+required = [
+    "screening_benchmark",
+    "screening_metric",
+    "baseline_score",
+    "pass_threshold",
+    "performance_metric",
+    "full_rerun",
+]
+missing = [key for key in required if key not in data or data[key] in (None, "", [], {})]
+if missing:
+    raise SystemExit(f"{path} is missing required handoff field(s): {', '.join(missing)}")
+
+if not (data.get("screening_command") or data.get("screening_workflow")):
+    raise SystemExit(f"{path} must include screening_command or screening_workflow.")
+
+full_rerun = data["full_rerun"]
+if not isinstance(full_rerun, dict):
+    raise SystemExit(f"{path}: full_rerun must be an object.")
+if not (full_rerun.get("commands") or full_rerun.get("workflows") or full_rerun.get("artifacts")):
+    raise SystemExit(
+        f"{path}: full_rerun must name commands, workflows, or artifacts for the selected-config rerun."
+    )
+
+print(f"Post-release datatype-sweep handoff OK: {path}")
+PY
+)
+sweep_handoff_status=$?
+if [ "$sweep_handoff_status" -ne 0 ]; then
+  printf '%s\n' "$sweep_handoff_output" >&2
+  exit 2
+fi
+printf '%s\n' "$sweep_handoff_output"
+
 autoport_check_output=$(python3 - "$release_dir" "$model_dir" 2>&1 <<'PY'
 import json
 import sys

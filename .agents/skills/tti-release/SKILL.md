@@ -17,6 +17,13 @@ The release stage must evaluate the autoport at the context length recorded in `
 
 Treat a valid TTI prompt length as a logical request length. If TTI sends a prompt whose length is within the supported context and the autoport fails because the length is not divisible by an internal chunk, tile, block, page, or trace size, that is an autoport model bug. Do not waive it, lower the context, or change the benchmark to an aligned length. Fix the model/generator/adapter padding, chunking, masking, or output slicing path and rerun the failing item.
 
+The release stage also prepares the post-release datatype sweep. After the
+release workflow is parsed, write a compact handoff JSON naming one smaller
+quality-sensitive benchmark or eval from the release evidence that can screen
+dtype/fidelity candidates, plus the full benchmark/eval set that stage 10 must
+rerun on the selected config. Do not choose a benchmark solely because it is
+cheap; it must be sensitive enough to catch likely precision regressions.
+
 ## Topology
 
 Assume the agent usually starts inside an IRD reservation/Codex container:
@@ -332,6 +339,10 @@ Include:
 - successful run log;
 - run spec and runtime model spec JSON;
 - small benchmark JSON files;
+- `post_release_sweep_benchmark.json`, naming the smaller screening benchmark,
+  screening command/workflow, metric, baseline score, pass threshold,
+  performance metric, and full benchmark/eval rerun commands or artifacts for
+  stage 10;
 - a `RUN_NOTES.md` with commands, versions, server mode, host/session, reset actions, report path, and pass/fail summary.
 
 Also include the run spec or report data that proves the implementation path. `RUN_NOTES.md` must have an "Autoport implementation check" line showing the target `models/autoports/<model>` path and whether the copied TTI artifacts matched it.
@@ -362,6 +373,7 @@ Done means:
 - Any failed accuracy, benchmark target, API conformance, or incomparable metric row is classified as `fixed`, `issue-waived`, or `readiness-fail`. A `readiness-fail` means the stage is not clean-pass.
 - `meta_ifeval` and `meta_gpqa_cot` pass for text LLMs, or each failure has a current linked issue proving the correct canonical implementation fails the same eval in the same way.
 - Final release markdown is copied under `models/autoports/<model>/doc/tti_release/`.
+- `post_release_sweep_benchmark.json` exists under `models/autoports/<model>/doc/tti_release/` and gives the post-release datatype sweep a concrete screening benchmark, pass threshold, baseline score, performance metric, and full-rerun plan.
 - `RUN_NOTES.md` records the exact server mode, host/session, repo tag, Docker image/version if Docker was used, command, env variables that mattered, reset/retry actions, copied artifacts, release-readiness status, failed rows, and waiver issue links where applicable.
 - The report is skimmed and the README/RUN_NOTES call out any failing accuracy, benchmark target, or API conformance checks with the classification above.
 - There is no leftover autoport vLLM server, TTI release tmux session, or `tt-inference-server` Docker container from this run.

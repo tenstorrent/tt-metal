@@ -95,11 +95,18 @@ Return `more-work-needed` when evidence shows one of these:
   evidence that a hard physical device limit prevents the advertised capability
   from fitting or running and proving the largest feasible value;
 - the stage dismisses a material anomaly with prose instead of investigation.
-- an optimized precision policy selects a slower higher-precision or
+- a pre-release stage lowers dtype or compute fidelity for performance without
+  memory-fit evidence showing that the advertised model capability could not fit
+  otherwise. Stages 01-09 should keep conservative precision; stage 10 handles
+  broad datatype/fidelity Pareto selection.
+  Precision-bearing program or compute-kernel fields, including matmul math
+  fidelity and accumulator precision, count as dtype/fidelity policy for this
+  finding.
+- a datatype-sweep stage or other explicit precision-selection stage selects a slower higher-precision or
   higher-fidelity path even though a faster lower-precision/fidelity candidate
   passed real target-model weights or recorded target activations, and the only
   blocker is random/synthetic "representative semantics" PCC.
-- a dominant matmul geometry sweep mixes evidence across incompatible precision
+- a datatype-sweep stage or other explicit precision-selection stage mixes dominant matmul geometry evidence across incompatible precision
   policies, for example measuring a smaller-core or residual-grid geometry only
   under BFP8/HiFi while the final or mandatory policy is BFP4/LoFi. Geometry is
   not rejected until the material geometry candidates have been measured under
@@ -213,14 +220,14 @@ For optimization stages, also inspect:
   final default run is materially slower than the candidate evidence, the stage
   must either fix the default wiring or report the final reproduced number as
   the optimized result instead of claiming the earlier candidate result;
-- whether the selected dtype/fidelity policy actually appears in measured
+- whether the active dtype/fidelity policy actually appears in measured
   runtime rows. Policy names, constructor defaults, and JSON fields do not
   prove that dominant matmuls used the intended weight dtype or math fidelity.
   If `tt-perf-report` or equivalent profiler rows show BF16/BFP8 where the
   selected policy claims BFP4, or HiFi where the selected policy claims LoFi,
   return `more-work-needed` unless the report records an exact op-contract
   blocker and uses the real measured dtype policy as the final result;
-- whether a reduced-precision or reduced-fidelity candidate was rejected only
+- for datatype-sweep or explicit precision-selection stages, whether a reduced-precision or reduced-fidelity candidate was rejected only
   by synthetic/random-weight evidence. Synthetic tests can reveal crashes and
   shape bugs, but they do not by themselves justify a slower higher-precision
   fallback when real target-model weights pass. A test called
@@ -229,7 +236,7 @@ For optimization stages, also inspect:
   rejected for such a synthetic PCC, return `more-work-needed` unless there is
   model-visible correctness failure, real-weight trace/runtime failure,
   unacceptable latency, or an exact op-contract blocker;
-- whether dominant matmul geometry was swept under the dtype/fidelity policy
+- for datatype-sweep or explicit precision-selection stages, whether dominant matmul geometry was swept under the dtype/fidelity policy
   being selected. A core-count, shard-width, `in0_block_w`, `per_core_N`, or
   output-subblock result from BFP8/HiFi does not validate BFP4/LoFi geometry,
   and a BFP4/LoFi result on one geometry does not reject the other material
@@ -252,6 +259,12 @@ For datatype-sweep stages, also inspect:
 - whether recorded dtype and compute-fidelity fields are actually consumed by
   the measured runtime path, using model summaries, propagation checks, or
   profiler/perf-report rows rather than JSON alone;
+- whether candidate screening used the smaller benchmark/eval named by the TTI
+  release handoff, not decoder PCC or top-k readiness metrics unless the
+  handoff explicitly chose them;
+- whether the selected config reran the full TTI-release benchmark/eval set, and
+  whether any failed row was fixed, validly waived, or caused the stage to pick
+  the next fastest screening-passing config;
 - whether every material BFP4 matmul group considered or selected has a
   BFP4+LoFi candidate, or an exact TTNN/runtime blocker plus `$autofix`
   evidence;
