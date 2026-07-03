@@ -84,9 +84,7 @@ autograd::TensorPtr reduce_scatter(
     /* d(x_0 + x_1 + ... + x_n) / dx_i = 1 for i=0,1,...,n and 0 otherwise */
     autograd::GradFunction grad = [tensor, out, dim, cluster_axis]() {
         if (out->is_grad_initialized()) {
-            tensor->add_grad(ttnn_fixed::distributed::all_gather(out->get_grad(), dim, cluster_axis));
-            out->deallocate_value();
-        }
+            tensor->add_grad(ttnn_fixed::distributed::all_gather(out->get_grad(), dim, cluster_axis));        }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
@@ -106,9 +104,7 @@ autograd::TensorPtr scatter(
     /* input is replicated across TP axis, so d(nx/n) / dx = dx / dx = 1 for i=0,1,...,n and 0 otherwise */
     autograd::GradFunction grad = [tensor, out, dim, cluster_axis]() {
         if (out->is_grad_initialized()) {
-            tensor->add_grad(ttnn_fixed::distributed::all_gather(out->get_grad(), dim, cluster_axis));
-            out->deallocate_value();
-        }
+            tensor->add_grad(ttnn_fixed::distributed::all_gather(out->get_grad(), dim, cluster_axis));        }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
@@ -128,9 +124,7 @@ autograd::TensorPtr all_gather(
                 tensor->add_grad(reduced_grad);
             } else {
                 tensor->add_grad(local_scatter(out->get_grad(), dim, cluster_axis));
-            }
-            out->deallocate_value();
-        }
+            }        }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
@@ -145,9 +139,7 @@ autograd::TensorPtr all_reduce(
                 tensor->add_grad(out->get_grad());
             } else {
                 tensor->add_grad(ttnn_fixed::distributed::all_reduce(out->get_grad(), cluster_axis));
-            }
-            out->deallocate_value();
-        }
+            }        }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
@@ -157,9 +149,7 @@ autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor, const std::opti
     auto out = autograd::create_tensor(tensor->get_value());
     autograd::GradFunction grad = [tensor, out, cluster_axis]() {
         if (out->is_grad_initialized()) {
-            tensor->add_grad(ttnn_fixed::distributed::all_reduce(out->get_grad(), cluster_axis));
-            out->deallocate_value();
-        }
+            tensor->add_grad(ttnn_fixed::distributed::all_reduce(out->get_grad(), cluster_axis));        }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
@@ -179,9 +169,7 @@ autograd::TensorPtr ring_shift(
                                         : ttnn_fixed::distributed::RingShiftDirection::Forward;
     autograd::GradFunction grad = [tensor, out, cluster_axis, opposite_direction]() {
         if (out->is_grad_initialized()) {
-            tensor->add_grad(ttnn_fixed::distributed::ring_shift(out->get_grad(), cluster_axis, opposite_direction));
-            out->deallocate_value();
-        }
+            tensor->add_grad(ttnn_fixed::distributed::ring_shift(out->get_grad(), cluster_axis, opposite_direction));        }
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));

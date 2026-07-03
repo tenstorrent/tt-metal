@@ -132,10 +132,6 @@ void Tensor::clean_node() {
     m_node_id = std::nullopt;
 }
 
-void Tensor::deallocate_value(bool force) {
-    m_value.deallocate(force);
-}
-
 void Tensor::set_requires_grad(bool requires_grad) {
     m_requires_grad = requires_grad;
 }

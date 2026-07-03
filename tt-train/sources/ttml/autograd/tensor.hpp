@@ -33,7 +33,6 @@ public:
     void set_grad(const tt::tt_metal::Tensor &grad);
     void set_node(const std::optional<NodeId> &node);
     void clean_node();
-    void deallocate_value(bool force = false);
     void add_grad(const tt::tt_metal::Tensor &grad);
     void set_requires_grad(bool requires_grad);
 
