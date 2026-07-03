@@ -22,6 +22,14 @@ void FabricBuilderContext::compute_max_channel_counts() {
 
     std::vector<FabricRouterChannelMapping> possible_mappings;
 
+    // If any node in the fabric has an intra-mesh Z edge (sub-torus skip link), MESH routers widen VC0
+    // from 4 -> 5 (channel 4 = intra-mesh Z). The fabric-wide max must reserve that 5th VC0 sender
+    // channel so the shared EDM config (router_config_->num_used_sender_channels) matches the per-router
+    // channel mapping; otherwise variant-to-router channel mapping indexes past the end. Scoped to
+    // fabrics that actually have intra-mesh Z so non-skip-link fabrics stay 4-wide.
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const bool has_intra_mesh_z = fabric_context_.has_any_intra_mesh_z_router(control_plane);
+
     // Always have MESH routers
     bool needs_vc_config = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
     possible_mappings.emplace_back(
@@ -29,7 +37,8 @@ void FabricBuilderContext::compute_max_channel_counts() {
         false,  // no tensix
         RouterVariant::MESH,
         needs_vc_config ? &intermesh_vc_config_ : nullptr,
-        false);
+        false,
+        has_intra_mesh_z);
 
     // If Z routers exist in this fabric, add Z_ROUTER mapping
     if (intermesh_vc_config_.router_type == IntermeshRouterType::Z_INTERMESH) {
