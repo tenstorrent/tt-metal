@@ -132,8 +132,12 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     cb(tile_bytes, 1, bf);                   // cb_recip_scratch
     cb(16, 2, bf);                           // cb_kreq : {block_id, is_last} reader->writer (double-buffered)
     cb(16, 2, bf);                           // cb_kack : writer->reader ack (double-buffered)
-    cb(tile_bytes, 1, bf);                   // cb_neginf : persistent all -inf mask tile (causal only)
-    cb(tile_bytes, 2, bf);                   // cb_vmask : per-token partial-column mask tile (causal only)
+    // Mask tiles are touched only under CAUSAL_MASK_ENABLED in the kernels, so skip their L1 when causal
+    // masking is off. Safe to gate: these are the trailing CBs, so omitting them shifts no other buffer index.
+    if (attrs.causal_enabled()) {
+        cb(tile_bytes, 1, bf);  // cb_neginf : persistent all -inf mask tile
+        cb(tile_bytes, 2, bf);  // cb_vmask : per-token partial-column mask tile
+    }
 
     // ---- compile-time args ----
     // Reader args: scalars, derived geometry, CB ids, element sizes, then q/k/v/indices accessors.
