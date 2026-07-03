@@ -15,26 +15,26 @@ supported for smoke but not claimed for throughput in this bringup.
 Usage::
 
     # Generate reference first (required for token-accuracy):
-    ./python_env/bin/python models/common/tests/demos/deepseek_r1_14b/generate_controlled_refpt.py \\
+    ./python_env/bin/python models/common/tests/demos/deepseek_r1_distill_qwen_14b/generate_book_refpt.py \\
         --hf-model deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
 
     # Token accuracy test (accuracy mode)
     MESH_DEVICE=N300 HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B \\
-      pytest models/common/tests/demos/deepseek_r1_14b/demo.py \\
+      pytest models/common/tests/demos/deepseek_r1_distill_qwen_14b/demo.py \\
         -k "not performance and token-accuracy" -v
 
     # Batch-1 latency test
     MESH_DEVICE=N300 HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B \\
-      pytest models/common/tests/demos/deepseek_r1_14b/demo.py -k "batch-1" -v
+      pytest models/common/tests/demos/deepseek_r1_distill_qwen_14b/demo.py -k "batch-1" -v
 
     # Batch-32 throughput test
     MESH_DEVICE=N300 HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B \\
-      pytest models/common/tests/demos/deepseek_r1_14b/demo.py -k "batch-32" -v
+      pytest models/common/tests/demos/deepseek_r1_distill_qwen_14b/demo.py -k "batch-32" -v
 
 LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when ``TT_CACHE_PATH`` is set,
 otherwise ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory.
 
-Reference artifact (``.refpt``): generate with ``generate_controlled_refpt.py`` before
+Reference artifact (``.refpt``): generate with ``generate_book_refpt.py`` before
 running token-accuracy tests. The file is written to
 ``models/tt_transformers/tests/reference_outputs/DeepSeek-R1-Distill-Qwen-14B.refpt``.
 """
@@ -69,19 +69,22 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 
 # DeepSeek-R1-Distill-Qwen-14B is **not** in models/tt_transformers/PERF.md.
 # Throughput / TTFT targets are NOT asserted here (no TTTv1 baseline to compare against).
-# Accuracy thresholds are set conservatively after verifying refpt intrinsic ceiling >= 95%
-# (see generate_controlled_refpt.py output and skills/reference-sanity.md).
+# Accuracy thresholds below are the measured TT-vs-HF top1/top5 token agreement against the committed
+# book reference (generate_book_refpt.py over tale-of-two-cities; HF intrinsic ceiling 79.8/91.8 top1/top5).
+# The 5% PERF_TOLERANCE absorbs run-to-run variation. Measured on N300 (2026-07-03):
+#   performance 88.1/99.6, accuracy 96.5/100.0 (top1/top5). N150 does not fit (L1 overflow, excluded) —
+#   its entries below are never asserted (create_model pytest.skips on the build failure).
 #
 # When PERF.md is eventually updated for this model, copy verbatim and add tok_s_u / ttft_ms
 # entries here (following the Mistral-7B / Qwen2.5-7B pattern).
 EXPECTED_METRICS = {
     "performance": {
         "N150": {"top1": 75, "top5": 90},
-        "N300": {"top1": 78, "top5": 92},
+        "N300": {"top1": 88, "top5": 99},
     },
     "accuracy": {
         "N150": {"top1": 80, "top5": 93},
-        "N300": {"top1": 82, "top5": 95},
+        "N300": {"top1": 96, "top5": 99},
     },
 }
 
@@ -201,7 +204,7 @@ def load_reference_data(hf_model_id: str):
     if not ref_path.exists():
         pytest.skip(
             f"Reference file not found: {ref_path}. "
-            f"Generate with: python models/common/tests/demos/deepseek_r1_14b/generate_controlled_refpt.py "
+            f"Generate with: python models/common/tests/demos/deepseek_r1_distill_qwen_14b/generate_book_refpt.py "
             f"--hf-model {hf_model_id}"
         )
     ref_data = torch.load(ref_path, map_location="cpu")

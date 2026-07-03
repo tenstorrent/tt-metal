@@ -442,7 +442,7 @@ def test_deepseek_r1_14b_numerical_divergence_vs_hf(mesh_device, hf_model_id, tm
                     position_ids=position_ids,
                     position_embeddings=(cos, sin),
                 )[0]
-            h = hf.model.norm(h)
+            hf.model.norm(h)
 
     for h_ in handles:
         h_.remove()
