@@ -4,8 +4,6 @@
 
 #include "tilize_single_core_program_factory.hpp"
 
-#include <functional>
-
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>

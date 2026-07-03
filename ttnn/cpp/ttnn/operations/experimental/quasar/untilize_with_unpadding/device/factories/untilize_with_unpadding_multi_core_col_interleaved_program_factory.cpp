@@ -5,7 +5,6 @@
 #include "untilize_with_unpadding_multi_core_col_interleaved_program_factory.hpp"
 
 #include <filesystem>
-#include <functional>
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"

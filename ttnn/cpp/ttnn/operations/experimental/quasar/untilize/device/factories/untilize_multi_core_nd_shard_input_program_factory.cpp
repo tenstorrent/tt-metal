@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <functional>
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"

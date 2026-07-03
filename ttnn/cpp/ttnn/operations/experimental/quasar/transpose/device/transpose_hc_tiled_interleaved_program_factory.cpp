@@ -8,7 +8,6 @@
 #include "ttnn/operations/math.hpp"
 
 #include <bit>
-#include <functional>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>

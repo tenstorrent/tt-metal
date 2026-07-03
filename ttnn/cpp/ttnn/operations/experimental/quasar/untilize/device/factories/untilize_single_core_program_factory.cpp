@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <filesystem>
-#include <functional>
 
 #include <tt_stl/reflection.hpp>
 #include "ttnn/operations/math.hpp"

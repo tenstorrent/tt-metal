@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_multicore_program_factory.hpp"
 #include <filesystem>
-#include <functional>
 #include <map>
 #include <string>
 #include "ttnn/operations/compute_throttle_utils.hpp"

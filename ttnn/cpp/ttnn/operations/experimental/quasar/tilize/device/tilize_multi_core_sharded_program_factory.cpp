@@ -4,8 +4,6 @@
 
 #include "tilize_multi_core_sharded_program_factory.hpp"
 
-#include <functional>
-
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>

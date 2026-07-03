@@ -14,8 +14,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
-#include <functional>
-
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>

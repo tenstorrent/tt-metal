@@ -6,7 +6,6 @@
 #include "move_overlap_program_factory.hpp"
 
 #include <cmath>
-#include <functional>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>

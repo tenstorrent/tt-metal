@@ -6,7 +6,6 @@
 
 #include <cmath>
 #include <filesystem>
-#include <functional>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>

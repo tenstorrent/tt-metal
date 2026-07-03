@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <functional>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
