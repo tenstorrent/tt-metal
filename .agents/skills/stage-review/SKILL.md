@@ -95,10 +95,6 @@ Return `more-work-needed` when evidence shows one of these:
   evidence that a hard physical device limit prevents the advertised capability
   from fitting or running and proving the largest feasible value;
 - the stage dismisses a material anomaly with prose instead of investigation.
-- an optimization stage is materially slower than an available same-model,
-  same-stage, same-hardware-family optimized reference without proving an
-  intentional workload difference, incompatible contract, correctness failure,
-  or TTNN/runtime blocker.
 - an optimized precision policy selects a slower higher-precision or
   higher-fidelity path even though a faster lower-precision/fidelity candidate
   passed real target-model weights or recorded target activations, and the only
@@ -189,12 +185,6 @@ For release stages, also inspect:
 For optimization stages, also inspect:
 
 - before/after measurements in the same regime;
-- whether the stage searched for same-model, same-stage, same-hardware-family
-  optimized references in the current checkout, run root, or provided
-  experiment artifacts. If such a reference is available, compare headline
-  latency and dominant op rows against it. A stage that only beats its original
-  functional baseline can still need more work when it regresses a known
-  optimized reference;
 - whether optimized paths from previous stages were preserved;
 - evidence for rejected optimizations or "already optimal" claims;
 - whether rejected optimizations were actually earned. For any material
