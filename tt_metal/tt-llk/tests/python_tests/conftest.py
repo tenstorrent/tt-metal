@@ -423,6 +423,13 @@ def pytest_ignore_collect(collection_path, config):
 
 
 def _collapse_runtime_only_variants(items):
+    """Keep only one test per unique compile key, dropping runtime only duplicates.
+
+    Tests decorated with ``@parametrize`` that use ``runtime()`` markers carry a
+    ``compile_key_fn`` on their ``runtime_axes`` pytest mark.  That function extracts
+    the compile time subset of each item's params.  Items that share the same compile
+    key produce identical ELFs, so only the first is kept for the compile-producer pass.
+    """
     from helpers.param_config import RUNTIME_AXES_MARK
 
     seen = set()
@@ -441,7 +448,7 @@ def _collapse_runtime_only_variants(items):
 
 
 def pytest_collection_modifyitems(config, items):
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
         _collapse_runtime_only_variants(items)
 
     test_order_file = config.getoption("--test-order-file")

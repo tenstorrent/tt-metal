@@ -23,6 +23,8 @@ RUNTIME_AXES_MARK = "runtime_axes"
 
 
 class _RuntimeMarker:
+    """Wrapper that tags a parameter value as runtime only."""
+
     __slots__ = ("value",)
 
     def __init__(self, value):
@@ -30,6 +32,11 @@ class _RuntimeMarker:
 
 
 def runtime(value):
+    """Mark a parametrize value as runtime only so compile producer can deduplicate it.
+
+    Wrapped values are excluded from the compile key: test variants that differ only in
+    ``runtime()`` parameters share an ELF and are collapsed to a single compilation.
+    """
     return _RuntimeMarker(value)
 
 
