@@ -117,11 +117,8 @@ class TtNemotronHMOE:
                 mesh_mapper=ttnn.ShardTensor2dMesh(dev, mesh_shape=_mesh_shape, dims=(None, 0)),
             )
             dn_sh = ttnn.to_device(dn_sh, dev)
-            for e in range(Eloc):
-                self._up.append(ttnn.reshape(ttnn.slice(up_sh, [e, 0, 0], [e + 1, _hid, _inter]), [_hid, _inter]))
-                self._down.append(ttnn.reshape(ttnn.slice(dn_sh, [e, 0, 0], [e + 1, _inter, _hid]), [_inter, _hid]))
-            ttnn.deallocate(up_sh)
-            ttnn.deallocate(dn_sh)
+            self._up_stack = up_sh
+            self._dn_stack = dn_sh
             # per-chip expert selector: sel[d] is a one-hot [E, Eloc] that maps the
             # replicated full router weights W (.,.,E) to this chip's Eloc columns
             # via a matmul; sharded on dim0 so chip d gets sel[d].
@@ -135,9 +132,14 @@ class TtNemotronHMOE:
             )
             self._Eloc = Eloc
         else:
-            for e in range(E):
-                self._up.append(self._devw(sd[f"experts.{e}.up_proj.weight"].t().contiguous()))
-                self._down.append(self._devw(sd[f"experts.{e}.down_proj.weight"].t().contiguous()))
+            up_stack = torch.stack(
+                [sd[f"experts.{e}.up_proj.weight"].t().contiguous() for e in range(E)], 0
+            ).to(torch.bfloat16)
+            dn_stack = torch.stack(
+                [sd[f"experts.{e}.down_proj.weight"].t().contiguous() for e in range(E)], 0
+            ).to(torch.bfloat16)
+            self._up_stack = self._upload(up_stack, ttnn.bfloat8_b)
+            self._dn_stack = self._upload(dn_stack, ttnn.bfloat8_b)
             self._sel = None
             self._Eloc = E
 
@@ -260,26 +262,34 @@ class TtNemotronHMOE:
         # HF sums the top-k weighted expert outputs in fp32 (topk_weights.dtype),
         # so accumulate in fp32; bf16 expert weights/matmuls with HiFi4 fp32 acc.
         hs_bf = ttnn.typecast(hs, ttnn.bfloat16)
-        out = None
-        for e in range(self._Eloc):
-            up = ttnn.matmul(hs_bf, self._up[e], compute_kernel_config=self.ckc)  # (B,T,inter) bf16
-            act = ttnn.relu(up)
-            ttnn.deallocate(up)
-            act = ttnn.multiply(act, act)                                          # relu2
-            down = ttnn.matmul(act, self._down[e], compute_kernel_config=self.ckc)  # (B,T,hidden) bf16
-            ttnn.deallocate(act)
-            down_f = ttnn.typecast(down, ttnn.float32)
-            ttnn.deallocate(down)
-            we = ttnn.slice(W_use, [0, 0, e], [B, T, e + 1])                       # (B,T,1) fp32
-            contrib = ttnn.multiply(down_f, we, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(down_f)
-            ttnn.deallocate(we)
-            if out is None:
-                out = contrib
-            else:
-                out = ttnn.add(out, contrib, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                ttnn.deallocate(contrib)
+        Eloc = self._Eloc
+        M = B * T
+        # Batched expert matmuls: evaluate all Eloc local experts as two 3D
+        # (batch=Eloc) matmuls instead of an Eloc-long python loop of tiny
+        # per-expert matmuls. Collapses the per-expert matmul + relu2 + slice +
+        # weight-multiply dispatch storm into a handful of full-grid ops. Math
+        # is identical to the dense per-expert sum.
+        hs_rep = ttnn.repeat(hs_bf, [Eloc, 1, 1])                                  # (Eloc,M,H) [B==1]
+        up = ttnn.matmul(hs_rep, self._up_stack, compute_kernel_config=self.ckc)   # (Eloc,M,inter)
+        ttnn.deallocate(hs_rep)
+        act = ttnn.relu(up)
+        ttnn.deallocate(up)
+        act = ttnn.multiply(act, act)                                              # relu2
+        down = ttnn.matmul(act, self._dn_stack, compute_kernel_config=self.ckc)     # (Eloc,M,H)
+        ttnn.deallocate(act)
+        down_f = ttnn.typecast(down, ttnn.float32)                                 # (Eloc,M,H)
+        ttnn.deallocate(down)
+        # per-expert routing weights: W_use (B,T,Eloc) -> (Eloc,M,1)
+        w = ttnn.reshape(W_use, [M, Eloc])
         ttnn.deallocate(W_use)
+        w = ttnn.transpose(w, 0, 1)                                                # (Eloc,M)
+        w = ttnn.reshape(w, [Eloc, M, 1])
+        contrib = ttnn.multiply(down_f, w, memory_config=ttnn.DRAM_MEMORY_CONFIG)   # (Eloc,M,H)
+        ttnn.deallocate(down_f)
+        ttnn.deallocate(w)
+        out = ttnn.sum(contrib, dim=0, keepdim=True)                               # (1,M,H)
+        ttnn.deallocate(contrib)
+        out = ttnn.reshape(out, [B, T, self.hidden_size])
 
         # Sum each chip's partial expert mixture into the full 128-expert result
         # (every chip on the TP axis then holds the complete routed sum).
