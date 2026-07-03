@@ -368,7 +368,7 @@ def cmd_emit_e2e(args) -> int:
         return 1
     print("  ✓ builder finished (exit 0)")
 
-    if (getattr(args, "engine", "fsm") or "fsm") == "cc":
+    if (getattr(args, "engine", "cc") or "cc") == "cc":
         return _run_emit_e2e_cc(
             model_id=model_id,
             demo_dir=demo_dir,
