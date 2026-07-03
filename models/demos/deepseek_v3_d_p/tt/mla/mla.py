@@ -439,6 +439,9 @@ class ttMLA:
                 tt_ccl=self.tt_ccl,
                 ccl_num_links=self.ccl_num_links,
                 ccl_topology=self.ccl_topology,
+                seq_len=seq_len,
+                slot_num=slot_num,
+                is_chunked=is_chunked,
             )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
@@ -970,7 +973,14 @@ class ttMLA:
         # indexer top-k simply selects all available causal keys, so sparse is numerically equal to dense
         # there.) The indexer's forward also writes its K-cache (a no-op on the dense null-indexer), so no
         # separate warm-up write is needed.
-        indices = self._indexer.forward(hidden_states, qr, seq_len_local, start_pos=kv_actual_isl or 0)
+        indices = self._indexer.forward(
+            hidden_states,
+            qr,
+            seq_len_local,
+            start_pos=kv_actual_isl or 0,
+            rope_tensors=rope_tensors,
+            cache_user_id=cache_user_id,
+        )
 
         tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local)
         keep_kvpe_bf16 = self._has_indexer and not is_chunked
