@@ -15,6 +15,7 @@
 #include <tt-metalium/allocator.hpp>
 #include "untilize_single_core_program_factory.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -156,12 +157,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
     if (fp32_dest_acc_en) {
         utd.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }
-    ComputeHardwareConfig compute_hw = std::invoke([&]() -> ComputeHardwareConfig {
-        if (a.device()->arch() == tt::ARCH::QUASAR) {
-            return ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
-        }
-        return ComputeGen1Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
-    });
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
+        a.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
+    std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, compute_hw);
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(
