@@ -309,9 +309,16 @@ class TtPrefillRuntime:
         it (and forward it over D2D) after every replay."""
         controller = self._controller
         assert controller is not None, "_prepare_trace() must run (via compile()) before _capture_now()"
-        # Route the ack (if one was registered after compile) through the controller so the capture splits
-        # the trace at each ack point (a host shm bump cannot live inside a trace).
-        if self._on_layer_complete is not None and not controller.has_layer_ack():
+        # Ack registered after compile (request loop, gap #3): the block runs the metadata
+        # zero_padded_kv_cache + ack routing ONLY when on_layer_complete is set (tt_prefill_block.forward),
+        # so those programs were NOT compiled by _prepare_trace's warm pass (which ran with
+        # on_layer_complete=None). Warm them now — with a NO-OP ack so this warm pass fires no real
+        # migration acks — then register the real ack so the capture splits the trace at each ack point (a
+        # host shm bump cannot live inside a trace). No ack (standalone) => nothing extra to warm.
+        if self._on_layer_complete is not None:
+            controller.set_layer_ack_callback(lambda _layer_idx: None)
+            self._forward_traced(kv_cache)  # compile zero_padded_kv_cache + ack path (no real ack fires)
+            ttnn.synchronize_device(self.mesh_device)
             controller.set_layer_ack_callback(self._on_layer_complete)
 
         controller.begin_capture()

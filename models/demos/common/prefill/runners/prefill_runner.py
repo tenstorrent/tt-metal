@@ -454,8 +454,12 @@ def run_request_loop(
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
-    as a hard fallback, until SIGTERM/SIGKILL. No fixed NUM_CHUNKS bound, no trace input, no PCC — see
-    run_standalone_loop for those."""
+    as a hard fallback, until SIGTERM/SIGKILL. No fixed NUM_CHUNKS bound, no trace input — see
+    run_standalone_loop for the bounded/trace variant.
+
+    PREFILL_REQUEST_LOOP_PCC=1 (single-rank, bring-up only) PCC-checks the populated KV against the golden
+    trace once the stream closes — the production analogue of standalone's per-rank KV check, driven by the
+    real H2D producer path (and, under use_trace, the replayed forward + post-compile LayerAck)."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -466,6 +470,7 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    slot_id = 0  # last chunk's slot — the PCC check below reads the slice this rank populated
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
@@ -480,11 +485,31 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
+        slot_id = meta["slot_id"]
         t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out)
         if first is None:
             first = t
         c += 1
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
+
+    if os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0") == "1" and c > 0:
+        # Bring-up validation of the production path (golden-trace input): the same optional runtime hook
+        # standalone uses. n_chunks = the count the producer actually pushed. Single-rank only (a pipeline
+        # rank owns a layer slice; kv_cache_pcc_check offsets by first_layer_idx, but multi-rank KV PCC is
+        # driven via the standalone loop).
+        pcc_check = getattr(runtime, "kv_cache_pcc_check", None)
+        if pcc_check is None:
+            raise RuntimeError(
+                f"PREFILL_REQUEST_LOOP_PCC=1 but {type(runtime).__name__} implements no kv_cache_pcc_check "
+                "(optional bring-up hook; see ADDING_A_PREFILL_MODEL.md §2)."
+            )
+        pcc_check(
+            kv_cache,
+            slot_id=slot_id,
+            n_chunks=c,
+            trace_dir=os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default),
+            first_layer_idx=cfg.first_layer_idx,
+        )
 
 
 def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
@@ -594,6 +619,7 @@ def _print_config() -> None:
             os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0"),
         ),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
+        ("PREFILL_REQUEST_LOOP_PCC", os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0")),
         (
             "PREFILL_MIGRATION_TABLE_PATH",
             os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
