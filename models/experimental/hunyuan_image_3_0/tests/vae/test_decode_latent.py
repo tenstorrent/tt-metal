@@ -30,7 +30,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.experimental.hunyuan_image_3_0.ref.vae.decoder import Z_CHANNELS, load_decoder
+from models.experimental.hunyuan_image_3_0.ref.vae.decoder import Z_CHANNELS, load_decoder, vae_decode_output_to_rgb
 from models.experimental.hunyuan_image_3_0.tt.pipeline import decode_latent
 
 PCC_THRESHOLD = 0.99
@@ -87,7 +87,7 @@ def test_full_res_decode_oom(mesh_device):
     z_bcthw = (latent_bchw / SCALING_FACTOR).unsqueeze(2)
     with torch.no_grad():
         pt_out = load_decoder()(z_bcthw)
-    pt_img = (pt_out[:, :, 0] / 2 + 0.5).clamp(0, 1)
+    pt_img = vae_decode_output_to_rgb(pt_out)
 
     tt_img = decode_latent(mesh_device, latent_bchw, scaling_factor=SCALING_FACTOR)
     assert_pcc = comp_pcc(pt_img, tt_img, PCC_THRESHOLD)[0]

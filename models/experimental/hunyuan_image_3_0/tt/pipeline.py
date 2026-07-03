@@ -377,11 +377,13 @@ def decode_latent(
     crosses host between the denoise loop and here. Mirrors the reference image
     decode (hunyuan_image_3_pipeline.py):
         latent = latent / scaling_factor
-        image  = vae.decode(latent)
+        image  = vae.decode(latent)          # T_in=1 -> T_out=4
+        image  = image[:, :, -1]             # keep last temporal frame (HF behavior)
         image  = (image / 2 + 0.5).clamp(0, 1)
 
     Returns torch [B, 3, H, W] in [0, 1].
     """
+    from models.experimental.hunyuan_image_3_0.ref.vae.decoder import vae_decode_output_to_rgb
     from .vae.decoder import VAEDecoderTTNN, bcthw_to_bthwc, bthwc_to_bcthw
 
     if decoder is None:
@@ -426,15 +428,16 @@ def decode_latent(
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )
     ttnn.deallocate(out_bthwc, force=False)
-    img = img[: img.shape[0] // mesh_device.get_num_devices()].float()  # [B, 3, 1, H, W]
+    img = img[: img.shape[0] // mesh_device.get_num_devices()].float()  # [B, 3, T, H, W]
 
-    return (img[:, :, 0] / 2 + 0.5).clamp(0, 1)  # drop T=1 -> [B, 3, H, W] in [0, 1]
+    return vae_decode_output_to_rgb(img)  # last temporal frame -> [B, 3, H, W] in [0, 1]
 
 
 def _decode_latent_spatial(mesh_device, latent, decoder, ccl, h_mesh_axis, w_mesh_axis, *, scaling_factor, dtype):
     """H/W-spatial-parallel decode: shard the latent across the mesh (H->axis0,
     W->axis1), run the spatially-sharded decoder (convs keep a halo, norms/attn
     gather), then ConcatMesh2dToTensor the output back to full resolution."""
+    from models.experimental.hunyuan_image_3_0.ref.vae.decoder import vae_decode_output_to_rgb
     from .vae.spatial import enable_vae_spatial
 
     enable_vae_spatial(decoder, ccl, h_mesh_axis=h_mesh_axis, w_mesh_axis=w_mesh_axis)
@@ -470,4 +473,4 @@ def _decode_latent_spatial(mesh_device, latent, decoder, ccl, h_mesh_axis, w_mes
     ttnn.deallocate(out_bthwc, force=False)
 
     img = img_bthwc.permute(0, 4, 1, 2, 3)  # [B,3,T,H_out,W_out]
-    return (img[:, :, 0] / 2 + 0.5).clamp(0, 1)  # [B,3,H_out,W_out] in [0,1]
+    return vae_decode_output_to_rgb(img)  # [B,3,H_out,W_out] in [0,1]

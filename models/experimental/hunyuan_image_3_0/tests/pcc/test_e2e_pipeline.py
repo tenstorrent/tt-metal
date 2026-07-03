@@ -45,7 +45,11 @@ from models.experimental.hunyuan_image_3_0.ref.attention.mask import build_atten
 from models.experimental.hunyuan_image_3_0.ref.attention.rope_2d import build_batch_2d_rope
 from models.experimental.hunyuan_image_3_0.ref.image_gen.patch_embed import UNetDown as RefDown, UNetUp as RefUp
 from models.experimental.hunyuan_image_3_0.ref.image_gen.timestep_embedder import TimestepEmbedder as RefTimeEmbed
-from models.experimental.hunyuan_image_3_0.ref.vae.decoder import Z_CHANNELS, load_decoder as load_ref_decoder
+from models.experimental.hunyuan_image_3_0.ref.vae.decoder import (
+    Z_CHANNELS,
+    load_decoder as load_ref_decoder,
+    vae_decode_output_to_rgb,
+)
 from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
 
 # Config / constants come straight from the pipeline module (env-driven there).
@@ -133,7 +137,7 @@ def _host_reference(c, down_sd, up_sd, init_latent, text_embeds, text_embeds_unc
     print("[e2e-pcc] host reference VAE decode ...", flush=True)
     with torch.no_grad():
         ref_img = load_ref_decoder()((lat.float() / SCALING).unsqueeze(2))
-    ref_rgb = (ref_img[:, :, 0] / 2 + 0.5).clamp(0, 1)
+    ref_rgb = vae_decode_output_to_rgb(ref_img)
     return lat, ref_rgb
 
 
