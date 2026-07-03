@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# trigger: llk-build-quasar
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -124,8 +125,17 @@ def _seed_torch_rng():
     Stimuli that don't set an explicit StimuliSpec.seed fall back to torch's
     global generator, so seeding here makes both generate_stimuli() and any
     direct torch.rand/randn/randint/uniform_ calls reproducible.
+
+    Skipped in --compile-producer mode: that job never executes an ELF or
+    checks a result (every test body ends in pytest.skip() inside run()), and
+    stimuli tensors are excluded from the compile hash/header when not
+    SPEED_OF_LIGHT (see generate_variant_hash's NON_COMPILATION_ARGUMENTS), so
+    RNG determinism is irrelevant there. This runs once per test item; at the
+    Quasar producer's ~400k-item scale, skipping the reseed removes that many
+    torch.manual_seed() calls off the hot path for zero behavioural change.
     """
-    torch.manual_seed(_DEFAULT_TORCH_SEED)
+    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+        torch.manual_seed(_DEFAULT_TORCH_SEED)
     yield
 
 

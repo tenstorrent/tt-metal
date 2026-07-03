@@ -105,7 +105,7 @@ class StimuliMode(Enum):
     LOAD_CACHED = 2  # load from disk, skip computation
 
 
-@dataclass
+@dataclass(slots=True)
 class TestOutcome:
     result: Any = None
     # Lines emitted by DEVICE_PRINT() during this run.
@@ -137,6 +137,54 @@ class TestConfig:
     SYNC_DIR: ClassVar[Path]
     PERF_DATA_DIR: ClassVar[Path]
     DEFAULT_STIMULI_CACHE_FOLDER: ClassVar[Path]
+
+    # Precompiled-header (PCH) scratch dir + checked-in source dir (Quasar only).
+    # PCH_AVAILABLE flips to True once the per-run .gch files are built; if
+    # generation fails for any reason it stays False and compiles run unchanged.
+    # PCH_ATTEMPTED gates generation to at most once per worker process: build_pch
+    # runs on the per-variant hot path, and a fail-open generation writes no
+    # success marker, so without this flag every variant would re-enter and
+    # re-serialize on the global PCH FileLock (see build_pch).
+    PCH_DIR: ClassVar[Path]
+    PCH_SOURCE_DIR: ClassVar[Path]
+    PCH_AVAILABLE: ClassVar[bool] = False
+    PCH_ATTEMPTED: ClassVar[bool] = False
+
+    # Sources observed to ICE the pinned SFPI toolchain when the math-role PCH
+    # is force-included. This set is NO LONGER the PCH safety mechanism -- PCH
+    # is disabled by default in build_pch(), so this denylist is currently
+    # inert -- but it is kept as a record of which sources have been seen to
+    # crash and as the gate that still applies if PCH is re-enabled via
+    # TT_LLK_ENABLE_PCH=1.
+    #
+    # WARNING: this denylist is NOT a reliable fix and must not be treated as
+    # one. An earlier round of this investigation claimed the ICE required
+    # BOTH -Os AND a force-included PCH, asserting "-O2/-O3 + PCH -> OK" as a
+    # verified 2x2 matrix. Real CI run 28638406365 disproves that: at -O3 with
+    # PCH force-included, a source NOT in this set (eltwise_unary) ICEd 1920
+    # times (get_def_stmt_liveness_1, at gimple-rvtt-live.cc:347). Observed so
+    # far, from real CI logs:
+    #   run 28636598915 (-Os): sfpu_where (transform @ rtl-rvtt-synth.cc:123)
+    #                          + eltwise_binary (get_def_stmt_liveness_1 @
+    #                          gimple-rvtt-live.cc:347)
+    #   run 28638406365 (-O3): eltwise_unary (get_def_stmt_liveness_1 @
+    #                          gimple-rvtt-live.cc:347)
+    # i.e. the set of crashing sources changes with the opt level, so no fixed
+    # denylist covers all of them. eltwise_unary is deliberately NOT added
+    # here: doing so would just be more whack-a-mole and would re-imply this
+    # list is sufficient, which the evidence says it is not.
+    #
+    # The gate is keyed on os.path.basename(self.test_name) in
+    # build_kernel_part (that comparison itself is correct -- test_name is the
+    # full source path, e.g. "sources/quasar/sfpu_where_quasar_test.cpp", and
+    # basename() of it matches these entries). It is only the *premise* -- that
+    # a small fixed list can enumerate the crashing sources -- that is unsound.
+    PCH_INCOMPATIBLE_SOURCES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "sfpu_where_quasar_test.cpp",
+            "eltwise_binary_sfpu_quasar_test.cpp",
+        }
+    )
 
     # Sources directories
     LLK_ROOT: ClassVar[Path]
@@ -187,6 +235,16 @@ class TestConfig:
     TENSIX_LOCATION: ClassVar[str] = "0,0"
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
     SIMULATOR_TIMEOUT: ClassVar[int] = 600
+
+    # Inner compile parallelism toggle. Disabled by default: each pytest-xdist
+    # worker compiles its kernel components serially (one g++ at a time), so total
+    # concurrent compilers is just (xdist -n) and RSS scales linearly with -n
+    # (avoids OOM / exit 137). Enable (LLK_BUILD_PARALLELISM=1) to compile a
+    # variant's components concurrently — total g++ becomes (xdist -n) ×
+    # len(KERNEL_COMPONENTS), so lower -n accordingly.
+    BUILD_PARALLELISM: ClassVar[bool] = (
+        os.environ.get("LLK_BUILD_PARALLELISM", "0") == "1"
+    )
 
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
@@ -407,6 +465,9 @@ class TestConfig:
         TestConfig.DEFAULT_STIMULI_CACHE_FOLDER = (
             TestConfig.ARTEFACTS_DIR / "temp_stimuli"
         )
+        # Per-run PCH scratch (.gch live here) + checked-in PCH source headers.
+        TestConfig.PCH_DIR = TestConfig.ARTEFACTS_DIR / "pch"
+        TestConfig.PCH_SOURCE_DIR = TestConfig.HELPERS / "pch"
 
     @staticmethod
     def create_build_directories():
@@ -425,6 +486,7 @@ class TestConfig:
                 TestConfig.PROFILER_SHARED_OBJ_DIR,
                 TestConfig.PROFILER_SHARED_ELF_DIR,
                 TestConfig.COVERAGE_INFO_DIR,
+                TestConfig.PCH_DIR,
             ]
         )
         TestConfig._BUILD_DIRS_CREATED = True
@@ -437,8 +499,23 @@ class TestConfig:
         speed_of_light: bool = False,
     ):
         debug_flag = "" if no_debug_symbols else "-g "
+        # Quasar builds at -Os to lower peak per-compile memory so more xdist
+        # workers fit; every other arch uses -O3. The earlier -O3 override
+        # here was a TEMPORARY test to check whether -O3 avoided the PCH ICE;
+        # it did not (see below), so it is reverted.
+        #
+        # Do NOT re-introduce a global -O3 override as a PCH workaround: real
+        # CI run 28638406365 compiled at -O3 with PCH force-included and still
+        # produced 1920 identical internal compiler errors
+        # (get_def_stmt_liveness_1, at config/riscv/tt/gimple-rvtt-live.cc:347,
+        # during GIMPLE pass: rvtt_live) on eltwise_unary_sfpu_quasar_test.cpp.
+        # The opt level only changes WHICH source ICEs, not whether PCH ICEs.
+        # PCH is disabled by default for this reason -- see build_pch().
+        opt_flag = (
+            "-Os" if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else "-O3"
+        )
         TestConfig.OPTIONS_ALL = (
-            f"{debug_flag}-O3 "
+            f"{debug_flag}{opt_flag} "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
             "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
         )
@@ -549,7 +626,14 @@ class TestConfig:
 
         if compile_producer:
             TestConfig.BUILD_MODE = BuildMode.PRODUCE
+            # Two guards, on purpose. The module-attribute swap keeps the
+            # historical behaviour for module-qualified callers; set_producer_mode
+            # makes the short-circuit order-independent so the many tests that do
+            # `from helpers.golden_generators import get_golden_generator` also get
+            # the dummy even though they bound the name at import time (see the
+            # _PRODUCER_MODE note in golden_generators.py).
             golden_generators_module.get_golden_generator = dummy_golden_generator
+            golden_generators_module.set_producer_mode(True)
 
         if compile_consumer:
             TestConfig.BUILD_MODE = BuildMode.CONSUME
@@ -975,6 +1059,165 @@ class TestConfig:
             done_marker.touch()
             TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
 
+    @staticmethod
+    def _pch_trisc_define(component: str) -> str:
+        """Command-line TRISC define for a KERNEL_COMPONENTS entry (matches build_kernel_part)."""
+        return "ISOLATE_SFPU" if component == "sfpu" else component.upper()
+
+    def build_pch(self):
+        """Precompile the per-role Quasar PCH prefixes once per job run.
+
+        A single Quasar `--compile-producer` run fans out ~400k
+        `riscv-tt-elf-g++` calls; without a PCH each one re-parses the same
+        stable header prefix (ckernel.h/ckernel_ops.h etc.) from scratch. We
+        precompile that prefix once per role into `.gch` files under PCH_DIR and
+        force-include them from build_kernel_part.
+
+        Safety: PCH is DISABLED BY DEFAULT (opt-in via TT_LLK_ENABLE_PCH=1;
+        see the gate below for why), this is Quasar-only, and it is fail-open —
+        any error leaves PCH_AVAILABLE False so compiles run exactly as before.
+        The `.gch` are built with the same compute flags as the
+        common-case variant; build_kernel_part only force-includes them for
+        variants whose flags match (see there), and even a stale/mismatched
+        `.gch` would be silently ignored by GCC (`-include` falls back to
+        parsing the header from source), never miscompiled.
+        """
+        if TestConfig.PCH_AVAILABLE or TestConfig.PCH_ATTEMPTED:
+            return
+        # Quasar-only: the checked-in PCH headers and role set are Quasar-specific.
+        if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            return
+        # PCH is DISABLED BY DEFAULT (opt-in via TT_LLK_ENABLE_PCH=1).
+        #
+        # Once build_pch() was fixed to actually stage the common header
+        # (commit 6099c3b39f), force-including the generated .gch was found to
+        # crash the pinned SFPI toolchain with a hard internal compiler error
+        # in the fork's custom RISC-V backend passes, NOT a graceful
+        # -Winvalid-pch fallback. Two real CI runs demonstrate this:
+        #   * run 28636598915 (-Os): 346 ICEs on sfpu_where + eltwise_binary
+        #     (transform @ rtl-rvtt-synth.cc:123; get_def_stmt_liveness_1 @
+        #     gimple-rvtt-live.cc:347).
+        #   * run 28638406365 (-O3): 1920 ICEs on eltwise_unary
+        #     (get_def_stmt_liveness_1 @ gimple-rvtt-live.cc:347).
+        # Every failing compile in both runs had -include of the math .gch and
+        # emitted zero -Winvalid-pch warnings, i.e. the .gch was accepted and
+        # consumed and the compiler then crashed in codegen.
+        #
+        # The two runs crash on DIFFERENT source files at different opt levels,
+        # so neither a per-source denylist (PCH_INCOMPATIBLE_SOURCES) nor an
+        # opt-level change is a reliable fix: the set of sources that ICE is
+        # not stable, so any fixed exclusion list will miss some. Until the
+        # toolchain backend bug is fixed (or a reliable predicate for the
+        # crashing shape is found), the only safe default is to not
+        # force-include PCH at all -- which is exactly the proven pre-PCH path
+        # that every run before 6099c3b39f took. Set TT_LLK_ENABLE_PCH=1 to
+        # re-enable for local experiments.
+        if os.environ.get("TT_LLK_ENABLE_PCH") != "1":
+            logger.debug("PCH disabled by default (set TT_LLK_ENABLE_PCH=1 to enable)")
+            return
+        if os.environ.get("TT_LLK_DISABLE_PCH") == "1":
+            logger.debug("PCH disabled via TT_LLK_DISABLE_PCH=1")
+            return
+
+        # Commit to at most one generation attempt per worker process. build_pch
+        # is on the per-variant hot path (build_elfs calls it before the variant's
+        # own done-marker fast-path), and generation is fail-open (below): on
+        # failure PCH_AVAILABLE stays False and no success marker is written. If we
+        # re-entered per variant we would re-acquire the global FileLock and re-run
+        # the doomed compiles on every one of the ~100k+ variants, serializing all
+        # xdist workers behind one lock and collapsing CPU utilisation. One shot.
+        TestConfig.PCH_ATTEMPTED = True
+
+        done_marker = TestConfig.PCH_DIR / ".pch_complete"
+        failed_marker = TestConfig.PCH_DIR / ".pch_failed"
+        if done_marker.exists():
+            TestConfig.PCH_AVAILABLE = True
+            return
+        # A sibling worker already tried and failed this run; don't retry.
+        if failed_marker.exists():
+            return
+
+        lock = FileLock("/tmp/tt-llk-build-pch.lock")
+        with lock:
+            if done_marker.exists():
+                TestConfig.PCH_AVAILABLE = True
+                return
+            if failed_marker.exists():
+                return
+
+            os.makedirs(TestConfig.PCH_DIR, exist_ok=True)
+
+            # Canonical common-case compute flags. Constructed from the same
+            # TestConfig options as resolve_compile_options()/build_kernel_part
+            # so the PCH is byte-for-byte flag-compatible with the variants that
+            # will consume it: no coverage/profiler/device-print, and
+            # -DRUNTIME_FORMATS present (compile_time_formats defaults to False).
+            canonical_options = (
+                f"{' '.join(TestConfig.INCLUDES)} {TestConfig.INITIAL_OPTIONS_COMPILE} "
+                "-DLLK_BOOT_MODE_TRISC -DRUNTIME_FORMATS "
+            )
+
+            try:
+                # Every role header (quasar_pch_{unpack,math,pack,sfpu}.h) does
+                # `#include "quasar_pch_common.h"` with a bare quoted include,
+                # resolved by GCC relative to the INCLUDING FILE'S OWN
+                # directory. That only works if the common header is staged
+                # alongside the role headers in PCH_DIR too, not just in
+                # PCH_SOURCE_DIR where they normally live side by side. This
+                # was missing entirely -- every build_pch() call has been
+                # failing with "quasar_pch_common.h: No such file or
+                # directory" since PCH was introduced (confirmed via a real
+                # run's "Report PCH status" log), meaning PCH has never once
+                # produced a usable .gch; every compile has silently fallen
+                # back to the pre-PCH fail-open path this whole time.
+                common_src = TestConfig.PCH_SOURCE_DIR / "quasar_pch_common.h"
+                if not common_src.exists():
+                    raise FileNotFoundError(f"missing PCH source header {common_src}")
+                shutil.copyfile(common_src, TestConfig.PCH_DIR / "quasar_pch_common.h")
+
+                for component in TestConfig.KERNEL_COMPONENTS:
+                    trisc_define = TestConfig._pch_trisc_define(component)
+                    src_header = TestConfig.PCH_SOURCE_DIR / f"quasar_pch_{component}.h"
+                    if not src_header.exists():
+                        raise FileNotFoundError(
+                            f"missing PCH source header {src_header}"
+                        )
+                    # Colocate a copy of the header with its .gch so that
+                    # `-include {staged_header}` resolves `{staged_header}.gch`.
+                    staged_header = TestConfig.PCH_DIR / f"quasar_pch_{component}.h"
+                    shutil.copyfile(src_header, staged_header)
+                    gch_path = f"{staged_header}.gch"
+
+                    pch_command = (
+                        f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} "
+                        f"{TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
+                        f"-I{TestConfig.RISCV_SOURCES} {canonical_options} "
+                        f"-DLLK_TRISC_{trisc_define} "
+                        f"-x c++-header {staged_header} -o {gch_path}"
+                    )
+                    logger.trace(pch_command)
+                    run_shell_command(pch_command, TestConfig.TESTS_WORKING_DIR)
+
+                done_marker.touch()
+                TestConfig.PCH_AVAILABLE = True
+                logger.info(
+                    "Precompiled Quasar PCH headers for roles: {}",
+                    ", ".join(TestConfig.KERNEL_COMPONENTS),
+                )
+            except Exception as e:
+                # Fail open: disable PCH for this run, leave compiles unchanged.
+                # Record the failure under the lock so neither this process nor any
+                # sibling worker re-attempts generation for the rest of the run.
+                TestConfig.PCH_AVAILABLE = False
+                try:
+                    failed_marker.touch()
+                except OSError:
+                    pass
+                logger.warning(
+                    "PCH generation failed ({}); continuing without precompiled headers.",
+                    e,
+                )
+
     def generate_compile_time_data_formats(self) -> list[str]:
         header_content: list[str] = [
             "// Data formats inferred by Python inference model"
@@ -1203,6 +1446,7 @@ class TestConfig:
             return
 
         self.build_shared_artefacts()
+        self.build_pch()
 
         # Fast path: if build is already complete, skip entirely
         if done_marker.exists():
@@ -1283,9 +1527,53 @@ class TestConfig:
                         f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
                         f"-DPROCESSOR_INDEX={risc_id} "
                     )
+                # Force-include the precompiled header prefix for this role, but
+                # only for variants whose compile flags match those the .gch was
+                # built with (the common case). The PCH is built with the
+                # canonical flag set (no coverage/profiler/device-print,
+                # -DRUNTIME_FORMATS present, no -DDISABLE_SFPLOADMACRO).
+                #
+                # canonical_variant is a best-effort gate, not a guarantee: a
+                # real run just proved it has gaps (e.g. implied_math_format
+                # isn't checked here, and a mismatched variant got -include'd
+                # anyway). The design intent was always "an incompatible .gch
+                # just gets discarded and re-parsed from source via
+                # -Winvalid-pch, never a hard failure" -- but -Werror is on
+                # globally (INITIAL_OPTIONS_COMPILE) and invalid-pch was never
+                # added to the -Wno-error= exemptions, so a real mismatch
+                # turned that intended-safe warning into a build-breaking
+                # error instead. -Wno-error=invalid-pch restores the actually
+                # intended fail-safe behavior regardless of any gap in
+                # canonical_variant's flag coverage -- correctness no longer
+                # depends on that gate being exhaustive.
+                pch_include = ""
+                if TestConfig.PCH_AVAILABLE:
+                    # Some sources crash the pinned toolchain when the math-role
+                    # PCH is force-included under -Os (hard ICE, not a graceful
+                    # -Winvalid-pch fallback). Skip -include for those so they
+                    # compile via the plain path; see PCH_INCOMPATIBLE_SOURCES.
+                    pch_safe_source = (
+                        os.path.basename(self.test_name)
+                        not in TestConfig.PCH_INCOMPATIBLE_SOURCES
+                    )
+                    canonical_variant = (
+                        pch_safe_source
+                        and self.coverage_build == CoverageBuild.No
+                        and self.profiler_build == ProfilerBuild.No
+                        and not self.compile_time_formats
+                        and not device_print_flags
+                        and os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") != "1"
+                    )
+                    if canonical_variant:
+                        pch_header = TestConfig.PCH_DIR / f"quasar_pch_{name}.h"
+                        pch_include = (
+                            f"-include {pch_header} "
+                            "-Winvalid-pch -Wno-error=invalid-pch "
+                        )
+
                 compile_command = (
                     f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
-                    f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
+                    f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {pch_include}{local_options_compile} {optional_kernel_flags} "
                     f"-DLLK_TRISC_{trisc_define} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
                     f"-x c++ - -lc -o {VARIANT_ELF_DIR / name}.elf"
@@ -1299,9 +1587,10 @@ class TestConfig:
                     (f"#include  <{self.test_name}>\n" "#include  <trisc.cpp>\n"),
                 )
 
-            with ThreadPoolExecutor(
-                max_workers=len(TestConfig.KERNEL_COMPONENTS)
-            ) as executor:
+            max_workers = (
+                len(TestConfig.KERNEL_COMPONENTS) if TestConfig.BUILD_PARALLELISM else 1
+            )
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [
                     executor.submit(build_kernel_part, name)
                     for name in TestConfig.KERNEL_COMPONENTS

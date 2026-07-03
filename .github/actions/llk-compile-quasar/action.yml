@@ -14,6 +14,36 @@ inputs:
     description: '1-indexed shard to compile (must be <= test-splits).'
     required: false
     default: '1'
+  num-workers:
+    description: >-
+      Number of pytest-xdist workers (-n). Each worker is a full Python process
+      that imports numpy + torch (via golden_generators) + the config/format
+      tables. With LLK_BUILD_PARALLELISM=1 each worker fans out to
+      len(KERNEL_COMPONENTS)=4 concurrent g++ (unpack/math/pack/sfpu) for one
+      variant, so total concurrent g++ = -n x 4. REVERTED from 18 back to 10:
+      -n 18 was tested and is a confirmed net negative, not just "no
+      improvement" -- JUnit comparison against the -n 10 run showed the
+      cache-hit-item (no compile at all) time distribution inflated ~29%
+      across the board (median 7ms->9ms, p99 48ms->57ms, max single item
+      3.3s), consistent with the 18x4=72 fan-out oversubscribing the 40 cores
+      and descheduling the cheap Python-bookkeeping path -- NOT extra real
+      compile work (the >=250ms "real compile" count was statistically
+      unchanged, 2507 vs 2520). Net effect: +22% total per-item CPU-time
+      wasted, wall-clock flat-to-slightly-worse, and mean RAM jumped to 85.96%
+      (peak 97.71%, right at the swap cliff) for no measured benefit. The
+      earlier "~1.55 GiB/worker" linear projection that justified the 18 bump
+      was a 2-point fit across configs with different LLK_BUILD_PARALLELISM/
+      scheduler settings and turned out to badly underestimate actual cost
+      (~3.2-3.6 GiB/worker measured between 10 and 18 workers at matched
+      config) -- treat any single-pair linear extrapolation on this job with
+      real skepticism going forward. -n 10 is the best confirmed config so
+      far: 61% peak RAM, zero swap, tied-fastest wall-clock, no wasted CPU. If
+      testing further, -n 12 is the next defensible probe (small step,
+      projected ~70% peak RAM) -- do not jump straight to a much higher
+      number again without an intermediate data point. Override per-call for
+      a different runner size or target concurrency.
+    required: false
+    default: '10'
 
 runs:
   using: composite
@@ -27,18 +57,92 @@ runs:
       shell: bash
       working-directory: tt_metal/tt-llk/tests/python_tests
       env:
+        # Inner parallelism ON: each of the -n workers fans out to 4 concurrent
+        # g++ (one per Quasar KERNEL_COMPONENT). With -n 4 that is ~16 total g++
+        # (saturates the 16-core large runner) but only 4 heavyweight Python
+        # processes carrying the fixed numpy+torch tax, vs 16 with serial/-n 16.
+        # Component compiles are write-disjoint ({name}.elf each, build.h written
+        # once before fan-out, all inside the per-variant FileLock), so this is
+        # safe. Was defaulted off (=0) back when it multiplied -n without lowering
+        # it (OOM under -O3 on a smaller runner); with -Os and a proportionally
+        # reduced -n the total g++ concurrency is held constant, not multiplied.
+        LLK_BUILD_PARALLELISM: "1"
         CHIP_ARCH: quasar
       run: |
         echo "Compiling Quasar (group ${{ inputs.test-group }}/${{ inputs.test-splits }})..."
+        # --dist=worksteal (supersedes the earlier --maxschedchunk=2000 experiment).
+        #
+        # What the JUnit + sidecar data actually showed (three runs, 40-core/78.5 GiB
+        # xlarge, 413,234 tests each):
+        #  * ~99.2% of test items finish <100 ms and ~65% <10 ms -- they are CACHE
+        #    HITS (build_elfs hits the .build_complete done-marker and returns without
+        #    compiling). Only ~0.6-0.8% (~2500-3200 items) are real g++ compiles
+        #    (300-1000 ms). So this job is NOT compile-bound in aggregate.
+        #  * With -n 10 the workers run at ~99% per-worker CPU (9.9 of 10 cores busy);
+        #    they are NOT starved/idle. Low box CPU (~25% of 40) is purely because
+        #    only 10 of 40 cores are fed. The real bottleneck is per-worker single-
+        #    thread Python/pytest per-item overhead x 413k items, gated by -n.
+        #  * The prior --maxschedchunk 10->2000 change helped only a little (~23 s),
+        #    and for a reason we can now name precisely -- NOT "master feeder
+        #    starvation": LoadScheduling's initial chunk = min(items//4, maxschedchunk)
+        #    (floor 2). At chunk=10 all 10 workers pull tiny chunks off the SAME front
+        #    of pending, so they cold-compile OVERLAPPING variant_ids at once (items
+        #    that share a variant_id are adjacent in collection order). One compiles;
+        #    the others block ~700 ms on the per-variant FileLock then cache-hit. That
+        #    redundant simultaneous compilation is what pushed peak CPU to 88.7% and
+        #    wasted ~600 s of duplicated compile-wait. chunk=2000 kept same-variant
+        #    runs on ONE worker (compile once, same-worker cache-hit the rest): ~700
+        #    fewer collisions and a LOWER peak CPU (78%) -- a GOOD sign, not worse
+        #    utilisation.
+        #
+        # worksteal takes that locality to the limit AND fixes the tail risk of a big
+        # static chunk (xdist src/xdist/scheduler/worksteal.py, v3.8.0): it hands each
+        # worker ONE contiguous ~1/10 block up front (max same-variant locality -> min
+        # cross-worker cold-cache FileLock collisions, especially the startup burst),
+        # then when a worker drops below 2 pending it STEALS half the busiest worker's
+        # tail -> rebalances the slow long tail a static chunk cannot. Fewer
+        # simultaneous cold compiles also mean a lower startup memory spike, which
+        # de-risks a future num-workers increase (mem at -n 10 is only ~53% with ZERO
+        # swap: ~2x headroom, and workers are compute-bound, so raising -n toward ~18
+        # is the next lever to test once this run is measured).
+        # Expected effect is modest (collisions cost only ~15-30 s of wall); this is
+        # the strictly-better scheduler + an enabler, not a fix for the ~25% CPU
+        # ceiling, which needs more workers and/or fewer/cheaper per-item Python items.
+        # worksteal ignores maxschedchunk, so the shared pytest.ini addopts is moot.
         "$GITHUB_WORKSPACE/.github/scripts/utils/host-load-sidecar.sh" \
           --interval 1 \
           --label "Quasar compile (group ${{ inputs.test-group }}/${{ inputs.test-splits }})" \
           --output "$GITHUB_STEP_SUMMARY" \
-          -- pytest -q --compile-producer -n 10 \
+          -- pytest -q --compile-producer -n ${{ inputs.num-workers }} \
                 -m "${{ inputs.pytest-markers }}" \
                 --splits ${{ inputs.test-splits }} --group ${{ inputs.test-group }} \
+                --dist=worksteal \
                 --override-ini=log_cli=false --tb=short --timeout=60 \
                 --junitxml=pytest-report-quasar-compile.xml .
+
+    - name: Report PCH status
+      # We have never been able to confirm from a real run whether PCH is
+      # actually succeeding, failing, or silently no-op'ing on Quasar --
+      # helpers/logger.py defaults loguru to INFO (DEBUG is suppressed
+      # entirely) and separately routes through pytest's log_cli (=false
+      # here), while the per-xdist-worker files it always writes regardless
+      # of log_cli (test_run_gw*.log) were never surfaced anywhere retrievable
+      # after the ephemeral runner tears down -- only the JUnit XML gets
+      # uploaded. The PCH success line was just promoted debug->info to clear
+      # the level filter, but that alone still wouldn't reach this job's
+      # captured console output. Grepping the worker log files directly and
+      # echoing to stdout sidesteps all of loguru/log_cli's routing and is
+      # guaranteed visible in the Actions log regardless of that config.
+      if: always()
+      shell: bash
+      working-directory: tt_metal/tt-llk/tests/python_tests
+      run: |
+        echo "=== PCH status (grepped from test_run_gw*.log) ==="
+        if compgen -G "test_run_gw*.log" > /dev/null; then
+          grep -hi "pch" test_run_gw*.log || echo "(no PCH-related log lines found in any worker log)"
+        else
+          echo "(no test_run_gw*.log files found -- check working-directory/log config)"
+        fi
 
     - name: Upload JUnit report for compiling elfs
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

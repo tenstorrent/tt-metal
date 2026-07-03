@@ -282,13 +282,6 @@ def register_golden(cls):
     return cls
 
 
-def get_golden_generator(cls):
-    """Retrieve the registered golden class instance."""
-    if cls not in golden_registry:
-        raise KeyError(f"Golden class {cls.__name__} is not registered.")
-    return golden_registry[cls]
-
-
 class DummyGoldenGenerator:
     def __call__(*args, **kwargs):
         return torch.zeros(1024, dtype=torch.bfloat16)
@@ -305,6 +298,53 @@ class DummyGoldenGenerator:
 
 def dummy_golden_generator(cls):
     return DummyGoldenGenerator()
+
+
+# Defense-in-depth producer-mode guard.
+#
+# In --compile-producer mode the job only compiles ELFs; the test body's
+# pytest.skip() fires inside run()/prepare() *after* every golden has already
+# been computed and thrown away. To avoid that waste, setup_mode() swaps in the
+# cheap DummyGoldenGenerator via `golden_generators.get_golden_generator =
+# dummy_golden_generator`.
+#
+# That module-attribute swap only reaches callers that resolve the name through
+# the module object at call time. Every quasar test, however, does
+# `from helpers.golden_generators import get_golden_generator`, which copies the
+# function object into the test module's namespace at import time. The swap is
+# therefore only honoured because pytest_configure() (→ setup_mode) happens to
+# run *before* the test modules are imported/collected — a real but implicit and
+# fragile ordering dependency (if a test module were ever imported first, its
+# bound name would keep pointing at the un-swapped function and produce full
+# goldens in producer mode again).
+#
+# _PRODUCER_MODE + the in-body check below make the guard order-independent:
+# because a function's __globals__ always refer to *this* module, the check sees
+# the flag no matter how the name was imported or when it was bound. This is
+# additive belt-and-suspenders on top of the existing swap; it does not change
+# any non-producer path (the flag defaults to False and is only set for
+# --compile-producer, which never coexists with the --stimuli-only/--use-stimuli
+# proxy modes).
+_PRODUCER_MODE = False
+
+
+def set_producer_mode(enabled: bool) -> None:
+    """Enable/disable the producer-mode golden short-circuit (see above)."""
+    global _PRODUCER_MODE
+    _PRODUCER_MODE = enabled
+
+
+def get_golden_generator(cls):
+    """Retrieve the registered golden class instance.
+
+    In --compile-producer mode returns the cheap DummyGoldenGenerator regardless
+    of how this function was imported (see _PRODUCER_MODE note above).
+    """
+    if _PRODUCER_MODE:
+        return DummyGoldenGenerator()
+    if cls not in golden_registry:
+        raise KeyError(f"Golden class {cls.__name__} is not registered.")
+    return golden_registry[cls]
 
 
 class ProxyMode(Enum):
