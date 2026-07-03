@@ -169,13 +169,15 @@ class TtNemotronHMOE:
     def _upload(self, torch_tensor, dtype, layout=ttnn.TILE_LAYOUT):
         if self._is_mesh():
             try:
-                return ttnn.from_torch(
-                    torch_tensor, dtype=dtype, layout=layout, device=self.device,
+                t = ttnn.from_torch(
+                    torch_tensor, dtype=dtype, layout=layout,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
                 )
+                return ttnn.to_device(t, self.device)
             except Exception:
                 pass
-        return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=self.device)
+        t = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout)
+        return ttnn.to_device(t, self.device)
 
     def _dev(self, torch_tensor, layout=ttnn.TILE_LAYOUT):
         """fp32 constant, mesh-replicated."""
