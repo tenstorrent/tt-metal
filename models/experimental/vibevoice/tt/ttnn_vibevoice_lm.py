@@ -376,6 +376,24 @@ class TTVibeVoiceLM:
         # row into a persistent device buffer each step (instead of slicing the device
         # table with a Python-int position, which would bake into the trace).
         self._cos_np, self._sin_np = _build_rope_cache(max_len, self.cfg.head_dim, self.cfg.rope_theta)  # [max_len, hd]
+        # On-device bf16 RoPE tables [max_len, hd] ROW_MAJOR for the llama-style path: the row
+        # for a DEVICE position is gathered on-device via ttnn.embedding (bf16-only), so the
+        # position can advance on-device (plus_one) with no per-step host RoPE write.  bf16 RoPE
+        # is ~0.9999 PCC vs the fp32 host rows and does not flip greedy tokens (bf16_rope_accuracy.py).
+        self._cos_emb = ttnn.as_tensor(
+            torch.from_numpy(self._cos_np).to(torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._sin_emb = ttnn.as_tensor(
+            torch.from_numpy(self._sin_np).to(torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         # Height-sharded L1 memcfg for the paged_update_cache input [1,1,n_kv,hd]
         # (heads tile-padded to 32, one batch row => one core).  paged_update_cache
         # takes a device-tensor write index so the KV write position varies per replay.
@@ -884,6 +902,32 @@ class TTVibeVoiceLM:
         last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
         logits = ttnn.linear(x, self.w.lm_head_w, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits, last_hidden
+
+    def _rope_rows_from_pos(self, cur_pos: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Gather the bf16 RoPE cos/sin rows for a DEVICE position (llama-style, on-device).
+
+        cur_pos: [1] int32 device tensor.  Returns cos/sin [1,1,1,hd] bf16.  Uses ttnn.embedding
+        (bf16-only) so the position can be a device tensor advanced by plus_one — no host RoPE
+        write.  Numerically = the fp32 sinusoid table rounded to bf16 (~0.9999 PCC vs fp32 rows).
+        """
+        hd = self.cfg.head_dim
+        idx = ttnn.reshape(ttnn.typecast(cur_pos, ttnn.uint32), [1, 1])
+        cos = ttnn.embedding(idx, self._cos_emb, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sin = ttnn.embedding(idx, self._sin_emb, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.reshape(cos, [1, 1, 1, hd]), ttnn.reshape(sin, [1, 1, 1, hd])
+
+    def forward_decode_traced_embeds_dev_rope(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        cur_pos: ttnn.Tensor,
+        kv_cache: KVCache,
+        return_last_hidden: bool = False,
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
+        """Like forward_decode_traced_embeds but the RoPE rows are gathered ON DEVICE from
+        cur_pos (bf16) instead of supplied as host-written fp32 rows — so the whole step,
+        including RoPE-row selection, is driven by the device position tensor (llama pattern)."""
+        cos_row, sin_row = self._rope_rows_from_pos(cur_pos)
+        return self.forward_decode_traced_embeds(inputs_embeds, cos_row, sin_row, cur_pos, kv_cache, return_last_hidden)
 
     def prefill(
         self,
