@@ -54,6 +54,12 @@ self-contained on the *overhaul decisions* themselves.
   fit gap", "refusing is the deliverable") — extend it, don't rebuild it.
   **New sibling needed:** "preserve the bug faithfully — don't fix it" (see #2),
   which is *more* counter-reflex than capitulation and needs its own affirmations.
+- **The invariant must be exceptionless (instruction-consistency is load-bearing).**
+  Any "safe" carve-out to "don't modify behavior / just swap syntax" teaches the
+  porter the rule is *negotiable* — and a Claude generalizes the negotiation, so the
+  next drive-by is bigger and you're back to hero-hacking. No carve-outs: the
+  carve-out is the crack. This governs how *every* "don't be a hero" instruction in
+  the recipe is written. (Surfaced settling Fix #2's Class-3 question.)
 
 ## Current status
 
@@ -184,6 +190,45 @@ rest.
   TensorAccessor-handling two-cases + compute-block ⚠, Plan-the-spec
   Dropped-Plumbing Case-2.
 
+### Fix #2 — TensorAccessor 3rd-arg (`aligned_page_size`) triage
+
+Source: `development-docs/2026-06-24 … TensorAccessor 3rd-arg taxonomy`.
+**4 classes** (the note superseded the old 3-class scheme):
+
+1. **Dynamic page size** (varies with row width across cache-reused shapes) →
+   **PORT WORK**: set `dynamic_tensor_shape` (the relaxation this exists for; PR #47456).
+2. **Redundant fixed value** (`== aligned_page_size`) → **PORT WORK**: drop (true
+   no-op — the binding's static `AlignedPageSize` supplies the identical value).
+3. **Latent bug** (divergent value, masked today by access pattern / dead path /
+   test config) → **GATE to ops** (not urgent).
+4. **Live bug** (divergent, reachable in default config) → **GATE to ops** (⚠ urgent).
+
+- **Porter's bright line (settled):** `3rd arg == aligned_page_size` → **drop**; any
+  **divergence → do NOT drop; refuse/flag to ops.** The porter never distinguishes
+  Class 3 from Class 4 — that's ops' urgency triage, not the porter's action. This
+  sidesteps the *error-prone* 3-vs-4 boundary (the note documents the first sweep
+  mis-calling it), so a mis-classification can never smuggle a live behavior change
+  into a port.
+- **Why hands-off, not drop-to-fix:** dropping a divergent arg fixes a latent bug =
+  a behavior change = violates the "just swap syntax" invariant *and* big-change-#2's
+  preserve-don't-fix. And it's **structurally enforced**: Metal 2.0 has **no
+  divergent-fixed-page mechanism** (deliberately un-built — every divergent fixed
+  page found was a bug; analysis + Borys), so a porter *cannot express* one → hitting
+  one forces a stop → refuse → ops. (Dream-hammer shape: always-a-bug ⇒
+  always-inexpressible.)
+- **Operationalize (parallels Diego's spreadsheet):** check in the **taxonomy table
+  as a defer-to lookup** (dated, stamped "authoritative until superseded"; auditors
+  look up the op, ops front-run the Class-4 list now) **+ bake the classification
+  *procedure* into the audit recipe** (the note's "How to classify a new op" +
+  discriminators: `tt::tile_size` vs `element_size()*1024` block-float exponent
+  section; raw vs aligned page; `page_id>0` reachability; align on strictest arch =
+  BH/Quasar 64) as the **staleness backstop** **+ feedback loop** (auditor derives an
+  unlisted op → records → table updated; the loop is the table's only maintenance —
+  it has no dedicated owner).
+- **Lands in:** audit **TensorAccessor-handling** subject (rides the existing
+  accessor-site walk), the checked-in taxonomy table, the audit's classification
+  procedure. Routing reuses the existing finding-roles (PORT WORK / GATE-to-owner).
+
 ## Phase-2 style recipe (deferred — separate step, NOT port work)
 
 Metal 2.0-enabled style improvements, run as a distinct pass *after* the initial
@@ -205,7 +250,9 @@ Known items:
   Almeet/Paul on frequency.
 - `[OPEN]` **Reorg execution** — human/AI-facing directory split + flowchart formats
   (SVG for check-in, PNG for Claude reading). After big changes settle.
-- `[OPEN]` **CSV mechanics** — vet + curate + stamp + check-in; where in the tree.
+- `[OPEN]` **Reference-table mechanics** — Diego's factory CSV *and* the 3rd-arg
+  taxonomy table (Fix #2): vet + curate + stamp + check-in; co-locate the two
+  defer-to tables. Both pair with a procedure/tripwire backstop + feedback loop.
 - `[OPEN]` **This doc's fate** — on-branch (chosen, for handoff-locality); exclude
   from any productization.
 
@@ -216,3 +263,4 @@ Known items:
 | #1 CB handling | `metal2_port_patterns.md`, audit TensorAccessor-handling + SPSC, recipe rule 5 | patterns catalog, audit (2 subjects), recipe rule 5 |
 | #2 factory shapes | audit TTNN-factory-concept-analysis + Appendix A, `port_op_to_metal2_ttnn_factory.md` | audit factory-analysis, Appendix A, recipe factory framing, new CSV |
 | Fix #1 LocalTensorAccessor | recipe rule 5, audit TensorAccessor-handling, Dropped-Plumbing Case-2 | same three |
+| Fix #2 3rd-arg triage | `development-docs/2026-06-24 … taxonomy`, audit TensorAccessor-handling | audit TensorAccessor-handling, checked-in taxonomy table, audit classification procedure |
