@@ -55,7 +55,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
 
     // If a=±inf, converts to a finite value, otherwise if a=±NaN, converts to ±inf or ±NaN.
     // This gives y = <finite value> * 0.0 + 1.0 = 1.0 for non-NaN x, otherwise y = NaN.
-    a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
+    a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - 1);
     x0 = r * scale + bias0;
     y = a * 0.0f + 1.0f;
     x1 = x0 + 1.0f;
@@ -70,7 +70,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
         y = x;
         rcp = rcp * t + rcp;
         y0 = x0 * rcp;
-        x_exp = sfpi::exexp(x, sfpi::ExponentMode::NoDebias);
+        x_exp = sfpi::exexp(x, sfpi::ExponentMode::Biased);
         t = -x1 * y0 + x0;
 
         // For tiny inputs, tanh(x) rounds to x in fp32. `x_exp` is biased, so
