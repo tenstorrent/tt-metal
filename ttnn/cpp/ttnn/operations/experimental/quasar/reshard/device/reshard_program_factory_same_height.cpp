@@ -107,11 +107,11 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
     // Two data-movement workers run the same kernel source on every local core; they split the
     // shard height across the two RISCs. The local sharded DFB is bound producer on k0 / consumer
     // on k1 to satisfy the DFB endpoint invariant (the CB is used only as an address source).
-    const auto make_worker = [&](const char* name, const DataMovementGen1Config& gen1, DFBEndpointType endpoint) {
+    const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, DFBEndpointType endpoint) {
         KernelSpec k{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_path),
-            .hw_config = ttnn::to_datamovement_hardware_config(device->arch(), gen1),
+            .hw_config = std::move(hw_config),
         };
         k.tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = TensorParamName{kSHRemoteTensorParam}, .accessor_name = kSHRemoteTensorParam});
@@ -129,8 +129,10 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
         return k;
     };
 
-    KernelSpec k0 = make_worker("reader", create_reader_gen1_datamovement_config(), DFBEndpointType::PRODUCER);
-    KernelSpec k1 = make_worker("writer", create_writer_gen1_datamovement_config(), DFBEndpointType::CONSUMER);
+    KernelSpec k0 =
+        make_worker("reader", ttnn::create_reader_datamovement_config(device->arch()), DFBEndpointType::PRODUCER);
+    KernelSpec k1 =
+        make_worker("writer", ttnn::create_writer_datamovement_config(device->arch()), DFBEndpointType::CONSUMER);
 
     DataflowBufferSpec shard_dfb{
         .unique_id = DFBSpecName{kSHDfbName},

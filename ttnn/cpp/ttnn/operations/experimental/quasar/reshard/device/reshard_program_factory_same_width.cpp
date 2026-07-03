@@ -172,11 +172,11 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         compile_time_args.emplace("remote_unit_size_padded", remote_unit_size_padded);
     }
 
-    const auto make_worker = [&](const char* name, const DataMovementGen1Config& gen1, DFBEndpointType endpoint) {
+    const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, DFBEndpointType endpoint) {
         KernelSpec k{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_path),
-            .hw_config = ttnn::to_datamovement_hardware_config(device->arch(), gen1),
+            .hw_config = std::move(hw_config),
         };
         k.tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = TensorParamName{kSWRemoteTensorParam}, .accessor_name = kSWRemoteTensorParam});
@@ -203,8 +203,10 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         return k;
     };
 
-    KernelSpec k0 = make_worker("reader", create_reader_gen1_datamovement_config(), DFBEndpointType::PRODUCER);
-    KernelSpec k1 = make_worker("writer", create_writer_gen1_datamovement_config(), DFBEndpointType::CONSUMER);
+    KernelSpec k0 =
+        make_worker("reader", ttnn::create_reader_datamovement_config(device->arch()), DFBEndpointType::PRODUCER);
+    KernelSpec k1 =
+        make_worker("writer", ttnn::create_writer_datamovement_config(device->arch()), DFBEndpointType::CONSUMER);
 
     DataflowBufferSpec shard_dfb{
         .unique_id = DFBSpecName{kSWShardDfbName},
