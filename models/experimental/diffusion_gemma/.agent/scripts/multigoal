@@ -1,0 +1,1284 @@
+#!/usr/bin/env python3
+"""Run a sequence of Codex goals through app-server."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+
+MAX_GOAL_OBJECTIVE_CHARS = 4_000
+TERMINAL_GOAL_STATUSES = {"complete", "blocked", "usageLimited", "budgetLimited"}
+SKILL_RE = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]*)")
+ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# Stage check scripts exit with: 0 = pass, 1 = advisory failure (recorded,
+# pipeline continues), 2 = critical failure (after remediation attempts are
+# exhausted, no further stages are launched). Any other exit (including the
+# checker-internal-error convention of 3) is a broken check or misconfigured
+# environment: it is retried once for transients and then, by default, stops
+# the pipeline as a runner/infra failure. A silently disabled guardrail would
+# bypass the evidence gate. Use --check-error-policy continue to override in an
+# emergency.
+CHECK_PASS = 0
+CHECK_ADVISORY = 1
+CHECK_CRITICAL = 2
+
+
+JsonObject = dict[str, Any]
+
+
+@dataclass
+class StageState:
+    thread_id: str
+    objective: str
+    status: str = "active"
+    terminal_status: str | None = None
+    active_turns: set[str] = field(default_factory=set)
+    last_turn_status: str | None = None
+    last_turn_error: str | None = None
+    ignore_stale_goal_objective: bool = False
+    stale_goal_objective_ignored: bool = False
+
+
+class AppServerClient:
+    def __init__(
+        self,
+        codex_bin: str,
+        repo: pathlib.Path,
+        env: dict[str, str],
+        stderr_log: pathlib.Path,
+        config_overrides: list[str],
+    ) -> None:
+        self.codex_bin = codex_bin
+        self.repo = repo
+        self.env = env
+        self.stderr_log = stderr_log
+        self.config_overrides = config_overrides
+        self.proc: subprocess.Popen[str] | None = None
+        self._write_lock = threading.Lock()
+        self._stderr_tail: list[str] = []
+        self._stderr_thread: threading.Thread | None = None
+
+    def __enter__(self) -> AppServerClient:
+        args = [self.codex_bin]
+        for item in self.config_overrides:
+            args.extend(["--config", item])
+        args.extend(["app-server", "--enable", "goals", "--listen", "stdio://"])
+        self.proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            cwd=self.repo,
+            env=self.env,
+            bufsize=1,
+        )
+        self._start_stderr_drain_thread()
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        if self.proc is None:
+            return
+        proc = self.proc
+        self.proc = None
+        if proc.stdin:
+            proc.stdin.close()
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+        except Exception:
+            proc.kill()
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=0.5)
+
+    def request(
+        self,
+        method: str,
+        params: JsonObject | None,
+        log: Any,
+        on_event: Callable[[JsonObject], None] | None = None,
+    ) -> JsonObject:
+        request_id = str(uuid.uuid4())
+        payload: JsonObject = {"id": request_id, "method": method}
+        if params is not None:
+            payload["params"] = params
+        self._send(payload, log)
+
+        while True:
+            message = self._read(log)
+            if message.get("id") == request_id and "error" in message:
+                raise RuntimeError(f"{method} failed: {message['error']}")
+            if message.get("id") == request_id:
+                result = message.get("result", {})
+                if not isinstance(result, dict):
+                    raise RuntimeError(f"{method} returned non-object result: {result!r}")
+                return result
+            self._handle_non_response(message, log, on_event)
+
+    def read_event(
+        self,
+        log: Any,
+        on_event: Callable[[JsonObject], None] | None = None,
+    ) -> JsonObject:
+        while True:
+            message = self._read(log)
+            if "id" in message and "method" in message:
+                self._handle_server_request(message, log)
+                continue
+            if "method" in message:
+                if on_event is not None:
+                    on_event(message)
+                return message
+            if "error" in message:
+                raise RuntimeError(f"Unexpected app-server error response: {message['error']}")
+
+    def _handle_non_response(
+        self,
+        message: JsonObject,
+        log: Any,
+        on_event: Callable[[JsonObject], None] | None,
+    ) -> None:
+        if "id" in message and "method" in message:
+            self._handle_server_request(message, log)
+        elif "method" in message and on_event is not None:
+            on_event(message)
+
+    def _handle_server_request(self, message: JsonObject, log: Any) -> None:
+        method = message.get("method")
+        params = message.get("params")
+        result: JsonObject = {}
+        if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
+            result = {"decision": "accept"}
+        elif method == "item/permissions/requestApproval" and isinstance(params, dict):
+            result = {"permissions": params.get("permissions", {}), "scope": "session"}
+        self._send({"id": message["id"], "result": result}, log)
+
+    def _send(self, payload: JsonObject, log: Any) -> None:
+        self._log(log, "send", payload)
+        if self.proc is None or self.proc.stdin is None:
+            raise RuntimeError("app-server process is not running")
+        with self._write_lock:
+            self.proc.stdin.write(json.dumps(payload) + "\n")
+            self.proc.stdin.flush()
+
+    def _read(self, log: Any) -> JsonObject:
+        if self.proc is None or self.proc.stdout is None:
+            raise RuntimeError("app-server process is not running")
+        line = self.proc.stdout.readline()
+        if not line:
+            tail = "\n".join(self._stderr_tail[-40:])
+            raise RuntimeError(f"app-server closed stdout; stderr tail:\n{tail}")
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid app-server JSON line: {line!r}") from exc
+        if not isinstance(message, dict):
+            raise RuntimeError(f"Invalid app-server JSON payload: {message!r}")
+        self._log(log, "recv", message)
+        return message
+
+    def _log(self, log: Any, direction: str, payload: JsonObject) -> None:
+        log.write(json.dumps({"ts": timestamp(), "direction": direction, "message": payload}) + "\n")
+        log.flush()
+
+    def _start_stderr_drain_thread(self) -> None:
+        if self.proc is None or self.proc.stderr is None:
+            return
+
+        def drain() -> None:
+            assert self.proc is not None
+            assert self.proc.stderr is not None
+            with self.stderr_log.open("a", encoding="utf-8") as stderr:
+                for line in self.proc.stderr:
+                    line = line.rstrip("\n")
+                    self._stderr_tail.append(line)
+                    del self._stderr_tail[:-80]
+                    stderr.write(line + "\n")
+                    stderr.flush()
+
+        self._stderr_thread = threading.Thread(target=drain, daemon=True)
+        self._stderr_thread.start()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run each prompt file as an exact persisted Codex goal through "
+            "codex app-server. This runner requires the openai-codex Python "
+            "package unless --codex-bin points at a Codex binary explicitly."
+        )
+    )
+    parser.add_argument("prompt_files", nargs="+", type=pathlib.Path)
+    parser.add_argument("--repo", type=pathlib.Path, default=pathlib.Path.cwd())
+    parser.add_argument("--codex-home", type=pathlib.Path)
+    parser.add_argument(
+        "--codex-bin",
+        default=os.environ.get("CODEX_BIN"),
+        help="Codex binary for app-server. Default: bundled binary from openai-codex.",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=pathlib.Path,
+        default=None,
+        help="Default: $RUN_MULTIGOAL_LOG_DIR or $TMPDIR/codex-multigoal-runs/<UTC timestamp>",
+    )
+    parser.add_argument(
+        "--replace",
+        action="append",
+        default=[],
+        metavar="OLD=NEW",
+        help="Literal text replacement applied to every prompt before sending.",
+    )
+    parser.add_argument(
+        "--start-index",
+        type=int,
+        default=1,
+        help="Stage number to use for the first prompt file, useful when continuing from a later stage.",
+    )
+    parser.add_argument(
+        "--resume-stage",
+        type=int,
+        default=None,
+        help=(
+            "Resume an existing terminal stage from --log-dir/manifest.txt using "
+            "its recorded stage_N_thread_id, then continue later stages. This is "
+            "for usageLimited/budgetLimited/blocker recovery where --start-index "
+            "would lose the stopped thread's context."
+        ),
+    )
+    parser.add_argument(
+        "--config",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Codex config override passed to app-server. May be repeated.",
+    )
+    parser.add_argument(
+        "--check-retries",
+        type=int,
+        default=1,
+        help=(
+            "Remediation goals to run when a stage's <prompt>.check.sh fails "
+            "before recording the failure (default: 1)."
+        ),
+    )
+    parser.add_argument(
+        "--no-checks",
+        action="store_true",
+        help="Skip <prompt>.check.sh verification scripts entirely.",
+    )
+    parser.add_argument(
+        "--check-error-policy",
+        choices=("stop", "continue"),
+        default="stop",
+        help=(
+            "What to do when a check script itself is broken (exit outside "
+            "0/1/2 after one retry). Default: stop the pipeline as an infra "
+            "failure so a disabled guardrail cannot pass silently."
+        ),
+    )
+    parser.add_argument("--approval-policy", default="never")
+    parser.add_argument("--sandbox", default="danger-full-access")
+    parser.add_argument("--model")
+    parser.add_argument("--effort")
+    parser.add_argument("--summary")
+    parser.add_argument("--service-tier")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    if args.start_index < 1:
+        raise SystemExit("--start-index must be >= 1")
+    if args.resume_stage is not None and args.resume_stage < 1:
+        raise SystemExit("--resume-stage must be >= 1")
+    if args.resume_stage is not None and args.log_dir is None:
+        raise SystemExit("--resume-stage requires --log-dir pointing at the existing multigoal log directory")
+    return args
+
+
+def timestamp() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def parse_replacements(items: list[str]) -> list[tuple[str, str]]:
+    replacements: list[tuple[str, str]] = []
+    for item in items:
+        if "=" not in item:
+            raise SystemExit(f"--replace expects OLD=NEW, got: {item}")
+        old, new = item.split("=", 1)
+        if not old:
+            raise SystemExit("--replace OLD cannot be empty")
+        replacements.append((old, new))
+    return replacements
+
+
+def replacement_value(replacements: list[tuple[str, str]], name: str) -> str | None:
+    value: str | None = None
+    for old, new in replacements:
+        if old == name:
+            value = new
+    return value
+
+
+def load_prompt(path: pathlib.Path, replacements: list[tuple[str, str]]) -> str:
+    text = path.read_text()
+    for old, new in replacements:
+        text = text.replace(old, new)
+    if not text.lstrip().startswith("/goal"):
+        raise SystemExit(f"{path} must start with a /goal command")
+    return text.rstrip() + "\n"
+
+
+def objective_from_prompt(prompt: str) -> str:
+    text = prompt.lstrip()
+    if not text.startswith("/goal"):
+        raise SystemExit("prompt must start with /goal")
+    objective = text[len("/goal") :].strip()
+    if not objective:
+        raise SystemExit("goal objective must not be empty")
+    chars = len(objective)
+    if chars > MAX_GOAL_OBJECTIVE_CHARS:
+        raise SystemExit(
+            f"goal objective is {chars} characters; Codex app-server limit is "
+            f"{MAX_GOAL_OBJECTIVE_CHARS}. Put long details in a prompt file and "
+            "make the objective point at that file."
+        )
+    return objective
+
+
+def parse_skill_names(text: str) -> list[str]:
+    return sorted(set(SKILL_RE.findall(text)))
+
+
+def skill_path(repo: pathlib.Path, name: str) -> pathlib.Path | None:
+    here = pathlib.Path(__file__).resolve().parent.parent  # the .agent/ dir this runner lives in
+    candidates = [
+        here / "skills" / name / "SKILL.md",
+        repo / "models" / "experimental" / "diffusion_gemma" / ".agent" / "skills" / name / "SKILL.md",
+        repo / ".agents" / "skills" / name / "SKILL.md",
+        pathlib.Path.home() / ".codex" / "skills" / name / "SKILL.md",
+        pathlib.Path.home() / ".codex" / "skills" / ".system" / name / "SKILL.md",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def input_items_for_objective(repo: pathlib.Path, objective: str) -> tuple[list[JsonObject], list[str]]:
+    items: list[JsonObject] = [{"type": "text", "text": objective}]
+    missing: list[str] = []
+    for name in parse_skill_names(objective):
+        path = skill_path(repo, name)
+        if path is None:
+            missing.append(name)
+            continue
+        items.append({"type": "skill", "name": name, "path": str(path)})
+    return items, missing
+
+
+def input_items_for_resume(
+    repo: pathlib.Path, message: str, original_objective: str
+) -> tuple[list[JsonObject], list[str]]:
+    items: list[JsonObject] = [{"type": "text", "text": message}]
+    missing: list[str] = []
+    for name in parse_skill_names(original_objective):
+        path = skill_path(repo, name)
+        if path is None:
+            missing.append(name)
+            continue
+        items.append({"type": "skill", "name": name, "path": str(path)})
+    return items, missing
+
+
+def codex_home(env: dict[str, str], explicit: pathlib.Path | None) -> pathlib.Path:
+    # Mark's unattended bringup runs use ChatGPT auth in CODEX_HOME. Do not let
+    # an ambient API key silently switch the billing/auth path.
+    env.pop("OPENAI_API_KEY", None)
+    env.pop("CODEX_API_KEY", None)
+    if explicit is not None:
+        home = explicit.expanduser()
+        env["CODEX_HOME"] = str(home)
+        return home
+    return pathlib.Path(env.get("CODEX_HOME", "~/.codex")).expanduser()
+
+
+def resolve_codex_bin(explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    try:
+        from codex_cli_bin import bundled_codex_path
+    except ImportError as exc:
+        raise SystemExit(
+            "openai-codex is required for multigoal's app-server runner. "
+            "Install the repo-local agent dependencies in the active Python "
+            "environment with: python -m pip install -r models/experimental/diffusion_gemma/.agent/requirements.txt"
+        ) from exc
+    return str(bundled_codex_path())
+
+
+def stage_name(index: int, path: pathlib.Path) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", path.stem).strip("-") or "prompt"
+    return f"{index:02d}-{safe}"
+
+
+def turn_params(args: argparse.Namespace, repo: pathlib.Path) -> JsonObject:
+    params: JsonObject = {
+        "cwd": str(repo),
+        "approvalPolicy": args.approval_policy,
+        "sandboxPolicy": {"type": sandbox_policy_type(args.sandbox)},
+    }
+    if args.model:
+        params["model"] = args.model
+    if args.effort:
+        params["effort"] = args.effort
+    if args.summary:
+        params["summary"] = args.summary
+    if args.service_tier:
+        params["serviceTier"] = args.service_tier
+    return params
+
+
+def sandbox_policy_type(value: str) -> str:
+    return {
+        "danger-full-access": "dangerFullAccess",
+        "workspace-write": "workspaceWrite",
+        "read-only": "readOnly",
+        "external-sandbox": "externalSandbox",
+    }.get(value, value)
+
+
+def thread_start_params(args: argparse.Namespace, repo: pathlib.Path) -> JsonObject:
+    params: JsonObject = {
+        "cwd": str(repo),
+        "approvalPolicy": args.approval_policy,
+        "sandbox": args.sandbox,
+    }
+    if args.model:
+        params["model"] = args.model
+    if args.service_tier:
+        params["serviceTier"] = args.service_tier
+    return params
+
+
+def thread_resume_params(args: argparse.Namespace, repo: pathlib.Path, thread_id: str) -> JsonObject:
+    params = thread_start_params(args, repo)
+    params["threadId"] = thread_id
+    return params
+
+
+def goal_from_response(result: JsonObject) -> JsonObject:
+    goal = result.get("goal")
+    if not isinstance(goal, dict):
+        raise RuntimeError(f"app-server response did not include a goal object: {result!r}")
+    return goal
+
+
+def in_progress_turn_ids(result: JsonObject) -> list[str]:
+    thread = result.get("thread")
+    if not isinstance(thread, dict):
+        return []
+    turns = thread.get("turns")
+    if not isinstance(turns, list):
+        return []
+    ids: list[str] = []
+    for turn in turns:
+        if not isinstance(turn, dict) or turn.get("status") != "inProgress":
+            continue
+        turn_id = turn.get("id")
+        if isinstance(turn_id, str):
+            ids.append(turn_id)
+    return ids
+
+
+def update_stage_state(state: StageState, message: JsonObject) -> None:
+    method = message.get("method")
+    params = message.get("params")
+    if not isinstance(method, str) or not isinstance(params, dict):
+        return
+    if params.get("threadId") != state.thread_id:
+        return
+
+    if method == "turn/started":
+        turn = params.get("turn")
+        if isinstance(turn, dict) and isinstance(turn.get("id"), str):
+            state.active_turns.add(turn["id"])
+        return
+
+    if method == "turn/completed":
+        turn = params.get("turn")
+        if isinstance(turn, dict):
+            turn_id = turn.get("id")
+            if isinstance(turn_id, str):
+                state.active_turns.discard(turn_id)
+            status = turn.get("status")
+            if isinstance(status, str):
+                state.last_turn_status = status
+                if status == "failed":
+                    error = turn.get("error")
+                    state.last_turn_error = json.dumps(error) if error is not None else "turn failed"
+                    state.terminal_status = "turnFailed"
+        return
+
+    if method == "thread/goal/updated":
+        goal = params.get("goal")
+        if not isinstance(goal, dict):
+            return
+        objective = goal.get("objective")
+        if objective != state.objective:
+            if state.ignore_stale_goal_objective:
+                # Resumed threads can replay an older thread/goal/updated event
+                # from the pre-resume objective. Ignore it after the resume path
+                # has explicitly reset the live objective.
+                if not state.stale_goal_objective_ignored:
+                    expected = repr(state.objective[:120])
+                    actual = repr(str(objective)[:120])
+                    print(
+                        "ignored stale resumed goal objective update; "
+                        f"expected_prefix={expected} actual_prefix={actual}",
+                        file=sys.stderr,
+                    )
+                    state.stale_goal_objective_ignored = True
+                return
+            raise RuntimeError(
+                "app-server goal objective changed unexpectedly.\n"
+                f"Expected: {state.objective!r}\nActual: {objective!r}"
+            )
+        status = goal.get("status")
+        if isinstance(status, str):
+            state.status = status
+            if status in TERMINAL_GOAL_STATUSES:
+                state.terminal_status = status
+
+
+def wait_for_stage_terminal(client: AppServerClient, log: Any, state: StageState) -> str:
+    last_notice = time.monotonic()
+    while state.terminal_status is None:
+        client.read_event(log, lambda msg: update_stage_state(state, msg))
+        now = time.monotonic()
+        if now - last_notice > 300:
+            print(
+                f"stage still active: status={state.status} active_turns={len(state.active_turns)}",
+                file=sys.stderr,
+            )
+            last_notice = now
+    return state.terminal_status
+
+
+def wait_for_turn_started(
+    client: AppServerClient,
+    log: Any,
+    state: StageState,
+    turn_id: str,
+) -> None:
+    while turn_id not in state.active_turns and state.terminal_status is None:
+        client.read_event(log, lambda msg: update_stage_state(state, msg))
+    if state.terminal_status is not None:
+        raise RuntimeError(f"stage reached terminal status {state.terminal_status} before turn {turn_id} started")
+
+
+def write_manifest_header(
+    path: pathlib.Path,
+    repo: pathlib.Path,
+    home: pathlib.Path,
+    codex_bin: str,
+    args: argparse.Namespace,
+    replacements: list[tuple[str, str]],
+    model_dir: str | None,
+) -> None:
+    hf_model = replacement_value(replacements, "HF_MODEL")
+    path.write_text(
+        "\n".join(
+            [
+                f"started_at_utc={timestamp()}",
+                f"repo={repo}",
+                f"codex_home={home}",
+                f"codex_bin={codex_bin}",
+                f"hf_model={hf_model or ''}",
+                f"model_dir={model_dir or ''}",
+                "runner=app-server",
+                f"approval_policy={args.approval_policy}",
+                f"sandbox={args.sandbox}",
+                "prompt_files:",
+                *[f"- {prompt}" for prompt in args.prompt_files],
+                "",
+            ]
+        )
+    )
+
+
+def append_manifest(path: pathlib.Path, lines: list[str]) -> None:
+    with path.open("a", encoding="utf-8") as f:
+        for line in lines:
+            f.write(line + "\n")
+
+
+def read_manifest(path: pathlib.Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if "=" not in raw or raw.startswith("- "):
+            continue
+        key, value = raw.split("=", 1)
+        values[key] = value
+    return values
+
+
+def next_resume_attempt(manifest_values: dict[str, str], index: int) -> int:
+    prefix = f"stage_{index}_resume_"
+    attempts: list[int] = []
+    for key in manifest_values:
+        if not key.startswith(prefix):
+            continue
+        rest = key[len(prefix) :]
+        number = rest.split("_", 1)[0]
+        if number.isdigit():
+            attempts.append(int(number))
+    return max(attempts, default=0) + 1
+
+
+def execute_goal(
+    client: AppServerClient,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    objective: str,
+    output_log: pathlib.Path,
+    on_thread_started: Callable[[str], None] | None = None,
+) -> tuple[str, str, str | None]:
+    """Run one objective to a terminal goal status.
+
+    Returns (terminal_status, thread_id, last_turn_error).
+    """
+    input_items, _missing = input_items_for_objective(repo, objective)
+    with output_log.open("w", encoding="utf-8") as log:
+        started = client.request("thread/start", thread_start_params(args, repo), log)
+        thread = started.get("thread")
+        if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
+            raise RuntimeError(f"thread/start did not return a thread id: {started!r}")
+        thread_id = thread["id"]
+        if on_thread_started is not None:
+            on_thread_started(thread_id)
+        state = StageState(thread_id=thread_id, objective=objective)
+
+        set_paused = client.request(
+            "thread/goal/set",
+            {"threadId": thread_id, "objective": objective, "status": "paused"},
+            log,
+            lambda msg: update_stage_state(state, msg),
+        )
+        paused_goal = goal_from_response(set_paused)
+        if paused_goal.get("objective") != objective or paused_goal.get("status") != "paused":
+            raise RuntimeError(f"paused goal was not set exactly: {paused_goal!r}")
+
+        turn_payload = turn_params(args, repo)
+        turn_payload["input"] = input_items
+        turn_payload["threadId"] = thread_id
+        turn_started = client.request(
+            "turn/start",
+            turn_payload,
+            log,
+            lambda msg: update_stage_state(state, msg),
+        )
+        turn = turn_started.get("turn")
+        turn_id: str | None = None
+        if isinstance(turn, dict) and isinstance(turn.get("id"), str):
+            turn_id = turn["id"]
+            if turn.get("status") == "inProgress":
+                state.active_turns.add(turn_id)
+        if turn_id is not None:
+            wait_for_turn_started(client, log, state, turn_id)
+
+        active_goal = client.request(
+            "thread/goal/set",
+            {"threadId": thread_id, "status": "active"},
+            log,
+            lambda msg: update_stage_state(state, msg),
+        )
+        goal = goal_from_response(active_goal)
+        if goal.get("objective") != objective or goal.get("status") != "active":
+            raise RuntimeError(f"active goal was not set exactly: {goal!r}")
+
+        terminal = wait_for_stage_terminal(client, log, state)
+        return terminal, thread_id, state.last_turn_error
+
+
+def execute_resumed_goal(
+    client: AppServerClient,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    objective: str,
+    thread_id: str,
+    output_log: pathlib.Path,
+    prompt_copy: pathlib.Path,
+) -> tuple[str, str | None]:
+    """Resume an existing stage thread and run one continuation turn.
+
+    Returns (terminal_status, last_turn_error).
+    """
+    message = "\n".join(
+        [
+            "Continue this existing multigoal stage after the previous turn stopped before the stage was complete.",
+            "",
+            f"Original goal prompt copy: {prompt_copy}",
+            "",
+            "Keep working on the same goal and use the existing artifacts, logs, and code state.",
+            "Do not restart from scratch unless the current artifacts require it.",
+            "The multigoal runner will run this stage's check script after you mark the goal complete, then continue later stages.",
+            "When the original goal is genuinely complete, mark the goal complete. If it is impossible to proceed, mark it blocked with the concrete blocker.",
+        ]
+    )
+    input_items, _missing = input_items_for_resume(repo, message, objective)
+    with output_log.open("w", encoding="utf-8") as log:
+        resumed = client.request("thread/resume", thread_resume_params(args, repo, thread_id), log)
+        state = StageState(thread_id=thread_id, objective=objective, ignore_stale_goal_objective=True)
+        state.active_turns.update(in_progress_turn_ids(resumed))
+        if state.active_turns:
+            active = client.request(
+                "thread/goal/set",
+                {"threadId": thread_id, "objective": objective, "status": "active"},
+                log,
+                lambda msg: update_stage_state(state, msg),
+            )
+            active_goal = goal_from_response(active)
+            if active_goal.get("objective") != objective or active_goal.get("status") != "active":
+                raise RuntimeError(f"active resumed goal was not set exactly: {active_goal!r}")
+            state.status = "active"
+            state.terminal_status = None
+            terminal = wait_for_stage_terminal(client, log, state)
+            return terminal, state.last_turn_error
+
+        paused = client.request(
+            "thread/goal/set",
+            {"threadId": thread_id, "objective": objective, "status": "paused"},
+            log,
+            lambda msg: update_stage_state(state, msg),
+        )
+        paused_goal = goal_from_response(paused)
+        if paused_goal.get("objective") != objective or paused_goal.get("status") != "paused":
+            raise RuntimeError(f"paused resumed goal was not set exactly: {paused_goal!r}")
+        state.status = "paused"
+        state.terminal_status = None
+
+        turn_payload = turn_params(args, repo)
+        turn_payload["input"] = input_items
+        turn_payload["threadId"] = thread_id
+        turn_started = client.request(
+            "turn/start",
+            turn_payload,
+            log,
+            lambda msg: update_stage_state(state, msg),
+        )
+        turn = turn_started.get("turn")
+        if isinstance(turn, dict) and isinstance(turn.get("id"), str):
+            turn_id = turn["id"]
+            if turn.get("status") == "inProgress":
+                state.active_turns.add(turn_id)
+            wait_for_turn_started(client, log, state, turn_id)
+
+        active = client.request(
+            "thread/goal/set",
+            {"threadId": thread_id, "objective": objective, "status": "active"},
+            log,
+            lambda msg: update_stage_state(state, msg),
+        )
+        active_goal = goal_from_response(active)
+        if active_goal.get("objective") != objective or active_goal.get("status") != "active":
+            raise RuntimeError(f"active resumed goal was not set exactly: {active_goal!r}")
+        state.status = "active"
+        state.terminal_status = None
+
+        terminal = wait_for_stage_terminal(client, log, state)
+        return terminal, state.last_turn_error
+
+
+def find_check_script(prompt_path: pathlib.Path) -> pathlib.Path | None:
+    candidate = prompt_path.with_name(prompt_path.stem + ".check.sh")
+    return candidate if candidate.exists() else None
+
+
+def requires_model_dir(args: argparse.Namespace) -> bool:
+    if args.no_checks:
+        return False
+    return any(find_check_script(prompt_path) is not None for prompt_path in args.prompt_files)
+
+
+def resolve_model_dir_for_launch(
+    *,
+    replacements: list[tuple[str, str]],
+    manifest_values: dict[str, str],
+    required: bool,
+) -> str | None:
+    replacement_model_dir = replacement_value(replacements, "MODEL_DIR")
+    manifest_model_dir = manifest_values.get("model_dir") or None
+    if replacement_model_dir and manifest_model_dir and replacement_model_dir != manifest_model_dir:
+        raise SystemExit(
+            "MODEL_DIR replacement does not match existing manifest model_dir:\n"
+            f"  --replace MODEL_DIR={replacement_model_dir}\n"
+            f"  manifest model_dir={manifest_model_dir}"
+        )
+    model_dir = replacement_model_dir or manifest_model_dir
+    if required and not model_dir:
+        raise SystemExit(
+            "MODEL_DIR is required when launching prompts with runner-side check scripts. "
+            "Pass --replace MODEL_DIR=models/experimental/diffusion_gemma so stage gates are "
+            "scoped to the exact autoport directory instead of relying on HF_MODEL fuzzy matching."
+        )
+    return model_dir
+
+
+def replacement_env(replacements: list[tuple[str, str]]) -> dict[str, str]:
+    return {old: new for old, new in replacements if ENV_NAME_RE.match(old)}
+
+
+def run_check_script(
+    script: pathlib.Path,
+    repo: pathlib.Path,
+    extra_env: dict[str, str],
+    check_log: pathlib.Path,
+) -> int:
+    env = os.environ.copy()
+    env.update(extra_env)
+    result = subprocess.run(
+        ["bash", str(script)],
+        cwd=repo,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    check_log.write_text(result.stdout or "", encoding="utf-8")
+    tail = "\n".join((result.stdout or "").splitlines()[-15:])
+    print(f"check {script.name} exited {result.returncode}; log: {check_log}", file=sys.stderr)
+    if tail:
+        print(tail, file=sys.stderr)
+    return result.returncode
+
+
+def remediation_objective(
+    prompt: str,
+    *,
+    script: pathlib.Path,
+    check_log: pathlib.Path,
+    prompt_copy: pathlib.Path,
+    exit_code: int,
+) -> str:
+    first_line = objective_from_prompt(prompt).splitlines()[0].strip()
+    severity = "CRITICAL" if exit_code >= CHECK_CRITICAL else "ADVISORY"
+    objective = "\n".join(
+        [
+            first_line,
+            "",
+            "Runner-side verification: an independent check script ran after this goal "
+            f"was previously reported complete and FAILED (exit {exit_code}, {severity}).",
+            f"Check script: {script}",
+            f"Full check output: {check_log}",
+            f"Original goal requirements: {prompt_copy}",
+            "Read the check output and treat it as a bug report against the previous "
+            "completion claim. Reproduce the problem, fix the underlying cause, and "
+            "re-verify by running the check script yourself until it exits 0 - or refute "
+            "it with concrete evidence recorded in the stage work_log. All original "
+            "completion requirements still apply.",
+        ]
+    )
+    if len(objective) > MAX_GOAL_OBJECTIVE_CHARS:
+        raise RuntimeError(f"remediation objective is {len(objective)} characters")
+    return objective
+
+
+def append_status(log_dir: pathlib.Path, name: str, goal_status: str, check_status: str) -> None:
+    status = log_dir / "STATUS.md"
+    if not status.exists():
+        status.write_text("| stage | goal | check |\n|---|---|---|\n", encoding="utf-8")
+    with status.open("a", encoding="utf-8") as f:
+        f.write(f"| {name} | {goal_status} | {check_status} |\n")
+
+
+def run_stage_checks(
+    client: AppServerClient,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    log_dir: pathlib.Path,
+    manifest: pathlib.Path,
+    index: int,
+    name: str,
+    prompt: str,
+    prompt_path: pathlib.Path,
+    prompt_copy: pathlib.Path,
+    replacements: list[tuple[str, str]],
+    manifest_key_prefix: str | None = None,
+) -> str:
+    """Run the stage's check script with remediation. Returns the check status string."""
+    manifest_key_prefix = manifest_key_prefix or f"stage_{index}"
+    script = find_check_script(prompt_path)
+    if script is None or args.no_checks:
+        status = "skipped" if args.no_checks and script is not None else "none"
+        append_manifest(manifest, [f"{manifest_key_prefix}_check={status}"])
+        return status
+
+    extra_env = replacement_env(replacements)
+    extra_env["MULTIGOAL_LOG_DIR"] = str(log_dir)
+    extra_env["MULTIGOAL_STAGE"] = name
+
+    code = -1
+    for attempt in range(args.check_retries + 1):
+        check_log = log_dir / f"{name}.check-{attempt + 1}.log"
+        code = run_check_script(script, repo, extra_env, check_log)
+        append_manifest(manifest, [f"{manifest_key_prefix}_check_attempt_{attempt + 1}=exit{code}"])
+        if code not in (CHECK_PASS, CHECK_ADVISORY, CHECK_CRITICAL):
+            # Broken check or environment: retry once for transients.
+            check_log = log_dir / f"{name}.check-{attempt + 1}-retry.log"
+            code = run_check_script(script, repo, extra_env, check_log)
+            append_manifest(manifest, [f"{manifest_key_prefix}_check_attempt_{attempt + 1}_retry=exit{code}"])
+        if code == CHECK_PASS:
+            append_manifest(manifest, [f"{manifest_key_prefix}_check=pass"])
+            return "pass"
+        if code not in (CHECK_ADVISORY, CHECK_CRITICAL):
+            append_manifest(manifest, [f"{manifest_key_prefix}_check=check-error(exit{code})"])
+            return f"check-error(exit{code})"
+        if attempt >= args.check_retries:
+            break
+        objective = remediation_objective(
+            prompt,
+            script=script,
+            check_log=check_log,
+            prompt_copy=prompt_copy,
+            exit_code=code,
+        )
+        remediation_log = log_dir / f"{name}.remediation-{attempt + 1}.jsonl"
+        print(f"\n== Stage {index} remediation {attempt + 1}: check failed (exit {code}) ==", file=sys.stderr)
+        print(f"+ log: {remediation_log}", file=sys.stderr)
+        terminal, _thread_id, turn_error = execute_goal(
+            client,
+            args,
+            repo,
+            objective,
+            remediation_log,
+            on_thread_started=lambda tid: append_manifest(
+                manifest, [f"{manifest_key_prefix}_remediation_{attempt + 1}_thread_id={tid}"]
+            ),
+        )
+        append_manifest(
+            manifest,
+            [f"{manifest_key_prefix}_remediation_{attempt + 1}_terminal_status={terminal}"],
+        )
+        if terminal != "complete":
+            detail = f": {turn_error}" if turn_error else ""
+            print(f"remediation goal ended {terminal}{detail}", file=sys.stderr)
+            break
+
+    status = "critical-fail" if code >= CHECK_CRITICAL else "advisory-fail"
+    append_manifest(manifest, [f"{manifest_key_prefix}_check={status}"])
+    return status
+
+
+def run_stage(
+    client: AppServerClient,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    log_dir: pathlib.Path,
+    manifest: pathlib.Path,
+    index: int,
+    prompt_path: pathlib.Path,
+    replacements: list[tuple[str, str]],
+) -> int:
+    prompt = load_prompt(prompt_path, replacements)
+    objective = objective_from_prompt(prompt)
+    name = stage_name(index, prompt_path)
+    prompt_copy = log_dir / f"{name}.prompt.txt"
+    prompt_copy.write_text(prompt)
+    output_log = log_dir / f"{name}.jsonl"
+    _input_items, missing_skills = input_items_for_objective(repo, objective)
+
+    print(f"\n== Stage {index}: {prompt_path} ==", file=sys.stderr)
+    print(f"+ log: {output_log}", file=sys.stderr)
+    print(f"+ objective_chars: {len(objective)}", file=sys.stderr)
+    if missing_skills:
+        print(f"+ missing skill paths: {', '.join(missing_skills)}", file=sys.stderr)
+
+    if args.dry_run:
+        output_log.write_text(objective)
+        check_script = find_check_script(prompt_path)
+        append_manifest(
+            manifest,
+            [
+                f"stage_{index}_dry_run=true",
+                f"stage_{index}_objective_chars={len(objective)}",
+                f"stage_{index}_skills={','.join(parse_skill_names(objective))}",
+                f"stage_{index}_check_script={check_script if check_script else 'none'}",
+            ],
+        )
+        return 0
+
+    append_manifest(
+        manifest,
+        [
+            f"stage_{index}_objective_chars={len(objective)}",
+            f"stage_{index}_skills={','.join(parse_skill_names(objective))}",
+            f"stage_{index}_missing_skills={','.join(missing_skills)}",
+        ],
+    )
+
+    terminal, _thread_id, turn_error = execute_goal(
+        client,
+        args,
+        repo,
+        objective,
+        output_log,
+        on_thread_started=lambda tid: append_manifest(manifest, [f"stage_{index}_thread_id={tid}"]),
+    )
+    append_manifest(manifest, [f"stage_{index}_terminal_status={terminal}"])
+    print(f"stage_terminal_status={terminal}", file=sys.stderr)
+    if terminal == "turnFailed":
+        append_status(log_dir, name, terminal, "not-run")
+        print(f"Stopping after stage {index}: turn failed: {turn_error}", file=sys.stderr)
+        return 5
+    if terminal != "complete":
+        append_status(log_dir, name, terminal, "not-run")
+        print(f"Stopping after stage {index}: goal is {terminal}", file=sys.stderr)
+        return 3
+
+    check_status = run_stage_checks(
+        client,
+        args,
+        repo,
+        log_dir,
+        manifest,
+        index,
+        name,
+        prompt,
+        prompt_path,
+        prompt_copy,
+        replacements,
+    )
+    append_status(log_dir, name, terminal, check_status)
+    if check_status == "critical-fail":
+        print(
+            f"Stopping after stage {index}: verification failed critically after "
+            f"{args.check_retries} remediation attempt(s). Artifacts are preserved; "
+            "later stages would build on a broken base.",
+            file=sys.stderr,
+        )
+        return 6
+    if check_status.startswith("check-error") and args.check_error_policy == "stop":
+        print(
+            f"Stopping after stage {index}: the verification check itself failed "
+            f"({check_status}). This is a runner/environment fault, not a model "
+            "verdict. Fix the check or environment, then resume with "
+            f"--start-index {index} (the stage goal already completed, so rerun "
+            "from this stage only if its work needs re-verification).",
+            file=sys.stderr,
+        )
+        return 7
+    return 0
+
+
+def run_resumed_stage(
+    client: AppServerClient,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    log_dir: pathlib.Path,
+    manifest: pathlib.Path,
+    index: int,
+    prompt_path: pathlib.Path,
+    replacements: list[tuple[str, str]],
+    manifest_values: dict[str, str],
+) -> int:
+    prompt = load_prompt(prompt_path, replacements)
+    objective = objective_from_prompt(prompt)
+    name = stage_name(index, prompt_path)
+    prompt_copy = log_dir / f"{name}.prompt.txt"
+    if not prompt_copy.exists():
+        prompt_copy.write_text(prompt, encoding="utf-8")
+    thread_id = manifest_values.get(f"stage_{index}_thread_id")
+    if not thread_id:
+        raise RuntimeError(f"cannot resume stage {index}: manifest has no stage_{index}_thread_id")
+    attempt = next_resume_attempt(manifest_values, index)
+    resume_name = f"{name}.resume-{attempt}"
+    output_log = log_dir / f"{resume_name}.jsonl"
+
+    print(f"\n== Resume stage {index}: {prompt_path} ==", file=sys.stderr)
+    print(f"+ thread: {thread_id}", file=sys.stderr)
+    print(f"+ log: {output_log}", file=sys.stderr)
+    append_manifest(
+        manifest,
+        [
+            f"stage_{index}_resume_{attempt}_started_at_utc={timestamp()}",
+            f"stage_{index}_resume_{attempt}_thread_id={thread_id}",
+        ],
+    )
+
+    terminal, turn_error = execute_resumed_goal(
+        client,
+        args,
+        repo,
+        objective,
+        thread_id,
+        output_log,
+        prompt_copy,
+    )
+    append_manifest(manifest, [f"stage_{index}_resume_{attempt}_terminal_status={terminal}"])
+    print(f"stage_resume_terminal_status={terminal}", file=sys.stderr)
+    if terminal == "turnFailed":
+        append_status(log_dir, resume_name, terminal, "not-run")
+        print(f"Stopping after resumed stage {index}: turn failed: {turn_error}", file=sys.stderr)
+        return 5
+    if terminal != "complete":
+        append_status(log_dir, resume_name, terminal, "not-run")
+        print(f"Stopping after resumed stage {index}: goal is {terminal}", file=sys.stderr)
+        return 3
+
+    check_status = run_stage_checks(
+        client,
+        args,
+        repo,
+        log_dir,
+        manifest,
+        index,
+        resume_name,
+        prompt,
+        prompt_path,
+        prompt_copy,
+        replacements,
+        manifest_key_prefix=f"stage_{index}_resume_{attempt}",
+    )
+    append_status(log_dir, resume_name, terminal, check_status)
+    if check_status == "critical-fail":
+        print(
+            f"Stopping after resumed stage {index}: verification failed critically after "
+            f"{args.check_retries} remediation attempt(s).",
+            file=sys.stderr,
+        )
+        return 6
+    if check_status.startswith("check-error") and args.check_error_policy == "stop":
+        print(
+            f"Stopping after resumed stage {index}: the verification check itself failed ({check_status}).",
+            file=sys.stderr,
+        )
+        return 7
+    return 0
+
+
+def main() -> int:
+    args = parse_args()
+    repo = args.repo.expanduser().resolve()
+    env = os.environ.copy()
+    home = codex_home(env, args.codex_home)
+    default_log_root = pathlib.Path(
+        os.environ.get(
+            "RUN_MULTIGOAL_LOG_DIR",
+            pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / "codex-multigoal-runs",
+        )
+    )
+    log_dir = args.log_dir or default_log_root / timestamp()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    replacements = parse_replacements(args.replace)
+    manifest = log_dir / "manifest.txt"
+    if args.resume_stage is not None and not manifest.exists():
+        raise SystemExit(f"--resume-stage requires an existing manifest: {manifest}")
+    manifest_values = read_manifest(manifest) if args.resume_stage is not None else {}
+    model_dir = resolve_model_dir_for_launch(
+        replacements=replacements,
+        manifest_values=manifest_values,
+        required=requires_model_dir(args),
+    )
+    if model_dir and replacement_value(replacements, "MODEL_DIR") is None:
+        replacements.append(("MODEL_DIR", model_dir))
+    codex_bin = resolve_codex_bin(args.codex_bin)
+    if args.resume_stage is None:
+        write_manifest_header(manifest, repo, home, codex_bin, args, replacements, model_dir)
+    elif model_dir and not manifest_values.get("model_dir"):
+        append_manifest(manifest, [f"model_dir={model_dir}"])
+
+    # Validate every prompt up front so an over-long or malformed late-stage
+    # prompt cannot kill a run hours in.
+    for prompt_path in args.prompt_files:
+        objective_from_prompt(load_prompt(prompt_path, replacements))
+
+    if args.dry_run:
+        client: AppServerClient | None = None
+        for index, prompt_path in enumerate(args.prompt_files, start=args.start_index):
+            if args.resume_stage is not None and index < args.resume_stage:
+                continue
+            code = run_stage(
+                client,  # type: ignore[arg-type]
+                args,
+                repo,
+                log_dir,
+                manifest,
+                index,
+                prompt_path,
+                replacements,
+            )
+            if code != 0:
+                return code
+        return 0
+
+    stderr_log = log_dir / "app-server.stderr.log"
+    with AppServerClient(codex_bin, repo, env, stderr_log, args.config) as client:
+        with (log_dir / "initialize.jsonl").open("w", encoding="utf-8") as init_log:
+            client.request(
+                "initialize",
+                {
+                    "clientInfo": {
+                        "name": "tt-metal-multigoal",
+                        "title": "TT Metal Multigoal Runner",
+                        "version": "1",
+                    },
+                    "capabilities": {"experimentalApi": True},
+                },
+                init_log,
+            )
+            client._send({"method": "initialized"}, init_log)
+
+        manifest_values = read_manifest(manifest)
+        for index, prompt_path in enumerate(args.prompt_files, start=args.start_index):
+            if args.resume_stage is not None and index < args.resume_stage:
+                continue
+            if args.resume_stage is not None and index == args.resume_stage:
+                code = run_resumed_stage(
+                    client,
+                    args,
+                    repo,
+                    log_dir,
+                    manifest,
+                    index,
+                    prompt_path,
+                    replacements,
+                    manifest_values,
+                )
+            else:
+                code = run_stage(
+                    client,
+                    args,
+                    repo,
+                    log_dir,
+                    manifest,
+                    index,
+                    prompt_path,
+                    replacements,
+                )
+            if code != 0:
+                return code
+
+    print(f"\nAll {len(args.prompt_files)} goals completed.", file=sys.stderr)
+    print(f"Logs: {log_dir}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

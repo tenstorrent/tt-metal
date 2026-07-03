@@ -1,0 +1,7 @@
+interface:
+  display_name: "Forge Functional Decoder"
+  short_description: "Translate a tt-forge TTNN emit into a functional-decoder (prefill)"
+  default_prompt: "Use $forge-functional-decoder to translate the tt-forge emitted TTNN model under FORGE_DIR into models/experimental/diffusion_gemma/tt/functional_decoder.py (prefill only), validate single-layer prefill PCC against the HF reference, write a documented decode_forward stub, and leave a work log, README, and context_contract.json."
+
+policy:
+  allow_implicit_invocation: false

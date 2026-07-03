@@ -1,0 +1,7 @@
+interface:
+  display_name: "Datatype Sweep"
+  short_description: "Select TTNN dtype and fidelity policies"
+  default_prompt: "Use $datatype-sweep to evaluate TTNN full-model precision and compute-fidelity configurations, choose the fastest one that satisfies top-1/top-5 accuracy limits, and leave Pareto plots plus a selected precision config."
+
+policy:
+  allow_implicit_invocation: true

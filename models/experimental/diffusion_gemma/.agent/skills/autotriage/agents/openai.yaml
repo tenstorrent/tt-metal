@@ -1,0 +1,6 @@
+interface:
+  display_name: "AutoTriage"
+  short_description: "Debug TT hangs from tt-triage logs"
+  default_prompt: "Use $autotriage to capture or interpret tt-triage evidence and diagnose this TT hang."
+policy:
+  allow_implicit_invocation: true
