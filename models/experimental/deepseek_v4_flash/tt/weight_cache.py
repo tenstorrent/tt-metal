@@ -89,6 +89,7 @@ def _load_weight(
     cache_file_name: Optional[str] = None,
     dtype: ttnn.DataType = ttnn.bfloat16,
     layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     """``ttnn.as_tensor`` for a (static) weight, with optional disk caching.
 
@@ -102,7 +103,7 @@ def _load_weight(
         dtype=dtype,
         layout=layout,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
         cache_file_name=cache_file_name,
     )
 

@@ -121,7 +121,7 @@ def rectangular_core_range_set(num_cores: int, device) -> ttnn.CoreRangeSet:
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))})
 
 
-def width_sharded_l1_config(height: int, width: int, device) -> ttnn.MemoryConfig:
+def width_sharded_l1_config(height: int, width: int, device, num_cores: int | None = None) -> ttnn.MemoryConfig:
     """Width-sharded L1 config: one tile-width (32 cols) per core over ``width // TILE_SIZE`` cores.
 
     Mirror of :func:`_rope_height_sharded_config` along the width axis: for a
@@ -129,7 +129,8 @@ def width_sharded_l1_config(height: int, width: int, device) -> ttnn.MemoryConfi
     (``height_padded`` is ``height`` rounded up to a tile boundary), ROW_MAJOR orientation.
     """
     assert width % ttnn.TILE_SIZE == 0, f"width {width} must be tile-aligned"
-    num_cores = width // ttnn.TILE_SIZE
+    if num_cores is None:
+        num_cores = width // ttnn.TILE_SIZE
     device_grid_size = device.compute_with_storage_grid_size()
     device_cores = device_grid_size.x * device_grid_size.y
     while num_cores > device_cores:
