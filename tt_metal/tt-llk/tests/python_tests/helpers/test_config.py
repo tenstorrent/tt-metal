@@ -504,15 +504,23 @@ class TestConfig:
         speed_of_light: bool = False,
     ):
         debug_flag = "" if no_debug_symbols else "-g "
-        # Quasar's compile-producer job never runs or perf-tests the ELF it
-        # builds (it only checks that it compiles), so -O3 buys nothing there
-        # while its template-heavy codegen drives peak per-compile memory —
-        # the actual ceiling on how many workers can run concurrently. -Os
-        # lowers that ceiling. WH/BH keep -O3 since their builds are exercised
-        # on real hardware and/or perf-measured.
-        opt_flag = (
-            "-Os" if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else "-O3"
-        )
+        # TEMPORARY TEST: forced to -O3 for all architectures (including
+        # Quasar) to let Neil directly measure PCH's speedup at -O3, matching
+        # the conditions of his earlier standalone PCH test. This is NOT a
+        # permanent reversion -- confirmed via the real pinned SFPI 7.64.0
+        # toolchain (commit ce901330ae) that -Os combined with a
+        # force-included PCH triggers a genuine compiler ICE in 2 SFPU
+        # sources (ckernel_sfpu_where.h, ckernel_sfpu_binary.h), while -O3
+        # (or -O2) + PCH is clean on the same sources. Quasar's
+        # compile-producer job never runs/perf-tests the ELF, so -O3 buys
+        # nothing there while its codegen drives peak per-compile memory --
+        # the actual ceiling on concurrent workers -- which is why it was
+        # switched to -Os in the first place. Revert this back to the
+        # CHIP_ARCH-conditional -Os once the -O3 PCH comparison is done:
+        #   opt_flag = (
+        #       "-Os" if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else "-O3"
+        #   )
+        opt_flag = "-O3"
         TestConfig.OPTIONS_ALL = (
             f"{debug_flag}{opt_flag} "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
