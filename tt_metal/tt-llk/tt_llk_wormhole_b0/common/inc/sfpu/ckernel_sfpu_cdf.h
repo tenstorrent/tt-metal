@@ -41,11 +41,9 @@ inline sfpi::vFloat _calculate_pos_cdf_appx_(sfpi::vFloat val)
     }
     v_endif;
 
-    v_if (result > 1.0f)
-    {
-        result = 1.0f;
-    }
-    v_endif;
+    // Branchless upper clamp: v_if(result > 1){result = 1} is exactly min(result, 1),
+    // which lowers to a single SFPSWAP-class op and drops the SFPSETCC/predicated store.
+    result = sfpi::min(result, 1.0f);
     return result;
 }
 

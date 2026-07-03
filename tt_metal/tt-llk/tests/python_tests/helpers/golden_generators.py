@@ -2154,6 +2154,11 @@ class UnarySFPUGolden:
             MathOperation.Rdiv: self._rdiv,
             MathOperation.Clamp: self._clamp,
             MathOperation.Hardtanh: self._hardtanh,
+            MathOperation.Tanhshrink: self._tanhshrink,
+            MathOperation.Floor: self._floor,
+            MathOperation.Ceil: self._ceil,
+            MathOperation.Trunc: self._trunc,
+            MathOperation.Frac: self._frac,
             MathOperation.Gelu: self._gelu,
             MathOperation.GeluTanh: self._gelu_tanh,
             MathOperation.Neg: self._neg,
@@ -2427,6 +2432,23 @@ class UnarySFPUGolden:
 
     def _tanh(self, x):
         return math.tanh(x)
+
+    def _tanhshrink(self, x):
+        # tanhshrink(x) = x - tanh(x)
+        return x - math.tanh(x)
+
+    def _floor(self, x):
+        return math.floor(x) if math.isfinite(x) else x
+
+    def _ceil(self, x):
+        return math.ceil(x) if math.isfinite(x) else x
+
+    def _trunc(self, x):
+        return math.trunc(x) if math.isfinite(x) else x
+
+    def _frac(self, x):
+        # Fractional part with sign of x: frac(x) = x - trunc(x)
+        return (x - math.trunc(x)) if math.isfinite(x) else x
 
     def _square(self, x):
         if not math.isfinite(x * x):
