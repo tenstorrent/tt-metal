@@ -104,24 +104,22 @@ BLOCK_COL_MAJOR_SHAPES = [
     ("bs_cm_c256_128x128_k3s1p1_tiled", [1, 256, 128, 128], (3, 3), (1, 1), (1, 1, 1, 1), "block", True, "tile"),
 ]
 
-# BLOCK-sharded ROW-MAJOR control (transpose_shards=False -- the DEFAULT block orientation).
+# BLOCK-sharded ROW-MAJOR (transpose_shards=False -- the DEFAULT block orientation), sub-64B per-core
+# shard width. This is the #27333/#30644 Blackhole alignment class (gotcha 1/2). c128 block-shards to
+# 16 channels/core = 32-byte row-major sticks (sub-64B). The in-place output shard buffer aliases the
+# input at the ACTUAL L1 address offset; the fix computes that offset from the real buffer addresses
+# (not a stick-granular size formula that mismatches Blackhole's 64B allocator base alignment). The
+# alignment-safety gate (should_halo_be_in_place) only activates in-place when the input/output per-core
+# footprints are base-aligned so the aliasing offset is an exact stick multiple and the input is fully
+# contained -- which holds here (32B stick divides the 64B base alignment). Passes bitwise.
 #
-# KNOWN-ISSUE (xfail): on Blackhole p100a this trips the in-place overlap-invariant TT_FATAL
-# (halo_device_operation.cpp: "src_addr == dst_buffer->address() + delta_bytes"). The ROW-MAJOR
-# in-place aliasing delta is computed with a STICK-granular formula
-# (align_buffer(nsticks*width)/width ...), which for this shard geometry lands on a 32-byte
-# boundary (13728 = 32*429) while the L1 allocator places the two overlapping buffers on Blackhole's
-# 64-byte boundary (actual delta 13760 = 64*215) -- a 32B under-alignment. This is gotcha class 1/2
-# (BH 64B vs WH 32B L1 alignment) living in the EXISTING in-place row-major delta computation, NOT
-# in the conv2d caller change. The assertion is doing its job (it prevents silent corruption -- it is
-# NOT a data mismatch/hang). The col-major block cases above use a shard width whose delta is already
-# 64B-aligned and pass bitwise; the TILED path uses the correct aligned_size_per_bank() delta and is
-# unaffected. This DOES affect the default (transpose_shards=False) block-sharded conv for SAVE
-# shapes on BH, so it must be resolved (delta fix in the op, or a gate exclusion) before conv in-place
-# is landed for row-major block. Left as a documented xfail rather than deleted so the finding stays
-# discoverable. The normal (in-place-disabled) path is unaffected.
+# NOTE: shard widths that do NOT divide the 64B base alignment (e.g. 24 channels -> 48B sticks, as
+# [1,256,128,128] block-shards to on this grid) are NOT base-alignment-safe: the allocator would place
+# the input tail overhanging the output and the stick grids would misalign. Those geometries are now
+# DECLINED by the gate (silent fall back to normal halo), so they no longer TT_FATAL or corrupt -- they
+# simply do not activate in-place (and would pytest.skip here rather than xfail).
 BLOCK_ROW_MAJOR_SHAPES = [
-    ("bs_rm_c256_128x128_k3s1p1", [1, 256, 128, 128], (3, 3), (1, 1), (1, 1, 1, 1), "block", False, "row_major"),
+    ("bs_rm_c128_128x128_k3s1p1", [1, 128, 128, 128], (3, 3), (1, 1), (1, 1, 1, 1), "block", False, "row_major"),
 ]
 
 ALL_SHAPES = HEIGHT_SHARDED_SHAPES + BLOCK_COL_MAJOR_SHAPES + BLOCK_ROW_MAJOR_SHAPES
@@ -414,14 +412,6 @@ def test_inplace_halo_conv2d_block_sharded_col_major(shape_entry):
     _run_and_compare(name, shape, kernel, stride, pad, shard, transpose_shards, in_layout, expect_col_major=True)
 
 
-@pytest.mark.xfail(
-    reason="BH in-place row-major delta is 32B-granular vs the allocator's 64B placement -> overlap "
-    "TT_FATAL (pre-existing in-place op bug, class 1/2 alignment; see BLOCK_ROW_MAJOR_SHAPES note). "
-    "Not a data mismatch; the assertion prevents corruption. Must be fixed before landing conv "
-    "in-place for the default (row-major) block orientation.",
-    strict=False,
-    raises=AssertionError,
-)
 @pytest.mark.parametrize("shape_entry", BLOCK_ROW_MAJOR_SHAPES, ids=[s[0] for s in BLOCK_ROW_MAJOR_SHAPES])
 def test_inplace_halo_conv2d_block_sharded_row_major(shape_entry):
     name, shape, kernel, stride, pad, shard, transpose_shards, in_layout = shape_entry

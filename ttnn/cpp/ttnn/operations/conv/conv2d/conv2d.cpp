@@ -290,7 +290,9 @@ Result conv2d_L1(
                 sliding_window_config,
                 input_tensor_post_tm.memory_config().shard_spec()->shape[0],
                 input_tensor_post_tm.memory_config().memory_layout(),
-                input_tensor_post_tm.layout() == tt::tt_metal::Layout::TILE);
+                input_tensor_post_tm.layout() == tt::tt_metal::Layout::TILE,
+                input_tensor_post_tm.memory_config().shard_spec()->shape[1] *
+                    (input_tensor_post_tm.dtype() == tt::tt_metal::DataType::FLOAT32 ? 4u : 2u));
 
             ttnn::Tensor halo_output = ttnn::halo(
                 input_tensor_post_tm,

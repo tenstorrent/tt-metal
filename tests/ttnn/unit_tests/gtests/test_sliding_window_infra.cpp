@@ -165,7 +165,8 @@ TEST(InPlaceHaloEconomics, MaxPoolHeightSharded) {
             config,
             in_nsticks_per_core,
             TensorMemoryLayout::HEIGHT_SHARDED,
-            /*is_in_tiled*/ false);
+            /*is_in_tiled*/ false,
+            /*input_shard_width_bytes*/ s.c * 2);  // bf16 height-sharded: full channel width
 
         const double ratio = in_nsticks_per_core ? (100.0 * max_ref_size / in_nsticks_per_core) : 0.0;
         const char* verdict = (max_ref_size < in_nsticks_per_core) ? "SAVE" : "LOSE";

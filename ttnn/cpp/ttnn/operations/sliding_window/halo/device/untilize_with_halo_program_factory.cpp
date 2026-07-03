@@ -479,19 +479,14 @@ ProgramDescriptor build_inplace_halo_program(
         input_npages = remapped_input_shard_shape_for_output_grid;
     }
 
-    // Byte offset of the input shard data within the (larger) output shard buffer. This is the
-    // ALIASING delta (where src_cb reads the input from, and the overlap assert). It differs from
-    // the KERNEL's in_out_shard_size_delta (a stick-INDEX delta used for the overlapping local
-    // copies), which is already 0 for tiled input.
-    //   Row-major: stick delta = in_out_shard_size_delta * out_stick_nbytes.
-    //   Tiled:     buffer delta = dst.aligned_size_per_bank() - src.aligned_size_per_bank(), because
-    //              untilize writes row-major sticks into the dst buffer while the tiled input lives
-    //              (byte-for-byte) at the TAIL of that buffer -- the stick delta (0) is not the byte
-    //              offset (#27333/#30644). Mirrors the archived inplace_untilize_with_halo_multi_core.
-    const bool is_in_tiled = !skip_untilize;
-    const uint32_t stick_delta = static_cast<uint32_t>(in_out_shard_size_delta) * out_stick_nbytes;
-    const uint32_t buffer_delta = dst_buffer->aligned_size_per_bank() - src_buffer->aligned_size_per_bank();
-    const uint32_t delta_bytes = is_in_tiled ? buffer_delta : stick_delta;
+    // Byte offset of the input shard data within the (larger) output shard buffer. This is the ALIASING
+    // delta: where src_cb reads the input from. It is the ACTUAL L1 address difference between the two
+    // overlapping buffers (correct for BOTH row-major and tiled input -- the input's tiles/sticks live
+    // byte-for-byte at the TAIL of the output buffer). The old row-major path used a stick-granular size
+    // formula that mismatched the real placement when the allocator's base alignment rounded the output
+    // base for sub-64B shard widths (#27333/#30644 class 1/2). Distinct from the KERNEL's
+    // in_out_shard_size_delta (a stick-INDEX delta for the overlapping local copies; 0 for tiled).
+    const uint32_t delta_bytes = src_buffer->address() - dst_buffer->address();  // actual aliasing offset
 
     ProgramDescriptor desc;
     InplaceCBIndices cb_indices = InplaceCBIndices();
@@ -810,20 +805,40 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
     // ---- In-place halo path (silent auto-activation; see IN_PLACE_HALO_REDO.md sec 10). ----
     // Uses the SAME pure decision function as create_output_tensors (which already deallocated
     // the input and allocated the overlapping output) and the pool caller.
+    const uint32_t inplace_shard_width_bytes =
+        input_tensor.memory_config().shard_spec()->shape[1] * (input_tensor.dtype() == DataType::FLOAT32 ? 4u : 2u);
     if (sliding_window::should_halo_be_in_place(
             operation_attributes.allow_in_place,
             operation_attributes.config,
             operation_attributes.in_nsticks_per_core,
             input_tensor.memory_config().memory_layout(),
-            is_in_tiled)) {
-        // Stick delta between input and output shards (MUST match create_output_tensors).
+            is_in_tiled,
+            inplace_shard_width_bytes)) {
+        // Kernel STICK-index delta for the overlapping local-copy direction/skip logic (row-major only;
+        // tiled writes into the dst buffer so its stick delta is 0). Derived from the SAME true aliasing
+        // byte offset the output/src CBs use -- the ACTUAL L1 address difference between the input and
+        // output shard buffers -- divided by the stick pitch the kernel indexes the OUTPUT with
+        // (out_stick_nbytes = shard_width * nbytes). The old code derived this from a stick-granular size
+        // formula which mismatched the real placement by one stick for sub-64B shard widths whenever the
+        // allocator's base alignment rounded the output base (#27333/#30644 class 1/2). The alignment gate
+        // in should_halo_be_in_place() only activates in-place when the offset is an exact stick multiple,
+        // so the TT_FATAL below is a loud backstop rather than the normal outcome.
         const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
         const uint32_t nbytes = input_tensor.dtype() == DataType::FLOAT32 ? 4u : 2u;  // post-untilize width
-        const uint32_t width_bytes = shard_width * nbytes;
-        const uint32_t aligned_delta_size =
-            (sliding_window::align_buffer(operation_attributes.max_out_nsticks_per_core * width_bytes) / width_bytes) -
-            (sliding_window::align_buffer(operation_attributes.in_nsticks_per_core * width_bytes) / width_bytes);
-        const int32_t in_out_shard_size_delta = is_in_tiled ? 0 : static_cast<int32_t>(aligned_delta_size);
+        const uint32_t out_stick_nbytes = shard_width * nbytes;
+        const uint32_t buffer_delta_bytes =
+            input_tensor.buffer()->address() - output_tensor.buffer()->address();  // actual aliasing offset
+        int32_t in_out_shard_size_delta = 0;
+        if (!is_in_tiled) {
+            TT_FATAL(
+                out_stick_nbytes != 0 && (buffer_delta_bytes % out_stick_nbytes) == 0,
+                "In-place halo: aliasing byte offset ({} B) must be an exact multiple of the row-major stick "
+                "pitch ({} B) so the kernel stick-index delta is exact (Blackhole alignment class 1/2). The "
+                "alignment gate should have declined this geometry.",
+                buffer_delta_bytes,
+                out_stick_nbytes);
+            in_out_shard_size_delta = static_cast<int32_t>(buffer_delta_bytes / out_stick_nbytes);
+        }
 
         auto inplace_config = sliding_window::generate_inplace_halo_kernel_config_tensors(
             tensor_metadata,

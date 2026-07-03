@@ -603,10 +603,8 @@ bool should_halo_be_in_place(
     const SlidingWindowConfig& config,
     uint32_t in_nsticks_per_core,
     TensorMemoryLayout memory_layout,
-    // Both row-major and tiled inputs are supported for every layout, so this no longer gates;
-    // kept in the signature for API symmetry with the callers and possible future tiled-specific
-    // margins.
-    [[maybe_unused]] bool is_in_tiled) {
+    bool is_in_tiled,
+    uint32_t input_shard_width_bytes) {
     // Per-caller capability gate: in-place stays pool-only for now. Callers that have not
     // opted in (conv2d, upsample, fold, ...) pass allow_in_place=false and never activate it.
     if (!allow_in_place) {
@@ -650,7 +648,47 @@ bool should_halo_be_in_place(
         compute_max_outbound_halo_sticks(tensor_metadata, shard_boundaries, config.num_cores_nhw);
 
     constexpr double kInPlaceL1Margin = 0.75;
-    return static_cast<double>(max_ref_size) < kInPlaceL1Margin * static_cast<double>(in_nsticks_per_core);
+    if (static_cast<double>(max_ref_size) >= kInPlaceL1Margin * static_cast<double>(in_nsticks_per_core)) {
+        return false;
+    }
+
+    // Alignment-safety gate (Blackhole #27333 / #30644, corruption class 1/2). For ROW-MAJOR input the
+    // in-place output shard buffer overlaps the input at a byte offset determined by the L1 allocator's
+    // placement. The allocator aligns sharded-buffer BASE addresses to get_dram_alignment() (64B on
+    // Blackhole), while a row-major shard's per-stick pitch is only get_l1_alignment()-aligned (16B on
+    // Blackhole) -- so sub-64B shard widths (e.g. block-sharded conv) have stick pitches like 48B that do
+    // not divide the base alignment. When a per-core shard footprint (nsticks * aligned_stick) is not a
+    // multiple of the base alignment, the allocator rounds the output base down: the input's tail then
+    // OVERHANGS the output buffer AND the input/output stick grids misalign, so the overlapping in-place
+    // copy reads/writes the wrong sticks (the classic "data isn't where it should be" corruption). Require
+    // BOTH the input and output per-core footprints to be base-aligned, which guarantees the aliasing
+    // offset equals the size delta, is an exact stick multiple, and the input is fully contained. Tiled
+    // input pages are tile-sized (always base-aligned) and untilize writes into the output buffer, so this
+    // does not apply there. Otherwise fall back to normal (non-in-place) halo -- no corruption, just no
+    // L1 saving for that geometry.
+    if (!is_in_tiled) {
+        if (input_shard_width_bytes == 0) {
+            return false;
+        }
+        const uint32_t base_align = tt::tt_metal::hal::get_dram_alignment();
+        const uint32_t page_align = tt::tt_metal::hal::get_l1_alignment();
+        // The in-place gather kernel writes output sticks at the RAW stick pitch (shard_width*nbytes)
+        // while the shard buffer stores pages at the l1-aligned pitch. These agree only when the stick
+        // width is already l1-aligned; otherwise dst writes and buffer pages disagree -> corruption.
+        // (Block sharding normally keeps widths l1-aligned, so this is a defensive backstop.)
+        if ((input_shard_width_bytes % page_align) != 0) {
+            return false;
+        }
+        const uint32_t aligned_stick = tt::round_up(input_shard_width_bytes, page_align);
+        const uint32_t max_out_nsticks = generate_max_out_nsticks_per_core(shard_boundaries);
+        const uint64_t in_footprint = static_cast<uint64_t>(in_nsticks_per_core) * aligned_stick;
+        const uint64_t out_footprint = static_cast<uint64_t>(max_out_nsticks) * aligned_stick;
+        if ((in_footprint % base_align) != 0 || (out_footprint % base_align) != 0) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 struct GatherHeader {

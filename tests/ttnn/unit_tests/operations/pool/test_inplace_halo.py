@@ -526,6 +526,14 @@ def test_inplace_halo_width_sharded_matches_normal(shape_entry, out_dtype):
 # ---------------------------------------------------------------------------
 BLOCK_SHARD_SHAPES = [
     # name, NCHW, kernel, stride, pad(t,b,l,r), in_layout, [activating out_dtypes]
+    # SUB-64B per-core shard width (the Blackhole #27333/#30644 alignment class 1/2). c128 block-shards
+    # to 16 channels/core (8 cores wide) = 32-byte ROW-MAJOR sticks (< 64B). 256x256 spatial keeps it net-L1
+    # SAVE so in-place activates. The 64B L1 allocator base alignment is a multiple of the 32B stick, so the
+    # aliasing offset stays an exact stick multiple and the input is fully contained -> the alignment gate
+    # ACTIVATES in-place and the overlapping copy is bitwise-exact. (Widths that do NOT divide the 64B base
+    # alignment, e.g. 48B sticks, are DECLINED by the gate and fall back to normal halo -- no FATAL, no
+    # corruption.) bf16 row-major output for the most sensitive (no output-quantization) bitwise comparison.
+    ("bs_rm_sub64_c128_256x256_k3s1p1", [1, 128, 256, 256], (3, 3), (1, 1), (1, 1, 1, 1), "row_major", ["bfloat16"]),
     # larger-spatial shapes SAVE for BOTH output dtypes:
     ("bs_c1024_32x32_k3s1p1", [1, 1024, 32, 32], (3, 3), (1, 1), (1, 1, 1, 1), "row_major", ["bfloat16", "bfloat8_b"]),
     ("bs_c1024_32x32_k3s1p1", [1, 1024, 32, 32], (3, 3), (1, 1), (1, 1, 1, 1), "tile", ["bfloat16", "bfloat8_b"]),

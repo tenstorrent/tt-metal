@@ -99,42 +99,25 @@ HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_te
     // In-place halo (silent auto-activation; see IN_PLACE_HALO_REDO.md sec 10). The SAME pure
     // decision function is used by the program factory and the pool caller so all three agree.
     const bool is_in_tiled = input_tensor.layout() == Layout::TILE;
+    const uint32_t input_shard_width_bytes = input_tensor.memory_config().shard_spec()->shape[1] *
+                                             (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ? 4u : 2u);
     const bool in_place = ttnn::operations::sliding_window::should_halo_be_in_place(
         args.allow_in_place,
         args.config,
         args.in_nsticks_per_core,
         input_tensor.memory_config().memory_layout(),
-        is_in_tiled);
+        is_in_tiled,
+        input_shard_width_bytes);
     if (!in_place) {
         return create_device_tensor(output_spec, input_tensor.device());
     }
     log_info(tt::LogOp, "halo_device_operation - in-place halo active; aliasing output onto input buffer");
 
-    // Capture the input shard address AND its aligned per-bank size BEFORE freeing it (both used
-    // to assert the overlap below). For TILED input the aliasing offset is the buffer-size delta
-    // (untilize writes into the dst buffer, so the stick-index delta is 0 and cannot be used) --
-    // that needs the input buffer's byte size before it is deallocated.
+    // Capture the input shard address AND its aligned per-bank size BEFORE freeing it (both used to
+    // assert containment below).
     Buffer* src_buffer = input_tensor.buffer();
     const uint32_t src_addr = src_buffer->address();
     const uint32_t in_aligned_size_per_bank = src_buffer->aligned_size_per_bank();
-
-    // Aliasing delta between input and output shards (MUST match the factory build_inplace_halo_program).
-    //   Row-major: stick-based delta = (aligned out_nsticks - aligned in_nsticks) * post-untilize width.
-    //   Tiled:     buffer-size delta = out_buffer.aligned_size_per_bank() - in_buffer.aligned_size_per_bank(),
-    //              because the tiled input has a different byte layout than the untilized row-major output
-    //              and its tiles physically live at the TAIL of the output buffer (#27333/#30644).
-    // The tiled buffer_delta is finalized after the output buffer is allocated (needs dst size).
-    uint32_t delta_bytes = 0;
-    if (!is_in_tiled) {
-        const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
-        const uint32_t nbytes = input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ? 4u : 2u;
-        const uint32_t width_bytes = shard_width * nbytes;
-        const uint32_t aligned_delta_size =
-            (ttnn::operations::sliding_window::align_buffer(args.max_out_nsticks_per_core * width_bytes) /
-             width_bytes) -
-            (ttnn::operations::sliding_window::align_buffer(args.in_nsticks_per_core * width_bytes) / width_bytes);
-        delta_bytes = aligned_delta_size * width_bytes;
-    }
 
     // Free the input shard's L1 region so the (larger) output shard can be allocated over the
     // same top-of-L1 region (sharded L1 allocates top-down). Deallocating the underlying
@@ -147,15 +130,27 @@ HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_te
 
     auto output = create_device_tensor(output_spec, input_tensor.device());
     Buffer* dst_buffer = output.buffer();
-    if (is_in_tiled) {
-        delta_bytes = dst_buffer->aligned_size_per_bank() - in_aligned_size_per_bank;
-    }
+    const uint32_t dst_addr = dst_buffer->address();
+    // The TRUE aliasing byte offset is the ACTUAL L1 address difference: after the input is freed and
+    // the larger output is allocated over the same top-of-L1 region, the input's data physically lives
+    // at (dst_addr + delta) where delta == src_addr - dst_addr. This is correct for row-major AND tiled.
+    // The old row-major path derived delta from a stick-granular size formula (align_buffer), which
+    // mismatched the real placement whenever the L1 allocator's base alignment (get_dram_alignment(),
+    // 64B on Blackhole) rounds the output base and the per-core shard footprint is not base-aligned --
+    // exactly the #27333/#30644 sub-64B block-row-major class. The should_halo_be_in_place() gate now
+    // declines the geometries where that rounding would occur (input tail overhanging the output), so
+    // the containment assert below is a loud backstop, not the normal outcome.
+    const uint32_t delta_bytes = src_addr - dst_addr;
     TT_FATAL(
-        src_addr == dst_buffer->address() + delta_bytes,
-        "In-place halo requires the input shard buffer to overlap the output shard buffer at the expected "
-        "offset (src {} != dst {} + delta {})",
+        dst_addr <= src_addr &&
+            (src_addr + in_aligned_size_per_bank) <= (dst_addr + dst_buffer->aligned_size_per_bank()),
+        "In-place halo requires the input shard buffer [{}, {}) to be fully contained in the output shard "
+        "buffer [{}, {}) (delta {}). The L1 allocator placed them so the input overhangs the output -- the "
+        "alignment gate should have declined this geometry.",
         src_addr,
-        dst_buffer->address(),
+        src_addr + in_aligned_size_per_bank,
+        dst_addr,
+        dst_addr + dst_buffer->aligned_size_per_bank(),
         delta_bytes);
     return output;
 }

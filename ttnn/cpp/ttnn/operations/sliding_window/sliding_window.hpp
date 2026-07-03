@@ -161,12 +161,16 @@ uint32_t compute_max_outbound_halo_sticks(
 // `memory_layout` selects the validated corruption-safe classes: HEIGHT_SHARDED,
 // WIDTH_SHARDED and BLOCK_SHARDED are all supported (width-sharded halo is all-local so
 // max_ref_size==0; block-sharded uses the transpose_mcast / column-major NOC orientation).
+// `input_shard_width_bytes` = per-core shard width in bytes (shard_spec.shape[1] * datum_size); used by
+// the Blackhole alignment-safety gate for row-major input (see .cpp). Callers pass the input tensor's
+// shard width; pass 0 to decline in-place when it is unknown.
 bool should_halo_be_in_place(
     bool allow_in_place,
     const SlidingWindowConfig& config,
     uint32_t in_nsticks_per_core,
     tt::tt_metal::TensorMemoryLayout memory_layout,
-    bool is_in_tiled);
+    bool is_in_tiled,
+    uint32_t input_shard_width_bytes);
 
 struct HaloGatherKernelConfig {
     std::vector<std::vector<uint16_t>> pad_config0;
