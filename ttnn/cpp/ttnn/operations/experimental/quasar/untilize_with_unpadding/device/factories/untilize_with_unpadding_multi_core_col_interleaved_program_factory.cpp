@@ -14,6 +14,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -152,12 +153,10 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
         if (fp32_dest_acc_en) {
             utd.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }
-        return std::invoke([&]() -> ComputeHardwareConfig {
-            if (device->arch() == tt::ARCH::QUASAR) {
-                return ComputeGen2Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
-            }
-            return ComputeGen1Config{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = utd};
-        });
+        auto hw = ttnn::to_compute_hardware_config(
+            device->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
+        std::visit([&](auto& c) { c.unpack_to_dest_mode = utd; }, hw);
+        return hw;
     };
     const std::filesystem::path compute_source(
         "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/compute/"
