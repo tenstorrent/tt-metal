@@ -236,7 +236,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
     }
 
     auto make_compute_hw = [&]() {
-        auto hw = ttnn::to_compute_hardware_config(
+        ComputeHardwareConfig hw = ttnn::to_compute_hardware_config(
             device->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
         if (fp32_dest_acc_en) {
             std::visit(
