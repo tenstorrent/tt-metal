@@ -5,6 +5,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/reshuffle.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     const uint32_t tiles_per_core = get_arg_val<uint32_t>(0);
@@ -19,16 +20,21 @@ void kernel_main() {
     constexpr uint32_t cb_chunk_count_scratch = tt::CBIndex::c_25;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
+    CircularBuffer cb_grad_obj(cb_grad);
+    CircularBuffer cb_out_intermed_obj(cb_out_intermed);
+    CircularBuffer cb_mask_obj(cb_mask);
+    CircularBuffer cb_out_obj(cb_out);
+
     unary_op_init_common(cb_grad, cb_out);
 
     for (uint32_t i = 0; i < input_height; ++i) {
-        cb_wait_front(cb_grad, max_tiles_per_core);
+        cb_grad_obj.wait_front(max_tiles_per_core);
 
         // Get chunk_count from CB using mailbox-based synchronization (issue #27979)
         uint32_t chunk_count = read_tile_value(cb_chunk_count_scratch, 0, 0);
 
         for (uint32_t chunk = 0; chunk < chunk_count; ++chunk) {
-            cb_wait_front(cb_mask, 1);
+            cb_mask_obj.wait_front(1);
 
             // Get idx_addr from CB using mailbox-based synchronization (issue #27979)
             uint32_t idx_addr = get_tile_address(cb_mask, 0);
@@ -38,9 +44,9 @@ void kernel_main() {
             asm volatile("fence");
 #endif
 
-            cb_wait_front(cb_out_intermed, max_tiles_per_core);
+            cb_out_intermed_obj.wait_front(max_tiles_per_core);
 
-            cb_reserve_back(cb_out, max_tiles_per_core);
+            cb_out_obj.reserve_back(max_tiles_per_core);
 
             for (uint32_t hidden_dim = 0; hidden_dim < tiles_per_core; hidden_dim++) {
                 tile_regs_acquire();
@@ -63,12 +69,12 @@ void kernel_main() {
                 tile_regs_release();
             }
 
-            cb_push_back(cb_out, max_tiles_per_core);
-            cb_pop_front(cb_out_intermed, max_tiles_per_core);
+            cb_out_obj.push_back(max_tiles_per_core);
+            cb_out_intermed_obj.pop_front(max_tiles_per_core);
 
-            cb_pop_front(cb_mask, 1);
+            cb_mask_obj.pop_front(1);
         }
 
-        cb_pop_front(cb_grad, max_tiles_per_core);
+        cb_grad_obj.pop_front(max_tiles_per_core);
     }
 }
