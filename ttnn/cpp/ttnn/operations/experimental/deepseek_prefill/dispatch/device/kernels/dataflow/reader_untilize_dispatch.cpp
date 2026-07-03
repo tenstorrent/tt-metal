@@ -40,6 +40,7 @@
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/dispatch_plan.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 #define ENABLE_DISPATCH_DEBUG 0
 #if ENABLE_DISPATCH_DEBUG
@@ -243,25 +244,32 @@ void kernel_main() {
         cb_push_back(cb_signal_id, 1);
 
         // 2. Stream tiled input stripe from DRAM in blocks of block_ct_dim tiles
-        for (uint32_t blk = 0; blk < num_tile_blocks; blk++) {
-            cb_reserve_back(cb_input_id, block_ct_dim);
-            uint32_t blk_write_ptr = get_write_ptr(cb_input_id);
-            uint32_t blk_start = tile_base_page + blk * block_ct_dim;
-            for (uint32_t col = 0; col < block_ct_dim; col++) {
-                noc_async_read_page(blk_start + col, input_addr_gen, blk_write_ptr + col * aligned_input_page_size);
+        {
+            DeviceZoneScopedN("read-tokens-from-dram");
+            for (uint32_t blk = 0; blk < num_tile_blocks; blk++) {
+                cb_reserve_back(cb_input_id, block_ct_dim);
+                uint32_t blk_write_ptr = get_write_ptr(cb_input_id);
+                uint32_t blk_start = tile_base_page + blk * block_ct_dim;
+                for (uint32_t col = 0; col < block_ct_dim; col++) {
+                    noc_async_read_page(blk_start + col, input_addr_gen, blk_write_ptr + col * aligned_input_page_size);
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_input_id, block_ct_dim);
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_id, block_ct_dim);
         }
 
         // 3. Read this batch's indices and weights pages
-        for (uint32_t t = 0; t < batch_count; t++) {
-            noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
-            noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
+        {
+            DeviceZoneScopedN("read-indices-weights-from-dram");
+            for (uint32_t t = 0; t < batch_count; t++) {
+                noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
+                noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
+            }
+            noc_async_read_barrier();
         }
-        noc_async_read_barrier();
 
         // 4. Build per-batch route plan into c_14.
+        DeviceZoneScopedN("build-route-plan");
         DPRINT_DISPATCH(
             "[R s={} c={}] b={} reserving plan slot (blocks on writer drain)\n",
             (uint32_t)dispatch_core_idx,

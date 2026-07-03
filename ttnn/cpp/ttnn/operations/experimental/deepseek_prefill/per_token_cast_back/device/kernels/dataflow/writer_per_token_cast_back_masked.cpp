@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Masked writer for per_token_cast_back. Mirrors the plain writer but writes back only this device's
-// valid expert-region rows. For each local expert e in [expert_start, expert_end), the valid output
-// rows are the contiguous range [start, start+count) (start/count from expert_region_offsets /
-// expert_token_counts, indexed by counter_offset + e, clamped against T). Within a region the rows
-// are contiguous, so each compute block's produced rows are written back to their dispatch-buffer
-// page with one NoC write per bank-contiguous run — identical to the plain writer, just looped over
-// experts. Garbage rows (outside any region) are never written.
+// Masked writer for per_token_cast_back. Mirrors the masked reader's block split: the valid compute
+// blocks (tile_h scale-blocks each) form a global space = concatenation over this device's experts of
+// each expert's ceil(count[e]*blocks_per_row / tile_h) blocks. This core owns the contiguous slice
+// [core_id*bpc, core_id*bpc + bpc), maps each block to (expert, row, block_idx), and writes that
+// block's produced rows back to their dispatch-buffer pages with one NoC write per bank-contiguous
+// run. The reader and writer derive the identical split from the same counts/offsets/core_id/num_cores.
+// Garbage rows (outside any region) are never written.
 
 #include <cstdint>
 
@@ -22,9 +22,8 @@ void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t counts_addr = get_arg_val<uint32_t>(1);
     uint32_t offsets_addr = get_arg_val<uint32_t>(2);
-    uint32_t expert_start = get_arg_val<uint32_t>(3);
-    uint32_t expert_end = get_arg_val<uint32_t>(4);
-    uint32_t width = get_arg_val<uint32_t>(5);  // H
+    uint32_t core_id = get_arg_val<uint32_t>(3);
+    uint32_t width = get_arg_val<uint32_t>(4);  // H
 
     constexpr uint32_t cb_out_fp32 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_counts = get_compile_time_arg_val(1);
@@ -37,8 +36,9 @@ void kernel_main() {
     constexpr uint32_t counter_offset = get_compile_time_arg_val(8);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(9);
     constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(10);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(11);
 
-    constexpr auto dst_args = TensorAccessorArgs<11>();
+    constexpr auto dst_args = TensorAccessorArgs<12>();
     constexpr auto counts_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
     const auto dst = TensorAccessor(dst_args, dst_addr);
@@ -75,7 +75,11 @@ void kernel_main() {
     CoreLocalMem<volatile uint32_t> counts_l1(counts_base);
     CoreLocalMem<volatile uint32_t> offsets_l1(offsets_base);
 
-    for (uint32_t e = expert_start; e < expert_end; ++e) {
+    // --- Pass 0: clamped per-expert token counts + block prefix sum (same as the reader). ---
+    uint32_t cnt_e[experts_per_chip];
+    uint32_t prefix[experts_per_chip + 1];
+    prefix[0] = 0;
+    for (uint32_t e = 0; e < experts_per_chip; ++e) {
         uint32_t start_page = offsets_l1[counter_offset + e];
         uint32_t count = counts_l1[counter_offset + e];
         if (start_page >= max_dispatch_buffer_token_size) {
@@ -83,42 +87,61 @@ void kernel_main() {
         } else if (start_page + count > max_dispatch_buffer_token_size) {
             count = max_dispatch_buffer_token_size - start_page;
         }
-        if (count == 0) {
-            continue;
+        cnt_e[e] = count;
+        prefix[e + 1] = prefix[e] + (count * blocks_per_row + tile_h - 1) / tile_h;
+    }
+    const uint32_t total_blocks = prefix[experts_per_chip];
+
+    // --- This core's contiguous slice of the global block space (must match the reader's). ---
+    const uint32_t bpc = (total_blocks + num_cores - 1) / num_cores;
+    uint32_t b_lo = core_id * bpc;
+    uint32_t b_hi = b_lo + bpc;
+    if (b_lo > total_blocks) {
+        b_lo = total_blocks;
+    }
+    if (b_hi > total_blocks) {
+        b_hi = total_blocks;
+    }
+
+    // --- Write back each global block in [b_lo, b_hi); map it to its (expert, row, block_idx). ---
+    uint32_t e = 0;
+    while (e < experts_per_chip && prefix[e + 1] <= b_lo) {
+        ++e;
+    }
+    for (uint32_t b = b_lo; b < b_hi; ++b) {
+        while (e < experts_per_chip && prefix[e + 1] <= b) {
+            ++e;
         }
-        const uint32_t end_row = start_page + count;
-        const uint32_t total_blocks_e = count * blocks_per_row;
-        const uint32_t num_blocks_e = (total_blocks_e + tile_h - 1) / tile_h;
+        const uint32_t start_page = offsets_l1[counter_offset + e];
+        const uint32_t end_row = start_page + cnt_e[e];
+        const uint32_t total_blocks_e = cnt_e[e] * blocks_per_row;
+        const uint32_t start_sb = (b - prefix[e]) * tile_h;
+        const uint32_t remaining = total_blocks_e - start_sb;
+        const uint32_t real_in_block = remaining < tile_h ? remaining : tile_h;
 
-        uint32_t current_row = start_page;
-        uint32_t block_idx_in_row = 0;
+        uint32_t current_row = start_page + start_sb / blocks_per_row;
+        uint32_t block_idx_in_row = start_sb % blocks_per_row;
 
-        for (uint32_t blk = 0; blk < num_blocks_e; ++blk) {
-            const uint32_t base = blk * tile_h;
-            const uint32_t remaining = total_blocks_e - base;
-            const uint32_t real_in_block = remaining < tile_h ? remaining : tile_h;
-
-            cb_out_fp32_obj.wait_front(tiles_per_block);
-            uint32_t slot = 0;
-            while (slot < real_in_block && current_row < end_row) {
-                uint32_t blocks_left_in_row = blocks_per_row - block_idx_in_row;
-                uint32_t slots_left = real_in_block - slot;
-                uint32_t run = blocks_left_in_row < slots_left ? blocks_left_in_row : slots_left;
-                noc.async_write(
-                    cb_out_fp32_obj,
-                    dst,
-                    run * out_block_bytes,
-                    {.offset_bytes = slot * out_block_bytes},
-                    {.page_id = current_row, .offset_bytes = block_idx_in_row * out_block_bytes});
-                slot += run;
-                block_idx_in_row += run;
-                if (block_idx_in_row >= blocks_per_row) {
-                    block_idx_in_row = 0;
-                    ++current_row;
-                }
+        cb_out_fp32_obj.wait_front(tiles_per_block);
+        uint32_t slot = 0;
+        while (slot < real_in_block && current_row < end_row) {
+            uint32_t blocks_left_in_row = blocks_per_row - block_idx_in_row;
+            uint32_t slots_left = real_in_block - slot;
+            uint32_t run = blocks_left_in_row < slots_left ? blocks_left_in_row : slots_left;
+            noc.async_write(
+                cb_out_fp32_obj,
+                dst,
+                run * out_block_bytes,
+                {.offset_bytes = slot * out_block_bytes},
+                {.page_id = current_row, .offset_bytes = block_idx_in_row * out_block_bytes});
+            slot += run;
+            block_idx_in_row += run;
+            if (block_idx_in_row >= blocks_per_row) {
+                block_idx_in_row = 0;
+                ++current_row;
             }
-            noc.async_write_barrier();
-            cb_out_fp32_obj.pop_front(tiles_per_block);
         }
+        noc.async_write_barrier();
+        cb_out_fp32_obj.pop_front(tiles_per_block);
     }
 }

@@ -22,10 +22,11 @@
 // buffer. Each dispatched row carries its per-128-block fp32 scales in the tail of its metadata row
 // (fields 5.., bit-cast to int32), so the scale is read directly from metadata — no separate scale
 // tensor and no gather. Built as a per-mesh-coordinate ProgramDescriptor so each device's expert
-// window (counter_offset) is derived from its linearized mesh coordinate. Reuses the plain path's
-// block/broadcast machinery; the only kernel changes are: outer loop over this device's experts,
-// scale sourced from the metadata tail, and a dynamic per-core num_blocks (depends on device-side
-// counts) passed reader->compute via a small CB.
+// window (counter_offset) is derived from its linearized mesh coordinate. The valid compute blocks
+// are split evenly across the full grid: every core gets its index (core_id) and num_cores, then
+// derives its own contiguous block slice on device (the counts are device-side, so the host cannot
+// pre-assign). Reuses the plain path's block/broadcast machinery; num_blocks is per-core dynamic,
+// published reader->compute via a small CB.
 
 namespace ttnn::experimental::prim::per_token_cast_back {
 
@@ -117,11 +118,11 @@ ProgramDescriptor build_program_for_coord(
     const uint32_t metadata_aligned_page_bytes = aligned_page_bytes(metadata);
     const uint32_t counts_pages = num_pages(counts);  // offsets has the same shape/pages
 
-    // Split this device's experts across cores (one contiguous expert sub-range per core).
+    // Split the global valid-block space evenly across the full grid. The block count is device-side
+    // (depends on the expert token counts), so allocate every core and let each derive its own
+    // contiguous slice from core_id / num_cores on device (see the reader/writer kernels).
     auto compute_grid = mesh_device->compute_with_storage_grid_size();
-    const uint32_t max_cores = compute_grid.x * compute_grid.y;
-    const uint32_t num_cores = std::max<uint32_t>(1, std::min(attrs.experts_per_chip, max_cores));
-    const uint32_t experts_per_core_range = tt::div_up(attrs.experts_per_chip, num_cores);
+    const uint32_t num_cores = compute_grid.x * compute_grid.y;
     auto all_cores = num_cores_to_corerangeset(num_cores, compute_grid, /*row_wise=*/true);
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
 
@@ -187,6 +188,7 @@ ProgramDescriptor build_program_for_coord(
         counter_offset,
         attrs.experts_per_chip,
         T,
+        num_cores,
     };
     TensorAccessorArgs(input_e4m3.buffer()).append_to(reader_ct);
     TensorAccessorArgs(counts.buffer()).append_to(reader_ct);
@@ -239,6 +241,7 @@ ProgramDescriptor build_program_for_coord(
         counter_offset,
         attrs.experts_per_chip,
         T,
+        num_cores,
     };
     TensorAccessorArgs(output.buffer()).append_to(writer_ct);
     TensorAccessorArgs(counts.buffer()).append_to(writer_ct);
@@ -254,19 +257,17 @@ ProgramDescriptor build_program_for_coord(
     const KernelHandle writer_id = static_cast<KernelHandle>(desc.kernels.size());
     desc.kernels.push_back(std::move(writer_kd));
 
-    // Per-core runtime args: each core owns expert sub-range [expert_start, expert_end).
+    // Per-core runtime args: each core owns block slice [core_id*bpc, core_id*bpc + bpc), derived on
+    // device. core_id is the core's index in all_cores_vec.
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = all_cores_vec[i];
-        const uint32_t expert_start = i * experts_per_core_range;
-        const uint32_t expert_end = std::min((i + 1) * experts_per_core_range, attrs.experts_per_chip);
 
         KernelDescriptor::RTArgList reader_rt;
         reader_rt.push_back(input_e4m3.buffer());
         reader_rt.push_back(counts.buffer());
         reader_rt.push_back(offsets.buffer());
         reader_rt.push_back(metadata.buffer());
-        reader_rt.push_back(expert_start);
-        reader_rt.push_back(expert_end);
+        reader_rt.push_back(i);
         reader_rt.push_back(H);
         desc.kernels[reader_id].emplace_runtime_args(core, reader_rt);
 
@@ -277,8 +278,7 @@ ProgramDescriptor build_program_for_coord(
         writer_rt.push_back(output.buffer());
         writer_rt.push_back(counts.buffer());
         writer_rt.push_back(offsets.buffer());
-        writer_rt.push_back(expert_start);
-        writer_rt.push_back(expert_end);
+        writer_rt.push_back(i);
         writer_rt.push_back(H);
         desc.kernels[writer_id].emplace_runtime_args(core, writer_rt);
     }

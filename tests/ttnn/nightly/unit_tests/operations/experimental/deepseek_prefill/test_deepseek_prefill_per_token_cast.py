@@ -51,6 +51,7 @@ MASKED_CONFIGS = [
     (256, [12], 4),
     (7168, [2], 1),  # real width: blocks_per_row=56 > tile_h, each token spans 2 compute blocks
     (7168, [40, 3], 1),  # real width + a region > tile_h rows
+    (7168, [200], 1),  # single large region: full-grid split lands many cores' slices mid-expert
 ]
 
 
