@@ -131,16 +131,37 @@ class DiffusionGemmaMoE(Module):
 
         Returns:
             replicated ``[1, B, S, hidden_size]`` (matches the tt_dit ``1BND`` convention).
+
+        demos/gemma4's ``MoEBlock`` (the prefill sparse_matmul path) requires the merged
+        ``B*S`` axis to be a multiple of ``TILE_SIZE`` (32). Real prompts often have a natural
+        ``S`` that isn't tile-aligned (e.g. 19 tokens for "Briefly: what is the capital of
+        France?"). We pad ``B*S`` up to the next multiple of 32 with zeros, run the MoE, and
+        slice the padded rows back off the output. The padding tokens waste routing/expert
+        compute for those rows but don't corrupt real-token outputs since the sparse_matmul
+        acts row-independently on the merged M axis.
         """
         # Read batch/seq from the trailing 3 dims so both 3D and 4D 1BND inputs work.
         B, S = router_input.shape[-3], router_input.shape[-2]
         H = self.hidden_size
-        assert (B * S) % TILE == 0, f"B*S = {B}*{S} = {B * S} must be tile-aligned for the prefill MoE path."
 
-        # demos/gemma4 wants [1, 1, M, H] where M = B*S.
-        router_in_1_1_M_H = ttnn.reshape(router_input, (1, 1, B * S, H))
-        expert_in_1_1_M_H = ttnn.reshape(expert_input, (1, 1, B * S, H))
+        M = B * S
+        M_padded = ((M + TILE - 1) // TILE) * TILE
+        pad_rows = M_padded - M
 
-        out_1_1_M_H = self._moe(router_in_1_1_M_H, expert_in_1_1_M_H)
+        # demos/gemma4 wants [1, 1, M, H] where M is tile-aligned.
+        router_in_1_1_M_H = ttnn.reshape(router_input, (1, 1, M, H))
+        expert_in_1_1_M_H = ttnn.reshape(expert_input, (1, 1, M, H))
+
+        if pad_rows > 0:
+            # Pad both inputs along the M axis with zeros. ttnn.pad takes per-dim (front, back).
+            router_in_1_1_M_H = ttnn.pad(router_in_1_1_M_H, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0)
+            expert_in_1_1_M_H = ttnn.pad(expert_in_1_1_M_H, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0)
+
+        out_1_1_Mp_H = self._moe(router_in_1_1_M_H, expert_in_1_1_M_H)
+
+        if pad_rows > 0:
+            # Slice the real M rows off the padded output.
+            out_1_1_Mp_H = ttnn.slice(out_1_1_Mp_H, [0, 0, 0, 0], [1, 1, M, H])
+
         # Return as 4D 1BND to match the caller convention (layer.py + tests upload 4D inputs).
-        return ttnn.reshape(out_1_1_M_H, (1, B, S, H))
+        return ttnn.reshape(out_1_1_Mp_H, (1, B, S, H))
