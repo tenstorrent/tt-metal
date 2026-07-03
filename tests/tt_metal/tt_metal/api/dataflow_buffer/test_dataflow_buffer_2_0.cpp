@@ -3936,10 +3936,13 @@ TEST_F(MeshDeviceFixture, B4_CachedThreshold_Config_2_0) {
         EXPECT_EQ(d->consumer_txn_descriptor.num_entries_to_process_threshold, 8u);
     }
 
-    // case 2: 1S(DM)x3A(DM), num_entries=18 → producer=9, consumer=3*9=27.
-    // The ALL-consumer multiplier (num_consumers ×) is the load-bearing piece a past bug fix added.
+    // case 2: 1S(DM)x3A(DM) — DM-DM ALL + implicit sync is rejected at config time (the
+    // broadcast credit path is broadcast-unaware; see the TT_FATAL in finalize). Assert the
+    // guard fires. (The ALL-multiplier threshold this used to check is an implicit-sync-only
+    // value, and implicit sync is exactly what DM-DM ALL forbids, so there is no allowed
+    // config that exercises the positive check — mirrors expect_tensix_blocked_implicit_consumer_rejected.)
     {
-        SCOPED_TRACE("case 2: 1Sx3A DM-DM, num_entries=18 → producer 9, consumer 3*9=27");
+        SCOPED_TRACE("case 2: DM-DM ALL + implicit sync must be rejected at config time");
         M2ConfigDFBParams p{
             .producer_type = M2PorCType::DM,
             .consumer_type = M2PorCType::DM,
@@ -3950,13 +3953,10 @@ TEST_F(MeshDeviceFixture, B4_CachedThreshold_Config_2_0) {
             .cap = m2::DFBAccessPattern::ALL,
             .implicit_sync = true,
         };
-        Program program = build_single_dfb_program_2_0(mesh_device, p);
-        program.impl().finalize_dataflow_buffer_configs();
-        auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
-        ASSERT_EQ(dfbs.size(), 1u);
-        const auto& d = dfbs[0];
-        EXPECT_EQ(d->producer_txn_descriptor.num_entries_to_process_threshold, 9u);
-        EXPECT_EQ(d->consumer_txn_descriptor.num_entries_to_process_threshold, 27u);
+        EXPECT_ANY_THROW({
+            Program program = build_single_dfb_program_2_0(mesh_device, p);
+            program.impl().finalize_dataflow_buffer_configs();
+        });
     }
 }
 
