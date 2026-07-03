@@ -20,8 +20,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    const auto& a = tensor_args;
-    auto& output = tensor_return_value;
+    const auto& a = tensor_args.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
@@ -29,7 +29,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
     const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
+        get_compute_kernel_config_args(a.device().arch(), operation_attributes.compute_kernel_config);
 
     uint32_t Wt = W / tile_width;
     uint32_t Ht = H / tile_height;
@@ -79,12 +79,6 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    tt_metal::Buffer* src0_buffer = a.buffer();
-
-    // This should allocate a DRAM buffer on the device
-    tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device");
-
     ProgramDescriptor desc;
 
     uint32_t src0_cb_index = 0;
@@ -128,7 +122,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
     std::vector<uint32_t> reader_compile_time_args = {std::bit_cast<uint32_t>(scaler)};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(a).append_to(reader_compile_time_args);
 
     if (operation_attributes.negate) {
         uint32_t acc_cb_index = tt::CBIndex::c_4;
@@ -157,7 +151,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
     }
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::HW);
@@ -205,7 +199,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
         .fp32_dest_acc_en = fp32_dest_acc_en,
     };
 
-    reader_desc.emplace_runtime_args(selected_core_coord, {a.buffer(), num_tensor_tiles, 0u});
+    reader_desc.emplace_runtime_args(selected_core_coord, {a, num_tensor_tiles, 0u});
 
     TT_FATAL(Ht != 0 && Wt != 0, "Height and width in tiles must be non-zero (Ht={}, Wt={}, H={}, W={})", Ht, Wt, H, W);
     uint32_t out_dim_divider = Ht * Wt;
@@ -215,7 +209,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
         num_tensor_tiles,
         out_dim_divider);
 
-    writer_desc.emplace_runtime_args(selected_core_coord, {output.buffer(), num_tensor_tiles / out_dim_divider, 0u});
+    writer_desc.emplace_runtime_args(selected_core_coord, {output, num_tensor_tiles / out_dim_divider, 0u});
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));

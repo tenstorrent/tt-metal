@@ -12,6 +12,17 @@ namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
+FillPadDeviceOperation::program_factory_t FillPadDeviceOperation::select_program_factory(
+    const operation_attributes_t& /*attrs*/, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+    // L1-sharded: each core processes its own shard (no cross-core NOC).
+    // DRAM interleaved / DRAM-sharded (rare): fall through to the regular factory.
+    if (input.is_sharded() && input.memory_config().is_l1()) {
+        return FillPadL1ShardedProgramFactory{};
+    }
+    return FillPadProgramFactory{};
+}
+
 void FillPadDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
@@ -31,7 +42,8 @@ Tensor FillPadDeviceOperation::create_output_tensors(
     return input_tensor;
 }
 
-ttnn::Tensor fill_pad(const Tensor& input, float fill_value, const MemoryConfig& output_memory_config) {
+ttnn::Tensor fill_pad(
+    const Tensor& input, tt::tt_metal::PadValue fill_value, const MemoryConfig& output_memory_config) {
     using OperationType = ttnn::prim::FillPadDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{

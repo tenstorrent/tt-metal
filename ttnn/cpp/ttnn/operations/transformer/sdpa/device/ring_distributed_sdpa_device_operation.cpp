@@ -6,7 +6,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include "ring_distributed_sdpa_program_factory.hpp"
 #include "sdpa_perf_model.hpp"
 
 #include <tt-metalium/constants.hpp>

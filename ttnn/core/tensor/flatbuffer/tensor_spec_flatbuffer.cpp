@@ -52,6 +52,7 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::UINT8: return flatbuffer::DataType::UInt8;
         case tt::tt_metal::DataType::UINT16: return flatbuffer::DataType::UInt16;
         case tt::tt_metal::DataType::INT32: return flatbuffer::DataType::Int32;
+        case tt::tt_metal::DataType::FP8_E4M3: TT_THROW("FP8_E4M3 cannot be serialized to flatbuffer");
         case tt::tt_metal::DataType::INVALID: return flatbuffer::DataType::Invalid;
     }
     TT_THROW("Unsupported DataType to flatbuffer.");
@@ -127,6 +128,8 @@ flatbuffer::ShardDistributionStrategy to_flatbuffer(tt::tt_metal::ShardDistribut
         case tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D:
             return flatbuffer::ShardDistributionStrategy::ROUND_ROBIN_1D;
         case tt::tt_metal::ShardDistributionStrategy::GRID_2D: return flatbuffer::ShardDistributionStrategy::GRID_2D;
+        case tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D:
+            return flatbuffer::ShardDistributionStrategy::CONTIGUOUS_1D;
     }
     TT_THROW("Unsupported ShardDistributionStrategy to flatbuffer.");
 }
@@ -136,6 +139,8 @@ tt::tt_metal::ShardDistributionStrategy from_flatbuffer(flatbuffer::ShardDistrib
         case flatbuffer::ShardDistributionStrategy::ROUND_ROBIN_1D:
             return tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D;
         case flatbuffer::ShardDistributionStrategy::GRID_2D: return tt::tt_metal::ShardDistributionStrategy::GRID_2D;
+        case flatbuffer::ShardDistributionStrategy::CONTIGUOUS_1D:
+            return tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D;
     }
     TT_THROW("Unsupported ShardDistributionStrategy from flatbuffer.");
 }

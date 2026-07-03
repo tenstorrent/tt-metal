@@ -361,12 +361,12 @@ void kernel_main() {
 
             if constexpr (num_cores > 1) {
                 if (k > 0) {
-                    start_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
+                    start_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
                         noc, start_core_x0, start_core_y0, end_core_x0, end_core_y0, num_cores0);
                 }
 
                 if (num_cores1 > 0) {
-                    start_sem.set_multicast<Noc::McastMode::EXCLUDE_SRC>(
+                    start_sem.set_multicast(
                         noc, start_core_x1, start_core_y1, end_core_x1, end_core_y1, num_cores1);
                 }
 

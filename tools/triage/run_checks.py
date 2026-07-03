@@ -5,10 +5,11 @@
 
 """
 Usage:
-    run_checks [--dev=<device_id>]...
+    run_checks [--dev=<device_id>]... [--loc=<location>]...
 
 Options:
-    --dev=<device_id>   Specify the device id. 'all' is also an option  [default: in_use]
+    --dev=<device_id>   Specify the device id. Repeatable. 'all' is also an option  [default: in_use]
+    --loc=<location>    Specify location/core. Repeatable. Logical coordinates only: R,C (tensix), eX,Y (eth), dX,Y / CHn (dram). Default: all locations
 
 Description:
      Data provider script for running checks on devices, block locations and RISC cores. This script provides a single interface for:
@@ -30,7 +31,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from functools import cached_property
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, get_args
+from typing import Literal, TypeAlias, TypeVar, cast, get_args
 
 from inspector_data import run as get_inspector_data, InspectorData
 from triage import (
@@ -50,7 +51,7 @@ from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.umd_device import TimeoutDeviceRegisterError
-from ttexalens.hardware.risc_debug import RiscHaltError
+from ttexalens.exceptions import RiscHaltError
 import utils
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
@@ -80,8 +81,8 @@ class CheckResult:
     result: object = recurse_field()
 
     # Hack to make result the last field to preserve header order
-    def __post_init__(cls):
-        cls.__dataclass_fields__["result"] = cls.__dataclass_fields__.pop("result")
+    def __post_init__(self):
+        self.__dataclass_fields__["result"] = self.__dataclass_fields__.pop("result")
 
 
 @dataclass
@@ -92,6 +93,9 @@ class DeviceDescription:
 
 def device_description_serializer(device_desc: DeviceDescription) -> str:
     return hex(device_desc.device.unique_id) if device_desc.use_unique_id else str(device_desc.device.id)
+
+
+CheckResultT = TypeVar("CheckResultT", bound=CheckResult)
 
 
 @dataclass
@@ -146,9 +150,9 @@ def get_devices(
                     "System Mesh has no host-local devices."
                 )
         device_ids = [
-            metal_device_id_mapping.get_device_id(metal_device_id)
+            device_id
             for metal_device_id in metal_device_ids
-            if metal_device_id_mapping.get_device_id(metal_device_id) is not None
+            if (device_id := metal_device_id_mapping.get_device_id(metal_device_id)) is not None
         ]
     elif len(devices) == 1 and devices[0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
@@ -187,6 +191,7 @@ def _exalens_block_locations(device: Device, block_type: BlockType) -> list[OnCh
 
 def get_block_locations(
     devices: list[Device],
+    locations: list[str],
     inspector_data: InspectorData | None,
     metal_device_id_mapping: MetalDeviceIdMapping | None,
 ) -> dict[Device, dict[BlockType, list[OnChipCoordinate]]]:
@@ -209,6 +214,16 @@ def get_block_locations(
                         )
                     else:
                         block_locations[device][block_type] = _exalens_block_locations(device, block_type)
+                # Metal reports the DRAM cores it manages (TRANSLATED coords), excluding the
+                # syseng-owned NOC0 worker endpoints (which serve CMFW DRAM telemetry and run no
+                # DRISC firmware). Prefer that authoritative list over the exalens enumeration, which
+                # would include the NOC0 endpoints and dump garbage from them. TRANSLATED coords avoid
+                # the UMD-vs-metal logical-DRAM numbering mismatch.
+                dram_cores = chip_blocks_list[i].dramCores
+                if len(dram_cores) > 0:
+                    block_locations[device]["dram"] = [
+                        OnChipCoordinate(c.x, c.y, "translated", device, "dram") for c in dram_cores
+                    ]
 
     # Exalens fallback for any device Inspector didn't cover (no inspector at all, or
     # Inspector's getBlocksByType is missing this device).
@@ -217,6 +232,19 @@ def get_block_locations(
             continue
         for block_type in BLOCK_TYPES:
             block_locations[device][block_type] = _exalens_block_locations(device, block_type)
+
+    # Keep only the requested locations. Only logical coordinates are accepted — physical (noc0)
+    # layout shifts with harvesting, so a logical string maps to the same core on every device.
+    if locations:
+        for loc in locations:
+            if "-" in loc:
+                raise TTTriageError(f"--loc expects a logical coordinate (R,C / eX,Y / dX,Y / CHn), got '{loc}'")
+        for device in devices:
+            wanted = {OnChipCoordinate.create(loc, device) for loc in locations}
+            for block_type in BLOCK_TYPES:
+                block_locations[device][block_type] = [
+                    location for location in block_locations[device][block_type] if location in wanted
+                ]
 
     return block_locations
 
@@ -261,8 +289,8 @@ class RunChecks:
         return self._location_to_block_type_map[location]
 
     def _collect_results(
-        self, result: list[CheckResult], check_result: object, result_type: type[CheckResult], **kwargs
-    ) -> list[CheckResult]:
+        self, result: list[CheckResultT], check_result: object, result_type: type[CheckResultT], **kwargs
+    ) -> list[CheckResultT]:
         """Helper to collect and wrap check results consistently."""
         if check_result is None:
             return result
@@ -271,12 +299,12 @@ class RunChecks:
                 if not isinstance(item, CheckResult):
                     result.append(result_type(result=item, **kwargs))
                 else:
-                    result.append(item)
+                    result.append(cast(CheckResultT, item))
         else:
             if not isinstance(check_result, CheckResult):
                 result.append(result_type(result=check_result, **kwargs))
             else:
-                result.append(check_result)
+                result.append(cast(CheckResultT, check_result))
         return result
 
     def run_per_device_check(
@@ -331,8 +359,13 @@ class RunChecks:
         self, check: Callable[[OnChipCoordinate], object], block_filter: list[str] | str | None = None
     ) -> list[PerBlockCheckResult] | None:
         """Run a check function on each block location, collecting results."""
-        block_types_to_check = (
-            BLOCK_TYPES if block_filter is None else [block_filter] if isinstance(block_filter, str) else block_filter
+        # block_filter strings are expected to be valid BlockType values.
+        block_types_to_check: list[BlockType] = (
+            BLOCK_TYPES
+            if block_filter is None
+            else cast("list[BlockType]", [block_filter])
+            if isinstance(block_filter, str)
+            else cast("list[BlockType]", block_filter)
         )
 
         def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
@@ -361,8 +394,9 @@ class RunChecks:
                 finally:
                     progress.remove_task(device_task)
 
-        # Reuse the device iteration from run_per_device_check
-        return self.run_per_device_check(per_device_blocks_check)
+        # Reuse the device iteration from run_per_device_check. The nested check wraps results as
+        # PerBlockCheckResult, so the collected list contains PerBlockCheckResult items.
+        return cast("list[PerBlockCheckResult] | None", self.run_per_device_check(per_device_blocks_check))
 
     def run_per_core_check(
         self,
@@ -373,13 +407,13 @@ class RunChecks:
     ) -> list[PerCoreCheckResult] | None:
         """Run a check function on each RISC core in each block location, collecting results."""
 
-        # Filtering cores to check
-        cores_to_check = (
+        # Filtering cores to check. core_filter strings are expected to be valid CoreType values.
+        cores_to_check: set[CoreType] = (
             CORE_TYPES
             if core_filter is None
-            else set([core_filter])
+            else cast("set[CoreType]", {core_filter})
             if isinstance(core_filter, str)
-            else set(core_filter)
+            else cast("set[CoreType]", set(core_filter))
         )
 
         def per_block_cores_check(location: OnChipCoordinate) -> list[PerCoreCheckResult] | None:
@@ -417,13 +451,15 @@ class RunChecks:
 
             return result if len(result) > 0 else None
 
-        # Reuse the block iteration from run_per_block_check
-        return self.run_per_block_check(per_block_cores_check, block_filter)
+        # Reuse the block iteration from run_per_block_check. The nested check wraps results as
+        # PerCoreCheckResult, so the collected list contains PerCoreCheckResult items.
+        return cast("list[PerCoreCheckResult] | None", self.run_per_block_check(per_block_cores_check, block_filter))
 
 
 @triage_singleton
 def run(args, context: Context):
     devices_to_check = args["--dev"]
+    locs_to_check = args["--loc"]
     try:
         inspector_data = get_inspector_data(args, context)
         metal_device_id_mapping = get_metal_device_id_mapping(args, context)
@@ -431,7 +467,7 @@ def run(args, context: Context):
         inspector_data = None
         metal_device_id_mapping = None
     devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
-    block_locations = get_block_locations(devices, inspector_data, metal_device_id_mapping)
+    block_locations = get_block_locations(devices, locs_to_check, inspector_data, metal_device_id_mapping)
     return RunChecks(devices, block_locations, metal_device_id_mapping)
 
 

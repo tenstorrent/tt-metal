@@ -16,28 +16,31 @@ void kernel_main() {
     const auto origin_h = get_arg_val<uint32_t>(i++);
     const auto origin_w = get_arg_val<uint32_t>(i++);
 
-    std::uint8_t input_id{0};
-    const auto cb_x = input_id++;
+    constexpr std::uint8_t input_id = 0;
+    constexpr auto cb_x = input_id + 0;
     CircularBuffer cb_x_obj(cb_x);  // input(==x)
-    const auto cb_one = input_id++;
+    constexpr auto cb_one = input_id + 1;
     CircularBuffer cb_one_obj(cb_one);  // one
-    const auto cb_decimal = input_id++;
+    constexpr auto cb_decimal = input_id + 2;
     CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
-    const auto cb_mask_h_w = input_id++;
+    constexpr auto cb_mask_h_w = input_id + 3;
     CircularBuffer cb_mask_h_w_obj(cb_mask_h_w);  // mask_h_w
 
-    std::uint8_t output_id{16};
-    const auto cb_y = output_id++;  // output(==y)
+    constexpr std::uint8_t output_id = 16;
+    constexpr auto cb_y = output_id;  // output(==y)
 
-    std::uint8_t intermed_id{24};
-    const auto cb_xabs = intermed_id++;
+    constexpr std::uint8_t intermed_id = 24;
+    constexpr auto cb_xabs = intermed_id + 0;
     CircularBuffer cb_xabs_obj(cb_xabs);         // |x|
-    const auto cb_xpow = intermed_id++;          // |x|^p
-    const auto cb_xpowadd = intermed_id++;
+    constexpr auto cb_xpow = intermed_id + 1;    // |x|^p
+    CircularBuffer cb_xpow_obj(cb_xpow);
+    constexpr auto cb_xpowadd = intermed_id + 2;
     CircularBuffer cb_xpowadd_obj(cb_xpowadd);   // Add[|x|^p * exp(log(|x|) * decimal)]
-    const auto cb_logx = intermed_id++;          // log(|x|)
-    const auto cb_exp_lxmd = intermed_id++;      // exp(log(|x|) * decimal)
-    const auto cb_correct_xpow = intermed_id++;
+    constexpr auto cb_logx = intermed_id + 3;    // log(|x|)
+    CircularBuffer cb_logx_obj(cb_logx);
+    constexpr auto cb_exp_lxmd = intermed_id + 4;  // exp(log(|x|) * decimal)
+    CircularBuffer cb_exp_lxmd_obj(cb_exp_lxmd);
+    constexpr auto cb_correct_xpow = intermed_id + 5;
     CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);  // |x|^p * exp(log(|x|) * decimal)
 
     constexpr uint32_t onetile = 1;
@@ -100,7 +103,15 @@ void kernel_main() {
         tile_regs_release();
 
         // |x + decimal|^p
-        power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
+        power_tile_to_cb(
+            cb_xabs_obj,
+            cb_xpow_obj,
+            cb_logx_obj,
+            cb_decimal_obj,
+            cb_exp_lxmd_obj,
+            cb_correct_xpow_obj,
+            p,
+            p_is_negative);
 
         if (tile_idx == 0) {
             tile_regs_acquire();
@@ -138,8 +149,8 @@ void kernel_main() {
     }
 
     // Compute cb_y - reduce single pre-accumulated tile to scalar
-    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-        cb_xpowadd, cb_one, cb_y, compute_kernel_lib::ReduceInputBlockShape::single());
+    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_xpowadd, cb_one, cb_y>(
+        compute_kernel_lib::ReduceInputBlockShape::single());
 
     cb_decimal_obj.pop_front(onetile);
     cb_one_obj.pop_front(onetile);

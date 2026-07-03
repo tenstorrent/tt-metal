@@ -42,7 +42,7 @@ bool run_l2_flush_test(
 
     IDevice* device = mesh_device->get_devices()[0];
     constexpr CoreCoord core = {0, 0};
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     // For invalidate tests, pre-populate with known "old" values
     // that should persist after invalidation (since invalidate doesn't write back)
@@ -50,46 +50,42 @@ bool run_l2_flush_test(
     std::vector<uint32_t> init_data(config.num_words, config.expect_new_values ? 0 : old_value);
     tt_metal::detail::WriteToDeviceL1(device, core, config.base_addr, init_data);
 
-    constexpr const char* DM_KERNEL = "l2_flush";
+    const experimental::KernelSpecName DM_KERNEL{"l2_flush"};
 
-    experimental::metal2_host_api::KernelSpec dm_kernel_spec{
+    experimental::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l2_flush_test.cpp"},
+        .source = "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l2_flush_test.cpp",
         .num_threads = 1,
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"base_addr", "test_mode"},
-                .named_common_runtime_args = {"value", "num_words"},
+                .runtime_arg_names = {"base_addr", "test_mode"},
+                .common_runtime_arg_names = {"value", "num_words"},
             },
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec main_wu{
+        .name = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "l2_flush",
+    experimental::ProgramSpec spec{
+        .name = "l2_flush",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {{
-        .kernel_spec_name = DM_KERNEL,
-        .named_runtime_args =
-            {{.node = node, .args = {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
-        .named_common_runtime_args = {{"value", config.value}, {"num_words", config.num_words}},
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = {{node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
+        .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
     }};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
@@ -134,7 +130,7 @@ bool run_l1_dcache_test(
 
     IDevice* device = mesh_device->get_devices()[0];
     constexpr CoreCoord core = {0, 0};
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     // For invalidate tests, we need to pre-populate with known "old" values
     // that should persist after invalidation (since invalidate doesn't write back)
@@ -142,46 +138,42 @@ bool run_l1_dcache_test(
     std::vector<uint32_t> init_data(config.num_words, old_value);
     tt_metal::detail::WriteToDeviceL1(device, core, config.base_addr, init_data);
 
-    constexpr const char* DM_KERNEL = "l1_dcache";
+    const experimental::KernelSpecName DM_KERNEL{"l1_dcache"};
 
-    experimental::metal2_host_api::KernelSpec dm_kernel_spec{
+    experimental::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l1_dcache_test.cpp"},
+        .source = "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l1_dcache_test.cpp",
         .num_threads = 1,
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"base_addr", "test_mode"},
-                .named_common_runtime_args = {"value", "num_words"},
+                .runtime_arg_names = {"base_addr", "test_mode"},
+                .common_runtime_arg_names = {"value", "num_words"},
             },
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec main_wu{
+        .name = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "l1_dcache",
+    experimental::ProgramSpec spec{
+        .name = "l1_dcache",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {{
-        .kernel_spec_name = DM_KERNEL,
-        .named_runtime_args =
-            {{.node = node, .args = {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
-        .named_common_runtime_args = {{"value", config.value}, {"num_words", config.num_words}},
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = {{node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
+        .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
     }};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());

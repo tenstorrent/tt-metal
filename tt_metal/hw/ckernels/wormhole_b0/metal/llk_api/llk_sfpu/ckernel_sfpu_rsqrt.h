@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,9 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_rsqrt.h"
+#include "ckernel_sfpu_sqrt.h"
+#include "sfpu/ckernel_sfpu_rsqrt_compat.h"
+#include "sfpi.h"
 
 using namespace sfpi;
 
@@ -15,12 +17,18 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en, bool FAST_APPROX, bool legacy_compat>
 inline void calculate_rsqrt() {
-    _calculate_rsqrt_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, FAST_APPROX, legacy_compat>(ITERATIONS);
+    if constexpr (legacy_compat) {
+        _calculate_rsqrt_compat_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en>(ITERATIONS);
+    } else {
+        _calculate_sqrt_internal_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, true, FAST_APPROX>();
+    }
 }
 
 template <bool APPROXIMATION_MODE, bool legacy_compat>
 void rsqrt_init() {
-    _init_rsqrt_<APPROXIMATION_MODE, legacy_compat>();
+    if constexpr (!legacy_compat) {
+        sqrt_init<APPROXIMATION_MODE>();
+    }
 }
 
 }  // namespace sfpu

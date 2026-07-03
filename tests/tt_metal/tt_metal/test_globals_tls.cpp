@@ -60,28 +60,29 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    constexpr const char* DM_KERNEL_1 = "dm_kernel_1";
-    constexpr const char* DM_KERNEL_2 = "dm_kernel_2";
-    constexpr const char* DM_KERNEL_3 = "dm_kernel_3";
+    const experimental::KernelSpecName DM_KERNEL_1{"dm_kernel_1"};
+    const experimental::KernelSpecName DM_KERNEL_2{"dm_kernel_2"};
+    const experimental::KernelSpecName DM_KERNEL_3{"dm_kernel_3"};
 
     // Three kernels split 6 user DMs as 3 + 2 + 1 to mirror the original 4 + 3 + 1 split
     // (preserving the "shared kernel binary across multiple DMs" + "single-DM kernel" mix).
-    auto make_dm_kernel_spec = [](const char* unique_id, uint32_t kernel_id, uint8_t num_threads) {
-        return experimental::metal2_host_api::KernelSpec{
+    auto make_dm_kernel_spec = [](const experimental::KernelSpecName& unique_id,
+                                  uint32_t kernel_id,
+                                  uint32_t num_threads) {
+        return experimental::KernelSpec{
             .unique_id = unique_id,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check.cpp"},
+
+                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check.cpp",
             .num_threads = num_threads,
-            .compile_time_arg_bindings = {{"kernel_id", kernel_id}},
-            .runtime_arguments_schema =
+            .compile_time_args = {{"kernel_id", kernel_id}},
+            .runtime_arg_schema =
                 {
-                    .named_runtime_args = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
+                    .runtime_arg_names = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
                 },
-            .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            .hw_config =
+                experimental::DataMovementHardwareConfig{
+                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
         };
     };
 
@@ -89,42 +90,42 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     auto k2 = make_dm_kernel_spec(DM_KERNEL_2, /*kernel_id=*/2, /*num_threads=*/2);
     auto k3 = make_dm_kernel_spec(DM_KERNEL_3, /*kernel_id=*/3, /*num_threads=*/1);
 
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec main_wu{
+        .name = "main",
         .kernels = {DM_KERNEL_1, DM_KERNEL_2, DM_KERNEL_3},
         .target_nodes = node,
     };
 
     // Total user-DM threads = 3 + 2 + 1 = 6, fitting within the default DM2..DM7 cap.
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "globals_and_tls",
+    experimental::ProgramSpec spec{
+        .name = "globals_and_tls",
         .kernels = {k1, k2, k3},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    auto make_kernel_run_params = [&](const char* name) {
-        return experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = name,
-            .named_runtime_args =
-                {{.node = node,
-                  .args =
-                      {{"signal_address", signal_address},
-                       {"dram_dst_address", dram_address},
-                       {"dram_dst_bank_id", dram_channel},
-                       {"l1_result_addr", l1_result_addr}}}},
+    auto make_kernel_run_params = [&]() {
+        return experimental::ProgramRunArgs::KernelRunArgs{
+            .runtime_arg_values =
+                {{node,
+                  {{"signal_address", signal_address},
+                   {"dram_dst_address", dram_address},
+                   {"dram_dst_bank_id", dram_channel},
+                   {"l1_result_addr", l1_result_addr}}}},
         };
     };
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        make_kernel_run_params(DM_KERNEL_1),
-        make_kernel_run_params(DM_KERNEL_2),
-        make_kernel_run_params(DM_KERNEL_3),
-    };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::ProgramRunArgs params;
+    auto kra1 = make_kernel_run_params();
+    kra1.kernel = DM_KERNEL_1;
+    auto kra2 = make_kernel_run_params();
+    kra2.kernel = DM_KERNEL_2;
+    auto kra3 = make_kernel_run_params();
+    kra3.kernel = DM_KERNEL_3;
+    params.kernel_run_args = {kra1, kra2, kra3};
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -287,8 +288,17 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     }
 
     constexpr CoreCoord core = {0, 0};
+    const uint32_t signal_address = 100 * 1024;
     constexpr uint32_t l1_result_addr = 200 * 1024;
     constexpr uint32_t total_result_bytes = NUM_COMPUTE_SLOTS * TLS_CHECK_RESULT_SLOT_BYTES;
+
+    std::vector<uint32_t> init_signal = {QUASAR_FIRST_COMPUTE_HARTID};
+    tt_metal::detail::WriteToDeviceL1(
+        device,
+        core,
+        signal_address,
+        std::span(reinterpret_cast<const uint8_t*>(init_signal.data()), sizeof(uint32_t)),
+        CoreType::WORKER);
 
     std::vector<uint32_t> init_data(total_result_bytes / sizeof(uint32_t), 0);
     tt_metal::detail::WriteToDeviceL1(
@@ -302,41 +312,41 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    constexpr const char* COMPUTE_KERNEL = "compute_tls";
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::KernelSpecName COMPUTE_KERNEL{"compute_tls"};
+    const experimental::NodeCoord node{0, 0};
 
-    experimental::metal2_host_api::KernelSpec compute_kernel_spec{
+    experimental::KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/simple_tls_check.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/simple_tls_check.cpp",
         .num_threads = QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER,
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"l1_result_addr"},
+                .runtime_arg_names = {"signal_address", "l1_result_addr"},
             },
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec main_wu{
+        .name = "main",
         .kernels = {COMPUTE_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "compute_kernel_tls",
+    experimental::ProgramSpec spec{
+        .name = "compute_kernel_tls",
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {{
-        .kernel_spec_name = COMPUTE_KERNEL,
-        .named_runtime_args = {{.node = node, .args = {{"l1_result_addr", l1_result_addr}}}},
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = COMPUTE_KERNEL,
+        .runtime_arg_values = {{node, {{"l1_result_addr", l1_result_addr}, {"signal_address", signal_address}}}},
     }};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -345,22 +355,80 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     std::vector<uint32_t> l1_data;
     tt_metal::detail::ReadFromDeviceL1(device, core, l1_result_addr, total_result_bytes, l1_data, CoreType::WORKER);
 
-    for (uint32_t slot = 0; slot < NUM_COMPUTE_SLOTS; slot++) {
+    auto slot_global_addr = [&l1_data](uint32_t slot) {
         const uint32_t offset = slot * TLS_CHECK_RESULT_SLOT_WORDS;
-        uint32_t kernel_id = l1_data[offset + TLS_CHECK_KERNEL_ID];
-        uint32_t num_sw_threads = l1_data[offset + TLS_CHECK_NUM_THREADS];
-        uint32_t my_thread_id = l1_data[offset + TLS_CHECK_MY_THREAD_ID];
-        uint32_t hartid = l1_data[offset + TLS_CHECK_HART_ID];
+        return (uint64_t)l1_data[offset + TLS_CHECK_GLOBAL_ADDR_LO] |
+               ((uint64_t)l1_data[offset + TLS_CHECK_GLOBAL_ADDR_HI] << 32);
+    };
 
-        // 1. Single kernel: all slots run kernel_id 1
-        EXPECT_EQ(kernel_id, 1u) << "slot=" << slot;
+    for (uint32_t engine = 0; engine < QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER; engine++) {
+        for (uint32_t trisc = 0; trisc < QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE; trisc++) {
+            uint32_t slot = engine * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE + trisc;
+            uint32_t offset = slot * TLS_CHECK_RESULT_SLOT_WORDS;
+            uint32_t kernel_id = l1_data[offset + TLS_CHECK_KERNEL_ID];
+            uint32_t num_sw_threads = l1_data[offset + TLS_CHECK_NUM_THREADS];
+            uint32_t my_thread_id = l1_data[offset + TLS_CHECK_MY_THREAD_ID];
+            uint32_t hartid = l1_data[offset + TLS_CHECK_HART_ID];
+            uint32_t thread_0_hartid = l1_data[offset + TLS_CHECK_THREAD_0_HART_ID];
+            uint32_t global_start = l1_data[offset + TLS_CHECK_GLOBAL_START];
+            uint32_t global_end = l1_data[offset + TLS_CHECK_GLOBAL_END];
+            uint64_t global_addr = slot_global_addr(slot);
+            uint32_t uninitialized_global_start = l1_data[offset + TLS_CHECK_UNINITIALIZED_GLOBAL_START];
+            uint32_t uninitialized_global_end = l1_data[offset + TLS_CHECK_UNINITIALIZED_GLOBAL_END];
+            uint64_t thread_local_start = l1_data[offset + TLS_CHECK_THREAD_LOCAL_START];
+            uint64_t thread_local_end = l1_data[offset + TLS_CHECK_THREAD_LOCAL_END];
+            uint32_t uninitialized_thread_local_start = l1_data[offset + TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_START];
+            uint32_t uninitialized_thread_local_end = l1_data[offset + TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_END];
 
-        // 2. num_sw_threads & my_thread_id (engine id 0-3, config indices 8-11)
-        uint32_t expected_engine_id = slot / QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
-        EXPECT_EQ(num_sw_threads, QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER) << "slot=" << slot;
-        EXPECT_EQ(my_thread_id, expected_engine_id) << "slot=" << slot;
+            // 1. Single kernel: all slots run kernel_id 1
+            EXPECT_EQ(kernel_id, 1u) << "N" << engine << "T" << trisc;
 
-        // 3. hartid: slot 0 -> 8, slot 1 -> 9, ..., slot 15 -> 23
-        EXPECT_EQ(hartid, QUASAR_FIRST_COMPUTE_HARTID + slot) << "slot=" << slot;
+            // 2. num_sw_threads & my_thread_id (engine id 0-3, config indices 8-11)
+            EXPECT_EQ(num_sw_threads, QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER) << "N" << engine << "T" << trisc;
+            EXPECT_EQ(my_thread_id, engine) << "N" << engine << "T" << trisc;
+
+            // 3. hartid: slot 0 -> 8, slot 1 -> 9, ..., slot 15 -> 23
+            EXPECT_EQ(hartid, QUASAR_FIRST_COMPUTE_HARTID + slot) << "N" << engine << "T" << trisc;
+
+            // 4. Verify that the core is pointing to the correct binary. The specific
+            // check here is the lowest hartid with the same kernel ID.
+            EXPECT_EQ(thread_0_hartid, QUASAR_FIRST_COMPUTE_HARTID + trisc)
+                << "N" << engine << "T" << trisc << " (shared)";
+
+            // 5. Check that initialized global variables have the correct start and end values.
+            // Initialized globals are set to 5, then incremented by 1 for each core in sequence.
+            // For threaded kernels, globals are shared between trisc lanes in each NEO engine, so values
+            // start at 5 with the first engine and increment by 1 for each engine in sequence.
+            EXPECT_EQ(global_start, 5u + engine) << "N" << engine << "T" << trisc;
+            EXPECT_EQ(global_end, 6u + engine) << "N" << engine << "T" << trisc;
+
+            // 6. For threaded kernels, check that the global variable address is shared between slots.
+            EXPECT_EQ(global_addr, slot_global_addr(trisc)) << "N" << engine << "T" << trisc;
+
+            // 7. Check that uninitialized global variables have the correct start and end values.
+            // Uninitialized globals are cleared to 0, then incremented by 1 for each slot in sequence.
+            EXPECT_EQ(uninitialized_global_start, 0u + engine) << "N" << engine << "T" << trisc;
+            EXPECT_EQ(uninitialized_global_end, 1u + engine) << "N" << engine << "T" << trisc;
+
+            // 8. Check that initialized thread local variables have the correct value.
+            // I.e. incrementing the variable in one DM does not affect the value in another DM.
+            // TODO: Initializing thread local variables does not work yet. Once they work,
+            // update this check with the correct values.
+            EXPECT_EQ(thread_local_start, 10u) << "N" << engine << "T" << trisc;
+            EXPECT_EQ(thread_local_end, 11u) << "N" << engine << "T" << trisc;
+
+            // 9. Check that uninitialized thread local variables have the correct value.
+            // Same as #8, but variables are cleared to 0 at the start.
+            EXPECT_EQ(uninitialized_thread_local_start, 0u) << "N" << engine << "T" << trisc;
+            EXPECT_EQ(uninitialized_thread_local_end, 1u) << "N" << engine << "T" << trisc;
+        }
+    }
+
+    for (uint32_t trisc = 0; trisc < QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE; trisc++) {
+        const uint64_t ref = slot_global_addr(trisc);
+        for (uint32_t neo = 0; neo < QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER; neo++) {
+            const uint32_t slot = neo * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE + trisc;
+            EXPECT_EQ(slot_global_addr(slot), ref) << "N" << neo << "T" << trisc;
+        }
     }
 }

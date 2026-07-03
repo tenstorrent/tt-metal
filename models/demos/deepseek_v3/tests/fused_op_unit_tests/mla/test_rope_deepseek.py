@@ -160,7 +160,7 @@ def create_rope_tensors(device, head_dim, batch_size=32):
     "device_params",
     [
         {
-            "trace_region_size": 550912,
+            "trace_region_size": 0,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],

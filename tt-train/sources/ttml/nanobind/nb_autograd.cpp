@@ -19,6 +19,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
+#include "autograd/callback.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/tensor.hpp"
 #include "nanobind/nb_export_enum.hpp"
@@ -40,7 +41,9 @@ void py_module_types(nb::module_& m) {
     nb::class_<Graph>(m, "Graph");
     nb::class_<GraphNode>(m, "GraphNode");
     nb::class_<NodeId>(m, "NodeId");
-    nb::class_<Tensor>(m, "Tensor");
+    // dynamic_attr() lets Python code attach arbitrary markers (e.g.
+    // `_fsdp_managed`, `_fsdp_shard_dim`, `_fsdp_axis`) to a Tensor.
+    nb::class_<Tensor>(m, "Tensor", nb::dynamic_attr());
     nb::class_<ParallelismContext>(m, "ParallelismContext");
     nb::class_<DistributedConfig>(m, "DistributedConfig");
 }
@@ -144,13 +147,14 @@ void py_module(nb::module_& m) {
             "to_numpy",
             [](const Tensor& tensor,
                std::optional<tt::tt_metal::DataType> new_type,
-               ttnn::distributed::MeshToTensor* composer) {
-                return ttml::nanobind::util::make_numpy_tensor(
-                    tensor.get_value(PreferredPrecision::FULL), new_type, composer);
+               ttnn::distributed::MeshToTensor* composer,
+               PreferredPrecision precision) {
+                return ttml::nanobind::util::make_numpy_tensor(tensor.get_value(precision), new_type, composer);
             },
             nb::arg("new_type") = std::nullopt,
             nb::arg("composer") = nullptr,
-            "Construct a numpy tensor from a Tensor");
+            nb::arg("precision") = PreferredPrecision::FULL,
+            "Construct a numpy tensor from a Tensor. precision=NATIVE reads the value as stored (no upcast).");
         py_tensor.def(
             "to_string",
             [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::FULL).write_to_string(); },
@@ -217,6 +221,13 @@ void py_module(nb::module_& m) {
             "get_instance", &AutoContext::get_instance, nb::rv_policy::reference, "Get singleton AutoContext instance");
         py_auto_context.def("set_seed", &AutoContext::set_seed, nb::arg("seed"), "Set seed");
         py_auto_context.def("get_seed", &AutoContext::get_seed, "Get seed");
+        py_auto_context.def(
+            "get_generator_state", &AutoContext::get_generator_state, "Serialize the RNG generator state");
+        py_auto_context.def(
+            "set_generator_state",
+            &AutoContext::set_generator_state,
+            nb::arg("state"),
+            "Restore the RNG generator state");
         py_auto_context.def(
             "add_backward_node",
             [](AutoContext& self, GradFunction grad_function, std::optional<nb::list> links_obj) {
@@ -365,6 +376,17 @@ void py_module(nb::module_& m) {
         "Create an autograd Tensor from a tt::tt_metal::Tensor");
 
     m.def("create_tensor", []() -> TensorPtr { return create_tensor(); }, "Create an empty autograd Tensor");
+
+    // Identity-forward autograd node that fires a Python callback during backward.
+    m.def(
+        "callback",
+        [](const TensorPtr& input, std::function<void()> fn) -> TensorPtr {
+            return autograd_callback(input, std::move(fn));
+        },
+        nb::arg("tensor"),
+        nb::arg("fn"),
+        "Identity autograd op that invokes `fn()` during backward before calling backward of the input's node. "
+        "This is used to implement module-level backward-pre / backward-post hooks (e.g. FSDP).");
 
     // Close the AutoContext device at Python shutdown so MeshDevice (and its
     // D2HSocket / NamedShm resources) are torn down before ShmResourceTracker's

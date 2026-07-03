@@ -544,7 +544,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         static_cast<uint32_t>(sender_worker_flow_control_semaphore_id),
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -557,7 +557,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         eth_channel,
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -614,7 +614,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         eth_channel,
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -1027,6 +1027,25 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                           ? actual_sender_channels_per_vc_.value()[2]
                                           : config.num_used_sender_channels_per_vc[2];
 
+    auto should_force_internal_sender_skip = [&](size_t channel_id) -> bool {
+        if (channel_id >= num_sender_channels || channel_trimming_overrides_.has_value()) {
+            return false;
+        }
+
+        if (!this->is_sender_channel_serviced_[risc_id][channel_id]) {
+            return false;
+        }
+
+        const size_t worker_channel = get_worker_connected_sender_channel();
+        const size_t vc2_start = actual_sender_channels_vc0 + actual_sender_channels_vc1;
+        const size_t vc2_end = vc2_start + actual_sender_channels_vc2;
+        const bool is_worker_channel = channel_id == worker_channel;
+        const bool is_vc2_channel = channel_id >= vc2_start && channel_id < vc2_end;
+        const bool has_static_peer = this->sender_channel_connection_liveness_check_disable_array[channel_id];
+
+        return !is_worker_channel && !is_vc2_channel && !has_static_peer;
+    };
+
     const auto& builder_context = fabric_context.get_builder_context();
     const auto& global_overrides = builder_context.get_channel_trimming_global_overrides();
     const bool router_has_real_capture_entry = has_real_channel_trimming_capture_entry(
@@ -1240,7 +1259,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // --- Sender channel per-channel arrays (always emit MAX entries; 0 for unused) ---
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        const bool has_static_peer =
+            (i < num_sender_channels) ? this->sender_channel_connection_liveness_check_disable_array[i] : false;
         named_args[fmt::format("SENDER_CH_{}_LIVE_CHECK_SKIP", i)] =
+            (i < num_sender_channels) ? static_cast<uint32_t>(has_static_peer || should_force_internal_sender_skip(i))
+                                      : 0;
+    }
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        named_args[fmt::format("SENDER_CH_{}_WAIT_STATIC_CONNECTION", i)] =
             (i < num_sender_channels)
                 ? static_cast<uint32_t>(this->sender_channel_connection_liveness_check_disable_array[i])
                 : 0;
@@ -1359,7 +1385,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     auto* static_alloc_ptr = dynamic_cast<FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
     TT_FATAL(static_alloc_ptr != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator");
     static_alloc_ptr->emit_channel_allocations_ct_args(
-        ct_args, actual_sender_channels_vc0, actual_sender_channels_vc1, num_receiver_channels);
+        ct_args,
+        actual_sender_channels_vc0,
+        actual_sender_channels_vc1,
+        actual_sender_channels_vc2,
+        num_receiver_channels);
 
     // Emit remote channel allocations
     ct_args.push_back(0xabaddad6);

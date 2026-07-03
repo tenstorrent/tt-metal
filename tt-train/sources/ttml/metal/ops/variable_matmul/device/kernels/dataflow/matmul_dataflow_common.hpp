@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,11 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "api/core_local_mem.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 struct TensorShape2D {
@@ -26,42 +30,25 @@ struct TensorShape2D {
 };
 
 /**
- * Read a block of in0 from a potentially padded tensor, optionally at an M-row and/or K-col
- * offset into the source tensor (the source is treated as a parent buffer; we read just the
- * sub-range starting at (in0_row_offset_tiles, in0_k_offset_tiles)). Bounds check on
- * matmul-M/K uses the effective `shape`, independent of the parent stride.
+ * Read a block of in0 from a (possibly padded) tensor, optionally sub-ranged at an M-row /
+ * K-col offset (UseOffset treats the source as a parent buffer starting at
+ * (in0_row_offset_tiles, in0_k_offset_tiles)). Bounds checks use the effective matmul `shape`,
+ * not the parent stride.
  *
- * Iteration order is always M-outer, K-inner (CB layout = [M, K] tile-major). When
- * TransposeA is true, the physical tensor is stored as [K_parent, M_parent] instead of
- * [M_parent, K_parent]; the address formula uses `parent_M_tiles_stride` for the K-row
- * stride. For non-transpose, the row stride is `parent_K_tiles_stride` (= parent K tile
- * count, used only when UseOffset).
+ * Iteration is M-outer, K-inner (CB layout [M, K] tile-major). TransposeA storage is
+ * [K_parent, M_parent] (row stride parent_M_tiles_stride); non-transpose is [M_parent, K_parent]
+ * (row stride parent_K_tiles_stride). Both strides used only when UseOffset.
  *
- * `shape` carries the matmul-coordinate effective sizes (logical_d0=effective_M for
- * non-transpose / logical_d0=K for transpose, logical_d1=K_tiles or effective_M).
+ * `shape` holds matmul-coordinate sizes: non-transpose (logical_d0=M, logical_d1=K),
+ * transpose (logical_d0=K, logical_d1=M).
  */
-template <
-    uint32_t M_block_tiles,
-    uint32_t K_block_tiles,
-    bool TransposeA,
-    bool UseOffset,
-    typename TensorAccessorType
-#ifdef READ_FROM_LOCAL_INPUT
-    ,
-    typename LocalTensorAccessorType
-#endif
-    >
+template <uint32_t M_block_tiles, uint32_t K_block_tiles, bool TransposeA, bool UseOffset, typename TensorAccessorType>
 void read_in0_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
     uint32_t write_ptr,
+    uint32_t dst_cb_id,
     uint32_t tile_size_bytes,
-#ifdef READ_FROM_LOCAL_INPUT
-    const LocalTensorAccessorType& in3_accessor,
-    uint32_t local_k_start,
-    uint32_t local_k_end,
-    uint32_t input_tensor_Wt,
-#endif
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
@@ -73,6 +60,11 @@ void read_in0_block_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
+    // Padded/out-of-range tiles are zero-filled into dst_cb_id; offset within the CB is the
+    // current write pointer minus the CB base (write_ptr at entry).
+    Noc noc;
+    const uint32_t cb_base = write_ptr;
+
     // i sweeps M (matmul-outer), j sweeps K (matmul-inner).
     const uint32_t m_bound = TransposeA ? shape.logical_d1 : shape.logical_d0;
     const uint32_t k_bound = TransposeA ? shape.logical_d0 : shape.logical_d1;
@@ -82,70 +74,51 @@ void read_in0_block_sync(
         }
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j < k_bound) {
-#ifdef READ_FROM_LOCAL_INPUT
-                if (local_k_start <= j && j <= local_k_end) {
-                    // read from self_tensor_accessor
-                    uint32_t local_i = UseOffset ? (i + in0_row_offset_tiles) : i;
-                    uint32_t tile_id = local_i * input_tensor_Wt + (j - local_k_start);
-                    noc_async_read_tile(tile_id, in3_accessor, write_ptr);
-                } else {
-#endif
-                    uint32_t tile_id;
-                    if constexpr (TransposeA) {
-                        if constexpr (UseOffset) {
-                            // [K_parent, M_parent] storage:
-                            // (K-row + k_offset) * M_parent_tiles + (M-col + m_offset)
-                            tile_id = (j + in0_k_offset_tiles) * parent_M_tiles_stride + (i + in0_row_offset_tiles);
-                        } else {
-                            tile_id = j * shape.logical_d1 + i;
-                        }
+                uint32_t tile_id;
+                if constexpr (TransposeA) {
+                    if constexpr (UseOffset) {
+                        // [K_parent, M_parent] storage:
+                        // (K-row + k_offset) * M_parent_tiles + (M-col + m_offset)
+                        tile_id = (j + in0_k_offset_tiles) * parent_M_tiles_stride + (i + in0_row_offset_tiles);
                     } else {
-                        if constexpr (UseOffset) {
-                            // [M_parent, K_parent] storage:
-                            // (M-row + m_offset) * K_parent_tiles + (K-col + k_offset)
-                            tile_id = (i + in0_row_offset_tiles) * parent_K_tiles_stride + (j + in0_k_offset_tiles);
-                        } else {
-                            tile_id = i * shape.logical_d1 + j;
-                        }
+                        tile_id = j * shape.logical_d1 + i;
                     }
-                    noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
-#ifdef READ_FROM_LOCAL_INPUT
+                } else {
+                    if constexpr (UseOffset) {
+                        // [M_parent, K_parent] storage:
+                        // (M-row + m_offset) * K_parent_tiles + (K-col + k_offset)
+                        tile_id = (i + in0_row_offset_tiles) * parent_K_tiles_stride + (j + in0_k_offset_tiles);
+                    } else {
+                        tile_id = i * shape.logical_d1 + j;
+                    }
                 }
-#endif
+                noc.async_read(
+                    tensor_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, dst_cb_id, tile_size_bytes, write_ptr - cb_base);
             }
             write_ptr += tile_size_bytes;
         }
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
 /**
- * Read a block of in1 from a potentially padded tensor, optionally at a K-axis offset.
- * When UseOffset is true the weight is treated as a parent buffer and the K-axis is
- * sliced [k_offset, k_offset + matmul_K). Bounds checks use the effective (matmul-K)
- * `shape`, independent of the parent K extent.
+ * Read a block of in1 from a (possibly padded) tensor, optionally K-sliced: UseOffset treats
+ * the weight as a parent buffer and reads K-range [k_offset, k_offset + matmul_K). Bounds
+ * checks use the effective matmul `shape`, not the parent K extent.
  *
- * The CB ends up K-outer, N-inner (tile (k, n) at index k * N_block_tiles + n), which
- * is what the matmul compute kernel expects.
- *
- * DRAM access pattern:
- *  - Non-transpose ([K, N] storage): K-outer / N-inner iteration walks storage in
- *    row-major order → sequential DRAM reads.
- *  - Transpose_b ([N, K] storage): K-outer / N-inner iteration jumps K-tiles between
- *    sibling reads → page-thrashing strided pattern. For the transposed case we walk
- *    storage in row-major order (N-outer / K-inner) and compute write_ptr per tile so
- *    the CB layout stays K-outer / N-inner. Sequential DRAM bandwidth recovers ~10x
- *    on large-K weights (e.g. Mixtral H=4096, I=14336).
+ * The CB ends up K-outer, N-inner (tile (k, n) at index k * N_block_tiles + n), as the matmul
+ * compute kernel expects.
  */
 template <uint32_t K_block_tiles, uint32_t N_block_tiles, bool TransposeB, bool UseOffset, typename TensorAccessorType>
 void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
     uint32_t write_ptr_base,
+    uint32_t dst_cb_id,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
@@ -155,6 +128,9 @@ void read_in1_block_sync(
     uint32_t parent_K_tiles_stride) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
+    // Padded/out-of-range tiles are zero-filled into dst_cb_id; offset within the CB is the
+    // target write pointer minus the CB base (write_ptr_base).
+    Noc noc;
     // i sweeps K (matmul-inner), j sweeps N (matmul-outer).
     // shape carries storage-layout sizes: when TransposeB, logical_d0=N, logical_d1=K.
     const uint32_t k_bound = TransposeB ? shape.logical_d1 : shape.logical_d0;
@@ -167,7 +143,7 @@ void read_in1_block_sync(
                 // Out-of-N tiles: zero-fill the whole K-column in this N slot.
                 for (uint32_t i = d0_start; i < d0_end; i++) {
                     uint32_t wp = write_ptr_base + ((i - d0_start) * N_block_tiles + n_col) * tile_size_bytes;
-                    fill_zeros_async(wp, tile_size_bytes);
+                    fill_zeros_async(noc, dst_cb_id, tile_size_bytes, wp - write_ptr_base);
                 }
                 continue;
             }
@@ -180,9 +156,10 @@ void read_in1_block_sync(
                     } else {
                         tile_id = j * shape.logical_d1 + i;
                     }
-                    noc_async_read_tile(tile_id, tensor_accessor, wp);
+                    noc.async_read(
+                        tensor_accessor, CoreLocalMem<uint32_t>(wp), tile_size_bytes, {.page_id = tile_id}, {});
                 } else {
-                    fill_zeros_async(wp, tile_size_bytes);
+                    fill_zeros_async(noc, dst_cb_id, tile_size_bytes, wp - write_ptr_base);
                 }
             }
         }
@@ -202,9 +179,10 @@ void read_in1_block_sync(
                     } else {
                         tile_id = i * shape.logical_d1 + j;
                     }
-                    noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                    noc.async_read(
+                        tensor_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
                 } else {
-                    fill_zeros_async(write_ptr, tile_size_bytes);
+                    fill_zeros_async(noc, dst_cb_id, tile_size_bytes, write_ptr - write_ptr_base);
                 }
                 write_ptr += tile_size_bytes;
             }
@@ -212,16 +190,15 @@ void read_in1_block_sync(
             write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
         }
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
 /**
- * Write a block of output to a potentially padded tensor.
- * Skip writing when M >= logical_M or N >= logical_N
+ * Write a block of output to a (possibly padded) tensor; skip tiles where M >= logical_M or
+ * N >= logical_N. When UseOutOffset is true the output is a parent buffer and we write into
+ * rows [out_row_offset_tiles, out_row_offset_tiles + actual_M); matmul-N equals the parent's N
+ * (caller-validated), so shape.logical_d1 stays the correct N stride.
  */
-// When UseOutOffset is true, the output tensor is a parent buffer; we write into rows
-// [out_row_offset_tiles, out_row_offset_tiles + actual_M) of it. matmul-N must equal
-// the parent's N (caller-validated), so shape.logical_d1 is still the correct N stride.
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, bool UseOutOffset, typename TensorAccessorType>
 void write_block_sync(
     const TensorAccessorType& tensor_accessor,
@@ -236,6 +213,7 @@ void write_block_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
+    Noc noc;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -252,18 +230,19 @@ void write_block_sync(
                 row = i;
             }
             uint32_t tile_id = row * shape.logical_d1 + j;
-            noc_async_write_tile(tile_id, tensor_accessor, read_ptr);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(read_ptr), tensor_accessor, tile_size_bytes, {}, {.page_id = tile_id});
             read_ptr += tile_size_bytes;
         }
         // finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
         read_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
 }
 
 /**
- * This write method is more granular, waiting on a row of output tiles
- * in the output CB before writing those out, rather than waiting on the entire block.
+ * Like write_block_sync, but waits on one row of output tiles in the CB at a time rather than
+ * the whole block before writing.
  */
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, bool UseOutOffset, typename TensorAccessorType>
 void write_block_sync_granular(
@@ -276,11 +255,13 @@ void write_block_sync_granular(
     uint32_t d1_start,
     uint32_t d1_end,
     uint32_t out_row_offset_tiles) {
+    Noc noc;
+    CircularBuffer cb_out(cb_id_out);
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
-        cb_wait_front(cb_id_out, N_block_tiles);
+        cb_out.wait_front(N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
         if (m_tile < d0_end && m_tile < shape.logical_d0) {
-            uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+            uint32_t out_read_ptr = cb_out.get_read_ptr();
             uint32_t row;
             if constexpr (UseOutOffset) {
                 row = m_tile + out_row_offset_tiles;
@@ -292,21 +273,21 @@ void write_block_sync_granular(
                     break;
                 }
                 uint32_t tile_id = row * shape.logical_d1 + n_tile_id;
-                noc_async_write_tile(tile_id, tensor_accessor, out_read_ptr);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(out_read_ptr), tensor_accessor, tile_size_bytes, {}, {.page_id = tile_id});
                 out_read_ptr += tile_size_bytes;
             }
         }
-        cb_pop_front(cb_id_out, N_block_tiles);
+        cb_out.pop_front(N_block_tiles);
     }
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
 }
 
 /**
- * Staggered defer-write index used by both dm_in0_sender and dm_in1_sender_out: each core picks
- * a k-block index for its deferred output write so that the writes spread across the next
- * output block's K-loop (latency hiding). Clamp to the last K iter — without this, K-axis
- * OffsetsRoles that shrink K at runtime can leave the check never firing, deadlocking
- * cb_id_out once M_blocks_per_core * N_blocks_per_core - 1 exceeds the CB depth.
+ * Staggered defer-write index for both senders: each core picks a k-block for its deferred
+ * output write so writes spread across the next output block's K-loop (latency hiding).
+ * Clamp to the last K iter — otherwise K-shrinking OffsetsRoles can leave the trigger never
+ * firing, deadlocking cb_id_out once M_blocks_per_core * N_blocks_per_core - 1 exceeds CB depth.
  */
 FORCE_INLINE uint32_t compute_defer_write_k_block(uint32_t core_y_index, uint32_t y_axis_cores, uint32_t K_num_blocks) {
     const uint32_t k_blocks_per_axis_core = (K_num_blocks + y_axis_cores - 1U) / y_axis_cores;
@@ -332,8 +313,9 @@ FORCE_INLINE void do_deferred_block_write(
     uint32_t defer_write_n_tile_end,
     uint32_t out_row_offset_tiles) {
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
-    cb_wait_front(cb_id_out, out_block_num_tiles);
-    const uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+    CircularBuffer cb_out(cb_id_out);
+    cb_out.wait_front(out_block_num_tiles);
+    const uint32_t out_read_ptr = cb_out.get_read_ptr();
     write_block_sync<M_block_tiles, N_block_tiles, UseOutOffset>(
         tensor_accessor,
         out_shape,
@@ -344,32 +326,5 @@ FORCE_INLINE void do_deferred_block_write(
         defer_write_n_tile,
         defer_write_n_tile_end,
         out_row_offset_tiles);
-    cb_pop_front(cb_id_out, out_block_num_tiles);
-}
-
-/**
- * Final (non-deferred) output block write at the end of an N-block iteration: granular variant
- * pops the output CB tile-by-tile to overlap compute and write.
- */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, bool UseOutOffset, typename TensorAccessorType>
-FORCE_INLINE void do_final_block_write(
-    const TensorAccessorType& tensor_accessor,
-    const TensorShape2D& out_shape,
-    uint32_t cb_id_out,
-    uint32_t out_tile_size,
-    uint32_t m_tile,
-    uint32_t m_tile_end,
-    uint32_t n_tile,
-    uint32_t n_tile_end,
-    uint32_t out_row_offset_tiles) {
-    write_block_sync_granular<M_block_tiles, N_block_tiles, UseOutOffset>(
-        tensor_accessor,
-        out_shape,
-        cb_id_out,
-        out_tile_size,
-        m_tile,
-        m_tile_end,
-        n_tile,
-        n_tile_end,
-        out_row_offset_tiles);
+    cb_out.pop_front(out_block_num_tiles);
 }

@@ -13,10 +13,19 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
 
+/**
+ * @brief Configure the packer address-modification (ADDR_MOD) slots for the selected pack mode.
+ *
+ * Programs ADDR_MOD_0/1/2 with the src/dest Y and Z increment/clear patterns the pack MOP relies
+ * on to traverse the destination register and step through faces for the given layout.
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ */
 template <PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_configure_addrmod_()
 {
@@ -68,6 +77,21 @@ inline void _llk_pack_configure_addrmod_()
             .set(ADDR_MOD_2);
     }
 }
+
+/**
+ * @brief Build and program the packer MOP template for the selected pack mode.
+ *
+ * Programs the ckernel MOP (and, for tilize, a replay buffer) with the PACR instruction sequence
+ * that packs one tile worth of data, selecting packer interfaces and ADDR_MODs per the layout.
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @tparam zero_output: When true, packer emits zeros instead of dest data.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param num_tiles: Number of tiles processed per MOP run.
+ * @note @ref _llk_pack_configure_addrmod_ must have programmed the ADDR_MOD slots for the same pack_mode.
+ */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_mop_config_(
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -311,7 +335,26 @@ inline void _llk_pack_mop_config_(
 
 namespace llk_pack_internal_bh
 {
-template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool skip_final_adcxx>
+/**
+ * @brief Shared packer-init body behind the @ref _llk_pack_init_ overloads.
+ *
+ * Runs the common init sequence with each stage individually skippable: program the ADDR_MOD slots,
+ * build the MOP template, set the packer strides, and program the packer X (datum) counter. The
+ * skip_* template flags let a caller reuse state already established by a prior init or hw-configure.
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @tparam zero_output: When true, the packer emits zeros instead of dest data.
+ * @tparam skip_addrmod_config: When true, leave the ADDR_MOD slots untouched.
+ * @tparam skip_packer_strides: When true, do not re-program the packer strides.
+ * @param pack_src_format: Source (dest register) data format; only used when programming strides.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param num_tiles: Number of tiles processed per MOP run.
+ * @note Init owns the packer X (datum) counter (SETADCXX): every init programs its own value, mirroring
+ *       the Wormhole contract. On Blackhole the value is always a single row (FACE_C_DIM - 1).
+ */
+template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides>
 inline void pack_init_apply(
     const std::uint32_t pack_src_format,
     const std::uint32_t face_r_dim,
@@ -329,35 +372,74 @@ inline void pack_init_apply(
         set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
     }
 
-    if constexpr (!skip_final_adcxx)
-    {
-        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
-    }
+    // Program the packer X (datum) counter. Per the "inits own SETADCXX" contract, every init sets its
+    // own value; on Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
+    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 } // namespace llk_pack_internal_bh
 
+/**
+ * @brief Reconfigure the packer source/destination data formats and tile geometry at runtime.
+ *
+ * Used to switch the packer to a new data format without a full HW re-configure.
+ *
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @param pack_src_format: Source (dest register) data format.
+ * @param pack_dst_format: Destination (L1) data format.
+ * @param tile_size: Size of one output tile in bytes.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param partial_face: True if packing a partial (sub-face-row) face.
+ */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim = FACE_R_DIM,
     const std::uint32_t tile_c_dim = TILE_C_DIM,
     const std::uint32_t num_faces  = 4,
     const bool partial_face        = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face);
+
+    llk::san::pack_operand_configure<true>(
+        is_fp32_dest_acc_en, pack_src_format, pack_dst_format, llk::san::IGNORE, tile_c_dim, num_faces, partial_face, llk::san::IGNORE);
+
+    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
 }
 
+/**
+ * @brief Enable or disable reading the destination register as 32-bit data for the packer.
+ *
+ * @param enable: True to read dest as 32-bit (FP32) data, false otherwise.
+ * @note Stalls on the pack pipe before modifying the PCK_DEST_RD_CTRL config register.
+ */
 inline void _llk_pack_set_fp32_dest_acc_(bool enable)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
 }
 
-// If using 8bit datums for unpack src. tilize must be set to false because we skip the blackhole workaround which involves unswizzling rows in the tile,
-// and this unswizzling is not needed for 8bit datums as they are not affected by the blackhole issue.
+/**
+ * @brief One-time hardware configuration of the packer for a given data format and tile geometry.
+ *
+ * Programs the packer config registers (formats, strides, relu) for the chosen pack mode. Call once
+ * before the init/execute sequence.
+ *
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @param pack_src_format: Source (dest register) data format.
+ * @param pack_dst_format: Destination (L1) data format.
+ * @param tile_size: Size of one output tile in bytes.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
+ * @note For 8-bit unpack-source datums, do not use PackMode::Tilize: the Blackhole row-unswizzling workaround is skipped (and is unnecessary, as 8-bit formats
+ * are unaffected by the issue).
+ */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_(
     const std::uint32_t pack_src_format,
@@ -370,21 +452,34 @@ inline void _llk_pack_hw_configure_(
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    // sstanisic todo: partial face, narrow tile are weird (see #47440)
+    llk::san::pack_operand_configure(is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, llk::san::IGNORE);
+
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
 
-template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false>
-inline void _llk_pack_init_(
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t tile_c_dim = TILE_C_DIM,
-    const std::uint32_t num_faces  = 4,
-    const std::uint32_t num_tiles  = 1)
-{
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, true /* skip_packer_strides */, true /* skip_final_adcxx */>(
-        0 /* pack_src_format unused */, face_r_dim, tile_c_dim, num_faces, num_tiles);
-}
-
+/**
+ * @brief Initialize the packer (addrmod + MOP + strides) for a pack op given a source format.
+ *
+ * The single Blackhole pack-init entry point: programs ADDR_MODs, the MOP template, (unless skipped)
+ * the packer strides, and the packer X (datum) counter. Per the "inits own SETADCXX" contract, every
+ * init sets its own X-counter value (FACE_C_DIM - 1 on Blackhole). When packing tilized 8-bit datums
+ * the Blackhole row-unswizzle workaround can be skipped (the issue does not affect 8-bit datums).
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @tparam zero_output: When true, packer emits zeros instead of dest data.
+ * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
+ * @tparam skip_packer_strides: When true, do not re-program the packer strides (e.g. when a prior
+ *         hw-configure / reconfig already established them, or the caller programs them itself).
+ * @param pack_src_format: Source (dest register) data format. Only consulted when programming strides.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param num_tiles: Number of tiles processed per MOP run.
+ * @param skip_bh_tilize_workaround: When true (8-bit src datums), skip the Blackhole tilize row-unswizzle workaround.
+ * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
+ */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_src_format,
@@ -392,7 +487,7 @@ inline void _llk_pack_init_(
     const std::uint32_t tile_c_dim,
     const std::uint32_t num_faces,
     const std::uint32_t num_tiles,
-    const bool skip_bh_tilize_workaround = false)
+    const bool skip_bh_tilize_workaround)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const DataFormat src_format = static_cast<DataFormat>(pack_src_format);
@@ -405,28 +500,58 @@ inline void _llk_pack_init_(
         LLK_ASSERT(num_tiles <= 8, "Max supported num_tiles for FLOAT16 or FLOAT16_B is 8.");
     }
 
+    llk::san::pack_operand_check(llk::san::IGNORE, pack_src_format, llk::san::IGNORE, face_r_dim, tile_c_dim, num_faces, llk::san::IGNORE, llk::san::IGNORE);
+    llk::san::operation_init<llk::san::Operation::Pack>();
+
     // 8bit datums in the unpack src format are not affected by the blackhole issue,
     // so we can skip the workaround which involves unswizzling rows in the tile.
     if (skip_bh_tilize_workaround && pack_mode == PackMode::Tilize)
     {
-        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides, false /* skip_final_adcxx */>(
+        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides>(
             pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
     else
     {
-        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, false /* skip_final_adcxx */>(
+        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
             pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
 }
 
+/**
+ * @brief Tear down the packer after a pack op (no-op on Blackhole).
+ *
+ * On Blackhole @ref _llk_pack_init_ always sets the PAC X counter to FACE_C_DIM - 1 (a single row),
+ * which is also its default value, so there is no per-pack state for this teardown to restore.
+ *
+ * @note Pairs with @ref _llk_pack_init_.
+ */
 inline void _llk_pack_uninit_()
 {
-    // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default
+    // sstanisic todo: contract cannot be enforced if Pack has an uninit, without killing performance
+    // llk::san::operation_uninit<llk::san::Operation::Pack>();
+
+    // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default.
 }
 
+/**
+ * @brief Pack one tile from the destination register to an L1 address.
+ *
+ * Selects the source dest tile, programs the L1 destination address, runs the packer MOP, and resets
+ * the Z counters afterward.
+ *
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @tparam pack_mode: Packing layout, values = <Default/Untilize> (Tilize not supported here)
+ * @param tile_index: Index of the source tile in the destination register.
+ * @param address: L1 destination address for the packed tile.
+ * @note Call @ref _llk_pack_init_ with matching template/runtime args before this function, and
+ *       @ref _llk_pack_uninit_ once all pack calls are complete.
+ */
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
+    llk::san::operation_check<llk::san::Operation::Pack>();
+
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Blackhole: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
     set_dst_write_addr(tile_index);

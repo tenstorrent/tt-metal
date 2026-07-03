@@ -471,7 +471,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
             // Start in the next column
             else {
                 core_group_2 = num_cores_to_corerangeset_in_subcoregrids(
-                    {last_core_group_1.x + 1, range_containing_last_core_group_1.end_coord.y},
+                    {last_core_group_1.x + 1, range_containing_last_core_group_1.start_coord.y},
                     num_core_group_2_cores,
                     core_grid,
                     row_wise);

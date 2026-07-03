@@ -34,7 +34,7 @@ void kernel_main() {
     UnicastEndpoint src;
     Noc noc;
     uint32_t reg_addr = STREAM_REG_ADDR(stream_id, stream_reg);
-    noc.inline_dw_write<Noc::TxnIdMode::DISABLED, InlineWriteDst::REG>(
+    noc.inline_dw_write<NocOptions::INLINE_REG>(
         src, value_to_write, {.noc_x = drisc_noc_x, .noc_y = drisc_noc_y, .addr = reg_addr});
     noc.async_write_barrier();
 

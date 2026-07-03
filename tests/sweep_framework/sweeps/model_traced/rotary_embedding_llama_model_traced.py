@@ -165,25 +165,33 @@ def apply_rotary_emb_golden(x: torch.Tensor, cos_cache: torch.Tensor, sin_cache:
     """
     seq_len = x.shape[2]  # For prefill mode
 
-    # Slice cos/sin to match seq_len (cache may be larger)
-    cos = cos_cache[..., :seq_len, :]
-    sin = sin_cache[..., :seq_len, :]
+    # The op rotates only the first min(seq_len, cos_seq) token rows and
+    # ZERO-FILLS the rest: when the (replicated) cos/sin cache has fewer seq rows
+    # than the input (e.g. cos seq=32 vs per-chip seq=128 on galaxy traces), rows
+    # >= cos_seq have no rotation factor and the kernel writes zeros there
+    # (rotary_embedding_llama_multi_core_program_factory.cpp). Mirror that instead
+    # of multiplying mismatched seq lengths (which used to crash).
+    s = min(seq_len, cos_cache.shape[2])
+
+    cos = cos_cache[..., :s, :]
+    sin = sin_cache[..., :s, :]
 
     # cos/sin are in TTNN "doubled" format: [c0, c0, c1, c1, ...]
     # Extract the "un-doubled" version: [c0, c1, c2, ...]
-    freqs_cos = cos[..., 0::2]  # [..., seq_len, head_dim//2]
+    freqs_cos = cos[..., 0::2]  # [..., s, head_dim//2]
     freqs_sin = sin[..., 0::2]
 
-    # Split input into even/odd (real/imaginary parts of complex rotation)
-    x_even = x[..., 0::2]  # [batch, n_heads, seq_len, head_dim//2]
-    x_odd = x[..., 1::2]
+    # Split the first s rows into even/odd (real/imaginary parts of the rotation).
+    x_even = x[..., :s, 0::2]
+    x_odd = x[..., :s, 1::2]
 
     # 2D rotation: [cos -sin; sin cos] @ [even; odd]
     cos_part = x_even * freqs_cos - x_odd * freqs_sin
     sin_part = x_even * freqs_sin + x_odd * freqs_cos
 
-    # Interleave back to original format
-    out = torch.stack([cos_part, sin_part], dim=-1).flatten(-2)
+    # Interleave back to original format; zero-fill rows >= s.
+    out = torch.zeros_like(x)
+    out[..., :s, :] = torch.stack([cos_part, sin_part], dim=-1).flatten(-2).to(x.dtype)
     return out
 
 
@@ -531,6 +539,15 @@ def run(
             rope_type=rope_params["rope_type"],
         )
 
+    # Match the traced cos/sin n_heads dim. Some prefill configs pass per-head
+    # cos/sin ([1, n_heads, seq, head_dim]); the generators produce [1, 1, ...],
+    # and the V2 (non-dict input_shape) path skips the traced-config n_heads
+    # expansion above — so a [1,6,...] cos/sin would be recorded as [1,1,...]
+    # (arg1/arg2 original_shape[1] diff). Repeat across heads when needed.
+    if not is_decode_mode and len(shape_b) >= 2 and int(shape_b[1]) != 1 and cos_cache.shape[1] == 1:
+        cos_cache = cos_cache.repeat(1, int(shape_b[1]), 1, 1)
+        sin_cache = sin_cache.repeat(1, int(shape_b[1]), 1, 1)
+
     # Convert to bfloat16 for consistency
     torch_cos_cache = cos_cache.to(torch.bfloat16)
     torch_sin_cache = sin_cache.to(torch.bfloat16)
@@ -539,10 +556,10 @@ def run(
     if is_decode_mode:
         # For decode mode, transformation matrix is [1, 1, batch*32, 32]
         # Each core gets a [32, 32] shard
-        torch_trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(1, 1, batch, 1).to(torch.bfloat16)
+        torch_trans_mat = get_rot_transformation_mat().repeat(1, 1, batch, 1).to(torch.bfloat16)
     else:
         # For prefill mode, use standard transformation matrix based on head_dim
-        torch_trans_mat = get_rot_transformation_mat(head_dim).to(torch.bfloat16)
+        torch_trans_mat = get_rot_transformation_mat().to(torch.bfloat16)
 
     # --- Compute Golden Reference Output ---
     if is_decode_mode:
@@ -751,7 +768,13 @@ def run(
     # explicitly passed it.  Injecting from the vector's output_memory_config or
     # memory_config metadata causes extra_key diffs in validation.
 
-    rope_call_kwargs = {"is_decode_mode": is_decode_mode}
+    # Only pass is_decode_mode when the master trace passed it explicitly; some
+    # configs omit it (the op defaults to prefill), and injecting it then is an
+    # is_decode_mode extra_key diff vs master.
+    _traced_idm = _kwargs.get("is_decode_mode")
+    rope_call_kwargs = {}
+    if _traced_idm is not None and _traced_idm != "__ABSENT__":
+        rope_call_kwargs["is_decode_mode"] = is_decode_mode
     rope_call_kwargs.update(op_kwargs)
     output_tensor = ttnn.experimental.rotary_embedding_llama(
         input_tensor_a,

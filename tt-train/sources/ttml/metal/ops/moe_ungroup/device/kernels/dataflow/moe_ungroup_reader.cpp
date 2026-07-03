@@ -4,25 +4,22 @@
 
 // Reader (NCRISC, NOC_0) for moe_ungroup. Per core:
 //   1. Read offsets[E_local + 1] from DRAM into L1.
-//   2. Push expert e=0 source tiles to cb_src0 (compute will untilize and
-//      hand to BRISC writer via cb_out0).
+//   2. Publish this core's active work count to compute via cb_ctrl.
 //   3. Wait for local BRISC to signal "prezero done" (brisc_done_sem).
 //      Run the cross-core mcast barrier on NOC_0 (matches moe_group's pattern
 //      of putting the mcast in the NCRISC kernel — NOC_0 multicast routing
 //      delivers correctly when the source is at the (start_x,start_y) corner).
 //      Signal local BRISC via brisc_release_sem.
-//   4. For e in 1..E_local-1: push expert e tiles, then handshake again
-//      (BRISC has finished writing expert e-1; mcast barrier; release BRISC).
-//
-// Inactive (padding) steps zero-fill into cb_src0 so compute and the writer
-// stay in lockstep across all cores.
+//   4. For each expert, push only this core's active source chunks to cb_src0;
+//      compute sizes its loop from cb_ctrl, so no inactive-step padding is needed.
+//      Between experts, handshake again after BRISC finishes writing expert e-1.
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/moe_ungroup/device/kernels/moe_ungroup_utils.hpp"
 
 constexpr uint32_t cb_src0 = tt::CBIndex::c_0;
-constexpr uint32_t cb_zero = tt::CBIndex::c_3;  // small scratch for offsets read
+constexpr uint32_t cb_reader_scratch = tt::CBIndex::c_3;  // offsets + per-expert caches
 
 constexpr uint32_t h = get_compile_time_arg_val(0);
 constexpr uint32_t num_chunks = get_compile_time_arg_val(1);
@@ -96,22 +93,24 @@ void kernel_main() {
     const auto expert_out_addrgen = TensorAccessor(expert_out_args, expert_out_addr, TILE_BYTES);
     const auto offsets_addrgen = TensorAccessor(offsets_args, offsets_addr);
 
-    // L1 layout in cb_zero (sized by host as (e_local+1)*4 + 2*e_local*4):
+    Noc noc;
+
+    // L1 layout in cb_reader_scratch (sized by host as (e_local+1)*4 + 2*e_local*4):
     //   [offsets_l1 (e_local+1) u32]
     //   [tr_start_per_expert e_local u32]
     //   [my_real_count_per_expert e_local u32]
     // Backing the per-expert caches in L1 instead of NCRISC stack avoids
     // blowing the small RISC stack for large e_local (e.g. 300+).
-    cb_reserve_back(cb_zero, 1U);
-    uint32_t scratch_l1 = get_write_ptr(cb_zero);
+    cb_reserve_back(cb_reader_scratch, 1U);
+    uint32_t scratch_l1 = get_write_ptr(cb_reader_scratch);
     volatile tt_l1_ptr uint32_t* offsets_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1);
     volatile tt_l1_ptr uint32_t* tr_start_per_expert =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + (e_local + 1U) * sizeof(uint32_t));
     volatile tt_l1_ptr uint32_t* my_real_count_per_expert =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + (2U * e_local + 1U) * sizeof(uint32_t));
-    noc_async_read(get_noc_addr(0, offsets_addrgen), scratch_l1, (e_local + 1U) * sizeof(uint32_t));
+    noc_async_read(offsets_addrgen.get_noc_addr(0), scratch_l1, (e_local + 1U) * sizeof(uint32_t));
     noc_async_read_barrier();
-    cb_push_back(cb_zero, 1U);
+    cb_push_back(cb_reader_scratch, 1U);
 
     // Walk offsets ONCE to compute this core's per-expert work bounds and
     // publish the total block count (steps × num_chunks) to compute via
@@ -148,12 +147,16 @@ void kernel_main() {
             uint32_t tr_global = tr_start + step;
 
             for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
-                cb_reserve_back(cb_src0, tiles_per_chunk);
-                uint32_t dst_l1 = get_write_ptr(cb_src0);
-                uint32_t tile_id_base = tr_global * Wt + chunk * tiles_per_chunk;
-                for (uint32_t t = 0; t < tiles_per_chunk; ++t) {
-                    uint64_t src_noc = get_noc_addr(tile_id_base + t, expert_out_addrgen);
-                    noc_async_read(src_noc, dst_l1 + t * TILE_BYTES, TILE_BYTES);
+                uint32_t chunk_tile_start = chunk * tiles_per_chunk;
+                uint32_t tile_id_base = tr_global * Wt + chunk_tile_start;
+                uint32_t remaining_tiles = (chunk_tile_start < Wt) ? (Wt - chunk_tile_start) : 0U;
+                uint32_t tiles_to_read = (remaining_tiles < tiles_per_chunk) ? remaining_tiles : tiles_per_chunk;
+
+                read_tiles_by_row</* UseBarrier = */ false>(
+                    cb_src0, expert_out_addrgen, tile_id_base, tiles_to_read, TILE_BYTES, tiles_per_chunk);
+
+                for (uint32_t t = tiles_to_read; t < tiles_per_chunk; ++t) {
+                    fill_zeros_async(noc, cb_src0, TILE_BYTES, t * TILE_BYTES);
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_src0, tiles_per_chunk);

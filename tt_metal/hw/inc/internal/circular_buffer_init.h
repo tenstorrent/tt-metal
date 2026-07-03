@@ -185,10 +185,14 @@ inline void setup_remote_cb_interfaces(
         const bool is_sender = l1_remote_cb_config_addr[0];
         uint32_t num_receivers = l1_remote_cb_config_addr[1];
         uint32_t fifo_start_addr = l1_remote_cb_config_addr[2];
-        uint32_t fifo_size = l1_remote_cb_config_addr[3];
         uint32_t fifo_ptr = l1_remote_cb_config_addr[4];
         uint32_t remote_noc_xy_addr = l1_remote_cb_config_addr[5];
         uint32_t aligned_pages_sent_addr = l1_remote_cb_config_addr[6];
+        // Canonical NoC target for the sender's pages_sent inc (on the receiver) or the
+        // receiver's pages_acked inc (on the sender). For a sharded GCB host writes the same
+        // L1 offset as slot 6; for a DRAM-sender GCB it points at the worker- or DRISC-side
+        // counter, since sender and receiver live in different L1 address spaces.
+        uint32_t remote_pages_addr_override = l1_remote_cb_config_addr[7];
         if (is_sender) {
             RemoteSenderCBInterface& sender_cb_interface = get_remote_sender_cb_interface(cb_id);
             sender_cb_interface.config_ptr = config_addr;
@@ -196,7 +200,8 @@ inline void setup_remote_cb_interfaces(
             sender_cb_interface.fifo_wr_ptr = fifo_ptr;
             sender_cb_interface.receiver_noc_xy_ptr = remote_noc_xy_addr;
             sender_cb_interface.aligned_pages_sent_ptr = aligned_pages_sent_addr;
-            sender_cb_interface.num_receivers = num_receivers;
+            sender_cb_interface.num_receivers_and_remote_pages_sent_ptr =
+                remote_cb_pack(num_receivers, remote_pages_addr_override);
             // Using posted semaphore inc
             resize_remote_sender_cb_interface<update_remote_over_noc>(cb_id, page_size, noc, nm, posted, cmd_buf);
         } else {
@@ -207,9 +212,10 @@ inline void setup_remote_cb_interfaces(
             receiver_cb_interface.config_ptr = config_addr;
             receiver_cb_interface.fifo_start_addr = fifo_start_addr;
             receiver_cb_interface.fifo_rd_ptr = fifo_ptr;
-            receiver_cb_interface.sender_noc_x = sender_noc_x;
-            receiver_cb_interface.sender_noc_y = sender_noc_y;
+            receiver_cb_interface.sender_noc_x = static_cast<uint16_t>(sender_noc_x);
+            receiver_cb_interface.sender_noc_y = static_cast<uint16_t>(sender_noc_y);
             receiver_cb_interface.aligned_pages_acked_ptr = aligned_pages_acked_addr;
+            receiver_cb_interface.remote_pages_acked_ptr = remote_pages_addr_override;
             // Using posted semaphore inc
             resize_remote_receiver_cb_interface<update_remote_over_noc>(cb_id, page_size, noc, nm, posted, cmd_buf);
         }

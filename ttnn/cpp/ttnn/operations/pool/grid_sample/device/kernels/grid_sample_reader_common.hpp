@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/numeric/bfloat16.h"
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -29,19 +30,6 @@ ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
     ptr[0] = (val | (val1 << 16));
     ptr[1] = (val2 | (val3 << 16));
-}
-
-ALWI uint16_t float_to_bfloat16(float value) {
-    uint32_t tmp;
-    std::memcpy(&tmp, &value, sizeof(tmp));
-    return static_cast<uint16_t>(tmp >> 16);
-}
-
-ALWI float bfloat16_to_float(uint16_t bf16) {
-    uint32_t tmp = static_cast<uint32_t>(bf16) << 16;
-    float result;
-    std::memcpy(&result, &tmp, sizeof(result));
-    return result;
 }
 
 // Grid coordinate reading functions
@@ -96,8 +84,8 @@ struct GridCoordinateReader {
                 const uint32_t coordinate_pair_offset = grid_idx * STANDARD_GRID_ELEMENTS_PER_POINT;
                 const uint16_t h_coord_raw = grid_ptr[coordinate_pair_offset + 1];  // y coordinate
                 const uint16_t w_coord_raw = grid_ptr[coordinate_pair_offset + 0];  // x coordinate
-                h_coord_rel = bfloat16_to_float(h_coord_raw);
-                w_coord_rel = bfloat16_to_float(w_coord_raw);
+                h_coord_rel = bf16_to_fp32(h_coord_raw);
+                w_coord_rel = bf16_to_fp32(w_coord_raw);
             }
 
             const float h_coord_image = h_coord_rel * height_scale + height_offset;
@@ -128,22 +116,28 @@ struct GridCoordinateReader {
             const float weight_sw = (h1_valid && w0_valid) ? (h_frac * w_frac_inv) : 0.0f;      // South-West
             const float weight_se = (h1_valid && w1_valid) ? (h_frac * w_frac) : 0.0f;          // South-East
 
-            weight_nw_bf = float_to_bfloat16(weight_nw);
-            weight_ne_bf = float_to_bfloat16(weight_ne);
-            weight_sw_bf = float_to_bfloat16(weight_sw);
-            weight_se_bf = float_to_bfloat16(weight_se);
+            weight_nw_bf = fp32_to_bf16_truncate(weight_nw);
+            weight_ne_bf = fp32_to_bf16_truncate(weight_ne);
+            weight_sw_bf = fp32_to_bf16_truncate(weight_sw);
+            weight_se_bf = fp32_to_bf16_truncate(weight_se);
         }
     }
 };
 
-// Input data reading template - handles both tensor accessor and direct NOC reads
+// Input data reading template - handles both tensor accessor and direct NOC reads.
+// Reads a single chunk slice of the 4 corner sticks for one grid point.
+// - read_bytes: bytes to copy per corner (chunk width)
+// - write_stride: distance between consecutive corners in the destination CB page
+// - src_byte_offset: byte offset within the source stick (= c_i * input_chunk_nbytes)
 template <typename TensorAccessorT>
 ALWI void read_four_corner_inputs(
     Noc noc,
     const TensorAccessorT& input_tensor_accessor,
     uint32_t batch_offset,
     uint32_t input_width,
-    uint32_t input_stick_nbytes,
+    uint32_t read_bytes,
+    uint32_t write_stride,
+    uint32_t src_byte_offset,
     int32_t h0,
     int32_t h1,
     int32_t w0,
@@ -164,41 +158,41 @@ ALWI void read_four_corner_inputs(
         noc.async_read(
             input_tensor_accessor,
             input_cb,
-            input_stick_nbytes,
-            {.page_id = north_west_stick_index},
+            read_bytes,
+            {.page_id = north_west_stick_index, .offset_bytes = src_byte_offset},
             {.offset_bytes = write_offset});
     }
-    write_offset += input_stick_nbytes;
+    write_offset += write_stride;
 
     if (h0_valid && w1_valid) {
         const uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
         noc.async_read(
             input_tensor_accessor,
             input_cb,
-            input_stick_nbytes,
-            {.page_id = north_east_stick_index},
+            read_bytes,
+            {.page_id = north_east_stick_index, .offset_bytes = src_byte_offset},
             {.offset_bytes = write_offset});
     }
-    write_offset += input_stick_nbytes;
+    write_offset += write_stride;
 
     if (h1_valid && w0_valid) {
         const uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
         noc.async_read(
             input_tensor_accessor,
             input_cb,
-            input_stick_nbytes,
-            {.page_id = south_west_stick_index},
+            read_bytes,
+            {.page_id = south_west_stick_index, .offset_bytes = src_byte_offset},
             {.offset_bytes = write_offset});
     }
-    write_offset += input_stick_nbytes;
+    write_offset += write_stride;
 
     if (h1_valid && w1_valid) {
         const uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
         noc.async_read(
             input_tensor_accessor,
             input_cb,
-            input_stick_nbytes,
-            {.page_id = south_east_stick_index},
+            read_bytes,
+            {.page_id = south_east_stick_index, .offset_bytes = src_byte_offset},
             {.offset_bytes = write_offset});
     }
 }
@@ -278,13 +272,23 @@ ALWI void read_four_corner_inputs_with_fill(
     }
 }
 
-// Process single grid point - common logic for both interleaved and sharded
+// Process single grid point - common logic for both interleaved and sharded.
+//
+// When in_nblocks_c > 1 the channel dimension is split into chunks of at most
+// input_chunk_nbytes bytes (= MAX_TILES_PER_REDUCTION * TILE_WIDTH * elem_size). For each chunk we
+// reserve one input CB page, NOC-read the c_i-th slice of all 4 corner sticks, and push that page
+// to the compute kernel, which iterates over the same in_nblocks_c chunks. The scalar (bilinear
+// weights) CB is pushed once per grid point since the weights are shared across chunks.
 template <
     uint32_t grid_dtype,
     bool use_precomputed_grid,
+    bool align_corners,
     uint32_t input_height,
     uint32_t input_width,
     uint32_t input_stick_nbytes,
+    uint32_t in_nblocks_c,
+    uint32_t input_chunk_nbytes,
+    bool last_chunk_partial,
     uint32_t input_cb_index,
     uint32_t scalar_cb_index,
     typename TensorAccessor,
@@ -297,13 +301,23 @@ ALWI void process_grid_point(
     uint32_t grid_idx,
     const TensorAccessor& input_tensor_accessor,
     uint32_t batch_offset) {
-    // Compute scaling factors as constexpr
+    // PyTorch grid_sample coordinate convention:
+    //   align_corners=True : maps grid in [-1, 1] to image positions [0, size - 1]
+    //                        => coord_image = ((grid + 1) / 2) * (size - 1)
+    //                                       = grid * (size - 1) / 2 + (size - 1) / 2
+    //   align_corners=False: maps grid in [-1, 1] to image positions [-0.5, size - 0.5]
+    //                        => coord_image = ((grid + 1) / 2) * size - 0.5
+    //                                       = grid * size / 2 + size / 2 - 0.5
     constexpr float input_height_f = float(input_height);
     constexpr float input_width_f = float(input_width);
-    constexpr float height_scale = input_height_f * 0.5f;
-    constexpr float height_offset = height_scale - 0.5f;
-    constexpr float width_scale = input_width_f * 0.5f;
-    constexpr float width_offset = width_scale - 0.5f;
+    constexpr float height_scale =
+        align_corners ? (input_height_f > 1.0f ? (input_height_f - 1.0f) * 0.5f : 0.0f) : input_height_f * 0.5f;
+    constexpr float height_offset = align_corners ? (input_height_f > 1.0f ? (input_height_f - 1.0f) * 0.5f : 0.0f)
+                                                  : (input_height_f * 0.5f - 0.5f);
+    constexpr float width_scale =
+        align_corners ? (input_width_f > 1.0f ? (input_width_f - 1.0f) * 0.5f : 0.0f) : input_width_f * 0.5f;
+    constexpr float width_offset =
+        align_corners ? (input_width_f > 1.0f ? (input_width_f - 1.0f) * 0.5f : 0.0f) : (input_width_f * 0.5f - 0.5f);
 
     int32_t h0, h1, w0, w1;
     uint16_t weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf;
@@ -350,28 +364,46 @@ ALWI void process_grid_point(
         }
     }
 
-    input_cb.reserve_back(1);
-
-    // Read 4 corner input sticks
-    read_four_corner_inputs(
-        noc,
-        input_tensor_accessor,
-        batch_offset,
-        input_width,
-        input_stick_nbytes,
-        h0,
-        h1,
-        w0,
-        w1,
-        input_height,
-        input_cb);
-
-    // Store bilinear interpolation weights for this grid point
+    // Store bilinear interpolation weights for this grid point. The same weights apply to every
+    // channel chunk, so we push the scalar CB only once.
     scalar_cb.reserve_back(1);
     const uint32_t l1_write_scalar_addr = scalar_cb.get_write_ptr();
     fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
     scalar_cb.push_back(1);
 
-    noc.async_read_barrier();
-    input_cb.push_back(1);
+    // Iterate over channel chunks. For the common case in_nblocks_c == 1 the loop runs once and the
+    // behavior matches the original non-chunked reader (chunk_bytes == input_stick_nbytes,
+    // src_byte_offset == 0, write_stride == input_stick_nbytes). last_chunk_partial is computed
+    // host-side to mirror compute_pool_2d's tile-reduce condition so the per-stick write stride
+    // matches the unpacker's tiles_to_reduce; computing it independently here would silently diverge
+    // if the host ever lifted the padded_C % TILE_WIDTH == 0 invariant.
+    constexpr uint32_t last_chunk_idx = in_nblocks_c - 1;
+    constexpr uint32_t partial_chunk_nbytes = input_stick_nbytes - last_chunk_idx * input_chunk_nbytes;
+    constexpr uint32_t base_write_stride = (in_nblocks_c > 1) ? input_chunk_nbytes : input_stick_nbytes;
+
+    for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
+        const uint32_t src_byte_offset = c_i * input_chunk_nbytes;
+        const uint32_t chunk_bytes = (c_i == last_chunk_idx) ? partial_chunk_nbytes : input_chunk_nbytes;
+        const uint32_t write_stride = (last_chunk_partial && c_i == last_chunk_idx) ? chunk_bytes : base_write_stride;
+
+        input_cb.reserve_back(1);
+
+        read_four_corner_inputs(
+            noc,
+            input_tensor_accessor,
+            batch_offset,
+            input_width,
+            chunk_bytes,
+            write_stride,
+            src_byte_offset,
+            h0,
+            h1,
+            w0,
+            w1,
+            input_height,
+            input_cb);
+
+        noc.async_read_barrier();
+        input_cb.push_back(1);
+    }
 }

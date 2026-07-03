@@ -17,7 +17,8 @@ namespace {
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::EXP: return "SFPU_OP_EXP_INCLUDE";
-        case UnaryOpType::GELU: return "SFPU_OP_GELU_INCLUDE";
+        case UnaryOpType::GELU:
+        case UnaryOpType::GELU_TANH: return "SFPU_OP_GELU_INCLUDE";
         case UnaryOpType::RECIP: return "SFPU_OP_RECIP_INCLUDE";
         case UnaryOpType::SQRT: return "SFPU_OP_SQRT_INCLUDE";
         case UnaryOpType::RSQRT: return "SFPU_OP_RSQRT_INCLUDE";
@@ -67,12 +68,12 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::PRELU_SFPU: return "SFPU_OP_PRELU_INCLUDE";
         case UnaryOpType::TYPECAST: return "SFPU_OP_TYPECAST_INCLUDE";
-        case UnaryOpType::BITWISE_XOR: return "SFPU_OP_BITWISE_XOR_INCLUDE";
+        case UnaryOpType::BITWISE_AND:
+        case UnaryOpType::BITWISE_OR:
+        case UnaryOpType::BITWISE_XOR: return "SFPU_OP_BITWISE_INCLUDE";
         case UnaryOpType::BITWISE_NOT: return "SFPU_OP_BITWISE_NOT_INCLUDE";
-        case UnaryOpType::BITWISE_AND: return "SFPU_OP_BITWISE_AND_INCLUDE";
-        case UnaryOpType::BITWISE_OR: return "SFPU_OP_BITWISE_OR_INCLUDE";
-        case UnaryOpType::RIGHT_SHIFT: return "SFPU_OP_RIGHT_SHIFT_INCLUDE";
-        case UnaryOpType::LEFT_SHIFT: return "SFPU_OP_LEFT_SHIFT_INCLUDE";
+        case UnaryOpType::LEFT_SHIFT:
+        case UnaryOpType::RIGHT_SHIFT: return "SFPU_OP_SHIFT_INCLUDE";
         case UnaryOpType::REMAINDER: return "SFPU_OP_REMAINDER_INCLUDE";
         case UnaryOpType::FMOD: return "SFPU_OP_FMOD_INCLUDE";
         case UnaryOpType::FILL: return "SFPU_OP_FILL_INCLUDE";
@@ -102,9 +103,28 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
+        case UnaryOpType::TANHSHRINK: return "SFPU_OP_TANHSHRINK_INCLUDE";
         case UnaryOpType::POLYGAMMA: return "SFPU_OP_POLYGAMMA_INCLUDE";
+        case UnaryOpType::MISH: return "SFPU_OP_MISH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
+}
+
+const char* bitwise_shift_data_format_str(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+    TT_FATAL(
+        input_dtype.has_value(),
+        "Missing input dtype for op_type {}: a valid integer input dtype (Int32/UInt32/UInt16) is required.",
+        op_type);
+    if (*input_dtype == DataType::INT32) {
+        return "Int32";
+    }
+    if (*input_dtype == DataType::UINT32) {
+        return "UInt32";
+    }
+    if (*input_dtype == DataType::UINT16) {
+        return "UInt16";
+    }
+    TT_THROW("Unsupported input dtype for bitwise/shift op_type {}: expected Int32, UInt32, or UInt16.", op_type);
 }
 
 template <typename T>
@@ -223,15 +243,45 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "heaviside_tile_init();",
                 fmt::format("heaviside_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
         case UnaryOpType::BITWISE_XOR:
-            return {"bitwise_xor_tile_init();", fmt::format("bitwise_xor_tile({}, {}u);", idst, (uint)params[0])};
+            return {
+                "bitwise_xor_tile_init();",
+                fmt::format(
+                    "bitwise_xor_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
         case UnaryOpType::BITWISE_AND:
-            return {"bitwise_and_tile_init();", fmt::format("bitwise_and_tile({}, {}u);", idst, (uint)params[0])};
+            return {
+                "bitwise_and_tile_init();",
+                fmt::format(
+                    "bitwise_and_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
         case UnaryOpType::BITWISE_OR:
-            return {"bitwise_or_tile_init();", fmt::format("bitwise_or_tile({}, {}u);", idst, (uint)params[0])};
+            return {
+                "bitwise_or_tile_init();",
+                fmt::format(
+                    "bitwise_or_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
         case UnaryOpType::RIGHT_SHIFT:
-            return {"right_shift_tile_init();", fmt::format("right_shift_tile({}, {}u);", idst, (uint)params[0])};
+            return {
+                "right_shift_tile_init();",
+                fmt::format(
+                    "right_shift_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
         case UnaryOpType::LEFT_SHIFT:
-            return {"left_shift_tile_init();", fmt::format("left_shift_tile({}, {}u);", idst, (uint)params[0])};
+            return {
+                "left_shift_tile_init();",
+                fmt::format(
+                    "left_shift_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
         case UnaryOpType::REMAINDER:
             return {
                 fmt::format(
@@ -263,9 +313,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             TT_FATAL(
                 (int32_t)param0 == (int32_t)VecMode::C || (int32_t)param0 == (int32_t)VecMode::RC,
                 "Invalid Vector mode value. Expected vector mode C (2) or RC (4) for sigmoid");
+            const char* vec_mode_sym = (int32_t)param0 == (int32_t)VecMode::C ? "VectorMode::C" : "VectorMode::RC";
             return {
                 fmt::format("sigmoid_tile_init<{}u>();", param1),
-                fmt::format("sigmoid_tile<{1}, {2}u>({0});", idst, (int32_t)param0, param1)};
+                fmt::format("sigmoid_tile<{}, {}u>({});", vec_mode_sym, param1, idst)};
         }
         case UnaryOpType::ERF:
             return {
@@ -595,8 +646,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("hardmish_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("hardmish_tile<{1}u>({0});", idst, (uint32_t)param0)};
         }
-        case UnaryOpType::MISH:
-            return {};// MISH uses dedicated mish_kernel.cpp;
+        case UnaryOpType::MISH: {
+            return {
+                fmt::format("mish_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("mish_tile<{1}u>({0});", idst, (uint32_t)param0)};
+        }
         case UnaryOpType::RSQRT: {
             return {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false, {1}>({0});", idst, param0_raw)};
         }
@@ -613,6 +667,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::BITWISE_NOT: return {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
         case UnaryOpType::RECIP: return {"recip_tile_init<false>();", fmt::format("recip_tile<false>({});", idst)};
         case UnaryOpType::GELU: return {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)};
+        case UnaryOpType::GELU_TANH: return {"gelu_tanh_tile_init();", fmt::format("gelu_tanh_tile({});", idst)};
         case UnaryOpType::LOG: return {"log_tile_init();", fmt::format("log_tile({});", idst)};
         case UnaryOpType::LOG1P: return {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)};
         case UnaryOpType::TANH: return {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)};
@@ -798,11 +853,11 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::BITCAST:
             // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
             // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
-        case UnaryOpType::TANHSHRINK:
         case UnaryOpType::HARDSWISH:
         case UnaryOpType::LOGSIGMOID: return {};
         case UnaryOpType::HARDMISH: return {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
         case UnaryOpType::DIGAMMA: return {"digamma_tile_init();", fmt::format("digamma_tile({});", idst)};
+        case UnaryOpType::TANHSHRINK: return {"tanhshrink_tile_init();", fmt::format("tanhshrink_tile({});", idst)};
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
 }
@@ -835,6 +890,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     }
     if (name == "gelu_approx") {
         return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(true));
+    }
+    if (name == "gelu_tanh") {
+        return UnaryWithParam(UnaryOpType::GELU_TANH);
     }
     if (name == "silu") {
         return UnaryWithParam(UnaryOpType::SILU);
@@ -1019,8 +1077,6 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
                 return "lgamma_fast_kernel.cpp";
             }
             return "lgamma_kernel.cpp";
-        case UnaryOpType::MISH: return "mish_kernel.cpp";
-        case UnaryOpType::TANHSHRINK: return "tanhshrink_kernel.cpp";
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
         case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
         case UnaryOpType::LOGIT: return "logit_kernel.cpp";

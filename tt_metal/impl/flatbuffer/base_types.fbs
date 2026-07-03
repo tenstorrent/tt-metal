@@ -55,6 +55,13 @@ enum DataFormat : uint8 {
   Lf8 = 10,
   Fp8_e4m3 = 26, // 0x1A in decimal
   MxFp4 = 22,
+  MxFp6P = 21,
+  MxFp6R = 19,
+  MxFp8R = 18,
+  MxFp8P = 20,
+  MxInt8 = 12,
+  MxInt4 = 16,
+  MxInt2 = 17,
   Int8 = 14,
   Tf32 = 4,
   UInt8 = 30,

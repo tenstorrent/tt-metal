@@ -2,7 +2,7 @@
 
 # Gemma-4
 
-Gemma 4 is the next-generation open-weights model family from Google, extending the Gemma line with mixed sliding-window/global attention, partial RoPE on global layers, per-layer-input embeddings on the smaller variants, and a sparse mixture-of-experts block on the larger ones. This directory implements text-only inference for four checkpoints — E2B and E4B (dense, with per-layer-input embeddings), and 26B-A4B and 31B (sparse MoE) — running on TT-NN with tensor parallelism across Wormhole meshes.
+Gemma 4 is the next-generation open-weights model family from Google, extending the Gemma line with mixed sliding-window/global attention, partial RoPE on global layers, per-layer-input embeddings on the smaller variants, and a sparse mixture-of-experts block on the larger ones. This directory implements text-only inference for five checkpoints — E2B and E4B (dense, with per-layer-input embeddings), 12B, 26B-A4B, and 31B — running on TT-NN with tensor parallelism across Tenstorrent meshes.
 
 ## Variants
 
@@ -10,6 +10,7 @@ Gemma 4 is the next-generation open-weights model family from Google, extending 
 |---|---|
 | E2B | [google/gemma-4-E2B-it](https://huggingface.co/google/gemma-4-E2B-it) |
 | E4B | [google/gemma-4-E4B-it](https://huggingface.co/google/gemma-4-E4B-it) |
+| 12B | [google/gemma-4-12B-it](https://huggingface.co/google/gemma-4-12B-it) |
 | 26B-A4B | [google/gemma-4-26B-A4B-it](https://huggingface.co/google/gemma-4-26B-A4B-it) |
 | 31B | [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) |
 
@@ -34,16 +35,18 @@ What the *code* in this directory supports, independent of what CI exercises.
 
 Legend: 🟢 fully supported · 🟡 supported with known issues / limitations · 🔴 not supported · — not applicable
 
-| Variant | N150 (1×1) | N300 (1×2) | T3K (1×8) | Galaxy (4×8) |
-|---|:-:|:-:|:-:|:-:|
-| E2B     | 🟢 | 🟢 | 🟢 | 🔴 |
-| E4B     | 🟢 | 🟡 [^e4b-n300] | 🟢 | 🔴 |
-| 26B-A4B | 🔴 | 🔴 | 🟢 | 🔴 |
-| 31B     | 🔴 | 🔴 | 🟢 | 🔴 |
+| Variant | N150 (1×1) | N300 (1×2) | T3K (1×8) | QB2 / P150x4 (1×4) | Galaxy (4×8) |
+|---|:-:|:-:|:-:|:-:|:-:|
+| E2B     | 🟢 | 🟢 | 🟢 | — | 🔴 |
+| E4B     | 🟢 | 🟡 [^e4b-n300] | 🟢 | — | 🔴 |
+| 12B     | 🔴 | 🔴 | — | 🟢 [^gemma4-12b] | 🔴 |
+| 26B-A4B | 🔴 | 🔴 | 🟢 | — | 🔴 |
+| 31B     | 🔴 | 🔴 | 🟢 | — | 🔴 |
 
 [^e4b-n300]: E4B on N300 is exercised by the test suite locally but the CI entry is commented out due to runner availability. See `tests/pipeline_reorg/models_{unit,e2e}_tests.yaml`.
+[^gemma4-12b]: 12B support uses `models/demos/gemma4/demo/text_demo_v2.py`, including batch-32 decode and long-context runs up to 256k tokens.
 
-The 26B-A4B and 31B variants are too large to fit on a single Wormhole device or N300; they require T3K (TP=8). Galaxy (4×8) support has not yet been wired up.
+The 12B, 26B-A4B, and 31B variants are too large to fit on a single Wormhole device or N300. The 26B-A4B and 31B variants require T3K (TP=8). Galaxy (4×8) support has not yet been wired up.
 
 ## Prerequisites
 
@@ -107,6 +110,27 @@ export HF_HUB_OFFLINE=1 \
 pytest models/demos/gemma4/demo/text_demo.py::test_demo -k "1x8"
 ```
 
+### 12B on QB2 / P150x4 (1×4)
+
+`text_demo_v2.py` supports batch-1 latency, batch-32 inference, and long-context runs up to 256k tokens for the 12B checkpoint.
+
+```bash
+HF_MODEL=google/gemma-4-12B-it pytest models/demos/gemma4/demo/text_demo_v2.py -k "batch-1"
+```
+
+For long-context 128k and 256k runs:
+
+```bash
+HF_MODEL=google/gemma-4-12B-it pytest models/demos/gemma4/demo/text_demo_v2.py -k "long-context-128k"
+HF_MODEL=google/gemma-4-12B-it pytest models/demos/gemma4/demo/text_demo_v2.py -k "long-context-256k"
+```
+
+For batch-32 inference:
+
+```bash
+HF_MODEL=google/gemma-4-12B-it pytest models/demos/gemma4/demo/text_demo_v2.py -k "batch-32"
+```
+
 For a single-layer smoke test on any single device:
 
 ```bash
@@ -115,9 +139,12 @@ HF_MODEL=<path-or-id> pytest models/demos/gemma4/demo/text_demo.py::test_demo_si
 
 ## Details
 
-- **Entry point:** `models/demos/gemma4/demo/text_demo.py` — single-prompt prefill + decode loop with on-device decode trace.
-- **Batch size:** 1 (single-user demo).
-- **Sequence length:** up to 4096 tokens in the demo; the model itself supports the upstream context window.
+- **Entry points:**
+  - `models/demos/gemma4/demo/text_demo.py` — single-user prefill + decode with on-device decode trace; batched prefill via `test_demo_batch_prefill` / `test_demo_batch_32` (marker `gemma4_batched_prefill`).
+  - `models/demos/gemma4/demo/text_demo_v2.py` — batch and long-context runs (batch-32 inference, long-context up to 256k — see that file for limits).
+- **Batch size:** `text_demo.py` defaults to batch 1; batched tests support batch-32 (override with `GEMMA4_BATCH_DEMO_SIZE`). `text_demo_v2.py` targets higher batch / long-context scenarios.
+- **Sequence length:** up to 4096 in the standard demo; batched prefill in `text_demo.py` uses a **128k** virtual-token ceiling (`GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN`) with chunking above that. `text_demo_v2.py` supports longer contexts (up to 256k).
+- **Prefill trace:** enabled for MoE models on ISL buckets up to 4096 when `padded_batch × kernel < 32k`. Above 4k ISL or at/above 32k batched virtual tokens, prefill trace is disabled automatically (no perf gain, OOM risk).
 - **Architecture:**
   - Mixed attention pattern: `sliding_attention` and `full_attention` layers interleaved per `hf_config.layer_types`.
   - Partial RoPE (factor 0.25) on global layers, full RoPE on sliding-window layers.

@@ -54,6 +54,13 @@ void kernel_main() {
     constexpr uint32_t cb_repack_id = tt::CBIndex::c_26;
     constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_31;
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
+    // Welford-fp32 alias for cb_in0. Shares SRAM with cb_in0 but has its own buffer index
+    // configured with UnpackToDestFp32, plus its own read/write pointers.
+    // The Welford section of compute reads the alias to get full fp32 into DEST, while later
+    // FPU consumers read cb_in0 directly. When welford_fp32_alias is false, cb_in0_welford_id
+    // == cb_in0_id and the gated pushes below are skipped.
+    constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
 
     Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
@@ -61,6 +68,7 @@ void kernel_main() {
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_ex_global(cb_ex_global_id);
     CircularBuffer cb_in0(cb_in0_id);
+    CircularBuffer cb_in0_welford(cb_in0_welford_id);
     CircularBuffer cb_repack(cb_repack_id);
     CircularBuffer cb_repack_out(cb_repack_out_id);
     CircularBuffer cb_out0(cb_out0_id);
@@ -98,29 +106,24 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
-    constexpr uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
-    uint32_t out_block_hw_last = out_block_hw_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
         out_block_h_last = block_h % num_out_blocks;
-        out_block_hw_last = out_block_h_last * block_w;
     }
 
     uint32_t index_b_offset = 0;
     for (uint32_t b = 0; b < num_batches; ++b) {
         uint32_t mt_offset = 0;
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-            uint32_t out_block_h_actual, out_block_hw_actual;
+            uint32_t out_block_h_actual;
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                 out_block_h_actual = out_block_h_last;
-                out_block_hw_actual = out_block_hw_last;
             } else {
                 out_block_h_actual = out_block_h_normal;
-                out_block_hw_actual = out_block_hw_normal;
             }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
@@ -136,6 +139,14 @@ void kernel_main() {
                         {});
                     noc.async_read_barrier();
                     cb_in0.push_back(1);
+                    if constexpr (welford_fp32_alias) {
+                        // Mirror the cb_in0 push on the alias. They share SRAM (multi-buffer-index
+                        // alias) so the noc.async_read above already filled both views; this is
+                        // purely bookkeeping so compute's welford section can wait_front
+                        // on cb_in0_welford independently of cb_in0.
+                        cb_in0_welford.reserve_back(1);
+                        cb_in0_welford.push_back(1);
+                    }
                 }
                 mt_offset += num_channels_tiles;
             }
@@ -184,13 +195,11 @@ void kernel_main() {
 
         mt_offset = 0;
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-            uint32_t out_block_h_actual, out_block_hw_actual;
+            uint32_t out_block_h_actual;
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                 out_block_h_actual = out_block_h_last;
-                out_block_hw_actual = out_block_hw_last;
             } else {
                 out_block_h_actual = out_block_h_normal;
-                out_block_hw_actual = out_block_hw_normal;
             }
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
@@ -205,6 +214,14 @@ void kernel_main() {
                         {});
                     noc.async_read_barrier();
                     cb_in0.push_back(1);
+                    if constexpr (welford_fp32_alias) {
+                        // Mirror the cb_in0 push on the alias. They share SRAM (multi-buffer-index
+                        // alias) so the noc.async_read above already filled both views; this is
+                        // purely bookkeeping so compute's welford section can wait_front
+                        // on cb_in0_welford independently of cb_in0.
+                        cb_in0_welford.reserve_back(1);
+                        cb_in0_welford.push_back(1);
+                    }
                 }
                 mt_offset += num_channels_tiles;
             }

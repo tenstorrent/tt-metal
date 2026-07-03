@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_sum/device/moreh_sum_device_operation.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 
@@ -16,8 +17,16 @@ Tensor moreh_sum(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::SmallVector<int64_t> dims = operations::get_dim(dim, input.padded_shape().rank());
+    ttnn::SmallVector<int64_t> dims = operations::get_dim(dim, input.logical_shape().rank());
     std::sort(dims.begin(), dims.end());
+
+    if (input.logical_shape().rank() == 1 && dims.size() == 1 && dims.front() == 0) {
+        const auto input_width = input.logical_shape()[0];
+        auto rank_2_input = ttnn::reshape(input, ttnn::Shape({1, input_width}));
+        auto reduced =
+            ttnn::prim::moreh_sum(rank_2_input, /*dim=*/1, keepdim, output, memory_config, compute_kernel_config);
+        return output.has_value() ? reduced : ttnn::reshape(reduced, ttnn::Shape({1}));
+    }
 
     auto temp_input = input;
     for (uint32_t i = dims.size() - 1; i > 0; i--) {

@@ -6,12 +6,21 @@ on:
       docker-image:
         required: true
         type: string
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
       build-artifact-name:
         required: true
         type: string
       enabled-skus:
         required: true
         type: string
+      collect-coverage:
+        required: false
+        type: boolean
+        default: false
+        description: "When true, collect LLVM profraw data and upload per-job profdata artifact for coverage aggregation."
 
 jobs:
   load-test-matrix:
@@ -23,6 +32,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -55,7 +65,12 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: >-
+        ${{
+          !contains(fromJSON('["wh_galaxy","bh_loudbox"]'), matrix.test-group.sku) &&
+            format('{0}{1}', inputs.harbor-prefix, inputs.docker-image) ||
+          inputs.docker-image || 'docker-image-unresolved!'
+        }}
       env:
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
@@ -75,6 +90,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -84,19 +100,50 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
       - name: Ensure BH links online
-        if: ${{ contains(matrix.test-group.sku, 'bh_quietbox') || contains(matrix.test-group.sku, 'bh_loudbox') }}
+        if: ${{ contains(matrix.test-group.sku, 'bh_loudbox') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
+      - name: Set up coverage profiling
+        if: ${{ inputs.collect-coverage }}
+        run: |
+          mkdir -p /work/coverage
+          echo "LLVM_PROFILE_FILE=/work/coverage/%p-%m.profraw" >> "$GITHUB_ENV"
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
           echo "${{ matrix.test-group.cmd }}"
           ${{ matrix.test-group.cmd }}
+      - name: Upload profdata artifact
+        if: ${{ inputs.collect-coverage && always() }}
+        run: |
+          profraw_count=$(find /work/coverage -name "*.profraw" | wc -l)
+          if [ "$profraw_count" -eq 0 ]; then
+            echo "No profraw files found, skipping upload"
+            exit 0
+          fi
+          # Use find+xargs to avoid ARG_MAX limits when many processes emit profraw files.
+          find /work/coverage -name "*.profraw" -print0 | \
+            xargs -0 llvm-profdata-20 merge -sparse -o /work/coverage/job.profdata
+          echo "Merged ${profraw_count} profraw files into job.profdata ($(du -h /work/coverage/job.profdata | cut -f1))"
+        shell: bash
+      - name: Upload profdata
+        if: ${{ inputs.collect-coverage && always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: profdata-metal-runtime-${{ matrix.test-group.name }}
+          path: ${{ github.workspace }}/docker-job/coverage/job.profdata
+          if-no-files-found: ignore
+          retention-days: 1
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

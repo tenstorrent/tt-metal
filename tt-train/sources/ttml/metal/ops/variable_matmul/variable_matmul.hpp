@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,49 +16,60 @@ namespace ttml::metal {
 // Re-export config type for convenience
 using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::VariableMatmulConfig;
 
-// Variable-M and variable-K matmul: M and K are runtime args. The program cache
-// keys on (N, transpose flags, grid), so a single cached program services any
-// (M, K) pair within a transpose variant.
+// Variable-M and variable-K matmul: M and K are runtime args, excluded from the program hash
+// (see compute_program_hash for the full key), so one cached program serves any (M, K) pair.
 //
-// Optional read-at-offset support (input/weight treated as parent buffers):
-//   - in0_row_offset_tiles: tile offset on the in0 matmul-M axis.
-//   - effective_M_tiles: M tile count to actually process (0 = use input's full M).
-//   - in0_k_offset_tiles: tile offset on the in0 matmul-K axis. The K count comes
-//     from the weight (no effective_K argument); in0 is read as if it had a larger
-//     K extent and we slice [k_offset, k_offset + K) tiles.
-//   - in1_k_offset_tiles: tile offset on the in1 matmul-K axis. When set, in0's K
-//     determines matmul-K; the weight is read as if it had a larger K extent and
-//     we slice [k_offset, k_offset + K) tiles. Cannot be combined with in0_k_offset.
+// Always reads offsets on-device: every call provides an offsets_tensor; the offset role is
+// fixed by which entry point is called (see below). The dataflow kernels read
+// offsets_tensor[offsets_start_index..start_index+2] at runtime and derive the per-call M/K
+// ranges (and, for variable_matmul_into_rows, the output write-at-offset row). One cached
+// program serves all expert slices.
 //
-// Optional write-at-offset support (output treated as a parent buffer):
-//   - output_tensor: pre-allocated output to write into.
-//   - out_row_offset_tiles: tile offset on the output's M axis. matmul-N must equal
-//     parent-N. When omitted, a fresh output tensor is allocated and returned.
+// CONTRACT: offsets values MUST be tile-aligned (multiples of TILE_HEIGHT = 32). The kernels
+// address the read/write/K windows at tile granularity (offset / 32), so a non-multiple-of-32
+// offset cannot be represented — it would silently start on the wrong tile and overlap a
+// neighbouring slice. Callers (e.g. moe_ffn) must pad each expert's row range to a tile
+// boundary. Debug builds assert this in the dataflow kernels.
 //
-// All defaults preserve "use the whole input, allocate fresh output" behavior.
-// All offsets/lengths are runtime args — different values reuse the same cached program.
+// On-device offsets are what makes the op viable under EP-sharded MoE — when the per-expert
+// dispatch counts live on the device, a host scalar would require an all-gather of offsets
+// across the EP dim. This is the motivation; the contract works the same on a single device.
 //
-// Tile alignment: all offsets/counts must be in TILE_HEIGHT (32) units. With transpose_a,
-// "row" still means the matmul-M axis (= input's stored *col* axis) and "k_offset" still
-// means the matmul-K axis (= input's stored *row* axis).
-using OffsetsRole = ttml::metal::ops::variable_matmul::device::OffsetsRole;
+// Two entry points, one per offset interpretation (the output contract is encoded in the
+// signature rather than a role enum + optional, so illegal combinations can't be expressed):
+//
+//   variable_matmul_into_rows — read in0 row-range [offsets[start], offsets[start+1]) and write
+//     the result into the SAME rows of the caller-provided output_tensor (a shared parent buffer
+//     that successive calls fill in place). matmul-N must equal output_tensor's N.
+//   variable_matmul_k_sliced — K-slice BOTH operands to [offsets[start], offsets[start+1]) and
+//     reduce only over that range; returns a freshly allocated [M, N].
 
-ttnn::Tensor variable_matmul(
+// Write-at-offset matmul; result lands in output_tensor rows [offsets[start], offsets[start+1]).
+// Returns output_tensor.
+ttnn::Tensor variable_matmul_into_rows(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const VariableMatmulConfig& config,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    uint32_t in0_row_offset_tiles = 0,
-    uint32_t effective_M_tiles = 0,
-    uint32_t in0_k_offset_tiles = 0,
-    uint32_t in1_k_offset_tiles = 0,
-    std::optional<ttnn::Tensor> output_tensor = std::nullopt,
-    uint32_t out_row_offset_tiles = 0,
-    // EP path: when offsets_tensor is set and offsets_role == OutputRow, the kernel
-    // reads offsets_tensor[offsets_start_index] and uses it (in tiles) as the
-    // write-at-offset row, replacing the scalar out_row_offset_tiles above.
-    std::optional<ttnn::Tensor> offsets_tensor = std::nullopt,
-    OffsetsRole offsets_role = OffsetsRole::None,
-    uint32_t offsets_start_index = 0);
+    const ttnn::Tensor& offsets_tensor,
+    const ttnn::Tensor& output_tensor,
+    uint32_t offsets_start_index = 0,
+    // Per-call matmul-M extent in tiles: a build-time hint for the grid orientation only (the
+    // actual rows processed come from offsets). See the expected_M_tiles doc in the types header.
+    uint32_t expected_M_tiles = 0,
+    bool transpose_a = false,
+    bool transpose_b = false,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
+// K-sliced matmul; reduces over the offsets[start..start+2] K-range of both operands and returns
+// a freshly allocated [M, N].
+ttnn::Tensor variable_matmul_k_sliced(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    const VariableMatmulConfig& config,
+    const ttnn::Tensor& offsets_tensor,
+    uint32_t offsets_start_index = 0,
+    bool transpose_a = false,
+    bool transpose_b = false,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttml::metal

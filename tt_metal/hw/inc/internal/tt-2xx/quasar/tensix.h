@@ -277,6 +277,7 @@ end
 // Interrupt controller definitions
 #define HW_INTS 15
 #define SW_INTS 4
+#define HW_ERROR_INTERRUPT_INDEX 3
 #define RISC_PIC_BASE (LOCAL_REGS_BASE + 0x00000400)
 #define RISC_PIC_BASE_PTR ((uint32_t volatile*)(RISC_PIC_BASE))
 #define RISC_PIC_BRISC_SW_INT_EN(core_id) (RISC_PIC_BASE_PTR + 0 + (core_id) * 64)

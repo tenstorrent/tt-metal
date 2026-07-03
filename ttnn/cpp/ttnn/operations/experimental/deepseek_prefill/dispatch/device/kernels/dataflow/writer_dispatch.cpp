@@ -2,22 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+//
+// Sender RISCV_0 kernel — fabric writer.
+//
+// Tile layout (IS_TILE_LAYOUT): sends tokens and metadata via fabric to dst.
+// Reads tokens and metadata from corresponding untilizer CBs.
+//
+// Row-major layout (no IS_TILE_LAYOUT): standard cb_wait_front / cb_pop_front on
+// c_4 / c_5 / c_6 pushed by the row-major sender reader.
+//
+
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/debug/assert.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+
+// FABRIC_2D vs 1D dispatch is handled portably via ccl_routing_utils::fabric_set_line_unicast_route
+// (templated on packet-header type). Under 1D the helper consumes route_info.distance_in_hops,
+// under 2D it consumes route_info.dst_chip_id + dst_mesh_id. The 2D fabric_route (EDM index)
+// still has to be recomputed from dest_mesh_ids/dest_chip_ids because the reader's 1D-style
+// route_info[0] doesn't match the 2D physical EDM index.
 
 #define ENABLE_DISPATCH_DEBUG 0
 
 #if ENABLE_DISPATCH_DEBUG
-#define DPRINT_DISPATCH DPRINT
+#define DPRINT_DISPATCH(...) DPRINT(__VA_ARGS__)
 #else
-#define DPRINT_DISPATCH \
-    if (0)              \
-    DebugPrinter()
+#define DPRINT_DISPATCH(...)
 #endif
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
@@ -59,11 +77,6 @@ void kernel_main() {
     // Operation parameters (indices 24-30)
     constexpr uint32_t num_devices = get_compile_time_arg_val(24);
     constexpr uint32_t hidden_size = get_compile_time_arg_val(25);
-    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(26);
-    constexpr uint32_t n_routed_experts = get_compile_time_arg_val(27);
-    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(28);
-    constexpr uint32_t metadata_len = get_compile_time_arg_val(29);
-    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(30);
 
     // Mesh information (indices 31-35)
     constexpr uint32_t src_mesh_id = get_compile_time_arg_val(31);
@@ -85,10 +98,8 @@ void kernel_main() {
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(43);
     constexpr uint32_t l1_alignment = get_compile_time_arg_val(44);
     constexpr uint32_t num_links = get_compile_time_arg_val(45);
-    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(46);
-
-    // Batch configuration (index 47) — read_batch_size not used by writer
-    // Index 48 — max_dispatch_buffer_token_size (used by reader only)
+    [[maybe_unused]] constexpr tt::tt_fabric::Topology topology =
+        (tt::tt_fabric::Topology)get_compile_time_arg_val(46);  // used by the FABRIC_1D #else handshake
 
     // TensorAccessorArgs for all 7 tensors (starting at index 49)
     constexpr auto input_args = TensorAccessorArgs<49>();
@@ -98,6 +109,13 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr auto dispatch_table_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
+
+#ifdef IS_TILE_LAYOUT
+    constexpr uint32_t writer_extra_args_base = dispatch_table_args.next_compile_time_args_offset();
+    constexpr uint32_t writer_cb_size = get_compile_time_arg_val(writer_extra_args_base + 0);
+    constexpr uint32_t num_untilizers = get_compile_time_arg_val(writer_extra_args_base + 1);
+    constexpr uint32_t route_info_slot_stride = l1_alignment;
+#endif
 
     // ===== Runtime Args =====
     size_t rt_args_idx = 0;
@@ -120,6 +138,27 @@ void kernel_main() {
     // pair on dispatch_devices==2 (mesh-2x4 column pair). Mirrors the combine fix.
     uint32_t exit_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
 
+#ifdef IS_TILE_LAYOUT
+    uint32_t addr_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t cross_addr_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t space_avail_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+
+    uint32_t ring_route_cb[num_untilizers];
+    uint32_t ring_payload_cb[num_untilizers];
+    uint32_t ring_meta_cb[num_untilizers];
+    uint32_t ring_noc_x[num_untilizers];
+    uint32_t ring_noc_y[num_untilizers];
+    uint32_t ring_data_avail_id[num_untilizers];
+    for (uint32_t s = 0; s < num_untilizers; s++) {
+        ring_route_cb[s] = get_arg_val<uint32_t>(rt_args_idx++);
+        ring_payload_cb[s] = get_arg_val<uint32_t>(rt_args_idx++);
+        ring_meta_cb[s] = get_arg_val<uint32_t>(rt_args_idx++);
+        ring_noc_x[s] = get_arg_val<uint32_t>(rt_args_idx++);
+        ring_noc_y[s] = get_arg_val<uint32_t>(rt_args_idx++);
+        ring_data_avail_id[s] = get_arg_val<uint32_t>(rt_args_idx++);
+    }
+#endif
+
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
@@ -128,26 +167,122 @@ void kernel_main() {
     constexpr uint32_t dispatch_devices = num_devices;
 #endif
 
-    DPRINT_DISPATCH << "Writer kernel: dispatch_core=" << dispatch_core_idx << "/" << num_dispatch_cores
-                    << " dispatch_devices=" << dispatch_devices << ENDL();
+    DPRINT_DISPATCH(
+        "Writer kernel: dispatch_core={} / {} dispatch_devices={}\n",
+        dispatch_core_idx,
+        num_dispatch_cores,
+        dispatch_devices);
+
+#ifdef IS_TILE_LAYOUT
+    uint32_t ring_route_base[num_untilizers];
+    uint32_t ring_payload_base[num_untilizers];
+    uint32_t ring_meta_base[num_untilizers];
+    uint32_t addr_ready_sem_l1_offset = get_semaphore(addr_ready_semaphore_id);
+    uint32_t cross_addr_sem_l1_offset = get_semaphore(cross_addr_semaphore_id);
+    for (uint32_t s = 0; s < num_untilizers; s++) {
+        ring_route_base[s] = get_write_ptr(ring_route_cb[s]);
+        ring_payload_base[s] = get_write_ptr(ring_payload_cb[s]);
+        ring_meta_base[s] = get_write_ptr(ring_meta_cb[s]);
+        uint64_t mailbox = get_noc_addr(ring_noc_x[s], ring_noc_y[s], cross_addr_sem_l1_offset);
+        noc_inline_dw_write(mailbox + 0 * sizeof(uint32_t), ring_route_base[s]);
+        noc_inline_dw_write(mailbox + 1 * sizeof(uint32_t), ring_payload_base[s]);
+        noc_inline_dw_write(mailbox + 2 * sizeof(uint32_t), ring_meta_base[s]);
+        noc_async_write_barrier();  // all three addresses must land before addr_ready wakes untilizer s
+        noc_semaphore_inc(get_noc_addr(ring_noc_x[s], ring_noc_y[s], addr_ready_sem_l1_offset), 1);
+        noc_async_atomic_barrier();
+        DPRINT_DISPATCH("Sender writer: addr handshake done ring={} u=({},{})\n", s, ring_noc_x[s], ring_noc_y[s]);
+    }
+#endif
 
 #ifdef DEST_CHIP_ID
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
-    constexpr std::array<bool, 4> directions = DIRECTIONS;
-
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
-    open_direction_connections_async(directions, fabric_connections, rt_args_idx);
 
     uint32_t packet_header_buffer_address = get_read_ptr(cb_packet_header_id);
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
+
+#ifdef FABRIC_2D
+    // Portable FABRIC_2D connections: one RoutingPlaneConnectionManager slot per dispatch-axis
+    // neighbor (each a distinct fabric direction), opened on its correct forwarding routing plane by
+    // the host. Required for multi-hop forwarding along the dispatch axis; the legacy fixed-link
+    // array connection only forwards a single hop (deadlocks on e.g. the 4-device column of a 4x2
+    // mesh). FABRIC_1D keeps the legacy array + per-target unicast handshake in the #else branch.
+    static_assert(axis != ReplicateGroup::NONE, "FABRIC_2D dispatch requires a concrete cluster_axis");
+    uint32_t num_connections = get_arg_val<uint32_t>(rt_args_idx++);
+    uint8_t sem_route_id = PacketHeaderPool::allocate_header_n(static_cast<uint8_t>(num_connections));
+    auto fabric_connections = tt::tt_fabric::RoutingPlaneConnectionManager::build_from_args<
+        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION>(rt_args_idx, num_connections);
+
+    // dir_to_slot maps a fabric routing direction -> the connection slot opened in that direction.
+    // DIR_TO_SLOT_EMPTY (> MaxConnections, so never a valid slot index) marks "no connection opened in
+    // this direction"; it must never be used as a slot index at send time.
+    constexpr uint8_t DIR_TO_SLOT_EMPTY = 0xFF;
+    uint8_t dir_to_slot[eth_chan_directions::COUNT];
+    for (uint32_t d = 0; d < static_cast<uint32_t>(eth_chan_directions::COUNT); ++d) {
+        dir_to_slot[d] = DIR_TO_SLOT_EMPTY;
+    }
+    for (uint32_t i = 0; i < num_connections; ++i) {
+        dir_to_slot[fabric_connections.get_tag(i)] = static_cast<uint8_t>(i);
+    }
+
+    // Bidirectional multicast handshake (hs_ = handshake): each device increments the init/exit
+    // semaphore on every other dispatch-axis device exactly once. Per-slot hop range is chosen by THIS
+    // device's position (hs_axis_pos) along the dispatch axis: the forward slot covers the (len-1-pos)
+    // devices ahead, the backward slot the pos devices behind — together exactly dispatch_devices-1
+    // peers. The neighbor's position only selects which slot (forward vs backward), not the range.
+    // (FABRIC_2D dispatch is always a Linear axis here; no FABRIC_2D ring config exists.)
+    constexpr bool hs_is_cols = (axis == ReplicateGroup::COLS);
+    constexpr uint32_t hs_axis_pos =
+        hs_is_cols ? (linearized_mesh_coord / mesh_cols) : (linearized_mesh_coord % mesh_cols);
+    constexpr uint32_t hs_axis_len = hs_is_cols ? mesh_rows : mesh_cols;
+    constexpr uint32_t hs_pos_range = (hs_axis_len - 1) - hs_axis_pos;  // devices ahead on the axis
+    constexpr uint32_t hs_neg_range = hs_axis_pos;                      // devices behind on the axis
+
+    uint8_t hs_starts[tt::tt_fabric::RoutingPlaneConnectionManager::MaxConnections];
+    uint8_t hs_ranges[tt::tt_fabric::RoutingPlaneConnectionManager::MaxConnections];
+    for (uint32_t i = 0; i < num_connections; ++i) {
+        const uint16_t nbr_chip = fabric_connections.get(i).dst_dev_id;
+        const uint16_t nbr_mesh = fabric_connections.get(i).dst_mesh_id;
+        // Reverse-map this neighbor's (mesh, chip) to its linearized mesh index to read its axis
+        // position. The neighbor must be one of this device's dispatch targets (host guarantees it).
+        uint32_t nbr_lin = 0;
+        bool nbr_found = false;
+        for (uint32_t d = 0; d < num_devices; ++d) {
+            if (dest_chip_ids[d] == nbr_chip && dest_mesh_ids[d] == nbr_mesh) {
+                nbr_lin = d;
+                nbr_found = true;
+                break;
+            }
+        }
+        ASSERT(nbr_found);  // a connection neighbor missing from dest_chip_ids => mis-sized/garbled rt args
+        const uint32_t nbr_axis_pos = hs_is_cols ? (nbr_lin / mesh_cols) : (nbr_lin % mesh_cols);
+        const bool is_forward = (nbr_axis_pos > hs_axis_pos);
+        hs_starts[i] = 1;  // start_distance=1: skip the issuing device, deliver from its first hop onward
+        hs_ranges[i] = is_forward ? static_cast<uint8_t>(hs_pos_range) : static_cast<uint8_t>(hs_neg_range);
+    }
+
+    // flush=true holds the receiver EDM's atomic-inc until this sender's prior fabric writes to that chip
+    // commit (needed at exit to order the inc behind payload/metadata). init passes flush=false: it is the
+    // first fabric traffic, so there are no prior writes to order against — matching the FABRIC_1D path.
+    auto dispatch_2d_mcast_handshake = [&](uint64_t sem_addr, bool flush) {
+        const auto cmd = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_addr, 1, flush};
+        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+            fabric_connections, sem_route_id, cmd, hs_starts, hs_ranges);
+    };
+#else
+    constexpr std::array<bool, 4> directions = DIRECTIONS;
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
+    open_direction_connections_async(directions, fabric_connections, rt_args_idx);
     auto* sem_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
-
     open_direction_connections_barrier(directions, fabric_connections);
+#endif
 
     // Init semaphore exchange
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+#ifdef FABRIC_2D
+    dispatch_2d_mcast_handshake(init_noc_semaphore_addr, /*flush=*/false);
+#else
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
@@ -156,18 +291,119 @@ void kernel_main() {
         mesh_cols,
         axis,
         num_devices>(fabric_connections, sem_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+#endif
 
     volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
     noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
     noc_semaphore_set(init_sem_ptr, 0);
 
-    DPRINT_DISPATCH << "Fabric setup complete" << ENDL();
+    DPRINT_DISPATCH("Fabric setup complete\n");
 #endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
-    // Sentinel-terminated fabric send loop
+#ifdef IS_TILE_LAYOUT
+    volatile tt_l1_ptr uint32_t* ring_data_avail_ptr[num_untilizers];
+    uint64_t ring_space_avail_noc[num_untilizers];
+    uint32_t consumed[num_untilizers];
+    bool done[num_untilizers];
+    uint32_t num_done = 0;
+    uint32_t space_avail_sem_l1_offset = get_semaphore(space_avail_semaphore_id);
+    for (uint32_t s = 0; s < num_untilizers; s++) {
+        ring_data_avail_ptr[s] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ring_data_avail_id[s]));
+        ring_space_avail_noc[s] = get_noc_addr(ring_noc_x[s], ring_noc_y[s], space_avail_sem_l1_offset);
+        consumed[s] = 0;
+        done[s] = false;
+    }
+
+    DPRINT_DISPATCH("[SND] drain loop start (rings={})\n", num_untilizers);
+
+    while (num_done < num_untilizers) {
+        for (uint32_t s = 0; s < num_untilizers; s++) {
+            if (done[s]) {
+                continue;
+            }
+            if (*ring_data_avail_ptr[s] >= consumed[s] + 1) {
+                uint32_t slot = consumed[s] % writer_cb_size;
+                volatile tt_l1_ptr uint32_t* route_info =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ring_route_base[s] + slot * route_info_slot_stride);
+                if (route_info[0] == ROUTE_INFO_SENTINEL) {
+                    done[s] = true;
+                    num_done++;
+                    DPRINT_DISPATCH("[SND] ring={} SENTINEL (consumed={})\n", s, consumed[s]);
+                } else {
+                    uint32_t route = route_info[0];
+                    uint32_t distance = route_info[1];
+                    uint32_t page_idx = route_info[2];
+                    uint32_t dst_chip_index = route_info[3];
+                    uint32_t payload_addr = ring_payload_base[s] + slot * aligned_output_page_size;
+                    uint32_t metadata_addr = ring_meta_base[s] + slot * aligned_metadata_page_size;
+                    DPRINT_DISPATCH("ring={} send: route={} page={}\n", s, route, page_idx);
+#ifdef DEST_CHIP_ID
+                    // route_info layout (written by writer_untilize_dispatch): [0]=route (1D EDM
+                    // index), [1]=distance_hops, [2]=page_idx, [3]=dst_chip_index (2D). Mirrors the
+                    // row-major path: under 2D the 1D-style route_info[0] doesn't match the physical
+                    // EDM index, so recompute the direction and the (mesh, chip) header from the dest.
+                    ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
+                    uint32_t fabric_route;
+                    if constexpr (
+                        std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader> ||
+                        std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
+                        pkt_route_info.dst_chip_id = dest_chip_ids[dst_chip_index];
+                        pkt_route_info.dst_mesh_id = dest_mesh_ids[dst_chip_index];
+                        // TODO(#46174): drop the private tt_fabric_api.h dependency once
+                        // RoutingPlaneConnectionManager exposes a portable (mesh, chip) -> slot lookup.
+                        fabric_route = static_cast<uint32_t>(get_next_hop_router_direction(
+                            dest_mesh_ids[dst_chip_index], dest_chip_ids[dst_chip_index]));
+                    } else {
+                        pkt_route_info.distance_in_hops = static_cast<uint16_t>(distance);
+                        fabric_route = route;
+                    }
+
+                    // Under FABRIC_2D the connections live in the RoutingPlaneConnectionManager (one slot
+                    // per direction); select this token's first-hop direction slot. The route is still
+                    // set to the actual (possibly multi-hop) destination by fabric_set_line_unicast_route.
+#ifdef FABRIC_2D
+                    ASSERT(
+                        dir_to_slot[fabric_route] != DIR_TO_SLOT_EMPTY);  // first-hop direction must have an open slot
+                    auto& payload_sender = fabric_connections.get(dir_to_slot[fabric_route]).sender;
+#else
+                    auto& payload_sender = fabric_connections[fabric_route];
+#endif
+                    // Send payload
+                    ccl_routing_utils::fabric_set_line_unicast_route(
+                        pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
+                    fabric_send_noc_unicast<fabric_max_packet_size>(
+                        output_addr_gen,
+                        payload_sender,
+                        unicast_packet_header,
+                        payload_addr,
+                        page_idx,
+                        (int)aligned_output_page_size,
+                        l1_alignment);
+
+                    // Send metadata
+                    ccl_routing_utils::fabric_set_line_unicast_route(
+                        pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
+                    fabric_send_noc_unicast<fabric_max_packet_size>(
+                        metadata_addr_gen,
+                        payload_sender,
+                        unicast_packet_header,
+                        metadata_addr,
+                        page_idx,
+                        (int)aligned_metadata_page_size,
+                        l1_alignment);
+                    noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
+#endif
+                    noc_semaphore_inc<true>(ring_space_avail_noc[s], 1);
+                    consumed[s]++;
+                }
+            }
+        }
+    }
+#else
+    // ===== Row-major path: standard CB protocol on c_4/c_5/c_6 pushed by the sender reader.
     while (true) {
         cb_wait_front(cb_route_info_id, 1);
         volatile tt_l1_ptr uint32_t* route_info =
@@ -180,6 +416,29 @@ void kernel_main() {
         }
         uint32_t distance = route_info[1];
         uint32_t page_idx = route_info[2];
+
+#ifdef DEST_CHIP_ID
+        // CB layout (written by reader_dispatch): [0]=route (1D EDM index), [1]=distance_hops,
+        // [2]=page_idx, [3]=dst_chip_index (2D only). Capture per-iteration route state from the
+        // CB BEFORE cb_pop_front invalidates the pointer; under 2D recompute the EDM direction
+        // from the destination since route_info[0] is 1D-style and doesn't match the 2D index.
+        ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
+        uint32_t fabric_route;
+        if constexpr (
+            std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader> ||
+            std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
+            const uint32_t dst_chip_device_id = route_info[3];
+            pkt_route_info.dst_chip_id = dest_chip_ids[dst_chip_device_id];
+            pkt_route_info.dst_mesh_id = dest_mesh_ids[dst_chip_device_id];
+            // TODO(#46174): drop the private tt_fabric_api.h dependency once
+            // RoutingPlaneConnectionManager exposes a portable (mesh, chip) -> slot lookup.
+            fabric_route = static_cast<uint32_t>(
+                get_next_hop_router_direction(dest_mesh_ids[dst_chip_device_id], dest_chip_ids[dst_chip_device_id]));
+        } else {
+            pkt_route_info.distance_in_hops = static_cast<uint16_t>(distance);
+            fabric_route = route;
+        }
+#endif
         cb_pop_front(cb_route_info_id, 1);
 
         cb_wait_front(cb_payload_for_writer_id, 1);
@@ -187,15 +446,21 @@ void kernel_main() {
         uint32_t payload_addr = get_read_ptr(cb_payload_for_writer_id);
         uint32_t metadata_addr = get_read_ptr(cb_metadata_for_writer_id);
 
-        DPRINT_DISPATCH << "Fabric send: route=" << route << " distance=" << distance << " page_idx=" << page_idx
-                        << ENDL();
+        DPRINT_DISPATCH("Fabric send: route={} distance={} page_idx={}\n", route, distance, page_idx);
 
 #ifdef DEST_CHIP_ID
+#ifdef FABRIC_2D
+        ASSERT(dir_to_slot[fabric_route] != DIR_TO_SLOT_EMPTY);  // first-hop direction must have an open slot
+        auto& payload_sender = fabric_connections.get(dir_to_slot[fabric_route]).sender;
+#else
+        auto& payload_sender = fabric_connections[fabric_route];
+#endif
         // Send payload
-        fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+        ccl_routing_utils::fabric_set_line_unicast_route(
+            pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
         fabric_send_noc_unicast<fabric_max_packet_size>(
             output_addr_gen,
-            fabric_connections[route],
+            payload_sender,
             unicast_packet_header,
             payload_addr,
             page_idx,
@@ -203,69 +468,82 @@ void kernel_main() {
             l1_alignment);
 
         // Send metadata
-        fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+        ccl_routing_utils::fabric_set_line_unicast_route(
+            pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
         fabric_send_noc_unicast<fabric_max_packet_size>(
             metadata_addr_gen,
-            fabric_connections[route],
+            payload_sender,
             unicast_packet_header,
             metadata_addr,
             page_idx,
             (int)aligned_metadata_page_size,
             l1_alignment);
-        noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
 
+        noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
 #endif
 
         cb_pop_front(cb_payload_for_writer_id, 1);
         cb_pop_front(cb_metadata_for_writer_id, 1);
     }
+#endif
 
 #ifdef DEST_CHIP_ID
-    // Defensive: drain any pending local NOC writes before fabric atomic-inc traffic,
-    // so the exit-sem signal cannot reach peers ahead of the last metadata/payload writes.
-    noc_async_write_barrier();
+        // Defensive: drain any pending local NOC writes before fabric atomic-inc traffic,
+        // so the exit-sem signal cannot reach peers ahead of the last metadata/payload writes.
+        noc_async_write_barrier();
 
-    // Exit semaphore exchange - uses a dedicated semaphore (exit_semaphore_address) and
-    // the dedicated sem_packet_header. flush=true (vs the init handshake which uses the
-    // default flush=false): the EDM on the receiver holds this atomic-inc until our prior
-    // fabric writes (payload + metadata) to that chip have committed there. Without it the
-    // small atomic-inc packet can overtake the larger data writes on B's local NOC and the
-    // peer would observe sem-reached-threshold before the data has landed in DRAM. At init
-    // there are no prior writes to order against, so flush=false saves one EDM round-trip
-    // check.
-    {
-        const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
-        send_init_semaphore_to_configured_targets<
-            linearized_mesh_coord,
-            topology,
-            src_chip_id,
-            mesh_rows,
-            mesh_cols,
-            axis,
-            num_devices>(
-            fabric_connections,
-            sem_packet_header,
-            dest_chip_ids,
-            dest_mesh_ids,
-            exit_noc_semaphore_addr,
-            /*flush=*/true);
+        // Exit semaphore exchange on a dedicated semaphore (exit_semaphore_address). The exit-inc must
+        // not be observed before our prior fabric writes (payload + metadata) to that chip have landed,
+        // or a peer could see sem-reached-threshold before the data is in DRAM. The two paths enforce
+        // this differently:
+        //   - FABRIC_2D: the noc_async_write_barrier() above drains local writes, and the 2D multicast
+        //     handshake is issued with flush=true so the receiver EDM also holds the atomic-inc until our
+        //     prior fabric writes commit (init uses flush=false: no prior writes to order against).
+        //   - FABRIC_1D (#else): send_init_semaphore_to_configured_targets is called with /*flush=*/true
+        //     so the receiver EDM holds the atomic-inc until our prior writes commit (the init handshake
+        //     uses the default flush=false since it has no prior writes to order against).
+        {
+            const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
+#ifdef FABRIC_2D
+            dispatch_2d_mcast_handshake(exit_noc_semaphore_addr, /*flush=*/true);
+#else
+            send_init_semaphore_to_configured_targets<
+                linearized_mesh_coord,
+                topology,
+                src_chip_id,
+                mesh_rows,
+                mesh_cols,
+                axis,
+                num_devices>(
+                fabric_connections,
+                sem_packet_header,
+                dest_chip_ids,
+                dest_mesh_ids,
+                exit_noc_semaphore_addr,
+                /*flush=*/true);
+#endif
 
-        volatile tt_l1_ptr uint32_t* exit_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
-        noc_semaphore_wait(exit_sem_ptr, dispatch_devices - 1);
-        noc_semaphore_set(exit_sem_ptr, 0);
-    }
+            volatile tt_l1_ptr uint32_t* exit_sem_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
+            DPRINT_DISPATCH(
+                "[SND] drain DONE; WAIT exit_sem=={} (have={})\n", dispatch_devices - 1, (uint32_t)(*exit_sem_ptr));
+            noc_semaphore_wait(exit_sem_ptr, dispatch_devices - 1);
+            DPRINT_DISPATCH("[SND] exit handshake done\n");
+            noc_semaphore_set(exit_sem_ptr, 0);
+        }
 
-    // send_init_semaphore_to_configured_targets calls fabric_send_chip_unicast_noc_unicast_semaphore_only[_1d]
-    // which calls send_payload_flush_blocking_from_address -> send_payload_from_address_impl<FLUSH_BLOCKING>,
-    // which only calls noc_async_writes_flushed on the packet-header write. It confirms the the write departed
-    // worker's NIU but does not mean the write landed in EDM's L1 inbox.
-    // If we exit the kernel and close_direction_connections runs while the write is still mid-flight toward EDM's L1,
-    // EDM might process its slot bookkeeping before the actual packet bytes have landed.
-    // A full barrier ensures all writes have completed, as well as atomics which is purely defensive here and
-    // future-proof.
-    noc_async_full_barrier();
+        // The atomic-inc handshake helpers (both the FABRIC_2D multicast and the FABRIC_1D per-target
+        // unicast) send via send_payload_flush_non_blocking_from_address — that confirms the write
+        // departed the worker's NIU but not that the bytes landed in the EDM's L1 inbox. If we exit and
+        // close the fabric connections while a send is mid-flight, the EDM might process its slot
+        // bookkeeping before the bytes arrive. A full barrier ensures all writes (and atomics,
+        // defensively) have completed before we close.
+        noc_async_full_barrier();
 
-    close_direction_connections(directions, fabric_connections);
+#ifdef FABRIC_2D
+        fabric_connections.close();
+#else
+        close_direction_connections(directions, fabric_connections);
+#endif
 #endif
 }

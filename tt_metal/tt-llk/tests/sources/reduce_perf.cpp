@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
@@ -41,7 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT = params.TILE_CNT;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
@@ -55,7 +56,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             return;
@@ -80,8 +81,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
-#include "llk_math_reduce.h"
 #include "tensor_shape.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -95,22 +96,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     constexpr MathFidelity MATH_FIDELITY = MathFidelity::HiFi4;
 
-    // todo: INT32 reduce is not supported yet
-    constexpr bool ENFORCE_FP32_ACC = false;
-    constexpr bool IS_INT_FPU       = false;
+    constexpr bool IS_INT_FPU = false;
 
-    // Create a default 32x32 tile with 4 faces of 16x16
     const ckernel::TensorShape DEFAULT_TENSOR_SHAPE = {FACE_R_DIM, FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, ENFORCE_FP32_ACC>();
+        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             return;
@@ -131,8 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "block_tile exceeds max dest tiles");
-                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU, ENFORCE_FP32_ACC>(
-                        block_tile, DEFAULT_TENSOR_SHAPE);
+                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU>(block_tile, DEFAULT_TENSOR_SHAPE);
                 }
             }
         }
@@ -148,8 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "block_tile exceeds max dest tiles");
-                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU, ENFORCE_FP32_ACC>(
-                        block_tile, DEFAULT_TENSOR_SHAPE);
+                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU>(block_tile, DEFAULT_TENSOR_SHAPE);
                 }
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
@@ -176,7 +172,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT = params.TILE_CNT;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
         _llk_pack_reduce_mask_config_<REDUCE_DIM>();
@@ -184,7 +180,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             _llk_pack_reduce_mask_clear_();

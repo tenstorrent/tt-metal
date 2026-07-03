@@ -18,18 +18,21 @@ namespace ttml::metal::ops::select_target_logit::device {
 //
 // Real callers pass (local_V, cluster_axis) and leave first_v = 0; first_v exists so
 // single-device unit tests can still exercise non-zero shard windows.
-struct operation_attributes_t {
+struct SelectTargetLogitParams {
     uint32_t first_v{0U};
     uint32_t local_V{0U};
     std::optional<uint32_t> cluster_axis{};
 };
 
-struct tensor_args_t {
+struct SelectTargetLogitInputs {
     const ttnn::Tensor& logit;   // [N, 1, S, local_V] TILE BFLOAT16  (local_V = last_v - first_v)
     const ttnn::Tensor& target;  // [N, S]              ROW_MAJOR UINT32  (global indices)
 
     std::optional<ttnn::Tensor> preallocated_output;
 };
+
+using operation_attributes_t = SelectTargetLogitParams;
+using tensor_args_t = SelectTargetLogitInputs;
 
 // output: [N, 1, S, 1] TILE BFLOAT16
 // output[n, 0, s, 0] = logit[n, 0, s, target[n, s] - device_first_v]

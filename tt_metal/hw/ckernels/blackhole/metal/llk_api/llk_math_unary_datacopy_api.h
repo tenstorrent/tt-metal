@@ -16,7 +16,7 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false>
-inline void llk_math_eltwise_unary_datacopy(uint dst_index, uint operand = 0) {
+inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32_t operand) {
     LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
 
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -29,7 +29,8 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false>
-inline void llk_math_eltwise_unary_datacopy_block(uint start_dst_index, uint ntiles, uint operand = 0) {
+inline void llk_math_eltwise_unary_datacopy_block(
+    std::uint32_t start_dst_index, std::uint32_t ntiles, std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
     for (uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
@@ -46,7 +47,7 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
     PackMode pack_mode = PackMode::Default>
-inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0) {
+inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole math datacopy init supports only PackMode::Default and PackMode::Tilize");

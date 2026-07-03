@@ -16,6 +16,11 @@ namespace ttml::ops {
 //     Y_e = (SiLU(X_e @ W_gate_e^T) * (X_e @ W_up_e^T)) @ W_down_e^T
 // where X_e = grouped[offsets[e] : offsets[e+1], :].
 //
+// Contract: each expert's slot [offsets[e], offsets[e+1]) is tile-aligned (offsets are
+// multiples of 32), and the grouping op zero-fills the within-slot pad rows beyond the
+// expert's real token count. The matmuls process the whole slot, so those pad rows must be
+// zero for Y's (and grouped's gradient's) pad rows to come out zero.
+//
 // `offsets` carries no gradient and stays a raw ttnn::Tensor.
 // Per-expert weights are passed as parallel lists of TensorPtr — one entry
 // per local expert. Each weight is consumed directly by `metal::variable_matmul`;

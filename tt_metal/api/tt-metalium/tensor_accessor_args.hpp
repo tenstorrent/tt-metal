@@ -8,6 +8,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
+#include <tt_stl/optional_reference.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -36,6 +37,14 @@ public:
 
     explicit TensorAccessorArgs(
         const MeshTensor& tensor,
+        tensor_accessor::ArgsConfig args_config = tensor_accessor::ArgConfig::None);
+
+    // Convenience overload for optional tensor inputs. An empty
+    // `optional_reference` is equivalent to constructing from a null `Buffer*`:
+    // `args_config_` is forced to `None` and `append_to` emits two zero
+    // compile-time args.
+    explicit TensorAccessorArgs(
+        ttsl::optional_reference<const MeshTensor> tensor,
         tensor_accessor::ArgsConfig args_config = tensor_accessor::ArgConfig::None);
 
     static TensorAccessorArgs create_dram_interleaved();

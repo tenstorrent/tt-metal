@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Measures transpose-flag overhead in variable_matmul.
@@ -13,6 +13,7 @@
 
 #include "core/compute_kernel_config.hpp"
 #include "core/random.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -24,10 +25,6 @@ namespace {
 
 using namespace tt::tt_metal;
 using ttml::metal::VariableMatmulConfig;
-
-// HiFi4 + FP32 dest: 2 cycles per tile matmul
-// 120 cores * 1350 MHz * (1/2 tile/cycle) * 2048 FLOPs/tile = 165.9 TFLOPS
-constexpr double kPeakTflops = 165.9;
 
 const VariableMatmulConfig kBaseConfig{
     .M_block_size = 4,
@@ -55,13 +52,10 @@ void report_counters(benchmark::State& state, double time_us, uint32_t M, uint32
     const double tflops = flops / (time_us * 1e6);
     state.counters["time_us"] = time_us;
     state.counters["tflops"] = tflops;
-    state.counters["util_pct"] = (tflops / kPeakTflops) * 100.0;
 }
 
-// Run a single benchmark loop with the given transpose flags. Matmul dimensions are always
-// M x K x N where N == K (square B), regardless of transpose configuration. The stored
-// shape of A and B is adjusted so that the matmul is logically the same operation under
-// each configuration.
+// Run one benchmark loop. Dimensions are always M x K x N with N == K (square B), so the matmul
+// is the same logical op under each transpose config — only the stored shapes of A/B change.
 void run_matmul_bench(benchmark::State& state, bool transpose_a, bool transpose_b) {
     auto device = ttnn::device::open_mesh_device(0);
     device->enable_program_cache();
@@ -77,26 +71,45 @@ void run_matmul_bench(benchmark::State& state, bool transpose_a, bool transpose_
     auto weight_shape = transpose_b ? ttnn::Shape({1, 1, N, K}) : ttnn::Shape({1, 1, K, N});
     auto weight = create_random_tensor(weight_shape, DataType::BFLOAT16, 43, device.get());
 
-    auto cfg = kBaseConfig;
-    cfg.transpose_a = transpose_a;
-    cfg.transpose_b = transpose_b;
+    const auto& cfg = kBaseConfig;
+
+    // EP-only API: build a trivial offsets tensor [0, M] and a pre-allocated output, then call
+    // through InputAndOutputRow with the full M range. Equivalent to a non-EP matmul.
+    const std::vector<uint32_t> offsets_host = {0U, M};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device.get(), ttnn::Layout::ROW_MAJOR);
+    auto output = create_random_tensor(ttnn::Shape({1, 1, M, N}), DataType::BFLOAT16, 44, device.get());
+    const uint32_t M_tiles = M / 32U;
+
+    auto run_once = [&]() {
+        ttml::metal::variable_matmul_into_rows(
+            /*input_tensor=*/input,
+            /*weight_tensor=*/weight,
+            /*config=*/cfg,
+            /*offsets_tensor=*/offsets,
+            /*output_tensor=*/output,
+            /*offsets_start_index=*/0,
+            /*expected_M_tiles=*/M_tiles,
+            /*transpose_a=*/transpose_a,
+            /*transpose_b=*/transpose_b);
+    };
 
     for (int i = 0; i < kWarmupIterations; ++i) {
-        auto out = ttml::metal::variable_matmul(input, weight, cfg);
+        run_once();
         distributed::Synchronize(device.get(), std::nullopt);
-        out.deallocate();
     }
 
     for (auto _ : state) {
         auto start = std::chrono::high_resolution_clock::now();
-        auto out = ttml::metal::variable_matmul(input, weight, cfg);
+        run_once();
         distributed::Synchronize(device.get(), std::nullopt);
         auto end = std::chrono::high_resolution_clock::now();
         double time_us = std::chrono::duration<double, std::micro>(end - start).count();
         state.SetIterationTime(time_us / 1e6);
         report_counters(state, time_us, M, K, N);
-        out.deallocate();
     }
+    output.deallocate();
+    offsets.deallocate();
 
     input.deallocate();
     weight.deallocate();
@@ -105,23 +118,16 @@ void run_matmul_bench(benchmark::State& state, bool transpose_a, bool transpose_
 
 }  // namespace
 
-// ============================================================================
-// A @ B (no transpose) — baseline
-// ============================================================================
 static void BM_AB(benchmark::State& state) {
     run_matmul_bench(state, /*transpose_a=*/false, /*transpose_b=*/false);
 }
 
-// ============================================================================
-// A @ B^T (transpose_b=true)
-// ============================================================================
 static void BM_ABT(benchmark::State& state) {
     run_matmul_bench(state, /*transpose_a=*/false, /*transpose_b=*/true);
 }
 
-// ============================================================================
-// A^T @ B (transpose_a=true) — exercises the compute-side transpose_wh_tile pass
-// ============================================================================
+// transpose_a adds a compute-side transpose_wh_tile pass — extra work beyond the stored-shape
+// change that transpose_b alone makes (see run_matmul_bench).
 static void BM_ATB(benchmark::State& state) {
     run_matmul_bench(state, /*transpose_a=*/true, /*transpose_b=*/false);
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,12 +32,6 @@ struct VariableMatmulDeviceOperation {
 
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& weight_tensor,
-        const VariableMatmulConfig& config,
-        ttnn::DeviceComputeKernelConfig compute_kernel_config);
 };
 
 }  // namespace ttml::metal::ops::variable_matmul::device
@@ -48,16 +42,13 @@ ttnn::Tensor ttml_variable_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const ttml::metal::ops::variable_matmul::device::VariableMatmulConfig& config,
+    const ttnn::Tensor& offsets_tensor,
+    ttml::metal::ops::variable_matmul::device::OffsetsRole offsets_role,
+    bool transpose_a = false,
+    bool transpose_b = false,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    uint32_t in0_row_offset_tiles = 0,
-    uint32_t effective_M_tiles = 0,
-    uint32_t in0_k_offset_tiles = 0,
-    uint32_t in1_k_offset_tiles = 0,
     std::optional<ttnn::Tensor> output_tensor = std::nullopt,
-    uint32_t out_row_offset_tiles = 0,
-    std::optional<ttnn::Tensor> offsets_tensor = std::nullopt,
-    ttml::metal::ops::variable_matmul::device::OffsetsRole offsets_role =
-        ttml::metal::ops::variable_matmul::device::OffsetsRole::None,
-    uint32_t offsets_start_index = 0);
+    uint32_t offsets_start_index = 0,
+    uint32_t expected_M_tiles = 0);
 
 }  // namespace ttnn::prim

@@ -50,7 +50,7 @@ void kernel_main() {
     input_b_cb.wait_front(NUM_TILES);
     out_cb.reserve_back(NUM_TILES);
 
-    acquire_dst();
+    tile_regs_acquire();
 
     copy_tile_to_dst_init_short(input_a_cb_id);
     copy_tile(input_a_cb_id, 0, kDstData);
@@ -58,9 +58,12 @@ void kernel_main() {
 
     sfpu_bcast<kBcastDim, kBcastOp>(kDstData, kDstBcast);
 
+    tile_regs_commit();
+    tile_regs_wait();
+
     pack_tile(kDstData, out_cb_id);
 
-    release_dst();
+    tile_regs_release();
 
     input_a_cb.pop_front(NUM_TILES);
     input_b_cb.pop_front(NUM_TILES);

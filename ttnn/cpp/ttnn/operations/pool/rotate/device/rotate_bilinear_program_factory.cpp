@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -139,6 +140,17 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
 
     uint32_t cb_idx = tt::CBIndex::c_0;
 
+    const auto input_face_geometry = FaceGeometry{.face_r_dim = REDUCTION_SIZE, .num_faces = 2};
+    const auto scalar_face_geometry = FaceGeometry{.face_r_dim = 1, .num_faces = 2};
+    const bool last_output_tile_is_partial = input_channels % tt::constants::TILE_WIDTH != 0;
+    const bool single_partial_output_fits_in_face =
+        last_output_tile_is_partial && input_channels <= tt::constants::FACE_WIDTH;
+    const auto output_face_geometry =
+        FaceGeometry{.face_r_dim = 1, .num_faces = single_partial_output_fits_in_face ? 1U : 2U};
+    const std::optional<TileDescriptor> output_tile =
+        single_partial_output_fits_in_face ? std::optional{TileDescriptor{1, tt::constants::FACE_WIDTH, false}}
+                                           : std::nullopt;
+
     const uint32_t fill_cb_page_size = input_stick_nbytes;
     const uint32_t fill_cb_index = cb_idx++;
     desc.cbs.push_back(CBDescriptor{
@@ -162,6 +174,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             .buffer_index = static_cast<uint8_t>(input_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_cb_page_size,
+            .face_geometry = input_face_geometry,
         }}},
     });
 
@@ -176,6 +189,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             .buffer_index = static_cast<uint8_t>(scalar_cb_index),
             .data_format = input_cb_data_format,
             .page_size = scalar_cb_page_size,
+            .face_geometry = scalar_face_geometry,
         }}},
     });
 
@@ -194,6 +208,8 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = output_cb_data_format,
             .page_size = output_cb_page_size,
+            .tile = output_tile,
+            .face_geometry = output_face_geometry,
         }}},
         .buffer = any_sharded ? output_tensor.buffer() : nullptr,
     });
@@ -230,43 +246,45 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
 
     auto make_compute_kernel_descriptor = [&](tt::tt_metal::CoreRangeSet cores, uint32_t total_interpolations) {
         std::vector<uint32_t> compute_compile_time_args = {
-            in_ntiles_c,
-            REDUCTION_SIZE,
-            0,
-            total_interpolations,
-            input_channels,
-            in_nblocks_c,
-            MAX_ROWS_FOR_REDUCTION,
-            input_cb_index,
-            DUMMY_CB_ID,
-            scalar_cb_index,
-            DUMMY_CB_ID,
-            output_cb_index,
-            ONE_SCALAR_PER_CORE ? 1U : 0U,
-            DUMMY_CB_ID,
-            0U,
-            0U,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            1U,
-            1U,
-            1U,
-            1U,
-            1U,
-            1U,
-            0U,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            1U,
-            1U,
-            0U};
+            in_ntiles_c,                    // ct_arg[0]
+            REDUCTION_SIZE,                 // ct_arg[1]
+            0,                              // ct_arg[2]
+            total_interpolations,           // ct_arg[3]
+            input_channels,                 // ct_arg[4]
+            in_nblocks_c,                   // ct_arg[5]
+            MAX_ROWS_FOR_REDUCTION,         // ct_arg[6]
+            input_cb_index,                 // ct_arg[7]
+            DUMMY_CB_ID,                    // ct_arg[8]
+            scalar_cb_index,                // ct_arg[9]
+            DUMMY_CB_ID,                    // ct_arg[10]
+            output_cb_index,                // ct_arg[11]
+            ONE_SCALAR_PER_CORE ? 1U : 0U,  // ct_arg[12]
+            DUMMY_CB_ID,                    // ct_arg[13]
+            0U,                             // ct_arg[14]
+            0U,                             // ct_arg[15]
+            0U,                             // ct_arg[16]: force_max_tiles_per_reduction_4 (off for rotate)
+            DUMMY_CB_ID,                    // ct_arg[17]
+            DUMMY_CB_ID,                    // ct_arg[18]
+            DUMMY_CB_ID,                    // ct_arg[19]
+            DUMMY_CB_ID,                    // ct_arg[20]
+            DUMMY_CB_ID,                    // ct_arg[21]
+            DUMMY_CB_ID,                    // ct_arg[22]
+            DUMMY_CB_ID,                    // ct_arg[23]
+            1U,                             // ct_arg[24]
+            1U,                             // ct_arg[25]
+            1U,                             // ct_arg[26]
+            1U,                             // ct_arg[27]
+            1U,                             // ct_arg[28]
+            1U,                             // ct_arg[29]
+            0U,                             // ct_arg[30]
+            DUMMY_CB_ID,                    // ct_arg[31]
+            DUMMY_CB_ID,                    // ct_arg[32]
+            DUMMY_CB_ID,                    // ct_arg[33]
+            DUMMY_CB_ID,                    // ct_arg[34]
+            1U,                             // ct_arg[35]
+            1U,                             // ct_arg[36]
+            0U,                             // ct_arg[37]: indexes_32_bit
+            DUMMY_CB_ID};                   // ct_arg[38]: fast_tilize_cb_id (tiled-output only, unused here)
 
         const auto pool_defines_map = pool::get_defines(pool::Pool2DType::AVG_POOL2D);
         KernelDescriptor::Defines compute_defines(pool_defines_map.begin(), pool_defines_map.end());

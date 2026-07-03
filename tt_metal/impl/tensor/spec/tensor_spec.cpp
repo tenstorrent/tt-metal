@@ -95,12 +95,12 @@ std::optional<std::string> get_shape_fits_shard_grid_error(
 
 void validate_dtype_and_layout(DataType dtype, Layout layout) {
     auto supported_dtype = [&dtype]() {
-        TT_ASSERT(
+        TT_FATAL(
             (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
              dtype == DataType::UINT8 || dtype == DataType::UINT16 || dtype == DataType::BFLOAT16 ||
-             dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B),
-            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on "
-            "device!");
+             dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B || dtype == DataType::FP8_E4M3),
+            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, or FP8_E4M3 dtypes are "
+            "supported on device!");
     };
     auto supported_layout = [&dtype, &layout]() {
         switch (dtype) {
@@ -112,13 +112,23 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             case DataType::BFLOAT16: break;
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B:
-                TT_ASSERT(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
+                TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
+                break;
+            case DataType::FP8_E4M3:
+                // Arch validation is each producer op's responsibility (e.g., the combine op
+                // validator at ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/
+                // device/combine_device_operation.cpp); this dtype/layout validator has no
+                // MeshDevice handle and so stays arch-agnostic.
+                // Layout note: ROW_MAJOR-only here because FP8_E4M3 is currently produced
+                // exclusively as the row-major output of the DeepSeek V3 Prefill combine op
+                // (ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine).
+                TT_FATAL(layout == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for FP8_E4M3 dtype!");
                 break;
             default:
-                TT_ASSERT(
+                TT_FATAL(
                     false,
-                    "Only UINT32, INT32, FLOAT32, UINT16, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on "
-                    "device!");
+                    "Only UINT32, INT32, FLOAT32, UINT16, BFLOAT16, BFLOAT8_B, BFLOAT4_B, or FP8_E4M3 dtypes are "
+                    "supported on device!");
                 break;
         }
     };
@@ -145,15 +155,8 @@ TensorSpec::TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_la
     populate_sharding_specs();
 }
 
-TensorSpec TensorSpec::with_memory_config(MemoryConfig memory_config) const {
-    TensorSpec result = *this;
-    result.tensor_layout_ = tensor_layout_.with_memory_config(std::move(memory_config));
-    result.populate_sharding_specs();
-    return result;
-}
-
 TensorSpec TensorSpec::sharded_across_dims(
-    tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
+    ttsl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
     Shape shard_shape = padded_shape();
     for (auto dim : dims) {
         shard_shape[dim] = 1;
@@ -163,7 +166,7 @@ TensorSpec TensorSpec::sharded_across_dims(
 }
 
 TensorSpec TensorSpec::sharded_across_dims_except(
-    tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
+    ttsl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
     const auto& padded_shape = this->padded_shape();
     Shape shard_shape = Shape().to_rank(padded_shape.rank());
     for (auto dim : dims) {
@@ -279,6 +282,13 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     const auto& mem_config = memory_config();
     const auto& nd_shard_spec = mem_config.nd_shard_spec().value();
     const auto& nd_shard_shape = nd_shard_spec.shard_shape;
+
+    // CONTIGUOUS_1D has no legacy equivalent: its shard->bank placement (adjacent shards packed onto the same bank)
+    // is not expressible as any legacy WIDTH/HEIGHT/BLOCK_SHARDED layout. Don't fabricate a (garbled) legacy spec --
+    // leave the tensor ND-sharding-only.
+    if (nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::CONTIGUOUS_1D) {
+        return std::nullopt;
+    }
 
     // Trying to flatten ND shard shape into 2D
     std::array<uint32_t, 2> shard_shape = {1, nd_shard_shape[-1]};

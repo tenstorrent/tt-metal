@@ -20,8 +20,8 @@ from loguru import logger
 import ttnn
 from conftest import requires_hybrid_allocator
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.demo.decoder_stage import create_decoder_block_tensors
+from models.demos.deepseek_v3_b1.demo.weight_provider import resolve_sram_expert_ids
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
@@ -59,7 +59,7 @@ _SRAM_HOT_EXPERTS_CEILING = 64
 
 
 def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
-    """Build the ``(sram_hot_experts, sram_core_grids, sram_assigner)`` triple.
+    """Build the ``(sram_hot_experts, sram_core_grids)`` pair.
 
     Core grids come from :meth:`SramExpertCoreGrids.shared_expert_mirror` (same
     CRS as shared-expert gate/up/down in ``overlap_configs``).
@@ -71,14 +71,6 @@ def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
     budgeting is applied here.
     """
     sram_core_grids = SramExpertCoreGrids.shared_expert_mirror()
-    # Routed experts in DRAM are already BFP4 (see prepare_routed_expert_weights);
-    # force the SRAM copies to match so every tile is the expected 25 KiB/expert
-    # binding-core footprint -- this is the lever that unlocks the 26+ expert
-    # target under the 960 KiB combined attn+SRAM cap.  Dropping BFP8 from the
-    # format list makes the assigner pick BFP4 on every tile regardless of PCC;
-    # add BFP2 back if accuracy drops unacceptably.
-    sram_assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"])
-
     freqs = _load_routing_frequencies()
     full_config = build_sram_hot_expert_config([layer_idx], freqs)
     sram_hot_experts = {k: v[:_SRAM_HOT_EXPERTS_CEILING] for k, v in full_config.items()}
@@ -87,7 +79,7 @@ def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
         layer_idx,
         len(sram_hot_experts.get(layer_idx, [])),
     )
-    return sram_hot_experts, sram_core_grids, sram_assigner
+    return sram_hot_experts, sram_core_grids
 
 
 def _optional_bspm_dir():
@@ -125,14 +117,51 @@ def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None
 # ============================================================================
 
 
+class _MutableStateDictOverlay:
+    """Read-through wrapper that lets rig_experts write the rigged bias on top of
+    a read-only LazyStateDict. Overrides take precedence; everything else reads
+    from the base mapping."""
+
+    def __init__(self, base):
+        self._base = base
+        self._overrides: dict = {}
+
+    def __getitem__(self, key):
+        if key in self._overrides:
+            return self._overrides[key]
+        return self._base[key]
+
+    def __setitem__(self, key, value):
+        self._overrides[key] = value
+
+    def __contains__(self, key):
+        return key in self._overrides or key in self._base
+
+    def __iter__(self):
+        seen = set(self._overrides)
+        yield from self._overrides
+        for k in self._base:
+            if k not in seen:
+                yield k
+
+    def __len__(self):
+        return len(self._base) + sum(1 for k in self._overrides if k not in self._base)
+
+
 def rig_experts(state_dict, layer_idx, rigged_group_count):
     """Rig expert routing bias in state_dict for deterministic test routing.
 
     Generates RMS-normalized input for stability with rigged routing,
     modifies state_dict bias entries, and returns the rigged configuration.
 
-    Returns (rigged_group_ids, rigged_expert_ids, torch_input).
+    When state_dict is read-only (LazyStateDict), it is wrapped in a mutable
+    overlay so the bias write succeeds. The wrapped object is returned as the
+    last tuple element so callers can swap their handle.
+
+    Returns (rigged_group_ids, rigged_expert_ids, torch_input, state_dict).
     """
+    if not hasattr(state_dict, "__setitem__"):
+        state_dict = _MutableStateDictOverlay(state_dict)
     K = 7168
     shape = (1, K)
     torch_input_f32 = torch.randn(shape, dtype=torch.float32)
@@ -168,7 +197,7 @@ def rig_experts(state_dict, layer_idx, rigged_group_count):
         f"experts={[(grp, rigged_expert_ids[grp]) for grp in rigged_group_ids]}"
     )
 
-    return rigged_group_ids, rigged_expert_ids, torch_input
+    return rigged_group_ids, rigged_expert_ids, torch_input, state_dict
 
 
 def create_decoder_golden_tensors(
@@ -322,15 +351,6 @@ _KNOWN_DECODER_MOE_FAILURE_SKIPS = {
     (6644, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
     (9916, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
     (11664, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
-    (0, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (127, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (511, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (1023, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (2047, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (4096, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (6644, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (9916, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (11664, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
 }
 
 
@@ -493,6 +513,46 @@ def skip_known_decoder_moe_failure(
         "rigged_groups8",
     ],
 )
+# SRAM placement scenario. "default" runs in CI and resolves SRAM IDs through the
+# same code path as the production demo: prepare_moe_layer_weights builds sram_slots
+# from sram_hot_experts (routing-frequency ranking), and the final sram_expert_ids
+# is derived from sram_slots.slot_experts post-L1-fit. All explicit scenarios are
+# opt-in (skip_post_commit).
+@pytest.mark.parametrize(
+    "sram_scenario",
+    [
+        pytest.param("default", marks=pytest.mark.skip_post_commit),
+        pytest.param("no_sram", marks=pytest.mark.skip_post_commit),
+        pytest.param("t1_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t1_not_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t2_both_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t2_partial", marks=pytest.mark.skip_post_commit),
+        pytest.param("t2_none_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t4_all_picked", marks=pytest.mark.skip_post_commit),
+        # Full t8_* sweep: N winners + (8-N) non-winners. Together they trace the
+        # SRAM-offload perf curve from pure DRAM (none_picked) to pure SRAM (all_picked).
+        pytest.param("t8_none_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_one_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_two_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_three_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_four_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_five_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_six_picked", marks=pytest.mark.skip_post_commit),
+        "t8_seven_picked",
+        pytest.param("t8_all_picked", marks=pytest.mark.skip_post_commit),
+    ],
+)
+# enable_sram_bspm: opt-in BSPM mixed precision for SRAM experts. Independent
+# of DRAM BSPM (which is always on when BSPM_DIR is set). When True, the test
+# uses the deferred SRAM build pattern so SDPA buffer lands at uniform L1
+# addresses before SRAM CTs allocate below it.
+@pytest.mark.parametrize(
+    "enable_sram_bspm",
+    [
+        pytest.param(False, id="sram_bspm_off"),
+        pytest.param(True, id="sram_bspm_on", marks=pytest.mark.skip_post_commit),
+    ],
+)
 @pytest.mark.parametrize(
     "enable_routing, use_hardcoded_expert_index, num_routed_experts",
     [
@@ -541,6 +601,8 @@ def test_decoder(
     noc_mode,
     num_internal_iterations,
     expert_upload_mode,
+    sram_scenario,
+    enable_sram_bspm,
     enable_routing,
     use_hardcoded_expert_index,
     num_routed_experts,
@@ -572,7 +634,14 @@ def test_decoder(
         pytest.skip("Test requires more devices than available")
 
     if use_real_weights and expert_upload_mode != "unrigged_all_experts":
-        pytest.skip("Real-weight decoder tests require unrigged_all_experts")
+        # Rigged routing rewrites e_score_correction_bias to force specific TopK
+        # winners. The golden reference uses the same modified state_dict, so the
+        # math stays consistent, but the real model's actual routing distribution
+        # is no longer being exercised — PCC may dip vs. unrigged real runs.
+        logger.warning(
+            "Real weights + {} rewrites gate bias to force TopK; PCC may be lower than unrigged",
+            expert_upload_mode,
+        )
     if use_real_weights and not os.getenv("DEEPSEEK_V3_HF_MODEL"):
         pytest.skip("DEEPSEEK_V3_HF_MODEL must be set to run real MTP layer tests")
 
@@ -602,7 +671,7 @@ def test_decoder(
     rigged_expert_ids = None
     torch_input = None
     if rigged_group_count is not None:
-        rigged_group_ids, rigged_expert_ids, torch_input = rig_experts(
+        rigged_group_ids, rigged_expert_ids, torch_input, state_dict = rig_experts(
             state_dict, ROUTED_EXPERT_LAYER_IDX, rigged_group_count
         )
 
@@ -612,17 +681,132 @@ def test_decoder(
     # present -- skip SRAM for them.
     sram_hot_experts = None
     sram_core_grids = None
-    sram_assigner = None
     if effective_num_routed_experts == 256:
-        sram_hot_experts, sram_core_grids, sram_assigner = _build_sram_hot_expert_kwargs(
-            state_dict, submesh, ROUTED_EXPERT_LAYER_IDX
-        )
+        sram_hot_experts, sram_core_grids = _build_sram_hot_expert_kwargs(state_dict, submesh, ROUTED_EXPERT_LAYER_IDX)
+
+    # SRAM placement scenarios — feeds the SRAM kernel pipeline via sram_expert_ids.
+    #   "default":  no override; sram_hot_experts (built above when 256-experts) is
+    #               used by prepare_moe_layer_weights to build sram_slots, and the
+    #               final sram_expert_ids is derived from sram_slots.slot_experts
+    #               *after* prepare returns (post-L1-fit truncation).
+    #   "no_sram":  explicitly disable SRAM (clear sram_hot_experts so sram_slots
+    #               isn't built, and override=[] so kernel pipeline allocates nothing).
+    #   explicit (t1_picked, t8_*, ...):  override list wins; sram_hot_experts may
+    #               still build sram_slots but the kernel pipeline + indices use
+    #               the override.
+    #
+    # Rigged: scenarios split TopK winners vs non-winners so *_picked fires at runtime
+    #         and *_not_picked stays idle (exercises the is_sram_expert filter).
+    # Unrigged: no winners known ahead of time; just take first N IDs (0..N-1).
+    #         *_picked / *_not_picked collapse since we can't distinguish.
+    if sram_scenario == "default":
+        sram_override = None
+    elif sram_scenario == "no_sram":
+        sram_override = []
+        # Disable sram_slots build so SRAM truly doesn't fire.
+        sram_hot_experts = None
+        sram_core_grids = None
+    elif rigged_expert_ids is not None:
+        winners = [grp * 32 + e for grp in rigged_group_ids for e in rigged_expert_ids[grp]]
+        non_winners = [eid for eid in range(256) if eid not in winners]
+        # For t8_*_picked, N = number of winners placed in SRAM (rest are non-winners).
+        # Sweep covers the full SRAM-offload curve from 0 (none_picked) to 8 (all_picked).
+        T8_PICKED_COUNT = {
+            "t8_none_picked": 0,
+            "t8_one_picked": 1,
+            "t8_two_picked": 2,
+            "t8_three_picked": 3,
+            "t8_four_picked": 4,
+            "t8_five_picked": 5,
+            "t8_six_picked": 6,
+            "t8_seven_picked": 7,
+            "t8_all_picked": 8,
+        }
+        if sram_scenario in T8_PICKED_COUNT:
+            n = T8_PICKED_COUNT[sram_scenario]
+            sram_override = winners[:n] + non_winners[: 8 - n]
+        else:
+            sram_override = {
+                "t1_picked": [winners[0]],
+                "t1_not_picked": [non_winners[0]],
+                "t2_both_picked": winners[:2],
+                "t2_partial": [winners[0], non_winners[0]],
+                "t2_none_picked": non_winners[:2],
+                "t4_all_picked": winners[:4],
+            }[sram_scenario]
+    else:
+        scenario_count = {
+            "t1_picked": 1,
+            "t1_not_picked": 1,
+            "t2_both_picked": 2,
+            "t2_partial": 2,
+            "t2_none_picked": 2,
+            "t4_all_picked": 4,
+            "t8_none_picked": 8,
+            "t8_one_picked": 8,
+            "t8_two_picked": 8,
+            "t8_three_picked": 8,
+            "t8_four_picked": 8,
+            "t8_five_picked": 8,
+            "t8_six_picked": 8,
+            "t8_seven_picked": 8,
+            "t8_all_picked": 8,
+        }[sram_scenario]
+        sram_override = list(range(scenario_count))
+    sram_expert_ids = resolve_sram_expert_ids(ROUTED_EXPERT_LAYER_IDX, sram_override, is_moe=True)
+    logger.info(
+        f"SRAM scenario {sram_scenario!r}: initial sram_expert_ids={sram_expert_ids} "
+        f"(may be replaced by sram_slots.slot_experts post-prepare for 'default' scenario)"
+    )
+
+    # Log BSPM precision distribution for SRAM-placed experts. Helps explain PCC:
+    # if all tiles are bfp8, the BSPM would be near bf16 quality; if many bfp0/bfp2,
+    # BSPM compression is aggressive and forcing them through uniform-bfp4 SRAM
+    # may actually be more precise.
+    bspm_dir_env = _optional_bspm_dir()
+    if sram_expert_ids and bspm_dir_env is not None:
+        from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
+
+        _bspm_path = bspm_dir_env / f"layer_{ROUTED_EXPERT_LAYER_IDX}" / "precision_eval" / "precision_map_B_3.5.bspm"
+        if _bspm_path.exists():
+            _bspm = load_bspm_for_layer(str(_bspm_path))
+            _fmt_names = ["bfp8", "bfp4", "bfp2", "bfp0"]
+            _proj_names = ["gate", "up", "down"]
+            for eid in sram_expert_ids:
+                if eid >= _bspm["n_experts"]:
+                    continue
+                for p_idx, p_name in enumerate(_proj_names):
+                    codes = _bspm["codes"][eid, p_idx]
+                    total = int(codes.size)
+                    pct = {
+                        _fmt_names[i]: f"{100 * int((codes == i).sum()) / total:.1f}%"
+                        for i in range(4)
+                        if int((codes == i).sum()) > 0
+                    }
+                    logger.info(f"BSPM expert {eid:3d} {p_name:4s}: {pct}")
+        else:
+            logger.warning(f"BSPM file not found, skipping distribution log: {_bspm_path}")
 
     logger.info("Preparing layer weights on device...")
     # ``sram_hot_experts`` is ``SramHotExpertConfig``: ``layer_idx -> ranked expert indices``.
     # This test only builds candidates for ``ROUTED_EXPERT_LAYER_IDX`` (see
     # ``_build_sram_hot_expert_kwargs``), so the dict has a single key; multi-layer
     # callers use the same shape with more entries.
+    #
+    # Deferred SRAM alloc under enable_sram_bspm: when BSPM-SRAM is on, SRAM CT
+    # sizes diverge per device → if allocated before create_decoder_block_tensors,
+    # SDPA buffer (allocated after) lands at per-device-different L1 addresses,
+    # breaking MLA's uniform-address assumption. Build DRAM weights first, then
+    # SDPA via create_decoder_block_tensors, then SRAM CTs (which land below the
+    # uniform SDPA address). Under uniform-BFP4 the direct path is fine (SRAM
+    # sizes are uniform per device). The parametrized flag requires BSPM_DIR
+    # to be set (otherwise there's no BSPM source to use).
+    if enable_sram_bspm and _optional_bspm_dir() is None:
+        pytest.skip("enable_sram_bspm=True requires BSPM_DIR env var to be set")
+    # Unified path: prepare_moe_layer_weights handles both explicit-list and
+    # auto-fit SRAM scenarios via prepare_compressed_sram_slots.
+    _prep_sram_ids = sram_expert_ids
+    _prep_enable_sram_bspm = enable_sram_bspm
     layer_weights = prepare_moe_layer_weights(
         submesh,
         state_dict,
@@ -631,11 +815,22 @@ def test_decoder(
         move_to_device=True,
         sram_hot_experts=sram_hot_experts,
         sram_core_grids=sram_core_grids,
-        sram_assigner=sram_assigner,
-        worker_l1_size=device_params.get("worker_l1_size") if sram_hot_experts is not None else None,
+        worker_l1_size=device_params.get("worker_l1_size"),
         compressed_tp8=True,
         bspm_dir=_optional_bspm_dir(),
+        enable_sram_bspm=_prep_enable_sram_bspm,
+        sram_expert_ids=_prep_sram_ids,
     )
+
+    # When no explicit override (the "default" scenario) and sram_slots got built,
+    # the kernel-pipeline weights are for sram_slots.slot_experts (L1-fit-truncated
+    # from sram_hot_experts). Use that same list for create_gate_indices_tensor's
+    # bit-15 encoding so indices and weights agree.
+    if not sram_expert_ids and layer_weights.sram_slots is not None:
+        sram_expert_ids = list(layer_weights.sram_slots.slot_experts)
+        logger.info(
+            f"SRAM scenario {sram_scenario!r}: final sram_expert_ids from sram_slots.slot_experts = {sram_expert_ids}"
+        )
 
     logger.info("Creating decoder block tensors...")
     d = create_decoder_block_tensors(
@@ -652,6 +847,7 @@ def test_decoder(
         is_moe=True,
         validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
         torch_input=torch_input,
+        sram_expert_ids=sram_expert_ids,
     )
 
     logger.info("Creating golden reference tensors...")
@@ -792,6 +988,9 @@ def test_decoder(
         gate_proj_weights_tensor=d["gate_proj_weights"],
         up_proj_weights_tensor=d["up_proj_weights"],
         down_proj_weights_tensor=d["down_proj_weights"],
+        sram_gate_proj_weights_tensor=d.get("sram_gate_proj_weights"),
+        sram_up_proj_weights_tensor=d.get("sram_up_proj_weights"),
+        sram_down_proj_weights_tensor=d.get("sram_down_proj_weights"),
         moe_final_output_tensor=None,
         rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
         shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
@@ -820,6 +1019,7 @@ def test_decoder(
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
+        enable_sram_bspm=enable_sram_bspm,
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
@@ -1110,6 +1310,12 @@ def test_decoder(
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
 @pytest.mark.parametrize("slot_id, num_slots", [(0, 2), (1, 2)])
+# Dense-MLP SRAM placement. DRAM list stays full (8 chunks) for sizing/CB probes;
+# placement selects which chunks the kernel processes via the SRAM matmul instead
+# of the DRAM matmul (the latter iterates 8 slots and skips SRAM-flagged ones).
+#   all-dram → 0 chunks via SRAM (baseline)
+#   all-sram → 8 chunks via SRAM (n_dram_active=0 → DRAM chain skipped at runtime)
+@pytest.mark.parametrize("dense_placement", ["all-dram", "all-sram"])
 @pytest.mark.requires_grid_size((13, 10))
 @requires_hybrid_allocator
 def test_decoder_mlp(
@@ -1129,6 +1335,7 @@ def test_decoder_mlp(
     num_internal_iterations,
     slot_id,
     num_slots,
+    dense_placement,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation for a dense (MLP) layer with enable_routing=False."""
@@ -1148,8 +1355,24 @@ def test_decoder_mlp(
         seed=RoutedExpert.SEED,
     )
 
+    # Dense placement → which dense-MLP chunks go to SRAM. DRAM list stays full
+    # regardless; kernel skip via num_dram_experts_pre_selected = 8 - len(sram).
+    if dense_placement == "all-dram":
+        dense_sram_expert_ids = []
+    elif dense_placement == "all-sram":
+        dense_sram_expert_ids = list(range(8))  # all 8 chunks via SRAM
+    else:
+        raise ValueError(f"unknown dense_placement: {dense_placement}")
+    logger.info(f"Dense placement {dense_placement!r}: sram_expert_ids={dense_sram_expert_ids}")
+
     logger.info("Preparing dense layer weights on device...")
-    layer_weights = prepare_dense_layer_weights(submesh, state_dict, DENSE_LAYER_IDX, move_to_device=True)
+    layer_weights = prepare_dense_layer_weights(
+        submesh,
+        state_dict,
+        DENSE_LAYER_IDX,
+        move_to_device=True,
+        sram_expert_ids=dense_sram_expert_ids,
+    )
 
     logger.info("Creating dense decoder block tensors...")
     d = create_decoder_block_tensors(
@@ -1239,6 +1462,9 @@ def test_decoder_mlp(
         gate_proj_weights_tensor=d["gate_proj_weights"],
         up_proj_weights_tensor=d["up_proj_weights"],
         down_proj_weights_tensor=d["down_proj_weights"],
+        sram_gate_proj_weights_tensor=d.get("sram_gate_proj_weights"),
+        sram_up_proj_weights_tensor=d.get("sram_up_proj_weights"),
+        sram_down_proj_weights_tensor=d.get("sram_down_proj_weights"),
         moe_final_output_tensor=None,
         rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
         shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],

@@ -389,6 +389,52 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
     }
 }
 
+TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddressFromMeshTensor) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program;
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+        CBConfig cb_config;
+        CoreCoord core0(0, 0);
+        CoreRange cr(core0, core0);
+        CoreRangeSet cr_set({cr});
+
+        auto& mesh_device = devices_.at(id);
+        auto tensor_layout = TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::TILE),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
+        auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+        Buffer* tensor_buffer = tensor.mesh_buffer().get_reference_buffer();
+        ASSERT_NE(tensor_buffer, nullptr);
+
+        initialize_program(program_, cr_set);
+
+        const uint32_t core0_num_cbs = 2;
+        std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
+        std::vector<CBHandle> cb_ids;
+        auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
+        for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
+            CircularBufferConfig config1 =
+                CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}})
+                    .set_page_size(buffer_idx, cb_config.page_size);
+            auto cb = CreateCircularBuffer(program_, core0, config1);
+            golden_addresses_per_core[core0][buffer_idx] = expected_cb_addr;
+            cb_ids.push_back(cb);
+            expected_cb_addr += cb_config.page_size;
+        }
+
+        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+        UpdateDynamicCircularBufferAddress(program_, cb_ids[0], tensor);
+        golden_addresses_per_core[core0][0] = tensor_buffer->address();
+        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+    }
+}
+
 // Verifies that the MeshTensor overloads of CircularBufferConfig::set_globally_allocated_address[_and_total_size]
 // produce a CircularBufferConfig with identical state to the underlying Buffer overload. CircularBufferConfig's
 // operator== compares total_size, globally_allocated_address, data_formats, page_sizes, tiles, and

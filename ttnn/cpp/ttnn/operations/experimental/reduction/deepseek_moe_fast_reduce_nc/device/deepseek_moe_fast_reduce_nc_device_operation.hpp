@@ -10,6 +10,7 @@
 #include "deepseek_moe_fast_reduce_nc_device_operation_types.hpp"
 #include "deepseek_moe_fast_reduce_nc_program_factory.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {

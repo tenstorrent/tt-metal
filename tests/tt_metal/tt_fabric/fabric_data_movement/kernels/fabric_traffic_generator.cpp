@@ -73,8 +73,7 @@ void kernel_main() {
             reinterpret_cast<uint32_t>(packet_header),
             total_send_size);
     }
-    DPRINT << "TEARDOWN\n";
-    DEVICE_PRINT("TEARDOWN\n");
+    DPRINT("TEARDOWN\n");
 
     // Graceful shutdown - close fabric connection
     fabric_connection.close();

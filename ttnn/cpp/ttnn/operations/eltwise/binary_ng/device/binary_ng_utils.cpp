@@ -122,7 +122,7 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
             return fmt::format(
                 compute,
                 root,
-                is_where_op ? "eltwise_where_sfpu_scalar"
+                is_where_op ? "eltwise_where_sfpu_scalar.cpp"
                             : (is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp"));
         case KernelName::ComputeRowBcastNg:
             return fmt::format(
@@ -148,7 +148,8 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
 
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
-OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype) :
+OpConfig::OpConfig(
+    BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, [[maybe_unused]] std::optional<DataType> dtype) :
     binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
@@ -176,46 +177,42 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             }
             break;
         case BinaryOpType::LT:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 ||
-                dtype == DataType::UINT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::LT;
             } else {
                 postprocess = unary::UnaryOpType::LTZ;
             }
             break;
         case BinaryOpType::GT:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 ||
-                dtype == DataType::UINT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::GT;
             } else {
                 postprocess = unary::UnaryOpType::GTZ;
             }
             break;
         case BinaryOpType::GE:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 ||
-                dtype == DataType::UINT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::GE;
             } else {
                 postprocess = unary::UnaryOpType::GEZ;
             }
             break;
         case BinaryOpType::LE:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 ||
-                dtype == DataType::UINT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::LE;
             } else {
                 postprocess = unary::UnaryOpType::LEZ;
             }
             break;
         case BinaryOpType::EQ:
-            if (is_sfpu_op() && dtype == DataType::FLOAT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::EQ;
             } else {
                 postprocess = unary::UnaryOpType::EQZ;
             }
             break;
         case BinaryOpType::NE:
-            if (is_sfpu_op() && dtype == DataType::FLOAT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::NE;
             } else {
                 postprocess = unary::UnaryOpType::NEZ;
@@ -436,10 +433,10 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DIV_FLOOR: return {"div_int32_floor_tile_init();", "div_int32_floor_tile"};
         case DIV_TRUNC: return {"div_int32_trunc_tile_init();", "div_int32_trunc_tile"};
         case REMAINDER:
-            if (dtype == DataType::UINT32 || dtype == DataType::UINT16 || dtype == DataType::UINT8) {
-                TT_THROW("Unsupported data type for remainder {}", dtype);
-            } else if (dtype == DataType::INT32) {
+            if (dtype == DataType::INT32) {
                 return {"remainder_int32_tile_init();", "remainder_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"remainder_uint32_tile_init();", "remainder_uint32_tile"};
             } else {
                 return {"remainder_binary_tile_init();", "remainder_binary_tile"};
             }
@@ -533,15 +530,19 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
             return {"le_binary_tile_init();", "le_binary_tile"};
         case EQ:
-            if (dtype == DataType::FLOAT32) {
-                return {"eq_binary_tile_init();", "eq_binary_tile"};
+            if (int_data_format) {
+                return {
+                    fmt::format("eq_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("eq_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            TT_THROW("SFPU EQ binary tile is only defined for Float32");
+            return {"eq_binary_tile_init();", "eq_binary_tile"};
         case NE:
-            if (dtype == DataType::FLOAT32) {
-                return {"ne_binary_tile_init();", "ne_binary_tile"};
+            if (int_data_format) {
+                return {
+                    fmt::format("ne_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("ne_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            TT_THROW("SFPU NE binary tile is only defined for Float32");
+            return {"ne_binary_tile_init();", "ne_binary_tile"};
         case WHERE: {
             const char* data_format = (dtype == DataType::INT32)     ? "Int32"
                                       : (dtype == DataType::UINT32)  ? "UInt32"
@@ -691,8 +692,7 @@ uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataTy
                 auto val = static_cast<uint16_t>(static_cast<float>(v));
                 return (static_cast<uint32_t>(val) << 16) | val;
             }
-            // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-            auto scalar_bf16 = bfloat16::truncate(static_cast<float>(v));
+            auto scalar_bf16 = bfloat16(static_cast<float>(v));
             return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
         },
         scalar);

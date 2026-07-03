@@ -19,4 +19,11 @@ std::optional<std::string> get_mgd_path(uint32_t num_devices);
 
 void enable_fabric(uint32_t num_devices);
 
+// Tear down any previously installed fabric config by transitioning to
+// FabricConfig::DISABLED. Safe to call when no devices are open (per
+// tt_metal/impl/context/metal_env.cpp: "Going TO DISABLED is allowed"),
+// which is the case immediately after AutoContext::close_device() and
+// during the failure path of open_device_mesh().
+void disable_fabric();
+
 }  // namespace ttml::ttnn_fixed::distributed

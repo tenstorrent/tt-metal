@@ -70,10 +70,11 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
             TT_FATAL(
-                a.logical_shape()[-1] == gamma.value().logical_shape()[-1] &&
-                    a.padded_shape()[-1] == gamma.value().padded_shape()[-1],
-                "Input and gamma last logical and padded dims must match, got input: logical[-1]={} padded[-1]={} vs "
-                "gamma: logical[-1]={} padded[-1]={}",
+                a.padded_shape()[-1] == gamma.value().padded_shape()[-1] &&
+                    gamma.value().logical_shape()[-1] >= a.logical_shape()[-1],
+                "Input and gamma padded widths must match and gamma logical width must be >= input logical width "
+                "(otherwise valid input columns would be multiplied by gamma padding). Got input: logical[-1]={} "
+                "padded[-1]={} vs gamma: logical[-1]={} padded[-1]={}",
                 a.logical_shape()[-1],
                 a.padded_shape()[-1],
                 gamma.value().logical_shape()[-1],
@@ -118,10 +119,11 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     if (beta.has_value()) {
         if (beta.value().layout() == Layout::TILE) {
             TT_FATAL(
-                a.logical_shape()[-1] == beta.value().logical_shape()[-1] &&
-                    a.padded_shape()[-1] == beta.value().padded_shape()[-1],
-                "Input and beta last logical and padded dims must match, got input: logical[-1]={} padded[-1]={} vs "
-                "beta: logical[-1]={} padded[-1]={}",
+                a.padded_shape()[-1] == beta.value().padded_shape()[-1] &&
+                    beta.value().logical_shape()[-1] >= a.logical_shape()[-1],
+                "Input and beta padded widths must match and beta logical width must be >= input logical width "
+                "(otherwise valid input columns would be offset by beta padding). Got input: logical[-1]={} "
+                "padded[-1]={} vs beta: logical[-1]={} padded[-1]={}",
                 a.logical_shape()[-1],
                 a.padded_shape()[-1],
                 beta.value().logical_shape()[-1],
@@ -315,10 +317,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                             program_config.block_w,
                             tt::div_up(Kt, num_cores_c));
                         TT_FATAL(
-                            Mt / num_cores_r == program_config.block_h,
-                            "block_h ({}) must equal to M (in tiles)/ num_cores_r ({})",
+                            tt::div_up(Mt, num_cores_r) == program_config.block_h,
+                            "block_h ({}) must equal ceil(Mt / num_cores_r) ({}); Mt={}, num_cores_r={}",
                             program_config.block_h,
-                            Mt / num_cores_r);
+                            tt::div_up(Mt, num_cores_r),
+                            Mt,
+                            num_cores_r);
                     } else {
                         TT_FATAL(
                             tt::div_up(Kt, num_cores_r) == program_config.block_w,
@@ -326,10 +330,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                             program_config.block_w,
                             tt::div_up(Kt, num_cores_r));
                         TT_FATAL(
-                            Mt / num_cores_c == program_config.block_h,
-                            "block_h ({}) must equal to M (in tiles) / num_cores_c ({})",
+                            tt::div_up(Mt, num_cores_c) == program_config.block_h,
+                            "block_h ({}) must equal ceil(Mt / num_cores_c) ({}); Mt={}, num_cores_c={}",
                             program_config.block_h,
-                            Mt / num_cores_c);
+                            tt::div_up(Mt, num_cores_c),
+                            Mt,
+                            num_cores_c);
                     }
                 }
                 if (b.has_value()) {
@@ -398,7 +404,10 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                     CoreCoord grid_start_core = shard_spec.grid.bounding_box().start_coord;
                     CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
                     shard_spec.grid = output_grid;
-                    auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        operation_attributes.output_mem_config.memory_layout(),
+                        operation_attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
                 }
@@ -416,7 +425,8 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
 
                 auto mem_config = operation_attributes.output_mem_config;
                 if (!mem_config.shard_spec().has_value()) {
-                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
+                    mem_config = tt::tt_metal::MemoryConfig(
+                        mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
                 }
 
                 return ttnn::TensorSpec(

@@ -1,6 +1,12 @@
 # Source files for ttnn_op_experimental_ssm.
 # Module owners should update this file when adding/removing/renaming source files.
 
+set(TTNN_OP_EXPERIMENTAL_SSM_API_HEADERS
+    hc_sum_reduce/hc_sum_reduce.hpp
+    prefix_scan/prefix_scan.hpp
+    repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul.hpp
+)
+
 set(TTNN_OP_EXPERIMENTAL_SSM_SRCS
     hc_sum_reduce/device/hc_sum_reduce_device_operation.cpp
     hc_sum_reduce/device/hc_sum_reduce_program_factory.cpp

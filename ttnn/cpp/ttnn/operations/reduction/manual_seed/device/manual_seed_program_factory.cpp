@@ -120,8 +120,8 @@ tt::tt_metal::ProgramDescriptor ManualSeedSingleSeedSetCoresProgramFactory::crea
 
     // Tensor config info
     const auto& user_ids_tensor = tensor_args.user_ids.value();
-    auto* const user_ids_tensor_buffer = user_ids_tensor.buffer();
-    const auto number_of_ids = static_cast<uint32_t>(user_ids_tensor.logical_volume());
+    const auto& user_ids_mesh = user_ids_tensor.mesh_tensor();
+    const auto number_of_ids = static_cast<uint32_t>(user_ids_mesh.logical_volume());
 
     // Create circular buffer for user_ids
     constexpr uint32_t user_ids_cb_index = tt::CBIndex::c_0;
@@ -140,7 +140,7 @@ tt::tt_metal::ProgramDescriptor ManualSeedSingleSeedSetCoresProgramFactory::crea
 
     // Create reader kernel
     std::vector<uint32_t> reader_compile_time_args = {user_ids_cb_index, kernel_communication_cb_index, number_of_ids};
-    TensorAccessorArgs(*user_ids_tensor_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(user_ids_mesh).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = reader_kernel_path;
@@ -154,7 +154,7 @@ tt::tt_metal::ProgramDescriptor ManualSeedSingleSeedSetCoresProgramFactory::crea
         const auto& core = cores[core_id];
 
         // Set runtime args for reader kernel
-        reader_desc.emplace_runtime_args(core, {user_ids_tensor_buffer, core_id});
+        reader_desc.emplace_runtime_args(core, {user_ids_mesh, core_id});
     }
     desc.kernels.push_back(std::move(reader_desc));
 
@@ -190,11 +190,11 @@ tt::tt_metal::ProgramDescriptor ManualSeedSetSeedsSetCoresProgramFactory::create
 
     // Tensor config info
     const auto& user_ids_tensor = tensor_args.user_ids.value();
-    auto* const user_ids_tensor_buffer = user_ids_tensor.buffer();
-    const auto number_of_ids = static_cast<uint32_t>(user_ids_tensor.logical_volume());
+    const auto& user_ids_mesh = user_ids_tensor.mesh_tensor();
+    const auto number_of_ids = static_cast<uint32_t>(user_ids_mesh.logical_volume());
 
     const auto& seeds_tensor = tensor_args.seeds.value();
-    auto* const seeds_tensor_buffer = seeds_tensor.buffer();
+    const auto& seeds_mesh = seeds_tensor.mesh_tensor();
 
     // Create circular buffers
     constexpr uint32_t user_ids_cb_index = tt::CBIndex::c_0;
@@ -217,8 +217,8 @@ tt::tt_metal::ProgramDescriptor ManualSeedSetSeedsSetCoresProgramFactory::create
     // Create reader kernel
     std::vector<uint32_t> reader_compile_time_args = {
         user_ids_cb_index, seeds_cb_index, kernel_communication_cb_index, number_of_ids};
-    TensorAccessorArgs(*user_ids_tensor_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*seeds_tensor_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(user_ids_mesh).append_to(reader_compile_time_args);
+    TensorAccessorArgs(seeds_mesh).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = reader_kernel_path;
@@ -232,7 +232,7 @@ tt::tt_metal::ProgramDescriptor ManualSeedSetSeedsSetCoresProgramFactory::create
         const auto& core = cores[core_id];
 
         // Set runtime args for reader kernel
-        reader_desc.emplace_runtime_args(core, {user_ids_tensor_buffer, seeds_tensor_buffer, core_id});
+        reader_desc.emplace_runtime_args(core, {user_ids_mesh, seeds_mesh, core_id});
     }
     desc.kernels.push_back(std::move(reader_desc));
 

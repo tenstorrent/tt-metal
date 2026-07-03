@@ -147,7 +147,7 @@ CPMAddPackage(
 ############################################################################################################################
 
 CPMAddPackage(
-    NAME googletest
+    NAME GTest
     GITHUB_REPOSITORY google/googletest
     GIT_TAG v1.13.0
     VERSION 1.13.0
@@ -155,6 +155,7 @@ CPMAddPackage(
         "INSTALL_GTEST OFF"
         "BUILD_SHARED_LIBS OFF"
 )
+CPMRegisterPackage("googletest" "1.13.0")
 
 ############################################################################################################################
 # boost-ext reflect : https://github.com/boost-ext/reflect
@@ -221,7 +222,7 @@ CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
     GIT_TAG
-        c5a3a378aa61d104c82ca053cb1e367782cd3618 # v2.10.2
+        2a61ad2494d09fecb2e13322c1383342c299900d # 2.12.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
@@ -399,69 +400,42 @@ CPMAddPackage(
 )
 
 ####################################################################################################################
-# libdwarf : https://github.com/davea42/libdwarf-code
-# Portable DWARF debug info parser (no libelf dependency, built-in ELF reader)
+# CaDiCaL : https://github.com/arminbiere/cadical
+# Upstream has no CMakeLists.txt; after CPM download we build STATIC from the same sources as makefile.in
+# (src/*.cpp minus cadical/mobical, plus src/*.c). NBUILD avoids generated build.hpp; patch fixes vivify.hpp.
 ####################################################################################################################
 CPMAddPackage(
-    NAME libdwarf
-    GITHUB_REPOSITORY davea42/libdwarf-code
-    GIT_TAG v0.12.0
-    OPTIONS
-        "BUILD_DWARFDUMP OFF"
-        "BUILD_DWARFEXAMPLE OFF"
-        "BUILD_SHARED_LIBS OFF"
-        "PIC_ALWAYS ON"
-        "BUILD_TESTING OFF"
-        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    NAME cadical
+    GITHUB_REPOSITORY arminbiere/cadical
+    GIT_TAG rel-2.2.1
+    DOWNLOAD_ONLY YES
+    PATCHES
+        cadical_vivify_include_tuple.patch
 )
 
-####################################################################################################################
-# Kissat SAT solver (MIT): https://github.com/arminbiere/kissat — IPASIR C API, built via upstream configure+make.
-# Fetched with CPM; build uses ExternalProject + GNU Make (not Ninja) so it works when the main project uses Ninja.
-####################################################################################################################
-CPMAddPackage(NAME kissat GITHUB_REPOSITORY arminbiere/kissat GIT_TAG sc2024 DOWNLOAD_ONLY YES)
-
-find_program(
-    KISSAT_GNU_MAKE
-    NAMES
-        gmake
-        make
-    REQUIRED
+file(GLOB CADICAL_CXX CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.cpp")
+list(FILTER CADICAL_CXX EXCLUDE REGEX ".*/(cadical|mobical)\\.cpp$")
+file(GLOB CADICAL_C CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.c")
+add_library(
+    cadical
+    STATIC
+    ${CADICAL_CXX}
+    ${CADICAL_C}
 )
-
-set(KISSAT_EXT_BUILD_DIR "${kissat_SOURCE_DIR}/build")
-include(ExternalProject)
-ExternalProject_Add(
-    kissat_external
-    SOURCE_DIR "${kissat_SOURCE_DIR}"
-    BINARY_DIR "${KISSAT_EXT_BUILD_DIR}"
-    DOWNLOAD_COMMAND
-        ""
-    UPDATE_COMMAND
-        ""
-    CONFIGURE_COMMAND
-        "${CMAKE_COMMAND}" -E chdir "${kissat_SOURCE_DIR}" "${CMAKE_COMMAND}" -E env "CC=${CMAKE_C_COMPILER}" sh
-        "${kissat_SOURCE_DIR}/configure" -fPIC
-    BUILD_COMMAND
-        "${CMAKE_COMMAND}" -E chdir "${KISSAT_EXT_BUILD_DIR}" ${KISSAT_GNU_MAKE} -j4 libkissat.a
-    INSTALL_COMMAND
-        ""
-    BUILD_BYPRODUCTS
-        "${KISSAT_EXT_BUILD_DIR}/libkissat.a"
-    USES_TERMINAL_BUILD YES
+add_library(cadical::cadical ALIAS cadical)
+target_include_directories(cadical SYSTEM PUBLIC "${cadical_SOURCE_DIR}/src")
+target_compile_definitions(
+    cadical
+    PRIVATE
+        NBUILD
+        $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
 )
-
-add_library(kissat STATIC IMPORTED GLOBAL)
-add_library(kissat::kissat ALIAS kissat)
 set_target_properties(
-    kissat
+    cadical
     PROPERTIES
-        IMPORTED_LOCATION
-            "${KISSAT_EXT_BUILD_DIR}/libkissat.a"
-        INTERFACE_INCLUDE_DIRECTORIES
-            "${kissat_SOURCE_DIR}/src"
+        POSITION_INDEPENDENT_CODE
+            ON
 )
-add_dependencies(kissat kissat_external)
 
 ####################################################################################################################
 # Cap'n Proto : https://github.com/capnproto/capnproto
@@ -492,3 +466,15 @@ if(TT_METAL_USE_EMULE)
         EXCLUDE_FROM_ALL YES
     )
 endif()
+
+############################################################################################################################
+# tt-exalens (only native ELF/DWARF parser)
+############################################################################################################################
+CPMAddPackage(
+    NAME ttexalens
+    GITHUB_REPOSITORY tenstorrent/tt-exalens
+    GIT_TAG 6f5720240b7254b25cb3d78aef81769fc12a30f9
+    SOURCE_SUBDIR ttexalens/cpp/elf
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)

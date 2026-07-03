@@ -7,11 +7,11 @@ import re
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoModelForVision2Seq
+from transformers import AutoConfig, AutoModelForImageTextToText
 from transformers.models.mllama.modeling_mllama import MllamaForCausalLM
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.common.utility_functions import comp_allclose, comp_pcc, hf_cache_layer_kv, nearest_32
 from models.tt_transformers.tests.multimodal.utils import load_partial_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, get_single_rot_mat
@@ -125,12 +125,12 @@ def test_cross_attention_transformer_text_inference(
 
     add_prefix = lambda d, prefix: {f"{prefix}{k}": v for k, v in d.items()}
     partial_state_dict = add_prefix(
-        load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.language_model."),
+        load_partial_weights(AutoModelForImageTextToText, model_repo_name, "model.language_model."),
         "model.",
     )
 
     lm_head_weights = add_prefix(
-        load_partial_weights(AutoModelForVision2Seq, model_repo_name, "lm_head."),
+        load_partial_weights(AutoModelForImageTextToText, model_repo_name, "lm_head."),
         "lm_head.",
     )
     partial_state_dict.update(lm_head_weights)
@@ -242,7 +242,7 @@ def test_cross_attention_transformer_text_inference(
             pt_xattn_cache_chunks = [
                 kv
                 for layer_idx in reference_model.model.cross_attention_layers
-                for kv in (T.past_key_values.key_cache[layer_idx], T.past_key_values.value_cache[layer_idx])
+                for kv in hf_cache_layer_kv(T.past_key_values, layer_idx)
             ]
         else:
             T = get_ref_model_logits(
@@ -253,7 +253,8 @@ def test_cross_attention_transformer_text_inference(
                 inputs_embeds=h,
                 past_key_values=T.past_key_values,
                 use_cache=True,  # to also get past_key_values
-                cache_position=torch.tensor([T.past_key_values[0][0].shape[-2]]),
+                # transformers 5.x Cache dropped __getitem__; use the version-tolerant accessor.
+                cache_position=torch.tensor([hf_cache_layer_kv(T.past_key_values, 0)[0].shape[-2]]),
                 output_hidden_states=False,
                 output_attentions=False,
                 return_dict=True,

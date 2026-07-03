@@ -1,14 +1,20 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
+#include "api/core_local_mem.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
 #include "matmul_dataflow_common.hpp"
 
 void kernel_main() {
-    // M_tiles, padded_M_tiles, M_blocks_per_core, K_tiles, padded_K_tiles come from runtime args.
+    // M_tiles, padded_M_tiles, M_blocks_per_core, K_tiles come from runtime args (padded_K_tiles
+    // is derived locally below).
     constexpr uint32_t N_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(2);
@@ -17,9 +23,9 @@ void kernel_main() {
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
     constexpr uint32_t in0_tile_size = get_compile_time_arg_val(6);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(7);
-    const uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
-    const uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
-    const uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    Semaphore in0_sender_sem(get_compile_time_arg_val(8));
+    Semaphore in0_receiver_sem(get_compile_time_arg_val(9));
+    Semaphore in0_valid_sem(get_compile_time_arg_val(10));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(11);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(12);
     constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(13));
@@ -34,7 +40,7 @@ void kernel_main() {
     const uint32_t in0_dest_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_sender_noc_y = get_arg_val<uint32_t>(argidx++);
-    // OFFSET_M_AXIS + OFFSET_IN0_ROW override these from on-device offsets (and recomputes per-core M).
+    // OFFSET_ROW_MODE overrides these from on-device offsets (and recomputes per-core M).
     uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -44,7 +50,7 @@ void kernel_main() {
 
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output address comes next.
 
-    // Tensor accessors (scalar CTAs 0..15; tensor accessors start at 16: in0, then output).
+    // Tensor accessors (scalar CTAs 0..15; tensor accessors start at 16: in0, output, then offsets).
     constexpr auto in0_args = TensorAccessorArgs<16>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
 
@@ -52,76 +58,72 @@ void kernel_main() {
     const auto out_accessor = TensorAccessor(out_args, get_arg_val<uint32_t>(out_addr_rt_arg_idx), out_tile_size);
 
     // Variable-M: read actual M values from runtime args (after output address).
-    // OFFSET_M_AXIS overrides M_tiles and M_blocks_per_core from on-device offsets.
+    // OFFSET_ROW_MODE overrides M_tiles and M_blocks_per_core from on-device offsets.
     uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 1);
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 2);
     uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 3);
-    // Read-at-offset support — only read the runtime args when the compile-time flag is set
-    // (avoids any potential register pressure / dead-code propagation issues on the no-offset
-    // hot path used by all backward calls).
+    // Read-at-offset support — the parent-stride runtime args are read only when use_offset is set
+    // (the if-constexpr keeps them out of the no-offset compile variant). Row and K offsets are
+    // initialized to 0 here and overwritten below from offsets[start..start+2] when the role
+    // activates them.
     uint32_t in0_row_offset_tiles = 0U;
-    uint32_t parent_M_tiles_stride = 0U;
+    uint32_t out_row_offset_tiles = 0U;
     uint32_t in0_k_offset_tiles = 0U;
+    uint32_t parent_M_tiles_stride = 0U;
     uint32_t parent_K_tiles_stride = 0U;
     if constexpr (use_offset) {
-        in0_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 4);
-        parent_M_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 5);
-        in0_k_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
-        parent_K_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 7);
+        parent_M_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 4);
+        parent_K_tiles_stride = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 5);
     }
-    uint32_t out_row_offset_tiles = 0U;
-    if constexpr (use_out_offset) {
-        out_row_offset_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 8);
-    }
-    // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from on-device offsets[start..start+2].
-    uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 9);
+    // OFFSET_K_MODE overrides K_tiles from on-device offsets[start..start+2].
+    uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
 
-#ifdef OFFSETS_ACTIVE
-    // EP path: read on-device offsets and override the matching host-derived values. Each flag
-    // is independent; they compose freely.
-    //   OFFSET_M_AXIS:   offsets[start..start+2] → M_tiles + per-core M; publishes M on cb_ctrl.
-    //   OFFSET_IN0_ROW:  also sets in0_row_offset_tiles from offsets[start].
-    //   OFFSET_OUT_ROW:  also sets out_row_offset_tiles from offsets[start] when this kernel
-    //                    is the writer (non-transpose_core_grid).
-    //   OFFSET_IN0_K:    in0 K-slice — sets in0_k_offset_tiles + K_tiles; publishes K on cb_ctrl.
-    //   OFFSET_IN1_K:    in1 K-slice — only sets K_tiles locally here; dm_in1 owns the offset
-    //                    and (when OFFSET_IN0_K is not set) the cb_ctrl publish.
+    Noc noc;
+
+    // Read on-device offsets and override the matching host-derived values. One mode per role:
+    //   OFFSET_ROW_MODE (InputAndOutputRow): offsets[start..start+2] → M_tiles + per-core M
+    //                    (published on cb_ctrl), in0_row_offset_tiles, and — on the writer
+    //                    kernel (non-transpose_core_grid) — out_row_offset_tiles.
+    //   OFFSET_K_MODE   (InputAndWeightK):    in0 K-slice — sets in0_k_offset_tiles + K_tiles
+    //                    and publishes K on cb_ctrl (dm_in1 reads the same offsets for its slice).
     {
-        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 10);
-        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 11);
+        const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 7);
+        const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 8);
         constexpr auto offsets_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
         const auto offsets_acc = TensorAccessor(offsets_args, offsets_addr);
         // Use cb_id_in0's L1 backing as scratch — the CB is unused at kernel startup, and the
         // real in0 tile reads only begin inside the K-loop below.
-        // Limitation: this reads exactly ONE page (kPageBytes) of the offsets tensor. The
+        // Limitation: this reads exactly ONE page (page 0) of the offsets tensor. The
         // (start, end) pair must therefore fall within page 0 — i.e. (E + 1) * sizeof(uint32_t)
-        // <= kPageBytes, where E is num_experts. On Blackhole kPageBytes is typically 4 KB
-        // (~1024 experts max). Larger E would need a strided / page-aware read.
-        constexpr uint32_t kPageBytes = decltype(offsets_args)::AlignedPageSize;
-        const uint32_t offsets_l1_addr = get_write_ptr(tt::CBIndex::c_0);
-        noc_async_read(get_noc_addr(0, offsets_acc), offsets_l1_addr, kPageBytes);
-        noc_async_read_barrier();
+        // <= the offsets tensor's page size, where E is num_experts.
+        const uint32_t offsets_l1_addr = CircularBuffer(tt::CBIndex::c_0).get_write_ptr();
+        noc.async_read(
+            offsets_acc,
+            CoreLocalMem<uint32_t>(offsets_l1_addr),
+            offsets_acc.get_aligned_page_size(),
+            {.page_id = 0},
+            {});
+        noc.async_read_barrier();
         volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
         const uint32_t row_start = offsets_stage[offsets_start_index];
         const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
-#ifdef OFFSET_M_AXIS
-        const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 12);
+        // Contract: offsets must be tile-aligned — the windows below are addressed at tile
+        // granularity (offset / 32), so a non-multiple-of-32 offset would alias the wrong tile.
+        ASSERT(row_start % 32U == 0U && row_end % 32U == 0U);
+#ifdef OFFSET_ROW_MODE
+        const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 9);
         const uint32_t actual_eff_M = (row_end - row_start) / 32U;
         // Empty-expert (actual=0) → M_blocks_per_core=0 (loop skipped). Still clamp M_tiles
         // to >=1 for in0_shape construction (TensorShape2D asserts d0>0); the shape isn't
         // read once the M-loop is skipped.
         M_tiles = actual_eff_M > 0U ? actual_eff_M : 1U;
-#ifdef OFFSET_IN0_ROW
         in0_row_offset_tiles = row_start / 32U;
-#endif
-#ifdef OFFSET_OUT_ROW
-        // OFFSET_OUT_ROW + this kernel is the writer (non-transpose_core_grid) → also override
-        // out_row_offset_tiles. is_output_writer is a CTA constant for this kernel.
+        // On the writer kernel (non-transpose_core_grid) also override the output write row.
+        // is_output_writer is a CTA constant for this kernel.
         if constexpr (is_output_writer) {
             out_row_offset_tiles = row_start / 32U;
         }
-#endif
-        // Per-core M split — mirrors host actual_M_tiles_per_core formula. M_blocks_per_core
+        // Per-core M split — mirrors host M_tiles_per_core formula. M_blocks_per_core
         // is UNIFORM across cores (avoids breaking the sender/receiver semaphore chain when
         // some cores have less M-work). Read/write bounds checks (m_tile >= shape.logical_d0)
         // clip out-of-range tiles for the tail cores.
@@ -131,35 +133,36 @@ void kernel_main() {
         M_end_tile = per_core * (in0_idx + 1U);
         M_blocks_per_core = (per_core + M_block_tiles - 1U) / M_block_tiles;
         // Publish (M_start, M_end, M_blocks_per_core) to compute via cb_ctrl.
-        cb_reserve_back(tt::CBIndex::c_8, 1U);
-        volatile tt_l1_ptr uint32_t* ctrl_l1 =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_8));
+        CircularBuffer cb_ctrl(tt::CBIndex::c_8);
+        cb_ctrl.reserve_back(1U);
+        volatile tt_l1_ptr uint32_t* ctrl_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_ctrl.get_write_ptr());
         ctrl_l1[0] = M_start_tile;
         ctrl_l1[1] = M_end_tile;
         ctrl_l1[2] = M_blocks_per_core;
-        cb_push_back(tt::CBIndex::c_8, 1U);
-#endif  // OFFSET_M_AXIS
-#ifdef OFFSET_IN0_K
+        cb_ctrl.push_back(1U);
+#endif  // OFFSET_ROW_MODE
+#ifdef OFFSET_K_MODE
         in0_k_offset_tiles = row_start / 32U;
         K_tiles = (row_end - row_start) / 32U;
-        cb_reserve_back(tt::CBIndex::c_8, 1U);
-        volatile tt_l1_ptr uint32_t* ctrl_l1 =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_8));
+        CircularBuffer cb_ctrl(tt::CBIndex::c_8);
+        cb_ctrl.reserve_back(1U);
+        volatile tt_l1_ptr uint32_t* ctrl_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_ctrl.get_write_ptr());
         ctrl_l1[3] = K_tiles;
-        cb_push_back(tt::CBIndex::c_8, 1U);
-#elif defined(OFFSET_IN1_K)
-        // OFFSET_IN1_K without OFFSET_IN0_K: K_tiles still needs the local override (used for
-        // padded_K_tiles below) but dm_in1 owns the cb_ctrl publish for compute.
-        K_tiles = (row_end - row_start) / 32U;
-#endif  // OFFSET_IN0_K / OFFSET_IN1_K
+        cb_ctrl.push_back(1U);
+#endif  // OFFSET_K_MODE
     }
-#endif  // OFFSETS_ACTIVE
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
+
+    // Empty expert (K_tiles==0): K_num_blocks is 0 so the K-loop is skipped and in0_shape is
+    // never read; clamp its K extent to 1 only to satisfy TensorShape2D's d>0 assert.
+    const uint32_t K_tiles_shape = K_tiles > 0U ? K_tiles : 1U;
+    const uint32_t padded_K_tiles_shape = padded_K_tiles > 0U ? padded_K_tiles : K_block_tiles;
 
     // Storage layout: without transpose_a the input is stored as [M, K]; with it, as [K, M].
     // shape carries the MATMUL-coord effective sizes — used for bounds checks.
-    const TensorShape2D in0_shape = transpose_a ? TensorShape2D(K_tiles, M_tiles, padded_K_tiles, padded_M_tiles)
-                                                : TensorShape2D(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
+    const TensorShape2D in0_shape = transpose_a
+                                        ? TensorShape2D(K_tiles_shape, M_tiles, padded_K_tiles_shape, padded_M_tiles)
+                                        : TensorShape2D(M_tiles, K_tiles_shape, padded_M_tiles, padded_K_tiles_shape);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
 
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
@@ -168,20 +171,9 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
+    CircularBuffer cb_in0(cb_id_in0);
 
-    volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
-    *(in0_valid_semaphore_addr_ptr) = VALID;
-    volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_receiver_semaphore_addr);
-
-    volatile tt_l1_ptr uint32_t* in0_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_sender_semaphore_addr);
-    const uint64_t in0_sender_semaphore_noc_addr =
-        get_noc_addr(in0_sender_noc_x, in0_sender_noc_y, in0_sender_semaphore_addr);
-
-    const uint64_t in0_receiver_semaphore_noc_addr =
-        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
+    in0_valid_sem.set(VALID);
 
     /**
      * This is a Row-Major output block ordering.
@@ -232,14 +224,15 @@ void kernel_main() {
                     continue;
                 }
                 const uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
-                cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                cb_in0.reserve_back(in0_block_num_tiles);
 
-                const uint32_t in0_start_address = get_write_ptr(cb_id_in0);
+                const uint32_t in0_start_address = cb_in0.get_write_ptr();
                 if constexpr (is_injector_core) {
                     read_in0_block_sync<M_block_tiles, K_block_tiles, transpose_a, use_offset>(
                         in0_reader,
                         in0_shape,
                         in0_start_address,
+                        cb_id_in0,
                         in0_tile_size,
                         m_tile,
                         m_tile_end,
@@ -250,34 +243,36 @@ void kernel_main() {
                         in0_k_offset_tiles,
                         parent_K_tiles_stride);
                 } else {
-                    // Get from previous device
-                    noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
+                    // Non-injector core: receive the block from the upstream sender core.
+                    in0_receiver_sem.set(INVALID);
+                    in0_sender_sem.up(noc, in0_sender_noc_x, in0_sender_noc_y, 1);
+                    in0_receiver_sem.wait(VALID);
                 }
 
-                // Critical to performance for sender to push data to compute before mcasting
-                // This frees sender to start next read earlier
-                cb_push_back(cb_id_in0, in0_block_num_tiles);
+                // Critical to performance for the sender to push data to compute before forwarding.
+                // This frees the sender to start the next read earlier.
+                cb_in0.push_back(in0_block_num_tiles);
 
                 if (!is_sink_core) {
-                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
-
-                    const uint64_t in0_unicast_data_addr =
-                        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
+                    in0_sender_sem.wait(1);
+                    in0_sender_sem.set(0);
 
                     /**
                      * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
                      * padded tiles. Use `current_block_bytes`.
                      */
-                    noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(in0_start_address),
+                        UnicastEndpoint{},
+                        current_block_bytes,
+                        {},
+                        {.noc_x = in0_dest_noc_x, .noc_y = in0_dest_noc_y, .addr = in0_start_address});
 
 #ifdef ARCH_BLACKHOLE
-                    noc_async_writes_flushed();
+                    noc.async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                    in0_valid_sem.relay_unicast(noc, in0_receiver_sem, in0_dest_noc_x, in0_dest_noc_y);
                 }
             }
 
@@ -295,17 +290,15 @@ void kernel_main() {
              */
             defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
             defer_write = defer_write && !is_injector_core;
-            // When K_num_blocks == 0 (empty K-axis offset / empty expert), the deferred-write
-            // trigger inside the K-loop never fires, so previously-deferred blocks would never
-            // reach DRAM and the tiles keep allocator leftovers. Force every block to a direct
-            // write so the kernel-side zero-init in compute lands in the output tensor.
+            // K_num_blocks == 0 (empty expert): the in-K-loop deferred-write trigger never
+            // fires, so force direct writes to flush compute's zero-init to DRAM.
             if (K_num_blocks == 0U) {
                 defer_write = false;
             }
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    do_final_block_write<M_block_tiles, N_block_tiles, use_out_offset>(
+                    write_block_sync_granular<M_block_tiles, N_block_tiles, use_out_offset>(
                         out_accessor,
                         out_shape,
                         cb_id_out,
@@ -319,6 +312,6 @@ void kernel_main() {
             }
         }
     }
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc.async_write_barrier();
+    noc.async_atomic_barrier();
 }

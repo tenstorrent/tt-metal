@@ -73,6 +73,7 @@ class LlamaMLP(AbstractModuleBase):
 
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
+        self.use_tp = use_tp
 
         if intermediate_size is None:
             intermediate_size = compute_swiglu_intermediate_size(embedding_size)
@@ -128,6 +129,18 @@ class LlamaMLP(AbstractModuleBase):
         Returns:
             Output tensor after MLP
         """
+        if not self.use_tp:
+            dropout_prob = 0.0 if self.get_run_mode() == RunMode.EVAL else self.dropout_prob
+            return ttml.ops.swiglu.swiglu(
+                input,
+                self.w1.weight.tensor,
+                self.w2.weight.tensor,
+                self.w3.weight.tensor,
+                dropout_prob,
+            )
+
+        # TP path: ColumnParallelLinear / RowParallelLinear inject collectives
+        # between matmuls, which the fused op cannot express.
         swished = ttml.ops.unary.silu(self.w1(input))
         gate = self.w3(input)
         gated = ttml.ops.binary.mul(swished, gate)

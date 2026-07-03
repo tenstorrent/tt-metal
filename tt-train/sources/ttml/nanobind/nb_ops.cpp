@@ -26,6 +26,8 @@
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
+#include "ops/mla_qkv_assemble_op.hpp"
+#include "ops/mla_q_rope.hpp"
 #include "ops/moe_ffn_swiglu_op.hpp"
 #include "ops/moe_group_op.hpp"
 #include "ops/moe_ungroup_op.hpp"
@@ -62,6 +64,7 @@ void py_module_types(nb::module_& m) {
     }
 
     m.def_submodule("matmul");
+    m.def_submodule("mla");
     {
         auto py_moe = m.def_submodule("moe");
         nb::class_<ttml::ops::MoEGroupOutputs>(py_moe, "MoEGroupOutputs");
@@ -163,7 +166,8 @@ void py_module(nb::module_& m) {
             &ttml::ops::distributed::vocab_parallel_cross_entropy_loss,
             nb::arg("logits"),
             nb::arg("targets"),
-            nb::arg("cluster_axis") = nb::none());
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("reduce") = ReduceType::MEAN);
     }
 
     {
@@ -330,6 +334,20 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_mla = static_cast<nb::module_>(m.attr("mla"));
+        py_mla.def(
+            "qkv_assemble",
+            &ttml::ops::mla_qkv_assemble,
+            nb::arg("q_pre"),
+            nb::arg("kv_up"),
+            nb::arg("k_pe"),
+            nb::arg("n_heads"),
+            nb::arg("qk_nope_dim"),
+            nb::arg("qk_rope_dim"),
+            nb::arg("v_dim"));
+    }
+
+    {
         auto py_attention = static_cast<nb::module_>(m.attr("attention"));
         // Overload 1: mask as ttml.autograd.Tensor (or None)
         py_attention.def(
@@ -380,6 +398,15 @@ void py_module(nb::module_& m) {
     {
         auto py_rope = static_cast<nb::module_>(m.attr("rope"));
         py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"), nb::arg("token_position") = 0);
+        py_rope.def(
+            "mla_q_rope",
+            &ttml::ops::mla_q_rope,
+            nb::arg("q_full"),
+            nb::arg("rope_params"),
+            nb::arg("qk_nope_dim"),
+            nb::arg("qk_rope_dim"),
+            "MLA Q RoPE with autograd: fused metal mla_q_rope forward and backward (neg cos/sin on backward).\n"
+            "q_full: [B, n_heads, S, qk_nope_dim + qk_rope_dim] TILE bf16. Requires qk_rope_dim <= 128.");
         py_rope.def(
             "gen_freqs",
             &ttml::ops::gen_freqs,

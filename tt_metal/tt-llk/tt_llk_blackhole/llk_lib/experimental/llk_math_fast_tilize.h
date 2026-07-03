@@ -24,15 +24,16 @@
 // Pack then reads 4 tiles from the DEST half using DST_ACCESS_STRIDED_MODE.
 // ============================================================================
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en = false, bool configure_remap = true>
 inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unpack_dst_format)
 {
-    // DEST remap (remap_addrs + swizzle_32b) is enabled here to mirror
-    // pack_untilize_dest_init's BH workaround (see tt-metal#17132 / tt-llk#989).
-    // Kernels that call fast_tilize_init from inside a loop pay the tensix_sync
-    // cost per iteration; systematic hoist is tracked in the same issues.
-    // No uninit - leaving the bits set is benign for subsequent ops.
-    _llk_math_reconfig_remap_(true);
+    if constexpr (configure_remap)
+    {
+        // DEST remap (remap_addrs + swizzle_32b) is enabled here to mirror
+        // pack_untilize_dest_init's BH workaround (see tt-metal#17132 / tt-llk#989).
+        // No uninit - leaving the bits set is benign for subsequent ops.
+        _llk_math_reconfig_remap_(true);
+    }
 
     // Compat fp32-dest: MOVA2D does not correctly handle 32-bit DEST rows (BH HW quirk,
     // same as WH). Temporarily clear Fp32_enabled so MOVA2D treats DEST as 16-bit.

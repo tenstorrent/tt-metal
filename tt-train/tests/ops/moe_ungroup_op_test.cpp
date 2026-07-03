@@ -160,7 +160,7 @@ TEST_F(MoeUngroupTest, LargeELocal) {
     constexpr uint32_t E = 64, K = 4;
     std::vector<uint16_t> leids;
     leids.reserve(32);
-    for (uint16_t i = 0; i < 32; ++i) leids.push_back(i);
+    for (uint32_t i = 0; i < 32; ++i) leids.push_back(static_cast<uint16_t>(i));
     run_and_check(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
@@ -172,7 +172,7 @@ TEST_F(MoeUngroupTest, LargeELocal) {
 void check_group_ungroup_roundtrip(uint32_t D, uint32_t B, uint32_t S, uint32_t H, uint32_t E, uint32_t K) {
     std::vector<uint16_t> leids;
     leids.reserve(E);
-    for (uint16_t i = 0; i < E; ++i) leids.push_back(i);
+    for (uint32_t i = 0; i < E; ++i) leids.push_back(static_cast<uint16_t>(i));
     auto host = make_inputs(D, B, S, H, E, K);
 
     auto g = build_group_inputs(host, leids, K);
@@ -222,4 +222,15 @@ TEST_F(MoeUngroupTest, GroupUngroupRoundTripLargerD) {
 
 TEST_F(MoeUngroupTest, GroupUngroupRoundTripLargerELocal) {
     check_group_ungroup_roundtrip(/*D=*/2, /*B=*/1, /*S=*/64, /*H=*/64, /*E=*/8, /*K=*/4);
+}
+
+// NIGHTLY_ prefix keeps this off the per-PR run (CI filters out *NIGHTLY*),
+// matching the convention in swiglu_op_test.cpp. Production-like shape: D=8,
+// large E=96, multi-thousand T_cap, wide H. Full S=4096/H=4096 would allocate
+// several ~0.5 GB host float arrays for the reference; S=1024/H=2048 keeps host
+// RAM modest while still exercising the large-E routing path and tile counts
+// that small per-PR cases don't. Profiling for the full roofline shape lives in
+// moe_profile_sweep_test.cpp.
+TEST_F(MoeUngroupTest, NIGHTLY_RealShapeLargeE) {
+    check_group_ungroup_roundtrip(/*D=*/8, /*B=*/1, /*S=*/1024, /*H=*/2048, /*E=*/96, /*K=*/8);
 }

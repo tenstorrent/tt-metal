@@ -13,6 +13,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 namespace ttnn::operations::matmul::utilities {
 
@@ -202,6 +203,7 @@ inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType
     using ttnn::operations::unary::UnaryOpType;
     switch (opType) {
         case UnaryOpType::GELU: return KernelActivation::GELU;
+        case UnaryOpType::GELU_TANH: return KernelActivation::GELU_TANH;
         case UnaryOpType::TANH: return KernelActivation::TANH;
         case UnaryOpType::SILU: return KernelActivation::SILU;
         case UnaryOpType::RELU6: return KernelActivation::RELU6;
@@ -253,6 +255,11 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
             result.type = KernelActivation::GELU;
             // param0 is vector mode (0=RC, 1=R, 2=C) or fast mode
             result.param0 = has_first ? static_cast<uint32_t>(params[0]) : 0;
+            break;
+
+        case UnaryOpType::GELU_TANH:
+            result.type = KernelActivation::GELU_TANH;
+            // No parameters
             break;
 
         case UnaryOpType::TANH:
@@ -327,6 +334,17 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
 
     return result;
 }
+
+void validate_matmul_reuse_work_split(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::Shape& a_shape_padded,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const MatmulMultiCoreReuseProgramConfig& program_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set = std::nullopt);
 
 }  // namespace ttnn::operations::matmul::utilities
 

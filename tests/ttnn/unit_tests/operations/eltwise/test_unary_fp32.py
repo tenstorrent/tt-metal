@@ -163,6 +163,21 @@ def test_acos_fp32(device):
     run_unary_fp32_test_with_ulp(device, ttnn.acos, torch.acos, max_ulp=100, pcc_check=True)
 
 
+def test_sinh_fp32_all_bfloat16_bitpatterns(device):
+    # Full-tensor torch.sinh overflows at +/-89.0 even though the rounded fp32 result is finite.
+    # Use a float64 golden rounded back to fp32 to test the kernel against the representable result.
+    run_unary_fp32_test_with_ulp(device, ttnn.sinh, lambda x: torch.sinh(x.double()).float(), max_ulp=3)
+
+
+def test_cosh_fp32_all_bfloat16_bitpatterns(device):
+    run_unary_fp32_test_with_ulp(
+        device,
+        ttnn.cosh,
+        lambda x: torch.cosh(x.double()).float(),
+        max_ulp=1,
+    )
+
+
 def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pcc_check=False, pcc=0.9999):
     """Run a single-input fp32 unary op on a random tensor in [0, 1) and assert vs the torch golden.
 
@@ -226,13 +241,13 @@ def test_log(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_sinh(device, h, w):
-    run_unary_test(device, h, w, ttnn.sinh, pcc_check=True)
+    run_unary_test(device, h, w, ttnn.sinh, ulp=3)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_cosh(device, h, w):
-    run_unary_test(device, h, w, ttnn.cosh, pcc_check=True, pcc=0.999)
+    run_unary_test(device, h, w, ttnn.cosh, ulp=1)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -241,8 +256,19 @@ def test_acosh(device, h, w):
     run_unary_test(device, h, w, ttnn.acosh, ulp=1, allow_nonfinite=True)
 
 
-@pytest.mark.skip("The current version doesn’t work with float32, but this will be fixed in issue #231689.")
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_asinh(device, h, w):
+    # Default [0, 1) input includes the small-x region where the log1p form fixes
+    # the catastrophic cancellation of the old log(|x| + sqrt(x^2 + 1)) chain.
+    # |x| < 0.75 uses a direct degree-6 polynomial (<=1 ulp); |x| >= 0.75 uses the
+    # cancellation-free log1p(|x| + x^2 / (1 + sqrt(1+x^2))) form (<=1.5 ulp).
+    run_unary_test(device, h, w, ttnn.asinh, ulp=2)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_atanh(device, h, w):
+    # The log1p reformulation makes the fp32 path stable on (-1, 1); the default
+    # [0, 1) input exercises the small-x stable region.
     run_unary_test(device, h, w, ttnn.atanh, ulp=2)

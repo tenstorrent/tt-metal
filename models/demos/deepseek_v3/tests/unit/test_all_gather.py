@@ -10,6 +10,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import skip_with_watcher
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from tests.sweep_framework.sweep_utils.ccl_common import get_mem_configs, get_serializable_shard_specs
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from tests.ttnn.utils_for_testing import maybe_trace
@@ -71,7 +72,7 @@ SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC = [
 
 @pytest.mark.requires_device(["N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": get_fabric_config(), "trace_region_size": 0}], indirect=True
 )
 @pytest.mark.parametrize("shape_dtype_buffer_type_shard_spec", SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])

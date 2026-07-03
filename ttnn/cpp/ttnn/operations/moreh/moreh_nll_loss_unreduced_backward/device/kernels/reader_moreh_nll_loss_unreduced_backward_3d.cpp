@@ -48,7 +48,8 @@ void kernel_main() {
     CircularBuffer cb_weight_obj(cb_weight);
     const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
-    read_line(cb_weight, cb_weight_scratch, addrg_weight, Ct);
+    CircularBuffer cb_weight_scratch_obj(cb_weight_scratch);
+    read_line(cb_weight_obj, cb_weight_scratch_obj, addrg_weight, Ct);
 
     cb_weight_obj.wait_front(Ct);
     CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
@@ -56,7 +57,7 @@ void kernel_main() {
 
     const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr);
 
-    auto zero = float_to_bfloat16(0.0f);
+    auto zero = fp32_to_bf16_truncate(0.0f);
 
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
@@ -67,10 +68,10 @@ void kernel_main() {
         uint32_t ct = nct % Ct;
 
         auto target_noc_id = nt * Wt + wt;
-        read_tile(cb_target, addrg_target, target_noc_id);
+        read_tile(cb_target_obj, addrg_target, target_noc_id);
 
         auto output_grad_noc_id = nt * Wt + wt;
-        read_tile(cb_output_grad, addrg_output_grad, output_grad_noc_id);
+        read_tile(cb_output_grad_obj, addrg_output_grad, output_grad_noc_id);
 
         cb_input_grad_obj.reserve_back(onetile);
         cb_target_obj.wait_front(onetile);
@@ -91,14 +92,14 @@ void kernel_main() {
                 uint16_t input_grad_val;
 
                 if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
-                    float output_grad_val = bfloat16_to_float(output_grad_l1_ptr[nw_tilized_idx]);
+                    float output_grad_val = bf16_to_fp32(output_grad_l1_ptr[nw_tilized_idx]);
 
 #if defined(WEIGHT)
-                    float weight_val = bfloat16_to_float(weight_l1_ptr[target_val]);
+                    float weight_val = bf16_to_fp32(weight_l1_ptr[target_val]);
 
-                    input_grad_val = float_to_bfloat16(-output_grad_val * weight_val);
+                    input_grad_val = fp32_to_bf16_truncate(-output_grad_val * weight_val);
 #else
-                    input_grad_val = float_to_bfloat16(-output_grad_val);
+                    input_grad_val = fp32_to_bf16_truncate(-output_grad_val);
 #endif
                 } else {
                     input_grad_val = zero;

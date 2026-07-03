@@ -40,7 +40,9 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<uint32_t> block_size_override = std::nullopt);
+    std::optional<uint32_t> block_size_override = std::nullopt,
+    std::optional<uint32_t> num_kv_heads_override = std::nullopt,
+    std::optional<uint32_t> cache_position_modulo = std::nullopt);
 
 ttnn::Tensor flash_multi_latent_attention_decode(
     const ttnn::Tensor& input_tensor_q,

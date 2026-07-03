@@ -144,7 +144,7 @@ Tensor atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<M
 
 Tensor div(
     const Tensor& input,
-    float value,
+    unary::ScalarVariant value,
     bool fast_and_approximate_mode,
     const std::optional<std::string>& rounding_mode,
     const std::optional<const DataType>& output_dtype,
@@ -389,11 +389,13 @@ Tensor div(
     return ttnn::floor(divided.value(), output_mem_config, output_tensor, sub_core_grids);
 }
 
-Tensor div_no_nan(const Tensor& input_a, float value, const std::optional<MemoryConfig>& /*output_mem_config*/) {
-    if (value == 0) {
+Tensor div_no_nan(
+    const Tensor& input_a, unary::ScalarVariant value, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    float value_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, value);
+    if (value_f == 0) {
         return ttnn::zeros_like(input_a);
     }
-    return ttnn::multiply(input_a, (1.0f / value));
+    return ttnn::multiply(input_a, (1.0f / value_f));
 }
 
 Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
@@ -406,8 +408,10 @@ Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optio
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
 }
 
-Tensor prelu(const Tensor& input, float weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
-    return ttnn::prelu_sfpu(input, weight);
+Tensor prelu(
+    const Tensor& input, unary::ScalarVariant weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    float weight_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, weight);
+    return ttnn::prelu_sfpu(input, weight_f);
 }
 
 Tensor prelu(
@@ -464,7 +468,7 @@ Tensor remainder(
 
 Tensor remainder(
     const Tensor& input,
-    float scalar,
+    unary::ScalarVariant scalar,
     const std::optional<const DataType>& /*output_dtype*/,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor,
@@ -473,7 +477,8 @@ Tensor remainder(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
-    return ttnn::unary_remainder(input, scalar, output_mem_config, output_tensor, sub_core_grids);
+    float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
+    return ttnn::unary_remainder(input, scalar_f, output_mem_config, output_tensor, sub_core_grids);
 }
 
 // FMOD result = input − (other * trunc(input/other))
@@ -500,15 +505,18 @@ Tensor fmod(
 
 Tensor fmod(
     const Tensor& input,
-    float scalar,
+    unary::ScalarVariant scalar,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/,
     const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
-    return ttnn::unary_fmod(input, scalar, output_mem_config);
+    float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
+    return ttnn::unary_fmod(input, scalar_f, output_mem_config);
 }
 
-Tensor floor_div(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
-    if (value == 0) {
+Tensor floor_div(
+    const Tensor& input_a, unary::ScalarVariant value, const std::optional<MemoryConfig>& output_mem_config) {
+    float value_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, value);
+    if (value_f == 0) {
         float t_inf = std::numeric_limits<float>::infinity();
         float t_nan = std::nanf("");
         return ttnn::where(
@@ -516,7 +524,7 @@ Tensor floor_div(const Tensor& input_a, float value, const std::optional<MemoryC
             t_nan,
             ttnn::multiply(ttnn::sign(input_a, output_mem_config), t_inf, std::nullopt, output_mem_config));
     }
-    Tensor temp = ttnn::multiply(input_a, (1.0f / value), std::nullopt, output_mem_config);
+    Tensor temp = ttnn::multiply(input_a, (1.0f / value_f), std::nullopt, output_mem_config);
     return ttnn::floor(temp);
 }
 
@@ -740,7 +748,7 @@ Tensor rsub(
 
 Tensor rsub(
     const Tensor& input_tensor_a,
-    const float input_b,
+    unary::ScalarVariant input_b,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
@@ -787,7 +795,7 @@ Tensor bias_gelu(
 
 Tensor bias_gelu(
     const Tensor& input_tensor_a,
-    const float bias,
+    unary::ScalarVariant bias,
     const std::optional<const DataType>& /*dtype*/,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,

@@ -16,9 +16,16 @@ constexpr uint32_t WALL_CLOCK_HIGH_INDEX = 2;
 // Sync marker ID - used to identify sync packets in real-time profiler stream
 constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 
+// CQDispatchSetWriteOffsetCmd::program_host_id and RT timestamp correlation: this value means the
+// dispatch event is not tied to a profiled program (raw streams, preamble defaults). dispatch_d
+// must not push it into the program-id FIFO; dispatch_s passes it to write_buffer_id for non-GO
+// commands so the host can filter those records out.
+constexpr uint16_t REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID = 0;
+
 // Program ID FIFO size
 constexpr uint32_t PROGRAM_ID_FIFO_SIZE = 32;
 
+#ifndef ARCH_QUASAR
 // Append a program ID to the circular buffer embedded in realtime_profiler_msg_t.
 // Returns true if successful, false if the buffer is full.
 // The control block (including this FIFO) lives in dispatch-core-local L1, assigned by
@@ -95,7 +102,7 @@ uint32_t pop_program_id(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
 
 // Write a program ID to both start and end timestamps of the current write buffer.
 // For GO_SIGNAL commands: pass the ID from pop_program_id().
-// For non-GO commands: pass 0 so the host filters them out.
+// For non-GO commands: pass REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID so the host filters them out.
 FORCE_INLINE
 void write_buffer_id(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uint32_t id) {
     RealtimeProfilerState state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
@@ -109,3 +116,19 @@ void write_buffer_id(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uint32_t i
         msg->kernel_end_b.id = id;
     }
 }
+#else
+FORCE_INLINE
+bool program_id_fifo_append(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t) { return false; }
+
+FORCE_INLINE
+bool program_id_fifo_pop(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t*) { return false; }
+
+FORCE_INLINE
+void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t*, bool) {}
+
+FORCE_INLINE
+uint32_t pop_program_id(volatile tt_l1_ptr realtime_profiler_msg_t*) { return 0; }
+
+FORCE_INLINE
+void write_buffer_id(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t) {}
+#endif

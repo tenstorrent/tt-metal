@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import os
 import time
 from functools import partial
 
@@ -17,11 +16,14 @@ from transformers import AutoTokenizer
 import ttnn
 from models.common.utility_functions import nearest_32
 from models.common.utils import top_k_top_p_filtering
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
+from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig
+from models.demos.t3000.falcon40b.reference.load_falcon_weights import load_falcon_reference_model
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.utils.device_sku import get_current_device_sku_name
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.model_config import determine_device_name
 
@@ -191,15 +193,33 @@ def run_falcon_demo_kv(
     # Set up warmup iterations and targets dicts for saving benchmark data
     N_warmup_iter = {}
     perf_targets = {}
+    resolved_perf_targets = None
+    verify_sku = None
     if perf_mode:
         logger.info("Running in performance measurement mode (invalid outputs)!")
 
         N_warmup_iter = {"inference_prefill": 5, "inference_decode": 5}
-        perf_targets = {
-            "prefill_t/s": None,
-            "decode_t/s": 36 * batch_size,
-            "decode_t/s/u": 36,
-        }
+        verify_sku = get_current_device_sku_name()
+        resolved_perf_targets = resolve_perf_targets(
+            model_name="falcon-40b",
+            sku=verify_sku,
+            batch_size=batch_size,
+            seq_len=max_seq_len,
+        )
+        if resolved_perf_targets:
+            if resolved_perf_targets.get("prefill_t/s") is not None:
+                perf_targets["prefill_t/s"] = float(resolved_perf_targets["prefill_t/s"])
+            if resolved_perf_targets.get("decode_t/s/u") is not None:
+                perf_targets["decode_t/s/u"] = float(resolved_perf_targets["decode_t/s/u"])
+            if resolved_perf_targets.get("decode_t/s") is not None:
+                perf_targets["decode_t/s"] = float(resolved_perf_targets["decode_t/s"])
+            elif "decode_t/s/u" in perf_targets:
+                perf_targets["decode_t/s"] = perf_targets["decode_t/s/u"] * batch_size
+        else:
+            logger.warning(
+                f"No centralized perf targets found for falcon-40b sku={verify_sku}, "
+                f"batch_size={batch_size}, seq_len={max_seq_len}"
+            )
 
     configuration = FalconConfig(**model_config_entries)
 
@@ -215,10 +235,11 @@ def run_falcon_demo_kv(
     logger.info("Loading weights...")
     profiler.start("loading_weights")
 
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
-        model_version, local_files_only=os.getenv("CI") == "true", low_cpu_mem_usage=True
-    )
-    hugging_face_reference_model.eval()
+    # transformers 5.x silently fails to populate the vendored Falcon via from_pretrained (the TT
+    # model then gets unloaded weights and the demo hangs on device); load the raw checkpoint in
+    # its native layout instead. bfloat16 matches the checkpoint dtype and keeps the full-model
+    # load within the demo's step timeout. See issue #47924.
+    hugging_face_reference_model = load_falcon_reference_model(model_version, dtype=torch.bfloat16)
     state_dict = hugging_face_reference_model.state_dict()
 
     profiler.end("loading_weights")
@@ -616,6 +637,15 @@ def run_falcon_demo_kv(
         input_sequence_length=num_input_tokens,
         output_sequence_length=1 if perf_mode else output_token_index + 1,
     )
+    if perf_mode and resolved_perf_targets:
+        verify_perf(
+            measurements,
+            expected_measurements={k: True for k in ("prefill_t/s", "decode_t/s", "decode_t/s/u") if k in perf_targets},
+            model_name="falcon-40b",
+            sku=verify_sku,
+            batch_size=batch_size,
+            seq_len=max_seq_len,
+        )
 
     return generated_text, measurements
 

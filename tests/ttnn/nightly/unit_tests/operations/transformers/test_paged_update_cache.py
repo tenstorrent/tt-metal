@@ -6,7 +6,6 @@ import torch
 import pytest
 import ttnn
 from loguru import logger
-from models.common.utility_functions import nearest_32, pad_by_zero
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 
 
@@ -255,6 +254,88 @@ def test_update_cache_decode_program_cache(
             cache_idx + 1, False, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
         )
 
+    assert device.num_program_cache_entries() == 1
+
+
+def run_update_cache_decode_attr_idxs(
+    cache_idx, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+):
+    """Drives the NON-index-tensor path: update positions are passed via the `update_idxs` list
+    (operation_attributes.update_idxs), which the C++ factory bakes into runtime args. This is the
+    path exercised by the DynamicRuntimeArg re-patching — the index-tensor path is already covered by
+    run_test_update_cache_decode and is correct on cache hits for a different reason (buffer re-patch)."""
+    input_shape = [1, num_users, num_heads, head_dim]
+    cache_shape = [num_users, num_heads, max_seq_len, head_dim]
+    cache = torch.randn(cache_shape).bfloat16().float()
+    cachett = ttnn.Tensor(cache, cache_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    x = torch.randn(input_shape).bfloat16().float()
+    x_pad = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_heads), "constant", 0)
+
+    xt = ttnn.Tensor(x_pad, input_dtype).to(ttnn.TILE_LAYOUT)
+    xt = ttnn.reshape(xt, ttnn.Shape(input_shape))
+    compute_grid_size = device.compute_with_storage_grid_size()
+    num_cores = num_users
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [xt.volume() // xt.padded_shape[-1] // num_cores, xt.padded_shape[-1]],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    xt = xt.to(device, input_mem_config)
+
+    # Distinct per-user positions; varying cache_idx between cached calls must move where the cache is
+    # written. update_idxs is passed as a plain list (NO update_idxs_tensor) -> attribute path.
+    cache_idxs = [cache_idx + i * 17 for i in range(num_users)]
+    cachett = ttnn.experimental.paged_update_cache(cachett, xt, update_idxs=cache_idxs, share_cache=False)
+
+    for i in range(num_users):
+        update_idx = cache_idxs[i]
+        x_view = x.permute(1, 2, 0, 3)[i, ...]
+        cache[i, 0:num_heads, update_idx : update_idx + 1, 0 : x.shape[-1]] = x_view
+
+    tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+
+    tt_updated_slice = []
+    for i in range(num_users):
+        update_idx = cache_idxs[i]
+        tt_slice = tt_got_back[i, 0:num_heads, update_idx : update_idx + 1, 0 : x.shape[-1]]
+        tt_updated_slice.append(tt_slice)
+    tt_updated_slice = torch.stack(tt_updated_slice, dim=0).permute(2, 0, 1, 3)
+
+    if input_dtype == ttnn.bfloat16 and cache_dtype == input_dtype:
+        eq_cache, _ = comp_equal(cache, tt_got_back)
+        eq_update, _ = comp_equal(x, tt_updated_slice)
+    else:
+        eq_cache, _ = comp_pcc(cache, tt_got_back, pcc=0.99)
+        eq_update, _ = comp_pcc(x, tt_updated_slice, pcc=0.99)
+    assert eq_cache and eq_update
+
+
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [32])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat16])
+def test_update_cache_decode_attr_idxs_program_cache(
+    head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+):
+    """Regression for the DynamicRuntimeArg fix on the NON-index-tensor path. update_idxs is excluded
+    from the program hash, so the two calls below must share ONE cache entry; and because the cache
+    write offset (cache_start_id / tile_update_offset_B) is re-patched on the cache hit, the second
+    call must write at its OWN positions (not the first call's frozen ones). Pins both halves:
+      - num_program_cache_entries() == 1  guards the hash exclusion (no re-hashing on differing idxs)
+      - the in-process correctness check on the 2nd call guards the frozen-arg bug."""
+    # First call: cache miss, builds + caches the program at one set of positions.
+    run_update_cache_decode_attr_idxs(
+        127, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    )
+    # Second call: DIFFERENT positions, same shapes -> program-cache HIT. Output must reflect the new
+    # positions (would fail with frozen cache_start_id before the get_dynamic_runtime_args fix).
+    run_update_cache_decode_attr_idxs(
+        1057, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    )
     assert device.num_program_cache_entries() == 1
 
 
@@ -923,3 +1004,379 @@ def test_paged_fill_cache_mesh_coords(
     passing, message = comp_equal(output_cache_torch, expected_cache_torch)
     logger.info(message)  # Log the comparison message regardless
     assert passing, message
+
+
+# ----------------------------------------------------------------------------
+# Batched paged_fill_cache: batch_idx_tensor with shape == [input_batch]
+# ----------------------------------------------------------------------------
+#
+# These tests exercise the new path where a single op call fills `input_batch`
+# rows of the cache in one shot, rather than the Python-loop pattern of one
+# scalar-batch_idx call per row. They validate against the per-row reference
+# (`get_expected_paged_fill_cache_output` applied iteratively).
+
+
+def _build_batched_inputs(
+    num_input_batch,
+    num_input_heads,
+    input_seq_len,
+    head_dim,
+    cache_max_blocks,
+    cache_block_size,
+    page_table_batch_size,
+    pt_max_blocks_per_seq,
+    batch_idxs,
+    inject_skip_for_batch_idx=None,
+    seed=0,
+):
+    """Construct a randomized cache + batched input + page_table for tests.
+
+    Cache is allocated as `[cache_max_blocks, 1, cache_block_size, head_dim]`,
+    matching how `test_paged_fill_cache_variants` and real vLLM/JAX callers
+    set up paged KV caches (cache_num_heads = 1 because GQA-style models share
+    a single KV-head dimension). The device-op now requires
+    `input_num_heads == cache_num_heads`, so callers of this helper must pass
+    `num_input_heads = 1`. The `num_input_heads` parameter is kept in the
+    signature for future use if a multi-head variant is added (which would
+    also need an updated cache shape and reference function).
+
+    cache_max_blocks is auto-bumped to a safe lower bound so all
+    `page_table_batch_size * pt_max_blocks_per_seq` slots fit even after the
+    kernel's per-head spill arithmetic; harmless for num_input_heads=1 (factor
+    of 1).
+    """
+    torch.manual_seed(seed)
+
+    required_blocks = page_table_batch_size * pt_max_blocks_per_seq * num_input_heads
+    if cache_max_blocks < required_blocks:
+        cache_max_blocks = required_blocks
+
+    initial_cache_torch = torch.randn(cache_max_blocks, 1, cache_block_size, head_dim).bfloat16() * 100
+    input_torch = (
+        torch.arange(num_input_batch * num_input_heads * input_seq_len * head_dim, dtype=torch.float32)
+        .reshape(num_input_batch, num_input_heads, input_seq_len, head_dim)
+        .bfloat16()
+        / 1000.0
+    )
+
+    page_table_torch_data = []
+    next_block_idx = 0
+    for _b in range(page_table_batch_size):
+        row = []
+        for _m in range(pt_max_blocks_per_seq):
+            row.append(next_block_idx % cache_max_blocks)
+            next_block_idx += 1
+        page_table_torch_data.append(row)
+    page_table_torch = torch.tensor(page_table_torch_data, dtype=torch.int32)
+
+    if inject_skip_for_batch_idx is not None and pt_max_blocks_per_seq > 1:
+        page_table_torch[inject_skip_for_batch_idx, pt_max_blocks_per_seq - 1] = -1
+
+    return initial_cache_torch, input_torch, page_table_torch
+
+
+def _reference_batched_paged_fill_cache(initial_cache_torch, input_torch, page_table_torch, batch_idxs):
+    """Apply paged_fill_cache once per input batch row, accumulating into a clone."""
+    num_input_batch = input_torch.shape[0]
+    assert num_input_batch == len(batch_idxs)
+    expected = initial_cache_torch.clone()
+    for b in range(num_input_batch):
+        # The single-batch reference expects input shape [1, num_heads, seq_len, head_dim].
+        single_batch_input = input_torch[b : b + 1]
+        expected = get_expected_paged_fill_cache_output(
+            expected,
+            single_batch_input,
+            page_table_torch,
+            int(batch_idxs[b]),
+        )
+    return expected
+
+
+def _run_batched_paged_fill_cache(
+    device,
+    num_input_batch,
+    num_input_heads,
+    input_seq_len,
+    head_dim,
+    cache_max_blocks,
+    cache_block_size,
+    page_table_batch_size,
+    pt_max_blocks_per_seq,
+    batch_idxs,
+    inject_skip_for_batch_idx=None,
+):
+    TILE_HEIGHT = 32
+    TILE_WIDTH = 32
+    assert head_dim % TILE_WIDTH == 0
+    assert input_seq_len % TILE_HEIGHT == 0
+    assert cache_block_size % TILE_HEIGHT == 0
+    for bi in batch_idxs:
+        assert int(bi) < page_table_batch_size
+
+    initial_cache_torch, input_torch, page_table_torch = _build_batched_inputs(
+        num_input_batch=num_input_batch,
+        num_input_heads=num_input_heads,
+        input_seq_len=input_seq_len,
+        head_dim=head_dim,
+        cache_max_blocks=cache_max_blocks,
+        cache_block_size=cache_block_size,
+        page_table_batch_size=page_table_batch_size,
+        pt_max_blocks_per_seq=pt_max_blocks_per_seq,
+        batch_idxs=batch_idxs,
+        inject_skip_for_batch_idx=inject_skip_for_batch_idx,
+    )
+
+    cache_tt = ttnn.from_torch(initial_cache_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    input_tt = ttnn.from_torch(input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    page_table_tt = ttnn.from_torch(page_table_torch, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+
+    batch_idxs_torch = torch.tensor(batch_idxs, dtype=torch.int32)
+    batch_idx_tensor_dev = ttnn.from_torch(
+        batch_idxs_torch, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
+    )
+
+    output_cache_tt = ttnn.experimental.paged_fill_cache(
+        cache_tt,
+        input_tt,
+        page_table_tt,
+        batch_idx_tensor=batch_idx_tensor_dev,
+        batch_idx=0,
+    )
+
+    expected_cache_torch = _reference_batched_paged_fill_cache(
+        initial_cache_torch, input_torch, page_table_torch, batch_idxs
+    )
+
+    output_cache_torch = ttnn.to_torch(output_cache_tt)
+    passing, message = comp_equal(output_cache_torch, expected_cache_torch)
+    logger.info(message)
+    assert passing, message
+
+
+# Only num_input_heads=1 is exercised here. The device-op validation
+# (paged_fill_cache_device_operation.cpp:62) requires
+# `input_num_heads == cache_num_heads`, and the test helper allocates the cache
+# with `cache_num_heads = 1` (matching how real vLLM/JAX callers configure paged
+# KV caches with GQA-style head sharing). Multi-head batched coverage would need
+# a separate helper that allocates cache as `[max_blocks, num_input_heads, ...]`
+# and an adapted reference function; not added here since no in-tree caller uses
+# that shape and the legacy tests (test_paged_fill_cache_variants etc.) only
+# exercise num_input_heads=1 as well.
+@pytest.mark.parametrize("num_input_heads", [1])
+@pytest.mark.parametrize("input_seq_len", [128, 2048])
+@pytest.mark.parametrize(
+    "num_input_batch, batch_idxs",
+    [
+        (2, [0, 1]),
+        (8, list(range(8))),
+        (32, list(range(32))),
+        # Non-contiguous batch_idxs: each input row writes to a non-sequential cache row.
+        (8, [5, 12, 0, 31, 17, 3, 9, 24]),
+    ],
+    ids=["b2_contig", "b8_contig", "b32_contig", "b8_permuted"],
+)
+def test_paged_fill_cache_batched(device, num_input_heads, input_seq_len, num_input_batch, batch_idxs):
+    """Single batched call fills `num_input_batch` cache rows in one op."""
+    _run_batched_paged_fill_cache(
+        device,
+        num_input_batch=num_input_batch,
+        num_input_heads=num_input_heads,
+        input_seq_len=input_seq_len,
+        head_dim=128,
+        cache_max_blocks=1024,
+        cache_block_size=64,
+        page_table_batch_size=32,
+        pt_max_blocks_per_seq=32,
+        batch_idxs=batch_idxs,
+    )
+
+
+@pytest.mark.parametrize(
+    "num_input_batch, batch_idxs, skip_for_batch_idx",
+    [
+        (4, [0, 1, 2, 3], 2),  # core may span the skipped batch
+        (8, [3, 1, 7, 0, 4, 2, 6, 5], 7),
+    ],
+    ids=["b4_skip_b2", "b8_perm_skip_b7"],
+)
+def test_paged_fill_cache_batched_skip_entries(device, num_input_batch, batch_idxs, skip_for_batch_idx):
+    """Per-block -1 (SKIP) sentinel entries in the page_table under the batched path."""
+    _run_batched_paged_fill_cache(
+        device,
+        num_input_batch=num_input_batch,
+        num_input_heads=1,
+        input_seq_len=2048,
+        head_dim=128,
+        cache_max_blocks=1024,
+        cache_block_size=64,
+        page_table_batch_size=32,
+        pt_max_blocks_per_seq=32,
+        batch_idxs=batch_idxs,
+        inject_skip_for_batch_idx=skip_for_batch_idx,
+    )
+
+
+def test_paged_fill_cache_batched_program_cache(device):
+    """Identical batched shapes share one program cache entry; new shape allocates a new one."""
+    common = dict(
+        num_input_heads=1,
+        input_seq_len=128,
+        head_dim=128,
+        cache_max_blocks=1024,
+        cache_block_size=64,
+        page_table_batch_size=32,
+        pt_max_blocks_per_seq=32,
+    )
+
+    initial_entries = device.num_program_cache_entries()
+
+    _run_batched_paged_fill_cache(device, num_input_batch=4, batch_idxs=[0, 1, 2, 3], **common)
+    after_first = device.num_program_cache_entries()
+    assert after_first - initial_entries == 1, "first call should create one program cache entry"
+
+    _run_batched_paged_fill_cache(device, num_input_batch=4, batch_idxs=[4, 5, 6, 7], **common)
+    after_second = device.num_program_cache_entries()
+    assert after_second == after_first, "same batched shape should reuse the program cache entry"
+
+    _run_batched_paged_fill_cache(device, num_input_batch=8, batch_idxs=list(range(8)), **common)
+    after_third = device.num_program_cache_entries()
+    assert after_third - after_second == 1, "different input_batch should allocate a new entry"
+
+
+@pytest.mark.parametrize("bad_tensor_size", [1, 3, 5, 7])
+def test_paged_fill_cache_batched_rejects_mismatched_batch_idx_tensor(device, bad_tensor_size):
+    """batch_idx_tensor must have exactly input_batch elements; anything else FATALs.
+
+    Covers the silent-wrong-result hole where input_batch > 1 paired with a
+    single-element batch_idx_tensor previously passed validation but produced
+    out-of-range writes in the kernel.
+    """
+    initial_cache_torch, input_torch, page_table_torch = _build_batched_inputs(
+        num_input_batch=4,
+        num_input_heads=1,
+        input_seq_len=128,
+        head_dim=128,
+        cache_max_blocks=1024,
+        cache_block_size=64,
+        page_table_batch_size=32,
+        pt_max_blocks_per_seq=32,
+        batch_idxs=[0, 1, 2, 3],
+    )
+    cache_tt = ttnn.from_torch(initial_cache_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    input_tt = ttnn.from_torch(input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    page_table_tt = ttnn.from_torch(page_table_torch, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+
+    bad = ttnn.from_torch(
+        torch.arange(bad_tensor_size, dtype=torch.int32),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+    )
+    with pytest.raises(RuntimeError):
+        ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx_tensor=bad, batch_idx=0)
+
+
+def test_paged_fill_cache_rejects_multi_batch_input_without_tensor(device):
+    """input_batch > 1 with no batch_idx_tensor was previously a silent wrong-result; now FATAL."""
+    initial_cache_torch, input_torch, page_table_torch = _build_batched_inputs(
+        num_input_batch=4,
+        num_input_heads=1,
+        input_seq_len=128,
+        head_dim=128,
+        cache_max_blocks=1024,
+        cache_block_size=64,
+        page_table_batch_size=32,
+        pt_max_blocks_per_seq=32,
+        batch_idxs=[0, 1, 2, 3],
+    )
+    cache_tt = ttnn.from_torch(initial_cache_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    input_tt = ttnn.from_torch(input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    page_table_tt = ttnn.from_torch(page_table_torch, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+
+    with pytest.raises(RuntimeError):
+        ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx=0)
+
+
+def test_paged_fill_cache_batched_mesh_coords(device):
+    """Mesh workload variant of the batched path on a single device.
+
+    The mesh workload factory dispatches to PagedFillCacheProgramFactory per
+    coordinate, so it inherits the batched behavior. This test pins it down
+    against the per-row reference.
+    """
+    num_input_batch = 4
+    batch_idxs = [0, 1, 2, 3]
+    initial_cache_torch, input_torch, page_table_torch = _build_batched_inputs(
+        num_input_batch=num_input_batch,
+        num_input_heads=1,
+        input_seq_len=128,
+        head_dim=128,
+        cache_max_blocks=1024,
+        cache_block_size=64,
+        page_table_batch_size=32,
+        pt_max_blocks_per_seq=32,
+        batch_idxs=batch_idxs,
+    )
+    cache_tt = ttnn.from_torch(initial_cache_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    input_tt = ttnn.from_torch(input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    page_table_tt = ttnn.from_torch(page_table_torch, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    batch_idx_tensor_dev = ttnn.from_torch(
+        torch.tensor(batch_idxs, dtype=torch.int32),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+    )
+
+    mesh_coords = {ttnn.MeshCoordinate(0, 0)}
+    output_cache_tt = ttnn.experimental.paged_fill_cache(
+        cache_tt,
+        input_tt,
+        page_table_tt,
+        batch_idx_tensor=batch_idx_tensor_dev,
+        batch_idx=0,
+        mesh_coords=mesh_coords,
+    )
+
+    expected_cache_torch = _reference_batched_paged_fill_cache(
+        initial_cache_torch, input_torch, page_table_torch, batch_idxs
+    )
+    output_cache_torch = ttnn.to_torch(output_cache_tt)
+    passing, message = comp_equal(output_cache_torch, expected_cache_torch)
+    logger.info(message)
+    assert passing, message
+
+
+def test_paged_fill_cache_batched_rejects_non_row_major_batch_idx_tensor(device):
+    """The writer kernel reads batch_idx_tensor as a single contiguous noc page;
+    require ROW_MAJOR layout so that read covers the whole 1D buffer."""
+    initial_cache_torch, input_torch, page_table_torch = _build_batched_inputs(
+        num_input_batch=4,
+        num_input_heads=1,
+        input_seq_len=128,
+        head_dim=128,
+        cache_max_blocks=1024,
+        cache_block_size=64,
+        page_table_batch_size=32,
+        pt_max_blocks_per_seq=32,
+        batch_idxs=[0, 1, 2, 3],
+    )
+    cache_tt = ttnn.from_torch(initial_cache_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    input_tt = ttnn.from_torch(input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    page_table_tt = ttnn.from_torch(page_table_torch, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+
+    # batch_idx_tensor must be ROW_MAJOR; TILE_LAYOUT should be rejected.
+    # int dtypes can't be tilized directly, so build a ROW_MAJOR tensor and
+    # tilize it; if that path is not supported, the test will skip itself.
+    try:
+        rm_tensor = ttnn.from_torch(
+            torch.tensor([0, 1, 2, 3], dtype=torch.int32),
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+        )
+        bad = ttnn.to_layout(rm_tensor, ttnn.TILE_LAYOUT)
+    except (RuntimeError, ValueError):
+        pytest.skip("Cannot construct a TILE_LAYOUT uint32 tensor on this build; layout assertion still in place.")
+
+    with pytest.raises(RuntimeError):
+        ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx_tensor=bad, batch_idx=0)

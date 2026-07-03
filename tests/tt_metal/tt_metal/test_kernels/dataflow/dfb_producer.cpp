@@ -22,7 +22,7 @@ void kernel_main() {
     Noc noc;
 
     uint32_t entry_size = dfb.get_entry_size();
-    const auto tensor_accessor = TensorAccessor(ta::src_tensor);
+    const auto tensor_accessor = TensorAccessor(tensor::src_tensor);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
         // Strided access: producer i owns pages i, i+P, i+2P, ...
@@ -32,11 +32,10 @@ void kernel_main() {
         if (page_id >= chunk_offset + entries_per_core) {
             break;
         }
-        // DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
-        // DEVICE_PRINT("producer tile id {} page id {}\n", tile_id, page_id);
+        // DPRINT("producer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            noc.async_read<Noc::TxnIdMode::ENABLED>(tensor_accessor, dfb, {.page_id = page_id}, {});
+            noc.async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = page_id}, {});
 #endif
         } else {
             dfb.reserve_back(1);
@@ -45,9 +44,7 @@ void kernel_main() {
             dfb.push_back(1);
         }
     }
-    // DPRINT << "PFW" << ENDL();
-    // DEVICE_PRINT("PFW\n");
+    // DPRINT("PFW\n");
     dfb.finish();
-    // DPRINT << "PFD" << ENDL();
-    // DEVICE_PRINT("PFD\n");
+    // DPRINT("PFD\n");
 }

@@ -1896,10 +1896,72 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
 
+// ProgramDescriptor (Contract-2) variant — mirrors the legacy Program& helper above.
+// Allocates the same five mux-side semaphores by pushing SemaphoreDescriptors into
+// desc.semaphores and recording their IDs into worker_rt_args. The arg-vector
+// layout (positions 0..16) is identical to the legacy helper so worker kernels
+// are byte-compatible across the two variants.
+void fabric_mux_connection_rt_args(
+    const bool mux_connection_valid,
+    const bool is_termination_master,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::ProgramDescriptor& desc,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id) {
+    // Allocate a worker-core-scoped semaphore by querying the next available ID
+    // and parking a SemaphoreDescriptor on the ProgramDescriptor. Returns the new ID.
+    auto alloc_sem = [&]() -> uint32_t {
+        auto id_opt = desc.find_available_semaphore_id(worker_logical_core, tt::CoreType::WORKER);
+        TT_FATAL(
+            id_opt.has_value(),
+            "No available semaphore ID for fabric mux connection on worker core (x={}, y={}, core_type=WORKER); "
+            "{} SemaphoreDescriptors already allocated on this ProgramDescriptor.",
+            worker_logical_core.x,
+            worker_logical_core.y,
+            desc.semaphores.size());
+        const uint32_t id = id_opt.value();
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = CoreRangeSet(CoreRange(worker_logical_core, worker_logical_core)),
+            .initial_value = 0});
+        return id;
+    };
+
+    worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
+    worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
+    worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
+    worker_rt_args.push_back(mux_virtual_core.y);     // fabric_mux_y 3
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_base_address(channel_type, worker_id));  // fabric_mux_channel_base_address 4
+    worker_rt_args.push_back(mux_kernel_config.get_connection_info_address(
+        channel_type, worker_id));  // fabric_mux_connection_info_address 5
+    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(
+        channel_type, worker_id));  // fabric_mux_connection_handshake_address 6
+    worker_rt_args.push_back(
+        mux_kernel_config.get_flow_control_address(channel_type, worker_id));  // fabric_mux_flow_control_address 7
+    worker_rt_args.push_back(
+        mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));    // fabric_mux_channel_id 9
+    worker_rt_args.push_back(termination_master_semaphore_id.value_or(alloc_sem()));  // termination_sync_address 10
+    worker_rt_args.push_back(alloc_sem());                        // local_fabric_mux_status_address 11
+    worker_rt_args.push_back(alloc_sem());                        // local_flow_control_address 12
+    worker_rt_args.push_back(alloc_sem());                        // local_teardown_address 13
+    worker_rt_args.push_back(alloc_sem());                        // local_buffer_index_address 14
+    worker_rt_args.push_back(termination_master_virtual_core.x);  // termination_master_noc_x 15
+    worker_rt_args.push_back(termination_master_virtual_core.y);  // termination_master_noc_y 16
+}
+
 namespace {  // anonymous namespace for internal helpers
 
 // Fabric bandwidth is based on raw hardware capability
-double lookup_fabric_bw(tt::ARCH arch) {
+double lookup_fabric_link_bw(tt::ARCH arch) {
     switch (arch) {
         // WH: 100 Gbps per link = 12.5 GB/s
         case tt::ARCH::WORMHOLE_B0: return 12.5;
@@ -1909,29 +1971,42 @@ double lookup_fabric_bw(tt::ARCH arch) {
     }
 }
 
-// Fabric latency was obtained by averaging empirical data across various machines,
-// topologies, and unicast_write vs scatter_write.
-double lookup_fabric_hop_latency_ns(tt::ARCH arch) {
+// One-way per-hop fabric latency (ns): marginal cost to forward the first packet across one more hop.
+// Measured on hardware via a single-clock round trip (src -> chip N hops away -> src) that cancels
+// cross-chip clock skew; per_hop = slope(RTT vs hops)/2, 256B payload (latency-bound), p50.
+// Fabric_1D uses 16B LowLatency header and Fabric_2D uses 96B Hybrid header.
+//   arch        2D fabric                          1D fabric
+//   Wormhole    874ns (for T3K, 907ns for Galaxy)  711ns (for T3K; 734ns on Galaxy for small hops)
+//   Blackhole   619ns (for p150_x4)                515ns (for p150_x4)
+// Note: Fabric_1D latency seems to increase with distance (~695*h + 4.7*h^2), not modelled here ...
+double lookup_fabric_hop_latency_ns(tt::ARCH arch, tt::tt_fabric::FabricConfig fabric_config) {
+    const bool is_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
     switch (arch) {
-        // WH: mean = 1528.6 ns, std dev = 57.5 ns (3.8%)
-        case tt::ARCH::WORMHOLE_B0: return 1528.6;
-        // BH: mean = 859.5 ns, std dev = 30.6 ns (3.6%)
-        case tt::ARCH::BLACKHOLE: return 859.5;
+        case tt::ARCH::WORMHOLE_B0: return is_2d ? 874.0 : 711.0;
+        case tt::ARCH::BLACKHOLE: return is_2d ? 619.0 : 515.0;
         default: TT_FATAL(false, "Fabric perf model: unsupported arch {}", arch);
     }
 }
 
 }  // namespace
 
-double estimate_fabric_transfer_ns(tt::ARCH arch, uint64_t data_bytes, uint32_t num_links, uint32_t num_hops) {
-    const double bw_per_link = lookup_fabric_bw(arch);
-    const double total_bw = bw_per_link * num_links;
-    const double transfer_ns = (total_bw > 0.0) ? static_cast<double>(data_bytes) / total_bw : 0.0;
+std::pair<int, int> estimate_fabric_transfer_cycles(
+    tt::ARCH arch,
+    tt::tt_fabric::FabricConfig fabric_config,
+    int clock_rate_mhz,
+    uint64_t data_bytes,
+    uint32_t num_links,
+    uint32_t num_hops) {
+    const double total_bw = lookup_fabric_link_bw(arch) * num_links;
+    const double bandwidth_ns = (total_bw > 0.0) ? static_cast<double>(data_bytes) / total_bw : 0.0;
 
-    const double hop_lat = lookup_fabric_hop_latency_ns(arch);
-    const double latency_ns = hop_lat * num_hops;
+    const double latency_ns = lookup_fabric_hop_latency_ns(arch, fabric_config) * num_hops;
 
-    return transfer_ns + latency_ns;
+    // Convert ns -> device clock cycles
+    const double cycles_per_ns = static_cast<double>(clock_rate_mhz) / 1000.0;
+    return {
+        static_cast<int>(std::ceil(bandwidth_ns * cycles_per_ns)),
+        static_cast<int>(std::ceil(latency_ns * cycles_per_ns))};
 }
 
 }  // namespace ttnn::ccl

@@ -1418,7 +1418,6 @@ def test_transpose_hc_mem_config(device, n, c, h, w):
     ids=["bfloat16", "float32", "int32", "bfloat8_b"],
 )
 def test_transpose_sharded(device, dim0, dim1, layout, input_sharding, output_sharding, dtype):
-    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/41662")
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is only supported for TILE layout")
 
@@ -1459,5 +1458,56 @@ def test_transpose_sharded(device, dim0, dim1, layout, input_sharding, output_sh
         input_mem_config=input_memory_config,
         output_mem_config=output_memory_config,
         layout=layout,
+        input_dtype=dtype,
+    )
+
+
+# RM + WIDTH-sharded coverage. `test_transpose_sharded` above only parametrizes
+# the input/output strategies over {HEIGHT, BLOCK}, so the WIDTH-sharded path is
+# entirely uncovered for ROW_MAJOR layout. WIDTH-sharded RM buffers have
+# `pages_per_shard_width > 1`, i.e. a single logical row spans multiple sub-row
+# pages on potentially distinct banks, which is the exact code path that
+# requires the multi-page split in `tt::data_movement::common::noc_async_*_sharded`
+# (dropped during PR #42130 / device 2.0 port and tracked as a follow-up).
+_RM_WIDTH_SHARDED_COMBOS = [
+    pytest.param(ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH, id="input_height-output_width"),
+    pytest.param(ttnn.ShardStrategy.BLOCK, ttnn.ShardStrategy.WIDTH, id="input_block-output_width"),
+    pytest.param(ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.HEIGHT, id="input_width-output_height"),
+    pytest.param(ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK, id="input_width-output_block"),
+    pytest.param(ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.WIDTH, id="input_width-output_width"),
+]
+
+
+@pytest.mark.parametrize(["dim0", "dim1"], [(2, 3), (2, 1), (0, 1)], ids=["wh", "hc", "cn"])
+@pytest.mark.parametrize(("input_sharding", "output_sharding"), _RM_WIDTH_SHARDED_COMBOS)
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.bfloat16, ttnn.float32, ttnn.int32],
+    ids=["bfloat16", "float32", "int32"],
+)
+def test_transpose_sharded_rm_width(device, dim0, dim1, input_sharding, output_sharding, dtype):
+    N = 1
+    C = 2
+    H = 256
+    W = 256
+
+    input_shape = (N, C, H, W)
+    output_shape = list(input_shape)
+    output_shape[dim0], output_shape[dim1] = input_shape[dim1], input_shape[dim0]
+
+    core_grid = ttnn.CoreGrid(x=2, y=4)
+    input_memory_config = ttnn.create_sharded_memory_config(input_shape, core_grid=core_grid, strategy=input_sharding)
+    output_memory_config = ttnn.create_sharded_memory_config(
+        output_shape, core_grid=core_grid, strategy=output_sharding
+    )
+
+    transpose(
+        input_shape,
+        device,
+        dim0=dim0,
+        dim1=dim1,
+        input_mem_config=input_memory_config,
+        output_mem_config=output_memory_config,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         input_dtype=dtype,
     )

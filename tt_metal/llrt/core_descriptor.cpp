@@ -66,7 +66,9 @@ inline std::string get_core_descriptor_file(
                 case tt::ARCH::QUASAR:
                     // Small Quasar sims: x_size=1 -> 1x3, x_size=2 -> 2x3
                     if (grid_size.x >= 2) {
-                        return core_desc_dir + "quasar_simulation_2x3_arch.yaml";
+                        return core_desc_dir + ((env.get_rtoptions().get_fast_dispatch())
+                                                    ? "quasar_simulation_2x3_arch_fast_dispatch.yaml"
+                                                    : "quasar_simulation_2x3_arch.yaml");
                     }
                     return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
             };

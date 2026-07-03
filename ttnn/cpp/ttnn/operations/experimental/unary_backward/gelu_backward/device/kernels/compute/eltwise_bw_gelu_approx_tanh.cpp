@@ -15,6 +15,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_unary/fill.h"
+#include "api/dataflow/circular_buffer.h"
 
 #define M_SQRT2 1.41421356237309504880f    /* sqrt(2) */
 #define M_2_SQRTPI 1.12837916709551257390f /* 2/sqrt(pi) */
@@ -25,6 +26,10 @@ void kernel_main() {
     constexpr auto cb_grad_out = tt::CBIndex::c_0;
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
+
+    CircularBuffer cb_grad_out_cb(cb_grad_out);
+    CircularBuffer cb_input_cb(cb_input);
+    CircularBuffer cb_grad_in_cb(cb_grad_in);
 
     constexpr float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;
     constexpr float kKappa = 0.044715;
@@ -37,16 +42,16 @@ void kernel_main() {
     sub_binary_tile_init();
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_reserve_back(cb_grad_in, 1);
-        cb_wait_front(cb_grad_out, 1);
-        cb_wait_front(cb_input, 1);
+        cb_grad_in_cb.reserve_back(1);
+        cb_grad_out_cb.wait_front(1);
+        cb_input_cb.wait_front(1);
 
         tile_regs_acquire();
 
         copy_tile(cb_grad_out, 0, 0);
         copy_tile(cb_input, 0, 1);
         copy_tile(cb_input, 0, 2);  // tile[2] = x
-        copy_tile(cb_input, 0, 8);  // tile[8] = x
+        copy_tile(cb_input, 0, 5);  // tile[5] = x
 
         // tile[1] = x^3
         square_tile(1);
@@ -93,7 +98,7 @@ void kernel_main() {
         mul_binary_tile(2, 3, 2);
 
         // tile[2] = x * pdf term
-        copy_dest_values(8, 3);
+        copy_dest_values(5, 3);
         mul_binary_tile(2, 3, 2);
 
         // result: tile[1] = grad * (cdf_term + x * pdf_term)
@@ -108,8 +113,8 @@ void kernel_main() {
 
         tile_regs_release();
 
-        cb_pop_front(cb_grad_out, 1);
-        cb_pop_front(cb_input, 1);
-        cb_push_back(cb_grad_in, 1);
+        cb_grad_out_cb.pop_front(1);
+        cb_input_cb.pop_front(1);
+        cb_grad_in_cb.push_back(1);
     }
 }

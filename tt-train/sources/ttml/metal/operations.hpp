@@ -6,8 +6,13 @@
 
 #include "ops/cross_entropy_bw/cross_entropy_bw.hpp"
 #include "ops/cross_entropy_fw/cross_entropy_fw.hpp"
+#include "ops/frobenius_normalize/frobenius_normalize.hpp"
+#include "ops/k_split_gram_matmul/k_split_gram_matmul.hpp"
 #include "ops/layernorm_bw/layernorm_bw.hpp"
 #include "ops/layernorm_fw/layernorm_fw.hpp"
+#include "ops/mla_qkv_assemble_bw/mla_qkv_assemble_bw.hpp"
+#include "ops/mla_qkv_assemble_fw/mla_qkv_assemble_fw.hpp"
+#include "ops/mla_q_rope/mla_q_rope.hpp"
 #include "ops/polynorm_fw/polynorm_fw.hpp"
 #include "ops/profiler_no_op/profiler_no_op.hpp"
 #include "ops/rmsnorm_bw/rmsnorm_bw.hpp"
