@@ -33,6 +33,10 @@ on:
         default: true
         type: boolean
         description: "Run Blackhole tests"
+      run-ttsim-tests:
+        default: true
+        type: boolean
+        description: "Run TTSIM tests"
 
 permissions:
   actions: read
@@ -44,8 +48,6 @@ permissions:
   checks: write
 
 jobs:
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
   determine-debug-flags:
     name: Determine debug flags
     runs-on: ubuntu-latest
@@ -66,50 +68,15 @@ jobs:
             echo "enable-llk-asserts=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # Shared build jobs - one per platform to enable artifact forwarding
-  build-artifacts-ubuntu-22:
-    name: Build artifacts (Ubuntu 22.04)
-    needs: [check-harbor, determine-debug-flags]
-    if: ${{ github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      build-type: RelWithDebInfo
-      build-wheel: true
-      tracy: true
-      platform: "Ubuntu 22.04"
-      skip-tt-train: false
-      build-umd-tests: true
-      enable-lto: ${{ inputs.enable-lto || false }}
-
-  build-artifacts-ubuntu-24:
-    name: Build artifacts (Ubuntu 24.04)
-    needs: [check-harbor, determine-debug-flags]
-    if: ${{ github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      build-type: RelWithDebInfo
-      build-wheel: true
-      tracy: true
-      platform: "Ubuntu 24.04"
-      skip-tt-train: false
-      build-umd-tests: true
-      enable-lto: ${{ inputs.enable-lto || false }}
-
-  # Ubuntu 22.04 test jobs - both Sanity and Blackhole share artifacts
-  wormhole-nightly-debug-ubuntu-22:
+  # sanity-tests.yaml now builds its own artifacts and covers both the Wormhole and
+  # Blackhole suites, so this workflow only invokes sanity-tests.yaml. Note: because
+  # sanity-tests.yaml treats scheduled (cron) runs as Blackhole + sim only, the nightly
+  # schedule below exercises the Blackhole + sim suite; the Wormhole suite is reachable
+  # here only via a manual workflow_dispatch with run-wormhole-tests enabled.
+  sanity-nightly-debug-ubuntu-22:
     name: Sanity tests nightly debug run (Ubuntu 22.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }})
-    needs: [determine-debug-flags, build-artifacts-ubuntu-22]
-    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests) }}
+    needs: [determine-debug-flags]
+    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests) }}
     uses: ./.github/workflows/sanity-tests.yaml
     secrets: inherit
     with:
@@ -118,35 +85,14 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
-      run-ops-unit-tests: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
-      run-ttsim-integration-tests: false
-      dev-docker-image: ${{ needs.build-artifacts-ubuntu-22.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.wheel-artifact-name }}
-      packages-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.packages-artifact-name }}
+      run-wormhole: ${{ inputs.run-wormhole-tests || false }}
+      run-blackhole: ${{ inputs.run-blackhole-tests || false }}
+      run-sim: ${{ inputs.run-ttsim-tests || false }}
 
-  blackhole-nightly-debug-ubuntu-22:
-    name: blackhole nightly debug run (Ubuntu 22.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }})
-    needs: [determine-debug-flags]
-    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-blackhole-tests) }}
-    uses: ./.github/workflows/blackhole-sanity-tests.yaml
-    secrets: inherit
-    with:
-      # blackhole-sanity fresh-builds for this platform/build-type each run (no artifacts passed).
-      # The awkward extra build collapses once wormhole + blackhole sanity are merged.
-      build-type: RelWithDebInfo
-      platform: "Ubuntu 22.04"
-      enable-lto: ${{ inputs.enable-lto || false }}
-      enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
-      enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
-      schedule-runs-all-tests: false
-      run-profiler-tests: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
-
-  # Ubuntu 24.04 test jobs - both Sanity and Blackhole share artifacts
-  wormhole-nightly-debug-ubuntu-24:
+  sanity-nightly-debug-ubuntu-24:
     name: Sanity tests nightly debug run (Ubuntu 24.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }})
-    needs: [determine-debug-flags, build-artifacts-ubuntu-24]
-    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests) }}
+    needs: [determine-debug-flags]
+    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests) }}
     uses: ./.github/workflows/sanity-tests.yaml
     secrets: inherit
     with:
@@ -155,26 +101,6 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
-      run-ops-unit-tests: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
-      run-ttsim-integration-tests: false # ttsim requires gcc-12 which is not available on Ubuntu 24.04
-      dev-docker-image: ${{ needs.build-artifacts-ubuntu-24.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifacts-ubuntu-24.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-24.outputs.wheel-artifact-name }}
-      packages-artifact-name: ${{ needs.build-artifacts-ubuntu-24.outputs.packages-artifact-name }}
-
-  blackhole-nightly-debug-ubuntu-24:
-    name: blackhole nightly debug run (Ubuntu 24.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }})
-    needs: [determine-debug-flags]
-    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-blackhole-tests) }}
-    uses: ./.github/workflows/blackhole-sanity-tests.yaml
-    secrets: inherit
-    with:
-      # blackhole-sanity fresh-builds for this platform/build-type each run (no artifacts passed).
-      # The awkward extra build collapses once wormhole + blackhole sanity are merged.
-      build-type: RelWithDebInfo
-      platform: "Ubuntu 24.04"
-      enable-lto: ${{ inputs.enable-lto || false }}
-      enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
-      enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
-      schedule-runs-all-tests: false
-      run-profiler-tests: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
+      run-wormhole: ${{ inputs.run-wormhole-tests || false }}
+      run-blackhole: ${{ inputs.run-blackhole-tests || false }}
+      run-sim: false # ttsim requires gcc-12 which is not available on Ubuntu 24.04
