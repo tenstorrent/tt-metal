@@ -1,0 +1,25 @@
+{
+  "prompt_len": 19,
+  "prompt_aligned_256": false,
+  "cache_len": 32,
+  "canvas_length": 256,
+  "max_denoising_steps": 16,
+  "gumbel_mode": "argmax",
+  "blocks_emitted": 1,
+  "tokens_emitted": 256,
+  "ttft_s": 111.6106029287912,
+  "per_block_latency_s": [
+    110.19469845481217
+  ],
+  "mean_block_latency_s": 110.19469845481217,
+  "tokens_per_block_per_s": 2.3231607653518704,
+  "denoise_steps_per_block": [
+    11
+  ],
+  "halted_per_block": [
+    true
+  ],
+  "final_next_pos": 288,
+  "text_chars": 66,
+  "text": "\u4f60\u597d\uff01I'm doing well, thank you for asking. How can I help you today?"
+}

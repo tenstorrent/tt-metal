@@ -1,0 +1,28 @@
+{
+  "prompt_len": 24,
+  "prompt_aligned_256": false,
+  "cache_len": 32,
+  "canvas_length": 256,
+  "max_denoising_steps": 2,
+  "gumbel_mode": "argmax",
+  "blocks_emitted": 2,
+  "tokens_emitted": 512,
+  "ttft_s": 8.237574242986739,
+  "per_block_latency_s": [
+    7.139674261212349,
+    6.893677900079638
+  ],
+  "mean_block_latency_s": 6.893677900079638,
+  "tokens_per_block_per_s": 37.135474518912844,
+  "denoise_steps_per_block": [
+    2,
+    2
+  ],
+  "halted_per_block": [
+    false,
+    false
+  ],
+  "final_next_pos": 544,
+  "text_chars": 4652,
+  "text": "<unused9><unused10><unused4><unused4><unused4><unused3><unused4><unused10><unused10><unused10><unused10><unused10><unused4><unused10><unused1><unused4><unused10><unused10><unused6><unused10><unused4><unused4><unused6><unused4><unused10><unused10><unused10><unused10><unused10><unused10><unused10><unused4><unused10><unused10><unused10><unused10><unused4><unused10><unused4><unused10><unused10><unused4><unused10><unused10><unused4><unused4><unused10><unused10><unused4><unused4><unused10><unused4><unused4><unused10><unused10><unused4><unused10><unused4><unused10><unused4><unused6><unused6><unused10><unused4><unused10><unused4><unused4><unused10><unused4><unused4><unused1><unused4><unused10><unused10><unused10><unused10><unused4><unused4><unused4><unused4><unused4><unused4><unused10><unused10><unused10><unused10><unused10><unused10><unused4><unused10><unused4><unused4><unused10><unused4><unused4><unused4><unused1><unused4><unused10><unused4><unused4><unused4><unused4><unused10><unused10><unused10><unused4><unused4><unused10><unused1><unused10><unused10><unused1><unused4><unused10><unused4><unused10><unused1><unused4><unused1><unused10><unused1><unused1><unused4><unused1><unused10><unused4><unused10><unused1><unused10><unused10><unused4><unused4><unused10><unused10><unused1><unused4><unused4><unused1><unused4><unused4><unused4><unused1><unused1><unused1><unused4><unused10><unused4><unused4><unused10><unused1><unused4><unused10><unused10><unused10><unused1><unused10><unused10><unused4><unused1><unused1><unused10><unused4><unused1><unused1><unused1><unused1><unused4><unused4><unused1><unused1><unused4><unused1><unused4><unused4><unused1><unused1><unused10><unused4><unused4><unused10><unused10><unused4><unused4><unused4><unused1><unused1><unused10><unused10><unused10><unused10><unused4><unused4><unused4><unused4><unused1><unused4><unused10><unused1><unused4><unused10><unused10><unused1><unused4><unused4><unused4><unused4><unused10><unused1><unused4><unused4><unused4><unused4><unused4><unused1><unused10><unused10><unused10><unused1><unused4><unused1><unused4><unused1><unused1><unused4><unused4><unused4><unused4><unused4><unused4><unused4><unused4><unused4><unused4><unused1><unused10><unused1><unused4><unused4><unused4><unused1><unused4><unused10><unused10><unused1><unused1><unused4><unused6><unused10><unused4><unused1><unused10><unused10><unused10><unused4><unused4><unused10><unused10><unused10><unused4><unused10><unused4><unused1><unused10><unused4><unused10><unused10><unused10><unused4><unused4><unused4><unused4><unused1><unused10><unused10><unused10><unused10><unused10><unused4><unused10><unused1><unused1><unused1><unused10><unused10><unused4><unused1><unused1><unused10><unused4><unused4><unused4><unused4><unused4><unused10><unused4><unused4><unused4><unused4><unused10><unused1><unused4><unused4><unused4><unused4><unused4><unused4><unused10><unused4><unused10><unused4><unused4><unused4><unused4><unused10><unused1><unused4><unused10><unused1><unused10><unused1><unused1><unused1><unused1><unused10><unused4><unused4><unused10><unused4><unused1><unused4><unused4><unused4><unused4><unused10><unused4><unused10><unused10><unused10><unused4><unused1><unused10><unused1><unused1><unused10><unused4><unused1><unused4><unused1><unused4><unused4><unused1><unused10><unused1><unused4><unused4><unused10><unused1><unused1><unused10><unused1><unused10><unused4><unused4><unused4><unused1><unused4><unused1><unused4><unused10><unused10><unused4><unused4><unused1><unused1><unused4><unused4><unused1><unused1><unused1><unused10><unused1><unused1><unused1><unused1><unused6><unused1><unused4><unused1><unused10><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused4><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused10><unused1><unused4><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused4><unused4><unused4><unused10><unused1><unused4><unused4><unused1><unused4><unused4><unused10><unused4><unused1><unused1><unused1><unused4><unused4><unused4><unused10><unused1><unused1><unused1><unused1><unused4><unused1><unused4><unused1><unused4><unused10><unused1><unused1><unused10><unused1><unused4><unused4><unused4><unused4><unused4><unused10><unused1><unused10><unused4><unused10><unused4><unused1><unused1><unused1><unused4><unused10><unused10><unused10><unused4><unused4><unused1><unused10><unused4><unused4><unused10><unused1><unused6><unused4><unused4><unused1><unused10><unused1><unused1><unused10><unused10><unused4><unused10><unused10><unused4><unused4><unused4>"
+}

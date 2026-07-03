@@ -1,0 +1,51 @@
+# DiffusionGemma registration for the tenstorrent/vllm TT plugin
+#
+# Target repo:   github.com/tenstorrent/vllm  (branch: dev)  — this is the FORK,
+#                NOT upstream vLLM and NOT part of the tt-metal repo, so the edit
+#                lives here as a patch rather than a committed source change.
+# Target file:   plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py
+# Target fn:     register_tt_models()
+# Insert after:  the Gemma4 registration block (the `for arch in (...Gemma4...)` loop).
+#
+# The HF architecture in the DiffusionGemma checkpoint config.json is
+# "DiffusionGemmaForBlockDiffusion"; the plugin auto-prepends "TT". As with
+# Gemma4 (no upstream vLLM impl), register BOTH the bare HF arch names and the
+# TT-prefixed aliases so upstream architecture resolution lands on the TT class
+# and the plugin's later TT-prefix validation is satisfied.
+#
+# This is the #47466 registration; the block-granular runner/scheduler change it
+# depends on to actually run is #47488 (see README.md § "The #47488 upstream
+# runner/scheduler change").
+
+--- a/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py
++++ b/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py
+@@ def register_tt_models(register_test_models=False) -> None:
+     for arch in (
+         "Gemma4ForCausalLM",
+         "Gemma4ForConditionalGeneration",
+         "TTGemma4ForCausalLM",
+         "TTGemma4ForConditionalGeneration",
+     ):
+         _register_model_if_missing(ModelRegistry, arch, _gemma4_target)
+
++    # DiffusionGemma 26B-A4B-it (block-diffusion; text backbone == Gemma-4 26B-A4B).
++    # Emits a 256-token block per decode step; requires the #47488 block-granular
++    # runner/scheduler change to advance num_computed_tokens by canvas_length and
++    # accept a [num_reqs, 256] block output (runner today asserts one token/step).
++    _diffusion_gemma_target = (
++        "models.experimental.diffusion_gemma.tt.generator_vllm:DiffusionGemmaForCausalLM"
++    )
++    for arch in (
++        "DiffusionGemmaForBlockDiffusion",
++        "DiffusionGemmaForCausalLM",
++        "TTDiffusionGemmaForBlockDiffusion",
++        "TTDiffusionGemmaForCausalLM",
++    ):
++        _register_model_if_missing(ModelRegistry, arch, _diffusion_gemma_target)
++
+     # DeepseekV3
+     _register_model_if_missing(
+         ModelRegistry,
+         "TTDeepseekV3ForCausalLM",
+         "models.demos.deepseek_v3.tt.generator_vllm:DeepseekV3ForCausalLM",
+     )

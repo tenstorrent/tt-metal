@@ -1,0 +1,25 @@
+{
+  "prompt_len": 19,
+  "prompt_aligned_256": false,
+  "cache_len": 32,
+  "canvas_length": 256,
+  "max_denoising_steps": 4,
+  "gumbel_mode": "argmax",
+  "blocks_emitted": 1,
+  "tokens_emitted": 256,
+  "ttft_s": 65.97999927029014,
+  "per_block_latency_s": [
+    64.44976459816098
+  ],
+  "mean_block_latency_s": 64.44976459816098,
+  "tokens_per_block_per_s": 3.972085881091096,
+  "denoise_steps_per_block": [
+    4
+  ],
+  "halted_per_block": [
+    false
+  ],
+  "final_next_pos": 288,
+  "text_chars": 0,
+  "text": ""
+}

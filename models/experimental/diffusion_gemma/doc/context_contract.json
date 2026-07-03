@@ -1,0 +1,58 @@
+{
+  "model": "google/diffusiongemma-26B-A4B-it",
+  "hf_architecture": "DiffusionGemmaForBlockDiffusion",
+  "hf_model_type": "diffusion_gemma",
+  "tt_vllm_architecture": "TTDiffusionGemmaForBlockDiffusion",
+  "tt_vllm_adapter": "models.experimental.diffusion_gemma.tt.generator_vllm:DiffusionGemmaForCausalLM",
+
+  "max_model_len": 262144,
+  "max_model_len_provenance": "HF config text_config.max_position_embeddings = 262144 (256K). Equals canvas_length(256) * max_blocks(1024). This is the capacity limit for prompt + generated, NOT a requirement that prompts be 262144 tokens (HF DiffusionGemmaGenerationMixin.generate computes max_length = input_len + max_new_tokens).",
+  "max_model_len_physical_limit_evidence": {
+    "device": "QB2 / bh-qbge-06 / P150x4 (2 Blackhole PCIe cards, 4 Tensix, TP=4, (1,4) mesh)",
+    "fit": "Full 30-layer 26B-A4B build + 256K KV caches allocate on the (1,4) mesh: post-build DRAM 29.704 GiB/chip used, 2.163 GiB/chip free (plan.md 2026-07-02 full-depth 256K probe).",
+    "sampler_constraint": "Full-vocab (262144) on-device Gumbel/noise materialization OOMs in the fragmented DRAM remaining after 256K-KV allocation (ttnn.rand asks for ~1 GiB; largest free block ~101 MiB/bank). The chunked/no-materialize Gumbel sampler (tt/sampling.py::gumbel_max_with_chunked_noise, --chunked-gumbel-sampling) fits full-depth 256K + canvas_length=256: DG_TEXT_DEMO_SUCCESS at 29.704 GiB/chip used.",
+    "verdict": "262144 is the advertised and servable context. No reduction below the HF-advertised context. Serving must use the chunked-Gumbel sampler (or argmax RUN-first sampler) at full 256K to stay within DRAM."
+  },
+
+  "output_block_granularity": {
+    "canvas_length": 256,
+    "note": "DiffusionGemma emits a 256-token BLOCK per decode step (one denoised+committed canvas), not one token. This is the OUTPUT block granularity; it is intrinsic to block-diffusion generation and is NOT an input-alignment constraint.",
+    "input_alignment": "Prompt length may be any valid length up to max_model_len. There is no requirement that prompt length be divisible by 256, by a prefill tile (32), by block_size, or by a page. prefill_prompt_tokens pads the prompt to a 32-tile multiple internally and reports the logical/aligned lengths; the intrinsic 256-token output block granularity does not constrain the prompt length."
+  },
+
+  "datatype_policy": {
+    "source": "Current full-model bring-up policy (create_tt_model default). The dg-07 datatype-sweep stage has NOT been run for DiffusionGemma; no reduced-precision selection has been recorded, so serving uses the full-model policy.",
+    "weights": "ttnn.bfloat16",
+    "activations_residual": "ttnn.bfloat16",
+    "kv_cache": "ttnn.bfloat16",
+    "ccl": "ttnn.bfloat16 (backbone TP=4 all-reduce/all-gather via gemma4 CCL)",
+    "self_conditioning": "ttnn.bfloat16 tensors; softmax/soft-embedding accumulate with fp32 (WormholeComputeKernelConfig HiFi4, fp32_dest_acc_en=True) per denoise_forward.default_self_conditioning_compute_kernel_config",
+    "matches_gemma4_vllm_bridge": "Yes — models/demos/gemma4/tt/generator_vllm.py serves bfloat16 weights + bfloat16 KV cache. fp32 experts do not fit QB2 DRAM and fp32-faithful router top-k is blocked by ttnn.topk TT_FATAL on FLOAT32 (plan.md), so bf16/MoE is the fastest policy that fits."
+  },
+
+  "mesh": {
+    "device": "QB2 / P150x4",
+    "tt_data_parallel": 1,
+    "tensor_parallel": 4,
+    "mesh_shape": [1, 4],
+    "batch_size_default": 1,
+    "max_num_seqs_note": "Batch-1 single-user latency is the headline target. Larger batch/concurrency (up to 32) is bounded by the 256K-KV per-request footprint; the block-diffusion per-step canvas K/V scratch (#47474 storage class ii) is additional per-request memory. Record the largest tested max_num_seqs in the serving evidence."
+  },
+
+  "sampling": {
+    "mode": "on-device canvas sampling (sample_on_device_mode=all). No host greedy/top-1 argmax path, no full-logits readback. Per-step decision tensors ([B,L] argmax/entropy/sampled/accept) are read back only for the data-dependent halt check; the full [B,L,vocab] logits stay on device.",
+    "procedure": "Per denoise step: temperature-scale (linear 0.8->0.4) -> Gumbel-max argmax(logits/T + gumbel) -> entropy-budget acceptance (sort/cumsum/scatter) -> renoise rejected positions to random tokens. Commit = clean argmax. RUN-first: --argmax-sampling routes clean argmax (gumbel_noise=None) to avoid full-vocab noise allocation at 256K.",
+    "eos_token_ids": [1, 106, 50]
+  },
+
+  "generation_config": {
+    "max_denoise_steps": 48,
+    "temperature_start": 0.8,
+    "temperature_end": 0.4,
+    "entropy_budget": 0.1,
+    "entropy_stop_threshold": 0.005,
+    "stable_steps_to_halt": 1,
+    "use_random_token_noise": true,
+    "use_self_conditioning": true
+  }
+}
