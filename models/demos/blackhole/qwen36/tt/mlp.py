@@ -220,7 +220,14 @@ class Qwen36MLP:
             hidden = ttnn.mul(w1_act, w3_out, memory_config=mc_out)
             ttnn.deallocate(w1_act)
         ttnn.deallocate(w3_out)
-        partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_out)
+        # Prefill w2 (down-proj): explicit 2D prefill progcfg (same 80-core (8,10) grid as w1/w3,
+        # cols 0-7 = L1-safe) beats ttnn-auto (~3% TTFT, PCC-neutral). Weight stays DRAM-interleaved;
+        # feeds reduce-scatter->norm. M=hidden.shape[-2] (x.shape[1] is Z=1 in TP), K=intermediate_tp,
+        # N=dim. Decode (M<=32) keeps ttnn-auto (progcfg None).
+        w2_pc = None
+        if hidden.shape[-2] > ttnn.TILE_SIZE and getattr(args, "prefill_progcfg", None) is not None:
+            w2_pc = args.prefill_progcfg(hidden.shape[-2], hidden.shape[-1], w.w2.shape[-1])
+        partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_out, program_config=w2_pc)
         ttnn.deallocate(hidden)
 
         # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).

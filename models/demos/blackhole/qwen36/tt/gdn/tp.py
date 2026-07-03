@@ -371,14 +371,14 @@ class TPGatedDeltaNet:
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
         _L1 = ttnn.L1_MEMORY_CONFIG
         if self._gdn_fuse_out:
-            # Fuse adapter relayout with per-head rms_norm + head-flatten
+            # Fuse adapter relayout with per-head rms_norm + head-flatten.
+            # TILE-native head->token relayout (transpose + fold), dropping the
+            # TILE->ROW_MAJOR->TILE round-trip. o is head-major (1,Nv,T,Dv).
             n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
             ttnn.deallocate(o)
-            n = ttnn.to_layout(n, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)
             n = ttnn.reshape(n, (1, Nv, T, Dv))
-            n = ttnn.permute(n, (0, 2, 1, 3))
-            n = ttnn.reshape(n, (1, T, self.value_dim_tp))
-            out_f = ttnn.to_layout(n, ttnn.TILE_LAYOUT, memory_config=_L1)
+            n = ttnn.transpose(n, 1, 2, memory_config=_L1)  # (1, T, Nv, Dv)
+            out_f = ttnn.reshape(n, (1, T, self.value_dim_tp))
         else:
             out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
             ttnn.deallocate(o)
