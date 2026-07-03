@@ -15,6 +15,7 @@
 
 #include <functional>
 #include <vector>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -153,12 +154,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                  {"W_size_bytes", W * input_tensor.element_size()},
                  {"l1_write_offset_bytes", wt * input_tensor.element_size() * TILE_WIDTH}},
             .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_hw_blocks"}},
-            .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-                if (device->arch() == tt::ARCH::QUASAR) {
-                    return DataMovementGen2Config{};
-                }
-                return create_reader_gen1_datamovement_config();
-            }),
+            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
         };
 
         KernelSpec writer_spec{
@@ -179,12 +175,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                  {"H_size_bytes", H * output_tensor.element_size()},
                  {"l1_read_offset_bytes", ht * output_tensor.element_size() * TILE_HEIGHT}},
             .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_hw_blocks"}},
-            .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-                if (device->arch() == tt::ARCH::QUASAR) {
-                    return DataMovementGen2Config{};
-                }
-                return create_writer_gen1_datamovement_config();
-            }),
+            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
         };
 
         ComputeUnpackToDestModes utd;
@@ -266,12 +257,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"num_tiles", "start_id", "start_ht", "start_wt", "Ht", "Wt", "HtWt"}},
-            .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-                if (device->arch() == tt::ARCH::QUASAR) {
-                    return DataMovementGen2Config{};
-                }
-                return create_reader_gen1_datamovement_config();
-            }),
+            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
         };
 
         KernelSpec writer_spec{
@@ -284,12 +270,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
             .compile_time_args = {{"page_size", dst_single_tile_size}},
             .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-            .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-                if (device->arch() == tt::ARCH::QUASAR) {
-                    return DataMovementGen2Config{};
-                }
-                return create_writer_gen1_datamovement_config();
-            }),
+            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
         };
 
         ComputeUnpackToDestModes utd;

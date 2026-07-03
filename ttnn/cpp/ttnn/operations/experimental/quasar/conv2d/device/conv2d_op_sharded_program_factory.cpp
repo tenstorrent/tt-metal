@@ -51,6 +51,7 @@
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
@@ -1098,13 +1099,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .dfb_bindings = std::move(reader_dfb_bindings),
         .semaphore_bindings = std::move(reader_sem_bindings),
         .tensor_bindings = std::move(reader_tensor_bindings),
-        .hw_config = std::invoke([&]() -> m2::DataMovementHardwareConfig {
-            if (device->arch() == tt::ARCH::QUASAR) {
-                return m2::DataMovementGen2Config{};
-            }
-            return m2::DataMovementGen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc};
-        }),
+        .hw_config = ttnn::to_datamovement_hardware_config(
+            device->arch(),
+            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc}),
     };
 
     // Reader compile-time args (per sub-layout).
@@ -1338,13 +1335,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .semaphore_bindings = {},
         .tensor_bindings = build_writer_tensor_bindings(),
         .compile_time_args = build_writer_ctas(/*is_sender=*/true),
-        .hw_config = std::invoke([&]() -> m2::DataMovementHardwareConfig {
-            if (device->arch() == tt::ARCH::QUASAR) {
-                return m2::DataMovementGen2Config{};
-            }
-            return m2::DataMovementGen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
-        }),
+        .hw_config = ttnn::to_datamovement_hardware_config(
+            device->arch(),
+            m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc}),
     };
     // The sender always builds the weights-mcast Semaphore objects (even under SKIP_MCAST), so always bind.
     writer_sender_spec.semaphore_bindings = {
@@ -1393,13 +1387,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .semaphore_bindings = {},
         .tensor_bindings = build_writer_tensor_bindings(),
         .compile_time_args = build_writer_ctas(/*is_sender=*/false),
-        .hw_config = std::invoke([&]() -> m2::DataMovementHardwareConfig {
-            if (device->arch() == tt::ARCH::QUASAR) {
-                return m2::DataMovementGen2Config{};
-            }
-            return m2::DataMovementGen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
-        }),
+        .hw_config = ttnn::to_datamovement_hardware_config(
+            device->arch(),
+            m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc}),
     };
     if (create_writer_mcast_receiver) {
         writer_receiver_spec.semaphore_bindings = {

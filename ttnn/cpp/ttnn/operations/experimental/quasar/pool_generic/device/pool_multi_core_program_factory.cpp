@@ -37,6 +37,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -1021,12 +1022,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         .tensor_bindings = make_reader_tensor_bindings(false),
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (mesh_device->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_reader_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_reader_datamovement_config(mesh_device->arch()),
     };
 
     std::optional<KernelSpec> reader1;
@@ -1039,12 +1035,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             .tensor_bindings = make_reader_tensor_bindings(true),
             .compile_time_args = reader1_cta,
             .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-            .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-                if (mesh_device->arch() == tt::ARCH::QUASAR) {
-                    return DataMovementGen2Config{};
-                }
-                return create_writer_gen1_datamovement_config();
-            }),
+            .hw_config = ttnn::create_writer_datamovement_config(mesh_device->arch()),
         };
     }
 

@@ -13,6 +13,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -297,12 +298,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
                  {"start_id", "num_sticks_per_core", "num_sticks_per_core_read", "num_read_per_barrier"},
              .common_runtime_arg_names =
                  {"addr_offset", "padded_stick_size", "unpadded_stick_size", "stick_size_offset", "misalignment"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (device->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_reader_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
         .advanced_options = {.num_runtime_varargs = num_dims, .num_common_runtime_varargs = 2 * num_dims},
     };
 
@@ -325,12 +321,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
                   "num_read_per_barrier",
                   "start_id",
                   "page_size_override"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (device->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_writer_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     // --- Per-core runtime args ---

@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -120,12 +121,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
                 TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (a.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_reader_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
     // -------- Writer KernelSpec (consumes SRC0, fills PAD scratch, writes output) --------
@@ -169,12 +165,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
                   "num_padded_Yt",
                   "num_unpadded_Xt",
                   "num_padded_Xt"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (a.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_writer_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     ProgramSpec spec{

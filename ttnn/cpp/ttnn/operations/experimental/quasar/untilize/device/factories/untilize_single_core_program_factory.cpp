@@ -14,6 +14,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "untilize_single_core_program_factory.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -125,12 +126,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
             .dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_page_id"}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (a.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_reader_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
     // ---- Writer ----
@@ -148,12 +144,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
              {"num_blocks_per_output_column_row", num_blocks_per_column_row},
              {"num_tiles_per_output_block", num_tiles_per_block},
              {"output_single_block_width_size", output_single_block_width_size}},
-        .hw_config = std::invoke([&]() -> DataMovementHardwareConfig {
-            if (a.device()->arch() == tt::ARCH::QUASAR) {
-                return DataMovementGen2Config{};
-            }
-            return create_writer_gen1_datamovement_config();
-        }),
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     // ---- Compute (Metal 2.0 fork of untilize) ----

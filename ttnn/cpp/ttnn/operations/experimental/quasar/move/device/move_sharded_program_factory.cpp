@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
@@ -100,12 +101,9 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
                 m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
             },
         // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit Gen1Config.
-        .hw_config = std::invoke([&]() -> m2::DataMovementHardwareConfig {
-            if (input.device()->arch() == tt::ARCH::QUASAR) {
-                return m2::DataMovementGen2Config{};
-            }
-            return m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
-        }),
+        .hw_config = ttnn::to_datamovement_hardware_config(
+            input.device()->arch(),
+            m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}),
     };
 
     reader.runtime_arg_schema.runtime_arg_names = m2::Group<std::string>{"total_size_bytes"};
