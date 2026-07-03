@@ -20,7 +20,6 @@ struct PolyNorm3BackwardDeviceOperation {
     static void validate_on_program_cache_miss(const PolyNorm3BWAttributes&, const PolyNorm3BWTensorArgs&);
     static PolyNorm3BWSpecReturn compute_output_specs(const PolyNorm3BWAttributes&, const PolyNorm3BWTensorArgs&);
     static PolyNorm3BWTensorReturn create_output_tensors(const PolyNorm3BWAttributes&, const PolyNorm3BWTensorArgs&);
-    static ttsl::hash::hash_t compute_program_hash(const PolyNorm3BWAttributes&, const PolyNorm3BWTensorArgs&);
 };
 
 }  // namespace ttml::metal::ops::polynorm3_bw::device

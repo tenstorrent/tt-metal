@@ -21,6 +21,7 @@ from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMu
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy, verify_perf
 from models.demos.utils.model_targets import resolve_accuracy_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 from models.tt_transformers.tt.generator import create_submeshes
@@ -313,16 +314,24 @@ def prepare_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer
 
 
+def _gemma3_text_demo_model_key() -> str:
+    hf_model = os.getenv("HF_MODEL", "").lower()
+    if "4b" in hf_model:
+        return "gemma-3-4b"
+    return "gemma-3-27b"
+
+
 def _gemma3_text_demo_device_params():
-    # Blackhole (e.g. P150) needs an extra CQ, L1 small, and a larger trace region than Wormhole.
+    # trace_region_size is resolved by the mesh_device fixture from the logical submesh SKU.
+    model_key = _gemma3_text_demo_model_key()
     if is_blackhole():
         return {
             "fabric_config": True,
-            "trace_region_size": 70000000,
+            TRACE_MODEL_KEY_PARAM: model_key,
             "num_command_queues": 2,
             "l1_small_size": 24576,
         }
-    return {"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}
+    return {"fabric_config": True, TRACE_MODEL_KEY_PARAM: model_key, "num_command_queues": 1}
 
 
 # List of supported Parameters for demo.py
@@ -686,6 +695,33 @@ def _gemma3_text_demo_device_params():
             False,  # stress_test
             False,  # enable_trace
         ),
+        # Seqlen sweep: 1k-128k context lengths, one step per seqlen
+        (
+            [
+                "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            ],  # input_prompts: list of 8 files, one per sweep step
+            True,  # instruct mode
+            8,  # repeat_batches (one per seqlen step)
+            64 * 1024,  # max_seq_len (capped for single-N150 memory; steps above this are filtered out)
+            1,  # batch_size
+            32,  # max_generated_tokens (minimal decode to verify prefill works)
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -708,6 +744,7 @@ def _gemma3_text_demo_device_params():
         "ci-b1-DP-32",  # CI DP 32 batch 1
         "ci-stress-1",  # CI Stress test batch-1
         "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
+        "seqlen-sweep",  # sweep 1k-128k context lengths
     ],
 )
 @pytest.mark.parametrize(
@@ -882,12 +919,30 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    if len(input_prompts) == 1:  # Manual input
+    is_seqlen_sweep = "seqlen-sweep" in test_id
+    # The paged KV-cache pool is sized by page_max_num_blocks_per_dp, independent of max_seq_len, so a
+    # capped sweep (e.g. --max_seq_len on a single-N150 SKU) would still allocate the full pool and OOM.
+    # Shrink the pool to the swept context so the cache fits smaller-DRAM SKUs. min() only ever reduces it.
+    if is_seqlen_sweep:
+        blocks_needed = -(-(max_seq_len + max_generated_tokens) // page_params["page_block_size"])  # ceil div
+        page_params = {
+            **page_params,
+            "page_max_num_blocks_per_dp": min(page_params["page_max_num_blocks_per_dp"], blocks_needed),
+        }
+        logger.info(
+            f"Seqlen sweep: page_max_num_blocks_per_dp capped to {page_params['page_max_num_blocks_per_dp']} "
+            f"(max_seq_len={max_seq_len}, block_size={page_params['page_block_size']})"
+        )
+    if is_seqlen_sweep:  # seqlen-sweep: list of file paths, loaded per step in repeat_batch_prompts
+        seqlen_sweep_files = input_prompts
+        logger.info(
+            f"Seqlen sweep: running {len(seqlen_sweep_files)} steps: {[f.split('_')[-1] for f in seqlen_sweep_files]}"
+        )
+    elif len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * global_batch_size
     else:  # Inputs from file
-        input_prompts = load_inputs(input_prompts, global_batch_size, input_prompts)
+        input_prompts = load_inputs(input_prompts, global_batch_size, instruct)
     profiler.end("loading_inputs")
-
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
@@ -954,9 +1009,22 @@ def test_demo_text(
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
 
     repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+    if is_seqlen_sweep:
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> "16k" -> 16384)
+        def _seqlen_from_file(f):
+            label = Path(f).stem.split("_")[-1]  # e.g. "16k"
+            return int(label[:-1]) * 1024 if label.endswith("k") and label[:-1].isdigit() else 0
 
+        filtered_files = [f for f in seqlen_sweep_files if 0 < _seqlen_from_file(f) <= max_seq_len]
+        if not filtered_files:
+            pytest.skip(f"No sweep prompt files fit within max_seq_len={max_seq_len}")
+        for f in filtered_files:
+            repeat_batch_prompts.append(load_inputs(f, global_batch_size, instruct))
+    else:
+        for i in range(repeat_batches):
+            repeat_batch_prompts.append(
+                [input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))]
+            )
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
@@ -1173,7 +1241,7 @@ def test_demo_text(
                 expected_accuracy_metrics={"top1": min_top1_acc, "top5": min_top5_acc},
             )
 
-    profiler.end(f"inference_decode", iteration=batch_idx)
+        profiler.end(f"inference_decode", iteration=batch_idx)
 
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
@@ -1310,31 +1378,34 @@ def test_demo_text(
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
 
-        # Save the decode performance of every iteration for plotting in superset
-        for i in range(1, iteration):
+        if not token_accuracy:
+            # Save the decode performance of every iteration for plotting in superset
+            for i in range(1, iteration):
+                benchmark_data.add_measurement(
+                    profiler,
+                    0,
+                    "inference_decode",
+                    f"time_to_token_{i}",
+                    profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                    step_warm_up_num_iterations=None,
+                    target=None,
+                )
+
+            # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+            num_iterations_for_avg = min(128, iteration)
+            inference_decode_time_first_128 = sum(
+                profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, num_iterations_for_avg)
+            )
             benchmark_data.add_measurement(
                 profiler,
                 0,
                 "inference_decode",
-                f"time_to_token_{i}",
-                profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                "avg_decode_time_first_128",
+                inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
                 step_warm_up_num_iterations=None,
                 target=None,
             )
 
-        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
-        inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
-        )
-        benchmark_data.add_measurement(
-            profiler,
-            0,
-            "inference_decode",
-            "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / 127,
-            step_warm_up_num_iterations=None,
-            target=None,
-        )
         if token_accuracy:
             benchmark_data.add_measurement(
                 profiler,
@@ -1356,7 +1427,7 @@ def test_demo_text(
             )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
+            run_type="demo_accuracy" if token_accuracy else "demo_perf",
             ml_model_name=model_name,
             ml_model_type="llm",
             device_name=tt_device_name,

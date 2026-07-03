@@ -7,6 +7,7 @@
 #include "api/compute/common.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/pack_untilize.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "api/debug/dprint.h"
@@ -31,8 +32,11 @@ constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 
 void kernel_main() {
     constexpr uint32_t cb_signal_id = get_compile_time_arg_val(0);
+    CircularBuffer cb_signal(cb_signal_id);
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(1);
+    CircularBuffer cb_untilize(cb_untilize_id);
     constexpr uint32_t cb_in_id = get_compile_time_arg_val(2);
+    CircularBuffer cb_in(cb_in_id);
     constexpr uint32_t hidden_size = get_compile_time_arg_val(3);
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(4);
     constexpr uint32_t block_ct_dim = get_compile_time_arg_val(5);
@@ -44,22 +48,22 @@ void kernel_main() {
     pack_untilize_init<block_ct_dim, full_ct_dim>(cb_in_id, cb_untilize_id);
 
     while (true) {
-        cb_reserve_back(cb_untilize_id, read_batch_size);
+        cb_untilize.reserve_back(read_batch_size);
 
-        cb_wait_front(cb_signal_id, 1);
+        cb_signal.wait_front(1);
         uint32_t val = read_tile_value(cb_signal_id, 0, 0);
-        cb_pop_front(cb_signal_id, 1);
+        cb_signal.pop_front(1);
         if (val == ROUTE_INFO_SENTINEL) {
             break;
         }
 
         for (uint32_t block = 0; block < num_blocks; block++) {
-            cb_wait_front(cb_in_id, block_ct_dim);
+            cb_in.wait_front(block_ct_dim);
             pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in_id, 1, cb_untilize_id, block);
-            cb_pop_front(cb_in_id, block_ct_dim);
+            cb_in.pop_front(block_ct_dim);
         }
 
-        cb_push_back(cb_untilize_id, read_batch_size);
+        cb_untilize.push_back(read_batch_size);
     }
     pack_untilize_uninit(cb_untilize_id);
 }

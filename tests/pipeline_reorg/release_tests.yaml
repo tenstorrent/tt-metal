@@ -35,15 +35,6 @@
   team: models
   model-name: bert
 
-- name: stable_diffusion N150 functional
-  cmd: run_stable_diffusion_func
-  skus:
-    wh_n150:
-      timeout: 24
-  owner_id: U045U3DEKM4 # Mohamed Bahnas
-  team: models
-  model-name: stable_diffusion
-
 - name: sdxl N150 functional
   cmd: run_sdxl_func
   skus:
@@ -281,7 +272,7 @@
 - name: t3k_resnet50_tests
   cmd: run_t3000_resnet50_tests
   skus:
-    wh_llmbox_perf_release:
+    wh_llmbox_perf:
       timeout: 12
   owner_id: U0837MYG788 # Marko Radosavljevic
   team: models
@@ -290,7 +281,7 @@
 - name: t3k_sentence_bert_tests
   cmd: run_t3000_sentence_bert_tests
   skus:
-    wh_llmbox_perf_release:
+    wh_llmbox_perf:
       timeout: 6
   owner_id: U045U3DEKM4 # Mohamed Bahnas (Aniruddha Tupe)
   team: models
@@ -299,25 +290,16 @@
 - name: t3k_sd35_large_tests
   cmd: run_t3000_sd35large_tests
   skus:
-    wh_llmbox_perf_release:
+    wh_llmbox_perf:
       timeout: 12
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
   model-name: sd35_large
 
-- name: t3k_flux1-dev_tests
-  cmd: run_t3000_flux1_tests
-  skus:
-    wh_llmbox_perf_release:
-      timeout: 12
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: flux1-dev
-
 - name: t3k_wan2.2_tests
   cmd: run_t3000_wan22_tests
   skus:
-    wh_llmbox_perf_release:
+    wh_llmbox_perf:
       timeout: 30
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
@@ -326,7 +308,7 @@
 - name: t3k_mochi_tests
   cmd: run_t3000_mochi_tests
   skus:
-    wh_llmbox_perf_release:
+    wh_llmbox_perf:
       timeout: 36
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
@@ -335,7 +317,7 @@
 - name: t3k_motif_tests
   cmd: run_t3000_motif_tests
   skus:
-    wh_llmbox_perf_release:
+    wh_llmbox_perf:
       timeout: 18
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
@@ -344,20 +326,11 @@
 - name: t3k_qwenimage_tests
   cmd: run_t3000_qwenimage_tests
   skus:
-    wh_llmbox_perf_release:
+    wh_llmbox_perf:
       timeout: 30
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: qwenimage
-
-- name: t3k_qwen3_vl_tests
-  cmd: run_t3000_qwen3_vl_tests
-  skus:
-    wh_llmbox_perf_release:
-      timeout: 12
-  owner_id: U08H31YMN4Q # Sanjay Sanjay
-  team: models
-  model-name: qwen3_vl
 
 # ============================================================================
 # Galaxy Wormhole tests
@@ -369,7 +342,7 @@
     pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
   model-name: sentence_bert
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 6
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
@@ -380,7 +353,7 @@
     pytest models/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k "4x8cfg1sp0tp1" --timeout 1200
   model-name: sd35
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 12
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
@@ -388,10 +361,10 @@
 - name: Galaxy Flux.1-dev demo tests
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1 TT_MM_THROTTLE_PERF=5
-    pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-dev" --timeout 1200
+    pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-flux_dev" --timeout 1200
   model-name: flux1
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 18
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
@@ -402,7 +375,7 @@
     pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500
   model-name: wan22
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 24
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
@@ -413,7 +386,7 @@
     pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "wh_4x8sp1tp0" --timeout=1500
   model-name: mochi
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 18
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
@@ -424,7 +397,7 @@
     pytest models/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1" --timeout 1200
   model-name: motif
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 18
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
@@ -435,7 +408,7 @@
     pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k "4x8" --timeout 1200
   model-name: qwenimage
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 24
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
@@ -452,19 +425,18 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder_prefill.py
   model-name: qwen3-32b-galaxy
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 10
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
 - name: Galaxy GPT-OSS 120B unit tests (high batch)
   cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
     pytest --timeout 1500 models/demos/gpt_oss/tests/unit -k "decode_high_throughput"
   model-name: gpt-oss-120b-high-batch-galaxy
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 25
   owner_id: U08TJ70UFRT # Stuti Raizada
   team: models
@@ -476,7 +448,7 @@
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
   model-name: llama3.1-8b-dp-galaxy
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 20
   owner_id: U08BH66EXAL # Radoica Draskic
   team: models
@@ -488,7 +460,7 @@
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat2"
   model-name: llama3.3-70b-galaxy
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 30
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -499,19 +471,18 @@
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/tests/test_qwen_accuracy.py
   model-name: qwen3-32b-galaxy
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 10
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
 - name: Galaxy GPT-OSS 120B e2e tests (high batch)
   cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
     pytest models/demos/gpt_oss/demo/text_demo.py -k "batch128" --timeout 1200
   model-name: gpt-oss-120b-high-batch-galaxy
   skus:
-    wh_galaxy_release:
+    wh_galaxy:
       timeout: 20
   owner_id: U08TJ70UFRT # Stuti Raizada
   team: models
@@ -521,16 +492,6 @@
 # ============================================================================
 
 # P150 Single-card tests
-- name: whisper P150 performance
-  cmd: |
-    pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
-  skus:
-    bh_p150_perf:
-      timeout: 84
-  owner_id: U05RWH3QUPM # Salar Hosseini
-  team: models
-  model-name: whisper
-
 - name: unet-shallow P150 performance
   cmd: |
     pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"

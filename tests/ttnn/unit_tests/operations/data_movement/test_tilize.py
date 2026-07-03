@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2023-2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,8 +11,8 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
-from models.common.utility_functions import skip_for_slow_dispatch
+from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc
+from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
@@ -50,18 +50,6 @@ def test_tilize_test(input_shapes, tilize_args, device, function_level_defaults)
     torch_output = ttnn.to_torch(tt_output)
 
     assert_equal(torch_input, torch_output)
-
-
-@pytest.mark.parametrize("shape", [(64, 128), (512, 512)])
-@pytest.mark.parametrize("use_multicore", [False, True])
-def test_tilize_fp32_truncation(device, shape, use_multicore):
-    torch.manual_seed(2005)
-    input_a = torch.full(shape, 1.9908e-05, dtype=torch.float32)
-    # Use the fixture-provided device directly
-    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.tilize(input_tensor, use_multicore=use_multicore)
-    output_tensor = ttnn.to_torch(input_tensor)
-    assert torch.allclose(input_a, output_tensor)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -485,3 +473,186 @@ def test_deepseek_v3_mla_tilize_trace_mode(
     ), f"Shape mismatch: {torch_output_from_tt.shape} != {torch_output_tensor.shape}"
 
     assert_equal(torch_output_tensor, torch_output_from_tt)
+
+
+# Regression coverage for https://github.com/tenstorrent/tt-metal/issues/45331.
+# Calls ttnn.tilize directly on a width-sharded DRAM ROW_MAJOR input that
+# previously sent the op into TilizeMultiCoreDefaultProgramFactory, whose
+# full-row CB allocation (~5.5 MB) exceeded the 1.5 MB L1 per-core budget on
+# Wormhole. The ttnn::tilize wrapper now reroutes such cases via interleaved
+# DRAM so TilizeMultiCoreBlockProgramFactory (bounded CBs) is used instead.
+# The assertions are intentionally minimal: this test exists to catch a crash
+# regression, not to validate full numerical fidelity of tilize.
+@pytest.mark.parametrize(
+    "shard_shape",
+    [
+        (2048, 3584),
+    ],
+)
+def test_tilize_width_sharded_dram_input_45331(device, shard_shape):
+    torch.manual_seed(0)
+    # Width-shard across every DRAM bank the device exposes (12 on Wormhole,
+    # 8 on Blackhole). Hardcoding 12 cores would request a DRAM bank that does
+    # not exist on Blackhole and crash in the allocator before tilize runs.
+    num_cores = device.dram_grid_size().x
+    shard_height, shard_width = shard_shape
+    tensor_shape = (shard_height, shard_width * num_cores)
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_dram_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        shard_spec,
+    )
+
+    tt_rm = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=sharded_dram_cfg,
+        device=device,
+    )
+
+    tt_tile = ttnn.tilize(tt_rm, memory_config=sharded_dram_cfg, use_multicore=True)
+
+    assert tt_tile.layout == ttnn.TILE_LAYOUT
+    torch_out = ttnn.to_torch(tt_tile)
+    assert torch.equal(torch_tensor, torch_out), "tilize round-trip mismatch"
+
+
+# fp8 is a valid tile INPUT (it tilizes to any float TILE output) though ROW_MAJOR-only as a dtype. Even
+# tile-widths only (odd fp8 widths hit a separate reader NoC bug); golden is the host-quantized fp8 source.
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "out_dtype,min_pcc",
+    [(ttnn.float32, 0.9999), (ttnn.bfloat16, 0.9999), (ttnn.bfloat8_b, 0.999), (ttnn.bfloat4_b, 0.98)],
+    ids=["out_fp32", "out_bf16", "out_bfp8", "out_bfp4"],
+)
+@pytest.mark.parametrize("shape", [(1, 1, 64, 128), (1, 32, 64, 512)], ids=["small", "wide"])
+def test_tilize_fp8_input(device, shape, out_dtype, min_pcc):
+    torch.manual_seed(0)
+    torch_input = torch.randn(*shape, dtype=torch.float32)
+    golden = torch_input.to(torch.float8_e4m3fn).to(torch.float32)  # match device fp8 quantization
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.fp8_e4m3,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.tilize(tt_in, dtype=out_dtype)
+    assert tt_out.layout == ttnn.TILE_LAYOUT and tt_out.dtype == out_dtype
+    assert_with_pcc(golden, ttnn.to_torch(tt_out).float(), min_pcc)
+
+
+def _make_fp32_precision_tensor(shape):
+    """Build a fp32 tensor with values that require full 23-bit mantissa precision.
+
+    These values are NOT representable in bfloat16 (7-bit mantissa) or TF32
+    (10-bit mantissa).  Any silent truncation will cause torch.equal to fail.
+    """
+    torch.manual_seed(35303)
+    t = torch.randn(shape, dtype=torch.float32)
+    precision_values = torch.tensor(
+        [
+            1.0000001192092896,  # smallest fp32 > 1.0  (bit 0x3F800001)
+            -1.0000001192092896,
+            0.693147182464599609,
+            -0.693147182464599609,
+            3.14159265358979,  # pi at full fp32 precision
+            -3.14159265358979,
+            16777217.0,  # 2^24 + 1, not representable in bf16
+            -16777217.0,
+            8388609.0,  # 2^23 + 1
+            -8388609.0,
+            1.41421353816986084,
+            -1.41421353816986084,
+            1.1920928955078125e-07,  # machine epsilon for fp32
+            -1.1920928955078125e-07,
+            1.9908e-05,  # regression value from issue #39310
+            -1.9908e-05,
+            1234567.125,  # large with fractional low bits
+            -1234567.125,
+            1.17549435e-38,  # smallest positive normal fp32
+            -1.17549435e-38,
+            3.40282347e38,  # FLT_MAX
+            -3.40282347e38,
+            0.333333343267440796,  # 1/3 at full fp32 precision
+            -0.333333343267440796,
+            2.7182817459106445,  # e at full fp32 precision
+            -2.7182817459106445,
+        ],
+        dtype=torch.float32,
+    )
+    n = min(precision_values.numel(), t.shape[-1])
+    t.view(-1, t.shape[-1])[0, :n] = precision_values[:n]
+    return t
+
+
+@pytest.mark.parametrize("shape", [(32, 32), (64, 128), (256, 512)])
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_tilize_fp32_lossless(device, shape, use_multicore):
+    """Tilize must preserve fp32 values with perfect bitwise equality."""
+    input_tensor = _make_fp32_precision_tensor(shape)
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize(tt_input, use_multicore=use_multicore)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [(32, 32), (128, 256)])
+def test_tilize_untilize_fp32_roundtrip(device, shape):
+    """Full tilize -> untilize round-trip must be bit-exact for fp32."""
+    input_tensor = _make_fp32_precision_tensor(shape)
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_tiled = ttnn.tilize(tt_input)
+    tt_rm = ttnn.untilize(tt_tiled)
+    output_tensor = ttnn.to_torch(tt_rm)
+
+    assert torch.equal(input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [(48, 80), (33, 65)])
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_tilize_with_zero_padding_fp32_lossless(device, shape, use_multicore):
+    """tilize_with_zero_padding must preserve fp32 data region exactly."""
+    input_tensor = _make_fp32_precision_tensor(shape)
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize_with_zero_padding(tt_input, use_multicore=use_multicore)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    H, W = shape
+    assert torch.equal(input_tensor, output_tensor[:H, :W])
+
+
+@pytest.mark.parametrize("shape", [(48, 80), (33, 65)])
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_tilize_with_val_padding_fp32_lossless(device, shape, use_multicore):
+    """tilize_with_val_padding must preserve fp32 data region exactly."""
+    input_tensor = _make_fp32_precision_tensor(shape)
+    H, W = shape
+    padded_H = math.ceil(H / 32) * 32
+    padded_W = math.ceil(W / 32) * 32
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize_with_val_padding(tt_input, [padded_H, padded_W], 1.0075, use_multicore=use_multicore)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor[:H, :W])
+
+
+def test_tilize_fp32_lossless_via_to_layout(device):
+    """to_layout (host→device tilize path) must be bit-exact for fp32."""
+    input_tensor = _make_fp32_precision_tensor((64, 128))
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor)

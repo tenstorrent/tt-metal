@@ -40,6 +40,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
+#include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgsConfig / ArgConfig::RuntimePageSize
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -91,7 +92,8 @@ static_assert(hashable_v<ProgramSpec>, "ProgramSpec must be hashable via ttsl re
 static_assert(hashable_v<WorkUnitSpec>, "WorkUnitSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<KernelSpec>, "KernelSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<DataflowBufferSpec>, "DataflowBufferSpec must be hashable via ttsl reflection");
-static_assert(hashable_v<RemoteDataflowBufferSpec>, "RemoteDataflowBufferSpec must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<CrossNodeDataflowBufferSpec>, "CrossNodeDataflowBufferSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreSpec>, "SemaphoreSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<TensorParameter>, "TensorParameter must be hashable via ttsl reflection");
 
@@ -276,9 +278,13 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     spec.name = "test_program";
 
     // A kernel that both produces and consumes the same DFB may share a single
-    // accessor_name across the PRODUCER and CONSUMER bindings.
-    auto kernel = MakeMinimalDMKernel("kernel");
+    // accessor_name across the PRODUCER and CONSUMER bindings. Uses a COMPUTE kernel: a compute
+    // self-loop is the only legal self-loop (it lowers to the intra-Tensix packer->unpacker flow),
+    // so it exercises the accessor-name relaxation through a path that survives validation. (A DM
+    // self-loop is rejected — see DMKernelSelfLoopFails.)
+    auto kernel = MakeMinimalComputeKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "acc"));
     kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "acc"));
 
@@ -289,15 +295,21 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
-TEST_F(ProgramSpecTestQuasar, SelfLoopWithDistinctAccessorNamesSucceeds) {
+TEST_F(ProgramSpecTestQuasar, DMKernelSelfLoopOnGen2Fails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
-    // A producer+consumer self-loop on one DFB may use DISTINCT accessor names ('p'/'c'): it binds
-    // one PRODUCER and one CONSUMER (different roles), which is the sanctioned multi-binding form.
-    // Only a second binding of the SAME role under a different name is forbidden.
+    // On Gen2, a data-movement kernel may NOT self-loop a DFB (bind it as both PRODUCER and CONSUMER).
+    // The DFB's tile-counter credit machinery synchronizes a producer and a consumer on DISTINCT RISCs
+    // via per-side masks, and a single DM kernel's producer and consumer masks are identical — the DFB
+    // backend would reject it with an opaque "producer_risc_mask and consumer_risc_mask must not
+    // overlap". Caught up front at validation with an actionable message instead. The legal Gen2
+    // alternatives are a private L1 scratch buffer, a LocalTensorAccessor tensor view, or a two-kernel
+    // cross-bind. (On Gen1 a DM self-loop IS legal — a DFB lowers to a plain circular buffer there; see
+    // DMKernelSelfLoopOnGen1Succeeds. Compute self-loops stay legal on both gens — see
+    // DFBSelfLoopOnComputeKernelSucceeds.)
     auto kernel = MakeMinimalDMKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
@@ -307,7 +319,11 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithDistinctAccessorNamesSucceeds) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("self-looped by data-movement kernel 'kernel'"),
+            ::testing::HasSubstr("not supported for data-movement kernels on Gen2 architectures"))));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBBoundTwiceInSameRoleUnderDifferentNamesFails) {
@@ -320,7 +336,7 @@ TEST_F(ProgramSpecTestQuasar, DFBBoundTwiceInSameRoleUnderDifferentNamesFails) {
     // same DFB twice in the SAME role (here two CONSUMER bindings) under different accessor names,
     // yielding two accessors / DataflowBuffer objects for one FIFO. Forbidden — the right port is a
     // kernel-side handle alias over a single binding. (A producer+consumer self-loop is a different,
-    // legitimate multi-binding and stays legal — see SelfLoopWithDistinctAccessorNamesSucceeds.)
+    // legitimate multi-binding and stays legal — see SelfLoopWithSharedLocalAccessorNameSucceeds.)
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
@@ -778,11 +794,13 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
     // Producer set = {self_loop_1, extra_producer}; consumer set = {self_loop_1, extra_consumer}.
     // The sets are not equal — the self-loop multi-binding rule rejects this mix.
     //
-    // All three kernels are DM (an unusual self-loop pattern but mechanically valid) so the
-    // per-role kind-uniformity check passes and the self-loop refinement check is reached.
-    auto self_loop_1 = MakeMinimalDMKernel("self_loop_1");
-    auto extra_producer = MakeMinimalDMKernel("extra_producer");
-    auto extra_consumer = MakeMinimalDMKernel("extra_consumer");
+    // All three kernels are COMPUTE so the self-loop participant (self_loop_1) is a legal compute
+    // self-loop — a DM self-loop would be rejected earlier on Gen2 (see DMKernelSelfLoopOnGen2Fails),
+    // masking the rule under test. With compute kernels the per-role kind-uniformity check passes and
+    // the self-loop set-equality refinement check is reached.
+    auto self_loop_1 = MakeMinimalComputeKernel("self_loop_1");
+    auto extra_producer = MakeMinimalComputeKernel("extra_producer");
+    auto extra_consumer = MakeMinimalComputeKernel("extra_consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -806,11 +824,120 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
                                  "the set of producer KernelSpecs differs from the set of consumer KernelSpecs")));
 }
 
-// NOTE: A "scope-disagreement" test case is not currently expressible: the only valid scope
-// value today is INTRA (INTER is rejected upstream as not-yet-supported), so two
-// self-loop participants can't meaningfully disagree on scope. When INTER support lands,
-// add a positive scope-disagreement test that exercises the
-// "must agree on DFBSelfLoopScope" TT_FATAL.
+// ----------------------------------------------------------------------------
+// DFB implicit-sync opt-out (Gen2)
+// ----------------------------------------------------------------------------
+// Implicit sync is ON by default for any DFB side that has a DM endpoint. A DM kernel can
+// opt out per-DFB (disable_dfb_implicit_sync_for) or for all the DFBs it binds at once
+// (disable_dfb_implicit_sync_for_all). These tests pin the per-kernel "all" hammer.
+
+TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllDisablesProducerSide) {
+    // Build the canonical DM-producer -> compute-consumer DFB, optionally hammering the
+    // producer's implicit sync off, and read back the lowered DataflowBufferConfig.
+    auto make_spec = [](bool disable_all) {
+        ProgramSpec spec;
+        spec.name = "test_program";
+
+        auto dm_kernel = MakeMinimalDMKernel("dm_kernel");
+        auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
+        std::get<DataMovementHardwareConfig>(dm_kernel.hw_config).gen2_config->disable_dfb_implicit_sync_for_all =
+            disable_all;
+
+        auto dfb = MakeMinimalDFB("dfb_0");
+        dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+        dm_kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "out"));
+        compute_kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_0"}, "in"));
+
+        spec.kernels = {dm_kernel, compute_kernel};
+        spec.dataflow_buffers = {dfb};
+        spec.work_units = {MakeMinimalWorkUnit("work_unit_0", NodeCoord{0, 0}, {"dm_kernel", "compute_kernel"})};
+        return spec;
+    };
+
+    // Default: the producer side has a DM kernel, so implicit sync is on.
+    {
+        auto program = MakeProgramFromSpec(*mesh_device_, make_spec(/*disable_all=*/false));
+        const uint32_t dfb_id = program.impl().get_dfb_handle("dfb_0");
+        EXPECT_TRUE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
+    }
+    // disable_dfb_implicit_sync_for_all turns it off for every DFB the kernel binds.
+    {
+        auto program = MakeProgramFromSpec(*mesh_device_, make_spec(/*disable_all=*/true));
+        const uint32_t dfb_id = program.impl().get_dfb_handle("dfb_0");
+        EXPECT_FALSE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
+    }
+}
+
+TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllDisagreementAcrossProducersFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer1 = MakeMinimalDMKernel("producer1");
+    auto producer2 = MakeMinimalDMKernel("producer2");
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    // producer1 hammers implicit sync off; producer2 leaves it on. Both bind the same DFB on
+    // the producer side, so the per-side opt-out disagrees and validation must reject.
+    std::get<DataMovementHardwareConfig>(producer1.hw_config).gen2_config->disable_dfb_implicit_sync_for_all = true;
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    producer1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer1, producer2, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer1", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer2", "consumer"}),
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("disagreeing implicit-sync opt-out state")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllAgreesWithExplicitList) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer1 = MakeMinimalDMKernel("producer1");
+    auto producer2 = MakeMinimalDMKernel("producer2");
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    // producer1 opts out via the per-kernel hammer; producer2 opts the same DFB out by name.
+    // Both express the same per-side decision (disable), so they agree and the side lowers off.
+    std::get<DataMovementHardwareConfig>(producer1.hw_config).gen2_config->disable_dfb_implicit_sync_for_all = true;
+    std::get<DataMovementHardwareConfig>(producer2.hw_config)
+        .gen2_config->disable_dfb_implicit_sync_for.push_back(DFBSpecName{"dfb"});
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    producer1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer1, producer2, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer1", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer2", "consumer"}),
+    };
+
+    auto program = MakeProgramFromSpec(*mesh_device_, spec);
+    const uint32_t dfb_id = program.impl().get_dfb_handle("dfb");
+    EXPECT_FALSE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
+}
 
 // ============================================================================
 // SECTION 2: Semantic Validation Tests (ValidateProgramSpec)
@@ -878,7 +1005,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
 
 TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigSucceeds) {
     // Gen2 config is fully optional even on Quasar: absence is treated as "use defaults"
-    // (empty disable_implicit_sync_for). A Gen1-only DM kernel building on Quasar is
+    // (empty disable_dfb_implicit_sync_for). A Gen1-only DM kernel building on Quasar is
     // permitted at the spec layer (whether such a kernel actually does anything useful on
     // Gen2 hardware is a separate question, outside the validator's scope).
     NodeCoord node{0, 0};
@@ -940,8 +1067,8 @@ TEST_F(ProgramSpecTestQuasar, RoleHintIgnoredOnGen2Succeeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
-// Remote DFBs are part of the API surface but not yet supported by the runtime.
-TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
+// Cross-node DFBs are part of the API surface but not yet supported by the runtime.
+TEST_F(ProgramSpecTestQuasar, CrossNodeDFBNotYetSupportedAtRuntime) {
     NodeCoord producer_node{0, 0};
     NodeCoord consumer_node{1, 0};
 
@@ -955,7 +1082,7 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
-    spec.remote_dataflow_buffers = {RemoteDataflowBufferSpec{
+    spec.cross_node_dataflow_buffers = {CrossNodeDataflowBufferSpec{
         .dfb_spec = MakeMinimalDFB("dfb"),
         .producer_consumer_map = {{producer_node, consumer_node}},
     }};
@@ -1164,17 +1291,300 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingDuplicateAccessorFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate semaphore accessor_name 'same'")));
 }
 
-TEST_F(ProgramSpecTestQuasar, TensorBindingOnComputeKernelTemporarilyUnsupportedFails) {
-    // TEMPORARY restriction: a TensorAccessor cannot yet be constructed in a compute kernel, so
-    // binding a tensor to one is rejected up front in ValidateProgramSpec with an apologetic message.
-    // Delete this test when compute-path tensor bindings are supported (the guard goes with it).
+// ============================================================================
+// Kernel Scratchpad Validation Tests (CollectSpecData)
+// ============================================================================
+//
+// A kernel scratchpad is a private, blank, node-local L1 region bound to exactly one kernel for the
+// program's execution lifetime (see scratchpad_spec.hpp). These tests pin the structural-validation
+// rules enforced in CollectSpecData: name uniqueness, binding referential integrity, the
+// exactly-one-binding-per-scratchpad invariant, accessor-name uniqueness per kernel, and the C++
+// identifier rule for accessor names. They mirror the DFB / semaphore binding-validation tests
+// above: build on MakeMinimalValidProgramSpec() and bind the scratchpad to the DM kernel
+// (kernels[0]).
+
+TEST_F(ProgramSpecTestQuasar, ValidScratchpadSucceeds) {
+    // Positive baseline: one ScratchpadSpec bound by exactly one kernel.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024}};
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, DuplicateScratchpadNameFails) {
+    // Two ScratchpadSpecs declared with the same unique_id.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    spec.scratchpads = {
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024},
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 512},  // duplicate!
+    };
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate ScratchpadSpec name")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ZeroSizeScratchpadFails) {
+    // A ScratchpadSpec with size_per_node == 0 (the default) reserves no L1, so the device-side
+    // accessor's operator[] would be out of bounds on first use. Bound to a kernel here so the
+    // size check — not the unbound check — is what fires.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}}};  // size_per_node defaults to 0
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("size_per_node == 0")));
+}
+
+TEST_F(ProgramSpecTestQuasar, UnknownScratchpadReferenceFails) {
+    // A scratchpad_binding referencing a scratchpad_spec_name that isn't declared in spec.scratchpads.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    // No spec.scratchpads declared, but the kernel binds one.
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"missing_scratch"}, .accessor_name = "s"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("references unknown scratchpad")));
+}
+
+TEST_F(ProgramSpecTestQuasar, UnboundScratchpadFails) {
+    // A ScratchpadSpec declared in spec.scratchpads that no kernel binds. An unbound scratchpad
+    // reserves L1 no kernel can reach.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"orphan_scratch"}, .size_per_node = 1024}};
+    // No kernel binds it.
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("declared but not bound")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadBoundByTwoKernelsSameNodeFails) {
+    // One ScratchpadSpec bound by two kernels that share a node. A scratchpad is private node-local
+    // L1; binding it from two kernels on the SAME node would be true sharing, which is not yet
+    // supported (the disjoint-node case IS allowed — see the next test). MakeMinimalValidProgramSpec
+    // places both kernels on node {0,0}, so this is the same-node collision case.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024}};
+    // kernels[0] (DM) and kernels[1] (compute) both bind it, and both run on node {0,0}.
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_dm"}};
+    spec.kernels[1].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_compute"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("kernel instances on node")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadBoundByTwoKernelsDisjointNodesSucceeds) {
+    // Complement of the same-node case above: one ScratchpadSpec bound by two kernels on DISJOINT
+    // nodes is legal. Each node hosts exactly one binding kernel instance, so the per-node scratchpad
+    // stays private to that kernel (allocation + CRTA delivery are per-binding-kernel, so the two
+    // bindings never interact). This is the matmul-grid-style fan: one kernel source specialized into
+    // multiple KernelSpecs on disjoint node ranges, all binding the same scratchpad resource.
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "scratchpad_shared_disjoint";
+
+    auto kernel_a = MakeMinimalGen1DMKernel("kernel_a");
+    kernel_a.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch_shared"}, .accessor_name = "scratch"});
+    auto kernel_b = MakeMinimalGen1DMKernel("kernel_b");
+    kernel_b.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch_shared"}, .accessor_name = "scratch"});
+
+    spec.kernels = {kernel_a, kernel_b};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_shared"}, .size_per_node = 1024}};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_a", node0, {"kernel_a"}),
+        MakeMinimalWorkUnit("wu_b", node1, {"kernel_b"}),
+    };
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadBoundTwiceInOneKernelFails) {
+    // One kernel binds the SAME scratchpad twice under two different accessor_names. Illegal: a kernel
+    // may bind a given scratchpad at most once (two bindings would request two separate per-node
+    // allocations under one name). This is a structural input error with no node-set dependency, so
+    // it is caught up front during collection rather than by the placement census.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024}};
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_a"},
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_b"},
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("binds scratchpad 'scratch_0' more than once")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DuplicateScratchpadAccessorNameFails) {
+    // One kernel with two scratchpad_bindings to two DIFFERENT scratchpads but sharing the same
+    // accessor_name. The accessor_name is the kernel-local C++ symbol, so it must be unique per
+    // kernel (the per-kernel duplicate check fires before the bound-more-than-once check, since
+    // the two scratchpads are distinct).
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    spec.scratchpads = {
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024},
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_1"}, .size_per_node = 1024},
+    };
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "dup"},
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_1"}, .accessor_name = "dup"},
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate scratchpad accessor_name")));
+}
+
+TEST_F(ProgramSpecTestQuasar, InvalidScratchpadAccessorNameFails) {
+    // The accessor_name becomes a C++ identifier in the generated kernel_bindings header, so it must
+    // be a valid C++ identifier. (Mirrors InvalidLocalAccessorNameFails / the semaphore-accessor
+    // equivalent; here we just spot-check a couple of clearly-invalid names.)
+    const std::vector<std::string> invalid_names = {
+        "1bad",       // leading digit
+        "has space",  // whitespace
+    };
+
+    for (const auto& bad_name : invalid_names) {
+        ProgramSpec spec = MakeMinimalValidProgramSpec();
+        spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024}};
+        spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = bad_name}};
+
+        EXPECT_THAT(
+            [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+            ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be a valid C++ identifier")))
+            << "Expected rejection for scratchpad accessor_name: '" << bad_name << "'";
+    }
+}
+
+TEST_F(ProgramSpecTestQuasar, MultipleScratchpadsEachBoundToOwnKernelSucceeds) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "scratchpad_multi";
+
+    // Two independent scratchpads, each bound by its own kernel on its own node — the simplest
+    // multi-scratchpad case (distinct from binding one shared scratchpad across disjoint nodes).
+    auto kernel_a = MakeMinimalGen1DMKernel("kernel_a");
+    kernel_a.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch_a"}, .accessor_name = "scratch"});
+    auto kernel_b = MakeMinimalGen1DMKernel("kernel_b");
+    kernel_b.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch_b"}, .accessor_name = "scratch"});
+
+    spec.kernels = {kernel_a, kernel_b};
+    spec.scratchpads = {
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_a"}, .size_per_node = 1024},
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_b"}, .size_per_node = 2048},
+    };
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_a", node0, {"kernel_a"}),
+        MakeMinimalWorkUnit("wu_b", node1, {"kernel_b"}),
+    };
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+// ----------------------------------------------------------------------------
+// Kernel hash sensitivity to scratchpad bindings
+// ----------------------------------------------------------------------------
+//
+// The kernel's JIT cache key is its compute_hash(); a scratchpad binding flows into the device-side
+// codegen (the scratch:: namespace + the CRTA-injected base address) and into the kernel's
+// ScratchpadBindingHandles, so a kernel that binds a scratchpad must NOT hash equal to one that
+// doesn't — otherwise it would silently reuse a stale cached binary.
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadBindingAffectsKernelHash) {
+    // Same kernel source, differing only in whether the kernel binds a scratchpad. The bound variant
+    // carries an extra ScratchpadBindingHandle, so the hashes must differ.
+    auto make_bound_spec = [] {
+        ProgramSpec spec;
+        spec.name = "scratchpad_hash_bound";
+        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+        spec.kernels = {dm_kernel};
+        spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel"})};
+        return spec;
+    };
+    auto make_unbound_spec = [] {
+        ProgramSpec spec;
+        spec.name = "scratchpad_hash_unbound";
+        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        spec.kernels = {dm_kernel};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel"})};
+        return spec;
+    };
+
+    Program prog_bound = MakeProgramFromSpec(*mesh_device_, make_bound_spec());
+    Program prog_unbound = MakeProgramFromSpec(*mesh_device_, make_unbound_spec());
+
+    auto hash_bound = prog_bound.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    auto hash_unbound = prog_unbound.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    EXPECT_NE(hash_bound, hash_unbound)
+        << "A kernel that binds a scratchpad must not share a JIT cache slot with one that doesn't.";
+}
+
+TEST_F(ProgramSpecTestQuasar, DifferentScratchpadSizeProducesDifferentKernelHash) {
+    // Same kernel source and accessor name; the two scratchpads differ only in size_per_node, which
+    // flows into the ScratchpadBindingHandle's size (and the generated scratch:: token), so the
+    // hashes must differ.
+    auto make_spec = [](uint32_t size_per_node) {
+        ProgramSpec spec;
+        spec.name = "scratchpad_hash_size";
+        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+        spec.kernels = {dm_kernel};
+        spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = size_per_node}};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel"})};
+        return spec;
+    };
+
+    Program prog_small = MakeProgramFromSpec(*mesh_device_, make_spec(/*size_per_node=*/1024));
+    Program prog_large = MakeProgramFromSpec(*mesh_device_, make_spec(/*size_per_node=*/2048));
+
+    auto hash_small = prog_small.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    auto hash_large = prog_large.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    EXPECT_NE(hash_small, hash_large) << "Scratchpads of different sizes must produce different kernel hashes.";
+}
+
+TEST_F(ProgramSpecTestQuasar, TensorBindingOnComputeKernelIsAccepted) {
+    // A tensor binding on a compute kernel is legal: the kernel constructs a LocalTensorAccessor
+    // (NOC-free) from the binding token rather than a TensorAccessor. ValidateProgramSpec accepts it;
+    // there is no host-side residency check. (The compile/dispatch path is proven in the HW test
+    // LocalTensorAccessorBindingCompileComputeKernel.)
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.tensor_parameters = {MakeMinimalTensorParameter("t")};
     BindTensorParameterToKernel(spec.kernels[1], "t", "t_acc");  // kernels[1] == compute_kernel
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("compute kernel with a tensor binding")));
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, SemaphoreNonZeroInitialValueFailsOnQuasar) {
@@ -1715,117 +2125,6 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBConsumerOnNodeWithoutProducerFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("This node has a consumer but no producer")));
 }
 
-// ----------------------------------------------------------------------------
-// KernelSpec::dfb_self_loop_connectivities validation tests
-// ----------------------------------------------------------------------------
-// This advanced option only applies to compute kernels that self-loop a DFB (bind it
-// as both producer and consumer). All misapplications must fail loudly so authors
-// never silently get the wrong scope. INTER is recognized but not yet implemented.
-
-TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelInterScopeFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "self_loop_inter";
-
-    auto compute = MakeMinimalComputeKernel("compute");
-    compute.advanced_options =
-        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"dfb"}, DFBSelfLoopConnectivity::INTER}}};
-
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {compute};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("INTER scope is not yet supported by the runtime")));
-}
-
-TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnDMKernelFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "self_loop_on_dm";
-
-    auto producer = MakeMinimalDMKernel("producer");
-    // Misapplied: self-loop scope entries are valid only on compute kernels.
-    producer.advanced_options =
-        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"dfb"}, DFBSelfLoopConnectivity::INTRA}}};
-    auto consumer = MakeMinimalDMKernel("consumer");
-
-    auto dfb = MakeMinimalDFB("dfb");
-    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {producer, consumer};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not a compute kernel")));
-}
-
-TEST_F(ProgramSpecTestQuasar, SelfLoopScopeReferencingUnknownDFBFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "self_loop_unknown_dfb";
-
-    auto compute = MakeMinimalComputeKernel("compute");
-    // Misapplied: there is no DFB named "ghost" in the spec.
-    compute.advanced_options =
-        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"ghost"}, DFBSelfLoopConnectivity::INTRA}}};
-
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {compute};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("entry referencing unknown DFB 'ghost'")));
-}
-
-TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnNonSelfLoopedDFBFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "self_loop_not_self_looped";
-
-    auto compute = MakeMinimalComputeKernel("compute");
-    // Misapplied: the kernel only produces; it does not self-loop the DFB.
-    compute.advanced_options =
-        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"dfb"}, DFBSelfLoopConnectivity::INTRA}}};
-    auto dm_consumer = MakeMinimalDMKernel("dm_consumer");
-
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    dm_consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {compute, dm_consumer};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute", "dm_consumer"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("does not self-loop this DFB")));
-}
-
 // ============================================================================
 // SECTION 4: Programs Creation Tests
 // ============================================================================
@@ -1841,15 +2140,14 @@ TEST_F(ProgramSpecTestQuasar, MinimalValidProgramSpecSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
-    // The 99.5% case: a compute kernel that self-loops a DFB and does NOT explicitly declare a
-    // dfb_self_loop_connectivities entry. The implementation must default to INTRA so the
-    // lower-layer DFB layer (which requires an explicit scope for Tensix-to-Tensix DFBs) accepts
-    // the program.
+TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelSucceeds) {
+    // A compute kernel that self-loops a DFB (binds it as both producer and consumer) is legal: it
+    // lowers to the intra-Tensix packer->unpacker flow (TensixScope::INTRA), which the Metal 2.0
+    // layer applies automatically. There is no user-facing self-loop scope option.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.name = "self_loop_implicit_intra";
+    spec.name = "compute_self_loop";
 
     auto compute = MakeMinimalComputeKernel("compute");
 
@@ -1857,32 +2155,6 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     // INTRA-tensix self-loop: no DM endpoint, so the spec-to-impl translation produces
     // enable_{producer,consumer}_implicit_sync=false at the lower DFB layer automatically.
-
-    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {compute};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
-
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
-}
-
-TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelExplicitIntraSucceeds) {
-    // Identical to the implicit case, but with an explicit INTRA entry on the kernel. The
-    // explicit declaration is redundant with the default but must be accepted (and produce
-    // the same program) so that authors can write self-documenting specs.
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "self_loop_explicit_intra";
-
-    auto compute = MakeMinimalComputeKernel("compute");
-    compute.advanced_options =
-        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"dfb"}, DFBSelfLoopConnectivity::INTRA}}};
-
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
     compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
     compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
@@ -2216,14 +2488,21 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
 //    NOTE: Our plan is to keep the simplifying assumption for now.
 //    We issue a clear message if the assumption is ever violated in the real world.
 //
-// C) KERNELS COUPLED THROUGH MULTI-DFB BINDINGS
-//    Until LLK APIs adopt DFBAccessor, we cannot specialize DFBs (multiple DFBs
-//    for a single DataflowBufferSpec). This induces additional DM solver constraints
-//    when a DFB endpoint is bound by more than one KernelSpec.
+//   C) KERNELS COUPLED THROUGH MULTI-DFB BINDINGS
+//    When a DFBSpec is bound by multiple KernelSpecs (which is legal, provided
+//    that the invariant that any given DFB instance has one one producer kernel
+//    instance and only one consumer kernel instance), the resulting cross-kernel
+//    coupling through the shared DFB binding induces additional DM solver constraints.
 //
-//    NOTE: The plan is to lift this artificial constraint once LLK support is in
-//    place. DFB IDs will then be passed as implicit RTAs rather than implicit CTAs
-//    on Quasar only.
+//    NOTE: The original plan called for lifting this artificial constraint once LLK adopted
+//    DFBAccessor using implicit RTAs. However, to realize performance gains, we're
+//    chosen instead to GUARANTEE using implicit CTAs for DFBAccessor. This
+//    constraint is therefore permanent.
+//
+//    If we were ever to start encountering serious unsolvable-Program issues as a result
+//    we might consider revisiting this decision. However, an unsolvable Program could
+//    can always be worked around by artificially dividing a KernelSpec (at the expense of
+//    dispatch overhead).
 
 // Category A: Order-Independence Test
 // This test verifies that the backtracking solver finds valid assignments,
@@ -2487,8 +2766,8 @@ static_assert(
     std::is_aggregate_v<KernelSpec::RuntimeArgSchema>,
     "RuntimeArgSchema must remain an aggregate to support designated initializers");
 static_assert(
-    std::is_aggregate_v<RemoteDataflowBufferSpec>,
-    "RemoteDataflowBufferSpec must remain an aggregate to support designated initializers");
+    std::is_aggregate_v<CrossNodeDataflowBufferSpec>,
+    "CrossNodeDataflowBufferSpec must remain an aggregate to support designated initializers");
 
 // These tests document the intended construction pattern using designated initializers.
 // They serve as living documentation and will fail to compile if aggregate status is broken.
@@ -2721,7 +3000,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
     };
     EXPECT_EQ(gen1.processor, tt::tt_metal::DataMovementProcessor::RISCV_1);
 
-    RemoteDataflowBufferSpec remote_dfb{
+    CrossNodeDataflowBufferSpec remote_dfb{
         .dfb_spec =
             DataflowBufferSpec{
                 .unique_id = DFBSpecName{"remote_dfb"},
@@ -2781,6 +3060,29 @@ TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, DMKernelSelfLoopOnGen1Succeeds) {
+    // On Gen1 (WH/BH) a DFB lowers to a plain circular buffer, so a single DM kernel may bind it as
+    // both PRODUCER and CONSUMER (self-loop) — the classic scratch pattern of one DM engine filling
+    // and draining an L1 FIFO. There is no tile-counter credit machinery requiring disjoint
+    // producer/consumer masks, so the spec validator accepts it. (On Gen2 the same spec is rejected —
+    // see DMKernelSelfLoopOnGen2Fails.)
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "dm_self_loop";
+
+    auto kernel = MakeMinimalGen1DMKernel("kernel", DataMovementProcessor::RISCV_0);
+    auto dfb = MakeMinimalDFB("dfb");
+    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
+    kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "c"));
+
+    spec.kernels = {kernel};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -3127,7 +3429,7 @@ TEST_F(ProgramSpecTestGen1, InvalidTensorAccessorNameFails) {
 
 TEST_F(ProgramSpecTestGen1, AccessorNamesAcrossCategoriesAreSeparateNamespaces) {
     // DFB / Semaphore / TensorAccessor accessor names live in separate namespaces (each gets
-    // its own emitted namespace in kernel_bindings_generated.h: dfb::, sem::, ta::). Reusing
+    // its own emitted namespace in kernel_bindings_generated.h: dfb::, sem::, tensor::). Reusing
     // the same identifier across categories within one kernel must be allowed.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
@@ -3163,7 +3465,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 // SECTION 10: TensorParameter JIT Smoke Tests (Gen1 / WH)
 // ============================================================================
 // Codegen-path smoke test for the Metal 2.0 TensorAccessor binding feature. Ends in
-// CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `ta::` namespace)
+// CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `tensor::` namespace)
 // must be syntactically valid and compose correctly with the rest of the kernel build. Doesn't
 // validate runtime behavior — catches regressions in codegen string-formatting, token type alias
 // generation, and include-path resolution.
@@ -3176,7 +3478,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 
 TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
     // DM kernel constructs a TensorAccessor from a binding token + invokes a NoC-using method.
-    // Exercises: ta:: namespace token, type alias <name>_t, the token ctor and its deduction
+    // Exercises: tensor:: namespace token, type alias <name>_t, the token ctor and its deduction
     // guide, get_common_arg_val for the implicit base address.
     NodeCoord node{0, 0};
 
@@ -3186,7 +3488,7 @@ TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    TensorAccessor accessor(ta::input_tensor);
+    TensorAccessor accessor(tensor::input_tensor);
     auto noc_addr = accessor.get_noc_addr(0);
     (void)noc_addr;
 }
@@ -3196,6 +3498,166 @@ void kernel_main() {
     spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_tensor");
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// ----------------------------------------------------------------------------
+// Scratchpad JIT-compile smoke tests (device-side accessor composes & compiles)
+// ----------------------------------------------------------------------------
+//
+// Like the TensorAccessor smoke above, these JIT-compile a kernel that constructs a Scratchpad from
+// its binding accessor (scratch::<name>) and reads the CRTA-injected base address — exercising the
+// generated scratch:: namespace + ScratchpadAccessor object and the device-side Scratchpad ctor. Compile-only on
+// the mock Wormhole device (Gen1: the Quasar TRISC firmware isn't built in this checkout, so a
+// Quasar JIT-compile would fail at link).
+
+TEST_F(ProgramSpecTestGen1, ScratchpadAccessorBindingJITSmokeDMKernel) {
+    // DM kernel constructs a Scratchpad from its binding token and reads the CRTA-injected base address.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "scratch_smoke_dm";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    Scratchpad<int32_t> pad(scratch::scratch);
+    volatile uint32_t base = pad.get_base_address();
+    (void)base;
+}
+)"};
+    dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    spec.kernels = {dm_kernel};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// Compute-kernel counterpart. A scratchpad binding works on a compute kernel: scratchpad.h only
+// forward-declares get_common_arg_val (resolved by the kernel's own API header — api/compute/common.h
+// on TRISC, api/dataflow/dataflow_api.h on DM) and is otherwise NOC-free, so the device-side
+// Scratchpad<T> ctor composes on the compute (TRISC) build path as well as DM.
+TEST_F(ProgramSpecTestGen1, ScratchpadAccessorBindingJITSmokeComputeKernel) {
+    // MakeMinimalGen1ValidProgramSpec wires a DM producer (kernels[0]) into a compute consumer
+    // (kernels[1]) through a DFB; bind the scratchpad to the compute kernel and have it construct a
+    // Scratchpad from its binding token.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    Scratchpad<int32_t> pad(scratch::scratch);
+    volatile uint32_t base = pad.get_base_address();
+    (void)base;
+}
+)"};
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.kernels[1].scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// Compile-only: a range-based for loop over a Scratchpad must compile. Exercises begin()/end() and the
+// CoreLocalMem<T> iterator ops the loop desugars to (operator++, operator!=, operator*). Compile-only on
+// the mock Gen1 device — no run: reading the uninitialized region would be UB at runtime, but this test
+// only JIT-compiles the kernel, so the loop just needs to be well-formed.
+TEST_F(ProgramSpecTestGen1, ScratchpadRangeBasedForCompiles) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "scratch_range_for";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    Scratchpad<int32_t> pad(scratch::scratch);
+    int32_t acc = 0;
+    for (auto& elem : pad) {
+        acc += elem;
+    }
+    volatile int32_t sink = acc;  // keep the loop live so the range-for is actually instantiated
+    (void)sink;
+}
+)"};
+    dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    spec.kernels = {dm_kernel};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// ============================================================================
+// TT_KERNEL ("1st world arguments") compute-path shim — JIT compile smoke test
+// ============================================================================
+//
+// Compiles a TT_KERNEL compute kernel through genfiles + the RISC-V compiler on a MOCK Wormhole
+// device (no silicon, no dispatch) via detail::CompileProgram. This is the only no-hardware
+// coverage that the generated kernel_main() shim is emitted on the COMPUTE (TRISC) compile path
+// and actually compiles: the on-hardware compute test (TtKernelNamedArgsLoopbackCompute) skips in
+// CI, and the shim unit tests only check the generated string, not its genfiles wiring.
+//
+// (A Quasar variant would also exercise the 4th TRISC, isolate_sfpu, but mock-Quasar JIT-compile
+// isn't wired up in this checkout — the Quasar TRISC firmware objects aren't built, so the link
+// step fails. The fix is arch-correct by construction regardless: the shim is appended to the same
+// source for every TRISC, and run_kernel() calls kernel_main() on Quasar too.)
+
+// Minimal TT_KERNEL compute entry: CTAs as template params, RTA/CRTA as function params, producing
+// into a DFB. The point is solely that the kernel_main() shim is generated on the TRISC path and
+// the whole thing compiles; the body avoids any arch-specific raw-L1 pokes.
+constexpr const char* kTtKernelComputeShimSource = R"(
+#include "api/compute/common.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+template <uint32_t magic, uint32_t entry_size>                             // CTAs
+TT_KERNEL void compute_entry(uint32_t input_offset, uint32_t num_tiles) {  // RTA, CRTA
+    DataflowBuffer out(dfb::out_dfb);
+    out.reserve_back(num_tiles);
+    out.push_back(num_tiles);
+    volatile uint32_t sink = magic ^ entry_size ^ input_offset;
+    (void)sink;
+}
+)";
+
+TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
+    const NodeCoord node{0, 0};
+    constexpr uint32_t entry_size = 1024;
+
+    // Compute kernel authored in TT_KERNEL form, producing into a DFB drained by a trivial consumer.
+    auto compute = MakeMinimalComputeKernel("compute");
+    compute.source = KernelSpec::SourceCode{kTtKernelComputeShimSource};
+    compute.runtime_arg_schema.runtime_arg_names = {"input_offset"};
+    compute.runtime_arg_schema.common_runtime_arg_names = {"num_tiles"};
+    compute.compile_time_args = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
+
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);  // trivial drain kernel
+
+    auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, 4);
+    out_dfb.data_format_metadata = tt::DataFormat::Float16_b;  // required for a compute DFB endpoint
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"out_dfb"}, "out_dfb"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"out_dfb"}, "out_dfb"));
+
+    ProgramSpec spec;
+    spec.name = "tt_kernel_compute_shim_compile";
+    spec.kernels = {compute, consumer};
+    spec.dataflow_buffers = {out_dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", node, {"compute", "consumer"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
@@ -3266,9 +3728,11 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedKernelHashStableAcross
     // the CTAs ([args_config.raw(), aligned_page_size]) are stable across shape variations.
     // The dynamic flag thus enables JIT cache reuse for tile-layout eltwise.
     //
-    // (Row-major interleaved has a shape-dependent page_size — the last-dim element count — so
-    // its CTAs do change with shape. That's a property of the page-size convention, not of the
-    // dynamic mechanism, and is a separate orthogonal concern. This test focuses on tile.)
+    // (Row-major interleaved has a shape-dependent page_size — the last-dim element count. Under
+    // dynamic_tensor_shape the resolver demotes that page size to a per-binding CRTA word, so its
+    // CTAs become shape-stable too; that path is covered by
+    // DynamicTensorShape_InterleavedRowMajorKernelHashStableAcrossWidths below. This test focuses on
+    // tile, whose page size is dtype-fixed and never rode a shape-dependent CTA in the first place.)
     auto make_spec = [](tt::tt_metal::Shape shape) {
         ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
         auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE);
@@ -3291,6 +3755,47 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedKernelHashStableAcross
         prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
         << "Interleaved tile + dynamic_tensor_shape: shape variations must hash equal so the "
            "same compiled kernel binary is reused.";
+}
+
+TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedRowMajorKernelHashStableAcrossWidths) {
+    // The payoff of the page-size fold. For a ROW-MAJOR interleaved TensorParameter the page size
+    // (last_dim_width * elem_size) is shape-dependent. WITHOUT the flag it rides a compile-time arg,
+    // so two different-width tensors hash differently -- distinct cache entries, and (worse) a stale
+    // page size baked into a binary that gets reused on a cache hit: the exact bug this feature
+    // fixes. WITH dynamic_tensor_shape the page size moves to a CRTA, the CTAs become width-
+    // independent, and the two widths hash identically -- one cached binary, refreshed per-dispatch.
+    auto make_spec = [](uint32_t width, bool dynamic) {
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+        auto memory_config =
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+        auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+        TensorParameter tp{
+            .unique_id = TensorParamName{"input_tensor"},
+            .spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, width}, std::move(tensor_layout)),
+            .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = dynamic},
+        };
+        spec.tensor_parameters = {tp};
+        BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+        return spec;
+    };
+
+    // Baseline (flag off): different widths -> different page-size CTA -> different hash.
+    Program s_a = MakeProgramFromSpec(*mesh_device_, make_spec(/*width=*/64, /*dynamic=*/false));
+    Program s_b = MakeProgramFromSpec(*mesh_device_, make_spec(/*width=*/128, /*dynamic=*/false));
+    EXPECT_NE(
+        s_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        s_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
+        << "Baseline: row-major page size rides a CTA, so different widths must hash differently.";
+
+    // With the flag: page size -> CRTA, CTAs width-independent -> identical hash (cache reuse).
+    Program d_a = MakeProgramFromSpec(*mesh_device_, make_spec(/*width=*/64, /*dynamic=*/true));
+    Program d_b = MakeProgramFromSpec(*mesh_device_, make_spec(/*width=*/128, /*dynamic=*/true));
+    EXPECT_EQ(
+        d_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        d_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
+        << "Row-major interleaved + dynamic_tensor_shape: page size moves to a CRTA, so different "
+           "widths hash equally (program-cache reuse; prevents the stale-page-size bug).";
 }
 
 TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedKernelHashStableAcrossShapes) {
@@ -3355,12 +3860,67 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedBindingTracksShapeCRTASlot
         << "Sharded + dynamic_tensor_shape: runtime-field CRTA words should equal BDS shape rank.";
 }
 
-TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedBindingHasNoRuntimeFieldCRTAs) {
-    // Interleaved + dynamic_tensor_shape: pure host-side validation loosening, no CTA→CRTA
-    // demotion, so num_runtime_field_crta_words should remain zero.
+TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedRowMajorBindingTracksPageSizeCRTASlot) {
+    // Row-major interleaved + dynamic_tensor_shape: the page size (= last_dim_width * elem_size) is
+    // part of the varying shape, so the resolver folds it from a compile-time arg into a single
+    // per-binding CRTA word ("A-collapse": the page-size CTA slot is dropped and the RuntimePageSize
+    // bit is set in args_config). The binding handle must advertise exactly one runtime field word,
+    // tagged as the page-size kind. MakeMinimalTensorParameter is BFLOAT16 / ROW_MAJOR / interleaved.
+    auto make_spec = [](bool dynamic) {
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        auto tp = MakeMinimalTensorParameter("input_tensor");
+        tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = dynamic};
+        spec.tensor_parameters = {tp};
+        BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+        return spec;
+    };
+
+    Program prog_dyn = MakeProgramFromSpec(*mesh_device_, make_spec(/*dynamic=*/true));
+    auto kernel = prog_dyn.impl().get_kernel_by_spec_name("dm_kernel");
+    const auto& handles = kernel->tensor_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+    EXPECT_EQ(handles[0].num_runtime_field_crta_words, 1u)
+        << "Row-major interleaved + dynamic_tensor_shape: page size demotes to exactly one CRTA word.";
+    EXPECT_TRUE(handles[0].runtime_field_is_page_size)
+        << "The runtime field must be tagged as the page-size kind (not the sharded-shape kind).";
+
+    // The binding's args_config CTA word carries the RuntimePageSize bit.
+    const std::vector<uint32_t> dyn_ctas = kernel->compile_time_args();
+    ASSERT_LT(handles[0].cta_offset, dyn_ctas.size());
+    const auto dyn_cfg = tensor_accessor::ArgsConfig(
+        static_cast<tensor_accessor::ArgsConfig::Underlying>(dyn_ctas[handles[0].cta_offset]));
+    EXPECT_TRUE(dyn_cfg.test(tensor_accessor::ArgConfig::RuntimePageSize))
+        << "RuntimePageSize bit must be set in the binding's args_config word.";
+
+    // A-collapse: the dynamic binding omits the page-size CTA word that the static (bit-off) binding
+    // carries, so the whole-kernel CTA count is exactly one shorter. The two specs are identical
+    // apart from the flag, so the size delta is precisely the dropped page-size slot.
+    Program prog_static = MakeProgramFromSpec(*mesh_device_, make_spec(/*dynamic=*/false));
+    const std::vector<uint32_t> static_ctas =
+        prog_static.impl().get_kernel_by_spec_name("dm_kernel")->compile_time_args();
+    EXPECT_EQ(static_ctas.size(), dyn_ctas.size() + 1u)
+        << "Static binding keeps the page-size CTA; the dynamic binding drops it (A-collapse).";
+    const auto static_cfg = tensor_accessor::ArgsConfig(
+        static_cast<tensor_accessor::ArgsConfig::Underlying>(static_ctas[handles[0].cta_offset]));
+    EXPECT_FALSE(static_cfg.test(tensor_accessor::ArgConfig::RuntimePageSize))
+        << "Without the flag, the RuntimePageSize bit must NOT be set.";
+}
+
+TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedTileBindingHasNoRuntimeFieldCRTAs) {
+    // Interleaved + TILE layout: the page size is dtype/tile-fixed, independent of logical shape, so
+    // dynamic_tensor_shape does NOT demote it to a CRTA (the fold gates on ROW_MAJOR). The flag is a
+    // pure host-side validation loosening here; the binding carries no runtime field words. Guards
+    // the layout gate -- a regression that demoted tile page sizes would trip this.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    auto tp = MakeMinimalTensorParameter("input_tensor");
-    tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+    TensorParameter tp{
+        .unique_id = TensorParamName{"input_tensor"},
+        .spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, 32}, std::move(tensor_layout)),
+        .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true},
+    };
     spec.tensor_parameters = {tp};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -3369,7 +3929,8 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedBindingHasNoRuntimeFie
     const auto& handles = kernel->tensor_binding_handles();
     ASSERT_EQ(handles.size(), 1u);
     EXPECT_EQ(handles[0].num_runtime_field_crta_words, 0u)
-        << "Interleaved dynamic_tensor_shape is host-side-only; no runtime CRTA words.";
+        << "Interleaved TILE + dynamic_tensor_shape is host-side-only; no runtime CRTA words.";
+    EXPECT_FALSE(handles[0].runtime_field_is_page_size);
 }
 
 TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {

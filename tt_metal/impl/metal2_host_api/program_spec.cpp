@@ -52,21 +52,29 @@ static constexpr uint32_t QUASAR_TENSIX_ENGINES_PER_NODE = 4;
 // Data structure built up from ProgramSpec to enable fast lookups
 struct CollectedSpecData {
     // Name -> spec lookups.
-    // dfb_by_name covers BOTH local and remote DFBs.
-    // For remote DFBs, the pointee is the inner dfb_spec.
-    // To check if a DFB is remote, check the remote_dfb_by_name map.
+    // dfb_by_name covers BOTH local and cross-node DFBs.
+    // For cross-node DFBs, the pointee is the inner dfb_spec.
+    // To check if a DFB is cross-node, check the cross_node_dfb_by_name map.
     std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
-    std::unordered_map<DFBSpecName, const RemoteDataflowBufferSpec*> remote_dfb_by_name;
+    std::unordered_map<DFBSpecName, const CrossNodeDataflowBufferSpec*> cross_node_dfb_by_name;
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
+    std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
 
     // Tensor parameter usage (derived from kernel tensor bindings).
     // Tracks which kernels bind a given tensor parameter.
     std::unordered_map<TensorParamName, std::vector<const KernelSpec*>> tensor_parameter_users;
 
+    // Scratchpad binders (derived from kernel scratchpad bindings).
+    // Tracks which kernels bind a given ScratchpadSpec. More than one may, provided their node sets
+    // are disjoint; the per-node placement census in ValidateProgramSpec enforces that (it needs the
+    // kernel node sets, derived below). A kernel binds a given scratchpad at most once (enforced
+    // during collection), so each kernel appears at most once in a spec's binder list.
+    std::unordered_map<ScratchpadSpecName, std::vector<const KernelSpec*>> scratchpad_binders;
+
     // DFB endpoint info (derived from kernel bindings).
-    // Populated for both local and remote DFBs.
+    // Populated for both local and cross-node DFBs.
     //
     // Multiple PRODUCER KernelSpecs (and multiple CONSUMER KernelSpecs) may bind the same DFB,
     // provided they have non-overlapping node coverage and matching binding-site parameters
@@ -207,11 +215,6 @@ const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
     return dfb.advanced_options.alias_with;
 }
 
-// Helper: return a kernel's dfb-compute-self-loop-scopes map.
-const Table<DFBSpecName, DFBSelfLoopConnectivity>& kernel_self_loop_scopes(const KernelSpec& kernel) {
-    return kernel.advanced_options.dfb_self_loop_connectivities;
-}
-
 // Local accessor names for kernel resource bindings must be valid C++ identifiers
 // They are used verbatim in the generated kernel source code.
 // TODO: Move this to ttsl in a follow up PR
@@ -296,15 +299,15 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         TT_FATAL(inserted, "Duplicate DataflowBufferSpec name '{}'", dfb.unique_id);
     }
 
-    // Collect RemoteDataflowBufferSpecs (remote DFBs).
-    // Remote DFBs share the DFB name space with local DFBs, since kernel bindings
+    // Collect CrossNodeDataflowBufferSpecs (cross-node DFBs).
+    // Cross-node DFBs share the DFB name space with local DFBs, since kernel bindings
     // refer to either kind by the same DFBSpecName.
-    for (const auto& remote_dfb : spec.remote_dataflow_buffers) {
-        const DFBSpecName& name = remote_dfb.dfb_spec.unique_id;
-        auto [it1, inserted1] = collected.dfb_by_name.try_emplace(name, &remote_dfb.dfb_spec);
-        TT_FATAL(inserted1, "Duplicate DataflowBufferSpec name '{}' (across local and remote DFBs)", name);
-        auto [it2, inserted2] = collected.remote_dfb_by_name.try_emplace(name, &remote_dfb);
-        TT_FATAL(inserted2, "Duplicate RemoteDataflowBufferSpec name '{}'", name);
+    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
+        const DFBSpecName& name = cross_node_dfb.dfb_spec.unique_id;
+        auto [it1, inserted1] = collected.dfb_by_name.try_emplace(name, &cross_node_dfb.dfb_spec);
+        TT_FATAL(inserted1, "Duplicate DataflowBufferSpec name '{}' (across local and cross-node DFBs)", name);
+        auto [it2, inserted2] = collected.cross_node_dfb_by_name.try_emplace(name, &cross_node_dfb);
+        TT_FATAL(inserted2, "Duplicate CrossNodeDataflowBufferSpec name '{}'", name);
     }
 
     // Build DFB endpoint info from kernel bindings
@@ -397,8 +400,6 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 endpoint_info.producers.push_back({&kernel, &dfb_binding});
             } else if (dfb_binding.endpoint_type == DFBEndpointType::CONSUMER) {
                 endpoint_info.consumers.push_back({&kernel, &dfb_binding});
-            } else {
-                TT_FATAL(false, "RELAY endpoints are only used for remote DFB, which is not supported yet");
             }
         }
     }
@@ -411,18 +412,18 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         TT_FATAL(!endpoint_info.consumers.empty(), "DFB '{}' has no consumer", dfb_name);
     }
 
-    // Referential integrity: every declared DFB (local or remote) must be bound by some kernel
+    // Referential integrity: every declared DFB (local or cross-node) must be bound by some kernel
     for (const auto& dfb : spec.dataflow_buffers) {
         TT_FATAL(
             collected.dfb_endpoints.contains(dfb.unique_id),
             "DFB '{}' is defined but not bound by any kernel",
             dfb.unique_id);
     }
-    for (const auto& remote_dfb : spec.remote_dataflow_buffers) {
-        const DFBSpecName& name = remote_dfb.dfb_spec.unique_id;
+    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
+        const DFBSpecName& name = cross_node_dfb.dfb_spec.unique_id;
         TT_FATAL(
             collected.dfb_endpoints.contains(name),
-            "RemoteDataflowBufferSpec '{}' is defined but not bound by any kernel",
+            "CrossNodeDataflowBufferSpec '{}' is defined but not bound by any kernel",
             name);
     }
 
@@ -455,6 +456,67 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         }
     }
 
+    // Collect ScratchpadSpecs
+    for (const auto& scratchpad : spec.scratchpads) {
+        auto [it, inserted] = collected.scratchpad_by_name.try_emplace(scratchpad.unique_id, &scratchpad);
+        TT_FATAL(inserted, "Duplicate ScratchpadSpec name '{}'", scratchpad.unique_id);
+        TT_FATAL(
+            scratchpad.size_per_node != 0,
+            "ScratchpadSpec '{}' has size_per_node == 0; a scratchpad must reserve a non-zero number of bytes "
+            "(did you forget to set size_per_node?).",
+            scratchpad.unique_id);
+    }
+
+    // Collect scratchpad bindings (structural checks here; the node-set placement check is in
+    // ValidateProgramSpec, which has the derived kernel node sets).
+    // A scratchpad is private, node-local L1. More than one KernelSpec may bind the same
+    // ScratchpadSpec, but only on disjoint node sets — the same node-local-resource discipline as a
+    // local DFB. Same-node co-binding (true sharing) is gated behind a future AdvancedOption and is
+    // rejected by the per-node census in ValidateProgramSpec.
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<std::string> accessor_names;
+        std::unordered_set<ScratchpadSpecName> bound_specs;
+        for (const auto& binding : kernel.scratchpad_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate scratchpad accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                collected.scratchpad_by_name.contains(binding.scratchpad_spec_name),
+                "Kernel '{}' references unknown scratchpad '{}'",
+                kernel.unique_id,
+                binding.scratchpad_spec_name);
+            // A kernel may bind a given scratchpad at most once. Two bindings would request two
+            // separate per-node allocations of the same spec under one kernel — muddy semantics, and
+            // a node-level violation of "one binding instance per node". This is structural (no node
+            // info needed), so it is caught here rather than in the placement census.
+            auto [sit, sinserted] = bound_specs.insert(binding.scratchpad_spec_name);
+            TT_FATAL(
+                sinserted,
+                "Kernel '{}' binds scratchpad '{}' more than once (latest under accessor_name '{}'). A "
+                "kernel may bind a given scratchpad at most once.",
+                kernel.unique_id,
+                binding.scratchpad_spec_name,
+                binding.accessor_name);
+            collected.scratchpad_binders[binding.scratchpad_spec_name].push_back(&kernel);
+        }
+    }
+    // Every declared scratchpad must be bound by some kernel: an unbound scratchpad would reserve L1
+    // that no kernel can reach.
+    for (const auto& scratchpad : spec.scratchpads) {
+        TT_FATAL(
+            collected.scratchpad_binders.contains(scratchpad.unique_id),
+            "ScratchpadSpec '{}' is declared but not bound by any kernel.",
+            scratchpad.unique_id);
+    }
+
     // Collect TensorParameters
     for (const auto& tensor_parameter : spec.tensor_parameters) {
         auto [it, inserted] =
@@ -464,19 +526,9 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
     // Validate kernel tensor bindings
     for (const auto& kernel : spec.kernels) {
-        // TEMPORARY: tensor bindings on compute kernels are not yet supported end-to-end. A
-        // TensorAccessor cannot currently be constructed in a compute kernel, so a spec that binds a
-        // tensor to a compute kernel looks valid here but fails once it reaches the kernel. Reject it
-        // up front with an honest message until the compute-path support lands (expected within a day
-        // or two of 2026-06-16). Remove this guard when that ships.
-        TT_FATAL(
-            !kernel.is_compute_kernel() || kernel.tensor_bindings.empty(),
-            "Kernel '{}' is a compute kernel with a tensor binding ('{}'). Tensor bindings on compute "
-            "kernels are not yet supported — a TensorAccessor cannot currently be constructed in a "
-            "compute kernel, so this spec would compile but fail in the kernel. This is a temporary "
-            "restriction that will be lifted soon.",
-            kernel.unique_id,
-            kernel.tensor_bindings.empty() ? std::string{} : kernel.tensor_bindings.front().accessor_name);
+        // A tensor binding is legal on both DM and compute kernels:
+        //   - a DM kernel can use the binding token to construct a TensorAccessor or LocalTensorAccessor
+        //   - a compute kernel can only use LocalTensorAccessor (NOC-free, local-L1 only)
 
         std::unordered_set<std::string> accessor_names;
         for (const auto& binding : kernel.tensor_bindings) {
@@ -506,7 +558,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     // kernel binds the parameter directly. Count that as a use so the completeness check below doesn't
     // reject a borrowed-only parameter. Existence of the referent is validated separately in the
     // borrowed-DFB checks. Only local DFBs are walked here: borrowed memory is a local-L1 feature,
-    // so spec.dataflow_buffers is the relevant set (remote DFBs are runtime-unsupported).
+    // so spec.dataflow_buffers is the relevant set (cross-node DFBs are runtime-unsupported).
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.borrowed_from.has_value()) {
             collected.tensor_parameter_users[*dfb.borrowed_from];  // register as used (no kernel user)
@@ -641,6 +693,20 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
     }
 }
 
+// Whether a Gen2 DM kernel opts out of implicit sync for a particular DFB.
+// Two routes lead to the same opt-out:
+//   - disable_dfb_implicit_sync_for_all: the per-kernel hammer, covering every DFB the kernel binds.
+//   - disable_dfb_implicit_sync_for: an explicit per-DFB list.
+// Precondition: the caller has already established this is a DM kernel with a gen2_config.
+bool DmKernelDisablesImplicitSync(
+    const DataMovementHardwareConfig::Gen2Config& gen2_config, const DFBSpecName& dfb_name) {
+    if (gen2_config.disable_dfb_implicit_sync_for_all) {
+        return true;
+    }
+    const auto& vec = gen2_config.disable_dfb_implicit_sync_for;
+    return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
+}
+
 // ValidateProgramSpec: Semantic validation
 // ----------------------------------------------------------------------------
 //
@@ -668,15 +734,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     // A Program needs at least one kernel
     TT_FATAL(!spec.kernels.empty(), "A ProgramSpec must have at least one KernelSpec");
-
-    // Validate no per-node thread maps are used (not yet implemented)
-    for (const auto& kernel : spec.kernels) {
-        const bool has_node_specific = !kernel.advanced_options.node_specific_thread_counts.empty();
-        TT_FATAL(
-            !has_node_specific,
-            "KernelSpec '{}' specifies node_specific_thread_counts, but per-node thread counts are not implemented.",
-            kernel.unique_id);
-    }
 
     // Validate named RTA/CRTA schema and named CTAs
     for (const auto& kernel : spec.kernels) {
@@ -801,7 +858,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // On Gen1 (WH/BH), the kernel must declare its placement: either a READER/WRITER role
             // hint (the runtime fills in processor/NOC/NOC-mode), or an explicit Gen1 config. There
             // is no safe default for reader-vs-writer — it is op-specific. Gen2 is fully optional:
-            // absence is treated as "use defaults" (empty disable_implicit_sync_for).
+            // absence is treated as "use defaults" (implicit sync left on for all bound DFBs).
             if (is_gen1_arch()) {
                 TT_FATAL(
                     data_movement_config.role != DataMovementRoleHint::UNSPECIFIED ||
@@ -942,18 +999,20 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             kernel.unique_id);
     }
 
-    // Validate DM kernel disable_implicit_sync_for entries.
+    // Validate DM kernel disable_dfb_implicit_sync_for entries.
     //
     // Implicit sync is a Gen2-only, DM-only mechanism (ISR-based credit posting from NoC
-    // transaction completion). Each DM kernel can opt out per-DFB by listing the DFB's name
-    // in its Gen2Config::disable_implicit_sync_for vector. The opt-out applies to
-    // the side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
+    // transaction completion). A DM kernel can opt out per-DFB by listing the DFB's name in
+    // its Gen2Config::disable_dfb_implicit_sync_for vector, or opt out of all the DFBs it binds at
+    // once via Gen2Config::disable_dfb_implicit_sync_for_all. Either way the opt-out applies to the
+    // side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
     //
     // Per-kernel rule: every listed name references a DFB the kernel binds (typo guard).
     //
-    // Cross-kernel rule (per DFB): on each side independently, all DM kernels must agree —
-    // either all list the DFB, or none do. (Producer-side and consumer-side are checked
-    // separately; the underlying hardware mechanism is per-side, with one mask per side.)
+    // Cross-kernel rule (per DFB): on each side independently, all DM kernels must agree on the
+    // opt-out — either all disable it (by list or by _all), or none do. (Producer-side and
+    // consumer-side are checked separately; the underlying hardware mechanism is per-side, with
+    // one mask per side.)
     {
         // Per-kernel pass: typo guard.
         for (const auto& kernel : spec.kernels) {
@@ -968,10 +1027,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             for (const auto& binding : kernel.dfb_bindings) {
                 bound_dfbs.insert(binding.dfb_spec_name);
             }
-            for (const auto& dfb_name : dm_config.gen2_config->disable_implicit_sync_for) {
+            for (const auto& dfb_name : dm_config.gen2_config->disable_dfb_implicit_sync_for) {
                 TT_FATAL(
                     bound_dfbs.contains(dfb_name),
-                    "Kernel '{}' disable_implicit_sync_for entry references DFB '{}', which the kernel does not bind",
+                    "Kernel '{}' disable_dfb_implicit_sync_for entry references DFB '{}', which the kernel does not "
+                    "bind",
                     kernel.unique_id,
                     dfb_name);
             }
@@ -986,7 +1046,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 const DFBSpecName& dfb_name,
                 std::string_view side_label) {
                 const KernelSpec* canonical = nullptr;
-                bool canonical_lists_dfb = false;
+                bool canonical_disables = false;
                 for (const auto& ep : endpoints) {
                     if (!ep.kernel->is_data_movement_kernel()) {
                         continue;
@@ -996,16 +1056,15 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                         // Gen1-only DM kernel — can't physically participate in Gen2 implicit sync; abstains.
                         continue;
                     }
-                    const auto& vec = dm_config.gen2_config->disable_implicit_sync_for;
-                    const bool lists_dfb = std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
+                    const bool disables = DmKernelDisablesImplicitSync(*dm_config.gen2_config, dfb_name);
                     if (canonical == nullptr) {
                         canonical = ep.kernel;
-                        canonical_lists_dfb = lists_dfb;
+                        canonical_disables = disables;
                         continue;
                     }
                     TT_FATAL(
-                        lists_dfb == canonical_lists_dfb,
-                        "DFB '{}' has disagreeing disable_implicit_sync_for state on the {} side",
+                        disables == canonical_disables,
+                        "DFB '{}' has disagreeing implicit-sync opt-out state on the {} side",
                         dfb_name,
                         side_label);
                 }
@@ -1217,23 +1276,43 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 guidance);
         }
 
-        // Self-loop interplay with multi-binding: when ANY kernel self-loops a DFB (appears in
-        // both producers and consumers), the producer set must equal the consumer set as sets
-        // of KernelSpec*. This permits the natural pattern of multiple same-source KernelSpecs
-        // each self-looping the DFB on their disjoint node ranges, while rejecting the case
-        // where a self-looping kernel shares the DFB with an unrelated kernel (which would
-        // make per-instance tensix-scope semantics ambiguous).
-        const bool has_self_loop = [&] {
-            for (const auto& p : endpoints.producers) {
-                for (const auto& c : endpoints.consumers) {
-                    if (p.kernel == c.kernel) {
-                        return true;
-                    }
+        // Find a self-loop participant: a kernel bound to this DFB as both producer and consumer.
+        // Stays nullptr if the DFB is not self-looped. Iterating producers in vector order keeps the
+        // pick — and any resulting error message — deterministic across runs.
+        const KernelSpec* self_loop_kernel = nullptr;
+        for (const auto& p : endpoints.producers) {
+            for (const auto& c : endpoints.consumers) {
+                if (p.kernel == c.kernel) {
+                    self_loop_kernel = p.kernel;
+                    break;
                 }
             }
-            return false;
-        }();
-        if (has_self_loop) {
+            if (self_loop_kernel != nullptr) {
+                break;
+            }
+        }
+
+        if (self_loop_kernel != nullptr) {
+            // A data-movement kernel may self-loop a DFB (bind it as both PRODUCER and CONSUMER) only
+            // on Gen1 (WH/BH), where a DFB lowers to a plain circular buffer that a single DM RISC can
+            // both fill and drain. On Gen2 the DFB's tile-counter credit machinery requires disjoint
+            // producer/consumer RISCs, so a DM self-loop cannot be lowered. Catch it here (with a clear
+            // message) rather than let it fall through to a confusing "producer_risc_mask and
+            // consumer_risc_mask must not overlap" error in the DFB backend. (Compute self-loops are
+            // always legal: they lower to the intra-Tensix packer->unpacker flow.)
+            TT_FATAL(
+                !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel()),
+                "DataflowBuffer '{}' is self-looped by data-movement kernel '{}' (bound as both PRODUCER "
+                "and CONSUMER). Self-loop DFBs are not supported for data-movement kernels on Gen2 "
+                "architectures. Consider using a scratchpad or LocalTensorAccessor instead.",
+                dfb.unique_id,
+                self_loop_kernel->unique_id);
+
+            // Self-loop interplay with multi-binding: the producer set must equal the consumer set
+            // as sets of KernelSpec*. This permits the natural pattern of multiple same-source
+            // KernelSpecs each self-looping the DFB on their disjoint node ranges, while rejecting
+            // the case where a self-looping kernel shares the DFB with an unrelated kernel (which
+            // would make the producer/consumer mask and lowering semantics ambiguous).
             std::unordered_set<const KernelSpec*> producer_kernels;
             std::unordered_set<const KernelSpec*> consumer_kernels;
             for (const auto& p : endpoints.producers) {
@@ -1249,48 +1328,66 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "When a DFB is self-looped, every same-side binding must come from a self-loop "
                 "participant (i.e. a kernel that appears on both sides).",
                 dfb.unique_id);
-
-            // All self-loop participants must agree on the tensix-scope for this DFB —
-            // MakeDataflowBufferConfig writes a single tensix_scope into the DFB config, and the
-            // self-loop participants alternate per node, so a disagreement is unresolvable.
-            // Iterate endpoints.producers (a vector) rather than producer_kernels (an
-            // unordered_set), so iteration order — and any resulting error message — is
-            // deterministic across runs.
-            auto scope_for_kernel = [&](const KernelSpec* k) {
-                auto conn = kernel_self_loop_scopes(*k).get(dfb.unique_id);
-                return conn ? *conn : DFBSelfLoopConnectivity::INTRA;
-            };
-            const KernelSpec* first_kernel = endpoints.producers.front().kernel;
-            const auto first_scope = scope_for_kernel(first_kernel);
-            std::unordered_set<const KernelSpec*> seen;
-            for (const auto& rec : endpoints.producers) {
-                if (!seen.insert(rec.kernel).second) {
-                    continue;
-                }
-                TT_FATAL(
-                    scope_for_kernel(rec.kernel) == first_scope,
-                    "DFB '{}' is self-looped; all self-loop participants must agree on "
-                    "DFBSelfLoopConnectivity, but kernel '{}' specifies a different scope "
-                    "than kernel '{}'.",
-                    dfb.unique_id,
-                    rec.kernel->unique_id,
-                    first_kernel->unique_id);
-            }
         }
     }
 
-    // Remote DFBs are not yet supported.
+    // Cross-node DFBs are not yet supported.
     //
-    // TODO: When remote DFB is supported, add a validation checks. Enforce that
+    // TODO: When cross-node DFB is supported, add a validation checks. Enforce that
     //       each (producer_node, consumer_node) entry in producer_consumer_map has
     //       p_node != c_node.
 
     TT_FATAL(
-        spec.remote_dataflow_buffers.empty(),
-        "RemoteDataflowBufferSpec is part of the Metal 2.0 API surface but is not yet supported "
-        "by the runtime. (ProgramSpec '{}' has {} remote DFB(s).)",
+        spec.cross_node_dataflow_buffers.empty(),
+        "CrossNodeDataflowBufferSpec is part of the Metal 2.0 API surface but is not yet supported "
+        "by the runtime. (ProgramSpec '{}' has {} cross-node DFB(s).)",
         spec.name,
-        spec.remote_dataflow_buffers.size());
+        spec.cross_node_dataflow_buffers.size());
+
+    // Scratchpad placement census (multi-binding rule).
+    //
+    // A scratchpad is private, node-local L1. More than one KernelSpec may bind the same
+    // ScratchpadSpec, but only on disjoint nodes: each node hosting the scratchpad must run exactly
+    // one binding kernel instance, so the per-node region stays private to that one kernel.
+    // (Allocation and CRTA delivery are per-binding-kernel — allocate_scratchpads stacks each
+    // kernel's scratchpad onto its own cores' allocators — so disjoint bindings never interact.) Two
+    // binding kernels on the same node would be true sharing, which is deferred behind a future
+    // AdvancedOption and rejected here. Mirrors the local-DFB per-node census above. (A kernel
+    // binding the same scratchpad twice is already rejected during collection, so every binder here
+    // is a distinct kernel.)
+    for (const auto& scratchpad : spec.scratchpads) {
+        auto binders_it = collected.scratchpad_binders.find(scratchpad.unique_id);
+        if (binders_it == collected.scratchpad_binders.end() || binders_it->second.size() < 2) {
+            continue;  // unbound (caught earlier) or single binder — always legal.
+        }
+        // Tally binding-kernel instances per node. A std::map keeps iteration (and error messages)
+        // deterministic.
+        std::map<NodeCoord, std::vector<const KernelSpec*>> binders_on_node;
+        for (const KernelSpec* kernel : binders_it->second) {
+            for (const NodeCoord& node : corerange_to_cores(collected.kernel_node_set.at(kernel->unique_id))) {
+                binders_on_node[node].push_back(kernel);
+            }
+        }
+        for (const auto& [node, kernels] : binders_on_node) {
+            if (kernels.size() <= 1) {
+                continue;
+            }
+            std::string names;
+            for (const KernelSpec* kernel : kernels) {
+                names += (names.empty() ? "'" : ", '") + kernel->unique_id.get() + "'";
+            }
+            TT_FATAL(
+                false,
+                "ScratchpadSpec '{}' is bound by {} kernel instances on node {} ({}). A scratchpad is "
+                "private node-local L1; multiple kernels may bind the same scratchpad only on disjoint "
+                "nodes, so each node's instance stays private to one kernel. Sharing one node's "
+                "scratchpad across kernels is not yet supported — give each binding kernel disjoint nodes.",
+                scratchpad.unique_id,
+                kernels.size(),
+                node.str(),
+                names);
+        }
+    }
 
     // Validate borrowed-memory DFBs.
     //
@@ -1440,56 +1537,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dfb_spec->data_format_metadata.has_value(),
                 "DFB '{}' is used by a compute kernel, but no data_format_metadata is specified",
                 dfb_name);
-        }
-    }
-
-    // Validate KernelSpec::dfb_self_loop_connectivities entries.
-    // This is a niche advanced option that only applies to compute kernels that self-loop a DFB
-    // (bind it as both producer and consumer).
-    // All misapplications fail loudly here for the benefit of users (especially AI users).
-    for (const KernelSpec& kernel : spec.kernels) {
-        if (kernel_self_loop_scopes(kernel).empty()) {
-            continue;
-        }
-        TT_FATAL(
-            kernel.is_compute_kernel(),
-            "KernelSpec '{}' specifies dfb_self_loop_connectivities, but is not a compute kernel. "
-            "This option applies only to compute kernels.",
-            kernel.unique_id);
-
-        for (const auto& [dfb_spec_name, scope] : kernel_self_loop_scopes(kernel)) {
-            TT_FATAL(
-                collected.dfb_by_name.contains(dfb_spec_name),
-                "KernelSpec '{}' has a dfb_self_loop_connectivities entry referencing unknown DFB '{}'.",
-                kernel.unique_id,
-                dfb_spec_name);
-
-            bool has_producer_binding = false;
-            bool has_consumer_binding = false;
-            for (const auto& binding : kernel.dfb_bindings) {
-                if (binding.dfb_spec_name != dfb_spec_name) {
-                    continue;
-                }
-                if (binding.endpoint_type == DFBEndpointType::PRODUCER) {
-                    has_producer_binding = true;
-                } else if (binding.endpoint_type == DFBEndpointType::CONSUMER) {
-                    has_consumer_binding = true;
-                }
-            }
-            TT_FATAL(
-                has_producer_binding && has_consumer_binding,
-                "KernelSpec '{}' has a dfb_self_loop_connectivities entry for DFB '{}', but the "
-                "kernel does not self-loop this DFB (does not bind it as BOTH producer and "
-                "consumer). This option applies only to self-looped DFBs.",
-                kernel.unique_id,
-                dfb_spec_name);
-
-            TT_FATAL(
-                scope != DFBSelfLoopConnectivity::INTER,
-                "KernelSpec '{}' specifies INTER scope for self-looped DFB '{}'. INTER scope is "
-                "not yet supported by the runtime.",
-                kernel.unique_id,
-                dfb_spec_name);
         }
     }
 
@@ -2036,12 +2083,24 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
 //
 // extra_crta_words: additional CRTA words (beyond the always-present base address
 // slot) that this binding occupies, used by the device-side accessor to read
-// runtime-resolved fields. Non-zero only when the TensorParameter opts into a
-// dynamic field that lives in CRTAs (currently: sharded + dynamic_tensor_shape,
-// which puts `rank` shape words in CRTAs).
+// runtime-resolved fields. Non-zero when the TensorParameter opts into a dynamic
+// field that lives in CRTAs: either sharded + dynamic_tensor_shape (which puts
+// `rank` shape words in CRTAs), or interleaved row-major + dynamic_tensor_shape (one
+// page-size word). The two are mutually exclusive per binding -- see runtime_field_is_page_size.
 struct ResolvedTensorParameter {
     std::vector<uint32_t> cta_payload;
+
+    // How many CRTA words (beyond the base address) does this binding consume?
+    // This is only used if TensorParameter relaxations have been requested.
     uint32_t extra_crta_words = 0;
+
+    // What info the runtime field CRTA words actually contain depends on the relaxation.
+    // Currently, there are only two mutually exclusive possibilities (though more may be added):
+    //  1. The interleaved row-major page-size (one CRTA only)
+    //  2. The sharded dynamic_tensor_shape shape (one CRTA per tensor dim)
+    // For now, since there are only two mutually exclusive possibilities, it's sufficient to
+    // distinguish them with a boolean.
+    bool runtime_field_is_page_size = false;
 };
 
 // Resolve a TensorParameter's static layout into a CTA payload + an extra CRTA word
@@ -2073,6 +2132,17 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     // the device-side accessor doesn't read it), so the flag is a pure host-side
     // validation loosening and has no effect on the CTA/CRTA layout.
     const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape && is_sharded;
+    // dynamic_tensor_shape lets the bound tensor's logical shape vary. For an interleaved ROW-MAJOR
+    // tensor the page size (= last_dim_width * elem_size) is part of that varying shape, so it must
+    // ride a runtime CRTA word too -- otherwise it goes stale on a program-cache hit and the
+    // accessor strides by the wrong number of bytes. We fold that in here rather than expose a
+    // separate flag: a useful page-size change is ALWAYS a shape change on row-major (you can't vary
+    // the width without varying the logical shape), so there is no "page size varies but shape
+    // doesn't" case to give a flag to. Tiled page size is dtype-fixed and sharded page size is
+    // spec-fixed, so neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages
+    // words instead (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
+    const bool dyn_page =
+        tensor_parameter.advanced_options.dynamic_tensor_shape && !is_sharded && spec.layout() == Layout::ROW_MAJOR;
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -2083,6 +2153,9 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     }
     if (dyn_shape) {
         args_config.set(tensor_accessor::ArgConfig::RuntimeTensorShape);
+    }
+    if (dyn_page) {
+        args_config.set(tensor_accessor::ArgConfig::RuntimePageSize);
     }
 
     // aligned_page_size: align the unaligned page size up to the buffer-type alignment.
@@ -2101,13 +2174,28 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 
     // Common header (always emitted, sharded or not):
     cta_payload.push_back(args_config.raw());
-    cta_payload.push_back(static_cast<uint32_t>(aligned_page_size));
+    // If the page size is static, it rides as a CTA.
+    // (If it's dynamic, it will live in a CRTA word instead.)
+    if (!dyn_page) {
+        cta_payload.push_back(static_cast<uint32_t>(aligned_page_size));
+    } else {
+        TT_FATAL(!is_sharded, "Internal error: dynamic page size should not occur on a sharded tensor parameter");
 
+        // One runtime field: the page size, re-derived from the bound buffer each dispatch
+        // and emitted immediately after the base-address word (see EmitBindingCrtaValues).
+        result.extra_crta_words = 1;
+        result.runtime_field_is_page_size = true;
+    }
+
+    // The rest of the logic in this function pertains to sharded tensors only.
+    // Early return for a non-sharded tensor.
     if (!is_sharded) {
-        // Interleaved tensors don't carry shape / bank-coord data: the device-side accessor
-        // computes addresses from page id + num_banks alone.
         return result;
     }
+
+    //////////////////////////////////
+    // Sharded tensor handling
+    //////////////////////////////////
 
     // Sharded: emit rank, num_banks, tensor_shape_in_pages (CTA only when static),
     // shard_shape_in_pages, bank_coords.
@@ -2208,6 +2296,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         handle.cta_offset = cta_word_offset;
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
+        handle.runtime_field_is_page_size = resolved.runtime_field_is_page_size;
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
@@ -2222,6 +2311,41 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
     out.crta_layout.binding_section_words = binding_section_words;
     out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_count) + binding_section_words;
 
+    return out;
+}
+
+// Per-kernel resolved scratchpad bindings:
+//  - one CRTA word per binding (the scratchpad's allocated L1 base address), in declaration order
+//  - the scratchpad section sits immediately after the TensorBinding section and before varargs, so
+//    each binding's absolute CRTA word index (and thus addr_crta_word) is fixed at codegen time
+//    (varargs are open-ended / runtime-counted, so a section placed after them would not be).
+// The allocated_address is left 0 here; allocate_scratchpads fills it once L1 is allocated.
+struct ScratchpadBindingsForKernel {
+    std::vector<ScratchpadBindingHandle> handles;
+    uint32_t section_words = 0;  // == number of scratchpad bindings
+};
+
+ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
+    const KernelSpec& kernel,
+    const std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*>& scratchpad_by_name,
+    size_t scratchpad_base_crta_word) {
+    ScratchpadBindingsForKernel out;
+    out.handles.reserve(kernel.scratchpad_bindings.size());
+
+    size_t crta_word_index = scratchpad_base_crta_word;
+    for (const auto& binding : kernel.scratchpad_bindings) {
+        const ScratchpadSpec* scratchpad_spec = scratchpad_by_name.at(binding.scratchpad_spec_name);
+
+        ScratchpadBindingHandle handle;
+        handle.accessor_name = binding.accessor_name;
+        handle.size_bytes = scratchpad_spec->size_per_node;
+        handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
+        // handle.allocated_address stays 0 until allocate_scratchpads runs.
+        out.handles.push_back(std::move(handle));
+        crta_word_index += 1;  // one address word per scratchpad binding
+    }
+
+    out.section_words = static_cast<uint32_t>(kernel.scratchpad_bindings.size());
     return out;
 }
 
@@ -2292,17 +2416,14 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     auto producer_access_pattern = to_hw_access_pattern(producer_binding->access_pattern);
     auto consumer_access_pattern = to_hw_access_pattern(consumer_binding->access_pattern);
 
-    // For a compute kernel that self-loops a DFB (binds it as both producer and consumer), the
-    // lower-layer DFB API requires an explicit scope. Self-loop is detected as any overlap
-    // between the producer and consumer kernel sets — under the multi-binding regime, the
-    // first-record pointers may differ even when the kernel sets are identical (the overlap is
-    // what matters, not vector ordering). Upstream validation guarantees producer set ==
-    // consumer set whenever any overlap exists, and that all self-loop participants agree on
-    // the tensix scope; reading from the first producer is therefore safe and representative.
-    // The user can declare scope via KernelSpec::dfb_self_loop_connectivities:
-    //  - absence of an entry means we infer INTRA (the common case)
-    //  - user-specified INTRA is also fine
-    //  - user-specified INTER is not currently supported. This will have already failed validation.
+    // A compute kernel that self-loops a DFB (binds it as both producer and consumer) lowers to the
+    // intra-Tensix packer->unpacker flow, so the lower-layer DFB API needs TensixScope::INTRA. The
+    // Metal 2.0 surface does not expose a scope option — INTRA is the only supported topology, applied
+    // automatically here. Self-loop is detected as any overlap between the producer and consumer kernel
+    // sets — under the multi-binding regime the first-record pointers may differ even when the kernel
+    // sets are identical (the overlap is what matters, not vector ordering). Upstream validation
+    // guarantees producer set == consumer set whenever any overlap exists, so reading from the first
+    // producer is safe and representative. A DM self-loop (Gen1-only) needs no tensix_scope.
     const bool is_self_loop = [&] {
         for (const auto& p : dfb_endpoint_info.producers) {
             for (const auto& c : dfb_endpoint_info.consumers) {
@@ -2315,11 +2436,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     }();
     std::optional<experimental::dfb::TensixScope> tensix_scope;
     if (is_self_loop && producer->is_compute_kernel()) {
-        auto user_conn = kernel_self_loop_scopes(*producer).get(dfb_spec->unique_id);
-        const auto user_scope = user_conn ? *user_conn : DFBSelfLoopConnectivity::INTRA;
-        tensix_scope = (user_scope == DFBSelfLoopConnectivity::INTRA)
-                           ? experimental::dfb::TensixScope::INTRA
-                           : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
+        tensix_scope = experimental::dfb::TensixScope::INTRA;
     }
 
     // Compute the per-side implicit-sync value by polling the bound DM kernels' Gen2 votes.
@@ -2338,8 +2455,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
             if (!dm_config.gen2_config.has_value()) {
                 continue;
             }
-            const auto& vec = dm_config.gen2_config->disable_implicit_sync_for;
-            if (std::find(vec.begin(), vec.end(), dfb_spec->unique_id) != vec.end()) {
+            if (DmKernelDisablesImplicitSync(*dm_config.gen2_config, dfb_spec->unique_id)) {
                 disabled = true;
             }
         }
@@ -2524,6 +2640,8 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .unpack_to_dest_mode = unpack_modes,
         .bfp8_pack_precise = compute_config.bfp8_pack_precise,
         .math_approx_mode = compute_config.math_approx_mode,
+        .enable_2x_src_format = compute_config.enable_2x_src_format,
+        .unpack_to_dest_en = compute_config.unpack_to_dest_en,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -2598,9 +2716,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
     // Step 2b: For multi-binding DFBs, all KernelSpecs on the same role must end up with
     // identical risc_masks. The DFB has a single producer_risc_mask / consumer_risc_mask in
-    // its hardware config; per-node mask variation would require splitting the DFB at lowering
-    // time (deliberately not done yet -- awaiting LLK DFBAccessor API support before we can do
-    // 1:N DFBs, as doing so requires passing DFB IDs as implicit RTAs rather than implicit CTAs).
+    // its hardware config.
     //
     // Gen1: the mask is a deterministic function of the user's KernelSpec hw_config (compute
     //   placement is fixed; DM processor is user-specified via Gen1Config). A
@@ -2769,6 +2885,17 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // Create TensorBindingHandles for this kernel
         const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
 
+        // Resolve scratchpad bindings for this kernel. The scratchpad section follows the TensorBinding
+        // section and precedes varargs, so it begins at the tensor-binding resolution's (pre-scratchpad)
+        // vararg offset; we then push the vararg section out by the scratchpad section's width so the
+        // crta_layout that flows into the kernel ctor reflects all four sections.
+        ScratchpadBindingsForKernel sp_bindings = ResolveScratchpadBindingsForKernel(
+            kernel_spec,
+            collected.scratchpad_by_name,
+            /*scratchpad_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset);
+        ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;
+        ta_bindings.crta_layout.vararg_section_offset += sp_bindings.section_words;
+
         // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time to
         // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
         // address section is tracked separately (via tensor_binding_handles), so we pass the user
@@ -2847,6 +2974,11 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     ta_bindings.crta_layout);
             }
         }
+
+        // Attach the resolved scratchpad bindings to the kernel (set post-construction: their sizes are
+        // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
+        // will later fill each handle's allocated_address.
+        kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
 
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
         KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);

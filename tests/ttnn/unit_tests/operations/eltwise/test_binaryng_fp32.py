@@ -97,7 +97,7 @@ def test_div_fp32(device):
     z_tt_div = ttnn.divide(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_div)
 
-    assert_allclose(z_torch, tt_out, atol=1e-10, rtol=1e-6)
+    assert_with_ulp(z_torch, tt_out, ulp_threshold=0, allow_nonfinite=True)
 
 
 # Test division when input_b is non-zero
@@ -105,6 +105,8 @@ def test_div_bf16_nonzero(device):
     x_torch = torch.tensor(
         [
             [
+                256.0,
+                1.009187e-31,
                 1.00030171126,
                 -3,
                 16,
@@ -118,6 +120,8 @@ def test_div_bf16_nonzero(device):
     y_torch = torch.tensor(
         [
             [
+                1.5,
+                1.175494e-38,
                 2,
                 3,
                 -4,

@@ -694,3 +694,51 @@ def test_typecast_rm_chunked_program_cache(device):
         output_tensor = ttnn.typecast(input_tensor, ttnn.uint8)
         result = ttnn.to_torch(output_tensor)
         assert_integer_typecast_equal(expected, result)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [16, 16],
+        [256],
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    [
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
+    ],
+)
+def test_typecast_uint8_to_bfloat16_exhaustive(shape, layout, memory_config, device):
+    """UINT8→BFLOAT16 typecast covering every possible uint8 value (0-255).
+
+    All 256 integers are exactly representable in bfloat16, so the conversion
+    must be bit-exact after rounding to bfloat16.
+    """
+    torch_input = torch.arange(0, 256, dtype=torch.uint8).reshape(shape)
+
+    expected = torch_input.to(torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.uint8,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+    )
+    output_tensor = ttnn.typecast(input_tensor, ttnn.bfloat16)
+    result = ttnn.to_torch(output_tensor)
+
+    assert result.dtype == torch.bfloat16, f"Expected bfloat16 output, got {result.dtype}"
+    assert torch.equal(expected, result), (
+        f"Mismatch: {(expected != result).sum().item()} / {expected.numel()} elements differ. "
+        f"First bad value at index {(expected != result).nonzero()[0].tolist()}"
+    )

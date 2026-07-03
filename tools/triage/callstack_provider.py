@@ -110,12 +110,12 @@ def get_callstack(
             except TimeoutDeviceRegisterError:
                 raise
             except Exception as e:
+                error_message = str(e) + " - defaulting to top callstack"
                 try:
                     # If full callstack failed, we default to top callstack
                     pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
                     if rewind_pc_for_ebreak:
                         pc = pc - 4
-                    error_message = str(e) + " - defaulting to top callstack"
                     cs = top_callstack(pc, elfs, offsets, context)
                     if len(cs) == 0:
                         error_message = "\n".join([error_message, _pc_not_in_range_message(dispatcher_core_data)])
@@ -316,7 +316,7 @@ class CallstackProvider:
                     # If GDB failed to get callstack, surface errors and default to top callstack
                     if len(gdb_callstack) == 0:
                         error_message = ""
-                        if self.gdb_server.error_stream:
+                        if isinstance(self.gdb_server.error_stream, io.StringIO):
                             error_message = f"\n  {self.gdb_server.error_stream.getvalue().strip()}"
                             # Clear after read so we don't repeat the same errors next time
                             self.gdb_server.error_stream.seek(0)
@@ -381,7 +381,7 @@ def find_available_port() -> int:
         with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
             s.bind(("", 0))  # 0 → OS picks a free port
             s.listen()
-            return s.getsockname()[1]
+            return int(s.getsockname()[1])
     except (socket.error, OSError) as e:
         # If we get here, no port was found
         raise TTTriageError(f"No available port found: {e}")

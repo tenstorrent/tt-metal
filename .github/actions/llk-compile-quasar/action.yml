@@ -30,11 +30,15 @@ runs:
         CHIP_ARCH: quasar
       run: |
         echo "Compiling Quasar (group ${{ inputs.test-group }}/${{ inputs.test-splits }})..."
-        pytest -q --compile-producer -n 10 \
-              -m "${{ inputs.pytest-markers }}" \
-              --splits ${{ inputs.test-splits }} --group ${{ inputs.test-group }} \
-              --override-ini=log_cli=false --tb=short --timeout=60 \
-              --junitxml=pytest-report-quasar-compile.xml .
+        "$GITHUB_WORKSPACE/.github/scripts/utils/host-load-sidecar.sh" \
+          --interval 1 \
+          --label "Quasar compile (group ${{ inputs.test-group }}/${{ inputs.test-splits }})" \
+          --output "$GITHUB_STEP_SUMMARY" \
+          -- pytest -q --compile-producer -n 8 \
+                -m "${{ inputs.pytest-markers }}" \
+                --splits ${{ inputs.test-splits }} --group ${{ inputs.test-group }} \
+                --override-ini=log_cli=false --tb=short --timeout=60 \
+                --junitxml=pytest-report-quasar-compile.xml .
 
     - name: Upload JUnit report for compiling elfs
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

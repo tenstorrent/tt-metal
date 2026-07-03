@@ -24,7 +24,7 @@ on:
         required: false
         type: string
         default: "all"
-        description: "Filter test rows by id, or by the sdpa tag group"
+        description: "Filter test rows by id"
 
 jobs:
   load-test-matrix:
@@ -78,27 +78,17 @@ jobs:
           with open(tests_path, "r") as f:
               tests = yaml.safe_load(f) or []
 
-          if selection == "sdpa":
-              matches = any(selection in (test.get("tags") or []) for test in tests)
-          else:
-              matches = any(test.get("id") == selection for test in tests)
+          matches = any(test.get("id") == selection for test in tests)
 
           print("true" if matches else "false")
           PY
           )
             if [[ "$selection_exists" != "true" ]]; then
-              echo "::error::Unknown e2e test-selection '$TEST_SELECTION'. Use 'all', 'sdpa', or an id from $TESTS_YAML_PATH."
+              echo "::error::Unknown e2e test-selection '$TEST_SELECTION'. Use 'all' or an id from $TESTS_YAML_PATH."
               exit 1
             fi
 
-            case "$TEST_SELECTION" in
-              sdpa)
-                selected=$(echo "$selected" | jq -c '[.[] | select((.tags // []) | index("sdpa"))]')
-                ;;
-              *)
-                selected=$(echo "$selected" | jq -c --arg id "$TEST_SELECTION" '[.[] | select(.id == $id)]')
-                ;;
-            esac
+            selected=$(echo "$selected" | jq -c --arg id "$TEST_SELECTION" '[.[] | select(.id == $id)]')
           fi
 
           filtered="$selected"
@@ -177,17 +167,10 @@ jobs:
         timeout-minutes: 10
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_logs
-          # tee combined stdout+stderr to a per-leg .log for ai-summary.
-          # Brace group: cmd may be multiple shell statements.
-          # PIPESTATUS: preserve real exit code (tee would mask it).
-          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
-          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
-          {
-            ${{ matrix.test-group.cmd }}
-          } 2>&1 | tee "$LOG_FILE"
-          exit ${PIPESTATUS[0]}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: ${{ matrix.test-group.cmd }}
       - name: Check latency/BW results
         id: check-data
         if: ${{ !cancelled() && matrix.test-group.upload_fabric_data == true }}

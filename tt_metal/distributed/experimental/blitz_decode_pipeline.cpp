@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -23,6 +24,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include "tt_metal/impl/context/metal_context.hpp"
 
@@ -247,36 +249,39 @@ ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bo
     // When selecting a pair for each hop, skip any pair that would reuse an already-claimed node.
     std::set<tt::tt_fabric::FabricNodeId> used_nodes;
 
-    // Select one inter-mesh pair per hop, avoiding collisions.
+    // Select one inter-mesh pair per hop such that NO FabricNodeId is reused across hops.
     // With loopback:    N hops: mesh_0→mesh_1→...→mesh_{N-1}→mesh_0
     // Without loopback: N-1 hops: mesh_0→mesh_1→...→mesh_{N-1} (no return)
+    //
+    // Greedy first-fit can strand a mid-chain hop on rings with few cable pairs per boundary, so
+    // tt_fabric::assign_non_colliding_hops() (topology_mapper_utils) does a backtracking global
+    // assignment (distinct representatives, most-constrained-hop-first) that succeeds whenever a valid
+    // layout exists.
     const std::size_t num_hops = initialize_loopback ? num_meshes : num_meshes - 1;
-    std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>> hops;
-    hops.reserve(num_hops);
+    using HopPair = std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>;
+
+    // Gather candidate exit/peer pairs for every hop, indexed by ring position.
+    std::vector<std::vector<HopPair>> candidates(num_hops);
     for (std::size_t i = 0; i < num_hops; i++) {
         const auto next = initialize_loopback ? (i + 1) % num_meshes : i + 1;
-        auto pairs =
+        candidates[i] =
             control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(mesh_ids[i], mesh_ids[next]);
-        TT_FATAL(!pairs.empty(), "No inter-mesh connection from mesh {} to mesh {}", *mesh_ids[i], *mesh_ids[next]);
-
-        bool found = false;
-        for (const auto& pair : pairs) {
-            if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
-                continue;
-            }
-            hops.push_back(pair);
-            used_nodes.insert(pair.first);
-            used_nodes.insert(pair.second);
-            found = true;
-            break;
-        }
         TT_FATAL(
-            found,
-            "No non-colliding inter-mesh pair from mesh {} to mesh {} "
-            "(all {} candidate pairs overlap with already-claimed nodes)",
-            *mesh_ids[i],
-            *mesh_ids[next],
-            pairs.size());
+            !candidates[i].empty(), "No inter-mesh connection from mesh {} to mesh {}", *mesh_ids[i], *mesh_ids[next]);
+    }
+
+    auto assignment = ::tt::tt_metal::experimental::tt_fabric::assign_non_colliding_hops(candidates);
+    TT_FATAL(
+        assignment.has_value(),
+        "Could not assign non-colliding inter-mesh pairs for all {} hops of the blitz decode pipeline ring "
+        "(each hop needs a distinct exit/peer chip pair; the inter-mesh cabling is overconstrained for this MGD).",
+        num_hops);
+    std::vector<HopPair>& hops = *assignment;
+
+    // Mark all chosen nodes used; the downstream mesh_0 entry/loopback search relies on `used_nodes`.
+    for (const auto& [exit_node, peer_node] : hops) {
+        used_nodes.insert(exit_node);
+        used_nodes.insert(peer_node);
     }
 
     // Pipeline data flow (with loopback):

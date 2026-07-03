@@ -204,8 +204,9 @@ def read_wait_globals(
     last_event = _read_symbol_value(
         kernel_elf, "last_event", loc_mem_access, check_value=dispatcher_core_data.kernel_name == "cq_dispatch"
     )
+    circular_buffer_fence: int | None
     try:
-        circular_buffer_fence = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence_
+        circular_buffer_fence = int(kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence_)
     except TimeoutDeviceRegisterError:
         raise
     except Exception:
@@ -238,12 +239,6 @@ def read_wait_globals(
             stream_addr0 + stream_stride_bytes * last_wait_stream,
         )
 
-        if is_dispatcher_kernel:
-            log_check(
-                wait_stream_value is not None,
-                f"Failed to read wait_stream_value for kernel {dispatcher_core_data.kernel_name}. There may be a problem with the dispatcher kernel.",
-            )
-
     if last_wait_count is not None and stream_width is not None:
         # Wrap the global wait count to the stream width, to match the stream wrap behavior
         last_wait_count = last_wait_count & ((1 << stream_width) - 1)
@@ -252,8 +247,11 @@ def read_wait_globals(
     sem_minus_local: int | None = None
     try:
         if dispatcher_core_data.kernel_name == "cq_dispatch":
-            my_dispatch_cb_sem_id = int(kernel_elf.get_constant("my_dispatch_cb_sem_id"))
-            fd_core_type_idx = int(kernel_elf.get_constant("fd_core_type_idx"))
+            my_dispatch_cb_sem_id_const = kernel_elf.get_constant("my_dispatch_cb_sem_id")
+            fd_core_type_idx_const = kernel_elf.get_constant("fd_core_type_idx")
+            assert my_dispatch_cb_sem_id_const is not None and fd_core_type_idx_const is not None
+            my_dispatch_cb_sem_id = int(my_dispatch_cb_sem_id_const)
+            fd_core_type_idx = int(fd_core_type_idx_const)
 
             # sem_l1_base is a firmware global array of L1 pointers; index by core type
             sem_base_ptr = kernel_elf.get_global("sem_l1_base", loc_mem_access)[fd_core_type_idx]
@@ -334,6 +332,7 @@ def run(args, context: Context):
             continue
 
         device = run_checks.get_device_by_unique_id(chip_unique_id)
+        assert device is not None, f"No device found for unique_id {chip_unique_id}"
         # Create OnChipCoordinate for this dispatcher core location
         location = OnChipCoordinate(x, y, "translated", device)
 

@@ -177,6 +177,10 @@ class TestConfig:
     SKIP_JUST_FOR_COMPILE_MARKER: ClassVar[str] = "SKIPPED_JUST_FOR_COMPILE"
     SKIP_JUST_FOR_STIMULI_MARKER: ClassVar[str] = "SKIPPED_JUST_FOR_STIMULI"
     _BUILD_DIRS_CREATED: ClassVar[bool] = False
+    # variant_ids this process has already built (or seen already built on disk).
+    # Variants that differ only in runtime args / formats / stimuli collapse to the
+    # same variant_id. Per-process: each xdist worker keeps its own.
+    _BUILT_VARIANT_IDS: ClassVar[set[str]] = set()
     SPEED_OF_LIGHT: ClassVar[bool] = (
         False  # Should everything be converted to compile-time arguments?
     )
@@ -1195,19 +1199,31 @@ class TestConfig:
     def build_elfs(self):
 
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
-        if not self.skip_build_header:
-            header_content = self.generate_build_header()
         done_marker = VARIANT_DIR / ".build_complete"
 
         if TestConfig.INFRA_TESTING:
             return
 
+        # In-process fast path: this worker already built (or saw built) this
+        # variant_id, so there is nothing to compile and nothing to stat. This is
+        # the cheapest exit and collapses runtime-only-differing variants.
+        if self.variant_id in TestConfig._BUILT_VARIANT_IDS:
+            return
+
         self.build_shared_artefacts()
 
-        # Fast path: if build is already complete, skip entirely
+        # Fast path: if build is already complete on disk (e.g. produced by
+        # another xdist worker), skip entirely.
         if done_marker.exists():
             logger.debug("Build already complete for {}", self.variant_id[:12])
+            TestConfig._BUILT_VARIANT_IDS.add(self.variant_id)
             return
+
+        # The build header is only needed for variants we actually compile, so
+        # generate it after the fast-path checks above rather than for every
+        # collected test (the vast majority of which hit a fast path).
+        if not self.skip_build_header:
+            header_content = self.generate_build_header()
 
         # Acquire lock for this variant to prevent concurrent builds
         lock_file = TestConfig.SYNC_DIR / f"{self.variant_id}.lock"
@@ -1216,6 +1232,7 @@ class TestConfig:
         with lock:
             # Check again inside lock in case another process just finished
             if done_marker.exists():
+                TestConfig._BUILT_VARIANT_IDS.add(self.variant_id)
                 return
 
             VARIANT_OBJ_DIR = VARIANT_DIR / "obj"
@@ -1328,6 +1345,8 @@ class TestConfig:
             # Mark build as complete so other processes know they can use the artefacts
             done_marker.touch()
 
+        TestConfig._BUILT_VARIANT_IDS.add(self.variant_id)
+
     def read_coverage_data_from_device(self):
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
         # Extracting coverage stream from device, for all kernel parts, for all their compilation units
@@ -1361,6 +1380,10 @@ class TestConfig:
 
     BRISC_ELF_LOADED: ClassVar[bool] = False
     LAST_LOADED_ELFS: ClassVar[Path] = Path()
+    # Max BRISC bring-up attempts after a reset. A board-wide `tt-smi -r 0`
+    # can leave a core slow-to-boot or wedged; each attempt re-issues the
+    # soft-reset kick (re-polling alone cannot recover a wedged core).
+    BRISC_BOOT_MAX_ATTEMPTS: ClassVar[int] = 3
 
     def run_elf_files(self) -> list:
         boot_mode = (
@@ -1391,28 +1414,49 @@ class TestConfig:
         if boot_mode == BootMode.BRISC:
             if not TestConfig.BRISC_ELF_LOADED:
                 commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
-                TestConfig.BRISC_ELF_LOADED = True
                 load_elf(
                     elf_file=str((TestConfig.SHARED_ELF_DIR / "brisc.elf").absolute()),
                     location=TestConfig.TENSIX_LOCATION,
                     risc_name="brisc",
                     verify_write=True,
                 )
-                # Pre-clear BriscCounter so we cannot latch onto a stale
-                # boot-ready sentinel left in L1 by a prior pytest process —
-                # mailboxes live at fixed L1 addresses outside any ELF
-                # section, so they survive ELF reload.
-                write_words_to_device(
-                    TestConfig.TENSIX_LOCATION,
-                    device_module.Mailboxes.BriscCounter.value,
-                    [0],
-                )
-                commit_tensix_soft_reset(
-                    0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
-                )
-                wait_brisc_boot_ready(
-                    TestConfig.TENSIX_LOCATION, timeout=brisc_cmd_timeout
-                )
+                # Bring BRISC up, retrying the soft-reset kick until it reaches
+                # its polling loop. A board-wide `tt-smi -r 0` can leave a core
+                # slow-to-boot or wedged; re-polling alone never recovers a
+                # wedged core, so each attempt re-asserts then de-asserts the
+                # BRISC soft reset. BRISC_ELF_LOADED is latched only after
+                # boot-ready succeeds, so a failed bring-up is retried on the
+                # next test instead of poisoning the rest of this worker's run.
+                last_err = None
+                for attempt in range(TestConfig.BRISC_BOOT_MAX_ATTEMPTS):
+                    if attempt:
+                        commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
+                    # Pre-clear BriscCounter so we cannot latch onto a stale
+                    # boot-ready sentinel left in L1 by a prior pytest process —
+                    # mailboxes live at fixed L1 addresses outside any ELF
+                    # section, so they survive ELF reload.
+                    write_words_to_device(
+                        TestConfig.TENSIX_LOCATION,
+                        device_module.Mailboxes.BriscCounter.value,
+                        [0],
+                    )
+                    commit_tensix_soft_reset(
+                        0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
+                    )
+                    try:
+                        wait_brisc_boot_ready(
+                            TestConfig.TENSIX_LOCATION, timeout=brisc_cmd_timeout
+                        )
+                    except TimeoutError as err:
+                        last_err = err
+                        continue
+                    TestConfig.BRISC_ELF_LOADED = True
+                    break
+                else:
+                    raise TimeoutError(
+                        f"BRISC bring-up did not become ready after "
+                        f"{TestConfig.BRISC_BOOT_MAX_ATTEMPTS} attempts"
+                    ) from last_err
 
             # Reset only TRISCs, BRISC stays alive in its polling loop
             commit_brisc_command(

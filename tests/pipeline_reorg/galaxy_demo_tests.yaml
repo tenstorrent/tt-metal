@@ -32,17 +32,6 @@
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
 
-- name: Galaxy Flux.1-dev demo tests
-  cmd: |
-    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1 TT_MM_THROTTLE_PERF=5
-    pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-dev" --timeout 1200
-  model: flux1
-  skus:
-    wh_galaxy_perf:
-      timeout: 15
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-
 - name: Galaxy Motif-Image-6B-Preview demo tests
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1
@@ -56,12 +45,12 @@
 
 - name: Galaxy Wan2.2 demo tests
   cmd: |
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500
   model: wan22
   skus:
     wh_galaxy_perf:
-      timeout: 20
+      timeout: 25
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
 

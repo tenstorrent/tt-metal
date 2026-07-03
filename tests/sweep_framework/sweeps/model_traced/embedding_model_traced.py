@@ -121,6 +121,13 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
     op_kwargs = build_op_kwargs(kwargs, exclude={"padding_idx", "weight_tensor_placement"})
 
+    # Forward padding_idx when the master trace recorded it (excluded above so a
+    # stale/absent value isn't passed, but ttnn.embedding takes it and the master
+    # captures it as an explicit kwarg — dropping it shows as a `padding_idx`
+    # extra_key diff vs the master trace).
+    if padding_idx is not None and padding_idx != "__ABSENT__":
+        op_kwargs["padding_idx"] = int(padding_idx)
+
     # V2 format provides separate shapes
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -141,8 +148,13 @@ def run(
     else:
         num_embeddings = weight_shape_actual[0]
 
-    # Generate input indices tensor (random integers in range [0, num_embeddings))
-    torch_input_tensor = torch_random(input_shape, 0, num_embeddings, torch.int64)
+    # Generate input indices tensor (random integers in range [0, num_embeddings)).
+    # When the master traced bf16 indices, cap the range to where bf16 is
+    # integer-exact (<=256) so device lookups still match the int64 golden while
+    # we preserve the traced bf16 dtype (instead of forcing uint32, which would
+    # mismatch the master's arg0.original_dtype).
+    _idx_cap = min(num_embeddings, 256) if input_a_dtype == ttnn.bfloat16 else num_embeddings
+    torch_input_tensor = torch_random(input_shape, 0, _idx_cap, torch.int64)
 
     # Determine weight dtype, layout, and memory_config
     # Use weight_* parameters if provided, otherwise fall back to input_b_*
@@ -167,11 +179,12 @@ def run(
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Embedding indices must be an integer type. The traced input dtype can be
-    # bfloat16, which cannot represent indices > 256 exactly (num_embeddings is
-    # often large, e.g. 32128), so bf16 indices get rounded on device and the
-    # lookups disagree with the exact int64 golden (PCC ~0). Force uint32.
-    if input_a_dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.float32):
+    # Embedding indices must be representable exactly by their dtype. bf16 is
+    # kept (its index range was capped to <=256 above so lookups stay exact and
+    # the traced dtype is preserved). bf8/bf4/float32 can't reliably index, so
+    # force uint32 for those (no traced config uses them as indices, so this
+    # won't mismatch the master trace).
+    if input_a_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.float32):
         input_a_dtype = ttnn.uint32
 
     # Create input tensor (indices)

@@ -42,14 +42,14 @@ Scripts that collect CI/CD metrics and benchmark data for upload to the analytic
 
 | Script | Description |
 |--------|-------------|
-| `ci_digest.py` | One named CI digest. Reports each watched workflow's latest completed scheduled run (real/infra/passing job counts + a collapsible failed-jobs table from `ai_job_summary_*` artifacts) to the step summary + an artifact. Stateless; self-gates on the digest's cron via `--schedule`. Driven by `.github/workflows/ci-digest.yaml`. Usage: `ci_digest.py --name <digest> --workflows <foo.yaml …> [--schedule "0 8 * * *"] [--force]`. Tests: `ci_digest.py --self-test`. |
+| `ci_digest.py` | One named CI digest. For each watched workflow, reads the latest completed scheduled run's `ai_run_summary_<run_id>` JSON artifact (succeeded / failed / infra_failure, produced by the `ai_summary/run` action) and renders a consolidated report — per-workflow health bar, counts, and a collapsible failed-jobs table — to the step summary + an artifact; falls back to the run conclusion when no JSON is present. Stateless; scheduling/gating lives in the workflow (`github.event.schedule`). Driven by `.github/workflows/ci-digest.yaml`. Usage: `ci_digest.py --name <digest> --workflows <foo.yaml …>`. Tests: `ci_digest.py --self-test`. |
 
 ## Test & CI Utilities (`utils/`)
 
 | Script | Description |
 |--------|-------------|
 | `utils/find-changed-files.sh` | Detects which files changed between `origin/main` and `HEAD`, then sets boolean flags for affected areas (CMake, tt-metalium, ttnn, models, docs, LLK, etc.). Used to conditionally gate CI jobs. |
-| `utils/prepare_test_matrix.py` | Builds a filtered GitHub Actions test matrix from a YAML test definition file and a list of enabled SKUs. Outputs JSON. Usage: `prepare_test_matrix.py <tests_yaml> <enabled_skus> <sku_config_yaml> [<systems_config_yaml>]` |
+| `utils/prepare_test_matrix.py` | Builds a filtered GitHub Actions test matrix from a YAML test definition file and a list of enabled SKUs. Outputs JSON. Usage: `prepare_test_matrix.py <tests_yaml> <enabled_skus> <sku_config_yaml>` |
 | `utils/count_pytests.py` | Counts total pytest cases in a directory, including `@pytest.mark.parametrize` expansions, by parsing Python ASTs. |
 | `utils/verify_time_budget.py` | Validates that the sum of test timeouts per (team, SKU) pair stays within the time budget defined in the budget YAML. |
 | `utils/validate_perf_targets.py` | Validates model performance benchmark results against targets defined in `models/model_targets.yaml`. Exits non-zero if any metric regresses beyond tolerance. |
