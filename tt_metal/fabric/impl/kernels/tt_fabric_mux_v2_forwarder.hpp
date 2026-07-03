@@ -69,12 +69,10 @@ inline void try_forward_channel_packet(
     uint8_t noc,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection) {
     if constexpr (DrainMode) {
-        WAYPOINT("FDWS");
         while (cached_downstream_free_slots == 0) {
             fabric_connection.wait_for_empty_write_slot();
             cached_downstream_free_slots = fabric_connection.get_num_free_write_slots();
         }
-        WAYPOINT("FDWE");
     } else {
         if (cached_downstream_free_slots == 0) {
             wait_until_downstream_slot_available(shared_trid_ring, cached_downstream_free_slots, fabric_connection);
@@ -84,8 +82,10 @@ inline void try_forward_channel_packet(
         }
     }
 
-    // Mirror V1's freshness point: invalidate just before consuming the worker-populated packet header.
-    // invalidate_l1_cache();
+    // Hoist the stream reg update early to avoid stale reads for the next packet since read and writes are to
+    // different addresses and CPU can't guarantee ordering.
+    increment_local_update_ptr_val(channel.pending_packets_stream_id, 1);
+
     const uint32_t packet_l1_address = channel.get_current_slot_address();
     auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_l1_address);
     const uint32_t packet_size_bytes = packet_header->get_payload_size_including_header();
@@ -100,7 +100,6 @@ inline void try_forward_channel_packet(
             packet_l1_address, packet_size_bytes, noc);
     }
 
-    increment_local_update_ptr_val(channel.pending_packets_stream_id, 1);
     cached_downstream_free_slots -= 1;
     channel.advance_slot();
 }
@@ -149,7 +148,6 @@ inline void run_forwarder(ForwarderContext& context) {
     const uint8_t data_noc_cmd_buf = fabric_connection.get_stateful_send_data_noc_cmd_buf();
     uint32_t cached_downstream_free_slots = fabric_connection.get_num_free_write_slots();
 
-    WAYPOINT("FSTY");
     while (shared_control_ptr->drain_initiated == 0) {
         for (uint32_t service_pass = 0;
              service_pass < kForwarderServiceBurstSize && shared_control_ptr->drain_initiated == 0;
@@ -161,30 +159,20 @@ inline void run_forwarder(ForwarderContext& context) {
         }
     }
 
-    WAYPOINT("FDRN");
     shared_control_ptr->forwarder_stop_tracking = 1;
-    DEVICE_PRINT("Forwarder entering drain phase after manager initiated drain\n");
+    noc_clear_packet_tag(noc, data_noc_cmd_buf);
+
     while (true) {
         if (!service_channels<true>(context, shared_trid_ring, cached_downstream_free_slots, noc, fabric_connection)) {
             break;
         }
     }
-    noc_clear_packet_tag(noc, data_noc_cmd_buf);
-    WAYPOINT("FEMP");
-    WAYPOINT("FCLS");
-    DEVICE_PRINT("Forwarder finished draining all channels, closing connection\n");
+
     fabric_connection.close();
-    DEVICE_PRINT("Forwarder closed connection\n");
-    WAYPOINT("FCLD");
-    WAYPOINT("FBRW");
+
     noc_async_write_barrier();
     noc_async_atomic_barrier();
-    WAYPOINT("FBRD");
-
-    WAYPOINT("FDON");
     shared_control_ptr->forwarder_done = 1;
-
-    DEVICE_PRINT("Forwarder exiting\n");
 }
 
 }  // namespace tt::tt_fabric::mux_v2::kernel

@@ -141,7 +141,6 @@ inline void run_manager() {
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
     // Phase 1: Steady state — service clients + opportunistic TRID retirement.
-    WAYPOINT("MSTY");
     while (true) {
         for (uint32_t logical_channel_id = 0; logical_channel_id < ct_args::num_channels; ++logical_channel_id) {
             invalidate_l1_cache();
@@ -152,16 +151,13 @@ inline void run_manager() {
         }
 
         if (finalized_client_count == ct_args::num_channels) {
-            WAYPOINT("MDRN");
             shared_control_ptr->drain_initiated = 1;
             break;
         }
     }
 
-    DEVICE_PRINT("Manager entering drain phase after all clients finalized\n");
     // Phase 2: Drain — retire TRIDs until forwarder done, skip all client servicing.
     // Once drain is initiated, clients are finalized and no future traffic can arrive.
-    WAYPOINT("MWFD");
     while (shared_control_ptr->forwarder_done == 0) {
         invalidate_l1_cache();
         if (shared_control_ptr->forwarder_stop_tracking == 0) {
@@ -170,13 +166,10 @@ inline void run_manager() {
         }
     }
 
-    WAYPOINT("MTRM");
-    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
-
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
-    DEVICE_PRINT("Manager exiting\n");
+    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
 }
 
 }  // namespace tt::tt_fabric::mux_v2::kernel

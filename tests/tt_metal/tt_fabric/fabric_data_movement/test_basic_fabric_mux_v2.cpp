@@ -41,8 +41,8 @@ constexpr uint32_t kSeedStride = 0x9E3779B9u;
 constexpr uint32_t kDefaultForwarderServiceBurstSize = 8;
 constexpr uint32_t kDefaultTridRingCapacity = tt::tt_fabric::FabricMuxV2Config::kDefaultTridRingCapacity;
 constexpr uint32_t kShortPacketCount = 1'000;
-constexpr uint32_t kMediumPacketCount = 5'000;
-constexpr uint32_t kLongPacketCount = 50'000;
+constexpr uint32_t kMediumPacketCount = 10'000;
+constexpr uint32_t kLongPacketCount = 100'000;
 constexpr uint32_t kDefaultReturnCreditsPerPacket = 16;
 
 using MeshDevicePtr = std::shared_ptr<tt::tt_metal::distributed::MeshDevice>;
@@ -845,7 +845,7 @@ class FabricMuxV2Functional2DFixture : public Fabric2DFixture, public ::testing:
 
 TEST_P(FabricMuxV2Functional2DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
 
-constexpr std::array<TestCaseConfig, 26> kTestCases = {{
+constexpr std::array<TestCaseConfig, 27> kTestCases = {{
     TestCaseConfig{
         .name = "SingleSender_DefaultPayload_Riscv0",
         .num_packets = kShortPacketCount,
@@ -1055,6 +1055,12 @@ constexpr std::array<TestCaseConfig, 26> kTestCases = {{
         .stage_count = 1,
     },
     // High channel count stress test
+    TestCaseConfig{
+        .name = "Stress_48Senders_DefaultPayload",
+        .num_senders = 48,
+        .num_packets = kLongPacketCount,
+        .num_buffers_per_channel = 4,
+    },
     TestCaseConfig{
         .name = "Stress_64Senders_DefaultPayload",
         .num_senders = 64,

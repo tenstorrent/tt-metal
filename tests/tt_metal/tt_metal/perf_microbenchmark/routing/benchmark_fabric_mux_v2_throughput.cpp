@@ -42,8 +42,9 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
         ForwarderNocConfig{.name = "r1", .noc = tt::tt_metal::NOC::RISCV_1_default},
     }};
     constexpr std::array<uint8_t, 5> kBufferSweep = {1, 2, 4, 8, 16};
-    constexpr std::array<uint32_t, 4> kPayloadSweep = {64, 1024, 2048, /*4096,*/ 0};
+    constexpr std::array<uint32_t, 5> kPayloadSweep = {64, 1024, 2048, 4096, 0};
     constexpr std::array<uint32_t, 6> kSenderSweep = {1, 2, 4, 8, 16, 32};
+    constexpr std::array<uint32_t, 2> kHighSenderSweep = {48, 64};
     constexpr std::array<uint32_t, 4> kTridRingCapacitySweep = {1, 2, 4, 8};
     constexpr std::array<uint32_t, 5> kServiceBurstSweep = {1, 2, 4, 8, 16};
     constexpr std::array<uint32_t, 6> kDrainerSlotsSweep = {1, 2, 4, 8, 16, 32};
@@ -51,8 +52,8 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
     std::vector<MuxV2ThroughputCase> cases;
     cases.reserve(
         kForwarderNocSweep.size() *
-        (kBufferSweep.size() + kPayloadSweep.size() + kSenderSweep.size() + kTridRingCapacitySweep.size() +
-         kServiceBurstSweep.size() + kDrainerSlotsSweep.size() + 1));  // +1 for 64-sender upper-limit case
+        (kBufferSweep.size() + kPayloadSweep.size() + kSenderSweep.size() + kHighSenderSweep.size() +
+         kTridRingCapacitySweep.size() + kServiceBurstSweep.size() + kDrainerSlotsSweep.size()));
 
     for (const auto& noc_config : kForwarderNocSweep) {
         for (const auto buffer_count : kBufferSweep) {
@@ -84,14 +85,16 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
             });
         }
 
-        // 64 senders with 4 buffers is the stream-reg upper limit (64 channels).
-        // Uses 4 buffers instead of the sweep default of 8 to stay within mux-core L1.
-        // cases.push_back(MuxV2ThroughputCase{
-        //     .name_suffix = "sender_sweep_64s_max_buf4_" + std::string(noc_config.name) + "_sb8_trid8",
-        //     .num_senders = 64,
-        //     .num_buffers_per_channel = 4,
-        //     .forwarder_noc = noc_config.noc,
-        // });
+        // High-sender cases use fewer per-channel buffers to stay within mux-core L1.
+        for (const auto sender_count : kHighSenderSweep) {
+            cases.push_back(MuxV2ThroughputCase{
+                .name_suffix = "high_sender_sweep_" + std::to_string(sender_count) + "s_max_buf4_" +
+                               std::string(noc_config.name) + "_sb8_trid8",
+                .num_senders = sender_count,
+                .num_buffers_per_channel = 4,
+                .forwarder_noc = noc_config.noc,
+            });
+        }
 
         for (const auto trid_ring_capacity : kTridRingCapacitySweep) {
             cases.push_back(MuxV2ThroughputCase{
