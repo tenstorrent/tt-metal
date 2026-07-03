@@ -694,7 +694,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
             std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
-                        experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {IN_DFB}}};
+                        experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
@@ -716,7 +716,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
             std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
-                        experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {OUT_DFB}}};
+                        experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
@@ -909,7 +909,7 @@ experimental::KernelSpec make_writer_unary_quasar_spec(
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
-            .disable_dfb_implicit_sync_for = {out_dfb_id}}},
+            .disable_dfb_implicit_sync_for_all = true}},
     };
 }
 
@@ -1041,7 +1041,7 @@ bool run_sfpu_binary_two_input_buffer(
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
         .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
-            .disable_dfb_implicit_sync_for = {IN0_DFB, IN1_DFB}}},
+            .disable_dfb_implicit_sync_for_all = true}},
     };
 
     experimental::KernelSpec compute_spec{
@@ -1219,7 +1219,7 @@ bool run_sfpu_ternary_three_input_buffer(
                       "src2_addr",
                       "src2_bank_id"}},
             .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
-                .disable_dfb_implicit_sync_for = {IN0_DFB, IN1_DFB, IN2_DFB}}},
+                .disable_dfb_implicit_sync_for_all = true}},
         };
 
         experimental::KernelSpec compute_spec{

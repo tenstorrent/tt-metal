@@ -126,7 +126,7 @@ void run_single_core_copy_block_matmul_partials(
             std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
-                        experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {SRC0_DFB}}};
+                        experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
@@ -146,7 +146,7 @@ void run_single_core_copy_block_matmul_partials(
             std::invoke([&] {
                 if (mesh_device->arch() == tt::ARCH::QUASAR) {
                     return experimental::DataMovementHardwareConfig{
-                        experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {DST_DFB}}};
+                        experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
                 }
                 return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};

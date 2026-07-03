@@ -327,12 +327,12 @@ void run_single_dfb_program(
     if (producer_type == DFBPorCType::DM && disable_isync) {
         std::get<experimental::DataMovementGen2Config>(
             std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config))
-            .disable_dfb_implicit_sync_for.push_back(DFB_NAME);
+            .disable_dfb_implicit_sync_for_all = true;
     }
     if (consumer_type == DFBPorCType::DM && disable_isync) {
         std::get<experimental::DataMovementGen2Config>(
             std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config))
-            .disable_dfb_implicit_sync_for.push_back(DFB_NAME);
+            .disable_dfb_implicit_sync_for_all = true;
     }
 
     experimental::WorkUnitSpec wu{
@@ -672,7 +672,7 @@ void run_concurrent_dfbs_program(
         if (disable_isync) {
             std::get<experimental::DataMovementGen2Config>(
                 std::get<experimental::DataMovementHardwareConfig>(kernel_specs.back().hw_config))
-                .disable_dfb_implicit_sync_for.push_back(dfb_name);
+                .disable_dfb_implicit_sync_for_all = true;
         }
         kernel_names.push_back(producer_name);
 
@@ -698,7 +698,7 @@ void run_concurrent_dfbs_program(
         if (disable_isync) {
             std::get<experimental::DataMovementGen2Config>(
                 std::get<experimental::DataMovementHardwareConfig>(kernel_specs.back().hw_config))
-                .disable_dfb_implicit_sync_for.push_back(dfb_name);
+                .disable_dfb_implicit_sync_for_all = true;
         }
         kernel_names.push_back(consumer_name);
     }
@@ -861,7 +861,7 @@ void run_concurrent_tensix_dm_dfbs_program(
         if (!dfb_config.enable_producer_implicit_sync) {
             std::get<experimental::DataMovementGen2Config>(
                 std::get<experimental::DataMovementHardwareConfig>(kernel_specs.back().hw_config))
-                .disable_dfb_implicit_sync_for.push_back(dfb_name);
+                .disable_dfb_implicit_sync_for_all = true;
         }
         kernel_names.push_back(consumer_name);
     }
@@ -1226,7 +1226,7 @@ void run_in_dfb_out_dfb_program(
     if (!dm2tensix_config.enable_producer_implicit_sync) {
         std::get<experimental::DataMovementGen2Config>(
             std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config))
-            .disable_dfb_implicit_sync_for.push_back(IN_DFB);
+            .disable_dfb_implicit_sync_for_all = true;
     }
 
     experimental::KernelSpec compute_spec{
@@ -1285,7 +1285,7 @@ void run_in_dfb_out_dfb_program(
     if (!tensix2dm_config.enable_producer_implicit_sync) {
         std::get<experimental::DataMovementGen2Config>(
             std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config))
-            .disable_dfb_implicit_sync_for.push_back(OUT_DFB);
+            .disable_dfb_implicit_sync_for_all = true;
     }
 
     experimental::WorkUnitSpec wu{
@@ -1713,10 +1713,10 @@ static void run_dfb_size_override_test(
     if (!implicit_sync) {
         std::get<experimental::DataMovementGen2Config>(
             std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config))
-            .disable_dfb_implicit_sync_for.push_back(DFB_NAME);
+            .disable_dfb_implicit_sync_for_all = true;
         std::get<experimental::DataMovementGen2Config>(
             std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config))
-            .disable_dfb_implicit_sync_for.push_back(DFB_NAME);
+            .disable_dfb_implicit_sync_for_all = true;
     }
 
     const CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
@@ -2337,7 +2337,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
     if (!remapper_dfb_config.enable_producer_implicit_sync) {
         std::get<experimental::DataMovementGen2Config>(
             std::get<experimental::DataMovementHardwareConfig>(dm_producer_spec.hw_config))
-            .disable_dfb_implicit_sync_for.push_back(REMAPPER_DFB);
+            .disable_dfb_implicit_sync_for_all = true;
     }
 
     // Combined compute kernel: BLOCKED consumer of remapper DFB ("remapper_in"),
