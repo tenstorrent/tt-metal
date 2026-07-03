@@ -602,7 +602,7 @@ void generate_runtime_args_cmds(
 
 struct Transfer {
     uint32_t start;
-    tt::stl::Span<const uint8_t> data;
+    ttsl::Span<const uint8_t> data;
     // Keep track of what CBs contributed to this transfer, so we can update the data in
     // update_program_dispatch_commands.
     std::vector<std::shared_ptr<CircularBufferImpl>> cbs;
@@ -734,7 +734,7 @@ BatchedTransfers assemble_runtime_args_commands(
                 transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
                     std::vector<Transfer>{Transfer{
                         .start = crta_offset,
-                        .data = tt::stl::Span<const uint8_t>(
+                        .data = ttsl::Span<const uint8_t>(
                             reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
                         .cbs = {},
                         .rta_data = &kernel->common_runtime_args_data()}};
@@ -972,7 +972,7 @@ public:
                     batched_transfers[std::make_pair(noc_xy_addr, dst_noc_info.num_dests)][start_addr] =
                         std::vector<Transfer>{
                             {{.start = start_addr,
-                              .data = tt::stl::Span<const uint8_t>(
+                              .data = ttsl::Span<const uint8_t>(
                                   reinterpret_cast<const uint8_t*>(&semaphore_data.back()), sizeof(uint32_t))}}};
                 }
             } else if (semaphore.core_type() == CoreType::ETH) {
@@ -1116,7 +1116,7 @@ public:
 
                 batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] = std::vector<Transfer>{
                     {.start = start_addr,
-                     .data = tt::stl::Span<const uint8_t>(
+                     .data = ttsl::Span<const uint8_t>(
                          reinterpret_cast<const uint8_t*>(cb_config_payload.data()), max_index * sizeof(uint32_t)),
                      .cbs = circular_buffers_on_corerange}};
                 i++;
@@ -1202,7 +1202,7 @@ public:
 
             batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] = std::vector<Transfer>{
                 {.start = start_addr,
-                 .data = tt::stl::Span<const uint8_t>(payload.data(), max_byte_end),
+                 .data = ttsl::Span<const uint8_t>(payload.data(), max_byte_end),
                  .dfbs = dfbs_on_corerange}};
             i++;
         }
@@ -1596,7 +1596,7 @@ public:
         for (uint32_t i = 0; i < batched_dispatch_subcmds.size(); ++i) {
             auto& cmd_data = batched_cmd_data[i];
             size_t last_end = cmd_data.front().start;
-            std::vector<tt::stl::Span<const uint8_t>> batched_data;
+            std::vector<ttsl::Span<const uint8_t>> batched_data;
             for (const Transfer& transfer : cmd_data) {
                 if (last_end != transfer.start) {
                     TT_ASSERT(transfer.start - last_end <= fill_data.size());
@@ -2988,7 +2988,7 @@ void set_num_worker_sems_on_dispatch(
     SystemMemoryManager& manager,
     uint8_t cq_id,
     uint32_t num_worker_sems,
-    tt::stl::Span<const uint32_t> workers_per_sub_device) {
+    ttsl::Span<const uint32_t> workers_per_sub_device) {
     TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     TT_ASSERT(workers_per_sub_device.size() == num_worker_sems);
     tt::tt_metal::DeviceCommandCalculator calculator;

@@ -54,11 +54,11 @@ TEST_F(MeshDeviceFixture, Host_Alignment_L1_Unaligned_NoViolation) {
 
     // Must NOT abort.
     detail::WriteToDeviceL1(
-        device, logical_core, unaligned_addr, tt::stl::Span<const uint8_t>(payload.data(), payload.size()));
+        device, logical_core, unaligned_addr, ttsl::Span<const uint8_t>(payload.data(), payload.size()));
 
     std::vector<uint8_t> readback(payload.size(), 0);
     detail::ReadFromDeviceL1(
-        device, logical_core, unaligned_addr, tt::stl::Span<uint8_t>(readback.data(), readback.size()));
+        device, logical_core, unaligned_addr, ttsl::Span<uint8_t>(readback.data(), readback.size()));
 
     EXPECT_EQ(readback, payload);
 
@@ -81,11 +81,11 @@ TEST_F(MeshDeviceFixture, Host_Alignment_DRAM_Unaligned_NoViolation) {
 
     // Channel 0 backs this DRAM allocation on the wormhole_N150 mock. Must NOT abort.
     detail::WriteToDeviceDRAMChannel(
-        device, /*dram_channel=*/0, unaligned_addr, tt::stl::Span<const uint8_t>(payload.data(), payload.size()));
+        device, /*dram_channel=*/0, unaligned_addr, ttsl::Span<const uint8_t>(payload.data(), payload.size()));
 
     std::vector<uint8_t> readback(payload.size(), 0);
     detail::ReadFromDeviceDRAMChannel(
-        device, /*dram_channel=*/0, unaligned_addr, tt::stl::Span<uint8_t>(readback.data(), readback.size()));
+        device, /*dram_channel=*/0, unaligned_addr, ttsl::Span<uint8_t>(readback.data(), readback.size()));
 
     EXPECT_EQ(readback, payload);
 

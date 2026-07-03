@@ -300,7 +300,7 @@ TEST_F(QueryOpConstraintsMockDevice, BinaryAdd) {
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
     const auto& spec_b = spec_a;
 
-    constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+    constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
     auto query = ttnn::graph::query_op_constraints(
         [](auto&&... args) { return ttnn::add(args...); },
