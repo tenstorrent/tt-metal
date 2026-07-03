@@ -316,26 +316,70 @@ class TtPrefillRuntime:
 
         self._on_layer_complete = on_layer_complete
 
-    def build_kv_chunk_table(self, kv_cache: ttnn.Tensor, path: str) -> str:
+    def build_kv_chunk_table(
+        self,
+        kv_cache: ttnn.Tensor,
+        path: str,
+        *,
+        first_layer_idx: int = 0,
+        num_my_layers: int = None,
+        stage_layout=None,
+    ) -> str:
         """Build + serialize the KV-chunk address table for the engine-owned `kv_cache` to
-        `path` and return it.
+        `path` and return it. Model-specific: DeepSeek/Kimi's MLA block-cyclic cache layout.
 
         The table maps each natural KV position to its true block-cyclic storage chip + offset
         (the MLA chunked-prefill cache layout), so the migration worker copies the right chunks.
         The runner publishes the serialized table to the worker — this method only describes the
-        cache layout; it issues no migration comms. Single-rank only (config.num_layers == the
-        full model)."""
-        from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+        cache layout; it issues no migration comms. The generic config-setup + protobuf serialize
+        lives in ``serialize_kv_chunk_table`` (model-agnostic); this method supplies the model's
+        block-cyclic builder + chunk constants.
 
-        return build_and_serialize_kv_chunk_table(
-            mesh_device=self.mesh_device,
-            kvpe_cache=kv_cache,
-            seq_len=self.config.max_seq_len,
+        Multi-rank (pipeline-parallel): this rank owns layers [first_layer_idx, first_layer_idx +
+        num_my_layers). The runner runs the all-ranks all-gather and passes the merged `stage_layout`
+        so ONLY rank 0 builds the table spanning every stage; the single-rank default (stage_layout
+        None) covers config.num_layers == the full model.
+
+        ``config.chunk_size`` is the block-cyclic period; the kimi builder hardcodes it as
+        PREFILL_CHUNK_OUTPUT_TOKENS, so a non-default period is rejected here rather than mismapped."""
+        from models.demos.common.prefill.runners.migration import serialize_kv_chunk_table
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+            NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+            PREFILL_CHUNK_OUTPUT_TOKENS,
+            create_kv_chunk_address_table_kimi,
+        )
+
+        # bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
+        chunk_size_bytes = 19584
+        assert self.config.chunk_size == PREFILL_CHUNK_OUTPUT_TOKENS, (
+            f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
+            f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but config.chunk_size="
+            f"{self.config.chunk_size}. A different period would mismap every position; re-introduce a "
+            f"parametrized builder if needed."
+        )
+
+        def _builder(*, config, chunk_size_bytes, num_users):
+            return create_kv_chunk_address_table_kimi(
+                config=config,
+                mesh_device=self.mesh_device,
+                mesh_shape=self.config.mesh_shape,
+                seq_len=self.config.max_seq_len,
+                sp_axis=self.config.sp_axis,
+                tt_kvpe_cache=kv_cache,
+                chunk_size_bytes=chunk_size_bytes,
+                num_users=num_users,
+                first_layer_idx=first_layer_idx,
+                num_my_layers=num_my_layers,
+                stage_layout=stage_layout,
+            )
+
+        return serialize_kv_chunk_table(
+            table_builder=_builder,
             num_layers=self.config.num_layers,
-            mesh_shape=self.config.mesh_shape,
-            sp_axis=self.config.sp_axis,
+            max_seq_len=self.config.max_seq_len,
             num_users=self.config.num_users,
-            chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
+            chunk_n_tokens=NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+            chunk_size_bytes=chunk_size_bytes,
             path=path,
         )
 

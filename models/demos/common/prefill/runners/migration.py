@@ -1,21 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""Model-agnostic KV-migration publish for the prefill runner.
+"""Model-agnostic KV-migration comms for the prefill runner.
 
-The runner owns the migration comms. The model-specific part — building the
-KV-chunk address table from the device cache layout — lives on the runtime
-(``runtime.build_kv_chunk_table(path)``); this module takes the already-serialized
-table and performs the generic handshake with a running migration_endpoint:
+The RUNNER owns the control flow; this module provides the generic (model-free) pieces and the model
+runtime owns the table build. The split for a migration bring-up:
 
-    1. client.send_kv_chunk_table(table_path)   # SetTable on table_q
-    2. client.send_device_map(entries)          # AssignDevMap + N x DevMapEntry on table_q
-    3. client.wait_ready(timeout_ms)            # blocks on RespOpcode::WorkerReady
+    1. deliver_device_map_and_gather_stage_layout(...)   # ALL RANKS: deliver local FNID->UMD map to
+                                                          #   the co-located worker + all-gather barrier
+    2. runtime.build_kv_chunk_table(kv_cache, path, ...) # RANK 0: model builds + serializes the table
+                                                          #   (via serialize_kv_chunk_table here)
+    3. publish_serialized_table_and_wait_ready(path)     # RANK 0: SetTable + wait for WORKER_READY
 
-Without step 2 the worker never opens UMD chips and never asserts WORKER_READY;
-without step 3 the runner enters its request loop before the scheduler can
-actually issue migrations. The device map is derived from the local mesh topology
-(generic). The ``_migration_client`` extension lives in tt-llm-engine and is
+Step 1 delivers every rank's device map (the worker keys chips on their hardware unique id and never
+gathers the map itself) and doubles as the barrier guaranteeing all maps land before rank 0 SET_TABLEs.
+Step 2 is the ONLY model-specific step: ``runtime.build_kv_chunk_table`` calls back into
+``serialize_kv_chunk_table`` with a model-supplied builder, so this module never imports a model.
+Step 3 attaches the ``MigrationLayerClient`` (SetTable on table_q, then blocks on
+RespOpcode::WorkerReady) — without WORKER_READY the runner would enter its request loop before the
+scheduler can issue migrations. The ``_migration_client`` extension lives in tt-llm-engine and is
 imported LAZILY so the runner still works standalone when migration is opted out.
 """
 
@@ -29,21 +32,6 @@ import zlib
 from loguru import logger
 
 import ttnn
-
-# Default shmem queue names. Overridable via PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE.
-_DEFAULT_CMD_QUEUE = "/prefill_mig_cmd_1"
-_DEFAULT_TABLE_QUEUE = "/prefill_mig_tbl_1"
-_DEFAULT_RESP_QUEUE = "/prefill_mig_rsp_1"
-
-# This is a predefined constant for the number of contiguous tokens in a DRAM bank
-NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
-# Nominal DRAM bank count for a full (unharvested) Blackhole part. Prefer get_num_dram_banks(device)
-# at runtime: harvested parts expose fewer banks (e.g. 7), and the cache ND-shard grid + the
-# disaggregation address-table striding must both use the device's actual count to stay consistent.
-BH_NUM_DRAM_BANKS = 8
-PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
-# bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
-_CHUNK_SIZE_BYTES = 19584
 
 
 def _disaggregation():
@@ -59,9 +47,10 @@ def _serialize_table_to_path(table, path: str) -> None:
 
 def _resolve_queue_names() -> tuple[str, str, str]:
     return (
-        os.environ.get("PREFILL_MIGRATION_CMD_QUEUE", _DEFAULT_CMD_QUEUE),
-        os.environ.get("PREFILL_MIGRATION_TABLE_QUEUE", _DEFAULT_TABLE_QUEUE),
-        os.environ.get("PREFILL_MIGRATION_RESP_QUEUE", _DEFAULT_RESP_QUEUE),
+        # Default shmem queue names. Overridable via PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE.
+        os.environ.get("PREFILL_MIGRATION_CMD_QUEUE", "/prefill_mid_cmd_1"),
+        os.environ.get("PREFILL_MIGRATION_TABLE_QUEUE", "/prefill_mig_tbl_1"),
+        os.environ.get("PREFILL_MIGRATION_RESP_QUEUE", "/prefill_mig_rsp_1"),
     )
 
 
@@ -195,180 +184,44 @@ def _build_device_map(mesh_device, mesh_shape) -> list[tuple[int, int, int]]:
     return device_map
 
 
-def _publish_table_and_wait_ready(
-    *, mesh_device, mesh_shape, table_path: str, wait_ready_timeout_ms: int = 120_000
-) -> None:
-    """Publish an already-serialized KV-chunk table to the migration worker and block
-    on WORKER_READY (or raise on timeout).
-
-    The runner calls this AFTER the runtime serialized the table
-    (``runtime.build_kv_chunk_table(path)``). Builds the device map from the local
-    mesh, attaches a ``MigrationLayerClient`` on the env-driven shmem queues, sends
-    SET_TABLE and AssignDevMap in the order the worker expects, then waits. The client
-    is scope-local to this call; runtime migrations are issued by the C++
-    PrefillScheduler over its own adapter.
-
-    Strict-by-default: any failure to import the extension, attach to the queues, or
-    reach WORKER_READY raises.
-    """
-    device_map = _build_device_map(mesh_device, mesh_shape)
-
-    client, cmd_q, table_q, resp_q = _attach_migration_client()
-
-    logger.info(
-        f"[migration] publishing: table={table_path} devices={len(device_map)} "
-        f"queues=(cmd={cmd_q}, table={table_q}, resp={resp_q}) wait_ready_ms={wait_ready_timeout_ms}"
-    )
-    client.send_kv_chunk_table(table_path)
-    client.send_device_map(device_map)
-    client.wait_ready(wait_ready_timeout_ms)
-    logger.info(f"[migration] WORKER_READY: devices={len(device_map)} table={table_path}")
-
-    return client
-
-
-def build_and_serialize_kv_chunk_table(
+def serialize_kv_chunk_table(
     *,
-    mesh_device,
-    kvpe_cache,
-    seq_len,
-    num_layers,
-    mesh_shape,
-    sp_axis,
-    num_users,
-    chunk_size_global,
-    path,
-    first_layer_idx=0,
-    num_my_layers=None,
-    stage_layout=None,
+    table_builder,
+    num_layers: int,
+    max_seq_len: int,
+    num_users: int,
+    chunk_n_tokens: int,
+    chunk_size_bytes: int,
+    path: str,
 ) -> str:
-    """Build the KV chunk address table from the device KV layout and serialize it to ``path``
-    for the inference server to forward via SET_TABLE. Returns the path on success.
+    """Model-agnostic KvChunkAddressTable serialize. Owns the generic config setup + protobuf
+    serialization; the MODEL owns the address math via the ``table_builder`` callback.
 
-    Uses create_kv_chunk_address_table_kimi: chunked prefill stores KV positions block-cyclic across
-    the SP shards (every model variant), so the table must map each natural position to its true
-    block-cyclic storage chip + offset. The migration worker copies the chunks the table lists for
-    the migrated position range. A contiguous (wrong) table still works for a blanket copy of the
-    WHOLE cache — every chunk is copied regardless of its label — but any sub-cache migration (a
-    prefix copy of [0, N), or a prompt shorter than max_seq_len) lists the wrong, block-cyclically-
-    scattered chunks and copies mostly un-prefilled storage, so the migrated KV fails its PCC check.
+    ``table_builder(config, chunk_size_bytes, num_users)`` receives the populated
+    ``KvChunkAddressTableConfig`` and returns a built ``KvChunkAddressTable`` for the model's own
+    cache layout (e.g. the deepseek/kimi block-cyclic builder). This keeps the common runner module
+    free of any model import — the model calls this from ``runtime.build_kv_chunk_table``.
 
-    ``chunk_size_global`` is the prefill chunk size (the block-cyclic period; the same value passed
-    to blockcyclic_positions). The kimi builder hardcodes this period as PREFILL_CHUNK_OUTPUT_TOKENS,
-    so a non-default PREFILL_CHUNK_SIZE is rejected here rather than silently mismapped."""
-    assert chunk_size_global == PREFILL_CHUNK_OUTPUT_TOKENS, (
-        f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
-        f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but chunk_size_global={chunk_size_global}. "
-        f"A different period would mismap every position; re-introduce a parametrized builder if needed."
-    )
-    # Lazy import: the kimi block-cyclic builder is model-specific (lives in the deepseek package),
-    # so keep this model-agnostic module importable without it.
-    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import create_kv_chunk_address_table_kimi
-
+    Returns ``path`` on success."""
     cfg = _disaggregation().KvChunkAddressTableConfig()
-    # cfg.num_layers is the GLOBAL layer total; the builder overwrites it with the gathered sum of all
-    # stages' layer counts, so this is just an initial value (== num_layers when stages tile cleanly).
+    # Initial value only: a multi-stage builder overwrites cfg.num_layers with the gathered global
+    # sum of every stage's layer count (== num_layers when a single stage owns the whole model).
     cfg.num_layers = num_layers
-    cfg.max_sequence_length = seq_len
+    cfg.max_sequence_length = max_seq_len
     cfg.num_slots = num_users
-    cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    cfg.chunk_size_bytes = _CHUNK_SIZE_BYTES
-    table = create_kv_chunk_address_table_kimi(
-        config=cfg,
-        mesh_device=mesh_device,
-        mesh_shape=mesh_shape,
-        seq_len=seq_len,
-        sp_axis=sp_axis,
-        tt_kvpe_cache=kvpe_cache,
-        chunk_size_bytes=_CHUNK_SIZE_BYTES,
-        num_users=num_users,
-        first_layer_idx=first_layer_idx,
-        num_my_layers=num_my_layers,
-        stage_layout=stage_layout,
-    )
+    cfg.chunk_n_tokens = chunk_n_tokens
+    cfg.chunk_size_bytes = chunk_size_bytes
+    table = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
     _serialize_table_to_path(table, path)
     logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
     return path
 
 
-def publish_kv_chunk_table_and_wait_ready(
-    *,
-    mesh_device,
-    kvpe_cache,
-    seq_len: int,
-    num_layers: int,
-    mesh_shape,
-    sp_axis: int,
-    num_users: int,
-    chunk_size_global: int,
-    path: str,
-    first_layer_idx: int = 0,
-    num_my_layers: int = None,
-    wait_ready_timeout_ms: int = 120_000,
-):
-    """Full migration bring-up from the prefill runner side.
-
-    Builds + serializes the KV chunk address table, attaches a
-    ``MigrationLayerClient`` on the env-driven shmem queues, sends SET_TABLE and
-    AssignDevMap in the order the worker expects, then blocks on WORKER_READY
-    (or raises on timeout). The client is scope-local to this call; runtime
-    migrations are issued by the C++ PrefillScheduler over its own adapter.
-
-    ``chunk_size_global`` is the prefill chunk size (the block-cyclic period;
-    same value passed to blockcyclic_positions). The table builder maps natural
-    positions to their true block-cyclic storage chunks — a wrong period makes
-    slot-1 migrated reads land at the wrong SP shards and PCC collapses to ~0.70
-    (the half-correct pattern). The kimi builder hardcodes this period, so
-    ``build_and_serialize_kv_chunk_table`` asserts it matches PREFILL_CHUNK_OUTPUT_TOKENS.
-
-    Strict-by-default: any failure to import the extension, attach to the
-    queues, or reach WORKER_READY raises. Callers that only need the serialized
-    table (no publish) can use ``build_and_serialize_kv_chunk_table`` directly.
-
-    Rank gating (mirrors tt-blaze's ``connect_with_migration_worker``):
-      * ALL RANKS deliver their OWN local FNID->UMD device map to the worker co-located on THEIR host
-        and join the cross-host all-gather that feeds rank 0's merged table -- see
-        ``_deliver_device_map_and_gather``. The worker needs every rank's local map before SET_TABLE
-        (a rank knows only its own chips; the map is never gathered worker-side).
-      * ONLY RANK 0 inits the endpoint ``MigrationLayerClient`` on the master cmd/table/resp queues,
-        builds + SET_TABLEs the merged table, and blocks on WORKER_READY -- see
-        ``_publish_table_and_wait_ready``. The resp queue is single-consumer, so exactly one rank may
-        attach (tt-blaze gates this to ``mesh_id == 0``).
-    """
-    rank = int(ttnn.distributed_context_get_rank())
-
-    # ALL RANKS: deliver this rank's local device map + join the collective all-gather (barrier).
-    stage_layout = _deliver_device_map_and_gather(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers)
-
-    if rank != 0:
-        logger.info(
-            f"[migration] rank {rank}: delivered its local device map + contributed its stage "
-            f"(first_layer={first_layer_idx}, count={num_my_layers}); rank 0 sends the merged table."
-        )
-        return
-
-    # RANK 0 ONLY: build the merged table, init the MigrationLayerClient, SET_TABLE, wait for ready.
-    return _publish_table_and_wait_ready(
-        mesh_device=mesh_device,
-        kvpe_cache=kvpe_cache,
-        seq_len=seq_len,
-        num_layers=num_layers,
-        mesh_shape=mesh_shape,
-        sp_axis=sp_axis,
-        num_users=num_users,
-        chunk_size_global=chunk_size_global,
-        path=path,
-        first_layer_idx=first_layer_idx,
-        num_my_layers=num_my_layers,
-        stage_layout=stage_layout,
-        wait_ready_timeout_ms=wait_ready_timeout_ms,
-    )
-
-
-def _deliver_device_map_and_gather(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers):
-    """ALL RANKS run this. Deliver THIS rank's local FNID->UMD device map to its co-located worker,
-    then join the collective all-gather that merges every stage into rank 0's table. Returns the
-    gathered ``stage_layout`` (used only by rank 0).
+def deliver_device_map_and_gather_stage_layout(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers):
+    """ALL RANKS run this (the runner drives it for every rank). Deliver THIS rank's local FNID->UMD
+    device map to its co-located worker, then join the collective all-gather that merges every stage
+    into one table. Returns the gathered ``stage_layout`` (the runner passes it to rank 0's
+    ``runtime.build_kv_chunk_table``; non-rank-0 callers just needed to join the collective).
 
     The delivery happens BEFORE the gather so every rank's map is in place before rank 0 SET_TABLEs;
     the all-gather doubles as the barrier that guarantees it. The gather is an MPI collective -- EVERY
@@ -379,48 +232,24 @@ def _deliver_device_map_and_gather(mesh_device, kvpe_cache, mesh_shape, first_la
     return allgather_kv_stage_layout(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers)
 
 
-def _publish_table_and_wait_ready(
-    *,
-    mesh_device,
-    kvpe_cache,
-    seq_len,
-    num_layers,
-    mesh_shape,
-    sp_axis,
-    num_users,
-    chunk_size_global,
-    path,
-    first_layer_idx,
-    num_my_layers,
-    stage_layout,
-    wait_ready_timeout_ms,
-):
-    """RANK 0 ONLY. Build + serialize the merged KV chunk table, init the endpoint
-    ``MigrationLayerClient`` on the master cmd/table/resp queues, send SET_TABLE, and block on
-    WORKER_READY (emitted once the table is applied and every rank's device map landed)."""
-    build_and_serialize_kv_chunk_table(
-        mesh_device=mesh_device,
-        kvpe_cache=kvpe_cache,
-        seq_len=seq_len,
-        num_layers=num_layers,
-        mesh_shape=mesh_shape,
-        sp_axis=sp_axis,
-        num_users=num_users,
-        chunk_size_global=chunk_size_global,
-        path=path,
-        first_layer_idx=first_layer_idx,
-        num_my_layers=num_my_layers,
-        stage_layout=stage_layout,
-    )
+def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeout_ms: int = 120_000):
+    """RANK 0 ONLY. Publish an ALREADY-serialized KV chunk table to the migration worker and block on
+    WORKER_READY (or raise on timeout). Returns the attached client.
 
+    The table is built + serialized by the model runtime (``runtime.build_kv_chunk_table`` — the model
+    owns the cache layout / block-cyclic address math), and the runner runs the all-ranks device-map
+    delivery + all-gather barrier (``deliver_device_map_and_gather_stage_layout``) FIRST, so by the
+    time this attaches the endpoint ``MigrationLayerClient`` on the master cmd/table/resp queues and
+    SET_TABLEs, every rank's local device map has landed and the worker can reach WORKER_READY.
+    """
     client, cmd_q, table_q, resp_q = _attach_migration_client()
     logger.info(
-        f"[migration] publishing table={path} (queues cmd={cmd_q}, table={table_q}, resp={resp_q}) "
+        f"[migration] publishing table={table_path} (queues cmd={cmd_q}, table={table_q}, resp={resp_q}) "
         f"wait_ready_ms={wait_ready_timeout_ms}"
     )
-    client.send_kv_chunk_table(path)
+    client.send_kv_chunk_table(table_path)
     client.wait_ready(wait_ready_timeout_ms)
-    logger.info(f"[migration] WORKER_READY: layers={num_layers} slots={num_users} table={path}")
+    logger.info(f"[migration] WORKER_READY: table={table_path}")
 
     return client
 

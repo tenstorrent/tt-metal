@@ -17,10 +17,9 @@ import ttnn
 
 # The _layer_completion extension is built only with this model's nanobind module (WITH_PYTHON_BINDINGS)
 # and is absent from packaged/wheel runs — skip the module rather than error collection of the suite.
-pytest.importorskip("models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill._layer_completion")
-from models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill import LayerCompletionQueue, LayerCompletionRouter
-
-from models.demos.deepseek_v3_d_p.tt.runners.prefill_runner import build_layer_completion_sink
+pytest.importorskip("models.demos.common.prefill.runners.pipelined_prefill._layer_completion")
+from models.demos.common.prefill.runners.pipelined_prefill import LayerCompletionQueue, LayerCompletionRouter
+from models.demos.common.prefill.runners.prefill_runner import build_layer_completion_sink
 
 
 def _unlink(shm_name: str) -> None:

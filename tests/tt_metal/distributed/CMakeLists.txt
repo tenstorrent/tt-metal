@@ -1,5 +1,5 @@
 # Shared layer-completion impl source list (LAYER_COMPLETION_IMPL_SRCS / LAYER_COMPLETION_DIR).
-include(${PROJECT_SOURCE_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill/sources.cmake)
+include(${PROJECT_SOURCE_DIR}/models/demos/common/prefill/runners/pipelined_prefill/sources.cmake)
 
 set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_auto_mpi_init.cpp

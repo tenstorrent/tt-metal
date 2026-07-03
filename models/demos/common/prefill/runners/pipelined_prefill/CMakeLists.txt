@@ -1,7 +1,7 @@
 # Standalone `_layer_completion` nanobind extension for the deepseek_v3_d_p pipelined-prefill
 # layer-completion feature (host-local ring + reorder buffer + MPI router + the test-only consumer).
 # Deliberately NOT part of ttnn: it links only TT::Metalium and is imported via
-# models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill — zero ttnn API/_ttnn footprint.
+# models.demos.common.prefill.runners.pipelined_prefill — zero ttnn API/_ttnn footprint.
 #
 # Added from the root CMakeLists (after ttnn, gated on WITH_PYTHON_BINDINGS) so the nanobind tooling
 # (TT::Nanobind, nanobind_* helpers) and TT::Metalium are in scope. Like _ttnn, the .so is emitted to

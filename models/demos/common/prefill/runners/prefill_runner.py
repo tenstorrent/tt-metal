@@ -316,7 +316,7 @@ class _CompletionCheckConsumer:
     """Test-only scheduler stand-in (enabled by PREFILL_CHECK_COMPLETIONS=1).
 
     Thin Python wrapper over the C++ LayerCompletionConsumer from the standalone `_layer_completion`
-    extension (models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill — NOT part of the ttnn
+    extension (models/demos/common/prefill/runners/pipelined_prefill — NOT part of the ttnn
     module). The C++ consumer drains the master router's scheduler counter
     channel on a NATIVE thread — immune to the GIL. An earlier Python daemon-thread version stalled at
     a partial count because the master rank's main thread blocks in a GIL-holding request-loop call
@@ -330,7 +330,7 @@ class _CompletionCheckConsumer:
     def __init__(self, ack_shm_name: str, *, num_layers: int):
         # Imported here (not at module top) so the runner doesn't hard-fail when the test-only
         # _layer_completion extension is absent; only PREFILL_CHECK_COMPLETIONS=1 runs reach this.
-        from models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill import LayerCompletionConsumer
+        from models.demos.common.prefill.runners.pipelined_prefill import LayerCompletionConsumer
 
         self._num_layers = num_layers
         # This consumer only runs in (unbounded) request mode, where the external producer — NOT
@@ -1153,10 +1153,10 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
             logger.warning(f"[migration] removing stale shm {path} from a prior run")
             os.remove(path)
 
-    # Migration KV-chunk-table publish: runs for ANY rank count. Every rank participates in the
-    # cross-host all-gather that merges the table, but only the first rank builds it and sends it to
-    # the worker (the gating lives inside publish_kv_chunk_table_and_wait_ready, mirroring tt-blaze
-    # where all ranks all-gather but only mesh 0 builds + sends). Previously single-rank only.
+    # Migration KV-chunk-table publish: runs for ANY rank count. The runner owns the control flow;
+    # every rank joins the cross-host all-gather (barrier) that merges the table, then ONLY the first
+    # rank asks its model runtime to build the merged table and sends it to the worker (mirroring
+    # tt-blaze where all ranks all-gather but only mesh 0 builds + sends). Previously single-rank only.
     migration_endpoint = None
     # Single opt-in: PREFILL_MIGRATION_SELFTEST=1 runs the migrate + slot==slot verify AND implies the
     # table publish it depends on, so you don't also have to set PREFILL_ENABLE_MIGRATION. The latter
@@ -1172,11 +1172,17 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
                 logger.warning(f"[migration] removing stale DONE sentinel {_done_file} from a prior run")
                 os.remove(_done_file)
 
-        # Full migration bring-up: publish the KV chunk table + device map, then block on
-        # WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
-        # COLLECTIVE: all ranks must call this so the table all-gather completes; only the first rank
-        # attaches to the worker and sends.
-        from models.demos.common.prefill.runners.migration import publish_kv_chunk_table_and_wait_ready
+        # Migration bring-up, split by ownership before the request loop opens (the worker gates on
+        # SetTable + AssignDevMap, so this must finish first):
+        #   * ALL RANKS deliver their local device map + join the all-gather barrier (COLLECTIVE —
+        #     every rank must call it or the communicator deadlocks).
+        #   * The model RUNTIME builds + serializes the model-specific KV chunk table and returns its
+        #     path (runtime.build_kv_chunk_table — the model owns the cache layout / address math).
+        #   * RANK 0 ONLY publishes that serialized table to the worker and blocks on WORKER_READY.
+        from models.demos.common.prefill.runners.migration import (
+            deliver_device_map_and_gather_stage_layout,
+            publish_serialized_table_and_wait_ready,
+        )
 
         # This rank's pipeline stage owns layers [first_layer_idx, first_layer_idx + num_my_layers).
         # The layer-aware merge gathers each rank's range so the table spans all stages; pass this
@@ -1184,20 +1190,31 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         first_layer_idx, num_my_layers = compute_layer_split(NUM_LAYERS, num_ranks)[rank]
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
-        migration_endpoint = publish_kv_chunk_table_and_wait_ready(
-            mesh_device=mesh_device,
-            kvpe_cache=kv_cache,
-            seq_len=MAX_SEQ_LEN,
-            num_layers=NUM_LAYERS,
-            mesh_shape=GLOBAL_MESH_SHAPE,
-            sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
-            num_users=NUM_USERS,
-            chunk_size_global=CHUNK_SIZE,  # block-cyclic period (prefill chunk size)
-            path=table_path,
-            first_layer_idx=first_layer_idx,
-            num_my_layers=num_my_layers,
-            wait_ready_timeout_ms=wait_ready_ms,
+
+        # ALL RANKS: deliver local device map + contribute this stage to the merged table (barrier).
+        stage_layout = deliver_device_map_and_gather_stage_layout(
+            mesh_device, kv_cache, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers
         )
+
+        if is_first_rank:
+            # RANK 0: model runtime builds + serializes the merged table (spanning all gathered
+            # stages), then publish the serialized path + block on WORKER_READY.
+            table_path = runtime.build_kv_chunk_table(
+                kv_cache,
+                table_path,
+                first_layer_idx=first_layer_idx,
+                num_my_layers=num_my_layers,
+                stage_layout=stage_layout,
+            )
+            migration_endpoint = publish_serialized_table_and_wait_ready(
+                table_path=table_path,
+                wait_ready_timeout_ms=wait_ready_ms,
+            )
+        else:
+            logger.info(
+                f"[migration] rank {rank}: delivered local device map + contributed stage "
+                f"(first_layer={first_layer_idx}, count={num_my_layers}); rank 0 sends the merged table."
+            )
 
     if single_rank and enable_layer_ack:
         # Direct path: the runtime owns + inject()s the scheduler counter channel.
@@ -1211,10 +1228,7 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         # Pipeline path: route per-rank completions to the master, which re-emits in seq order.
         # Imported here (not at module top) so single-rank / no-extension builds never need the
         # standalone _layer_completion .so (built only with WITH_PYTHON_BINDINGS).
-        from models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill import (
-            LayerCompletionQueue,
-            LayerCompletionRouter,
-        )
+        from models.demos.common.prefill.runners.pipelined_prefill import LayerCompletionQueue, LayerCompletionRouter
 
         # Each rank's router OWNS its own ring, so the name must be per-rank — append _{rank} even to
         # the env override (a single literal would make colocated ranks unlink each other's live ring

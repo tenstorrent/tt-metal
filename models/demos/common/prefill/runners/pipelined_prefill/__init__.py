@@ -10,7 +10,7 @@ TT::Metalium; its .so is emitted into the build tree and symlinked next to this 
 Import is intentionally at point-of-use in the runner so single-rank / no-extension builds don't fail.
 """
 
-from models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill._layer_completion import (
+from models.demos.common.prefill.runners.pipelined_prefill._layer_completion import (
     LayerCompletionConsumer,
     LayerCompletionQueue,
     LayerCompletionRouter,

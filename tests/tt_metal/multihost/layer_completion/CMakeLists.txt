@@ -3,7 +3,7 @@ add_library(TT::Metalium::Test::Distributed::MultihostLayerCompletion ALIAS mult
 TT_ENABLE_UNITY_BUILD(multi_host_layer_completion)
 
 # Shared layer-completion impl source list (LAYER_COMPLETION_IMPL_SRCS / LAYER_COMPLETION_DIR).
-include(${PROJECT_SOURCE_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill/sources.cmake)
+include(${PROJECT_SOURCE_DIR}/models/demos/common/prefill/runners/pipelined_prefill/sources.cmake)
 target_sources(
     multi_host_layer_completion
     PRIVATE
