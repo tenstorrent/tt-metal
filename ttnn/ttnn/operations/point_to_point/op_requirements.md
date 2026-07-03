@@ -66,7 +66,7 @@ one support-surface gap.
 - **Golden baseline (representative 72-cell subset)**: 30 supported_pass / 36 xfail_expected / 6 invalid_skipped; all loud categories 0 (per `verifier_results/verifier_report.json`)
 - **Precision**: PCC = 1.0, bit-exact, all shapes/dtypes
 
-### [ ] Refinement 1 — Integer dtype passthrough (uint16, int32, uint32)
+### [x] Refinement 1 — Integer dtype passthrough (uint16, int32, uint32)
 
 **Goal**: add `ttnn.uint16`, `ttnn.int32`, `ttnn.uint32` to `SUPPORTED["dtype"]`. This
 flips the 36 currently-`xfail_expected` integer golden cells

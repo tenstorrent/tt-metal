@@ -63,10 +63,14 @@ def tag_alignment(inputs, axes):
 INPUT_TAGGERS: dict = {"alignment": tag_alignment}
 
 SUPPORTED = {
-    # Pure data movement: every fixed-width dtype is correct in principle. The
-    # proven primary set is the acceptance-test dtypes (bf16/fp32/bf8b). Integer
-    # passthrough (uint16/int32/uint32) stays a refinement candidate.
-    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
+    # Pure data movement: every fixed-width dtype is correct in principle. Floats
+    # (bf16/fp32) and block-float (bf8b) shipped in Phase 0; integer passthrough
+    # (uint16/int32/uint32) added in Refinement 1 — the dataflow kernels are
+    # dtype-agnostic byte copies (tt_memmove + noc_async_read/write sized in
+    # bytes), so integers transfer identically. ccl_packet_dims frames integers
+    # with the full packet (the bf16 bit_floor clamp is bf16-specific), and the
+    # CB is a raw byte staging buffer whose format only sets element width.
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.uint16, ttnn.int32, ttnn.uint32],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     # Both topologies run on the same FABRIC_1D fabric; the route (and Ring
     # short-way choice) is owned by ccl_dm_route, so the kernels are identical.

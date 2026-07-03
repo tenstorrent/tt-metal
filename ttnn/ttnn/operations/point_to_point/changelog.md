@@ -1,5 +1,47 @@
 # point_to_point — changelog
 
+## Refinement 1 — Integer dtype passthrough (uint16, int32, uint32)
+
+- **Date**: 2026-07-03
+- **What was done**: Added `ttnn.uint16`, `ttnn.int32`, `ttnn.uint32` to
+  `SUPPORTED["dtype"]` in `point_to_point.py`. This was pure host-side work — the
+  four dataflow kernels are dtype-agnostic byte copies (`tt_memmove` +
+  `noc_async_read/write` sized in bytes), so no kernel change was needed.
+  Confirmed the host path handles integers correctly:
+  - `ccl_packet_dims` frames integers with the FULL fabric packet — the bf16
+    `std::bit_floor` clamp is gated on `dtype == BFLOAT16` (ccl_helpers_dataflow_host.hpp:77-78),
+    so integers take the `else` branch exactly like fp32.
+  - `ttnn.CBFormatDescriptor(data_format=<int dtype>)` accepts all three widths
+    (the CB is a raw byte staging buffer; format only sets element width).
+  - `_datum_size` returns `ttnn.element_size` for these (uint16→2, int32/uint32→4);
+    the block-float fallback is not taken.
+  - `validate()` needed NO change: it reads `SUPPORTED` dynamically with no
+    dtype-specific hardcoding, so adding the dtypes extends the runtime gate.
+- **Accuracy achieved**: PCC = 1.0, EXACT byte-identity (`torch.equal`), zero
+  rounding error — pure integer byte copy. Measured on shapes
+  [(1,1,32,32), (1,1,64,128), (1,1,48,64)] × {uint16, int32, uint32} ×
+  {TILE, ROW_MAJOR} × {Linear, Ring} = 36/36 exact matches
+  (test_point_to_point_integer_dtypes.py). Golden `check_output` PCC path also
+  green for integers (rtol/atol tolerance band (0.999, 0.02) trivially satisfied).
+- **Golden test progress**: representative sim subset on `bh_8xP150_p2p` (mesh
+  (2,4), FABRIC_1D): all sampled integer cells now categorized SUPPORTED (no
+  longer xfail) and PASS — 6/6 at single-tile Linear across all 3 dtypes × both
+  layouts. Float regression clean (bf16/fp32 TILE+RM + bf8b TILE = 5/5).
+  bf8b+ROW_MAJOR still INVALID-skipped. No supported_fail / xpass_drift / xfail.
+  The full golden matrix is 432 cells (216 integer); the 105-min full sim run is
+  left to the verifier's `eval.verify_supported` — the `xfail_expected` count for
+  `dtype` is now driven to 0 by the SUPPORTED edit (deterministic via
+  golden_harness `_decorate` → `unsupported_reason`).
+- **Issues encountered**: None. Integer passthrough was near-zero kernel work as
+  the verifier predicted. The 2-byte uint16 width (the most likely to surprise on
+  page-alignment / packet-framing) passed all 12 cells including non-tile-aligned
+  and ROW_MAJOR.
+- **Tests added**: `tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point_integer_dtypes.py`
+  — 36 parametrizations (3 integer dtypes × 2 layouts × 2 topologies × 3 shape
+  classes) with EXACT `torch.equal` oracle (byte identity, not a PCC band).
+- **Non-regression**: existing acceptance test spot-check (bf16 × TILE × Linear,
+  incl. nonparticipating + output_tensor variants) = 7/7 green.
+
 ## 2026-07-03 — Phase 1: fresh implementation (self-contained Python CCL op)
 
 Implemented `point_to_point` end-to-end from `op_design.md` as a self-contained
