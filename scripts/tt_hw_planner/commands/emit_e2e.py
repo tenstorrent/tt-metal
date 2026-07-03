@@ -661,9 +661,10 @@ Do all of this with your own tools (Read/Bash), then report a verdict.
    {demo_dir}/tests/e2e/, and a README.md. Flag missing/placeholder pieces.
 
 4. NO-WASTE. From {demo_dir}/bringup_status.json, take the GRADUATED set (NEW
-   components with a `_stubs/<name>.py.last_good_native` snapshot). Confirm the
-   UNION of INVOKED stubs across all task heads' runs == that graduated set.
-   Name any graduated module that is never invoked.
+   components with a `_stubs/<name>.py.last_good_native` OR `.py.last_good_sharded`
+   snapshot — bring-up is single-phase, so a TP>1 mesh run graduates shardable
+   modules DIRECTLY sharded). Confirm the UNION of INVOKED stubs across all task
+   heads' runs == that graduated set. Name any graduated module never invoked.
 
 WRITE the structured machine-readable report to {demo_dir}/grader_report.json
 so the fix agent gets precise targets. Use EXACTLY this schema:
@@ -781,8 +782,12 @@ sibling model under models/demos/<other-model>/:
   SOURCE B — the bring-up tool output for this model at:
     {demo_dir}
       - bringup_status.json   (components + status; GRADUATED = NEW with a
-        `_stubs/<name>.py.last_good_native` snapshot and a native ttnn body;
-        REUSE entries have no stub and are NOT graduated work products)
+        `_stubs/<name>.py.last_good_native` OR `.py.last_good_sharded` snapshot.
+        Bring-up is single-phase: TP=1 graduates a native single-device body,
+        TP>1 graduates the shardable modules DIRECTLY sharded (the .last_good_sharded
+        body already does ShardTensorToMesh + all_reduce). The LIVE `_stubs/<name>.py`
+        IS the graduated body — compose it as-is. REUSE entries have no stub and are
+        NOT graduated work products)
       - _stubs/*.py           (the graduated TTNN stubs; each exposes
                                build(device, torch_module) and a callable)
       - _captured/<name>/{{args,kwargs,output}}.pt   (HF golden tensors)
@@ -804,7 +809,8 @@ dependency between them; if two calls share a graduated module, use only ONE
 agent for them. Iterate using Gate 1, Gate 2, and Gate 3 until you have an
 end-to-end pipeline ready:
 
-  Gate 1 — every routed graduated stub is still native (not torch fallback).
+  Gate 1 — every routed graduated stub is still real ttnn (not torch fallback);
+           a sharded (TP>1) body counts as native — do NOT rewrite it to replication.
   Gate 2 — every graduated module is actually INVOKED in the pipeline run
            (no graduated module left out — this is critical).
   Gate 3 — the pipeline's FINAL output PCC vs the HF golden (Source A) is
