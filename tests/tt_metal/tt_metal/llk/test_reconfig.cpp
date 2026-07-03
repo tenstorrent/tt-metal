@@ -288,7 +288,7 @@ bool single_core_reconfig(
         packed_golden0 = pack_vector<uint32_t, bfloat16>(golden0_bfp16);
     }
     // Pack out1 vector:
-    std::vector<uint32_t> packed_golden1 = pack_as_bfp8_tiles(tt::stl::make_const_span(golden1), true, false);
+    std::vector<uint32_t> packed_golden1 = pack_as_bfp8_tiles(ttsl::make_const_span(golden1), true, false);
 
     // ////////////////////////////////////////////////////////////////////////////
     // //                      Compile and Execute Application
@@ -462,13 +462,12 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         .hw_config =
             experimental::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB, INP3_DFB, INP4_DFB, INP5_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source = "tt_metal/kernels/dataflow/writer_unary.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
@@ -480,7 +479,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         .hw_config =
             experimental::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {OUT_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     experimental::KernelSpec compute_spec{
@@ -783,7 +782,8 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
                             .processor = tt_metal::DataMovementProcessor::RISCV_0,
                             .noc = tt_metal::NOC::RISCV_0_default},
                     .gen2_config =
-                        experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {out_dfb}}},
+                        experimental::DataMovementHardwareConfig::Gen2Config{
+                            .disable_dfb_implicit_sync_for_all = true}},
         };
     };
 
@@ -816,8 +816,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
         .hw_config =
             experimental::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB, INP3_DFB, INP4_DFB, INP5_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     experimental::KernelSpec writer0_spec = make_writer_spec(WRITER0, OUT0_DFB);

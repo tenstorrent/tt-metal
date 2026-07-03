@@ -93,6 +93,13 @@ std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
     return mesh_shapes;
 }
 
+#if defined(TT_METAL_USE_EMULE)
+// emule has no fabric router, so the device-L1 connection table is never populated. Record the
+// fwd/bwd-to-neighbor binding host-side for the teleport's 1D dst resolution. Defined in the emule runner.
+// See tt-emule docs/fabric-ccl-emulation.md.
+extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor);
+#endif
+
 template <typename ProgramOrDescriptor>
 void append_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
@@ -205,6 +212,16 @@ void append_fabric_connection_rt_args(
     if (core_type == CoreType::WORKER) {
         append_worker_to_fabric_edm_sender_rt_args(
             fabric_router_channel, worker_teardown_semaphore_id, worker_buffer_index_semaphore_id, worker_args);
+#if defined(TT_METAL_USE_EMULE)
+        // Record (src_chip, worker_core, forwarding_direction, neighbor_chip) for the emule teleport's 1D
+        // dst resolution. Called per connection in fwd-then-bwd order (matches the kernel's read order).
+        __emule_fabric_record_conn(
+            static_cast<uint32_t>(control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id)),
+            static_cast<uint32_t>(worker_core.x),
+            static_cast<uint32_t>(worker_core.y),
+            static_cast<uint32_t>(forwarding_direction.value()),
+            static_cast<uint32_t>(control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id)));
+#endif
     } else {
         // TODO: will be deprecated. currently for ethernet dispatch case
         //       ethernet core need to have same memory mapping as worker

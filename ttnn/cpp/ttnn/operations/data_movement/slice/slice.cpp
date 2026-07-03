@@ -126,9 +126,10 @@ ttnn::Tensor slice(
     // output_memory_config: may be rescaled below to match the sliced output dims.
     auto output_memory_config = memory_config;
 
-    // Fill in a missing shard_spec on a sharded output: reuse source's if layouts match, else
-    // synthesize from the source shape.
-    auto resolve_mc = [&](const ttnn::Tensor& source) {
+    // Fill in a missing shard_spec on a sharded output; reuse source's if layouts match.
+    // `orientation_hint` lets composite-fallback callers forward orientation past the staging hop.
+    auto resolve_mc = [&](const ttnn::Tensor& source,
+                          std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt) {
         auto resolved_mc = output_memory_config;
         if (resolved_mc.is_sharded() && !resolved_mc.shard_spec().has_value()) {
             const auto& in_mc = source.memory_config();
@@ -138,7 +139,7 @@ ttnn::Tensor slice(
                     ttnn::MemoryConfig(resolved_mc.memory_layout(), resolved_mc.buffer_type(), in_mc.shard_spec());
             } else {
                 auto spec = operations::data_movement::transpose::generate_transpose_shard_spec(
-                    source, source.padded_shape(), resolved_mc.memory_layout());
+                    source, source.padded_shape(), resolved_mc.memory_layout(), orientation_hint);
                 resolved_mc = ttnn::MemoryConfig(resolved_mc.memory_layout(), resolved_mc.buffer_type(), spec);
             }
         }
@@ -189,6 +190,11 @@ ttnn::Tensor slice(
     const bool rm_out_bad = detail::needs_rm_composite_output(input_tensor, output_memory_config);
     const bool out_no_spec = detail::needs_sharded_output_reshard(input_tensor, output_memory_config);
     if (rm_in_bad || rm_out_bad || out_no_spec) {
+        // Snapshot orientation before the L1-interleaved staging hop strips it.
+        std::optional<tt::tt_metal::ShardOrientation> input_orientation_hint;
+        if (input_tensor.shard_spec().has_value()) {
+            input_orientation_hint = input_tensor.shard_spec()->orientation;
+        }
         const auto interleaved_l1 =
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
         Tensor x = rm_in_bad ? ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt) : input_tensor;
@@ -197,7 +203,7 @@ ttnn::Tensor slice(
         auto sliced = ttnn::slice<T>(x, begins, ends, step, interleaved_l1, std::nullopt, pad_value, sub_core_grids);
         // slice preserves layout and to_memory_config doesn't change it — no trailing to_layout needed.
         // sliced is L1-interleaved so resolve_mc falls through to generate_transpose_shard_spec.
-        const auto final_mc = resolve_mc(sliced);
+        const auto final_mc = resolve_mc(sliced, input_orientation_hint);
         if (sliced.memory_config() == final_mc) {
             return finalize_into_preallocated(sliced);
         }
@@ -520,6 +526,16 @@ template ttnn::Tensor slice<int32_t>(
     ttsl::Span<const int32_t> begins,
     ttsl::Span<const int32_t> ends,
     ttsl::Span<const int32_t> step,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<float>& pad_value,
+    const std::optional<CoreRangeSet>& sub_core_grids);
+
+template ttnn::Tensor slice<int64_t>(
+    const ttnn::Tensor& input_tensor,
+    ttsl::Span<const int64_t> begins,
+    ttsl::Span<const int64_t> ends,
+    ttsl::Span<const int64_t> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,

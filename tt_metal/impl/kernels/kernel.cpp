@@ -182,10 +182,10 @@ Kernel::Kernel(
 void Kernel::register_kernel_with_watcher() {
     auto& watcher = MetalContext::instance().watcher_server();
     if (!watcher) {
-        // Watcher server should always be available... unless the target is a mock device
+        // Null for mock and emulated targets (no watcher created); nothing to register.
         TT_FATAL(
-            MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock,
-            "Watcher server is unavailable, and the target is not a mock device");
+            MetalContext::instance().get_cluster().is_mock_or_emulated(),
+            "Watcher server is unavailable, and the target is not a mock or emulated device");
         this->watcher_kernel_id_ = -1;
         return;
     }
@@ -198,7 +198,7 @@ void Kernel::register_kernel_with_watcher() {
 }
 
 void Kernel::register_kernel_elf_paths_with_watcher(IDevice& device, const std::string& binary_root) const {
-    // Skip if watcher server not available (e.g., during mock device testing)
+    // Skip if watcher server not available (e.g. mock or emulated targets)
     auto& watcher = MetalContext::instance().watcher_server();
     if (!watcher) {
         return;
@@ -326,6 +326,14 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 uint32_t num_runtime_field_crta_words)> callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
         callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset, handle.num_runtime_field_crta_words);
+    }
+}
+
+void Kernel::process_scratchpad_binding_handles(
+    const std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)> callback)
+    const {
+    for (const auto& handle : this->scratchpad_binding_handles_) {
+        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word);
     }
 }
 
@@ -545,6 +553,16 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
+    }
+    // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
+    // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time
+    // inputs (size_bytes is baked into the generated header, so it MUST be in the cache key).
+    // allocated_address is a per-execution allocation, not part of the binary, so it is omitted.
+    hasher.update(static_cast<uint64_t>(this->scratchpad_binding_handles_.size()));
+    for (const auto& handle : this->scratchpad_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.size_bytes));
+        hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
     }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
     // Named RTA and CRTA counts also need to be hashed!
@@ -1336,6 +1354,7 @@ void QuasarComputeKernel::set_build_options(JitBuildOptions& build_options) cons
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
     build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
     build_options.enable_2x_src_format = this->config_.enable_2x_src_format;
+    build_options.unpack_to_dest_en = this->config_.unpack_to_dest_en;
 }
 
 }  // namespace experimental::quasar

@@ -21,9 +21,16 @@ from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.demos.common.prefill.adapter import ADAPTER_PATHS, PrefillModelAdapter, get_adapter
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
-from models.demos.deepseek_v3_d_p.tests.model_variants import DSV3, TEST_VARIANTS, TestVariant
+
+# The per-model registry now lives in models/demos/common/prefill/adapter.py and is shared by the
+# runner and the tests. These aliases keep the existing fixture/test references (TestVariant /
+# TEST_VARIANTS / DSV3) working.
+TestVariant = PrefillModelAdapter
+TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}
+DSV3 = get_adapter("deepseek_v3_d_p")
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
@@ -422,6 +429,12 @@ def _resolve_hf_config(model_path_str: str):
 @lru_cache(maxsize=None)
 def _resolve_config_only(variant_name: str):
     v = TEST_VARIANTS[variant_name]
+    # Hand-built config takes precedence: some models (e.g. GLM-5.1 `glm_moe_dsa`, DeepSeek-V3.2
+    # `deepseek_v32`) are not registered with transformers, so AutoConfig cannot load them. The builder
+    # returns a ready HF-attribute config. (Result is lru_cached like the AutoConfig path; tests that
+    # mutate config.max_seq_len already rely on this shared/cached object.)
+    if v.config_builder is not None:
+        return v.config_builder()
     # Check environment variable first
     env_path = os.getenv(v.env_var)
     if env_path:

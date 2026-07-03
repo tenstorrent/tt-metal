@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fabric CPU-only unit test driver (same commands as .github/workflows/fabric-cpu-only-tests-impl.yaml).
+# Fabric CPU-only unit test driver (keep in sync with tests/pipeline_reorg/fabric_cpu_only_*_tests.yaml).
 # Run from repository root, or from anywhere (script cds to root). Requires a built tree under ./build.
 # Requires bash (not sh/dash): bash ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh ...
 #
