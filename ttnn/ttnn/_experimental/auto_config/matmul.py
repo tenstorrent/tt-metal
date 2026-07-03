@@ -24,6 +24,12 @@ _MN_BLOCK_MIN = 2
 _MN_BLOCK_MAX = 16
 _K_BLOCK_MIN = 2
 _BENCHMARK_ITERS = 3
+# Maximum number of minimal-matmul candidates to benchmark per signature.  The
+# full cartesian product of block-size candidates can exceed 100 entries for
+# large shapes (e.g. 784×192×576 → 174 entries), which would add tens of
+# minutes to a CI run.  We sample evenly from the sorted candidate list to
+# keep the sweep bounded while still covering diverse block-size regimes.
+_MAX_MINIMAL_CANDIDATES = 4
 _CACHE_FILE_SUFFIX = ".json"
 _DEFAULT_CCL_CHUNKS_PER_SYNC = 10
 _DEFAULT_CCL_NUM_WORKERS_PER_LINK = 2
@@ -925,6 +931,9 @@ def _build_local_minimal_candidates(
         return []
     grid = device.compute_with_storage_grid_size()
     descriptors = _build_minimal_descriptors(signature, bias=prepared.bias, grid=grid)
+    if len(descriptors) > _MAX_MINIMAL_CANDIDATES:
+        step = max(1, len(descriptors) // _MAX_MINIMAL_CANDIDATES)
+        descriptors = descriptors[::step][:_MAX_MINIMAL_CANDIDATES]
     return [
         Candidate(
             descriptor={"kind": "minimal_matmul", **descriptor},
@@ -1779,9 +1788,15 @@ def _run_base_operation(
     is_linear: bool,
     kwargs: dict[str, Any],
 ) -> Any:
+    # Strip None-valued kwargs so the C++ binding uses its own defaults, matching
+    # the pre-wrapper behaviour where only explicitly-provided arguments were passed.
+    # Passing None explicitly can select different code paths in the C++ pybind11
+    # binding (e.g. output_tile=None forcing a default tile that conflicts with an
+    # explicit program_config).
+    forwarded = {k: v for k, v in kwargs.items() if v is not None}
     if is_linear:
-        return base_operation(input_tensor_a, input_tensor_b, bias=bias, **kwargs)
-    return base_operation(input_tensor_a, input_tensor_b, **kwargs)
+        return base_operation(input_tensor_a, input_tensor_b, bias=bias, **forwarded)
+    return base_operation(input_tensor_a, input_tensor_b, **forwarded)
 
 
 def dispatch_matmul(
