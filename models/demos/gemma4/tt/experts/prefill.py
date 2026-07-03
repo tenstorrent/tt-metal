@@ -78,6 +78,19 @@ def _process_prefill_chunk(
     gate_up_config = _build_sparse_matmul_config(TILE_SIZE, intermediate_size)
     down_config = _build_sparse_matmul_config(TILE_SIZE, hidden_size)
 
+    # HiFi4 + FP32 dest-acc for the expert matmuls. Matmuls default to LoFi; the
+    # gate/up/down accumulate over the hidden/intermediate dim with bf8 weights, so
+    # after #47311 (which removed the reduce's forced-FP32 accumulation) this is the
+    # dominant residual error on the MoE variant (26B). Only the MoE path needs it —
+    # the dense variants (E2B/12B) already pass with the SDPA fp32 fix alone.
+    expert_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        hidden_grouped.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
     # Gate projection
     gate = ttnn.sparse_matmul(
         hidden_grouped,
@@ -87,6 +100,7 @@ def _process_prefill_chunk(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=gate_up_config,
+        compute_kernel_config=expert_compute_kernel_config,
         dtype=ttnn.bfloat16,
     )
     sm_intermediate = gate.shape[-1]
@@ -102,6 +116,7 @@ def _process_prefill_chunk(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=gate_up_config,
+        compute_kernel_config=expert_compute_kernel_config,
         dtype=ttnn.bfloat16,
     )
     hidden_grouped.deallocate(True)
@@ -122,6 +137,7 @@ def _process_prefill_chunk(
         output_tile=output_tile,
         program_config=down_config,
         is_input_a_sparse=True,
+        compute_kernel_config=expert_compute_kernel_config,
         dtype=ttnn.bfloat16,
     )
     down_input.deallocate(True)
