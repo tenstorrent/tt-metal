@@ -81,7 +81,7 @@ bool SDMeshCommandQueue::write_shard_to_device(
     const MeshCoordinate& device_coord,
     const void* src,
     const std::optional<BufferRegion>& region,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     if (!mesh_device_->impl().is_local(device_coord)) {
@@ -103,8 +103,7 @@ bool SDMeshCommandQueue::write_shard_to_device(
         return false;
     }
 
-    auto payload =
-        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
@@ -120,7 +119,7 @@ void SDMeshCommandQueue::read_shard_from_device(
     std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */,
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>&,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (!mesh_device_->impl().is_local(device_coord)) {
         return;
     }
@@ -285,19 +284,19 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event(
-    tt::stl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
+    ttsl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
     // No synchronization is needed for slow dispatch, returning a dummy value
     return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host_nolock(
-    tt::stl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
+    ttsl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
     // No synchronization is needed for slow dispatch, returning a dummy value
     return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
-    tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
+    ttsl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
     // No synchronization is needed for slow dispatch, so we can call the non-locking version.
     return this->enqueue_record_event_to_host_nolock(sub_device_ids, device_range);
 }
@@ -308,10 +307,10 @@ void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {
 }
 
 void SDMeshCommandQueue::enqueue_write_dram_core_counter(
-    tt::stl::Span<const DeviceMemoryAddress> targets,
+    ttsl::Span<const DeviceMemoryAddress> targets,
     uint32_t value,
     bool /*blocking*/,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
@@ -338,7 +337,7 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
     }
 }
 
-void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
+void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
@@ -357,7 +356,7 @@ void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
     active_distributed_context_->barrier();
 }
 
-void SDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId>) {}
+void SDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId>) {}
 
 void SDMeshCommandQueue::reset_worker_state(
     bool, uint32_t, const vector_aligned<uint32_t>&, const std::vector<std::pair<CoreRangeSet, uint32_t>>&) {}

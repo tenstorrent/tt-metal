@@ -39,7 +39,7 @@ protected:
         const MeshCoordinate& device_coord,
         const void* src,
         const std::optional<BufferRegion>& region,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        ttsl::Span<const SubDeviceId> sub_device_ids = {},
         std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr,
         const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr) = 0;
     virtual void read_shard_from_device(
@@ -49,15 +49,15 @@ protected:
         std::shared_ptr<experimental::PinnedMemory> pinned_memory,
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+        ttsl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual void submit_memcpy_request(
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         bool blocking,
         std::vector<MemoryPin> memory_pins = {}) = 0;
     // Must be called with lock_api_function_() held.
-    virtual void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+    virtual void finish_nolock(ttsl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual MeshEvent enqueue_record_event_to_host_nolock(
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
     virtual void invalidate_prefetcher_cache_after_pinned_write() {}
 
@@ -145,10 +145,10 @@ public:
     // to be atomic). Fast/slow dispatch perform the write; the dummy (inactive-rank)
     // queue is a no-op.
     virtual void enqueue_write_dram_core_counter(
-        tt::stl::Span<const DeviceMemoryAddress> targets,
+        ttsl::Span<const DeviceMemoryAddress> targets,
         uint32_t value,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+        ttsl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
 };
 
 }  // namespace tt::tt_metal::distributed

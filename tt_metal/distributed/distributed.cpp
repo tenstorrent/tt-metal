@@ -134,7 +134,7 @@ MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
     return trace_id;
 }
 
-void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (!device->is_initialized()) {
         return;
     }
@@ -147,9 +147,7 @@ void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span
     }
 }
 
-void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    mesh_cq.finish(sub_device_ids);
-}
+void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids) { mesh_cq.finish(sub_device_ids); }
 
 bool UsingDistributedEnvironment() {
     using multihost::DistributedContext;

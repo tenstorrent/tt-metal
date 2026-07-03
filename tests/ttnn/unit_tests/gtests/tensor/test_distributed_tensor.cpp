@@ -51,8 +51,7 @@ TEST_F(TensorDistributionTest, DistributeToDevice) {
     const auto& tensor_topology = input_tensor.tensor_topology();
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(1));
     EXPECT_EQ(
-        tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
+        tensor_topology.placements(), (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
 }
 
 TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {
@@ -66,8 +65,7 @@ TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {
     const auto& tensor_topology = replicated_tensor.tensor_topology();
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(mesh_device_->num_devices()));
     EXPECT_EQ(
-        tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
+        tensor_topology.placements(), (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
 
     std::vector<Tensor> device_tensors = get_device_tensors(replicated_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
@@ -112,7 +110,7 @@ TEST_F(TensorDistribution2x4Test, Shard1DFewerShardsThanDevices) {
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(mesh_device_->num_devices() - 1));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), mesh_device_->num_devices() - 1);
 
@@ -147,7 +145,7 @@ TEST_F(TensorDistribution2x4Test, Shard1DNegativeDim) {
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(mesh_device_->num_devices()));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
@@ -175,7 +173,7 @@ TEST_F(TensorDistribution2x4Test, Shard1D) {
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(mesh_device_->num_devices()));
     EXPECT_EQ(
         tensor_topology.placements(),
-        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
+        (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), mesh_device_->num_devices());
 
@@ -544,7 +542,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 0);
         Tensor dist = create_distributed_tensor(
@@ -564,7 +562,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
         Tensor dist = create_distributed_tensor(
@@ -584,7 +582,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 2);
         Tensor dist = create_distributed_tensor(
@@ -605,7 +603,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 3);
         Tensor dist = create_distributed_tensor(
@@ -626,7 +624,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<uint32_t>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0u);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<uint32_t> span(data->data(), data->size());
+        ttsl::Span<uint32_t> span(data->data(), data->size());
         const TensorLayout rm_uint32_tensor_layout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{});
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
@@ -652,7 +650,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
 
         auto mapper = create_mesh_mapper(
             *mesh_device_,
@@ -676,7 +674,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         SCOPED_TRACE("Negative: null buffer_pin (const span)");
         auto data = std::make_shared<std::vector<float>>(num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
-        tt::stl::Span<const float> const_span(data->data(), data->size());
+        ttsl::Span<const float> const_span(data->data(), data->size());
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
         Tensor dist = create_distributed_tensor(
@@ -696,7 +694,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(num_devices * kTileHW);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
         const TensorLayout tile_float_tensor_layout(DataType::FLOAT32, Layout::TILE, MemoryConfig{});
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
@@ -725,7 +723,7 @@ TEST_F(TensorDistribution2x4Test, BorrowedDistributedTensors) {
         auto data = std::make_shared<std::vector<float>>(2 * num_devices * elements_per_shard);
         std::iota(data->begin(), data->end(), 0.0f);
         tt::tt_metal::MemoryPin pin(data);
-        tt::stl::Span<float> span(data->data(), data->size());
+        ttsl::Span<float> span(data->data(), data->size());
 
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
         Tensor dist = create_distributed_tensor(

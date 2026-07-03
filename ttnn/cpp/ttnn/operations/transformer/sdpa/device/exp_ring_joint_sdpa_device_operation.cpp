@@ -323,7 +323,7 @@ ExpRingJointSDPAResult ExpRingJointSDPADeviceOperation::create_output_tensors(
     };
 }
 
-tt::stl::hash::hash_t ExpRingJointSDPADeviceOperation::compute_program_hash(
+ttsl::hash::hash_t ExpRingJointSDPADeviceOperation::compute_program_hash(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
     std::vector<Tensor> input_tensors = {
         tensor_args.input_q,

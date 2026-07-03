@@ -73,7 +73,7 @@ struct MoEComputeLayout {
 const MoEComputeLayout& get_layout(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: {
-            static tt::stl::Indestructible<MoEComputeLayout> wh{MoEComputeLayout{
+            static ttsl::Indestructible<MoEComputeLayout> wh{MoEComputeLayout{
                 /*max_tilize_cores=*/{CoreCoord(6, 9), CoreCoord(6, 8), CoreCoord(5, 9), CoreCoord(5, 8)},
                 /*max_combine_core_range_set=*/CoreRangeSet(CoreRange({5, 0}, {6, 7})),
             }};
@@ -84,7 +84,7 @@ const MoEComputeLayout& get_layout(tt::ARCH arch) {
             // production worker grid. Tilize+combine shift to the right edge (x=9,10)
             // to clear the matmul mcast bounding box ({0,0},{7,9}). See #41827 for the
             // BH topology rationale.
-            static tt::stl::Indestructible<MoEComputeLayout> bh{MoEComputeLayout{
+            static ttsl::Indestructible<MoEComputeLayout> bh{MoEComputeLayout{
                 /*max_tilize_cores=*/{CoreCoord(10, 9), CoreCoord(10, 8), CoreCoord(9, 9), CoreCoord(9, 8)},
                 /*max_combine_core_range_set=*/CoreRangeSet(CoreRange({9, 0}, {10, 7})),
             }};

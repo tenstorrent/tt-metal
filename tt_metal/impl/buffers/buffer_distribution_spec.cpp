@@ -269,14 +269,14 @@ UncompressedBufferPageMapping compute_page_mapping(
             num_shards_per_core * shard_pages, UncompressedBufferPageMapping::PADDING);
     }
 
-    tt::stl::SmallVector<uint32_t> shard_grid(tensor_shape.rank());
+    ttsl::SmallVector<uint32_t> shard_grid(tensor_shape.rank());
     for (size_t i = 0; i < tensor_shape.rank(); i++) {
         shard_grid[i] = (tensor_shape[i] + shard_shape[i] - 1) / shard_shape[i];
     }
 
-    tt::stl::SmallVector<uint64_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape);
-    tt::stl::SmallVector<uint64_t> shard_strides = tt::tt_metal::compute_strides(shard_shape);
-    tt::stl::SmallVector<uint32_t> actual_shard_size(tensor_shape.rank());
+    ttsl::SmallVector<uint64_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape);
+    ttsl::SmallVector<uint64_t> shard_strides = tt::tt_metal::compute_strides(shard_shape);
+    ttsl::SmallVector<uint32_t> actual_shard_size(tensor_shape.rank());
 
     CMAKE_UNIQUE_NAMESPACE::PageMappingIntermData params{
         .page_mapping = &page_mapping,
@@ -306,8 +306,8 @@ std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Sha
 
     uint64_t tensor_volume = tensor_shape.volume();
     uint64_t shard_volume = shard_shape.volume();
-    tt::stl::SmallVector<uint32_t> new_tensor_shape;
-    tt::stl::SmallVector<uint32_t> new_shard_shape;
+    ttsl::SmallVector<uint32_t> new_tensor_shape;
+    ttsl::SmallVector<uint32_t> new_shard_shape;
 
     bool matching_dims_sequence = false;
     bool last_dim_divisible = false;

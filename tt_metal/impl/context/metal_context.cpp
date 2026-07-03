@@ -140,7 +140,7 @@ void MetalContext::initialize_device_manager(
     size_t l1_small_size,
     size_t trace_region_size,
     const tt_metal::DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size,
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw) {
@@ -737,7 +737,7 @@ void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker
         /*trace_region_size=*/0,
         worker_l1_size,
         DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t>{},
+        ttsl::Span<const std::uint32_t>{},
         rtoptions().get_mock_cluster_desc_path());
 }
 

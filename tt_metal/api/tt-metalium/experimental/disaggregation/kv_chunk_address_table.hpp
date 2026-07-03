@@ -16,7 +16,7 @@
 namespace tt::tt_metal::experimental::disaggregation {
 
 // Strongly-typed index into the device group side table.
-using DeviceGroupIndex = tt::stl::StrongType<uint32_t, struct DeviceGroupIndexTag>;
+using DeviceGroupIndex = ttsl::StrongType<uint32_t, struct DeviceGroupIndexTag>;
 
 // A unique group of fabric nodes that hold replicas of a KV cache chunk.
 // FabricNodeIds are stored sorted so that identical replica sets

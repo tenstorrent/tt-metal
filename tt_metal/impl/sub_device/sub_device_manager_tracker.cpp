@@ -36,7 +36,7 @@
 namespace tt::tt_metal {
 
 SubDeviceManagerTracker::SubDeviceManagerTracker(
-    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, ttsl::Span<const SubDevice> sub_devices) :
     device_(device) {
     TT_FATAL(device_ != nullptr, "SubDeviceManagerTracker requires a valid device");
     auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator), sub_devices);
@@ -54,7 +54,7 @@ SubDeviceManagerTracker::~SubDeviceManagerTracker() {
 }
 
 SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto sub_device_manager = std::make_unique<SubDeviceManager>(sub_devices, local_l1_size, device_);
     auto sub_device_manager_id = sub_device_manager->id();
     sub_device_managers_.insert_or_assign(sub_device_manager_id, std::move(sub_device_manager));
@@ -139,7 +139,7 @@ SubDeviceManagerId SubDeviceManagerTracker::get_default_sub_device_manager_id() 
 }
 
 std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_address(
-    tt::stl::Span<const SubDeviceId> sub_device_ids) const {
+    ttsl::Span<const SubDeviceId> sub_device_ids) const {
     constexpr uint32_t global_bank_id = 0;
     DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
     // Global bank id needs to look up a bank from the compute grid (not the storage grid)
@@ -155,7 +155,7 @@ std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_ad
             std::is_reference_v<
                 std::invoke_result_t<decltype(&SubDeviceManager::get_sub_device_ids), SubDeviceManager>>,
             "Getting a span from get_sub_device_ids requires it to be a reference");
-        sub_device_ids = tt::stl::Span<const SubDeviceId>(active_sub_device_manager_->get_sub_device_ids());
+        sub_device_ids = ttsl::Span<const SubDeviceId>(active_sub_device_manager_->get_sub_device_ids());
     }
     for (const auto& sub_device_id : sub_device_ids) {
         const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
