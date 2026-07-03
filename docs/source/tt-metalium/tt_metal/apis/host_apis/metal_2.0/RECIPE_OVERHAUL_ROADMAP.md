@@ -229,6 +229,59 @@ Source: `development-docs/2026-06-24 … TensorAccessor 3rd-arg taxonomy`.
   accessor-site walk), the checked-in taxonomy table, the audit's classification
   procedure. Routing reuses the existing finding-roles (PORT WORK / GATE-to-owner).
 
+### Fix #3 — Self-loop DFB consistency (DM-never / compute-fine / packer→self-loop / INTRA purge)
+
+Cleaning up self-loop guidance across recipe + audit + flowchart (Audrey changed it
+more than once; goal = consistency). The recipe's core rule turned out already
+correct — the flowchart was the stray. Parts:
+
+- **Ground truth — state consistently + prominently, on the DM-vs-compute *axis*
+  (never bare "self-loops OK"):**
+  - **Compute-kernel self-loop** — common, necessary (LLKs rely on it), supported on
+    ALL arches. Fine.
+  - **DM-kernel self-loop** — legal on Gen1 (WH/BH), **illegal on Gen2/Quasar**
+    (gen-aware legality landed, `c238a58`). **For the recipe: NEVER use one.** It's a
+    **silent Quasar trap** — Gen1 tests *and* the WH legality check both go green, so
+    a locally-reasoning porter sees "legal + tests pass → fine" and it only detonates
+    at the Quasar port, which is the whole point of porting now. Purpose-driven, not
+    legality-driven → **attach the why**, or a porter overrides it.
+- **Packer / producer-only DFB → self-loop the unused consumer on the compute kernel
+  (Option A; = current recipe).** A compute packer (produces into resident output,
+  nothing drains) + LLKs ⇒ must be a DFB; Metal 2.0 rejects single-ended
+  producer-only DFBs, so a "pointless" consumer binding is required. Self-loop it —
+  do **not** bind a separate kernel (e.g. the writer DM). Why (so it isn't
+  re-litigated):
+  - Binding a non-draining *separate* kernel as consumer of a *real* producer is the
+    exact **deadlock-risky fabricated-consumer** shape the audit already GATEs; the
+    compute self-loop is the sanctioned-safe fabrication.
+  - "Bind the DM writer" (considered + rejected) doesn't cut factory if-elses: the
+    DDR-output vs L1-output configs already differ in DFB *backing* (regular vs
+    borrowed-mem), so the factory branches on config regardless — the consumer choice
+    rides that existing branch. Self-loop is fully compatible with a clean
+    single-factory config-switch.
+  - Avoids a false producer→consumer topology edge, and the real case where the op
+    has no DM writer at all (confirmed via Borys).
+- **INTRA/INTER purge.** The `DFBSelfLoopConnectivity {INTRA, INTER}` API option is
+  **removed from the API surface** (pointless placeholder; INTER never supported;
+  INTRA now auto-applied in Almeet's backend). No dead API-option refs exist in the
+  recipe — the only traces are "INTRA" as backend-lowering *shorthand* (~7 sites,
+  mostly `metal2_port_patterns.md`). **Strip the word "INTRA"; keep the mechanism it
+  grounded, rephrased plainly; trim deep backend detail** (risc_mask,
+  `dataflow_buffer.cpp` cite — not porter-actionable). Folds into the same self-loop
+  section rewrite.
+- **"Why" mechanism — do NOT assert one** (`[OPEN]`, see Open threads). Whether
+  compute self-loops lower due to inter-TRISC sync or because LLK→LLK streaming
+  handoff needs a self-loop is unresolved. Phrase at confidence level ("compute
+  self-loops are a supported, LLK-relied-on pattern; DM self-loops have no backend
+  lowering") or verify with LLK/Almeet owners.
+- **Flowchart correction (Audrey's action):** the CB→DFB flowchart's packer note said
+  "use the writer DM kernel (if present), otherwise self-loop" — the Option-B stray.
+  Audrey updating it to plain self-loop. Until then, trust the recipe over the
+  flowchart here.
+- **Lands in:** `metal2_port_patterns.md` (self-loop / sync-free / single-ended /
+  packer sections — the INTRA sites + the packer rule), audit SPSC single-ended fork,
+  recipe DFB-spec self-loop mentions. Flowchart (Audrey).
+
 ## Phase-2 style recipe (deferred — separate step, NOT port work)
 
 Metal 2.0-enabled style improvements, run as a distinct pass *after* the initial
@@ -248,6 +301,9 @@ Known items:
 - `[OPEN]` **LLK-consumes-LocalTensorAccessor** — the long pole that would unblock
   the conv2d-horror class. Audrey to advocate; out of recipe scope. Awaiting
   Almeet/Paul on frequency.
+- `[OPEN]` **Compute-vs-DM self-loop "why" mechanism** (Fix #3) — inter-TRISC sync vs
+  LLK→LLK streaming-handoff-needs-self-loop. Unresolved; don't assert in the recipe.
+  Verify with LLK/Almeet owners, else phrase at confidence level.
 - `[OPEN]` **Reorg execution** — human/AI-facing directory split + flowchart formats
   (SVG for check-in, PNG for Claude reading). After big changes settle.
 - `[OPEN]` **Reference-table mechanics** — Diego's factory CSV *and* the 3rd-arg
@@ -264,3 +320,4 @@ Known items:
 | #2 factory shapes | audit TTNN-factory-concept-analysis + Appendix A, `port_op_to_metal2_ttnn_factory.md` | audit factory-analysis, Appendix A, recipe factory framing, new CSV |
 | Fix #1 LocalTensorAccessor | recipe rule 5, audit TensorAccessor-handling, Dropped-Plumbing Case-2 | same three |
 | Fix #2 3rd-arg triage | `development-docs/2026-06-24 … taxonomy`, audit TensorAccessor-handling | audit TensorAccessor-handling, checked-in taxonomy table, audit classification procedure |
+| Fix #3 self-loop consistency | `metal2_port_patterns.md` (self-loop/sync-free/packer + INTRA sites), audit SPSC single-ended fork | patterns catalog, audit SPSC fork, recipe DFB-spec self-loop mentions; flowchart (Audrey) |
