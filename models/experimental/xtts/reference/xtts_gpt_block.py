@@ -123,14 +123,30 @@ def build_gpt2_config():
         resid_pdrop=0.0,
         embd_pdrop=0.0,
         attn_pdrop=0.0,
+        # XTTS's GPT is a causal autoregressive decoder. A standalone GPT2Block
+        # does NOT build a causal mask by itself (GPT2Model normally does), so we
+        # use the eager attention path and pass an explicit causal mask in
+        # forward — see build_causal_mask.
+        attn_implementation="eager",
     )
+
+
+def build_causal_mask(seq_len, dtype=torch.float32):
+    """Additive causal attention mask of shape ``[1, 1, seq_len, seq_len]``.
+
+    0 on/below the diagonal, a large negative value above it — so each position
+    attends only to itself and earlier positions.
+    """
+    mask = torch.full((seq_len, seq_len), torch.finfo(dtype).min, dtype=dtype)
+    return torch.triu(mask, diagonal=1).view(1, 1, seq_len, seq_len)
 
 
 class XttsReferenceGptBlock(nn.Module):
     """One XTTS GPT decoder block, wrapping a HF ``GPT2Block``.
 
-    The wrapper normalizes the return value to a bare hidden-states tensor of
-    shape ``[batch, seq, hidden]``. This shields callers from the transformers
+    The wrapper (a) applies causal masking — the XTTS GPT is an autoregressive
+    decoder — and (b) normalizes the return value to a bare hidden-states tensor
+    of shape ``[batch, seq, hidden]``, shielding callers from the transformers
     API drift where ``GPT2Block.forward`` returns a tuple on some versions and a
     plain tensor on others.
     """
@@ -140,7 +156,8 @@ class XttsReferenceGptBlock(nn.Module):
         self.block = GPT2Block(config, layer_idx=layer_idx)
 
     def forward(self, hidden_states):
-        out = self.block(hidden_states)
+        mask = build_causal_mask(hidden_states.shape[1], hidden_states.dtype)
+        out = self.block(hidden_states, attention_mask=mask)
         return out[0] if isinstance(out, tuple) else out
 
 
