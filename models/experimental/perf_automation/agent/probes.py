@@ -597,6 +597,12 @@ def make_run_profiled(
         env = dict(os.environ)
         env["TT_METAL_DEVICE_PROFILER"] = "1"
         env.update(extra_env or {})
+        try:
+            from .profiler_heal import ensure_profiler_patched
+
+            ensure_profiler_patched(root)
+        except Exception:
+            pass
         node_id = resolve_node_id(root, perf_test, case, env=env, runner=collect_runner)
         cmd = build_tracy_command(node_id, None, out_dir)
         t_start = time.monotonic()
