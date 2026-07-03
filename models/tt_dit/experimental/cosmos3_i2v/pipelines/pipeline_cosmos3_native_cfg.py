@@ -517,19 +517,17 @@ def _install_device_proj_out_forward(pipe) -> None:
         single_embed = self.time_embedder(self.time_proj(scalar_timestep)).to(target_dtype)
         t_after_timeembed = _time.perf_counter() if _hoist_timing_enabled else 0.0
 
-        # scatter_add requires materializing a [N_noisy, hidden] int64 index (3.7GB at
-        # 720p/189f) — expensive when the embed is uniform across all noisy tokens.
-        # Binary mask avoids the index alloc: noisy tokens (non-conditioning frames) are
-        # packed contiguously after the conditioning frame tokens.
+        # Noisy tokens are packed after the conditioning frame tokens; add the embed
+        # in-place on the noisy slice to avoid allocating any temporary tensor.
+        # _native_forward is pure-I2V only (sound/action raise NotImplementedError above),
+        # so conditioning tokens are always the first n_clean rows of packed_tokens_vision.
         import math as _math
 
-        _total_noisy = sum(
+        _n_noisy = sum(
             ni.shape[0] * _math.prod(ts[1:]) for ni, ts in zip(vision_noisy_frame_indexes, vision_token_shapes)
         )
-        _n_gen = packed_tokens_vision.shape[0]
-        _noisy_scale = packed_tokens_vision.new_ones(_n_gen, 1)
-        _noisy_scale[: _n_gen - _total_noisy] = 0.0
-        packed_tokens_vision = packed_tokens_vision + _noisy_scale * single_embed
+        _n_clean = packed_tokens_vision.shape[0] - _n_noisy
+        packed_tokens_vision[_n_clean:].add_(single_embed)
 
         if _hoist_timing_enabled:
             t_after_vision_pre = _time.perf_counter()
@@ -541,10 +539,10 @@ def _install_device_proj_out_forward(pipe) -> None:
                 flush=True,
             )
 
-        # Build gen_seq directly. vision_sequence_indexes is into the JOINT sequence
-        # [und_len, sequence_length); subtract und_len for gen-relative scatter.
-        gen_seq = packed_tokens_vision.new_zeros(size=(gen_len, hidden_size))
-        gen_seq[vision_sequence_indexes - und_len] = packed_tokens_vision
+        # pure-I2V: vision_sequence_indexes = arange(und_len, und_len + gen_len),
+        # so vision_sequence_indexes - und_len = arange(gen_len). The scatter is a
+        # full copy; use packed_tokens_vision directly as gen_seq.
+        gen_seq = packed_tokens_vision
 
         if _hoist_timing_enabled:
             t_after_gen_build = _time.perf_counter()
