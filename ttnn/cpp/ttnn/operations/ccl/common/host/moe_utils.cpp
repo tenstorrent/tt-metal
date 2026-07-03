@@ -104,7 +104,6 @@ uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const
 
 size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<size_t> cluster_axis) {
     auto mesh_range = tt::tt_metal::distributed::MeshCoordinateRange(mesh_device.shape());
-    auto mesh_range_set = tt::tt_metal::distributed::MeshCoordinateRangeSet(mesh_range);
     const auto& mesh_view = mesh_device.get_view();
     auto mesh_shape = mesh_view.shape();
     auto topology = tt::tt_fabric::get_fabric_topology();
@@ -123,14 +122,9 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
     auto positive_direction = [&](tt::tt_fabric::RoutingDirection direction) {
         return direction == tt::tt_fabric::RoutingDirection::E || direction == tt::tt_fabric::RoutingDirection::S;
     };
-    [[maybe_unused]] auto negative_direction = [&](tt::tt_fabric::RoutingDirection direction) {
-        return direction == tt::tt_fabric::RoutingDirection::W || direction == tt::tt_fabric::RoutingDirection::N;
-    };
 
-    auto applicable_to_coord = [&](const MeshCoordinate& coord,
-                                   size_t cluster_axis,
-                                   size_t /*axis_size*/,
-                                   tt::tt_fabric::RoutingDirection direction) -> bool {
+    auto applicable_to_coord =
+        [&](const MeshCoordinate& coord, size_t cluster_axis, tt::tt_fabric::RoutingDirection direction) -> bool {
         auto boundary_mode = detail::get_boundary_mode(topology);
         int offset = positive_direction(direction) ? 1 : -1;
         auto neighbor = coord.get_neighbor(mesh_shape, offset, cluster_axis, boundary_mode);
@@ -138,12 +132,12 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
     };
 
     size_t num_available_routing_planes = std::numeric_limits<size_t>::max();
-    for (const auto& coord : mesh_range_set.coords()) {
+    for (const auto& coord : mesh_range) {
         const auto fabric_node_id = mesh_device.get_fabric_node_id(coord);
 
         for (const auto axis : cluster_axes) {
             for (const auto direction : directions[axis]) {
-                if (applicable_to_coord(coord, axis, mesh_shape[axis], direction)) {
+                if (applicable_to_coord(coord, axis, direction)) {
                     auto planes_in_direction = tt::tt_fabric::get_num_usable_routing_planes(fabric_node_id, direction);
                     log_debug(
                         tt::LogOp,
