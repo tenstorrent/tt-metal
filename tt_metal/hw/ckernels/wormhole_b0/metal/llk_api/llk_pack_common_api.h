@@ -184,36 +184,6 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
 }
 
 /**
- * @deprecated Face geometry is now derived from the new output's CB metadata. Use the metadata-based
- * llk_pack_reconfig_data_format(const std::uint32_t new_output) overload instead. This overload is retained
- * only for backwards compatibility and will be removed.
- *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
- * @param  new_output          Output circular buffer / operand index to reconfigure the packer for.
- * @param  face_r_dim          Face height in rows.
- * @param  num_faces           Number of faces per tile.
- */
-template <bool is_fp32_dest_acc_en>
-[[deprecated(
-    "Face geometry is now derived from the output CB metadata; use the "
-    "llk_pack_reconfig_data_format(const std::uint32_t) overload instead.")]] inline void
-llk_pack_reconfig_data_format_disaggregated(
-    const std::uint32_t new_output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
-    const std::uint32_t output_id = get_output_id(new_output);
-    const bool partial_face = get_output_partial_face(output_id);
-    const bool narrow_tile = get_output_narrow_tile(output_id);
-
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
-        num_faces,
-        partial_face,
-        narrow_tile);
-}
-
-/**
  * Conditionally reconfigure the packer when switching output operands: only reprograms the data
  * format when the new output's destination format differs from the old one and neither is Invalid.
  *
