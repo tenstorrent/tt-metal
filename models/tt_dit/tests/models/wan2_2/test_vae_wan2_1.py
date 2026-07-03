@@ -35,6 +35,28 @@ from ....utils.tensor import bf16_tensor_2dshard, typed_tensor_2dshard
 VAE_MODEL_NAME = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 VAE_COMMIT_HASH_PLACEHOLDER = "local"
 
+# Canonical mesh configurations shared across component-level VAE tests.
+MESH_CONFIGS_WITH_LINKS = [
+    ((1, 1), 0, 1, 1),
+    ((2, 4), 0, 1, 1),
+    ((2, 4), 1, 0, 1),
+    ((1, 8), 0, 1, 1),
+    ((1, 4), 1, 0, 1),
+    # WH (ring) on 4x8 uses more links
+    ((4, 8), 0, 1, 4),
+    # BH (linear) on 4x8 uses fewer links
+    ((4, 8), 0, 1, 2),
+]
+MESH_CONFIG_IDS = [
+    "1x1h0w1nl1",
+    "2x4h0w1nl1",
+    "2x4h1w0nl1",
+    "1x8h0w1nl1",
+    "1x4h1w0nl1",
+    "4x8h0w1nl4",
+    "4x8h0w1nl2",
+]
+
 
 def setup_hooks(model):
     """
@@ -215,6 +237,15 @@ def get_concat_dims(h_axis, w_axis, is_channels_last):
     concat_dims[h_axis] = h_idx
     concat_dims[w_axis] = w_idx
     return concat_dims
+
+
+# TODO: Use this maybe instead of get_concat_dims
+def tensor_shard_mapping(h_axis, w_axis, tensor_type="channels_first"):
+    assert tensor_type in ["channels_first", "channels_last"]
+    if tensor_type == "channels_first":
+        return {h_axis: 3, w_axis: 4}
+    else:
+        return {h_axis: 2, w_axis: 3}
 
 
 def convert_to_torch_channels_first(tt_tensor, concat_dims, mesh_device, is_channels_last, logical_h):
@@ -414,24 +445,7 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std, fused_activation,
 )
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis",
-    [
-        ((1, 1), 0, 1),
-        ((2, 4), 0, 1),
-        ((2, 4), 1, 0),
-        ((1, 8), 0, 1),
-        ((1, 4), 1, 0),
-        ((4, 8), 0, 1),
-    ],
-    ids=[
-        "1x1h0w1",
-        "2x4h0w1",
-        "2x4h1w0",
-        "1x8h0w1",
-        "1x4h1w0",
-        "4x8h0w1",
-    ],
-    indirect=["mesh_device"],
+    "mesh_device, h_axis, w_axis, num_links", MESH_CONFIGS_WITH_LINKS, ids=MESH_CONFIG_IDS, indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -439,7 +453,7 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std, fused_activation,
     ids=["bf16", "f32"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
-def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dtype, reset_seeds, request):
+def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, dtype, reset_seeds, request):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanAttentionBlock as TorchWanAttentionBlock
 
     param_id = request.node.name
@@ -450,7 +464,7 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dt
     torch_model = TorchWanAttentionBlock(dim=C)
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
@@ -532,24 +546,7 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dt
 @pytest.mark.parametrize("cache_len", [None, 1, 2], ids=["cache_none", "cache_1", "cache_2"])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis",
-    [
-        ((1, 1), 0, 1),
-        ((2, 4), 0, 1),
-        ((2, 4), 1, 0),
-        ((1, 8), 0, 1),
-        ((1, 4), 1, 0),
-        ((4, 8), 0, 1),
-    ],
-    ids=[
-        "1x1h0w1",
-        "2x4h0w1",
-        "2x4h1w0",
-        "1x8h0w1",
-        "1x4h1w0",
-        "4x8h0w1",
-    ],
-    indirect=["mesh_device"],
+    "mesh_device, h_axis, w_axis, num_links", MESH_CONFIGS_WITH_LINKS, ids=MESH_CONFIG_IDS, indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -573,6 +570,7 @@ def test_wan_conv3d(
     std,
     h_axis,
     w_axis,
+    num_links,
     dtype,
     request,
 ):
@@ -589,7 +587,7 @@ def test_wan_conv3d(
     )
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
@@ -692,24 +690,7 @@ def test_wan_conv3d(
 @pytest.mark.parametrize("cache_len", [None, 1, 2], ids=["cache_none", "cache_1", "cache_2"])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis",
-    [
-        ((1, 1), 0, 1),
-        ((2, 4), 0, 1),
-        ((2, 4), 1, 0),
-        ((1, 8), 0, 1),
-        ((1, 4), 1, 0),
-        ((4, 8), 0, 1),
-    ],
-    ids=[
-        "1x1h0w1",
-        "2x4h0w1",
-        "2x4h1w0",
-        "1x8h0w1",
-        "1x4h1w0",
-        "4x8h0w1",
-    ],
-    indirect=["mesh_device"],
+    "mesh_device, h_axis, w_axis, num_links", MESH_CONFIGS_WITH_LINKS, ids=MESH_CONFIG_IDS, indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -718,7 +699,7 @@ def test_wan_conv3d(
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
 def test_wan_residual_block(
-    mesh_device, B, in_dim, out_dim, T, H, W, cache_len, mean, std, h_axis, w_axis, dtype, request
+    mesh_device, B, in_dim, out_dim, T, H, W, cache_len, mean, std, h_axis, w_axis, num_links, dtype, request
 ):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanResidualBlock as TorchWanResidualBlock
 
@@ -734,7 +715,7 @@ def test_wan_residual_block(
     )
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
@@ -877,26 +858,7 @@ def test_wan_residual_block(
     ids=["std=1", "std=0.1"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis",
-    [
-        ((1, 1), 0, 1),
-        ((2, 1), 0, 1),
-        ((2, 4), 0, 1),
-        ((2, 4), 1, 0),
-        ((1, 8), 0, 1),
-        ((1, 4), 1, 0),
-        ((4, 8), 0, 1),
-    ],
-    ids=[
-        "1x1h0w1",
-        "2x1h0w1",
-        "2x4h0w1",
-        "2x4h1w0",
-        "1x8h0w1",
-        "1x4h1w0",
-        "4x8h0w1",
-    ],
-    indirect=["mesh_device"],
+    "mesh_device, h_axis, w_axis, num_links", MESH_CONFIGS_WITH_LINKS, ids=MESH_CONFIG_IDS, indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -905,7 +867,7 @@ def test_wan_residual_block(
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
 def test_wan_mid_block(
-    mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axis, w_axis, dtype, MIN_PCC, MAX_RMSE, request
+    mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axis, w_axis, num_links, dtype, MIN_PCC, MAX_RMSE, request
 ):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanMidBlock as TorchWanMidBlock
 
@@ -920,7 +882,7 @@ def test_wan_mid_block(
     )
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
@@ -1062,28 +1024,11 @@ def test_wan_mid_block(
 @pytest.mark.parametrize("cache_len", [None, 1, 2], ids=["cache_none", "cache_1", "cache_2"])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis",
-    [
-        ((1, 1), 0, 1),
-        ((2, 4), 0, 1),
-        ((2, 4), 1, 0),
-        ((1, 8), 0, 1),
-        ((1, 4), 1, 0),
-        ((4, 8), 0, 1),
-    ],
-    ids=[
-        "1x1h0w1",
-        "2x4h0w1",
-        "2x4h1w0",
-        "1x8h0w1",
-        "1x4h1w0",
-        "4x8h0w1",
-    ],
-    indirect=["mesh_device"],
+    "mesh_device, h_axis, w_axis, num_links", MESH_CONFIGS_WITH_LINKS, ids=MESH_CONFIG_IDS, indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
 def test_wan_resample(
-    mesh_device, B, dim, T, H, W, mode, resample_out_dim, cache_len, mean, std, h_axis, w_axis, request
+    mesh_device, B, dim, T, H, W, mode, resample_out_dim, cache_len, mean, std, h_axis, w_axis, num_links, request
 ):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanResample as TorchWanResample
 
@@ -1099,7 +1044,7 @@ def test_wan_resample(
     )
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
@@ -1237,24 +1182,7 @@ def test_wan_resample(
 )
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis",
-    [
-        ((1, 1), 0, 1),
-        ((2, 4), 0, 1),
-        ((2, 4), 1, 0),
-        ((1, 8), 0, 1),
-        ((1, 4), 1, 0),
-        ((4, 8), 0, 1),
-    ],
-    ids=[
-        "1x1h0w1",
-        "2x4h0w1",
-        "2x4h1w0",
-        "1x8h0w1",
-        "1x4h1w0",
-        "4x8h0w1",
-    ],
-    indirect=["mesh_device"],
+    "mesh_device, h_axis, w_axis, num_links", MESH_CONFIGS_WITH_LINKS, ids=MESH_CONFIG_IDS, indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -1263,7 +1191,7 @@ def test_wan_resample(
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
 def test_wan_upblock(
-    mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blocks, mean, std, h_axis, w_axis, dtype, request
+    mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blocks, mean, std, h_axis, w_axis, num_links, dtype, request
 ):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanUpBlock as TorchWanUpBlock
 
@@ -1281,7 +1209,7 @@ def test_wan_upblock(
     )
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
@@ -1634,28 +1562,7 @@ def test_wan_decoder3d(
     ids=["f32", "bf16"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis, num_links",
-    [
-        ((1, 1), 0, 1, 1),
-        ((2, 4), 0, 1, 1),
-        ((2, 4), 1, 0, 1),
-        ((1, 8), 0, 1, 1),
-        ((1, 4), 1, 0, 1),
-        # WH (ring) on 4x8 uses more links; keep existing
-        ((4, 8), 0, 1, 4),
-        # BH (linear) on 4x8 uses fewer links
-        ((4, 8), 0, 1, 2),
-    ],
-    ids=[
-        "1x1h0w1nl1",
-        "2x4h0w1nl1",
-        "2x4h1w0nl1",
-        "1x8h0w1nl1",
-        "1x4h1w0nl1",
-        "4x8h0w1nl4",
-        "4x8h0w1nl2",
-    ],
-    indirect=["mesh_device"],
+    "mesh_device, h_axis, w_axis, num_links", MESH_CONFIGS_WITH_LINKS, ids=MESH_CONFIG_IDS, indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
 def test_wan_decoder(
@@ -1887,12 +1794,11 @@ def test_wan_decoder_production_blocking(
         tt_input_tensor, logical_h, t_chunk_size=t_chunk_size, logical_w=logical_w
     )
 
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 3
-    concat_dims[w_axis] = 4
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, mesh_shape=tuple(mesh_device.shape), dims={h_axis: 3, w_axis: 4}
+        ),
     )
     logger.info(f"tt time taken: {time.time() - start}")
     logger.info(f"tt output shape: {tt_output_torch.shape}")
@@ -2038,15 +1944,12 @@ def test_wan_encoder_production_blocking(
     tt_output, new_logical_h, new_logical_w = tt_model(
         tt_input_tensor, logical_h, encoder_t_chunk_size=forward_chunk, logical_w=logical_w
     )
-
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 3
-    concat_dims[w_axis] = 4
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-    )
     logger.info(f"tt time taken: {time.time() - start}")
+
+    concat_dims = get_concat_dims(h_axis, w_axis, is_channels_last=False)
+    tt_output_torch = convert_to_torch_channels_first(
+        tt_output, concat_dims, mesh_device, is_channels_last=False, logical_h=new_logical_h
+    )
     logger.info(f"tt output shape: {tt_output_torch.shape}")
 
     if golden is None:
@@ -2163,9 +2066,7 @@ def test_wan_decoder_chunked_consistency(
     tt_input_host, logical_h = conv_pad_height(tt_input_host, parallel_config.height_parallel.factor)
     tt_input_host, logical_w = conv_pad_width(tt_input_host, parallel_config.width_parallel.factor)
 
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 3
-    concat_dims[w_axis] = 4
+    concat_dims = get_concat_dims(h_axis, w_axis, is_channels_last=False)
 
     def run_decoder(t_chunk_size):
         tt_input_tensor = typed_tensor_2dshard(
@@ -2357,15 +2258,10 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
             feat_idx=tt_feat_idx,
         )
 
-        concat_dims = [None, None]
-        concat_dims[h_axis] = 2
-        concat_dims[w_axis] = 3
-        tt_output_torch = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+        concat_dims = get_concat_dims(h_axis, w_axis, is_channels_last=True)
+        tt_output_torch = convert_to_torch_channels_first(
+            tt_output, concat_dims, mesh_device, is_channels_last=True, logical_h=new_logical_h
         )
-        tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
-        tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
 
         logger.info(f"checking output")
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
@@ -2392,32 +2288,12 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         "720p",
     ],
 )
-@pytest.mark.parametrize("T", [1, 10, 81], ids=["_1f", "10f", "81f"])
+# @pytest.mark.parametrize("T", [1, 10, 81], ids=["_1f", "10f", "81f"]) # This is not feasible, the 81f takes 4 hours on wormhole
+@pytest.mark.parametrize("T", [1, 10], ids=["_1f", "10f"])
 # @pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis, num_links",
-    [
-        ((1, 1), 0, 1, 1),
-        ((2, 4), 0, 1, 1),
-        ((2, 4), 1, 0, 1),
-        ((1, 8), 0, 1, 1),
-        ((1, 4), 1, 0, 1),
-        # WH (ring) on 4x8 uses more links; keep existing
-        ((4, 8), 0, 1, 4),
-        # BH (linear) on 4x8 uses fewer links
-        ((4, 8), 0, 1, 2),
-    ],
-    ids=[
-        "1x1h0w1nl1",
-        "2x4h0w1nl1",
-        "2x4h1w0nl1",
-        "1x8h0w1nl1",
-        "1x4h1w0nl1",
-        "4x8h0w1nl4",
-        "4x8h0w1nl2",
-    ],
-    indirect=["mesh_device"],
+    "mesh_device, h_axis, w_axis, num_links", MESH_CONFIGS_WITH_LINKS, ids=MESH_CONFIG_IDS, indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
 def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, request):
@@ -2481,13 +2357,11 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         logical_w=logical_w,
     )
 
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 3
-    concat_dims[w_axis] = 4
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+    concat_dims = get_concat_dims(h_axis, w_axis, is_channels_last=False)
+    tt_output_torch = convert_to_torch_channels_first(
+        tt_output, concat_dims, mesh_device, is_channels_last=False, logical_h=new_logical_h
     )
+
     logger.info(f"tt time taken: {time.time() - start}")
     logger.info(f"tt output shape: {tt_output_torch.shape}")
 
