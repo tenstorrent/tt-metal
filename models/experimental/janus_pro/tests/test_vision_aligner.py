@@ -74,7 +74,8 @@ def test_aligner_inference(batch, num_chunks, mesh_device, reset_seeds, dummy_we
     # Weights are replicated, so every device holds the same result; take one copy.
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:1].squeeze()
 
-    pcc_required = 0.99
+    # Two bf16 linears + GELU; measured PCC ~0.99999.
+    pcc_required = 0.9999
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
