@@ -1,0 +1,210 @@
+INFO 07-03 06:30:57 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 07-03 06:30:57 [__init__.py:46] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 07-03 06:30:57 [__init__.py:58] Loading plugin tt
+2026-07-03 06:30:59.460 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+INFO 07-03 06:30:59 [__init__.py:212] Platform plugin tt is activated
+INFO 07-03 06:31:03 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-03 06:31:03 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+(APIServer pid=353050) INFO 07-03 06:31:03 [utils.py:287]
+(APIServer pid=353050) INFO 07-03 06:31:03 [utils.py:287]        █     █     █▄   ▄█
+(APIServer pid=353050) INFO 07-03 06:31:03 [utils.py:287]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.1.dev1+g6b4a3a7b4.d20260702
+(APIServer pid=353050) INFO 07-03 06:31:03 [utils.py:287]   █▄█▀ █     █     █     █  model   Qwen/Qwen3-4B
+(APIServer pid=353050) INFO 07-03 06:31:03 [utils.py:287]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=353050) INFO 07-03 06:31:03 [utils.py:287]
+(APIServer pid=353050) INFO 07-03 06:31:03 [utils.py:223] non-default args: {'model': 'Qwen/Qwen3-4B', 'max_model_len': 40960, 'block_size': 32, 'max_num_seqs': 32, 'additional_config': {'tt': {'sample_on_device_mode': 'all', 'trace_region_size': 134217728, 'fabric_config': 'FABRIC_1D_RING'}}}
+(APIServer pid=353050) INFO 07-03 06:31:10 [model.py:526] Resolved architecture: Qwen3ForCausalLM
+(APIServer pid=353050) INFO 07-03 06:31:10 [model.py:1550] Using max model len 40960
+(APIServer pid=353050) INFO 07-03 06:31:10 [scheduler.py:224] Chunked prefill is enabled with max_num_batched_tokens=2048.
+(APIServer pid=353050) INFO 07-03 06:31:10 [vllm.py:698] Asynchronous scheduling is enabled.
+(APIServer pid=353050) WARNING 07-03 06:31:10 [vllm.py:743] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+INFO 07-03 06:31:14 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 07-03 06:31:14 [__init__.py:46] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 07-03 06:31:14 [__init__.py:58] Loading plugin tt
+2026-07-03 06:31:16.340 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+INFO 07-03 06:31:16 [__init__.py:212] Platform plugin tt is activated
+INFO 07-03 06:31:20 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-03 06:31:20 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+(EngineCore_DP0 pid=353130) INFO 07-03 06:31:20 [core.py:98] Initializing a V1 LLM engine (v0.1.dev1+g6b4a3a7b4.d20260702) with config: model='Qwen/Qwen3-4B', speculative_config=None, tokenizer='Qwen/Qwen3-4B', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=40960, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, disable_custom_all_reduce=True, quantization=None, enforce_eager=False, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=None, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_fallback=False, disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False), seed=0, served_model_name=Qwen/Qwen3-4B, enable_prefix_caching=False, enable_chunked_prefill=False, pooler_config=None, compilation_config={'level': None, 'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'eager', 'custom_ops': ['all'], 'splitting_ops': ['vllm::unified_attention', 'vllm::unified_attention_with_output', 'vllm::unified_mla_attention', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::linear_attention', 'vllm::plamo2_mamba_mixer', 'vllm::gdn_attention_core', 'vllm::kda_attention', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::unified_kv_cache_update'], 'compile_mm_encoder': False, 'compile_sizes': None, 'compile_ranges_split_points': [2048], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': None, 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'fuse_act_padding': False}, 'max_cudagraph_capture_size': None, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': True, 'static_all_moe_layers': []}
+2026-07-03 06:31:21.938 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-03 06:31:21.938 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-03 06:31:21.938 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-03 06:31:21.938 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-03 06:31:21.939 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-03 06:31:21.939 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-03 06:31:21.942 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-03 06:31:22.109 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-03 06:31:22.109 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-03 06:31:22.109 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-03 06:31:22.109 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-03 06:31:22.112 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-03 06:31:22.338 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-03 06:31:22.938 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-03 06:31:22.939 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-03 06:31:22.939 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-03 06:31:22.939 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+(EngineCore_DP0 pid=353130) 2026-07-03 06:31:22.940 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+(EngineCore_DP0 pid=353130) 2026-07-03 06:31:22.940 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-03 06:31:22.955 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-03 06:31:22.955 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-03 06:31:22.955 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-03 06:31:22.955 | info     |    BuildKernels | Using pre-compiled firmware from: /home/ubuntu/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-03 06:31:42.959 | critical |           Metal | Device 0: Virtual core 31-25, Port status: 0x1, Retrain count: 0x0, Rx link up: 0x1, Train status: 0x2, PCS status: 0x1, SerDes reset status: 0x1, Postcode: 0xc0dea000, ERISC0 reset PC: 0x357c, ERISC1 reset PC: 0x9330, RISC soft reset: 0x47000, Heartbeat start: 0xdcba1500, Heartbeat end: 0xdcba1500, Heartbeat changed: false (llrt.cpp:342)
+2026-07-03 06:31:42.959 | critical |          Always | TT_THROW: Device 0: Timed out while waiting for active ethernet core 31-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0 (assert.hpp:104)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033] EngineCore failed to start.
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033] Traceback (most recent call last):
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]   File "/home/ubuntu/vllm/vllm/v1/engine/core.py", line 1023, in run_engine_core
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]     engine_core = engine_core_cls(*args, engine_index=dp_rank, **kwargs)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]   File "/home/ubuntu/vllm/vllm/v1/engine/core.py", line 755, in __init__
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]     super().__init__(
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]   File "/home/ubuntu/vllm/vllm/v1/engine/core.py", line 107, in __init__
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]     self.model_executor = executor_class(vllm_config)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]   File "/home/ubuntu/vllm/vllm/v1/executor/abstract.py", line 103, in __init__
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]     self._init_executor()
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]   File "/home/ubuntu/vllm/vllm/v1/executor/uniproc_executor.py", line 47, in _init_executor
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]     self.driver_worker.init_device()
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]   File "/home/ubuntu/vllm/vllm/v1/worker/worker_base.py", line 322, in init_device
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]     self.worker.init_device()  # type: ignore
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]     ^^^^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]   File "/home/ubuntu/vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/worker.py", line 112, in init_device
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]     self.mesh_device = open_mesh_device(
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]                        ^^^^^^^^^^^^^^^^^
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]   File "/home/ubuntu/vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/worker.py", line 753, in open_mesh_device
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]     mesh_device = ttnn.open_mesh_device(
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]                   ^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]   File "/home/ubuntu/tt-metal/ttnn/ttnn/distributed/distributed.py", line 671, in open_mesh_device
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]     return ttnn._ttnn.multi_device.open_mesh_device(
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033] RuntimeError: TT_THROW @ /home/ubuntu/tt-metal/tt_metal/llrt/llrt.cpp:566: tt::exception
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033] info:
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033] Device 0: Timed out while waiting for active ethernet core 31-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033] backtrace:
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- /home/ubuntu/tt-metal/build_Release/lib/libtt_metal.so(+0xb707a8) [0x7f24bee097a8]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- tt::llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(int, tt::xy_pair const&, int)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- tt::tt_metal::RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(int)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- tt::tt_metal::RiscFirmwareInitializer::reset_cores(int)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- tt::tt_metal::RiscFirmwareInitializer::run_launch_phase(std::set<int, std::less<int>, std::allocator<int> > const&)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- tt::tt_metal::MetalContext::initialize(tt::tt_metal::DispatchCoreConfig const&, unsigned char, std::vector<unsigned int, std::allocator<unsigned int> > const&, unsigned long, bool)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- tt::tt_metal::MetalContext::initialize_device_manager(std::vector<int, std::allocator<int> > const&, unsigned char, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long, bool, bool)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- tt::tt_metal::experimental::CreateDevices(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, std::vector<int, std::allocator<int> > const&, unsigned char, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::vector<unsigned int, std::allocator<unsigned int> > const&, unsigned long, bool, bool)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- tt::tt_metal::distributed::MeshDeviceImpl::ScopedDevices::ScopedDevices(std::vector<tt::tt_metal::distributed::MaybeRemote<int>, std::allocator<tt::tt_metal::distributed::MaybeRemote<int> > > const&, std::vector<tt::tt_metal::distributed::MaybeRemote<int>, std::allocator<tt::tt_metal::distributed::MaybeRemote<int> > > const&, unsigned long, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::optional<tt::tt_metal::distributed::MeshShape> const&, std::optional<tt::tt_metal::distributed::MeshCoordinate> const&, std::vector<int, std::allocator<int> > const&, unsigned long)
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- /home/ubuntu/tt-metal/ttnn/ttnn/_ttnn.so(+0x7fbfac) [0x7f24c1ca2fac]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- /home/ubuntu/tt-metal/ttnn/ttnn/_ttnn.so(+0x310535) [0x7f24c17b7535]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x3133) [0x18154f3]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore() [0x1890b66]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore() [0x180256d]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x2f37) [0x18152f7]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore() [0x1890c75]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore() [0x180256d]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore(PyEval_EvalCode+0xde) [0x187cd9e]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore() [0x18bb609]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore(PyRun_SimpleStringFlags+0xe0) [0x195b67a]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore() [0x1ae6695]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore() [0x1972218]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore() [0x197202c]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f253b276d90]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f253b276e40]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]  --- VLLM::EngineCore(_start+0x29) [0x19bf069]
+(EngineCore_DP0 pid=353130) ERROR 07-03 06:31:42 [core.py:1033]
+(EngineCore_DP0 pid=353130) Process EngineCore_DP0:
+(EngineCore_DP0 pid=353130) Traceback (most recent call last):
+(EngineCore_DP0 pid=353130)   File "/home/ubuntu/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/multiprocessing/process.py", line 314, in _bootstrap
+(EngineCore_DP0 pid=353130)     self.run()
+(EngineCore_DP0 pid=353130)   File "/home/ubuntu/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/multiprocessing/process.py", line 108, in run
+(EngineCore_DP0 pid=353130)     self._target(*self._args, **self._kwargs)
+(EngineCore_DP0 pid=353130)   File "/home/ubuntu/vllm/vllm/v1/engine/core.py", line 1037, in run_engine_core
+(EngineCore_DP0 pid=353130)     raise e
+(EngineCore_DP0 pid=353130)   File "/home/ubuntu/vllm/vllm/v1/engine/core.py", line 1023, in run_engine_core
+(EngineCore_DP0 pid=353130)     engine_core = engine_core_cls(*args, engine_index=dp_rank, **kwargs)
+(EngineCore_DP0 pid=353130)                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore_DP0 pid=353130)   File "/home/ubuntu/vllm/vllm/v1/engine/core.py", line 755, in __init__
+(EngineCore_DP0 pid=353130)     super().__init__(
+(EngineCore_DP0 pid=353130)   File "/home/ubuntu/vllm/vllm/v1/engine/core.py", line 107, in __init__
+(EngineCore_DP0 pid=353130)     self.model_executor = executor_class(vllm_config)
+(EngineCore_DP0 pid=353130)                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore_DP0 pid=353130)   File "/home/ubuntu/vllm/vllm/v1/executor/abstract.py", line 103, in __init__
+(EngineCore_DP0 pid=353130)     self._init_executor()
+(EngineCore_DP0 pid=353130)   File "/home/ubuntu/vllm/vllm/v1/executor/uniproc_executor.py", line 47, in _init_executor
+(EngineCore_DP0 pid=353130)     self.driver_worker.init_device()
+(EngineCore_DP0 pid=353130)   File "/home/ubuntu/vllm/vllm/v1/worker/worker_base.py", line 322, in init_device
+(EngineCore_DP0 pid=353130)     self.worker.init_device()  # type: ignore
+(EngineCore_DP0 pid=353130)     ^^^^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore_DP0 pid=353130)   File "/home/ubuntu/vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/worker.py", line 112, in init_device
+(EngineCore_DP0 pid=353130)     self.mesh_device = open_mesh_device(
+(EngineCore_DP0 pid=353130)                        ^^^^^^^^^^^^^^^^^
+(EngineCore_DP0 pid=353130)   File "/home/ubuntu/vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/worker.py", line 753, in open_mesh_device
+(EngineCore_DP0 pid=353130)     mesh_device = ttnn.open_mesh_device(
+(EngineCore_DP0 pid=353130)                   ^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore_DP0 pid=353130)   File "/home/ubuntu/tt-metal/ttnn/ttnn/distributed/distributed.py", line 671, in open_mesh_device
+(EngineCore_DP0 pid=353130)     return ttnn._ttnn.multi_device.open_mesh_device(
+(EngineCore_DP0 pid=353130)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore_DP0 pid=353130) RuntimeError: TT_THROW @ /home/ubuntu/tt-metal/tt_metal/llrt/llrt.cpp:566: tt::exception
+(EngineCore_DP0 pid=353130) info:
+(EngineCore_DP0 pid=353130) Device 0: Timed out while waiting for active ethernet core 31-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0
+(EngineCore_DP0 pid=353130) backtrace:
+(EngineCore_DP0 pid=353130)  --- /home/ubuntu/tt-metal/build_Release/lib/libtt_metal.so(+0xb707a8) [0x7f24bee097a8]
+(EngineCore_DP0 pid=353130)  --- tt::llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(int, tt::xy_pair const&, int)
+(EngineCore_DP0 pid=353130)  --- tt::tt_metal::RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(int)
+(EngineCore_DP0 pid=353130)  --- tt::tt_metal::RiscFirmwareInitializer::reset_cores(int)
+(EngineCore_DP0 pid=353130)  --- tt::tt_metal::RiscFirmwareInitializer::run_launch_phase(std::set<int, std::less<int>, std::allocator<int> > const&)
+(EngineCore_DP0 pid=353130)  --- tt::tt_metal::MetalContext::initialize(tt::tt_metal::DispatchCoreConfig const&, unsigned char, std::vector<unsigned int, std::allocator<unsigned int> > const&, unsigned long, bool)
+(EngineCore_DP0 pid=353130)  --- tt::tt_metal::MetalContext::initialize_device_manager(std::vector<int, std::allocator<int> > const&, unsigned char, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long, bool, bool)
+(EngineCore_DP0 pid=353130)  --- tt::tt_metal::experimental::CreateDevices(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, std::vector<int, std::allocator<int> > const&, unsigned char, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::vector<unsigned int, std::allocator<unsigned int> > const&, unsigned long, bool, bool)
+(EngineCore_DP0 pid=353130)  --- tt::tt_metal::distributed::MeshDeviceImpl::ScopedDevices::ScopedDevices(std::vector<tt::tt_metal::distributed::MaybeRemote<int>, std::allocator<tt::tt_metal::distributed::MaybeRemote<int> > > const&, std::vector<tt::tt_metal::distributed::MaybeRemote<int>, std::allocator<tt::tt_metal::distributed::MaybeRemote<int> > > const&, unsigned long, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+(EngineCore_DP0 pid=353130)  --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+(EngineCore_DP0 pid=353130)  --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+(EngineCore_DP0 pid=353130)  --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::optional<tt::tt_metal::distributed::MeshShape> const&, std::optional<tt::tt_metal::distributed::MeshCoordinate> const&, std::vector<int, std::allocator<int> > const&, unsigned long)
+(EngineCore_DP0 pid=353130)  --- /home/ubuntu/tt-metal/ttnn/ttnn/_ttnn.so(+0x7fbfac) [0x7f24c1ca2fac]
+(EngineCore_DP0 pid=353130)  --- /home/ubuntu/tt-metal/ttnn/ttnn/_ttnn.so(+0x310535) [0x7f24c17b7535]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x3133) [0x18154f3]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore() [0x1890b66]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore() [0x180256d]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x2f37) [0x18152f7]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore() [0x1890c75]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore() [0x180256d]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore(PyEval_EvalCode+0xde) [0x187cd9e]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore() [0x18bb609]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore(PyRun_SimpleStringFlags+0xe0) [0x195b67a]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore() [0x1ae6695]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore() [0x1972218]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore() [0x197202c]
+(EngineCore_DP0 pid=353130)  --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f253b276d90]
+(EngineCore_DP0 pid=353130)  --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f253b276e40]
+(EngineCore_DP0 pid=353130)  --- VLLM::EngineCore(_start+0x29) [0x19bf069]
+(EngineCore_DP0 pid=353130)
+nanobind: leaked 1 instances!
+ - leaked instance 0x7f244a3928f8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "DataType"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "pad_to_tile"
+ - leaked function "empty"
+ - leaked function "create_matmul_attributes"
+ - leaked function ""
+ - leaked function "__hash__"
+ - leaked function "disable_and_clear_program_cache"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html
