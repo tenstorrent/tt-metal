@@ -314,8 +314,7 @@ def _params_solve_dependencies(**kwargs: any) -> List[Tuple]:
 def parametrize(**kwargs: any):
     compile_key_fn = None
     _rt_names = set()
-    _combo_name = None
-    _combo_rt_indices = frozenset()
+    _combo_rt_indices = {}
     unwrapped = {}
     for name, value in kwargs.items():
         if isinstance(value, _RuntimeMarker):
@@ -324,12 +323,14 @@ def parametrize(**kwargs: any):
         elif (
             isinstance(value, list)
             and value
-            and isinstance(value[0], tuple)
-            and any(isinstance(v, _RuntimeMarker) for v in value[0])
+            and all(isinstance(v, tuple) for v in value)
+            and any(isinstance(el, _RuntimeMarker) for combo in value for el in combo)
         ):
-            _combo_name = name
-            _combo_rt_indices = frozenset(
-                i for i, v in enumerate(value[0]) if isinstance(v, _RuntimeMarker)
+            _combo_rt_indices[name] = frozenset(
+                i
+                for combo in value
+                for i, el in enumerate(combo)
+                if isinstance(el, _RuntimeMarker)
             )
             unwrapped[name] = [
                 tuple(v.value if isinstance(v, _RuntimeMarker) else v for v in combo)
@@ -338,19 +339,18 @@ def parametrize(**kwargs: any):
         else:
             unwrapped[name] = value
 
-    if _rt_names or _combo_name:
+    if _rt_names or _combo_rt_indices:
 
         def compile_key_fn(params):
             parts = []
             for k, v in sorted(params.items()):
                 if k in _rt_names:
                     continue
-                if k == _combo_name:
+                if k in _combo_rt_indices:
                     if len(v) == 1 and isinstance(v[0], tuple):
                         v = v[0]
-                    v = tuple(
-                        el for i, el in enumerate(v) if i not in _combo_rt_indices
-                    )
+                    rt_indices = _combo_rt_indices[k]
+                    v = tuple(el for i, el in enumerate(v) if i not in rt_indices)
                 parts.append((k, v))
             return tuple(parts)
 
@@ -377,9 +377,9 @@ def parametrize(**kwargs: any):
 
     def decorator(test_function):
         if compile_key_fn is not None:
-            test_function = pytest.mark.runtime_axes(compile_key_fn=compile_key_fn)(
-                test_function
-            )
+            test_function = getattr(pytest.mark, RUNTIME_AXES_MARK)(
+                compile_key_fn=compile_key_fn
+            )(test_function)
         return pytest.mark.parametrize(parameters_string, parameter_values, ids=ids)(
             test_function
         )

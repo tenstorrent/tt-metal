@@ -422,7 +422,7 @@ def pytest_ignore_collect(collection_path, config):
     return None
 
 
-def _collapse_runtime_only_variants(items):
+def _collapse_runtime_only_variants(config, items):
     """Keep only one test per unique compile key, dropping runtime only duplicates.
 
     Tests decorated with ``@parametrize`` that use ``runtime()`` markers carry a
@@ -434,6 +434,7 @@ def _collapse_runtime_only_variants(items):
 
     seen = set()
     keep = []
+    deselected = []
     for item in items:
         marker = item.get_closest_marker(RUNTIME_AXES_MARK)
         if marker is None:
@@ -444,12 +445,18 @@ def _collapse_runtime_only_variants(items):
         if key not in seen:
             seen.add(key)
             keep.append(item)
-    items[:] = keep
+        else:
+            deselected.append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = keep
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
-        _collapse_runtime_only_variants(items)
+        _collapse_runtime_only_variants(config, items)
 
     test_order_file = config.getoption("--test-order-file")
 
