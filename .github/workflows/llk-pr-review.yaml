@@ -176,7 +176,7 @@ jobs:
           # comment MCP tool the command posts with, plus gh for diff/view.
           claude_args: |
             --effort ${{ github.event.inputs.effort || 'max' }}
-            --allowedTools "Task,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(sed:*),mcp__github_inline_comment__create_inline_comment,mcp__deepwiki,mcp__atlassian,mcp__glean_default"
+            --allowedTools "Task,Read,Grep,Glob,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(sed:*),mcp__github_inline_comment__create_inline_comment,mcp__deepwiki,mcp__atlassian,mcp__glean_default"
             --max-turns 100
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
