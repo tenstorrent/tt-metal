@@ -90,12 +90,13 @@ inline void write_pooled_strip(
     }
 
     // Forced-local block (sparse_local_block=1): force each query's own block to +inf so top-k always
-    // keeps it. Query (q_seq_row0 + rr)'s block = (q_pos) / POOL_BLOCK_KEYS, where q_pos =
-    // chunk_start_keys + q_seq_row0 + rr plus the mid-slab boundary-chip straddle jump (0 otherwise, so the
-    // common case is unchanged); stamp only when it lands in this unit's [col_off_blocks, +valid).
+    // keeps it. Query (q_seq_row0 + rr)'s block = q_pos / POOL_BLOCK_KEYS, where q_pos is the diagonal key
+    // position -- causal_diag_tile evaluated in KEYS (all args key units; the straddle jump is applied for
+    // the mid-slab boundary chip, 0 otherwise so the common case is unchanged). Stamp only when it lands in
+    // this unit's [col_off_blocks, +valid).
     for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
         const uint32_t q_seq = q_seq_row0 + rr;
-        const uint32_t q_pos = chunk_start_keys + q_seq + (q_seq >= straddle_q_keys ? straddle_jump_keys : 0);
+        const uint32_t q_pos = iscore::causal_diag_tile(q_seq, chunk_start_keys, straddle_q_keys, straddle_jump_keys);
         const uint32_t local_block = q_pos / POOL_BLOCK_KEYS;
         if (local_block >= col_off_blocks && local_block < col_off_blocks + valid_blocks) {
             scratch[rr * valid_blocks + (local_block - col_off_blocks)] = POOL_POS_INF_BF16;
