@@ -540,7 +540,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
     // DPRINT("process_write_linear noc_xy:0x{:x} write_offset:{} dst_addr:0x{08x} length:{} data_ptr:0x{08x}\n",
     // dst_noc, write_offset_index, dst_addr, length, data_ptr);
     if (multicast) {
-        cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
+        cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr, 0, noc_index, num_mcast_dests);
     } else {
         cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
     }
@@ -557,7 +557,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
         uint32_t xfer_size = length > available_data ? available_data : length;
         if (hit_boundary) {
             if (multicast) {
-                cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
+                cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr, 0, noc_index, num_mcast_dests);
             } else {
                 cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
             }
@@ -732,7 +732,7 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
                 cq_noc_async_write_with_state<CQ_NOC_SnDL>(
                     static_cast<uint32_t>(data_ptr), remainder_dst_addr, remainder_xfer_size, num_dests);
                 // Reset values expected below
-                cq_noc_async_write_with_state<CQ_NOC_snDL, CQ_NOC_WAIT, CQ_NOC_send>(0, dst, xfer_size);
+                cq_noc_async_write_with_state<CQ_NOC_snDL, CQ_NOC_WAIT, CQ_NOC_send>(0, dst, xfer_size, num_dests);
                 writes++;
                 mcasts += num_dests;
 
@@ -858,7 +858,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
                     uint32_t rem_xfer_size = cq_noc_async_write_with_state_any_len<false>(
                         static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_dests);
                     // Unset Link flag
-                    cq_noc_async_write_init_state<CQ_NOC_sndl, true, false>(0, 0, 0);
+                    cq_noc_async_write_init_state<CQ_NOC_sndl, true, false>(0, 0, 0, noc_index, num_dests);
                     uint32_t data_offset = xfer_size - rem_xfer_size;
                     cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_wait>(
                         static_cast<uint32_t>(data_ptr + data_offset),
@@ -1134,13 +1134,15 @@ void process_go_signal_mcast_cmd() {
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
             dst_noc_addr_multicast,
-            sizeof(uint32_t));
+            sizeof(uint32_t),
+            noc_index,
+            num_dests);
         noc_nonposted_writes_acked[noc_index] += num_dests;
 
         WAYPOINT("WCW");
         wait_worker_completion(stream, wait_count);
         WAYPOINT("WCD");
-        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
+        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
         noc_nonposted_writes_num_issued[noc_index] += 1;
     } else {
         WAYPOINT("WCW");

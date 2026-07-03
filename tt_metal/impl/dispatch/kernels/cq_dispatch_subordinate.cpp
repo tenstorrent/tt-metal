@@ -376,7 +376,9 @@ void process_go_signal_mcast_cmd() {
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
             dst_noc_addr_multicast,
-            sizeof(uint32_t));
+            sizeof(uint32_t),
+            noc_index,
+            num_dests);
 
         // Multicast write accounting: increment counters for num_dests acks and one issued transaction.
         noc_increment_nonposted_writes_acked(noc_index, num_dests);
@@ -384,7 +386,7 @@ void process_go_signal_mcast_cmd() {
 #if !DEVICE_PRINT_DISPATCH_ENABLED
         wait_for_workers(wait_count, wait_stream);
 #endif
-        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
+        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
         noc_increment_nonposted_writes_issued(noc_index, 1);
     } else {
         wait_for_workers(wait_count, wait_stream);
