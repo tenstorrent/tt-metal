@@ -45,9 +45,11 @@ SHAPES = [
 ]
 SHAPE_IDS = [f"{i}_{o}_k{k}_T{t}" for (i, o, k, t) in SHAPES]
 
-C_IN_CANDS = [32, 64, 128, 256]
+# Now that registration actually applies (key bug fixed), blocking really varies the kernel. Sweep
+# a wider grid; candidates that exceed L1 raise TT_THROW and are dropped by the fit/PCC filter.
+C_IN_CANDS = [32, 64, 128, 256, 512]
 C_OUT_CANDS = [32, 64, 128, 256]
-T_OUT_CANDS = [1, 2, 4, 8]
+T_OUT_CANDS = [1, 2, 4, 8, 16]
 
 PROFILER_DUMP_EVERY = 8
 SUBDIR = "acestep_vae_conv_sweep"
@@ -72,7 +74,9 @@ def _pcc(a, b):
 
 def _build_and_run(device, in_c, out_c, k, T, blocking):
     """Register `blocking` for this shape, build a fresh conv, run one forward. Returns out tensor."""
-    key = (in_c, out_c, c3d._ntuple(k, 3))
+    # 1D-via-3D convs look up their config with kernel (k, 1, 1), NOT _ntuple(k,3)=(k,k,k). Register
+    # under the exact key the conv uses, or the blocking is silently ignored.
+    key = (in_c, out_c, (k, 1, 1))
     saved = c3d._DEFAULT_BLOCKINGS.get(key)
     if blocking is not None:
         c3d._DEFAULT_BLOCKINGS[key] = blocking
@@ -114,8 +118,9 @@ def test_vae_conv_sweep_worker(device, shape):
         try:
             out = ttnn.to_torch(_build_and_run(device, in_c, out_c, k, T, blk)).float()
         except Exception:
+            # L1 overflow (TT_THROW) or unsupported blocking -> not a valid candidate.
             continue
-        if _pcc(ref, out) >= 0.999:
+        if _pcc(ref, out) >= 0.999:  # blocking must not change the math
             valid.append(blk)
 
     # Record the combo order so the orchestrator can line durations up with blockings.
