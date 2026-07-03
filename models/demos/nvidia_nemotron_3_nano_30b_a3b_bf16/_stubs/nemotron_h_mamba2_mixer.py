@@ -54,39 +54,120 @@ class TtNemotronHMamba2Mixer:
         sd = torch_module.state_dict()
         H = self.num_heads
 
-        # ---- big projection weights (stored pre-transposed: [in, out]) ----
-        self._w_in = self._dev(sd["in_proj.weight"].t().contiguous().float())     # (2688, 10304)
-        self._w_out = self._dev(sd["out_proj.weight"].t().contiguous().float())   # (4096, 2688)
+        # FULL (unsharded) Mamba2 dims used to build the weight reordering.
+        Hf, HD, Nn = self.num_heads, self.head_dim, self.ssm_state_size    # 64,64,128
+        Gf = self.n_groups                                                 # 8
+        INTERf = self.intermediate_size                                    # 4096
+        GGNf = Gf * Nn                                                     # 1024
+        reps = Hf // Gf                                                    # 8
+
+        # ---- tensor-parallel (head-parallel) config -----------------------
+        # ONLY shard under the shard runner; the single-device .last_good_native
+        # path stays byte-identical (TP=1 => replicated, exactly as before).
+        # Mamba TP = split the HEADS across chips: the SSD scan is per-head
+        # independent, so each chip runs Hl=H/TP heads (and the matching
+        # Gl=G/TP conv groups, reps preserved) end-to-end with NO cross-head
+        # comms. in_proj is column-parallel (replicated x, sharded proj); out_proj
+        # is row-parallel (sharded in -> partial sums -> one all_reduce). On this
+        # box fabric only trains on the full mesh, so the run lands on a 2-D
+        # MeshShape(DP,TP): shard the TP (last) axis, replicate the DP axis.
+        import os as _os
+        dev = self.device
+        try:
+            _is_mesh = isinstance(dev, ttnn.MeshDevice)
+        except AttributeError:
+            _is_mesh = False
+        _mesh_shape = list(dev.shape) if _is_mesh else [1, 1]
+        shard = bool(_os.environ.get("TT_HW_PLANNER_SHARD_RUN")) and _is_mesh
+        TP = _mesh_shape[-1] if shard else 1
+        shard = shard and TP > 1 and (Hf % TP == 0) and (Gf % TP == 0)
+        self._shard = shard
+        self._TP = TP
+        self._tp_axis = len(_mesh_shape) - 1
+        self._mesh_shape = _mesh_shape
+        Hl, Gl = Hf // TP, Gf // TP
+        INTERl, GGNl = Hl * HD, Gl * Nn
 
         # ---- depthwise causal conv1d weights, decomposed per tap ----
         w_conv = sd["conv1d.weight"].squeeze(1).float()        # (6144, K)
         self.conv_k = int(w_conv.shape[1])
-        # tap s shifts the sequence by s (x[t-s]); its weight column is K-1-s.
-        self._conv_taps = [self._dev(w_conv[:, self.conv_k - 1 - s].reshape(1, 1, self.conv_dim)) for s in range(self.conv_k)]
+        K = self.conv_k
         cb = sd.get("conv1d.bias")
-        self._conv_bias = self._dev(cb.float().reshape(1, 1, self.conv_dim)) if cb is not None else None
 
-        # ---- group->head expansion matrix P: (G*N, H*N), head h -> group h//reps ----
-        # B/C are stored per n_groups; each group is shared by H//G heads. Expanding
-        # via a one-hot matmul is the proven path on this 2x2 mesh (ttnn.repeat* is
-        # the fragile OTHER suspect here — see project memory).
-        G, N = self.n_groups, self.ssm_state_size
-        reps = H // G                                          # 8
-        P = torch.zeros(G * N, H * N, dtype=torch.float32)
-        for h in range(H):
-            g = h // reps
-            P[g * N:(g + 1) * N, h * N:(h + 1) * N] = torch.eye(N, dtype=torch.float32)
-        self._P = self._dev(P)
+        if shard:
+            # Column permutation of in_proj's 10304 outputs so each chip's heads'
+            # [gate | x | B | C | dt] land in one contiguous block that dim-1
+            # sharding then splits evenly. Layout of proj:
+            #   gate[0:INTER] x[INTER:2INTER] B[2INTER:2INTER+GGN]
+            #   C[2INTER+GGN:2INTER+2GGN] dt[2INTER+2GGN:]
+            incol, cvcol = [], []
+            for d in range(TP):
+                hs, he = d * Hl, (d + 1) * Hl
+                gs, ge = d * Gl, (d + 1) * Gl
+                incol += list(range(hs * HD, he * HD))                                     # gate
+                incol += list(range(INTERf + hs * HD, INTERf + he * HD))                   # x
+                incol += list(range(2 * INTERf + gs * Nn, 2 * INTERf + ge * Nn))           # B
+                incol += list(range(2 * INTERf + GGNf + gs * Nn, 2 * INTERf + GGNf + ge * Nn))  # C
+                incol += list(range(2 * INTERf + 2 * GGNf + hs, 2 * INTERf + 2 * GGNf + he))    # dt
+                # conv operates on conv_dim = [x(INTER) | B(GGN) | C(GGN)] channels.
+                cvcol += list(range(hs * HD, he * HD))                                     # x
+                cvcol += list(range(INTERf + gs * Nn, INTERf + ge * Nn))                   # B
+                cvcol += list(range(INTERf + GGNf + gs * Nn, INTERf + GGNf + ge * Nn))     # C
+            incol = torch.tensor(incol, dtype=torch.long)
+            cvcol = torch.tensor(cvcol, dtype=torch.long)
 
-        # ---- SSM scalars ----
-        A = -torch.exp(sd["A_log"].float())                    # (H,)
-        self._A = self._dev(A.reshape(1, H, 1, 1))
-        self._D = self._dev(sd["D"].float().reshape(1, H, 1, 1))
-        self._dt_bias = self._dev(sd["dt_bias"].float().reshape(1, 1, H))
+            Win = sd["in_proj.weight"].t().contiguous().float()[:, incol]     # (2688, 10304)
+            self._w_in = self._shd(Win, 1)                                    # col-parallel
+            # out_proj row-parallel: heads are contiguous in d_inner, so a plain
+            # dim-0 split lines each chip's input rows up with its heads' y.
+            self._w_out = self._shd(sd["out_proj.weight"].t().contiguous().float(), 0)
 
-        # ---- norm weights ----
-        self._norm_w_full = self._dev(sd["norm.weight"].float().reshape(1, 1, self.intermediate_size))
+            w_conv_r = w_conv[cvcol]                                          # (conv_dim, K) reordered
+            self._conv_taps = [self._shd(w_conv_r[:, K - 1 - s].reshape(1, 1, -1), 2) for s in range(K)]
+            self._conv_bias = self._shd(cb.float()[cvcol].reshape(1, 1, -1), 2) if cb is not None else None
+
+            A = -torch.exp(sd["A_log"].float())                              # (H,)
+            self._A = self._shd(A.reshape(1, Hf, 1, 1), 1)
+            self._D = self._shd(sd["D"].float().reshape(1, Hf, 1, 1), 1)
+            self._dt_bias = self._shd(sd["dt_bias"].float().reshape(1, 1, Hf), 2)
+            self._norm_w_full = self._shd(sd["norm.weight"].float().reshape(1, 1, INTERf), 2)
+
+            # local group->head matrix [Gl*N, Hl*N]; reps preserved by the head
+            # split so this is identical on every chip -> replicated.
+            P = torch.zeros(GGNl, Hl * Nn, dtype=torch.float32)
+            for h in range(Hl):
+                g = h // reps
+                P[g * Nn:(g + 1) * Nn, h * Nn:(h + 1) * Nn] = torch.eye(Nn, dtype=torch.float32)
+            self._P = self._dev(P)
+        else:
+            # ---- big projection weights (stored pre-transposed: [in, out]) ----
+            self._w_in = self._dev(sd["in_proj.weight"].t().contiguous().float())     # (2688, 10304)
+            self._w_out = self._dev(sd["out_proj.weight"].t().contiguous().float())   # (4096, 2688)
+            # tap s shifts the sequence by s (x[t-s]); its weight column is K-1-s.
+            self._conv_taps = [self._dev(w_conv[:, K - 1 - s].reshape(1, 1, self.conv_dim)) for s in range(K)]
+            self._conv_bias = self._dev(cb.float().reshape(1, 1, self.conv_dim)) if cb is not None else None
+            G, N = self.n_groups, self.ssm_state_size
+            P = torch.zeros(G * N, H * N, dtype=torch.float32)
+            for h in range(H):
+                g = h // reps
+                P[g * N:(g + 1) * N, h * N:(h + 1) * N] = torch.eye(N, dtype=torch.float32)
+            self._P = self._dev(P)
+            A = -torch.exp(sd["A_log"].float())                    # (H,)
+            self._A = self._dev(A.reshape(1, H, 1, 1))
+            self._D = self._dev(sd["D"].float().reshape(1, H, 1, 1))
+            self._dt_bias = self._dev(sd["dt_bias"].float().reshape(1, 1, H))
+            self._norm_w_full = self._dev(sd["norm.weight"].float().reshape(1, 1, self.intermediate_size))
+
         self._norm_ones = self._dev(torch.ones(1, 1, self.norm_group_size, dtype=torch.float32))
+
+        # Under head-parallel every per-head/per-group dim the forward reads is
+        # LOCAL, so one program with local dims runs correctly on each symmetric
+        # chip. norm_group_size (=512) is unchanged by the split.
+        if shard:
+            self.num_heads = Hl
+            self.n_groups = Gl
+            self.intermediate_size = INTERl
+            self.conv_dim = INTERl + 2 * GGNl
 
         # per-seq-length constant cache (tril / decay-broadcast / shift mats)
         self._consts = {}
@@ -123,6 +204,14 @@ class TtNemotronHMamba2Mixer:
             except Exception:
                 pass
         return ttnn.from_torch(torch_tensor, dtype=ttnn.float32, layout=layout, device=self.device)
+
+    def _shd(self, torch_tensor, dim, layout=ttnn.TILE_LAYOUT):
+        """Upload an fp32 torch weight sharded along `dim` on the TP (last) mesh
+        axis and replicated on the DP axis (2-D MeshShape(DP,TP))."""
+        return ttnn.from_torch(
+            torch_tensor, dtype=ttnn.float32, layout=layout, device=self.device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.device, mesh_shape=self._mesh_shape, dims=(None, dim)),
+        )
 
     def _fp32(self, t):
         if isinstance(t, ttnn.Tensor):
@@ -321,9 +410,12 @@ class TtNemotronHMamba2Mixer:
         y = ttnn.to_layout(y_n_rm, ttnn.TILE_LAYOUT)
         y = ttnn.multiply(y, self._norm_w_full)
 
-        # 13. out_proj
+        # 13. out_proj (row-parallel under TP): sum the per-chip partial sums so
+        #     every TP chip holds the full mixer output (readback keeps chip 0).
         out = ttnn.matmul(y, self._w_out, compute_kernel_config=self.ckc)  # (B, T, hidden_size)
         ttnn.deallocate(y)
+        if self._shard:
+            out = ttnn.all_reduce(out, cluster_axis=self._tp_axis, topology=ttnn.Topology.Linear)
         return ttnn.typecast(out, ttnn.bfloat16)
 
 

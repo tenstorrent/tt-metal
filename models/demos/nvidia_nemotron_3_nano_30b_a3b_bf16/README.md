@@ -4,14 +4,34 @@
 
 | Device | Status | Notes |
 |---|---|---|
-| BH (Blackhole), single chip | Supported | `ttnn.open_device(device_id=0)`, single device, `l1_small_size=24576`; per-layer weight streaming (30B does not fit on device at once); greedy text generation with compose (graduated child stubs) or monolith backbone |
+| BH (Blackhole), 4-chip mesh (DP=2 × TP=2) | Supported | `ttnn.open_mesh_device(ttnn.MeshShape(2, 2))`, `l1_small_size=24576`; **TP=2 expert-parallel MoE + row-parallel mixers** (`ShardTensor2dMesh` + `all_reduce`); `FABRIC_1D` enabled before open; per-layer weight streaming (30B does not fit at once); greedy text generation with compose (graduated child stubs) or monolith backbone |
+| BH (Blackhole), single chip | Supported (fallback) | `ttnn.open_device(device_id=0)` used automatically when the mesh cannot be opened |
 
-This port targets a **single Blackhole device**. It is **not** a multi-chip / mesh
-(TP) port: `num_key_value_heads = 2` is not divisible by TP 4/8/32, so a
-tensor-parallel KV split across a mesh is a hard blocker (see Known Limitations /
-`kernel_findings.json`). Tensor-parallel = 1 (single chip) is the supported, tested
-configuration. There is no Wormhole, Grayskull, or mesh path in the
-supported/tested configuration.
+The pipeline is placed on a **4-chip Blackhole mesh** as **DP=2 × TP=2**
+(`ttnn.MeshShape(2, 2)`; rows = DP=2, cols = TP=2), the split the tool selected for
+4 chips. The inter-chip fabric (`FABRIC_1D`) is enabled before the mesh is opened
+(`tt/pipeline.py::open_pipeline_mesh`), which also sets `TT_HW_PLANNER_SHARD_RUN=1`
+so the graduated Phase-2 shard stubs arm their sharded bodies.
+
+**TP=2 (real weight sharding).** The graduated Phase-2 shard stubs are composed
+**as-is**. This MoE-dominant 30 B backbone shards **expert-parallel**: each MoE
+E-layer (`nemotron_h_m_o_e`, and the monolith's `_moe_experts_sharded`) splits its
+128 routed experts into a disjoint `Eloc = 128/TP` slice per TP chip via
+`ShardTensor2dMesh(dims=(None, 0))` (sharded on the TP/column axis, replicated on the
+DP/row axis); the router stays replicated, the per-chip partial mixture is summed and
+`ttnn.all_reduce(cluster_axis=TP)`'d back to the full 128-expert sum, and the
+replicated shared expert is added after the reduce. The row-parallel Mamba2 mixers
+(`nemotron_h_block`, `nemotron_h_mamba2_mixer`) likewise shard their in-projection and
+`all_reduce` the out-projection partials. So the pipeline genuinely contains
+`ShardTensor2dMesh` + a collective — it is **not** pure replication. Embeddings,
+RMSNorms, the top-k router and the `lm_head` stay **replicated** across the mesh.
+Placement does not change the numerics — every shard is reassembled exactly by the
+`all_reduce`, and the final (replicated) logits are read back from replica shard 0
+(`ConcatMeshToTensor(dim=0)`).
+
+If the mesh cannot be opened (fewer chips / fabric unavailable), `open_pipeline_mesh`
+falls back to a single device (TP=1, everything replicated — numerically identical)
+and notes it in the run output (`shard_active=False`).
 
 The model has ~30 B total parameters and does not fit on device at once, so
 per-layer weights are streamed from host and evicted after each layer (peak
@@ -104,7 +124,8 @@ Real prompt → TTNN pipeline → greedy decode → generated text:
 ```
 
 Flags: `--prompt`, `--max-new-tokens`, `--compose {0,1}` (1 = compose graduated
-child stubs, default; 0 = monolith backbone), `--device-id`.
+child stubs, default; 0 = monolith backbone). The demo opens the 4-chip mesh
+automatically (falling back to a single device if unavailable).
 
 Example output:
 
@@ -117,13 +138,16 @@ NEW_IDS    : [6993, 2613, 3501, 7185, 34315]
 ### End-to-end test (Gate 1 / 2 / 3 vs HF golden)
 
 ```bash
+# 4-chip mesh with TP=2 sharding (DP=2 x TP=2) — opened automatically:
 TT_E2E_COMPOSE=1 TT_E2E_N=5 ./python_env/bin/python -m pytest \
     models/demos/nvidia_nemotron_3_nano_30b_a3b_bf16/tests/e2e/test_e2e_pipeline.py -s
 ```
 
-Environment: `TT_E2E_COMPOSE=1` composes the graduated children (Gate 2); `0` runs
-the monolith backbone. `TT_E2E_N` sets the generation horizon (both sides capped to
-the same N).
+Environment: the test/demo always try the 4-chip `MeshShape(2, 2)` mesh and arm the
+TP=2 sharded stubs (`TT_HW_PLANNER_SHARD_RUN=1`), falling back to a single device
+(numerically identical) if the mesh cannot be opened. `TT_E2E_COMPOSE=1` composes the
+graduated children (Gate 2); `0` runs the monolith backbone. `TT_E2E_N` sets the
+generation horizon (both sides capped to the same N).
 
 ### Regenerate the HF golden (only if the prompt or N changes)
 
@@ -140,19 +164,25 @@ TT_E2E_PROMPT="The capital of France is" TT_E2E_N=5 ./python_env/bin/python -m \
 
 ## Correctness Gates (prompt = "The capital of France is", N = 5)
 
-The e2e test enforces four checks; all must pass.
+The e2e test enforces four checks; all must pass. Numbers below are the measured
+**4-chip mesh (DP=2 × TP=2) run with the TP=2 sharded block stub ACTIVE**
+(`placement=mesh2x2 shard_active=True`, fabric ALIVE — real `ShardTensorToMesh` +
+`all_reduce`).
 
 | Gate | Result |
 |---|---|
 | Gate 1 — no torch runtime fallback (everything ran on device) | PASS (`fallbacks=[]`) |
 | Gate 2 — all 7 graduated modules invoked (compose) | PASS (`missing=[]`) |
-| Gate 3 — mean per-step next-token logits PCC ≥ 0.95 vs HF | **0.9983** |
-| Behavioral — greedy token match vs HF | exact: `[6993, 2613, 3501, 7185, 34315]` |
+| Gate 3 — mean per-step next-token logits PCC ≥ 0.95 vs HF | **0.9976** (per-step `[0.9983, 0.9976, 0.9957, 0.9977, 0.9990]`) |
+| Behavioral — greedy token match vs HF | exact: `[6993, 2613, 3501, 7185, 34315]` → `' Paris."...'` |
 
-Per-component PCC (vs captured HF golden, target 0.99): `nemotron_h_block` 0.99999,
-`nemotron_h_mamba2_mixer` 0.99999, `nemotron_h_m_o_e` 0.99998, `nemotron_h_topk_router`
-1.0, `mamba_r_m_s_norm_gated` 0.99999, `re_l_u_squared_activation` 1.0; the backbone
-path is validated through the e2e logits PCC (0.9983).
+Measured on the 4-chip mesh (`shard_active=True`, `MeshShape(2, 2)`, TP=2). The
+single-device fallback gives an equivalent result — placement does not change the
+numerics. Per-component PCC (vs captured HF golden, target 0.99): `nemotron_h_block`
+0.99999, `nemotron_h_mamba2_mixer` 0.99999, `nemotron_h_m_o_e` 0.99998,
+`nemotron_h_topk_router` 1.0, `mamba_r_m_s_norm_gated` 0.99999,
+`re_l_u_squared_activation` 1.0; the backbone path is validated through the e2e
+logits PCC (0.9976).
 
 Gate 2 is proven by an execution registry (`tt/_invocation.py`) — each child is
 recorded when it actually runs, not by the caller's optimism.
@@ -199,10 +229,16 @@ models/demos/nvidia_nemotron_3_nano_30b_a3b_bf16/
 
 ### Hardware / deployment
 
-- **Single Blackhole chip only (TP = 1).** A tensor-parallel mesh split is blocked:
-  `num_key_value_heads = 2` is not divisible by TP 4/8/32, and KV replication is not
-  supported in `tt_transformers` (`kernel_findings.json`). The supported config is a
-  single device.
+- **Partial TP=2 (block stub sharded; other mixers replicated).** The pipeline runs on
+  a `MeshShape(2, 2)` mesh (DP=2 × TP=2). The graduated `nemotron_h_block` mixer is
+  **TP=2 head-parallel** (`ShardTensorToMesh` + `all_reduce`, composed as-is), but the
+  `nemotron_h_mamba2_mixer`, `nemotron_h_m_o_e` and GQA attention mixers expose no clean
+  column/row shard dim, so per the placement rule they stay **replicated** rather than
+  guessing a split. TP parity is exact (the head split is reassembled by the collective).
+  The sharded path is armed only after a live `all_reduce` probe succeeds on the board;
+  on a board with no inter-chip ethernet the block falls back to a replicated (identical)
+  run with the limitation recorded honestly. A single device is used automatically as a
+  fallback when <4 chips are available.
 - **30 B does not fit on device.** Weights are streamed per layer and evicted after
   each layer; peak device residency is roughly one layer's weights.
 

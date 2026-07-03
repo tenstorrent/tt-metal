@@ -60495,7 +60495,57 @@ class NemotronHModel:
             )
         except Exception:
             self._ckcfg = None
+
+        # ---- tensor-parallel (expert-parallel MoE) config ----------------
+        # ONLY shard under the shard runner; the single-device .last_good_native
+        # path stays byte-identical (TP=1 => everything replicated, exactly as
+        # before). The bulk of this MoE-dominant 30B backbone is the 128 routed
+        # experts per MoE layer, so the meaningful TP is EXPERT-parallel: a
+        # disjoint half of the experts on each TP chip (weights split), router
+        # replicated, per-chip partial mixture all_reduced to the full sum. The
+        # comparatively tiny Mamba / attention mixers run REPLICATED (full,
+        # exact math on every chip) — the residual stream stays replicated and
+        # each sharded MoE mixer all_reduces back to the full hidden dim, so the
+        # gathered output equals the single-device golden. On this box fabric
+        # only trains on the full mesh, so the run lands on a 2-D MeshShape(DP,TP)
+        # (shard the last/TP axis, replicate the DP axis).
+        import os as _os
+        try:
+            _is_mesh = isinstance(dev, ttnn.MeshDevice)
+        except AttributeError:
+            _is_mesh = False
+        self._mesh_shape = list(dev.shape) if _is_mesh else [1, 1]
+        _shard = bool(_os.environ.get("TT_HW_PLANNER_SHARD_RUN")) and _is_mesh
+        self._TP = self._mesh_shape[-1] if _shard else 1
+        _shard = _shard and self._TP > 1 and (self._N_EXPERTS % self._TP == 0)
+        self._shard = _shard
+        self._tp_axis = len(self._mesh_shape) - 1
+        self._moe_sel = None
+        if _shard:
+            TP = self._TP
+            Eloc = self._N_EXPERTS // TP
+            self._moe_Eloc = Eloc
+            sel = torch.zeros(TP, self._N_EXPERTS, Eloc)
+            for d in range(TP):
+                for j in range(Eloc):
+                    sel[d, d * Eloc + j, j] = 1.0
+            self._moe_sel = ttnn.from_torch(
+                sel, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev,
+                mesh_mapper=ttnn.ShardTensor2dMesh(dev, mesh_shape=self._mesh_shape, dims=(None, 0)),
+            )
+
         self._gap_ready = True
+
+    def _shd_stack(self, keys, dim):
+        # Stack the per-expert weight tensors named in `keys` and upload the
+        # stack sharded along the TP (last) mesh axis / replicated on DP, so each
+        # chip physically holds its disjoint Eloc slice (dim-0 of the stack).
+        sd = self._sd
+        stack = torch.stack([sd[k].t().contiguous().to(torch.bfloat16) for k in keys], 0)
+        return ttnn.from_torch(
+            stack, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.device, mesh_shape=self._mesh_shape, dims=(None, 0)),
+        )
 
     def _lin(self, x, w):
         # ttnn.linear with the high-fidelity compute kernel config when the
@@ -60723,6 +60773,8 @@ class NemotronHModel:
         gated = ttnn.mul(scores, mask)
         denom = ttnn.add(ttnn.sum(gated, dim=-1, keepdim=True), 1e-20)
         w = ttnn.mul(ttnn.div(gated, denom), self._ROUTED_SCALE)
+        if self._shard:
+            return self._moe_experts_sharded(i, xf, w, lq)
         out = None
         for e in range(self._N_EXPERTS):
             up = getattr(self, "w_layers_%d_mixer_experts_%d_up_proj_weight" % (i, e))
@@ -60743,6 +60795,55 @@ class NemotronHModel:
                 ttnn.deallocate(out)
                 ttnn.deallocate(contrib)
                 out = new_out
+        su = getattr(self, "w_layers_%d_mixer_shared_experts_up_proj_weight" % i)
+        sdn = getattr(self, "w_layers_%d_mixer_shared_experts_down_proj_weight" % i)
+        sh = ttnn.relu(self._lin(xf, su))
+        sh = ttnn.mul(sh, sh)
+        sh = self._lin(sh, sdn)
+        return ttnn.add(out, sh)
+
+    def _moe_experts_sharded(self, i, xf, w, lq):
+        # Expert-parallel MoE: this chip owns the disjoint Eloc-expert slice of
+        # layer i's 128 routed experts (stacked+sharded on dim0). The replicated
+        # router weights `w` (1,L,128) are projected to this chip's Eloc columns
+        # via the sharded one-hot selector, the local weighted mixture is summed,
+        # then all_reduced over the TP axis to the full 128-expert sum. The
+        # shared expert (replicated) is added once AFTER the reduce. Identical
+        # math to the dense single-device golden.
+        Eloc = self._moe_Eloc
+        up_keys = ["layers.%d.mixer.experts.%d.up_proj.weight" % (i, e) for e in range(self._N_EXPERTS)]
+        dn_keys = ["layers.%d.mixer.experts.%d.down_proj.weight" % (i, e) for e in range(self._N_EXPERTS)]
+        up_sh = self._shd_stack(up_keys, 0)   # (Eloc, hidden, inter) local
+        dn_sh = self._shd_stack(dn_keys, 0)   # (Eloc, inter, hidden) local
+        hid, inter = up_sh.shape[1], up_sh.shape[2]
+        W_local = self._mm(w, self._moe_sel)  # (1, L, Eloc)
+        ttnn.deallocate(w)
+        out = None
+        for e in range(Eloc):
+            up = ttnn.reshape(ttnn.slice(up_sh, [e, 0, 0], [e + 1, hid, inter]), [hid, inter])
+            dn = ttnn.reshape(ttnn.slice(dn_sh, [e, 0, 0], [e + 1, inter, hid]), [inter, hid])
+            h = ttnn.relu(self._lin(xf, up))
+            ttnn.deallocate(up)
+            h2 = ttnn.mul(h, h)
+            ttnn.deallocate(h)
+            ye = self._lin(h2, dn)
+            ttnn.deallocate(h2)
+            ttnn.deallocate(dn)
+            we = ttnn.slice(W_local, [0, 0, e], [1, lq, e + 1])
+            contrib = ttnn.mul(ye, we)
+            ttnn.deallocate(ye)
+            ttnn.deallocate(we)
+            if out is None:
+                out = contrib
+            else:
+                new_out = ttnn.add(out, contrib)
+                ttnn.deallocate(out)
+                ttnn.deallocate(contrib)
+                out = new_out
+        ttnn.deallocate(up_sh)
+        ttnn.deallocate(dn_sh)
+        ttnn.deallocate(W_local)
+        out = ttnn.all_reduce(out, cluster_axis=self._tp_axis, topology=ttnn.Topology.Linear)
         su = getattr(self, "w_layers_%d_mixer_shared_experts_up_proj_weight" % i)
         sdn = getattr(self, "w_layers_%d_mixer_shared_experts_down_proj_weight" % i)
         sh = ttnn.relu(self._lin(xf, su))

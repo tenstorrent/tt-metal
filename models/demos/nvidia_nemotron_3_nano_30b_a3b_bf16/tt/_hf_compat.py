@@ -12,6 +12,7 @@ HF outside pytest collection.
 from __future__ import annotations
 
 import contextlib
+import importlib.machinery
 import sys
 import types
 
@@ -71,6 +72,11 @@ def _install_mamba_ssm_shim():
         m = types.ModuleType(name)
         m._tt_shim = True
         m.__path__ = []
+        # A real ModuleSpec so transformers' _is_package_available -> find_spec
+        # returns a spec (not None, not ValueError); importlib.metadata.version
+        # then raises PackageNotFoundError -> is_*_available() == False, so the
+        # modeling file takes its pure-torch fallback (fast path stays disabled).
+        m.__spec__ = importlib.machinery.ModuleSpec(name, loader=None)
         return m
 
     mamba_ssm = _mk("mamba_ssm")
@@ -104,7 +110,25 @@ def _install_mamba_ssm_shim():
     sys.modules["mamba_ssm.ops.triton.ssd_combined"] = ssd_combined
 
 
+def _install_causal_conv1d_shim():
+    """`modeling_nemotron_h.py` statically imports `causal_conv1d`, so HF's
+    check_imports rejects the model when the package is absent even though the
+    runtime guards it behind `is_causal_conv1d_available()`. Inject a pure shim
+    so check_imports passes; availability still reports False (no metadata), so
+    the pure-torch causal-conv path is taken."""
+    if "causal_conv1d" in sys.modules and getattr(sys.modules["causal_conv1d"], "_tt_shim", False):
+        return
+    m = types.ModuleType("causal_conv1d")
+    m._tt_shim = True
+    m.__path__ = []
+    m.__spec__ = importlib.machinery.ModuleSpec("causal_conv1d", loader=None)
+    m.causal_conv1d_fn = _raise_fast_path
+    m.causal_conv1d_update = _raise_fast_path
+    sys.modules["causal_conv1d"] = m
+
+
 def install_hf_compat():
-    """Install both shims. Idempotent. Call before loading the HF model."""
+    """Install all shims. Idempotent. Call before loading the HF model."""
     _install_mamba_ssm_shim()
+    _install_causal_conv1d_shim()
     _neutralize_cuda_stream()

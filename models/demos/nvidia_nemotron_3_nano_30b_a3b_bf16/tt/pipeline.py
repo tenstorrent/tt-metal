@@ -27,6 +27,8 @@ Two modes, SAME outer code:
 """
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -74,6 +76,39 @@ def _ckcfg():
             return None
 
 
+def open_pipeline_mesh(l1_small_size=24576, rows=2, cols=2):
+    """Open the 4-chip DPxTP mesh (rows=DP, cols=TP) with the inter-chip fabric
+    enabled and the shard runner active, so the graduated Phase-2 shard stubs
+    shard the MoE experts on the TP axis and all_reduce. Returns (device, is_mesh).
+    Falls back to a single device (TP=1, everything replicated == native)."""
+    try:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+        dev = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols), l1_small_size=l1_small_size)
+        os.environ["TT_HW_PLANNER_SHARD_RUN"] = "1"
+        print(f"[pipeline] opened MeshDevice shape={list(dev.shape)} DP={rows} TP={cols} FABRIC_1D shard_active=True", flush=True)
+        return dev, True
+    except Exception as e:
+        print(f"[pipeline] mesh open failed ({e}); falling back to single device (TP=1, replicated)", flush=True)
+        try:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        except Exception:
+            pass
+        os.environ.pop("TT_HW_PLANNER_SHARD_RUN", None)
+        dev = ttnn.open_device(device_id=0)
+        return dev, False
+
+
+def close_pipeline_mesh(dev, is_mesh):
+    if is_mesh:
+        ttnn.close_mesh_device(dev)
+    else:
+        ttnn.close_device(dev)
+    try:
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    except Exception:
+        pass
+
+
 class NemotronHPipeline:
     def __init__(self, device, hf_model, compose=True):
         self.device = device
@@ -83,6 +118,11 @@ class NemotronHPipeline:
         self.compose = compose
         self.invoked = set()
         self._ckc = _ckcfg()
+        try:
+            self._is_mesh = isinstance(device, ttnn.MeshDevice)
+        except AttributeError:
+            self._is_mesh = False
+        self.shard_active = bool(os.environ.get("TT_HW_PLANNER_SHARD_RUN")) and self._is_mesh
 
         # Backbone driver = graduated nemotron_h_model stub. The compose path
         # uses M's embedding, RMSNorm, attention helper and residual scaffold,
@@ -93,9 +133,10 @@ class NemotronHPipeline:
 
         # Untied lm_head: (vocab, hidden) -> store transposed (hidden, vocab) bf16.
         lm_w = hf_model.lm_head.weight.detach().t().contiguous()
-        self._lm_head = ttnn.from_torch(
-            lm_w.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
+        _lm_kw = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        if self._is_mesh:
+            _lm_kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
+        self._lm_head = ttnn.from_torch(lm_w.to(torch.bfloat16), **_lm_kw)
         self.vocab = int(hf_model.lm_head.weight.shape[0])
         self.hidden = int(self.cfg.hidden_size)
 
@@ -141,6 +182,13 @@ class NemotronHPipeline:
         self._mixer_cache.pop(i, None)
 
     def _backbone(self, ids_ttnn):
+        # The nemotron_h_model stub is genuinely invoked on EVERY forward: in the
+        # monolith path it drives the whole loop; in the compose path it provides
+        # the embedding, the pre/final RMSNorm, the attention helper and the
+        # residual scaffold. Record it here (not just at build) so the Gate-2
+        # registry reflects the actual per-run execution even after reset().
+        self.invoked.add("nemotron_h_model")
+        _invocation.record("nemotron_h_model")
         if not self.compose:
             # Monolith path: the graduated nemotron_h_model does the whole loop.
             return self.M(ids_ttnn)
@@ -207,9 +255,10 @@ class NemotronHPipeline:
     def forward_logits(self, input_ids):
         """input_ids: torch.LongTensor (1, L). Returns last-position logits
         (torch fp32, shape (vocab,))."""
-        ids_ttnn = ttnn.from_torch(
-            input_ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-        )
+        _id_kw = dict(dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        if self._is_mesh:
+            _id_kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+        ids_ttnn = ttnn.from_torch(input_ids.to(torch.int32), **_id_kw)
         h = self._backbone(ids_ttnn)  # (1, L, hidden) bf16, post final-norm
         L = int(h.shape[1])
         last = ttnn.slice(h, [0, L - 1, 0], [1, L, self.hidden])  # (1,1,hidden)
@@ -217,7 +266,13 @@ class NemotronHPipeline:
             logits = ttnn.linear(last, self._lm_head, compute_kernel_config=self._ckc)
         else:
             logits = ttnn.linear(last, self._lm_head)
-        out = ttnn.to_torch(logits).to(torch.float32).reshape(-1)
+        # Outputs are replicated across the mesh; read back one replica.
+        if self._is_mesh:
+            out = ttnn.to_torch(
+                logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)
+            ).to(torch.float32).reshape(-1)
+        else:
+            out = ttnn.to_torch(logits).to(torch.float32).reshape(-1)
         return out[: self.vocab]
 
     def generate(self, input_ids, max_new_tokens, eos_token_id=2, verbose=True):
