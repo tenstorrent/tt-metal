@@ -740,6 +740,61 @@ def test_dual_output_decode_pcc(mesh_device, device_params):
     assert ok, f"mid-block norm-add fusion changed the decode output: {pcc}"
 
 
+# e2e correctness of the halo-aware conv3d path: decode the SAME input twice on device — once with every
+# conv forced to full-pad (neighbor_pad_persistent_buffer + standard conv3d), once with the halo two-
+# dispatch (neighbor_pad_halo + conv3d halo mode) — and compare. Op-level halo conv3d == full-pad conv3d
+# is byte-exact, so the two decodes must match ~1.0. This is the e2e proof, not a torch golden (the 1080p
+# CPU reference is impractically slow). Runs all-standalone so every NP-light conv exercises the halo path.
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_halo_vs_fullpad_decode_pcc(mesh_device, device_params):
+    from models.common.utility_functions import comp_pcc
+    from models.tt_dit.utils.tensor import fast_device_to_host
+
+    mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    tt_decoder = _build_tt_decoder(mesh)
+    torch.manual_seed(123)
+    latent = _latent()
+    sample_tt, logical_h, logical_w = _prepare_decode_input(tt_decoder, latent)
+    concat_dims = [None, None]
+    concat_dims[tt_decoder.parallel_config.height_parallel.mesh_axis] = 2
+    concat_dims[tt_decoder.parallel_config.width_parallel.mesh_axis] = 3
+
+    halo_convs = [m for m in _walk(tt_decoder) if getattr(m, "_use_halo_conv", False)]
+    assert halo_convs, "no conv is halo-enabled — check _use_halo_conv gating / NP_NO_HALO_CONV"
+
+    def decode_to_host():
+        # Trace the decode: production frame count is required (the conv3d win-table blockings only match
+        # the production shapes; off-table shapes fall back to a default blocking that OOMs L1), and an
+        # untraced 145-frame decode is impractically slow. Same capture/replay path as the wall test.
+        _ = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
+        ttnn.synchronize_device(mesh)
+        tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+        out = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
+        ttnn.end_trace_capture(mesh, tid, cq_id=0)
+        ttnn.synchronize_device(mesh)
+        ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+        host = fast_device_to_host(out, mesh, concat_dims, ccl_manager=tt_decoder.ccl_manager)
+        ttnn.release_trace(mesh, tid)
+        ttnn.deallocate(out)
+        return host
+
+    for m in halo_convs:
+        m._use_halo_conv = False
+    ref = decode_to_host()
+    for m in halo_convs:
+        m._use_halo_conv = True
+    halo = decode_to_host()
+
+    ok, pcc = comp_pcc(ref, halo, 0.999)
+    print(f"DECODE-HALO-PCC: pcc={pcc} halo_convs={len(halo_convs)} ({'OK' if ok else 'FAIL'})", flush=True)
+    assert ok, f"halo-aware conv3d changed the decode output vs full-pad: {pcc}"
+
+
 # Fast wiring check: validate the mid-block (h, residual) deferral on ONE mid-block at its real
 # production input shape (1,19,34,60,1024 → H/W fractured 2x4 → 17x15 per device, logical 34x60), instead
 # of a full untraced decode (~23 min each). The input is synthesized directly (no decode, no abort), so

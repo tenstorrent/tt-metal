@@ -773,13 +773,90 @@ def run_conv3d_halo_vs_fullpad_2d(mesh_device, input_shape, C_out, kernel_size, 
     assert all_pass, "halo conv3d != full-pad conv3d"
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(400)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape, C_out",
-    [([1, 4, 68, 120, 64], 64), ([1, 8, 136, 240, 64], 128)],
-    ids=["small_34x60_C64", "mid_68x120_C64"],
+    "input_shape, C_out, kernel_size",
+    [
+        ([1, 4, 68, 120, 64], 64, (3, 3, 3)),  # small 34x60 C64
+        ([1, 8, 136, 240, 64], 128, (3, 3, 3)),  # mid 68x120 C64
+        ([1, 21, 34, 60, 1024], 1024, (3, 3, 3)),  # ltx_s0_res: 17x15, C_in=C_out=1024
+        ([1, 21, 34, 60, 1024], 4096, (3, 3, 3)),  # ltx_s0_up: C_out=4096
+        ([1, 16, 68, 120, 384], 192, (1, 3, 3)),  # k133 spatial (pT=0): 34x60
+        ([1, 21, 18, 32, 128], 1024, (3, 3, 3)),  # ups_initial: 9x8 (small W_dev)
+    ],
+    ids=["small_C64", "mid_C64", "s0_res_C1024", "s0_up_C4096", "k133_spatial", "ups_initial_9x8"],
 )
-def test_conv3d_halo_vs_fullpad(mesh_device, device_params, input_shape, C_out):
-    run_conv3d_halo_vs_fullpad_2d(mesh_device, input_shape, C_out=C_out, kernel_size=(3, 3, 3), pH=1, pW=1, num_links=2)
+def test_conv3d_halo_vs_fullpad(mesh_device, device_params, input_shape, C_out, kernel_size):
+    pH, pW = kernel_size[1] // 2, kernel_size[2] // 2
+    run_conv3d_halo_vs_fullpad_2d(
+        mesh_device, input_shape, C_out=C_out, kernel_size=kernel_size, pH=pH, pW=pW, num_links=2
+    )
+
+
+# Reuse test: the decode calls neighbor_pad_halo ~30x sharing the manager's ping-pong sems. A single-op
+# test can't catch a missing on-device self-reset — this loops the op N times reusing ONE sem set (no
+# ping-pong to mask it). If call 2+ hangs, a semaphore isn't reset between runs.
+@pytest.mark.timeout(200)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_neighbor_pad_halo_reuse(mesh_device, device_params):
+    input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, num_links = [1, 8, 68, 120, 64], 2, 3, 0, 1, 1, 1, 2
+    mesh_shape = tuple(mesh_device.shape)
+    h_factor, w_factor = mesh_shape[h_axis], mesh_shape[w_axis]
+    torch.manual_seed(0)
+    inp = torch.rand(input_shape).bfloat16()
+    outer = input_shape[0] * input_shape[1]
+    H_dev, W_dev, C = input_shape[h_dim] // h_factor, input_shape[w_dim] // w_factor, input_shape[-1]
+    total_sticks = outer * 2 * pH * W_dev + outer * 2 * pW * (H_dev + 2 * pH)
+    grid = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+    mesh_device.load_sub_device_manager(mgr)
+    sub_id = ttnn.SubDeviceId(0)
+    mesh_device.set_sub_device_stall_group([sub_id])
+    h_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    w_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    dims = [None, None]
+    dims[h_axis], dims[w_axis] = h_dim, w_dim
+    inp_mesh = ttnn.from_torch(
+        inp,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+    )
+    halo_buf = ttnn.from_torch(
+        torch.zeros([total_sticks, C]).bfloat16(),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+    )
+    for it in range(5):
+        ttnn.experimental.neighbor_pad_halo(
+            inp_mesh,
+            halo_buf,
+            np_padding_h=pH,
+            np_padding_w=pW,
+            np_cluster_axis=h_axis,
+            np_num_links=num_links,
+            np_topology=ttnn.Topology.Linear,
+            h_neighbor_semaphore=h_sem,
+            barrier_semaphore=barrier_sem,
+            w_neighbor_semaphore=w_sem,
+            np_pad_dim2=w_dim,
+            np_pad2_left=pW,
+            np_pad2_right=pW,
+            np_pad2_cluster_axis=w_axis,
+            np_pad2_num_links=num_links,
+            padding_mode="zeros",
+        )
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
+        print(f"iter {it}: OK", flush=True)
+    mesh_device.reset_sub_device_stall_group()
+    mesh_device.clear_loaded_sub_device_manager()
