@@ -120,6 +120,30 @@ runs:
                 --override-ini=log_cli=false --tb=short --timeout=60 \
                 --junitxml=pytest-report-quasar-compile.xml .
 
+    - name: Report PCH status
+      # We have never been able to confirm from a real run whether PCH is
+      # actually succeeding, failing, or silently no-op'ing on Quasar --
+      # helpers/logger.py defaults loguru to INFO (DEBUG is suppressed
+      # entirely) and separately routes through pytest's log_cli (=false
+      # here), while the per-xdist-worker files it always writes regardless
+      # of log_cli (test_run_gw*.log) were never surfaced anywhere retrievable
+      # after the ephemeral runner tears down -- only the JUnit XML gets
+      # uploaded. The PCH success line was just promoted debug->info to clear
+      # the level filter, but that alone still wouldn't reach this job's
+      # captured console output. Grepping the worker log files directly and
+      # echoing to stdout sidesteps all of loguru/log_cli's routing and is
+      # guaranteed visible in the Actions log regardless of that config.
+      if: always()
+      shell: bash
+      working-directory: tt_metal/tt-llk/tests/python_tests
+      run: |
+        echo "=== PCH status (grepped from test_run_gw*.log) ==="
+        if compgen -G "test_run_gw*.log" > /dev/null; then
+          grep -hi "pch" test_run_gw*.log || echo "(no PCH-related log lines found in any worker log)"
+        else
+          echo "(no test_run_gw*.log files found -- check working-directory/log config)"
+        fi
+
     - name: Upload JUnit report for compiling elfs
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
       if: always()

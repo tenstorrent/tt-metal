@@ -1112,7 +1112,7 @@ class TestConfig:
 
                 done_marker.touch()
                 TestConfig.PCH_AVAILABLE = True
-                logger.debug(
+                logger.info(
                     "Precompiled Quasar PCH headers for roles: {}",
                     ", ".join(TestConfig.KERNEL_COMPONENTS),
                 )
