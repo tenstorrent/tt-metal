@@ -82,13 +82,18 @@ class Qwen25Coder32BExecutorRuntimeConfig:
     optimizations: Any = None
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int) -> bool:
-        # Mirror TTTv1's ModelArgs.get_trace_prefill_supported_seq_lens. Qwen2.5-Coder-32B has no
-        # model-specific entry there, so it falls through to the device default; on its only
-        # supported SKU (T3K, 8 devices) that default is [128, 1024] (model_config.py:2406-2415).
-        # The old hardcoded ``return False`` (claimed TT_FATAL under LazyWeight + distributed norms)
-        # no longer reproduces -- prefill compiles, captures and replays for these seq lens (mirrors
-        # the Llama-3.2-1B finding in the rebase handoff). On-device confirmation NOT RUN this
-        # session (device queue unavailable); see the model's REBASE_UPDATE.md.
+        # Mirror TTTv1's ModelArgs.get_trace_prefill_supported_seq_lens: on the only supported SKU
+        # (T3K, 8 devices) the device default is [128, 1024]. Prefill compiles, captures and replays
+        # for these seq lens on hardware.
+        #
+        # Gate tracing to COLD prefill (num_cached_tokens == 0). The shared traced-prefill path does
+        # not thread the cached start position / chunk_start into the trace body, so a prefix-cached
+        # request (num_cached_tokens > 0) that pads to a trace-eligible length would replay with
+        # start_pos=0 -> wrong RoPE indices and KV written at cache offset 0 (silently wrong output).
+        # The eager prefix-cache path offsets correctly, so fall through to it; full traced
+        # prefix-cache prefill is the upstream work item (issue #32056).
+        if num_cached_tokens != 0:
+            return False
         num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
         allowed = {1: (128,), 2: (128, 1024), 8: (128, 1024)}.get(num_devices, (128,))
         return (

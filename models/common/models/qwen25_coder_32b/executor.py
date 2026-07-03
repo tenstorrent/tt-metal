@@ -57,6 +57,10 @@ class EagerQwen25Coder32BExecutor:
     def decode_forward(self, *args, **kwargs):
         return self._engine.decode_forward(*args, **kwargs)
 
+    def warmup_model_prefill(self, *args, **kwargs):
+        # Eager execution captures no prefill trace; fail loud instead of silently no-op'ing.
+        raise NotImplementedError("EagerQwen25Coder32BExecutor does not support prefill-trace warmup")
+
     def cleanup(self) -> None:
         return self._engine.cleanup()
 
@@ -92,6 +96,9 @@ class TracedQwen25Coder32BExecutor:
     @property
     def already_warmed_up_prefill(self):
         return self._engine.already_warmed_up_prefill
+
+    def warmup_model_prefill(self, *args, **kwargs):
+        return self._engine.warmup_model_prefill(*args, **kwargs)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         return self._engine.allocate_kv_cache(kv_cache_shape, dtype, num_layers)

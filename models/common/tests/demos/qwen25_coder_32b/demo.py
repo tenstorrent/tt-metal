@@ -11,7 +11,7 @@ Uses ``EagerQwen25Coder32BExecutor`` / ``TracedQwen25Coder32BExecutor`` directly
 both divide T3K (8). The port raises on any other mesh.
 
 Usage:
-    # Token accuracy (requires refpt — generate with generate_controlled_refpt.py)
+    # Token accuracy (uses the committed .refpt book reference)
     MESH_DEVICE=T3K HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct \\
       pytest models/common/tests/demos/qwen25_coder_32b/demo.py -k "token-accuracy" -v
 
@@ -52,15 +52,22 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # Expected metrics
 # =============================================================================
 
-# Top-1 / top-5 / tok_s_u / ttft_ms: T3K numbers come directly from
-# ``models/tt_transformers/PERF.md`` (Qwen2.5-Coder-32B rows; same model card across
-# both Performance and Accuracy tables). Only T3K is published for this checkpoint.
+# tok_s_u gates decode throughput on the on-device sampling path (SAMPLING_MODE=on_device_topk, the
+# default below and what these numbers were measured on) — T3K, healthy build, reset-then-measure,
+# 2026-07-03:
+#   - performance: gate at the TTTv1 same-box baseline 23.97 (TTTv1 > TTTv2 23.3, so gate at TTTv1
+#     per the "don't gate below TTTv1" rule; TTTv2 clears it within PERF_TOLERANCE=5%).
+#   - accuracy: gate at the measured TTTv2 20.2 (TTTv1 accuracy profile not re-measured on this build).
+# The old 22.4 / 19.7 were copied from a stale PERF.md and were only ever reachable via the host
+# stitch path (they are the target the earlier "perf gap" was measured against). ttft_ms is left as a
+# loose PERF.md ceiling that TTTv2 prefill (~102-118 ms) clears comfortably; top1/top5 gate the
+# separate token-accuracy test, not the perf benchmark.
 EXPECTED_METRICS = {
     "performance": {
-        "T3K": {"top1": 96, "top5": 99, "tok_s_u": 22.4, "ttft_ms": 190},
+        "T3K": {"top1": 96, "top5": 99, "tok_s_u": 23.97, "ttft_ms": 190},
     },
     "accuracy": {
-        "T3K": {"top1": 95, "top5": 99, "tok_s_u": 19.7, "ttft_ms": 183},
+        "T3K": {"top1": 95, "top5": 99, "tok_s_u": 20.2, "ttft_ms": 183},
     },
 }
 
@@ -193,9 +200,7 @@ def load_reference_data(hf_model_id: str):
     ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
         pytest.skip(
-            f"Reference file not found: {ref_path}. "
-            f"Generate with: python models/common/tests/demos/qwen25_coder_32b/generate_controlled_refpt.py "
-            f"--hf-model {hf_model_id}"
+            f"Reference file not found: {ref_path} " f"(committed book .refpt; expected present on a clean checkout)."
         )
 
     ref_data = torch.load(ref_path, map_location="cpu")
@@ -526,7 +531,10 @@ def _run_perf_benchmark(model, mesh_device, expected, batch_size, case_name):
         #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
         #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (PERF.md-parity
         #                      recipe; gathers only the [*,32] tuples, faster than force-argmax)
-        sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
+        # Default to on-device sampling: it is the path these perf gates were measured on and the one
+        # TTTv1 uses for its published numbers (host argmax stitches full-vocab logits every step and
+        # is ~2x slower on T3K's 8-way 152k vocab). Override with SAMPLING_MODE=host to measure it.
+        sampling_mode = os.environ.get("SAMPLING_MODE", "on_device_topk").lower()
         _on_device_params = {
             "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
             "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),

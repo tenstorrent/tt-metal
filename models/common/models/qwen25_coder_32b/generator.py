@@ -85,8 +85,7 @@ class Qwen25Coder32BGenerator:
         return self.executor.decode_forward(*args, **kwargs)
 
     def warmup_model_prefill(self, *args, **kwargs):
-        if hasattr(self.executor, "warmup_model_prefill"):
-            return self.executor.warmup_model_prefill(*args, **kwargs)
+        return self.executor.warmup_model_prefill(*args, **kwargs)
 
     @staticmethod
     def default_page_table(batch_size: int, max_seq_len: int, block_size: int = 32) -> torch.Tensor:
