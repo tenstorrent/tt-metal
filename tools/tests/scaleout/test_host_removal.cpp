@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <google/protobuf/text_format.h>
 
 #include <cabling_generator/cabling_generator.hpp>
@@ -29,10 +30,8 @@ protected:
         ofs << content;
     }
 
-    // Builds a flat single-template cabling descriptor where the hostnames are used as both
-    // the graph `children.name` and the deployment `host:` field. `connections` is a list of
-    // (from_name, to_name, tray_a, port_a, tray_b, port_b) tuples expressed as
-    // `internal_connections` of type QSFP_DD.
+    // Builds a flat single-template cabling descriptor using hostnames as both the graph
+    // `children.name` and the deployment `host:` field, with optional QSFP_DD connections.
     struct Conn {
         std::string from;
         std::string to;
@@ -365,10 +364,8 @@ TEST_F(HostRemovalTest, IdempotentDoubleRemove) {
     EXPECT_EQ(gen.get_deployment_hosts().size(), 2u);
 }
 
-// chip_connections_ must be regenerated (not stale) after removal. We can't easily assert
-// an exact post-removal count because chip_connections includes intra-node inter-board
-// connections too, but we can verify (a) it shrinks and (b) no surviving entry references
-// the removed host_id.
+// chip_connections_ must be regenerated after removal: it should shrink and no surviving entry
+// may reference a host_id that's no longer in the cluster.
 TEST_F(HostRemovalTest, ChipConnectionsShrinkAfterRemoval) {
     const std::string dir = create_test_dir("chip_connections_shrink");
     const std::vector<std::string> hosts = {"node_a", "node_b", "node_c"};
@@ -448,9 +445,8 @@ TEST_F(HostRemovalTest, RemoveEmptyHostnameIsNoOp) {
     EXPECT_EQ(gen.get_deployment_hosts().size(), 2u);
 }
 
-// Invariant: deployment_hosts_ ordering matches DFS host_id order after removal.
-// (We construct a fresh generator on the emitted output and verify deployment.hosts(i).host()
-// matches the cabling's child whose host_id == i.)
+// deployment_hosts_ ordering must match DFS host_id order after removal (deployment.hosts(i)
+// corresponds to the cabling child with host_id == i).
 TEST_F(HostRemovalTest, DeploymentOrderingMatchesDfsHostIds) {
     const std::string dir = create_test_dir("deployment_ordering_dfs");
     const std::vector<std::string> hosts = {"node_a", "node_b", "node_c", "node_d", "node_e"};
@@ -482,11 +478,11 @@ TEST_F(HostRemovalTest, DeploymentOrderingMatchesDfsHostIds) {
     }
 }
 
-// Nested case: removing the only leaf of a sub_instance collapses it out of the parent.
+// Removing the only leaf of a sub_instance collapses it out of the parent.
 TEST_F(HostRemovalTest, RemoveLastNodeInSubgraphCollapsesIt) {
     const std::string dir = create_test_dir("remove_last_node_collapses_subgraph");
-    // Two templates: `outer` has child `group` (graph_ref) + sibling leaf `node_top`,
-    // and `group` has one leaf `node_inner`. Removing `node_inner` should collapse `group`.
+    // `outer` holds leaf `node_top` + subgraph `group`; `group` holds one leaf `node_inner`.
+    // Removing `node_inner` should collapse `group`.
     write_textproto(
         dir + "cabling.textproto",
         R"(
@@ -541,6 +537,55 @@ root_instance {
 
     // Round-trip the reduced descriptor — must still load cleanly.
     EXPECT_NO_THROW({ CablingGenerator reloaded(cabling_out, deployment_out); });
+}
+
+// In 16_n300_lb_cluster, nodes inside sub-instances are wired at the cluster level, so removing
+// one is the unsupported cross-level case and must throw rather than corrupt cabling on renumber.
+// host_id 0 (deployment host "metal-wh-18") maps to superpod1/node1, which is wired to
+// superpod3/node1 at the cluster level.
+TEST_F(HostRemovalTest, RemoveHostWithCrossLevelConnectionThrows) {
+    CablingGenerator gen(
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
+
+    ASSERT_EQ(gen.get_deployment_hosts().size(), 16u);
+    const std::string cross_level_host = gen.get_deployment_hosts().front().hostname;  // host_id 0
+    EXPECT_THROW(gen.remove_host(cross_level_host), std::runtime_error);
+    // Throw happens before any mutation, so the cluster is unchanged.
+    EXPECT_EQ(gen.get_deployment_hosts().size(), 16u);
+}
+
+// Real-descriptor path: 4x_bh_quietbox uses child names ("qb-0N") that differ from deployment
+// hostnames ("sjc1-tt-qb-0N"). Removing by hostname must resolve to the host_id the tool
+// associates with that deployment slot and drop the node + deployment entry together, keeping
+// cabling and deployment consistent (the pre-fix bug left the deployment untrimmed / mismatched).
+TEST_F(HostRemovalTest, RemoveByHostnameWhenNamesDifferFromHostnames) {
+    CablingGenerator gen(
+        "tests/scale_out/4x_bh_quietbox/cabling_descriptors/4x_bh_quietbox.textproto",
+        "tests/scale_out/4x_bh_quietbox/deployment_descriptors/4x_bh_qb_p150_deployment.textproto");
+    ASSERT_EQ(gen.get_deployment_hosts().size(), 4u);
+
+    gen.remove_host("sjc1-tt-qb-02");
+
+    const std::string dir = create_test_dir("remove_by_real_hostname");
+    auto [cabling_out, deployment_out] = emit_pair(gen, dir);
+    auto cabling_desc = load_cluster(cabling_out);
+    auto deployment_desc = load_deployment(deployment_out);
+
+    // Cabling and deployment must both shrink to 3 in lockstep and stay contiguous 0..2. (Before
+    // the fix, removing by hostname left the cabling at 3 nodes but the deployment at 4 hosts.)
+    EXPECT_EQ(cabling_desc.root_instance().child_mappings().size(), 3u);
+    EXPECT_EQ(collect_root_host_ids(cabling_desc), (std::vector<uint32_t>{0, 1, 2}));
+
+    const auto names = hostnames_in_deployment(deployment_desc);
+    EXPECT_EQ(names.size(), 3u);
+    EXPECT_EQ(std::count(names.begin(), names.end(), "sjc1-tt-qb-02"), 0);
+
+    // Emitted pair must reload cleanly with 3 hosts.
+    EXPECT_NO_THROW({
+        CablingGenerator reloaded(cabling_out, deployment_out);
+        EXPECT_EQ(reloaded.get_deployment_hosts().size(), 3u);
+    });
 }
 
 }  // namespace tt::scaleout_tools

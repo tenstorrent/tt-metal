@@ -174,10 +174,10 @@ public:
     const std::vector<Host>& get_deployment_hosts() const;
     const std::vector<LogicalChannelConnection>& get_chip_connections() const;
 
-    // Remove a host (by hostname) from the resolved cluster + deployment.
-    // Drops the host's node, any internal connections touching it, and empty subgraphs
-    // left behind; renumbers remaining host_ids to stay contiguous 0..N-1.
-    // Emits a warning and no-ops if `hostname` isn't present. Safe to call repeatedly.
+    // Remove host(s) by hostname: drops the node, its connections, and empty subgraphs, then
+    // renumbers remaining host_ids to 0..N-1. Warns and no-ops on unknown hostnames (safe to
+    // repeat). Throws if a host is wired outside its containing graph (cross-level/hierarchical
+    // removal is unsupported).
     void remove_host(const std::string& hostname);
     void remove_hosts(const std::vector<std::string>& hostnames);
 
@@ -260,10 +260,13 @@ private:
         const std::string& path_prefix,
         std::unordered_map<HostId, std::string>& host_to_node_path);
 
-    // Recursive helper for remove_host(). Drops the node, scrubs connections in the
-    // containing graph, and collapses any sub_instance left empty. Returns true if the
-    // hostname was found and removed (in this subtree), false otherwise.
-    bool remove_host_from_resolved_graph(ResolvedGraphInstance& graph, const std::string& hostname);
+    // Recursive helper for remove_hosts(): drops the node with `host_id`, scrubs its connections,
+    // and collapses any emptied sub_instance. Returns true if the host_id was found and removed.
+    bool remove_host_id_from_resolved_graph(ResolvedGraphInstance& graph, HostId host_id);
+
+    // Renumber host_ids, rebuild deployment order, and regenerate chip connections. Run once per
+    // remove_hosts() call after the structural removals.
+    void finalize_after_removal();
 
     // Utility function to generate logical chip connections from cluster hierarchy
     void generate_logical_chip_connections();

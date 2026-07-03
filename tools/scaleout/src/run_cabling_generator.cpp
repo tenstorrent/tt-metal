@@ -23,10 +23,10 @@ struct InputConfig {
     std::string output_name;
     bool loc_info = true;  // Default to detailed location info
     bool is_cabling_directory = false;
-    std::vector<std::string> remove_hosts;  // Hostnames to drop after load, before emission
+    std::vector<std::string> remove_hosts;
 };
 
-// Parse a comma-separated list of hostnames. Trims whitespace and drops empty entries.
+// Split a comma-separated list, trimming surrounding whitespace and dropping empty entries.
 static std::vector<std::string> parse_csv_hostnames(const std::string& csv) {
     std::vector<std::string> out;
     std::string current;
