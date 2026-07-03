@@ -158,7 +158,7 @@ tt::tt_metal::Tensor sample(
         // (e.g. duplicate GRPO completions). Callers that intend distinct per-device noise must pass
         // the sharded axes in seed_axes.
         if (num_shard_axes == 0 && mesh_shape.mesh_size() > 1U) {
-            log_warning(
+            log_debug(
                 tt::LogOp,
                 "ttnn_fixed::sample: multi-device mesh {} but no seed_axes selected -> every device "
                 "draws identical noise (identical samples). Pass seed_axes with the data-parallel "
