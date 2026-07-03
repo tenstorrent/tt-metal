@@ -243,5 +243,7 @@ behavior (`stop` distinct from denoise `halted`).
   Pushed to `diffusion-gemma-function` (194dbd432db..faebfbcc358). All pre-commit hooks passed.
   Adds `tt/serving.py`, `tt/generator_vllm.py`, `demo/serving_smoke.py`,
   `tests/test_serving_block_contract.py`, `doc/context_contract.json`, `doc/vllm_integration/*`.
-- `<post-review>` — post-clean-pass touch-ups (unify KV allocators, docstring fix, README
-  coverage-gap note). SHA recorded after commit below.
+- `4d320be2615` — refactor(diffusion_gemma): tighten vLLM adapter KV-cache ownership post-review.
+  Post-clean-pass touch-ups (unify KV allocators via `_model_owned_kv_handles`, docstring fix,
+  drop unused import, README coverage-gap note, work-log review record). Pushed
+  (faebfbcc358..4d320be2615). All pre-commit hooks passed.
