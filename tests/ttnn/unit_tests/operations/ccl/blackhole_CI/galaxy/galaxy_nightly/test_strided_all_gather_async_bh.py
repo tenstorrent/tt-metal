@@ -14,6 +14,17 @@ from models.common.utility_functions import (
 )
 
 
+def _create_cluster_submesh(mesh_device, cluster_axis):
+    """Create a 1xN (or Nx1) submesh sized to the cluster axis ring.
+
+    The op only operates along cluster_axis, so the non-cluster axis is just
+    redundant compute. Sub-meshing keeps the test focused on a single ring.
+    """
+    submesh_shape = [1, 1]
+    submesh_shape[cluster_axis] = mesh_device.shape[cluster_axis]
+    return mesh_device.create_submesh(ttnn.MeshShape(tuple(submesh_shape)))
+
+
 # Isolates the all-gather from the SP=8 / TP=4 fused matmul config in
 # test_strided_all_gather_minimal_matmul_async_bh.py, to measure AG performance alone.
 # The (8, 4) mesh puts the M shard (other_dim) on axis 0 (SP=8) and the K shard (dim) on
@@ -29,7 +40,7 @@ from models.common.utility_functions import (
 @pytest.mark.parametrize(
     "ag_output_shape, dim, other_dim, num_workers_per_link, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
     [
-        ([1, 1, 38912, 4096], 3, 2, 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 9, 512, 256),
+        ([1, 1, 4864, 4096], 3, 2, 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 9, 512, 256),
     ],
     ids=["wan1"],
 )
@@ -76,9 +87,11 @@ def test_strided_all_gather_async(
     mm_block_h,
     mm_block_w,
 ):
+    cluster_axis = 1
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
     run_strided_all_gather_impl(
-        mesh_device,
-        mesh_device.get_num_devices(),
+        submesh,
+        submesh.get_num_devices(),
         ag_output_shape,
         dim,
         other_dim,
