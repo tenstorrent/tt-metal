@@ -198,15 +198,16 @@ class TtPrefillRuntime:
             )
         return self.make_placeholder_activation()
 
-    def compile(self, kv_cache: ttnn.Tensor) -> None:
+    def compile(self, kv_cache: ttnn.Tensor, index_kcache: Optional[ttnn.Tensor] = None) -> None:
         """Warm up one chunk so the per-chunk loop hits no first-run cost. The engine
-        passes the cache it owns; the warm-up writes into it (slot 0) and is harmless."""
+        passes the cache(s) it owns; the warm-up writes into them (slot 0) and is harmless.
+        index_kcache is the sparse indexer key cache (None for dense)."""
         assert self.model_built
         chunk = self.config.chunk_size
         logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
         t0 = time.perf_counter()
         tt_input = self.make_chunk_input([0] * chunk)
-        self.prefill_chunk(tt_input, kv_cache, slot_id=0, actual_start=0, actual_end=chunk)
+        self.prefill_chunk(tt_input, kv_cache, slot_id=0, actual_start=0, actual_end=chunk, index_kcache=index_kcache)
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(
@@ -221,6 +222,7 @@ class TtPrefillRuntime:
         slot_id: int,
         actual_start: int,
         actual_end: int,
+        index_kcache: Optional[ttnn.Tensor] = None,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_cache`.
 
@@ -251,6 +253,10 @@ class TtPrefillRuntime:
             slot_id: cache user slot to fill, in [0, num_users).
             actual_start: absolute KV pos of the chunk's first real token (the cache write offset).
             actual_end: absolute KV pos past the chunk's last real token.
+            index_kcache: the engine-owned DSA indexer key cache (from init_index_kcache), for sparse
+                models; the same tensor on every call. None for dense (the NullIndexer ignores it) and
+                when the engine does not supply one — the sparse indexer then falls back to a self-owned
+                single-slot cache.
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
@@ -271,6 +277,7 @@ class TtPrefillRuntime:
             actual_start=actual_start,
             actual_end=actual_end,
             cache_user_id=slot_id,
+            index_kcache=index_kcache,
         )
         ttnn.deallocate(input_tensor)
         # Non-last rank: forward returns the hidden-state activation to forward downstream.

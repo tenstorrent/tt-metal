@@ -932,6 +932,7 @@ class ttMLA:
         actual_start: Optional[int] = None,
         cache_user_id: int = 0,
         return_kv_intermediates: bool = False,
+        index_kcache: Optional[ttnn.Tensor] = None,
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, Optional[dict]]":
         if self.kv_only:
             return self._forward_kv_only(
@@ -970,7 +971,19 @@ class ttMLA:
         # indexer top-k simply selects all available causal keys, so sparse is numerically equal to dense
         # there.) The indexer's forward also writes its K-cache (a no-op on the dense null-indexer), so no
         # separate warm-up write is needed.
-        indices = self._indexer.forward(hidden_states, qr, seq_len_local, start_pos=kv_actual_isl or 0)
+        # Indexer key-cache slot is user-major, matching the KVPE cache layout (cache_user_id*num_layers +
+        # cache_layer_idx). index_kcache is the runtime-owned shared buffer (None for standalone callers, and
+        # ignored by the dense NullIndexer). Compute the slot only when sparse — dense builds may leave
+        # layer_num None, and the NullIndexer ignores the arg regardless.
+        cache_batch_idx = cache_user_id * self.layer_num + cache_layer_idx if self._has_indexer else 0
+        indices = self._indexer.forward(
+            hidden_states,
+            qr,
+            seq_len_local,
+            start_pos=kv_actual_isl or 0,
+            index_kcache=index_kcache,
+            cache_batch_idx=cache_batch_idx,
+        )
 
         tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local)
         keep_kvpe_bf16 = self._has_indexer and not is_chunked
