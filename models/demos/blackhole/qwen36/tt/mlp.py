@@ -188,8 +188,10 @@ class Qwen36MLP:
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 )
                 ttnn.deallocate(x_sh)
-                w1_out = ttnn.to_memory_config(w1_out, mc)
-                w3_out = ttnn.to_memory_config(w3_out, mc)
+                # Decode: keep gate/up outputs in L1 (they feed the L1 mul → w2 matmul, all
+                # consumed before the all-reduce), avoiding the L1→DRAM→L1 round-trip.
+                w1_out = ttnn.to_memory_config(w1_out, ttnn.L1_MEMORY_CONFIG)
+                w3_out = ttnn.to_memory_config(w3_out, ttnn.L1_MEMORY_CONFIG)
             else:
                 # Fused SILU in progcfg; sharded/2D kernel rejects activation= kwarg with progcfg.
                 pc_gate = tpc.create_prefill_matmul_program_config(
@@ -205,17 +207,20 @@ class Qwen36MLP:
             w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
             _silu_fused = True
 
+        # Decode (M=1): the gated activation + down-proj output are tiny, so keep them in L1
+        # (down-proj reads its activation from L1). Prefill keeps DRAM: [seq, dim] would overflow L1.
+        mc_out = ttnn.L1_MEMORY_CONFIG if x.shape[-2] <= ttnn.TILE_SIZE else mc
         # gate * up. Standalone silu only on DRAM-sharded decode path (SILU not fused there).
         if _silu_fused:
-            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc_out)
             ttnn.deallocate(w1_out)
         else:
-            w1_act = ttnn.silu(w1_out, memory_config=mc)
+            w1_act = ttnn.silu(w1_out, memory_config=mc_out)
             ttnn.deallocate(w1_out)
-            hidden = ttnn.mul(w1_act, w3_out, memory_config=mc)
+            hidden = ttnn.mul(w1_act, w3_out, memory_config=mc_out)
             ttnn.deallocate(w1_act)
         ttnn.deallocate(w3_out)
-        partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc)
+        partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_out)
         ttnn.deallocate(hidden)
 
         # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).
