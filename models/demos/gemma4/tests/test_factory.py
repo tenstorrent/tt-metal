@@ -401,6 +401,23 @@ def parametrize_batch_seq(configs=None, ids=None):
     return pytest.mark.parametrize("batch_size, seq_len", configs, ids=ids)
 
 
+# UMD device-enumeration failures that mean the *runner* is unhealthy (a dead
+# ETH core, failed topology discovery, etc.) rather than a bug in our code. When
+# `ttnn.get_num_devices()` raises one of these at import/collection time, there
+# is no device to test on, so the honest outcome is a skip — not a fatal pytest
+# collection error (exit 4) that masks which test was even meant to run.
+_DEVICE_DISCOVERY_FAILURE_MARKERS = (
+    "eth core heartbeat check failed",
+    "topology discovery",
+    "cluster initialization",
+)
+
+
+def _is_device_discovery_failure(exc):
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _DEVICE_DISCOVERY_FAILURE_MARKERS)
+
+
 def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
     """Universal mesh parametrization with FABRIC_1D.
 
@@ -431,7 +448,26 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         pytest -k "1x2"   # N300 (TP=2)                (manual / non-CI)
         pytest -k "1x8"   # T3K (TP=8)                 (manual / non-CI)
     """
-    num_devices = ttnn.get_num_devices()
+    try:
+        num_devices = ttnn.get_num_devices()
+    except RuntimeError as e:
+        # Only swallow genuine hardware-enumeration failures (bad runner); let any
+        # other RuntimeError propagate so real software regressions stay visible.
+        if not _is_device_discovery_failure(e):
+            raise
+        params = [
+            pytest.param(
+                (1, 1),
+                {"fabric_config": None, **dict(device_params_extra or {})},
+                id="device-unavailable",
+                marks=pytest.mark.skip(reason=f"Device discovery failed (unhealthy runner): {e}"),
+            )
+        ]
+
+        def decorator(func):
+            return pytest.mark.parametrize("mesh_device, device_params", params, indirect=True)(func)
+
+        return decorator
 
     if mesh_shapes is None:
         all_shapes = [(1, 1), (1, 2), (1, 4), (1, 8), (1, 32)]
