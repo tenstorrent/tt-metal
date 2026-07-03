@@ -115,13 +115,18 @@ class AceStepAttention(LightweightModule):
         return cls(config)
 
     def _project_heads(self, x, weight, n_heads):
-        """x:[1,1,seq,hidden] -> proj -> [1, n_heads, seq, head_dim]."""
+        """x:[1,1,seq,hidden] -> proj -> [1, n_heads, seq, head_dim].
+
+        Head split via nlp_create_qkv_heads (num_kv_heads=0 -> single-tensor Q-style split), which
+        lands heads on dim 1 in one op — profiling showed this is ~4x cheaper than reshape+transpose
+        (0.027ms vs 0.121ms). Used for the cross-attn Q/K/V projections (different Q vs KV sources).
+        """
         cfg = self.config
         proj = ttnn.linear(x, weight, compute_kernel_config=cfg.compute_kernel_config)  # [1,1,seq,n*hd]
-        seq = proj.shape[2]
-        proj = ttnn.reshape(proj, (1, seq, n_heads, cfg.head_dim))  # [1,seq,n,hd]
-        proj = ttnn.transpose(proj, 1, 2)  # [1,n,seq,hd]
-        return proj
+        heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            proj, num_heads=n_heads, num_kv_heads=0, transpose_k_heads=False
+        )
+        return heads  # [1, n_heads, seq, head_dim]
 
     def forward(self, hidden_states, cos=None, sin=None, encoder_hidden_states=None, attn_mask=None):
         cfg = self.config
