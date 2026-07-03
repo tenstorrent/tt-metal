@@ -311,9 +311,26 @@ class TTConv1d:
         # Streaming context cache: last `causal_pad` input columns [B, 1, causal_pad, in_ch].
         # context_size == causal_pad == (K-1)*dilation - (stride-1) (reference SConv1d).
         self._cache = None
+        self._cache_zeros_host = None  # cached host zeros for in-place reset (llama-pattern trace)
 
     def reset_cache(self) -> None:
         self._cache = None
+
+    def reset_cache_inplace(self) -> None:
+        """Zero the streaming cache IN PLACE (keep the buffer address).  Used by the llama-pattern
+        fused-frame trace: the caches are reset at a segment start while the trace is live, and
+        reallocating (reset_cache -> None -> realloc) would corrupt the trace's captured addresses.
+        No-op if the cache hasn't been allocated yet (then the next call allocates it fresh)."""
+        if self._cache is None:
+            return
+        if self._cache_zeros_host is None:
+            tdtype = torch.bfloat16 if self.compute_dtype == ttnn.bfloat16 else torch.float32
+            self._cache_zeros_host = ttnn.from_torch(
+                torch.zeros(list(self._cache.shape), dtype=tdtype),
+                dtype=self.compute_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        ttnn.copy_host_to_device_tensor(self._cache_zeros_host, self._cache)
 
     def _extra_right_pad(self, T: int) -> int:
         """get_extra_padding_for_conv1d (only meaningful for stride > 1)."""
@@ -453,6 +470,9 @@ class TTBlock1DDevice:
     def reset_cache(self) -> None:
         self.dw_conv.reset_cache()
 
+    def reset_cache_inplace(self) -> None:
+        self.dw_conv.reset_cache_inplace()
+
     def __call__(self, x: ttnn.Tensor, use_cache: bool = False, is_final_chunk: bool = False) -> ttnn.Tensor:
         """x: [B, 1, T, C] → [B, 1, T, C]"""
         # Mixer (depthwise conv) path
@@ -576,6 +596,15 @@ class TTSemanticTokenizer:
             for blk in stage:
                 blk.reset_cache()
         self._head_conv.reset_cache()
+
+    def reset_cache_inplace(self) -> None:
+        """Zero all streaming caches IN PLACE (llama-pattern trace; stable addresses)."""
+        for c in self._downsample_convs:
+            c.reset_cache_inplace()
+        for stage in self._stages:
+            for blk in stage:
+                blk.reset_cache_inplace()
+        self._head_conv.reset_cache_inplace()
 
     def forward(
         self,
