@@ -53,6 +53,7 @@
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/profiler/profiler.hpp"
+#include <tt-metalium/experimental/realtime_profiler_packets.hpp>
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/dispatch/realtime_profiler_tracy_handler.hpp"
 #include "jit_build/build_env_manager.hpp"
@@ -62,6 +63,29 @@
 namespace tt::tt_metal::distributed {
 
 namespace {
+
+// Broadcast PROFILER_TERMINATE=1 to every worker core on a device (FULL logical grid, so DISPATCH
+// cores are covered too). Makes each producing RISC's ring_ensure_room stop blocking on a full SPSC
+// ring and drop markers instead. Needed (a) at shutdown, and (b) when the X280 drainer fails to
+// boot: with no drainer the rings are never emptied, so without this a producing RISC blocks
+// forever once its ring fills — deadlocking the workload (the command-queue completion never
+// arrives). Best-effort; logs and continues on write failure.
+void broadcast_profiler_terminate(Cluster& cluster, ChipId chip_id, IDevice* device, uint64_t prof_l1) {
+    if (device == nullptr) {
+        return;
+    }
+    const uint64_t terminate_addr =
+        prof_l1 + static_cast<uint64_t>(kernel_profiler::PROFILER_TERMINATE) * sizeof(uint32_t);
+    const uint32_t one = 1;
+    const CoreCoord grid = device->logical_grid_size();
+    for (uint32_t ly = 0; ly < static_cast<uint32_t>(grid.y); ly++) {
+        for (uint32_t lx = 0; lx < static_cast<uint32_t>(grid.x); lx++) {
+            const CoreCoord v =
+                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, CoreCoord{lx, ly}, CoreType::WORKER);
+            cluster.write_core(&one, sizeof(one), tt_cxy_pair(chip_id, v), terminate_addr);
+        }
+    }
+}
 
 // Minimum wall time between full init calibrations (run_sync + constructor SYNC_CHECK) and
 // between finish-path sync checks, per physical chip. Matches the finish-path throttle.
@@ -753,6 +777,18 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                     dev_state.x280_socket.reset();
                     dev_state.x280_driver.reset();
                     dev_state.x280_active = false;
+                    // No drainer => the cores' SPSC profiler rings will never be emptied. Tell every
+                    // worker to drop-not-block so a full ring can't deadlock the workload.
+                    try {
+                        broadcast_profiler_terminate(x280_cluster, device_id, dev_state.device, prof_l1);
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogMetal,
+                            "[Real-time profiler] Device {}: failed to broadcast PROFILER_TERMINATE after X280 "
+                            "boot failure: {}",
+                            device_id,
+                            e.what());
+                    }
                 } else {
                     dev_state.x280_active = true;
                     log_info(
@@ -776,6 +812,22 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 "[Real-time profiler] Device {}: X280 kernel-zone drainer boot failed ({}); continuing without it.",
                 device_id,
                 e.what());
+            // No drainer => stop the cores blocking on full profiler rings (see boot-failure path above).
+            try {
+                const uint64_t prof_l1_t =
+                    MetalContext::instance(context_id_)
+                        .hal()
+                        .get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+                broadcast_profiler_terminate(
+                    MetalContext::instance(context_id_).get_cluster(), device_id, dev_state.device, prof_l1_t);
+            } catch (const std::exception& e2) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {}: failed to broadcast PROFILER_TERMINATE after X280 boot "
+                    "exception: {}",
+                    device_id,
+                    e2.what());
+            }
         }
 
         MetalContext::instance(context_id_).device_manager()->mark_rt_profiler_device_init_complete(device_id);
@@ -1012,13 +1064,14 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             return true;
         };
 
-        // Process one X280 raw-marker page (64 B, first 24 used): [0]=core_x(virtual) [1]=core_y(virtual)
-        // [2]=risc [3]=timer_id(type|hash) [4]=time_hi [5]=time_lo. Relayed in ring order (== emission
-        // order == correct nest order per lane), so pushing START/END per marker in arrival order lets
-        // Tracy nest them correctly. Coords are translated virtual->NOC0 to match the standard profiler.
+        // Decode -> enrich -> dispatch one X280 wire packet (see PROFILER_PACKET_PIPELINE.md). The
+        // X280 is only the transport+presenter; here we resolve everything that requires runtime/
+        // profiler knowledge ONCE (name hash -> name, virtual -> NOC0) and publish an ENRICHED packet
+        // through the profiler-packet callbacks. Subscribers (e.g. the Tracy handler) never see
+        // ciphered data and none of them redo this translation.
         std::vector<uint32_t> x280_page_buf(RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t));
         // 16-bit-hash -> zone name/file/line, resolved the same way the DRAM profiler names zones.
-        // Built lazily on the first marker (kernels have compiled + written the zone-source logs by
+        // Built lazily on the first packet (kernels have compiled + written the zone-source logs by
         // the time any marker is drained), so device zones show real names instead of "Zone_<hash>".
         std::unordered_map<uint16_t, tracy::MarkerDetails> x280_zone_names;
         std::once_flag x280_zone_names_once;
@@ -1030,50 +1083,81 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 return false;
             }
             dev_state.x280_socket->read(x280_page_buf.data(), 1);
-            const uint32_t* p = x280_page_buf.data();
-            const uint32_t vx = p[0], vy = p[1], risc = p[2], timer_id = p[3];
-            const uint64_t timestamp = (static_cast<uint64_t>(p[4]) << 32) | p[5];
-            // virtual -> NOC0 (built at boot); fall back to the raw virtual coord if unmapped.
-            uint32_t core_x = vx, core_y = vy;
-            if (auto it = dev_state.x280_virt_to_noc0.find((static_cast<uint64_t>(vx) << 32) | vy);
-                it != dev_state.x280_virt_to_noc0.end()) {
-                core_x = it->second.first;
-                core_y = it->second.second;
-            }
-            // Resolve the zone name/file/line from the 16-bit hash (same map the DRAM profiler uses).
-            std::call_once(x280_zone_names_once, [&] {
-                try {
-                    x280_zone_names = loadZoneSourceLocationsHashesReadOnly();
-                } catch (const std::exception& e) {
-                    log_warning(tt::LogMetal, "[Real-time profiler] X280 zone-name resolution failed: {}", e.what());
-                }
-                log_debug(
-                    tt::LogMetal, "[Real-time profiler] X280 resolved {} zone-name hashes", x280_zone_names.size());
-            });
-            const tracy::MarkerDetails* details = nullptr;
-            if (auto it = x280_zone_names.find(static_cast<uint16_t>(timer_id & 0xFFFF)); it != x280_zone_names.end()) {
-                details = &it->second;
-            }
-            // Debug/comparison (env TT_METAL_X280_ZONE_CSV=<path>): dump every relayed marker so the
-            // X280 capture can be diffed 1:1 against the DRAM profiler's profile_log_device.csv by
-            // marker identity. timer_id low-16 = zone-name hash and coords are NOC0, both matching the
-            // DRAM CSV. ptype: 0=ZONE_START, 1=ZONE_END. Off by default.
-            static std::ofstream x280_zone_csv;
-            static std::once_flag x280_zone_csv_once;
-            std::call_once(x280_zone_csv_once, [] {
-                if (const char* pth = std::getenv("TT_METAL_X280_ZONE_CSV"); pth != nullptr && *pth != '\0') {
-                    x280_zone_csv.open(pth);
-                    x280_zone_csv << "chip,core_x,core_y,risc,timer_id,ptype,cycle,name\n";
-                }
-            });
-            if (x280_zone_csv.is_open()) {
-                x280_zone_csv << dev_state.chip_id << ',' << core_x << ',' << core_y << ',' << risc << ','
-                              << (timer_id & 0xFFFF) << ',' << ((timer_id >> 16) & 0x7) << ',' << timestamp << ','
-                              << (details != nullptr ? details->marker_name : "") << '\n';
-            }
-            tracy_handler_->PushDeviceMarker(dev_state.chip_id, core_x, core_y, risc, timer_id, timestamp, details);
             pages_received++;
             x280_pages++;
+
+            namespace exp = tt::tt_metal::experimental;
+            const auto* header = reinterpret_cast<const exp::WirePacketHeader*>(x280_page_buf.data());
+            switch (static_cast<exp::ProfilerPacketType>(header->type)) {
+                case exp::ProfilerPacketType::WorkerZone: {
+                    const auto* w = reinterpret_cast<const exp::WorkerZoneWire*>(x280_page_buf.data());
+                    const uint32_t ptype = (w->timer_id >> 16) & 0x7;
+                    if (ptype != kernel_profiler::ZONE_START && ptype != kernel_profiler::ZONE_END) {
+                        break;  // only zone start/end are handled today; other packet types are deferred
+                    }
+                    // Enrich: virtual -> NOC0 (map built at boot; fall back to virtual if unmapped).
+                    uint32_t noc0_x = w->core_x, noc0_y = w->core_y;
+                    if (auto it =
+                            dev_state.x280_virt_to_noc0.find((static_cast<uint64_t>(w->core_x) << 32) | w->core_y);
+                        it != dev_state.x280_virt_to_noc0.end()) {
+                        noc0_x = it->second.first;
+                        noc0_y = it->second.second;
+                    }
+                    // Enrich: 16-bit hash -> deciphered zone name (stable string_view into the map).
+                    std::call_once(x280_zone_names_once, [&] {
+                        try {
+                            x280_zone_names = loadZoneSourceLocationsHashesReadOnly();
+                        } catch (const std::exception& e) {
+                            log_warning(
+                                tt::LogMetal, "[Real-time profiler] X280 zone-name resolution failed: {}", e.what());
+                        }
+                        log_debug(
+                            tt::LogMetal,
+                            "[Real-time profiler] X280 resolved {} zone-name hashes",
+                            x280_zone_names.size());
+                    });
+                    const uint16_t hash = static_cast<uint16_t>(w->timer_id & 0xFFFF);
+                    std::string_view name;
+                    if (auto it = x280_zone_names.find(hash); it != x280_zone_names.end()) {
+                        name = it->second.marker_name;
+                    }
+
+                    exp::WorkerZonePacket pkt{
+                        .chip_id = dev_state.chip_id,
+                        .core_virtual_x = w->core_x,
+                        .core_virtual_y = w->core_y,
+                        .core_noc0_x = noc0_x,
+                        .core_noc0_y = noc0_y,
+                        .risc = w->risc,
+                        .timer_id = hash,
+                        .name = name,
+                        .timestamp = (static_cast<uint64_t>(w->time_hi) << 32) | w->time_lo,
+                        .is_start = (ptype == kernel_profiler::ZONE_START),
+                    };
+
+                    // Debug/comparison (env TT_METAL_X280_ZONE_CSV=<path>): dump every enriched zone so
+                    // the X280 capture can be diffed 1:1 against the DRAM profiler's profile_log_device.csv
+                    // by marker identity (coords are NOC0, name deciphered — both match the DRAM CSV).
+                    // Off by default.
+                    static std::ofstream x280_zone_csv;
+                    static std::once_flag x280_zone_csv_once;
+                    std::call_once(x280_zone_csv_once, [] {
+                        if (const char* pth = std::getenv("TT_METAL_X280_ZONE_CSV"); pth != nullptr && *pth != '\0') {
+                            x280_zone_csv.open(pth);
+                            x280_zone_csv << "chip,core_x,core_y,risc,timer_id,ptype,cycle,name\n";
+                        }
+                    });
+                    if (x280_zone_csv.is_open()) {
+                        x280_zone_csv << pkt.chip_id << ',' << pkt.core_noc0_x << ',' << pkt.core_noc0_y << ','
+                                      << pkt.risc << ',' << pkt.timer_id << ',' << ptype << ',' << pkt.timestamp << ','
+                                      << pkt.name << '\n';
+                    }
+
+                    exp::InvokeProfilerPacketCallbacks(exp::ProfilerPacketType::WorkerZone, &pkt);
+                    break;
+                }
+                default: break;  // unknown/deferred packet type
+            }
             return true;
         };
 

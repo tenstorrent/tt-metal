@@ -73,9 +73,12 @@ std::string FormatTopCounts(const std::unordered_map<Key, uint64_t>& counts) {
 RealtimeProfilerTracyHandler::RealtimeProfilerTracyHandler() {
     callback_handle_ = tt::RegisterProgramRealtimeProfilerCallback(
         [this](const tt::ProgramRealtimeRecord& record) { HandleRecord(record); });
+    packet_callback_handle_ = tt::tt_metal::experimental::RegisterProfilerPacketCallback(
+        [this](const tt::tt_metal::experimental::WorkerZonePacket& zone) { HandleWorkerZone(zone); });
 }
 
 RealtimeProfilerTracyHandler::~RealtimeProfilerTracyHandler() {
+    tt::tt_metal::experimental::UnregisterProfilerPacketCallback(packet_callback_handle_);
     tt::UnregisterProgramRealtimeProfilerCallback(callback_handle_);
 
     std::lock_guard<std::mutex> lock(mutex_);
@@ -269,38 +272,21 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
 #endif
 }
 
-void RealtimeProfilerTracyHandler::PushDeviceMarker(
-    [[maybe_unused]] uint32_t chip_id,
-    [[maybe_unused]] uint32_t core_x,
-    [[maybe_unused]] uint32_t core_y,
-    [[maybe_unused]] uint32_t risc,
-    [[maybe_unused]] uint32_t timer_id,
-    [[maybe_unused]] uint64_t timestamp,
-    [[maybe_unused]] const tracy::MarkerDetails* details) {
+void RealtimeProfilerTracyHandler::HandleWorkerZone(
+    [[maybe_unused]] const tt::tt_metal::experimental::WorkerZonePacket& zone) {
 #if defined(TRACY_ENABLE)
     if (!tracy::GetProfiler().IsConnected()) {
         return;
     }
-    TracyTTCtx ctx = GetContext(chip_id);
+    TracyTTCtx ctx = GetContext(zone.chip_id);
     if (!ctx) {
         return;
     }
 
-    // One raw kernel-profiler marker drained off a per-RISC SPSC ring by the X280 and relayed in
-    // ring order. Ring order == emission order == correct nest order for the (core,risc) lane, so
-    // pushing START/END in arrival order lets Tracy nest zones correctly (no on-device pairing).
-    // The packet type lives in the timer_id (bits 16..18): 0=ZONE_START, 1=ZONE_END; anything else
-    // (e.g. timestamped data) is not a plain zone boundary and is skipped for now. The 16-bit name
-    // hash (timer_id & 0xFFFF) identifies the zone; markers share the device clock domain so the
-    // per-chip context calibration applies directly, and NOC0 core_x/core_y (translated by the
-    // receiver) put them on the same lane the standard DeviceProfiler uses.
-    const uint32_t ptype = (timer_id >> 16) & 0x7;
-    const bool is_start = (ptype == 0);
-    const bool is_end = (ptype == 1);
-    if (!is_start && !is_end) {
-        return;
-    }
-
+    // The enriched packet is already fully resolved by the host (NOC0 coord, deciphered name,
+    // is_start). Zones arrive in ring order (== emission order == correct nest order per lane), so
+    // pushing START/END in arrival order lets Tracy nest them correctly. Markers share the device
+    // clock domain, so the per-chip context calibration applies directly.
     static constexpr tracy::RiscType kRisc[5] = {
         tracy::RiscType::BRISC,
         tracy::RiscType::NCRISC,
@@ -309,26 +295,18 @@ void RealtimeProfilerTracyHandler::PushDeviceMarker(
         tracy::RiscType::TRISC_2};
 
     tracy::TTDeviceMarker marker;
-    marker.chip_id = chip_id;
-    marker.core_x = core_x;
-    marker.core_y = core_y;
-    marker.risc = kRisc[risc % 5];
-    marker.timestamp = timestamp;
-    marker.runtime_host_id = timer_id & 0xFFFF;
-    marker.marker_type = is_start ? tracy::TTDeviceMarkerType::ZONE_START : tracy::TTDeviceMarkerType::ZONE_END;
-    // Resolve the real zone name/file/line from the hash map (same as the DRAM profiler); fall back
-    // to a hash-tagged name if the source location wasn't logged.
-    if (details != nullptr) {
-        marker.marker_name = details->marker_name;
-        marker.file = details->source_file;
-        marker.line = details->source_line_num;
-    } else {
-        marker.marker_name = fmt::format("Zone_{}", timer_id & 0xFFFF);
-        marker.file = "kernel_profiler";
-        marker.line = 0;
-    }
+    marker.chip_id = zone.chip_id;
+    marker.core_x = zone.core_noc0_x;
+    marker.core_y = zone.core_noc0_y;
+    marker.risc = kRisc[zone.risc % 5];
+    marker.timestamp = zone.timestamp;
+    marker.runtime_host_id = zone.timer_id;
+    marker.marker_type = zone.is_start ? tracy::TTDeviceMarkerType::ZONE_START : tracy::TTDeviceMarkerType::ZONE_END;
+    marker.marker_name = zone.name.empty() ? fmt::format("Zone_{}", zone.timer_id) : std::string(zone.name);
+    marker.file = "kernel_profiler";
+    marker.line = 0;
 
-    if (is_start) {
+    if (zone.is_start) {
         TracyTTPushStartMarker(ctx, marker);
     } else {
         TracyTTPushEndMarker(ctx, marker);

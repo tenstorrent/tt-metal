@@ -19,6 +19,7 @@
 #include <optional>
 #include <fstream>
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/experimental/realtime_profiler_packets.hpp>
 #include "data_collection.hpp"
 
 namespace tt::tt_metal {
@@ -77,6 +78,17 @@ public:
     // Invoke all registered callbacks with the given record.
     void InvokeProgramRealtimeProfilerCallbacks(const tt::ProgramRealtimeRecord& record);
 
+    // Generic profiler packet pipeline (see tools/x280_bm/PROFILER_PACKET_PIPELINE.md).
+    // Callbacks are registered per packet type; Invoke passes the enriched packet by
+    // address to every callback registered for that type. Same drain-safe unregister
+    // semantics as the program-record callbacks above.
+    tt::tt_metal::experimental::ProfilerPacketCallbackHandle RegisterProfilerPacketCallbackRaw(
+        tt::tt_metal::experimental::ProfilerPacketType type,
+        tt::tt_metal::experimental::RawProfilerPacketCallback callback);
+    void UnregisterProfilerPacketCallback(tt::tt_metal::experimental::ProfilerPacketCallbackHandle handle);
+    void InvokeProfilerPacketCallbacks(
+        tt::tt_metal::experimental::ProfilerPacketType type, const void* enriched_packet);
+
     // Real-time profiler liveness tracking. MeshDevice notifies activation after a
     // successful init+sync handshake and deactivation at close; IsRealtimeProfilerActive()
     // returns true while at least one chip is active.
@@ -122,6 +134,17 @@ private:
     mutable std::mutex program_realtime_profiler_callbacks_mutex_;
     std::vector<RealtimeCallbackRegistration> program_realtime_profiler_callbacks_;
     tt::ProgramRealtimeProfilerCallbackHandle next_callback_handle_{0};
+
+    // Generic profiler packet callbacks, keyed by packet type (invoked from the receiver thread).
+    struct PacketCallbackRegistration {
+        tt::tt_metal::experimental::ProfilerPacketCallbackHandle handle;
+        tt::tt_metal::experimental::ProfilerPacketType type;
+        tt::tt_metal::experimental::RawProfilerPacketCallback callback;
+        std::shared_ptr<RealtimeCallbackState> state;
+    };
+    mutable std::mutex profiler_packet_callbacks_mutex_;
+    std::vector<PacketCallbackRegistration> profiler_packet_callbacks_;
+    tt::tt_metal::experimental::ProfilerPacketCallbackHandle next_packet_callback_handle_{0};
 
     // Chip ids whose RT profiler is currently live; shares the callback-list mutex.
     std::unordered_set<uint32_t> realtime_profiler_active_chips_;

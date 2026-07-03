@@ -9,11 +9,8 @@
 #include <mutex>
 #include <unordered_map>
 #include <tracy/TracyTTDevice.hpp>
+#include <tt-metalium/experimental/realtime_profiler_packets.hpp>
 #include "data_collection.hpp"
-
-namespace tracy {
-struct MarkerDetails;
-}  // namespace tracy
 
 namespace tt::tt_metal {
 
@@ -41,18 +38,11 @@ public:
     // Used to verify host-device clock sync accuracy in the Tracy GUI.
     void PushSyncCheckMarker(uint32_t chip_id, uint64_t device_timestamp, double frequency);
 
-    // Push one raw kernel-profiler marker drained off a per-RISC SPSC ring by the X280 and relayed
-    // in ring order. core_x/core_y (NOC0) and risc identify the originating Tensix core lane; the
-    // packet type in timer_id (bits 16..18) selects ZONE_START/ZONE_END; timestamp is in the device
-    // clock domain (same as program zones). Pushing in arrival order nests zones correctly.
-    void PushDeviceMarker(
-        uint32_t chip_id,
-        uint32_t core_x,
-        uint32_t core_y,
-        uint32_t risc,
-        uint32_t timer_id,
-        uint64_t timestamp,
-        const tracy::MarkerDetails* details);
+    // Subscriber for X280-drained worker-core kernel zones. The enriched packet is already fully
+    // resolved by the host (NOC0 coords, deciphered name, is_start), so this just pushes a
+    // ZONE_START or ZONE_END marker on the originating core's Tracy lane. Zones arrive in ring order
+    // (== emission order == correct nest order per lane), so pushing in arrival order nests correctly.
+    void HandleWorkerZone(const tt::tt_metal::experimental::WorkerZonePacket& zone);
 
     // Send a GpuCalibration event to Tracy, updating the host-device clock mapping.
     void CalibrateDevice(uint32_t chip_id, int64_t host_time, uint64_t device_timestamp, double frequency);
@@ -77,6 +67,7 @@ private:
     std::unordered_map<uint32_t, TracyTTCtx> tracy_contexts_;
     SkippedEndBeforeStartStats skipped_end_before_start_stats_;
     tt::ProgramRealtimeProfilerCallbackHandle callback_handle_;
+    tt::tt_metal::experimental::ProfilerPacketCallbackHandle packet_callback_handle_;
 };
 
 }  // namespace tt::tt_metal

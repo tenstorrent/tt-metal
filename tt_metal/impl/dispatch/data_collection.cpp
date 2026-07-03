@@ -116,4 +116,18 @@ void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHa
 
 bool IsProgramRealtimeProfilerActive() { return tt::IsProgramRealtimeProfilerActive(); }
 
+ProfilerPacketCallbackHandle RegisterProfilerPacketCallbackRaw(
+    ProfilerPacketType type, RawProfilerPacketCallback callback) {
+    return tt::tt_metal::MetalContext::instance().data_collector()->RegisterProfilerPacketCallbackRaw(
+        type, std::move(callback));
+}
+
+void UnregisterProfilerPacketCallback(ProfilerPacketCallbackHandle handle) {
+    tt::tt_metal::MetalContext::instance().data_collector()->UnregisterProfilerPacketCallback(handle);
+}
+
+void InvokeProfilerPacketCallbacks(ProfilerPacketType type, const void* enriched_packet) {
+    tt::tt_metal::MetalContext::instance().data_collector()->InvokeProfilerPacketCallbacks(type, enriched_packet);
+}
+
 }  // namespace tt::tt_metal::experimental

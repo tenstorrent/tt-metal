@@ -17,8 +17,9 @@
  * Marker = 2 words: w0 = 0x80000000 | (timer_id<<12) | time_H, w1 = time_L.
  * packet type = (timer_id>>16)&7 (0=ZONE_START, 1=ZONE_END).
  *
- * Marker page (64 B, first 24 used): +0x00 core_x +0x04 core_y +0x08 risc
- *                                    +0x0C timer_id(type|hash) +0x10 time_hi +0x14 time_lo
+ * WorkerZoneWire page (64 B, first 28 used): +0x00 header{u16 type=WorkerZone, u16 rsvd}
+ *   +0x04 core_x(virtual) +0x08 core_y +0x0C risc +0x10 timer_id(type|hash) +0x14 time_hi +0x18 time_lo
+ *   (layout shared by convention with tt-metalium/experimental/realtime_profiler_packets.hpp)
  * Params @ MBOX_PARAMS: +0x00 config_addr +0x08 pcie_x +0x10 pcie_y +0x18 prof_l1
  *                       +0x20 num_cores +0x28 stop
  * Results @ MBOX_RESULTS: +0x00 total_markers +0x08 loops +0x18 done(=DONE_MAGIC)
@@ -161,13 +162,16 @@ int main(uint64_t hartid) {
                         w32(cbase + CTRL_HEAD(r) * 4, h);
                         goto done;
                     }
+                    /* WorkerZoneWire (see tt-metalium/experimental/realtime_profiler_packets.hpp):
+                     * [0] header (type=WorkerZone=0 in low 16b, reserved=0), then the raw fields. */
                     uint64_t p = wbase + fifo_off + write_ptr;
-                    w32(p + 0, core_x);
-                    w32(p + 4, core_y);
-                    w32(p + 8, r);
-                    w32(p + 12, timer_id);
-                    w32(p + 16, time_hi);
-                    w32(p + 20, time_lo);
+                    w32(p + 0, 0); /* PacketHeader{ type=WorkerZone, reserved } */
+                    w32(p + 4, core_x);
+                    w32(p + 8, core_y);
+                    w32(p + 12, r);
+                    w32(p + 16, timer_id);
+                    w32(p + 20, time_hi);
+                    w32(p + 24, time_lo);
                     write_ptr += PAGE;
                     if (write_ptr >= fifo_total) {
                         write_ptr -= fifo_total;

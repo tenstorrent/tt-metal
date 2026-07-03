@@ -1,6 +1,7 @@
 # X280 Profiler → Host Packet Pipeline — Design Decisions
 
-**Status:** agreed design, pre-implementation (2026-07-03). Branch `mo/x280_tests`.
+**Status:** now-scope IMPLEMENTED + verified on bh-17 (2026-07-03); non-core types deferred.
+Branch `mo/x280_tests`, uncommitted.
 **Scope of this doc:** how profiler data travels from the Tensix cores, through the X280
 "presenter," across the D2H socket, and into typed host-side callbacks. Captures the
 architecture and the decisions behind it so future packet types (events, payload, sync,

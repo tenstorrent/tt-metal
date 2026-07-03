@@ -181,9 +181,14 @@ inline __attribute__((always_inline)) bool get_dropped_timestamps(uint32_t index
 }
 
 inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValue) {
-    for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
-        profiler_data_buffer[riscID].data[ID_LL] = counterValue;
-    }
+    // SPSC backend: the trace/host counter used to be written into the fixed ID_LL slot. But in this
+    // backend the whole buffer (incl. ID_*/GUARANTEED slots) is the X280-drained ring, so that write
+    // clobbered whatever marker word currently occupied slot ID_LL -> the marker's time_lo became a
+    // small traceCount value, placing the zone ~2^32 cycles early and wrecking Tracy nesting. The
+    // X280 drain never reads ID_LL, so this is a no-op here.
+    // TODO(perf): replace with a state/context packet type that sets run/host-id-style fields for all
+    // subsequent markers; host enrichment forward-fills them (see PROFILER_PACKET_PIPELINE.md).
+    (void)counterValue;
 }
 
 inline __attribute__((always_inline)) void set_profiler_zone_valid(bool condition) {
@@ -203,11 +208,12 @@ __attribute__((noinline)) void init_profiler(
     uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
     if (runCounter == 0) {
-        // First launch: empty every RISC's ring (head = tail = 0) and stamp coords.
+        // First launch: empty every RISC's ring (head = tail = 0) and stamp coords. NOTE: do NOT
+        // write data[ID_HH] here — ID_HH is a live ring slot in this backend, so poking it corrupts
+        // a marker word (see set_host_counter). The ring is emptied via head/tail == 0 above.
         for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
             profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + riscID] = 0;
             profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + riscID] = 0;
-            profiler_data_buffer[riscID].data[ID_HH] = 0;
         }
         profiler_control_buffer[NOC_X] = my_x[0];
         profiler_control_buffer[NOC_Y] = my_y[0];
@@ -358,7 +364,8 @@ __attribute__((noinline)) void trace_only_init() {
         traceCount++;
         set_host_counter(traceCount);
         profiler_control_buffer[TRACE_REPLAY_STATUS] = TRACE_MARK_FW_START;
-        profiler_data_buffer[myRiscID].data[ID_HH] = 0x80000000;
+        // Do NOT poke data[ID_HH] here: it is a live ring slot in the SPSC backend and the X280
+        // drain does not consume it, so the write only corrupts a marker word (see set_host_counter).
     }
 }
 
