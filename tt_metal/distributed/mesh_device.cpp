@@ -1483,9 +1483,7 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
     }
 }
 
-D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
-    return realtime_profiler_ ? realtime_profiler_->get_socket() : nullptr;
-}
+RealtimeProfilerManager* MeshDeviceImpl::get_realtime_profiler() const { return realtime_profiler_.get(); }
 
 ::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() {
     TT_FATAL(
