@@ -1957,3 +1957,117 @@ def test_candidate_gather_semaphore_clobber(ttnn_mesh_device, gather_op, num_bg,
         f"gather_op={gather_op} num_bg={num_bg}: candidate gather corrupted under contention on "
         f"{sum(1 for m in mismatch_counts if m)}/{NUM_REPLAYS} replays (counts {mismatch_counts})."
     )
+
+
+# ==============================================================================
+# Real TTSampling.forward heavy path in a trace — closest unit-level repro (#48222/#48469).
+# ==============================================================================
+#
+# The stripped topk->gather A/B and the background-contention clobber test are BOTH clean for
+# prim. This drives the ACTUAL production sampler (models.common.sampling.tt_sampling.TTSampling)
+# heavy top-k/top-p forward inside a captured trace on T3K, A/B-ing only the gather op used by
+# _perform_all_gather (prim ttnn.all_gather vs all_gather_async). This is the exact code path the
+# qwen2.5-VL decode runs (F1 0.33 prim / 0.80 async in-model). If prim corrupts here, it's the
+# minimal repro; if clean, the trigger needs even more model context (KV/attention/MLP graph).
+
+_TTS_TRACE_REGION_SIZE = 48 << 20
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [{"mesh_shape": (1, 8), "trace_region_size": _TTS_TRACE_REGION_SIZE}],
+    ids=["1x8"],
+    indirect=True,
+)
+@pytest.mark.parametrize("gather_op", ["prim", "async"])
+def test_ttsampling_forward_trace_ab(ttnn_mesh_device, gather_op):
+    import os
+
+    from models.common.sampling.tt_sampling import TTSampling
+    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.tt_transformers.tt.model_config import ModelArgs
+
+    os.environ.setdefault("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
+
+    mesh_device = ttnn_mesh_device
+    cluster_shape = tuple(mesh_device.shape)
+    B, NUM_REPLAYS = 32, 10
+
+    model_args = ModelArgs(mesh_device, max_batch_size=B, max_seq_len=128, dummy_weights=True)
+    # Force the heavy top-k/top-p path (not force-argmax) so _perform_all_gather is exercised.
+    ag_cfg = dict(model_args.model_config.get("SAMPLING_AG_CONFIG", {}) or {})
+    ag_cfg["allow_force_argmax"] = False
+    model_args.model_config["SAMPLING_AG_CONFIG"] = ag_cfg
+
+    vocab = model_args.vocab_size
+    padded_vocab = model_args.padded_vocab_size
+
+    # Stochastic-but-seeded heavy params: top_k=10, top_p=0.9, temp=1.0 (mirrors eval-32 sampling).
+    top_k = [10] * B
+    top_p = [0.9] * B
+    temp = [1.0] * B
+
+    tt_ccl = TT_CCL(mesh_device)
+    sampler = TTSampling(
+        args=model_args, mesh_device=mesh_device, tt_ccl=tt_ccl,
+        k=torch.tensor(top_k), p=torch.tensor(top_p), temp=torch.tensor(temp),
+    )
+    assert not sampler.force_argmax_sampling, "must exercise heavy path"
+
+    # A/B: patch the gather op used by _perform_all_gather.
+    if gather_op == "prim":
+        def _forced_prim(tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
+            return ttnn.all_gather(
+                tensor, dim=dim, num_links=num_links, memory_config=memory_config,
+                cluster_axis=cluster_axis, topology=ttnn.Topology.Linear,
+            )
+        sampler._perform_all_gather = _forced_prim  # async is the branch default on this branch
+
+    # Fixed logits with a clear argmax per user (peaked so top-1 is unambiguous vs bf16 ties).
+    torch.manual_seed(1234)
+    logits_host = torch.randn(1, 1, B, padded_vocab, dtype=torch.bfloat16) * 0.1
+    peaks = torch.tensor([(u * 2711 + 13) % vocab for u in range(B)], dtype=torch.long)
+    for u in range(B):
+        logits_host[0, 0, u, peaks[u]] = 50.0
+    if padded_vocab > vocab:
+        logits_host[:, :, :, vocab:] = float("-inf")
+
+    shard_dims = (None, 3)  # T3K (1,8): shard vocab across the 8 devices on axis 1
+    logits_tt = ttnn.from_torch(
+        logits_host, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=cluster_shape),
+    )
+
+    # With top_p=0.9 and one dominant (logit 50) token, the sampler should pick the peak every time.
+    expected = peaks.clone()
+
+    def _tokens(tt_out_tok):
+        return to_torch_auto_compose(tt_out_tok)[0, 0, :, :].reshape(-1)[:B].long()
+
+    # warmup/compile OUTSIDE capture
+    out, _ = sampler(logits_tt)
+    ttnn.synchronize_device(mesh_device)
+    eager = _tokens(out)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    try:
+        out, _ = sampler(logits_tt)
+    finally:
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+    per_replay_wrong = []
+    for r in range(NUM_REPLAYS):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        toks = _tokens(out)
+        per_replay_wrong.append(int((toks != expected).sum().item()))
+    ttnn.release_trace(mesh_device, trace_id)
+
+    print(f"[TTSampling.forward gather_op={gather_op} mesh={cluster_shape}] "
+          f"eager_wrong={int((eager != expected).sum().item())}/{B}  "
+          f"replay_wrong_per_iter={per_replay_wrong}")
+    assert all(w == 0 for w in per_replay_wrong), (
+        f"gather_op={gather_op}: TTSampling.forward heavy path picked wrong tokens under trace on "
+        f"{sum(1 for w in per_replay_wrong if w)}/{NUM_REPLAYS} replays (wrong-counts {per_replay_wrong})."
+    )
