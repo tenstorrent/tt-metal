@@ -243,6 +243,7 @@ def test_pack_l1_acc_quasar(
             face_r_dim=face_r_dim,
             tile_dimensions=TILE_DIMENSIONS,
             use_dense_tile_dimensions=True,
+            result_int8_negative_zero_as_min=(formats.output_format == DataFormat.Int8),
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,

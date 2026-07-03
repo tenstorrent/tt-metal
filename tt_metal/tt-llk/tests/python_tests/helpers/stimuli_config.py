@@ -88,6 +88,7 @@ class StimuliConfig:
         use_dense_tile_dimensions: bool = False,
         operand_res_tile_size: int = None,
         twos_complement: bool = False,
+        result_int8_negative_zero_as_min: bool = False,
     ):
 
         # Fields init
@@ -114,6 +115,7 @@ class StimuliConfig:
         self.use_dense_tile_dimensions = use_dense_tile_dimensions
         self.operand_res_tile_size = operand_res_tile_size
         self.twos_complement = twos_complement
+        self.result_int8_negative_zero_as_min = result_int8_negative_zero_as_min
 
         # Hardware flags injected by TestConfig via set_use_srcs() / set_dest_acc()
         self.use_srcs = False
@@ -714,6 +716,7 @@ class StimuliConfig:
             use_srcs=use_srcs,
             dest_acc=self._dest_acc_32b,
             twos_complement=self.twos_complement,
+            int8_negative_zero_as_min=self.result_int8_negative_zero_as_min,
         )
 
     def collect_results(self, location="0,0"):

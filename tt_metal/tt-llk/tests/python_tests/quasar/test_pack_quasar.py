@@ -288,6 +288,7 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
             face_r_dim=tile_shape.face_r_dim,
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
+            result_int8_negative_zero_as_min=(formats.output_format == DataFormat.Int8),
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
