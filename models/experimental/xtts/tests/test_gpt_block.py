@@ -30,10 +30,7 @@ from models.experimental.xtts.reference.xtts_gpt_block import (
     load_xtts_state_dict,
     reference_gpt_block,
 )
-from models.experimental.xtts.tt.xtts_gpt_block import (
-    load_gpt_block_parameters,
-    xtts_gpt_block,
-)
+from models.experimental.xtts.tt.xtts_gpt_block import TtXttsGptBlock
 
 
 @pytest.fixture(scope="module")
@@ -62,11 +59,11 @@ def test_xtts_gpt_block(device, xtts_state_dict, layer_idx, seq_len, pcc, reset_
         reference_output = reference(torch_input)
 
     # TTNN port of the same block.
-    parameters = load_gpt_block_parameters(xtts_state_dict, device, layer_idx=layer_idx)
+    tt_block = TtXttsGptBlock(xtts_state_dict, device, layer_idx=layer_idx)
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16
     )
-    tt_output = ttnn.to_torch(xtts_gpt_block(tt_input, parameters)).float()[:, :seq_len, :]
+    tt_output = ttnn.to_torch(tt_block(tt_input)).float()[:, :seq_len, :]
 
     does_pass, pcc_message = comp_pcc(reference_output, tt_output, pcc)
     logger.info(comp_allclose(reference_output, tt_output))
