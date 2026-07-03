@@ -195,7 +195,9 @@ class NemotronHPipeline:
 
         M = self.M
         h = self._embed_to_fp32(ids_ttnn)
-        for i in range(M._N_LAYERS):
+        _perf_layers = int(os.environ.get("TT_PERF_LAYERS", "0") or "0")
+        _n_layers = min(M._N_LAYERS, _perf_layers) if _perf_layers > 0 else M._N_LAYERS
+        for i in range(_n_layers):
             if i in self.M._MAMBA_LAYERS and i == self.M._MAMBA_LAYERS[0]:
                 # The block stub does its OWN pre-norm + residual; feed it the
                 # bf16 residual stream and let it return the updated stream.
