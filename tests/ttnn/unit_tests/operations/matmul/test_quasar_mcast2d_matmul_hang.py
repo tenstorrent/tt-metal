@@ -47,23 +47,22 @@ import ttnn
 def test_quasar_mcast2d_matmul_hang(mesh_device, out_subblock_h):
     device = mesh_device
 
-    # Resized for the 2-compute-core emulator (was 8x4=32 cores). Block-sharding K (or N) across a
-    # multi-COLUMN grid requires grid_x = number of width-shards; the emulator can't provide extra columns,
-    # so a [224,128] tensor with a [224,64] shard needs 2 columns and trips tensor_spec.cpp:153 "shards
-    # along width (2) must not exceed columns (1)". Fix: run on a SINGLE core (1x1 grid) with the WHOLE
-    # tensor as one block shard (shard shape == full tensor, no K/N split). The matmul kernels are no-op'd
-    # (LLK dest-sync deadlock, issue filed), so this only needs to allocate + launch, not hang.
-    M, K, N = 224, 128, 32
-    grid_x, grid_y = 1, 1  # single compute core; whole A/out is one block shard (no K/N split)
+    # Sized for the 2-compute-core emulator, whose grid is 2x1 (logical cores (0,0) and (1,0) -- 2 COLUMNS,
+    # 1 ROW; there is NO y=1 row, so any grid_y=2 config fails with "No core at (0,1)"). grid_x=2 gives the
+    # 2 columns needed to block-shard K (the "shards along width" error earlier was grid_x=1, not a missing
+    # column); grid_y=1 is the single row. The matmul kernels are no-op'd (LLK dest-sync deadlock, issue
+    # filed), so this only needs to allocate + launch, not reproduce the hang.
+    M, K, N = 224, 128, 64
+    grid_x, grid_y = 2, 1  # 2x1: M over grid_y=1, K over grid_x=2 (2 columns), N tiled over grid_x=2
 
     a_torch = torch.randn((1, 1, M, K), dtype=torch.bfloat16)
     b_torch = torch.randn((1, 1, K, N), dtype=torch.bfloat16)
 
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
-    # BLOCK_SHARDED A on 1 core: the whole tensor is one shard [224,128] (7 x 4 tiles). The shard width
-    # equals the full tensor width, so it fits a single-column grid (no "shards along width" violation).
+    # BLOCK_SHARDED A: 224 rows over grid_y=1 -> 224 (7 tiles); 128 cols over grid_x=2 -> 64 (2 tiles) per
+    # core. Shard [224,64] on the 2 columns (0,0)-(1,0) -- 2 shards, fits the 2x1 grid.
     a_mem_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, M, K),
+        shape=(1, 1, 224, 64),
         core_grid=core_grid,
         strategy=ttnn.ShardStrategy.BLOCK,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -75,7 +74,7 @@ def test_quasar_mcast2d_matmul_hang(mesh_device, out_subblock_h):
     b = ttnn.from_torch(b_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Config classes live under the raw binding path (as the resnet model uses for the 1D variant).
-    # grid=1x1: num_blocks_x = N_tiles(1)/per_core_N(1) = 1 = grid_x; num_blocks_y = per_core_M/out_block_h = 1.
+    # grid=2x1: num_blocks_x = N_tiles(2)/per_core_N(1) = 2 = grid_x; num_blocks_y = per_core_M/out_block_h = 1.
     program_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=2,
@@ -90,9 +89,9 @@ def test_quasar_mcast2d_matmul_hang(mesh_device, out_subblock_h):
         fuse_batch=True,
     )
 
-    # Output BLOCK_SHARDED on 1 core: the whole output is one shard [224,32] (full N=32).
+    # Output BLOCK_SHARDED: shard [224,32] per core on the 2 columns (0,0)-(1,0).
     out_mem_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, M, N),
+        shape=(1, 1, 224, 32),
         core_grid=core_grid,
         strategy=ttnn.ShardStrategy.BLOCK,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
