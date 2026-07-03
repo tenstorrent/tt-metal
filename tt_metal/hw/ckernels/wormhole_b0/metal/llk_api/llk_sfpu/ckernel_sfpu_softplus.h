@@ -61,10 +61,10 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
 #ifdef INP_FLOAT32
     // FP32: degree 7 for < 1 ULP
     sfpi::vFloat poly = PolynomialEvaluator::eval(
-        r, sfpi::vConst1, sfpi::vConst1, 0.5f, 0.166666667f, 0.0416666667f, 0.00833333333f, 0.00138888889f, 0.000198412698f);
+        r, 1.0f, 1.0f, 0.5f, 0.166666667f, 0.0416666667f, 0.00833333333f, 0.00138888889f, 0.000198412698f);
 #else
     // BF16: degree 5 sufficient
-    sfpi::vFloat poly = PolynomialEvaluator::eval(r, sfpi::vConst1, sfpi::vConst1, 0.5f, 0.166666667f, 0.0416666667f, 0.00833333333f);
+    sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, 0.5f, 0.166666667f, 0.0416666667f, 0.00833333333f);
 #endif
 
     // Scale by 2^k via exponent manipulation
@@ -72,7 +72,7 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     sfpi::vInt new_exp = p_exp + k_int;
 
     // FTZ: if exponent underflows, result is 0
-    sfpi::vFloat result = sfpi::vConst0;
+    sfpi::vFloat result = 0.0f;
     v_if(new_exp > 0) { result = sfpi::setexp(poly, new_exp); }
     v_endif;
 
@@ -107,7 +107,7 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
 #ifdef INP_FLOAT32
             // FP32: inline Cody-Waite exp + 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3))
             sfpi::vFloat e = softplus_exp_negative(neg_a);
-            residual = e * (sfpi::vConst1 + e * (-0.5f + e * 0.333333343f));
+            residual = e * (1.0f + e * (-0.5f + e * 0.333333343f));
 #else
             // BF16: exp_21f is faster than inline Cody-Waite (~8 vs ~15 ops)
             residual = _sfpu_exp_21f_bf16_<false>(neg_a);
@@ -118,9 +118,7 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         // Reconstruct softplus(t):
         //   t >= 0: softplus(t) = t + f(t) = max(0,t) + residual
         //   t < 0:  softplus(t) = f(|t|) = 0 + residual
-        // Branch-free: vec_min_max clamps t to max(0,t), saving 1 instruction vs v_if
-        sfpi::vFloat zero_threshold = 0.0f;
-        sfpi::vec_min_max(zero_threshold, t);
+        t = sfpi::max(t, 0.0f);
         sfpi::vFloat sp = t + residual;
 
         // Round-to-nearest for bf16 destination (SFPSTORE defaults to truncation)

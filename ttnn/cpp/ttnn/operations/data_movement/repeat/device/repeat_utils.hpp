@@ -35,6 +35,9 @@ std::optional<tt::tt_metal::ShardSpec> adjust_repeat_shard_spec_to_shape(
 
 // Fresh shard spec over compute grid from post-repeat shape; nullopt if it won't fit.
 std::optional<tt::tt_metal::ShardSpec> generate_repeat_shard_spec(
-    const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, tt::tt_metal::TensorMemoryLayout memory_layout);
+    const Tensor& input_tensor,
+    const ttnn::Shape& padded_out_shape,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt);
 
 }  // namespace ttnn::operations::data_movement::repeat

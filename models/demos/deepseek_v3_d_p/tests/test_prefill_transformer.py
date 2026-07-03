@@ -69,6 +69,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     load_debug_trace,
     load_reference_cache,
     save_reference_cache,
+    slice_debug_trace,
     slice_non_padded,
     tokenize_prompt_to_isl,
 )
@@ -214,16 +215,24 @@ def run_model(
 
     # Priority 1: debug trace on disk
     trace = None
-    trace_dir = (
+    trace_dir = None
+    trace_sliced = False
+    trace_match = (
         find_trace_dir(input_source, isl_total, padding_side, use_pretrained, n_routed_experts)
         if pcc_validation
         else None
     )
-    if trace_dir is not None:
+    if trace_match is not None:
+        trace_dir, trace_isl = trace_match
         trace = load_debug_trace(trace_dir, num_layers=num_layers)
+        if trace_isl > isl_total:
+            trace = slice_debug_trace(trace, isl_total)
+            trace_sliced = True
+            logger.info(f"Sliced trace {trace_dir.name} from native isl={trace_isl} to requested isl={isl_total}")
         logger.info(
             f"Loaded debug trace from {trace_dir} "
-            f"(trace n_layers={trace.metadata.get('n_layers')}, test num_layers={num_layers})"
+            f"(trace n_layers={trace.metadata.get('n_layers')}, test num_layers={num_layers}, "
+            f"native_isl={trace_isl}, sliced={trace_sliced})"
         )
 
     cache_key = ReferenceCacheKey(
@@ -699,7 +708,9 @@ def run_model(
         # --- Logits PCC check (last-token logits vs trace reference) ---
         # Trace logits / next-token are products of the full traced model. They are
         # only meaningful when the TT model ran the same number of layers as the trace.
-        trace_full_model = trace is not None and num_layers == trace.metadata.get("n_layers")
+        # A sliced trace's stored logits/next-token belong to the full (longer) sequence,
+        # so they are not a valid reference for the shorter prefill — skip those checks.
+        trace_full_model = trace is not None and not trace_sliced and num_layers == trace.metadata.get("n_layers")
         if trace_full_model and trace.logits is not None and "logits" in tt_intermediates:
             try:
                 _, logits_pcc = comp_pcc(trace.logits.float(), tt_intermediates["logits"].float())
@@ -709,10 +720,12 @@ def run_model(
                 logger.error(f"{'logits':<20s}  PCC comparison failed: {e}")
                 pcc_results.append(("logits", -1.0))
         elif trace is not None and not trace_full_model:
-            logger.info(
-                f"Skipping trace logits/first-token checks: "
-                f"num_layers={num_layers} != trace n_layers={trace.metadata.get('n_layers')}"
+            reason = (
+                "trace sliced to a shorter isl (full-sequence logits/next-token invalid)"
+                if trace_sliced
+                else f"num_layers={num_layers} != trace n_layers={trace.metadata.get('n_layers')}"
             )
+            logger.info(f"Skipping trace logits/first-token checks: {reason}")
 
         profiler.end("pcc_validation")
 
@@ -737,7 +750,8 @@ def run_model(
         )
 
         # First-token cross-check against the reference
-        if trace is not None and num_layers == trace.metadata.get("n_layers"):
+        # (skipped for a sliced trace: its next_token_id is the full sequence's, not the prefix's)
+        if trace is not None and not trace_sliced and num_layers == trace.metadata.get("n_layers"):
             token_match = check_first_token_match(trace, trace_dir, first_token_id, first_token_prob)
             if token_match is False:
                 failures.append(("first_token_match", -1.0))

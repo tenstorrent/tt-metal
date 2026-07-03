@@ -906,7 +906,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
             // - Using `ttnn::pad` changes the alignment on the tensor to its physical size, and the tensor spec
             //   validation requires that `physical_shard_width % width_alignment == 0`
             // - `physical_size.width() % page_shape.width() == 0`
-            if (input_tensor.logical_shape()[-1] % input_tensor_sharded_memory_config.shard_spec()->shape[-1] != 0 &&
+            if (input_tensor.logical_shape()[-1] % input_tensor_sharded_memory_config.shard_spec()->shape[1] != 0 &&
                 input_tensor.layout() == Layout::ROW_MAJOR &&
                 input_tensor_sharded_memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
                 const auto& shard_spec = input_tensor_sharded_memory_config.shard_spec().value();

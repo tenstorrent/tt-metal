@@ -45,7 +45,7 @@ public:
         size_t trace_region_size = 0,
         size_t worker_l1_size = 0,
         const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = {},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         const std::string& mock_cluster_desc_path = "") :
         MetalEnvDescriptor(
             mock_cluster_desc_path.empty() ? std::optional<std::string>(std::nullopt)
@@ -79,7 +79,7 @@ public:
     size_t trace_region_size() const { return trace_region_size_; }
     size_t worker_l1_size() const { return worker_l1_size_; }
     const DispatchCoreConfig& dispatch_core_config() const { return dispatch_core_config_; }
-    const tt::stl::Span<const std::uint32_t>& l1_bank_remap() const { return l1_bank_remap_; }
+    const ttsl::Span<const std::uint32_t>& l1_bank_remap() const { return l1_bank_remap_; }
 
     const Hal& hal() const { return env_impl().get_hal(); }
     Cluster& cluster() const { return env_impl().get_cluster(); }
@@ -106,7 +106,7 @@ public:
     size_t trace_region_size_ = 0;
     size_t worker_l1_size_ = 0;
     DispatchCoreConfig dispatch_core_config_;
-    tt::stl::Span<const std::uint32_t> l1_bank_remap_;
+    ttsl::Span<const std::uint32_t> l1_bank_remap_;
 };
 
 }  // namespace tt::tt_metal

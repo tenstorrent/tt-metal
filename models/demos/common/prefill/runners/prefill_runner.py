@@ -17,9 +17,11 @@ after compile). The two modes run identical pipeline mechanics and differ only i
 
   * Request mode (default): production serving. rank 0's tokens + per-iter PrefillMetadata arrive over
     the H2D socket from an external producer (prefill_h2d_producer.py / the scheduler); the loop is
-    UNBOUNDED (runs to SIGTERM). KV-chunk-table migration + per-layer LayerAck are wired for the
-    single-rank case only (disabled for the pipeline for now). Shutdown for >1 rank is rough: ranks
-    block in the H2D/D2D recv device op and exit on teardown/SIGKILL (no end-of-request sentinel yet).
+    UNBOUNDED. KV-chunk-table migration + per-layer LayerAck are wired for the single-rank case only
+    (disabled for the pipeline for now). Shutdown is graceful: the producer/scheduler closes the stream
+    with an all -1 PrefillMetadata sentinel that each rank forwards downstream and then exits on; a rank
+    blocked in the recv can only be released by a transfer (the recv device op has no timeout), so
+    SIGTERM/SIGKILL remains the hard fallback if no sentinel arrives.
 
   * Standalone mode (PREFILL_STANDALONE=1): bring-up / benchmark. rank 0's input is the golden trace
     for a fixed PREFILL_STANDALONE_NCHUNKS chunks; the loop is BOUNDED and exits cleanly.
@@ -124,6 +126,14 @@ _apply_manifest_env()
 # per-chunk overhead is the persistent service's fabric/NoC presence, not the push workers).
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 METADATA_SIZE_BYTES = 12
+
+# End-of-stream sentinel: the producer/scheduler closes the request stream with one final push whose
+# PrefillMetadata words are all -1 (0xFFFFFFFF on the wire). -1 is out of range for slot_id and both KV
+# positions, so it can't collide with a real chunk. On receipt a rank forwards it to the next rank
+# (unblocking that rank's recv) and breaks its loop, so an N-rank pipeline drains and exits gracefully
+# instead of every rank blocking in its recv until SIGKILL. Shared wire convention with the scheduler;
+# see ADDING_A_PREFILL_MODEL.md.
+SHUTDOWN_METADATA_WORD = -1
 
 # H2D socket service (request mode, rank 0 input): one worker core copies each pushed chunk into a fresh
 # tensor; the producer packs the PrefillMetadata alongside each push.
@@ -236,6 +246,16 @@ def _first_rank_chunk_tokens(runtime, token_ids: list[int], kv_actual: int) -> t
     return runtime.make_chunk_input(token_ids[kv_actual : kv_actual + cfg.chunk_size])
 
 
+def _is_shutdown_sentinel(meta: dict) -> bool:
+    """True for the all -1 end-of-stream sentinel (see SHUTDOWN_METADATA_WORD); false for every real
+    chunk, whose slot_id and KV positions are non-negative and in range."""
+    return (
+        meta["slot_id"] == SHUTDOWN_METADATA_WORD
+        and meta["actual_start"] == SHUTDOWN_METADATA_WORD
+        and meta["actual_end"] == SHUTDOWN_METADATA_WORD
+    )
+
+
 def _socket_next(h2d_service) -> tuple:
     """Block on the next producer push: returns (tt_tokens, {slot_id, actual_start, actual_end})
     decoded from the 12-byte PrefillMetadata. Used only by the unbounded request loop (rank 0 input)."""
@@ -343,6 +363,33 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
     )
 
 
+def _forward_shutdown(d2d_out, rank: int, hidden_size: int) -> None:
+    """Forward the shutdown sentinel to the downstream rank so it unblocks in its own recv, then release
+    the outbound link so the transfer ships (mirroring _compute_and_send's tail). The activation content
+    is irrelevant — the downstream discards it once it sees the sentinel — but outbound_socket_service_sync
+    requires the input's per-shard spec to equal the sender backing's, so build the dummy exactly like a
+    real activation: the [1, 1, CHUNK_SIZE, hidden_size] bf16 TILE spec sharded by D2D_MAPPER_CONFIG."""
+    import torch
+
+    dev = d2d_out.get_backing_tensor().device()
+    dummy = ttnn.from_torch(
+        torch.zeros(1, 1, CHUNK_SIZE, hidden_size),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=dev,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.create_mesh_mapper(dev, D2D_MAPPER_CONFIG),
+    )
+    sentinel = {
+        "slot_id": SHUTDOWN_METADATA_WORD,
+        "actual_start": SHUTDOWN_METADATA_WORD,
+        "actual_end": SHUTDOWN_METADATA_WORD,
+    }
+    _d2d_send(d2d_out, dummy, rank, sentinel)  # ships + frees the dummy
+    d2d_out.release_fabric_links()
+    logger.info(f"[pp rank {rank}] forwarded SHUTDOWN sentinel to rank {rank + 1}")
+
+
 def _lease_reclaim(d2d_in, d2d_out) -> None:
     """Before a chunk: reclaim this rank's fabric links (the previous-iter D2D transfer has drained),
     then grant the inbound receiver so this chunk's activation drains into its backing. No-op without
@@ -357,22 +404,27 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
 
 def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d_out) -> float:
     """Run one chunk: prefill into the engine-owned kv_cache, forward the output downstream (non-last
-    rank) and grant the outbound sender so it ships over fabric, log CHUNK_START. Returns the
-    compute-start epoch (NTP-comparable)."""
+    rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
+    (NTP-comparable). CHUNK_START is logged BEFORE the forward, with this chunk's metadata, so the
+    slot/KV-range is visible per rank even if prefill_chunk hangs. The trailing metadata is kept after
+    compute_start so the c=/compute_start= fields stay parseable (plot_pipeline_trace.py)."""
     t_start = time.time()
+    logger.info(
+        f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} "
+        f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
+    )
     out = runtime.prefill_chunk(
         inp, kv_cache, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
     )
     if SYNC_PER_CHUNK:
-        # Block on device completion before the send so the delta is this rank's forward alone, not the
-        # downstream-start proxy. Serializes dispatch (no overlap) — measurement runs only.
+        # Block on device completion so the delta is this rank's forward alone, not the downstream-start
+        # proxy. Serializes dispatch (no overlap) — measurement runs only.
         ttnn.synchronize_device(runtime.mesh_device)
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
     if not runtime.config.is_last_rank:
         _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it over fabric
     if d2d_out is not None:
         d2d_out.release_fabric_links()
-    logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f}")
     return t_start
 
 
@@ -390,13 +442,13 @@ def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done:
 
 
 def run_request_loop(
-    runtime, kv_cache, rank: int, num_ranks: int, *, h2d_service=None, d2d_in=None, d2d_out=None
+    runtime, kv_cache, rank: int, num_ranks: int, *, hidden_size: int, h2d_service=None, d2d_in=None, d2d_out=None
 ) -> None:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
-    producer decides the count); downstream ranks read from D2D. Runs until SIGTERM. There is no
-    end-of-stream marker, so shutdown is rough: ranks block in the recv device op and exit on mesh
-    teardown / SIGKILL. No fixed NUM_CHUNKS bound, no trace input, no PCC — see run_standalone_loop
-    for those."""
+    producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
+    closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
+    as a hard fallback, until SIGTERM/SIGKILL. No fixed NUM_CHUNKS bound, no trace input, no PCC — see
+    run_standalone_loop for those."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -413,6 +465,14 @@ def run_request_loop(
             inp, meta = _socket_next(h2d_service)  # slot/start/end from the producer
         else:
             inp, meta = _d2d_recv(d2d_in)
+        if _is_shutdown_sentinel(meta):
+            # End of stream: drop the throwaway payload, hand the sentinel to the next rank so it too
+            # unblocks and exits, then fall through to the graceful drain below.
+            logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
+            ttnn.deallocate(inp)
+            if d2d_out is not None:
+                _forward_shutdown(d2d_out, rank, hidden_size)
+            break
         t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out)
         if first is None:
             first = t
@@ -721,7 +781,16 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
-    run_request_loop(runtime, kv_cache, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
+    run_request_loop(
+        runtime,
+        kv_cache,
+        rank,
+        num_ranks,
+        hidden_size=hf_config.hidden_size,
+        h2d_service=h2d_service,
+        d2d_in=d2d_in,
+        d2d_out=d2d_out,
+    )
 
     # Release services while the mesh + command queues are still alive (their dtors free a command
     # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).

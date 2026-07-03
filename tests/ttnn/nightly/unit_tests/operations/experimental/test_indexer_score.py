@@ -135,7 +135,8 @@ def run_dsa(
 ):
     """Run indexer_score_dsa (relu + learned gates + head-sum) and return the bf16 score as torch.
 
-    q (srcB) and k (srcA) may be bfp8_b; weights stay bf16.
+    q (srcB) and k (srcA) may be bfp8_b; weights stay bf16. (The block-cyclic K remap derives sp from the
+    mesh and so is exercised on a real SP mesh -- see the multidevice tests -- not simulated single-chip.)
     """
     out = ttnn.experimental.indexer_score_dsa(
         to_device(q, device, dtype=q_dtype),
@@ -1152,7 +1153,7 @@ def _msa_per_sp_ref(q_g, k_g, sp_count, history):
 
 
 @pytest.mark.parametrize("mesh_device", [QB_SP], indirect=True)
-def test_indexer_score_msa_qb_per_device_chunk_start(mesh_device):
+def test_indexer_score_qb_msa_per_device_chunk_start(mesh_device):
     """MSA over 4 BH devices (SP=4), each deriving its own chunk_start from its coordinate (cluster_axis
     unset -> linear order). Raw dot + constant scale, num_groups=1 -> one head-summed [1,1,Sq,T] plane."""
     q_g, k_g, _ = _global_inputs(M3_QB_HEADS, QB_CHUNK, QB_T, seed=42)
@@ -1172,7 +1173,7 @@ def test_indexer_score_msa_qb_per_device_chunk_start(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [(QB2_SP, QB2_TP)], ids=["2x2"], indirect=True)
-def test_indexer_score_msa_qb_sp2_tp2(mesh_device):
+def test_indexer_score_qb_msa_sp2_tp2(mesh_device):
     """MSA over a 2x2 mesh: chunk_start derived per-device along cluster_axis (SP), constant across TP; the
     M3 index heads split across TP. Each device head-sums its half (num_groups=1); the test sums the TP
     partials (the all-reduce) and validates per SP rank against its own raw-dot, own-chunk_start reference."""
@@ -1483,3 +1484,174 @@ def test_indexer_score_block_pool_validation(device, expect_error, block_size, k
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=k_chunk_size, head_group_size=0)
     with expect_error(RuntimeError, match):
         run_msa(q, k, 512, device, num_groups=heads, block_size=block_size, program_config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# Block-cyclic (per-SP-shard slab) K layout. Chunked prefill packs each SP shard's per-chunk slab
+# (chunk_local = global_chunk/sp keys) back-to-back, so the SP-gathered [B,1,T,D] k is in a PERMUTED physical
+# order and the reader reads it back in natural token order (invP per tile) -- scores (and the block-max-pool
+# over token-contiguous blocks) come out correct. Interface matches ttnn.transformer.sparse_sdpa: the caller
+# names the MESH AXIS the cache was striped over (block_cyclic_sp_axis, sp DERIVED from the mesh) and passes
+# the per-shard chunk length (block_cyclic_chunk_local). The permutation is only non-trivial for sp > 1, so it
+# is exercised on a REAL SP mesh (below), NOT simulated on one chip; the pure invP tile-math is unit-tested
+# device-free.
+# ---------------------------------------------------------------------------
+def _slab_positions(ring_size, chunk, t):
+    """P[r] = natural token position physically stored at slab row r. Physical row r (shard c = r//sll, local
+    row lr = r%sll) holds natural token (lr//cl)*chunk + c*cl + (lr%cl), where sll = T/ring_size (per-shard
+    local length), cl = chunk/ring_size (per-shard slab width). This is the layout the in-kernel invP inverts.
+    Canonical (production) version: models/demos/deepseek_v3_d_p/tt/mla/utils.py::blockcyclic_positions; kept
+    local here so this op unit test has no model dependency."""
+    sll, cl = t // ring_size, chunk // ring_size
+    c = torch.arange(ring_size).repeat_interleave(sll)
+    lr = torch.arange(sll).repeat(ring_size)
+    return (lr // cl) * chunk + c * cl + (lr % cl)
+
+
+def _slab_inv_positions(ring_size, chunk, t):
+    """invP[n] = physical slab row holding natural token n (inverse of _slab_positions). Row-granularity form
+    of the in-kernel per-tile SLAB_KTILE remap: slab = n//chunk, rem = n%chunk, c = rem//cl, off = rem%cl ->
+    r = c*sll + slab*cl + off (sll = t/ring_size, cl = chunk/ring_size)."""
+    sll, cl = t // ring_size, chunk // ring_size
+    n = torch.arange(t)
+    slab = n // chunk
+    rem = n - slab * chunk
+    c = rem // cl
+    off = rem - c * cl
+    return c * sll + slab * cl + off
+
+
+def _to_slab(k_nat, ring_size, chunk):
+    """Permute a natural-order [1,1,T,D] k into its slab physical layout: k_slab[r] = k_nat[P[r]]."""
+    t = k_nat.shape[2]
+    P = _slab_positions(ring_size, chunk, t)
+    k_slab = k_nat.clone()
+    k_slab[0, 0] = k_nat[0, 0][P]
+    return k_slab
+
+
+@pytest.mark.parametrize("ring_size", [2, 4, 8], ids=["sp2", "sp4", "sp8"])
+@pytest.mark.parametrize("chunk_local,t", [(32, 2048), (64, 4096), (128, 3072)], ids=["cl32", "cl64", "cl128"])
+def test_indexer_score_slab_invp_math(ring_size, chunk_local, t):
+    """Pure-function (device-free) check of the block-cyclic remap math the reader kernel bakes in: invP must
+    be the exact inverse of the block-cyclic layout P over the whole cache, for every legal (sp, chunk, T).
+    Locks the SLAB_KTILE arithmetic independent of any device; the end-to-end remap is validated on a real
+    SP mesh below. (Requires T a whole number of global chunks and chunk divisible by sp.)"""
+    chunk = ring_size * chunk_local  # global chunk = sp * per-shard chunk
+    if t % chunk or (t // ring_size) % chunk_local:
+        pytest.skip("layout must tile the cache evenly (whole global chunks, >=1 slab per shard)")
+    P = _slab_positions(ring_size, chunk, t)
+    invP = _slab_inv_positions(ring_size, chunk, t)
+    ident = torch.arange(t)
+    assert torch.equal(P[invP], ident), "P[invP(n)] != n -- invP is not the layout's inverse"
+    assert torch.equal(invP[P], ident), "invP[P(r)] != r -- not a bijection"
+
+
+# ---- Real-mesh block-cyclic remap: sp DERIVED from block_cyclic_sp_axis on an (sp, 1) mesh ----
+# The remap is the identity at sp=1, so the natural->physical PERMUTATION arithmetic only runs on a real SP
+# mesh. K is stored block-cyclic and REPLICATED; q/w are SP-sharded on seq (per-chip chunk_local rows). The
+# reader remaps each logical K-tile so the score matches the contiguous-K, natural-order per-SP reference.
+# Reuses the QB constants (QB_HISTORY % (QB_SP*QB_SQ) == 0 -> T is a whole number of global chunks, and
+# T/QB_SP spans many slabs so the permutation is non-trivial).
+@pytest.mark.parametrize("mesh_device", [(QB_SP, 1)], ids=["sp4"], indirect=True)
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_qb_block_cyclic(mesh_device, case_id, heads):
+    """DSA over a REAL SP=4 mesh with a block-cyclic K cache. sp is read from block_cyclic_sp_axis=0 (the mesh
+    rows); block_cyclic_chunk_local = QB_SQ (per-chip seq). chunk_start OMITTED -> the slab path deduces base =
+    T - global_chunk = QB_HISTORY, device r gets base + r*QB_SQ. Score must match the natural-order reference."""
+    q_g, k_nat, w_g = _global_inputs(heads, QB_CHUNK, QB_T, seed=42)
+    k_bc = _to_slab(k_nat, QB_SP, QB_CHUNK)  # global chunk = QB_SP * QB_SQ = QB_CHUNK
+    mesh_shape = tuple(mesh_device.shape)
+    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None))  # seq on SP axis, repl. axis 1
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard)
+    k_dev = _to_mesh(mesh_device, k_bc, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    out = ttnn.experimental.indexer_score_dsa(
+        q_dev,
+        k_dev,
+        w_dev,
+        cluster_axis=0,  # SP axis (same axis the cache was striped over)
+        block_cyclic_sp_axis=0,
+        block_cyclic_chunk_local=QB_SQ,
+        program_config=glx_config(heads),
+    )
+    out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 1)))
+    ref = _per_sp_ref(q_g, k_nat, w_g, QB_SP, QB_HISTORY)
+    assert_indexer_match(out_t, ref, QB_CHUNK, QB_T, check_neg=True)
+
+
+# ---- Q sequence sharded across BOTH mesh axes via cluster_axis=None (block_cyclic_chunk_local == tp*q_isl) ----
+# On a 2x2 mesh with K block-cyclic over ONE axis (sp=2, tp=2), Q's sequence is split across all 4 devices.
+# cluster_axis=None ranks device (a,b) by its row-major position in the device list (a*B+b), so the flat
+# linearization IS a row-major nested 2D seq shard: device r's q-row 0 sits at base + r*Sq. For a slab-aligned
+# base every device stays inside its slab (no straddle), so the flat shard + block-cyclic remap reassembles to
+# a plain contiguous natural-order scoring of the whole chunk. A NAMED cluster_axis is rejected (its rank would
+# miss the second axis's offset).
+@pytest.mark.parametrize("mesh_device", [(2, 2)], ids=["2x2"], indirect=True)
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_qb_both_axes_seq(mesh_device, case_id, heads, expect_error):
+    """Q seq sharded across both axes (all 4 devices) with cluster_axis=None: chunk_local == tp*q_isl (tp=2),
+    which the guard allows only for cluster_axis=None. K block-cyclic over sp=2, aligned base -> no straddle,
+    so the reassembled score equals the contiguous natural-order reference. Also asserts a NAMED cluster_axis
+    (which would mis-rank) is still rejected."""
+    sp, chunk_global, t = 2, 256, 512  # cl=128, Sq per device = 256/4 = 64 (2 tiles); 2 chunks -> >1 slab/shard
+    q_g, k_nat, w_g = _global_inputs(heads, chunk_global, t, seed=42)
+    k_bc = _to_slab(k_nat, sp, chunk_global)
+    shard = ttnn.ShardTensorToMesh(mesh_device, dim=2)  # flat row-major over all 4 devices == None's device order
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard)
+    k_dev = _to_mesh(mesh_device, k_bc, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+    kw = dict(block_cyclic_sp_axis=0, block_cyclic_chunk_local=chunk_global // sp, program_config=glx_config(heads))
+
+    # cluster_axis=None -> Q linearized row-major over all 4 devices (both axes). chunk_start OMITTED ->
+    # base = T - global_chunk = 256 (slab-aligned). Reassembled == contiguous natural scoring at base.
+    out = ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, cluster_axis=None, **kw)
+    out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+    ref = indexer_score_dsa_ref(q_g, k_nat, w_g, t - chunk_global)
+    assert_indexer_match(out_t, ref, chunk_global, t, check_neg=True)
+
+    # A NAMED cluster_axis with tp*q_isl is rejected (rank would miss the second axis's seq offset).
+    with expect_error(RuntimeError, "NAMED cluster_axis"):
+        ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, cluster_axis=0, **kw)
+
+
+@pytest.mark.parametrize("mesh_device", [(QB_SP, 1)], ids=["sp4"], indirect=True)
+def test_indexer_score_qb_msa_block_cyclic(mesh_device):
+    """MSA (raw dot, constant scale, num_groups=1) over a REAL SP=4 block-cyclic K cache: sp read from
+    block_cyclic_sp_axis=0, the reader remaps each logical K-tile so the head-summed per-SP score matches the
+    natural-order reference. The reader remap is block_size-independent (it presents natural-order K; pooling
+    then runs over that), so block-max-pool-over-block-cyclic is covered by composition of this remap test and
+    the single-chip contiguous pooled tests -- no separate pooled mesh case needed."""
+    q_g, k_nat, _ = _global_inputs(M3_QB_HEADS, QB_CHUNK, QB_T, seed=42)
+    k_bc = _to_slab(k_nat, QB_SP, QB_CHUNK)
+    mesh_shape = tuple(mesh_device.shape)
+    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None))
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
+    k_dev = _to_mesh(mesh_device, k_bc, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    out = ttnn.experimental.indexer_score_msa(
+        q_dev,
+        k_dev,
+        cluster_axis=0,
+        scale=M3_QB_SCALE,
+        num_groups=1,
+        block_cyclic_sp_axis=0,
+        block_cyclic_chunk_local=QB_SQ,
+        program_config=glx_config(M3_QB_HEADS),
+    )
+    out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 1)))
+    ref = _msa_per_sp_ref(q_g, k_nat, QB_SP, QB_HISTORY)
+    assert_indexer_match(out_t, ref, QB_CHUNK, QB_T, check_neg=True)
+
+
+def test_indexer_score_rejects_partial_block_cyclic_args(device, expect_error):
+    """block_cyclic_sp_axis and block_cyclic_chunk_local define the cache's layout and must be passed TOGETHER
+    -- passing only one is a caller error (the per-shard width is undefined). Host-side guard, single chip."""
+    heads, dim, sq, t = 64, GLX_DIM, 64, 512
+    q, k, w = make_inputs(heads, dim, sq, t)
+    q_dev, k_dev, w_dev = to_device(q, device), to_device(k, device), to_device(w, device)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
+    for kwargs in [{"block_cyclic_sp_axis": 0}, {"block_cyclic_chunk_local": 256}]:
+        with expect_error(RuntimeError, "both be set or both unset"):
+            ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=0, program_config=cfg, **kwargs)
