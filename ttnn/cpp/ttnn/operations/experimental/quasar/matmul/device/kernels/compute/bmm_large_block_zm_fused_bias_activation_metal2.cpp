@@ -332,14 +332,14 @@ void kernel_main() {
                     // Newest ring marker per stuck core: 0xC0FFEE00 -> stuck at in0 wait (in0 data not
                     // delivered); 0xC0FFEE01 -> passed in0, stuck at in1 wait; 0xC0FFEE02 -> passed BOTH
                     // input waits, so the stall is later (partials reserve/wait, pack, or dest).
-                    UNPACK((WATCHER_RING_BUFFER_PUSH(0xC0FFEE00u)));
-                    UNPACK((WATCHER_RING_BUFFER_PUSH((uint32_t)block)));
-                    UNPACK((WATCHER_RING_BUFFER_PUSH((uint32_t)in0_block_num_tiles)));
+                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE00u));
+                    UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)block));
+                    UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in0_block_num_tiles));
                     in0_cb.wait_front(in0_block_num_tiles);
-                    UNPACK((WATCHER_RING_BUFFER_PUSH(0xC0FFEE01u)));
-                    UNPACK((WATCHER_RING_BUFFER_PUSH((uint32_t)in1_block_num_tiles)));
+                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE01u));
+                    UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in1_block_num_tiles));
                     in1_cb.wait_front(in1_block_num_tiles);
-                    UNPACK((WATCHER_RING_BUFFER_PUSH(0xC0FFEE02u)));
+                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE02u));
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {

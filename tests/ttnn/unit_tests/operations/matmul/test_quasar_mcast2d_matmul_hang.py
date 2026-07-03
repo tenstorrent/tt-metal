@@ -52,7 +52,7 @@ def test_quasar_mcast2d_matmul_hang(mesh_device, out_subblock_h):
     # K over grid_x=2, N tiled over grid_x=2. The matmul kernels are currently no-op'd (LLK dest-sync
     # deadlock, issue filed), so this only needs to allocate + launch, not reproduce the hang.
     M, K, N = 224, 128, 64
-    grid_x, grid_y = 2, 1  # in0 block-sharded across a 2x1 grid (M over y, K over x)
+    grid_x, grid_y = 1, 2  # in0 block-sharded across a 1x2 grid (M over y, K over x)
 
     a_torch = torch.randn((1, 1, M, K), dtype=torch.bfloat16)
     b_torch = torch.randn((1, 1, K, N), dtype=torch.bfloat16)
