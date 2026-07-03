@@ -99,7 +99,7 @@ string GetRiscName(
     tt::tt_metal::CoreCoord virtual_core =
         cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-    const std::string risc_name = hal.get_processor_class_name(programmable_core_type, risc_id, abbreviated);
+    const std::string& risc_name = hal.get_processor_class_name(programmable_core_type, risc_id, abbreviated);
     // Mark dispatch-engine (DE) cores in the prefix so they're distinguishable from Tensix DMs without
     // having to bake the distinction into each DPRINT message (e.g. "DE-DM4" vs "DM4").
     if (programmable_core_type == tt_metal::HalProgrammableCoreType::DISPATCH) {
@@ -1120,7 +1120,8 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 // return without populating cores[WORKER], so falling through to the explicit-cores branch
                 // would throw map::at on get_feature_cores(...).at(CoreType::WORKER).
                 continue;
-            } else if (core_type == CoreType::DISPATCH) {
+            }
+            if (core_type == CoreType::DISPATCH) {
                 cores_class = tt::llrt::RunTimeDebugClassDispatch;
             }
         }

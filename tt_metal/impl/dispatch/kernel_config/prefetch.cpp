@@ -34,7 +34,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
-#include <internal/dispatch/dispatch_engine_cores.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 
 using namespace tt::tt_metal;
 
@@ -87,7 +87,7 @@ PrefetchKernel::PrefetchKernel(
     }
     this->kernel_type_ = FDKernelType::DISPATCH;
     this->send_to_brisc_ = true;
-    this->quasar_dm_processor_ = internal::prefetch_dm_processor();
+    this->quasar_dm_processor_ = detail::prefetch_dm_processor();
     // Log prefetcher core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
     tt::tt_metal::Inspector::set_prefetcher_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);

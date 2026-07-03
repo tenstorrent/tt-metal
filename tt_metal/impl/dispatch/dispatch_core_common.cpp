@@ -5,12 +5,16 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt_stl/reflection.hpp>
 #include "dispatch_core_common.hpp"
-#include <internal/dispatch/dispatch_engine_cores.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
+
+namespace tt::tt_metal::detail {
+CoreType resolve_dispatch_core_type(
+    tt::tt_metal::MetalEnvImpl& env, ChipId device_id, const DispatchCoreConfig& dispatch_core_config);
+}  // namespace tt::tt_metal::detail
 
 namespace tt::tt_metal {
 
@@ -52,7 +56,7 @@ CoreType get_core_type_from_config(const DispatchCoreConfig& config) {
 
 CoreType resolve_dispatch_core_type(
     tt::tt_metal::MetalEnvImpl& env, ChipId device_id, const DispatchCoreConfig& dispatch_core_config) {
-    return internal::resolve_dispatch_core_type(env, device_id, dispatch_core_config);
+    return ::tt::tt_metal::detail::resolve_dispatch_core_type(env, device_id, dispatch_core_config);
 }
 
 DispatchCoreConfig get_dispatch_core_config() {

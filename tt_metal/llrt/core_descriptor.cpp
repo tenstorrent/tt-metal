@@ -29,7 +29,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <internal/dispatch/dispatch_engine_cores.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 
 namespace tt {
 
@@ -150,7 +150,7 @@ const core_descriptor_t& get_core_descriptor_config(
     const bool quasar_dispatch_engine_fd =
         arch == tt::ARCH::QUASAR && fast_dispatch &&
         !env.get_rtoptions().get_use_quasar_tensix_dispatch_cores() &&
-        tt::tt_metal::internal::resolve_dispatch_core_type(
+        tt::tt_metal::detail::resolve_dispatch_core_type(
             arch,
             dispatch_core_config,
             env.get_cluster().get_soc_desc(device_id),
