@@ -189,7 +189,7 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_metadata_worker_workload(
 struct CrossProcessCase {
     ttnn::Shape global_shape;
     ttsl::SmallVector<MeshMapperConfig::Placement> placements;
-    uint32_t scratch_cb_size_bytes;
+    uint32_t max_socket_page_size_bytes;
     uint32_t fifo_size_bytes;
     uint32_t metadata_size_bytes;
     uint32_t num_iterations;
@@ -209,16 +209,16 @@ void run_owner(
         .global_spec = global_spec,
         .mapper = ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements}),
         .fifo_size_bytes = cs.fifo_size_bytes,
-        .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
+        .max_socket_page_size_bytes = cs.max_socket_page_size_bytes,
     };
 
     tt::tt_metal::D2HStreamService service(mesh_device, std::move(cfg));
     service.export_descriptor(service_id);
 
     g_cross_rank_world->barrier();
-    std::vector<std::byte> discard(service.payload_size_bytes());
-    service.read_from_tensor(discard);
-    service.barrier();
+    // Host-only cross-process D2H has one consumer: the connector rank. The owner
+    // only releases the initial transfer so the connector can discard it.
+    service.notify_backing_ready();
     g_cross_rank_world->barrier();
 
     auto mapper = ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
@@ -281,19 +281,16 @@ void run_owner_sharded(
         .global_spec = global_spec,
         .mapper = ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements}),
         .fifo_size_bytes = cs.fifo_size_bytes,
-        .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
+        .max_socket_page_size_bytes = cs.max_socket_page_size_bytes,
     };
 
     tt::tt_metal::D2HStreamService service(mesh_device, std::move(cfg));
     service.export_descriptor(service_id);
 
     g_cross_rank_world->barrier();
-    auto drain_mapper =
-        ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
-    auto drain_host = ttnn::distributed::distribute_tensor(
-        Tensor::from_vector<uint32_t>(std::vector<uint32_t>(cs.global_shape.volume(), 0), global_spec), *drain_mapper);
-    service.read_from_tensor(drain_host);
-    service.barrier();
+    // Host-only cross-process D2H has one consumer: the connector rank. The owner
+    // only releases the initial transfer so the connector can discard it.
+    service.notify_backing_ready();
     g_cross_rank_world->barrier();
 
     auto mapper = ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
@@ -383,7 +380,7 @@ void run_owner_metadata(
         .global_spec = global_spec,
         .mapper = ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements}),
         .fifo_size_bytes = cs.fifo_size_bytes,
-        .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
+        .max_socket_page_size_bytes = cs.max_socket_page_size_bytes,
         .worker_cores = worker_cores,
         .metadata_master_core = metadata_master,
         .metadata_size_bytes = cs.metadata_size_bytes,
@@ -552,7 +549,7 @@ TEST_F(CrossProcessD2HStreamServiceFixture, ReplicatedMinimal) {
     CrossProcessCase cs{
         .global_shape = ttnn::Shape({1, 1, 16, 640}),
         .placements = placements,
-        .scratch_cb_size_bytes = 4 * per_row_bytes,
+        .max_socket_page_size_bytes = 4 * per_row_bytes,
         .fifo_size_bytes = 16 * per_row_bytes,
         .metadata_size_bytes = 0,
         .num_iterations = kNumIterations,
@@ -576,7 +573,7 @@ TEST_F(CrossProcessD2HStreamServiceFixture, ReplicatedMetadata) {
     CrossProcessCase cs{
         .global_shape = ttnn::Shape({1, 1, 16, 640}),
         .placements = placements,
-        .scratch_cb_size_bytes = 4 * per_row_bytes,
+        .max_socket_page_size_bytes = 4 * per_row_bytes,
         .fifo_size_bytes = 16 * per_row_bytes,
         .metadata_size_bytes = 64,
         .num_iterations = kNumIterations,
@@ -629,7 +626,7 @@ TEST_F(CrossProcessD2HStreamServiceFixture, Sweep) {
             CrossProcessCase cs{
                 .global_shape = global_shape,
                 .placements = all_replicate,
-                .scratch_cb_size_bytes = ch.cb_pages * per_row_bytes,
+                .max_socket_page_size_bytes = ch.cb_pages * per_row_bytes,
                 .fifo_size_bytes = ch.fifo_pages * per_row_bytes,
                 .metadata_size_bytes = 0,
                 .num_iterations = kNumIterations,
@@ -686,7 +683,7 @@ TEST_F(CrossProcessD2HStreamServiceFixture, Sharded_Sweep) {
             CrossProcessCase cs{
                 .global_shape = global_shape,
                 .placements = placements,
-                .scratch_cb_size_bytes = row.scratch_cb_pages * per_row_bytes,
+                .max_socket_page_size_bytes = row.scratch_cb_pages * per_row_bytes,
                 .fifo_size_bytes = row.fifo_pages * per_row_bytes,
                 .metadata_size_bytes = 0,
                 .num_iterations = kNumIterations,
@@ -725,7 +722,7 @@ TEST_F(CrossProcessD2HStreamServiceFixture, MetadataOnly) {
     CrossProcessCase cs{
         .global_shape = ttnn::Shape({1, 1, 1, 4}),  // unused for backing; N=4 -> 16B record
         .placements = {},
-        .scratch_cb_size_bytes = 0,
+        .max_socket_page_size_bytes = 0,
         .fifo_size_bytes = 4096,
         .metadata_size_bytes = 16,
         .num_iterations = 10,

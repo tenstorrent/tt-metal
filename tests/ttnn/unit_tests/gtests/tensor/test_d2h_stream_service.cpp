@@ -52,7 +52,7 @@ enum class OutputPath {
 struct D2HServiceCase {
     ttnn::Shape global_shape;
     ttsl::SmallVector<MeshMapperConfig::Placement> placements;
-    uint32_t scratch_cb_size_bytes = 0;
+    uint32_t max_socket_page_size_bytes = 0;
     uint32_t fifo_size_bytes = 0;
 };
 
@@ -217,7 +217,7 @@ void run_d2h_worker_sync_case(
         .global_spec = global_spec,
         .mapper = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements}),
         .fifo_size_bytes = cs.fifo_size_bytes,
-        .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
+        .max_socket_page_size_bytes = cs.max_socket_page_size_bytes,
         .worker_cores = worker_cores,
         .metadata_master_core = metadata_master,
         .metadata_size_bytes = metadata_size_bytes,
@@ -278,7 +278,7 @@ void run_d2h_worker_sync_case_per_shard(
         .global_spec = global_spec,
         .mapper = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements}),
         .fifo_size_bytes = cs.fifo_size_bytes,
-        .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
+        .max_socket_page_size_bytes = cs.max_socket_page_size_bytes,
         .worker_cores = worker_cores,
         .metadata_master_core = metadata_master,
         .metadata_size_bytes = metadata_size_bytes,
@@ -344,7 +344,7 @@ void run_d2h_stream_service_case(
         .global_spec = global_spec,
         .mapper = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements}),
         .fifo_size_bytes = cs.fifo_size_bytes,
-        .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
+        .max_socket_page_size_bytes = cs.max_socket_page_size_bytes,
     };
 
     tt::tt_metal::D2HStreamService service(mesh_device, std::move(cfg));
@@ -509,7 +509,7 @@ TEST_F(D2HStreamServiceTest, Replicated_Sweep) {
         D2HServiceCase cs{
             .global_shape = ttnn::Shape({1, 1, row.N, row.per_row_size}),
             .placements = replicate_all(*this->mesh_device_),
-            .scratch_cb_size_bytes = row.scratch_cb_pages * per_row_bytes,
+            .max_socket_page_size_bytes = row.scratch_cb_pages * per_row_bytes,
             .fifo_size_bytes = row.fifo_pages * per_row_bytes,
         };
         run_d2h_stream_service_case(this->mesh_device_, cs, OutputPath::Tensor);
@@ -526,7 +526,7 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync) {
     D2HServiceCase cs{
         .global_shape = ttnn::Shape({1, 1, 16, 640}),
         .placements = replicate_all(*this->mesh_device_),
-        .scratch_cb_size_bytes = 4 * per_row_bytes,
+        .max_socket_page_size_bytes = 4 * per_row_bytes,
         .fifo_size_bytes = 16 * per_row_bytes,
     };
     run_d2h_worker_sync_case(this->mesh_device_, cs, worker_cores);
@@ -542,7 +542,7 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Metadata) {
     D2HServiceCase cs{
         .global_shape = ttnn::Shape({1, 1, 16, 640}),
         .placements = replicate_all(*this->mesh_device_),
-        .scratch_cb_size_bytes = 4 * per_row_bytes,
+        .max_socket_page_size_bytes = 4 * per_row_bytes,
         .fifo_size_bytes = 16 * per_row_bytes,
     };
     run_d2h_worker_sync_case(
@@ -559,7 +559,7 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Metadata_SingleWorker) {
     D2HServiceCase cs{
         .global_shape = ttnn::Shape({1, 1, 16, 640}),
         .placements = replicate_all(*this->mesh_device_),
-        .scratch_cb_size_bytes = 4 * per_row_bytes,
+        .max_socket_page_size_bytes = 4 * per_row_bytes,
         .fifo_size_bytes = 16 * per_row_bytes,
     };
     run_d2h_worker_sync_case(
@@ -606,7 +606,7 @@ TEST_F(D2HStreamServiceTest, Sharded_Sweep) {
             D2HServiceCase cs{
                 .global_shape = make_global_shape(row.N, row.per_row_size),
                 .placements = placements,
-                .scratch_cb_size_bytes = row.scratch_cb_pages * per_row_bytes,
+                .max_socket_page_size_bytes = row.scratch_cb_pages * per_row_bytes,
                 .fifo_size_bytes = row.fifo_pages * per_row_bytes,
             };
             run_d2h_stream_service_case(this->mesh_device_, cs, OutputPath::Tensor, /*num_iterations=*/10);
@@ -713,7 +713,7 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
             D2HServiceCase cs{
                 .global_shape = ttnn::Shape({1, 1, row.N, row.per_row_size}),
                 .placements = replicate_all(*this->mesh_device_),
-                .scratch_cb_size_bytes = ch.cb_pages * per_row_bytes,
+                .max_socket_page_size_bytes = ch.cb_pages * per_row_bytes,
                 .fifo_size_bytes = ch.fifo_pages * per_row_bytes,
             };
             run_d2h_worker_sync_case(
@@ -777,7 +777,7 @@ TEST_F(D2HStreamServiceTest, Sharded_WorkerSync_Sweep) {
                 D2HServiceCase cs{
                     .global_shape = make_global_shape(row.N, row.per_row_size),
                     .placements = placements,
-                    .scratch_cb_size_bytes = ch.cb_pages * per_row_bytes,
+                    .max_socket_page_size_bytes = ch.cb_pages * per_row_bytes,
                     .fifo_size_bytes = ch.fifo_pages * per_row_bytes,
                 };
                 run_d2h_worker_sync_case_per_shard(

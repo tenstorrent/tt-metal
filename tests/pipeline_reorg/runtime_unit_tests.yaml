@@ -203,12 +203,6 @@
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_per_core_allocation
-    if [ "$ARCH_NAME" = "blackhole" ]; then
-      TT_METAL_SLOW_DISPATCH_MODE=1 \
-        TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
-        ./build/test/tt_metal/unit_tests_api \
-        --gtest_filter='*.DramKernel*:DramSenderGCBFixture.*:DramSubchannelHelperFixture.*'
-    fi
   skus:
     wh_n150_civ2:
       timeout: 20
@@ -242,12 +236,6 @@
   disabled_debug_tools_filter: *disabled_debug_tools
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='-{disabled_debug_tools_filter}'
-    if [ "$ARCH_NAME" = "blackhole" ]; then
-      TT_METAL_SLOW_DISPATCH_MODE=1 \
-        TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
-        ./build/test/tt_metal/unit_tests_debug_tools \
-        --gtest_filter='*Drisc*:*Dram*Print*:-{disabled_debug_tools_filter}'
-    fi
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_inspector
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch

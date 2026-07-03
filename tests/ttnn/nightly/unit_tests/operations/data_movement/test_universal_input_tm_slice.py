@@ -160,7 +160,17 @@ def _explicit_width_shard_config(device, ncores, sh, sw):
 
 
 def _run_slice(
-    shape, begins, ends, step, layout, input_mem_config, output_mem_config, dtype, device, ulp_when_exact=True
+    shape,
+    begins,
+    ends,
+    step,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    dtype,
+    device,
+    ulp_when_exact=True,
+    expected_shard_orientation=None,
 ):
     """Run slice and assert output memory_layout matches request; verifies shard_spec is set when sharded."""
     torch.manual_seed(12345)
@@ -182,6 +192,11 @@ def _run_slice(
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ):
             assert actual.shard_spec is not None, "Sharded output requested but result has no shard_spec"
+            if expected_shard_orientation is not None:
+                assert actual.shard_spec.orientation == expected_shard_orientation, (
+                    f"Expected output shard orientation {expected_shard_orientation}, "
+                    f"got {actual.shard_spec.orientation}"
+                )
 
     ref = x[slices]
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
@@ -815,6 +830,43 @@ def test_slice_rm_sharded_in_sharded_no_spec_out(device):
     )
 
 
+# COL_MAJOR cases cover orientation propagation through slice's composite-reshard path.
+@pytest.mark.parametrize(
+    "requested_out_layout",
+    [
+        pytest.param(ttnn.TensorMemoryLayout.BLOCK_SHARDED, id="col_major_block_in_block_out_nospec"),
+        pytest.param(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, id="col_major_block_in_height_out_nospec"),
+    ],
+)
+def test_slice_block_sharded_input_to_sharded_nospec(requested_out_layout, device):
+    in_shape = (1, 1, 64, 64)
+    grid = device.compute_with_storage_grid_size()
+    gx, gy = min(2, grid.x), min(2, grid.y)
+    in_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))}),
+            (32, 32),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+    )
+    out_no_spec_mc = ttnn.MemoryConfig(requested_out_layout, ttnn.BufferType.L1)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        (1, 1, 32, 64),
+        (1, 1, 1, 1),
+        ttnn.TILE_LAYOUT,
+        in_mc,
+        out_no_spec_mc,
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+        expected_shard_orientation=ttnn.ShardOrientation.COL_MAJOR,
+    )
+
+
 def test_slice_tile_same_layout_sharded_no_spec_halving(device):
     """TILE HEIGHT-sharded → halving slice → HEIGHT no-spec out. Regression: adjust_shard_spec_to_shape
     must fall back to generate_transpose_shard_spec when the scaled shard would be sub-tile."""
@@ -832,6 +884,32 @@ def test_slice_tile_same_layout_sharded_no_spec_halving(device):
         ttnn.bfloat16,
         device,
         ulp_when_exact=True,
+    )
+
+
+def test_slice_tile_same_layout_sharded_no_spec_halving_col_major(device):
+    """Native adjust-failed fallback path: preserves COL_MAJOR input orientation."""
+    in_shape = (1, 1, 64, 64)
+    grid = device.compute_with_storage_grid_size()
+    shard_grid = ttnn.num_cores_to_corerangeset(2, grid, True)
+    in_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (32, 64), ttnn.ShardOrientation.COL_MAJOR),
+    )
+    out_no_spec_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        (1, 1, 32, 32),
+        (1, 1, 1, 1),
+        ttnn.TILE_LAYOUT,
+        in_mc,
+        out_no_spec_mc,
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+        expected_shard_orientation=ttnn.ShardOrientation.COL_MAJOR,
     )
 
 

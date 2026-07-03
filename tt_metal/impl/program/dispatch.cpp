@@ -2037,10 +2037,6 @@ void assemble_device_commands(
     CircularBufferCommandGenerator circular_buffer_command_generator;
     circular_buffer_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
 
-    TT_ASSERT(
-        program.dataflow_buffers().empty() || !MetalContext::instance().hal().has_tile_counter_registers(),
-        "Dataflow buffers on Quasar are not supported through Fast Dispatch yet. Use Slow Dispatch instead.");
-
     DataflowBufferCommandGenerator dfb_command_generator;
     dfb_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
 

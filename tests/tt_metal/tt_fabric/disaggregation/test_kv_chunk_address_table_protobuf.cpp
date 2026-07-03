@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "impl/experimental/disaggregation/kv_chunk_address_table_protobuf.hpp"
+#include "impl/internal/disaggregation/kv_chunk_address_table_protobuf.hpp"
 
-namespace tt::tt_metal::experimental::disaggregation {
+namespace tt::tt_metal::internal::disaggregation {
 namespace {
 
 using tt::tt_fabric::FabricNodeId;
@@ -264,4 +264,4 @@ TEST(KvChunkAddressTableProtobuf, TextFormatRoundTripViaFile) {
 }
 
 }  // namespace
-}  // namespace tt::tt_metal::experimental::disaggregation
+}  // namespace tt::tt_metal::internal::disaggregation

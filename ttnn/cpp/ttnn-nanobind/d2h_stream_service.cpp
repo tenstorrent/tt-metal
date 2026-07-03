@@ -37,33 +37,39 @@ void py_module_types(nb::module_& mod) {
                const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
                std::optional<tt::tt_metal::TensorSpec> global_spec,
                uint32_t fifo_size_bytes,
-               uint32_t scratch_cb_size_bytes,
+               uint32_t max_socket_page_size_bytes,
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
                std::optional<tt::tt_metal::distributed::MeshComposerConfig> composer_config,
                std::optional<CoreRange> worker_cores,
                std::optional<CoreCoord> metadata_master_core,
-               uint32_t metadata_size_bytes) {
+               uint32_t metadata_size_bytes,
+               bool parallel_host_read,
+               uint32_t host_read_thread_count) {
                 tt::tt_metal::D2HStreamService::Config cfg{
                     .global_spec = std::move(global_spec),
                     .mapper = std::move(mapper),
                     .composer_config = std::move(composer_config),
                     .fifo_size_bytes = fifo_size_bytes,
-                    .scratch_cb_size_bytes = scratch_cb_size_bytes,
+                    .max_socket_page_size_bytes = max_socket_page_size_bytes,
                     .worker_cores = worker_cores,
                     .metadata_master_core = metadata_master_core,
                     .metadata_size_bytes = metadata_size_bytes,
+                    .parallel_host_read = parallel_host_read,
+                    .host_read_thread_count = host_read_thread_count,
                 };
                 new (self) tt::tt_metal::D2HStreamService(mesh_device, std::move(cfg));
             },
             nb::arg("mesh_device"),
             nb::arg("global_spec").none(),
             nb::arg("fifo_size_bytes"),
-            nb::arg("scratch_cb_size_bytes") = 0u,
+            nb::arg("max_socket_page_size_bytes"),
             nb::arg("mapper").none() = nb::none(),
             nb::arg("composer_config").none() = nb::none(),
             nb::arg("worker_cores").none() = nb::none(),
             nb::arg("metadata_master_core").none() = nb::none(),
-            nb::arg("metadata_size_bytes") = 0u)
+            nb::arg("metadata_size_bytes") = 0u,
+            nb::arg("parallel_host_read") = true,
+            nb::arg("host_read_thread_count") = 0u)
         .def(
             "read_metadata",
             [](tt::tt_metal::D2HStreamService& self) {
@@ -113,6 +119,7 @@ void py_module_types(nb::module_& mod) {
             nb::rv_policy::reference_internal)
         .def("payload_size_bytes", &tt::tt_metal::D2HStreamService::payload_size_bytes)
         .def("metadata_size_bytes", &tt::tt_metal::D2HStreamService::metadata_size_bytes)
+        .def("get_slot_count", &tt::tt_metal::D2HStreamService::get_slot_count)
         .def("get_sockets", &tt::tt_metal::D2HStreamService::get_sockets)
         .def("get_worker_cores", &tt::tt_metal::D2HStreamService::get_worker_cores)
         .def("get_metadata_master_core", &tt::tt_metal::D2HStreamService::get_metadata_master_core)
@@ -125,11 +132,17 @@ void py_module_types(nb::module_& mod) {
         .def("export_descriptor", &tt::tt_metal::D2HStreamService::export_descriptor, nb::arg("service_id"))
         .def_static(
             "connect",
-            [](const std::string& service_id, std::optional<uint32_t> timeout_ms) {
-                return tt::tt_metal::D2HStreamService::connect(service_id, timeout_ms);
+            [](const std::string& service_id,
+               std::optional<uint32_t> timeout_ms,
+               bool parallel_host_read,
+               uint32_t host_read_thread_count) {
+                return tt::tt_metal::D2HStreamService::connect(
+                    service_id, timeout_ms, parallel_host_read, host_read_thread_count);
             },
             nb::arg("service_id"),
-            nb::arg("timeout_ms") = nb::none());
+            nb::arg("timeout_ms") = nb::none(),
+            nb::arg("parallel_host_read") = true,
+            nb::arg("host_read_thread_count") = 0u);
 }
 
 void py_module(nb::module_& /* mod */) {}
