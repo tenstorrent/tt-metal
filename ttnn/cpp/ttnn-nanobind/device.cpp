@@ -59,6 +59,11 @@ namespace {
 // RegisterProgramRealtimeProfilerCallback. Access only from the Python thread (always under GIL), so no mutex needed.
 std::unordered_map<uint64_t, PyObject*> python_realtime_callback_refs;
 
+struct PythonProgramRealtimeRecordBatch {
+    std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord> records;
+    uint64_t dropped = 0;
+};
+
 void ttnn_device(nb::module_& mod) {
     mod.def(
         "open_device",
@@ -94,7 +99,11 @@ void ttnn_device(nb::module_& mod) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    mod.def("close_device", [](ttnn::MeshDevice& device) { ttnn::close_device(device); }, nb::arg("device"));
+    mod.def(
+        "close_device",
+        [](ttnn::MeshDevice& device) { ttnn::close_device(device); },
+        nb::arg("device"),
+        nb::call_guard<nb::gil_scoped_release>());
 
     mod.def(
         "deallocate_buffers",
@@ -170,6 +179,15 @@ void py_device_module_types(nb::module_& m_device) {
                 return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
             },
             "Kernel source paths associated with this runtime ID");
+
+    nb::class_<PythonProgramRealtimeRecordBatch>(
+        m_device, "ProgramRealtimeRecordBatch", "Batch of real-time profiler records delivered to a callback.")
+        .def_ro("records", &PythonProgramRealtimeRecordBatch::records, "ProgramRealtimeRecord entries in this batch")
+        .def_ro(
+            "dropped",
+            &PythonProgramRealtimeRecordBatch::dropped,
+            "Records lost since this callback last ran; nonzero if the callback could not keep up with incoming "
+            "profiler data");
 
     nb::class_<tt::tt_metal::detail::MemoryView>(
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
@@ -685,9 +703,14 @@ void device_module(nb::module_& m_device) {
             Py_INCREF(raw_cb);
 
             auto handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
-                [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
+                    PythonProgramRealtimeRecordBatch py_batch{
+                        .records = std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>(
+                            batch.records.begin(), batch.records.end()),
+                        .dropped = batch.dropped,
+                    };
                     nb::gil_scoped_acquire gil;
-                    (nb::handle(raw_cb))(nb::cast(record, nb::rv_policy::copy));
+                    (nb::handle(raw_cb))(nb::cast(std::move(py_batch), nb::rv_policy::move));
                 });
 
             python_realtime_callback_refs[handle] = raw_cb;
@@ -696,27 +719,31 @@ void device_module(nb::module_& m_device) {
         nb::arg("callback"),
         R"doc(
             Register a callback to be invoked when real-time profiler data arrives from a device.
-            The callback receives a ProgramRealtimeRecord and is called from the real-time profiler
-            receiver thread.
+            The callback receives a ProgramRealtimeRecordBatch and is called from its own thread.
+            Callbacks that are too slow to keep up with incoming profiler data may miss records.
 
             Multiple callbacks can be registered.
 
             Args:
-                callback: A callable that accepts a single ProgramRealtimeRecord argument.
+                callback: A callable that accepts a single ProgramRealtimeRecordBatch argument.
 
             Returns:
                 int: A handle that can be passed to UnregisterProgramRealtimeProfilerCallback.
 
             Example:
-                >>> def my_callback(record):
-                ...     print(f"runtime_id={record.runtime_id} on chip {record.chip_id}")
+                >>> def my_callback(batch):
+                ...     for record in batch.records:
+                ...         print(f"runtime_id={record.runtime_id} on chip {record.chip_id}")
                 >>> handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(my_callback)
         )doc");
 
     m_device.def(
         "UnregisterProgramRealtimeProfilerCallback",
         [](uint64_t handle) {
-            tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            {
+                nb::gil_scoped_release release;
+                tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            }
             auto it = python_realtime_callback_refs.find(handle);
             if (it != python_realtime_callback_refs.end()) {
                 Py_DECREF(it->second);
@@ -724,7 +751,6 @@ void device_module(nb::module_& m_device) {
             }
         },
         nb::arg("handle"),
-        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Unregister a previously registered real-time profiler callback.
             This call waits for any in-flight invocations of the callback to finish.

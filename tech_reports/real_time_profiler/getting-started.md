@@ -2,7 +2,7 @@
 
 The **real-time profiler** (RT profiler) streams per-program timing from the device over the existing fast-dispatch path (D2H socket). Each completed program yields a `ProgramRealtimeRecord`: `runtime_id`, raw `start_timestamp` / `end_timestamp`, device `frequency` (cycles per ns), `chip_id`, and `kernel_sources` (paths for that program).
 
-You can register **multiple** callbacks; they run on the profiler receiver thread in registration order. Use `UnregisterProgramRealtimeProfilerCallback(handle)` when done (Python: `ttnn.device.UnregisterProgramRealtimeProfilerCallback`).
+You can register **multiple** callbacks. Each runs on its own thread, so if multiple callbacks touch the same mutable data, synchronize it (e.g. with a lock). Use `UnregisterProgramRealtimeProfilerCallback(handle)` when done (Python: `ttnn.device.UnregisterProgramRealtimeProfilerCallback`).
 
 On some dispatch setups (e.g. ETH dispatch, remote chips without the needed resources) the profiler stays inactive — check `ttnn.device.IsProgramRealtimeProfilerActive()` before asserting on record counts.
 
@@ -14,27 +14,28 @@ On some dispatch setups (e.g. ETH dispatch, remote chips without the needed reso
 
 ```python
 import json
-import threading
 
 import ttnn
 
 out = open("rt_records.jsonl", "a")
-lock = threading.Lock()
+dropped_total = 0
 
-def on_record(record):
-    row = {
-        "runtime_id": record.runtime_id,
-        "chip_id": record.chip_id,
-        "start_timestamp": record.start_timestamp,
-        "end_timestamp": record.end_timestamp,
-        "frequency": record.frequency,
-        "kernel_sources": list(record.kernel_sources),
-    }
-    with lock:
+def on_record_batch(batch):
+    global dropped_total
+    dropped_total += batch.dropped
+    for record in batch.records:
+        row = {
+            "runtime_id": record.runtime_id,
+            "chip_id": record.chip_id,
+            "start_timestamp": record.start_timestamp,
+            "end_timestamp": record.end_timestamp,
+            "frequency": record.frequency,
+            "kernel_sources": list(record.kernel_sources),
+        }
         out.write(json.dumps(row) + "\n")
-        out.flush()
+    out.flush()
 
-handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(on_record)
+handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(on_record_batch)
 try:
     # open device, run workloads, synchronize...
     pass
