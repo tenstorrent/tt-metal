@@ -143,21 +143,34 @@ def _get_quantization_config_dict(hf_config: Any) -> dict | None:
     return qc
 
 
+def _find_int4_weight_group(quantization_config: Any) -> dict | None:
+    """Return the ``weights`` config of the first pack-quantized group with ``num_bits == 4``, else ``None``.
+
+    ``is_pack_quantized_int4`` and ``_pack_quant_params`` both resolve the authoritative INT4 group
+    through this helper so they can never disagree on *which* config group is being read -- the INT4
+    group is not necessarily ``group_0`` (e.g. a checkpoint may put a different precision in ``group_0``).
+    """
+    if not isinstance(quantization_config, dict):
+        return None
+    if quantization_config.get("quant_method") not in (None, "compressed-tensors"):
+        return None
+    for group in (quantization_config.get("config_groups") or {}).values():
+        weights = (group or {}).get("weights") or {}
+        if weights.get("num_bits") == 4:
+            return weights
+    return None
+
+
 def is_pack_quantized_int4(quantization_config: Any) -> bool:
     """True for compressed-tensors pack-quantized INT4 (a config group with num_bits == 4)."""
-    if not isinstance(quantization_config, dict):
-        return False
-    if quantization_config.get("quant_method") not in (None, "compressed-tensors"):
-        return False
-    for group in (quantization_config.get("config_groups") or {}).values():
-        if ((group or {}).get("weights") or {}).get("num_bits") == 4:
-            return True
-    return False
+    return _find_int4_weight_group(quantization_config) is not None
 
 
 def _pack_quant_params(quantization_config: dict) -> tuple[int, int, bool]:
     """Extract and validate ``(num_bits, group_size, symmetric)`` for the pack-quantized weight group."""
-    weights_cfg = quantization_config["config_groups"]["group_0"]["weights"]
+    weights_cfg = _find_int4_weight_group(quantization_config)
+    if weights_cfg is None:
+        raise ValueError("quantization_config has no pack-quantized INT4 weight group (num_bits == 4).")
     num_bits = int(weights_cfg["num_bits"])
     group_size = int(weights_cfg["group_size"])
     symmetric = bool(weights_cfg.get("symmetric", True))
