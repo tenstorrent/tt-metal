@@ -25,6 +25,10 @@ import ttnn
 
 PERF_MAX_NEW_TOKENS = int(os.environ.get("TT_PERF_MAX_NEW_TOKENS", "4"))
 PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
+# perf-only depth cap: profile a few blocks so a deep model's marker stream (x mesh chips) does not
+# overflow / bloat the profiler; pipelines that read TT_PERF_LAYERS honor it, others ignore it. This
+# is set in-process here so ONLY the perf run is capped (the correctness/e2e gate runs the full model).
+os.environ.setdefault("TT_PERF_LAYERS", "2")
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_<task>_perf(device_params, device):
@@ -214,6 +218,11 @@ def generate_perf_test(
         "the host blocks in ttnn.synchronize_device for many minutes, stalling the run. If the source "
         "defines a large seq constant, OVERRIDE it with a small value here (env-overridable, small default). "
         "A perf profile only needs a representative dispatch-dense pass, not the max shape.\n"
+        "- KEEP the skeleton's `os.environ.setdefault(\"TT_PERF_LAYERS\", ...)` line VERBATIM near the top. "
+        "It caps profiled depth for deep (many-layer) models so the device profiler's marker buffer does "
+        "not overflow (worse on a multi-chip mesh, where markers scale x chips). It is set in-process so "
+        "ONLY this perf run is capped; a pipeline that does not read TT_PERF_LAYERS simply ignores it. Do "
+        "NOT hard-require it and do NOT gate on it — just carry it through.\n"
         "- NO PCC / correctness assertions (this is perf only) — just assert the pipeline produced output.\n"
         "- TIME THE FORWARD: keep the skeleton's time.monotonic() bracket around the bounded forward and "
         'the final print("FORWARD_WALL_MS=...") VERBATIM — the harness reads it as an independent '
