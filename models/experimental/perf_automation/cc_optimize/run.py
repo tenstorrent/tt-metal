@@ -16,6 +16,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 PERF_DIR = "models/experimental/perf_automation"
@@ -247,6 +248,7 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)
+    env.setdefault("PERF_MCP_FULLPIPE_SAMPLES", "3")
     print(
         f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL 52 layers, no tracy (one slow run, minutes)..."
     )
@@ -470,6 +472,10 @@ def optimize_pipeline(
     prompt = _PROMPT.format(model=model_name, task=task, metric=metric)
     start_sha = _git(repo_root, "rev-parse", "HEAD")
     mcp_env = cfg["mcpServers"]["perf-mcp"]["env"]
+    try:
+        (Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline.json").unlink()
+    except Exception:
+        pass
     before_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
     rounds, can_stop, halted = 0, False, False
     while rounds < max_rounds:
