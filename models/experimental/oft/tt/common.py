@@ -219,16 +219,10 @@ class GroupNorm:
         self.num_groups = self.num_groups // num_splits
         self.channels = self.channels // num_splits
 
-        # Generate input mask
-        input_mask_tensor = ttnn.create_group_norm_input_mask(self.channels, self.num_groups, grid_y, ttnn.bfloat16)
-        input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
-        if negative_mask:
-            input_nmask_tensor = ttnn.create_group_norm_input_negative_mask(
-                self.channels, self.num_groups, grid_y, ttnn.bfloat16
-            )
-            input_nmask_tensor = ttnn.to_device(input_nmask_tensor, device)
-        else:
-            input_nmask_tensor = None
+        # Both positive and negative masks are synthesized in the writer kernel
+        # (see #48640). Negative-mask synthesis is opt-in via the
+        # synthesize_negative_mask kwarg on ttnn.group_norm.
+        synthesize_neg_mask = bool(negative_mask)
         # Generate gamma/beta tensors
         gamma = ttnn.create_group_norm_weight_bias_rm(self.weight, self.channels, grid_y)
         beta = ttnn.create_group_norm_weight_bias_rm(self.bias, self.channels, grid_y)
@@ -273,8 +267,7 @@ class GroupNorm:
         tt_output_tensor = ttnn.group_norm(
             input_tensor,
             num_groups=self.num_groups,
-            input_mask=input_mask_tensor,
-            negative_mask=input_nmask_tensor,
+            synthesize_negative_mask=synthesize_neg_mask,
             weight=gamma_t,
             bias=beta_t,
             memory_config=sharded_mem_config,
@@ -326,16 +319,15 @@ class GroupNormDRAM:
         logger.debug(
             f"input_tensor_tilized shape: {input_tensor_tilized.shape} padded shape: {input_tensor_tilized.padded_shape}"
         )
-        [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
-            [self.weight, self.bias], self.channels, self.num_groups, device, core_grid=grid_size, return_mask=True
+        [gamma_t, beta_t] = ttnn.dram_group_norm_params_from_torch(
+            [self.weight, self.bias], self.channels, self.num_groups, device, core_grid=grid_size, return_mask=False
         )
 
-        # groupnorm
+        # groupnorm — mask synthesized in the writer kernel (see #48640)
         logger.debug(f"DRAM {grid_size=}")
         output_tensor = ttnn.group_norm(
             input_tensor_tilized,
             num_groups=self.num_groups,
-            input_mask=input_mask_tensor,
             weight=gamma_t,
             bias=beta_t,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

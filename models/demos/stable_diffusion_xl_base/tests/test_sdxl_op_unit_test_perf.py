@@ -135,7 +135,9 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1516464  # Measured: 1.52ms for GroupNorm VAE welford_reciprocal
+    expected_duration_ns = (
+        1338000  # Measured: 1.34ms for GroupNorm VAE welford_reciprocal (post-#48640 Welford mask-multiply reorder)
+    )
 
     # Log the performance result
     print(

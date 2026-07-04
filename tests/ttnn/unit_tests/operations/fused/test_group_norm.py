@@ -1178,9 +1178,14 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", NO_INPUT_MASK_SHAPES)
 @pytest.mark.parametrize("specify_grid", [True])
-def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid):
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, specify_grid):
     """
     Test that a group norm without an input mask produces the same result as torch.
+
+    Exercises the writer-kernel mask-synthesis path on the sharded factory. Parametrized
+    over use_welford so we cover the Welford + sharded + synthesis combination, which
+    depends on the mask-multiply reorder in welford_groupnorm_sharded_v2.cpp.
     """
     torch.manual_seed(0)
     input_shape = (N, C, H, W)
@@ -1217,6 +1222,7 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid):
             memory_config=sharded_mem_config,
             core_grid=grid_size if specify_grid else None,
             compute_kernel_config=compute_config,
+            use_welford=use_welford,
         )
         tt_output_tensor_host = ttnn.from_device(tt_output_tensor)
         tt_output_tensor_host = ttnn.to_torch(tt_output_tensor_host)
@@ -1253,6 +1259,174 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid):
     assert (
         frobenius_high2 <= frobenius_low2
     ), "High-accuracy config should have lower Frobenius error than low-accuracy config"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 640, 128, 128, 32)])
+def test_group_norm_bf16_negative_mask_partial_read(device, N, C, H, W, num_groups):
+    """
+    Exercises MASK_PARTIAL_READ + NEGATIVE_MASK_PARTIAL_READ on the sharded
+    factory. The existing SDXL negative-mask coverage passes BFP8 masks and
+    hits the legacy full-tile-read path; this test passes both masks as
+    bf16 so the writer takes the two-strip partial-read path for each.
+    """
+    torch.manual_seed(0)
+    grid_size = ttnn.CoreGrid(y=8, x=8)
+
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    tt_input_tensor = ttnn.from_torch(
+        tt_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.x, ttnn.DataType.BFLOAT16)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
+
+    input_negative_mask_tensor = ttnn.create_group_norm_input_negative_mask(
+        C, num_groups, grid_size.x, ttnn.DataType.BFLOAT16
+    )
+    input_negative_mask_tensor = ttnn.to_device(input_negative_mask_tensor, device)
+
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.x)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.x)
+
+    gamma_t = ttnn.from_torch(
+        gamma,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_t = ttnn.from_torch(
+        beta,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_shape = N * H * W // grid_size.y, C // grid_size.x
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt_input_tensor = ttnn.to_device(tt_input_tensor, device, memory_config=sharded_mem_config)
+
+    tt_output_tensor = ttnn.group_norm(
+        tt_input_tensor,
+        num_groups=num_groups,
+        input_mask=input_mask_tensor,
+        negative_mask=input_negative_mask_tensor,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size,
+        weight=gamma_t,
+        bias=beta_t,
+    )
+    ttnn.synchronize_device(device)
+
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        tt_output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.065,
+        atol=0.065,
+        frobenius_threshold=0.016,
+    )
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 640, 128, 128, 32)])
+def test_group_norm_synthesize_negative_mask(device, N, C, H, W, num_groups):
+    """
+    Exercises NEGATIVE_MASK_SYNTHESIZE on the sharded factory. No mask tensors
+    are passed; instead, synthesize_negative_mask=True opts into the writer-
+    kernel negative-mask synthesis path, and the positive mask is synthesized
+    automatically because input_mask is omitted. Compares against the same
+    computation with a caller-supplied bf16 negative_mask to confirm bit-
+    equivalence.
+    """
+    torch.manual_seed(0)
+    grid_size = ttnn.CoreGrid(y=8, x=8)
+
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    tt_input_tensor = ttnn.from_torch(
+        tt_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.x)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.x)
+    gamma_t = ttnn.from_torch(
+        gamma,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_t = ttnn.from_torch(
+        beta,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_shape = N * H * W // grid_size.y, C // grid_size.x
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt_input_tensor = ttnn.to_device(tt_input_tensor, device, memory_config=sharded_mem_config)
+
+    tt_output_tensor = ttnn.group_norm(
+        tt_input_tensor,
+        num_groups=num_groups,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size,
+        weight=gamma_t,
+        bias=beta_t,
+        synthesize_negative_mask=True,
+    )
+    ttnn.synchronize_device(device)
+
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        tt_output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.065,
+        atol=0.065,
+        frobenius_threshold=0.016,
+    )
 
 
 @pytest.mark.parametrize("input_shape, num_groups, msg_pattern", NEGATIVE_TESTS_PARAMS)
