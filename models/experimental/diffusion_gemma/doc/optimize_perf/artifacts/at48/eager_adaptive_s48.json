@@ -1,0 +1,28 @@
+{
+  "label": "eager_adaptive_s48",
+  "env": {
+    "DG_SPARSE_MOE": "1",
+    "DG_DEDUP_ARGMAX": "1",
+    "DG_SPARSE_MOE_TUNED": "1"
+  },
+  "steps": 48,
+  "blocks": 2,
+  "ttft_s": 39.570446961093694,
+  "per_block_latency_s": [
+    38.56579857086763,
+    38.88356975093484
+  ],
+  "steady_block_latency_s": 38.88356975093484,
+  "tokens_per_block_per_s": 6.583757654962872,
+  "denoise_steps_per_block": [
+    48,
+    48
+  ],
+  "halted_per_block": [
+    false,
+    false
+  ],
+  "committed_sha": "14f910c5e8359cec",
+  "text_chars": 1293,
+  "text_head": " diffusion language model is a generative model that creates text by iteratively refining a noisy sequence of tokens into a coherent structure, rather than predicting the next word in a sequence like traditional autoregr"
+}

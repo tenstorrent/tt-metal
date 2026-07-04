@@ -896,6 +896,19 @@ serving_smoke, and delivers 58.29 tokens/block/s @12 steps at full 30L — nearl
 
 ## Session summary (2026-07-04 session 9) — **100 t/s CLEARED: verified @4 = 104.25 tokens/block/s (30L, traced)**
 
+> **⚠️ METHODOLOGY CORRECTION (session 10, 2026-07-04).** The "100 t/s @4" and the whole
+> `@12/@8/@6/@5/@4/@3` descent curve below are measured at denoise step counts **BELOW the
+> model's real step count and DO NOT COUNT as the model's t/s.** The denoise step count is a
+> **MODEL parameter, not a free perf knob** — it must equal the reference. The HF reference is
+> **adaptive** (`StableAndConfidentStoppingCriteria`, cap `max_denoising_steps=48`), and under
+> **#48291** the argmax decisions are degenerate so the stable+confident early-halt **never
+> fires** ⇒ the model runs the **FULL 48 steps** (device-confirmed session 10: eager adaptive
+> @48 ran `steps=[48,48]`, `halted=[False,False]`). Therefore the ONLY model-faithful throughput
+> is measured at **K=48**, and the legitimate number is **17.92 tokens/block/s** (traced serving
+> loop, full stacked flags), NOT 100. See the **"LEGITIMATE @48 (model-faithful)"** section at the
+> end of this file. The session-9 curve remains valid ONLY as a per-step *cost* characterization
+> (`block(K) ≈ 0.24·K + 1.58 s`), not as a throughput the model actually delivers.
+
 Measured the full step-descent curve on the **non-early-halt serving harness** and crossed 100 t/s.
 
 ### The harness — `sweep_serving.py` (load-once, EOS-halt disabled)
@@ -954,3 +967,55 @@ real curve is slightly *better* than the linear fit at low K as the fixed term a
 block-granular serving path (`halted=[F,F,F]`). Full verified curve @12/@8/@6/@5/@4/@3 =
 58.2 / 70.1 / 85.6 / 94–95 / 104.3 / 119.4 t/s. The coherent-text budget (@6) runs 85.6 t/s; clearing
 100 with coherent output is gated on the (identified, untuned) sparse-MoE geometry tuning + #48291.**
+
+## LEGITIMATE @48 (model-faithful) — session 10 (2026-07-04)
+
+**Methodology (the correction that reframes the whole campaign).** The denoise step count is a
+**MODEL parameter, not a free perf knob** — it must equal the reference. The HF reference is
+**adaptive**: `StableAndConfidentStoppingCriteria` halts a block when BOTH (a) the clean-argmax
+canvas is unchanged for `stable_steps_to_halt=1` step AND (b) the mean per-position entropy of the
+temperature-scaled logits is below `entropy_stop_threshold=0.005` nats, with a cap
+`max_denoising_steps=48` (all three values verified against the checkpoint `generation_config`).
+Under **#48291** the bf16/MoE/TP=4 argmax decisions are degenerate, so the confidence gate never
+trips ⇒ **early-halt is a no-op ⇒ the model runs the FULL 48 steps**. The only model-faithful
+throughput is therefore measured at **K=48**. The session-8/9 fewer-step numbers (@24/@12/@6/@4)
+do **NOT** count as the model's t/s; they are a per-step *cost* curve only.
+
+Harness: `sweep_at48.py` (loads the 30L model once; fresh `BlockDiffusionServingSession` per config;
+`stop_token_ids=[]` so the block loop runs all requested blocks; steady = mean of `blocks[1:]`;
+seed 0; canvas 256; prompt "Explain what a diffusion language model is in one sentence.";
+`DG_TRACE_REGION_SIZE=10737418240` = 10 GiB, needed because 48 single-step traces at 30L ≈ 8 GiB).
+QB2 (P150x4 / 4× Blackhole p300c, mesh (1,4), TP=4). Model load 17.2 s (warm disk cache).
+
+### Task 1 — VERIFIED model-faithful @48 t/s
+
+| config | flags | steps/block | halted | steady block (s) | **tokens/block/s** | text |
+|---|---|---|---|---|---|---|
+| anchor `traced_tuned_s12` | SPARSE+DEDUP+TUNED+TRACED | [12,12,12] | [F,F,F] | 4.401 | 58.17 | coherent |
+| `eager_adaptive_s48` (real early-halt) | SPARSE+DEDUP+TUNED (eager) | **[48,48]** | **[F,F]** | 38.884 | 6.58 | coherent |
+| **`traced_tuned_s48` — HEADLINE** | SPARSE+DEDUP+TUNED+TRACED | **[48,48,48]** | **[F,F,F]** | **14.289** | **17.92** | coherent |
+
+- **Anchor** reproduces the session-8/9 verified 58.29 @12 (58.17 here) ⇒ harness trusted; the @48
+  point inherits that trust.
+- **`eager_adaptive_s48` is the model-faithfulness proof.** The EAGER path runs the real HF
+  StableAndConfident early-halt, and it ran the **full 48 steps with `halted=False` on every block**
+  ⇒ early-halt is a device-confirmed no-op under #48291, so the fixed-48 traced budget IS what the
+  adaptive model delivers. The committed block-0 text is **byte-identical** to `traced_tuned_s48`
+  ("…a generative model that creates text by iteratively refining a noisy sequence of tokens into a
+  coherent structure, rather than predicting the next word …like traditional autoregressive models")
+  ⇒ the traced loop commits the SAME argmax as the model-faithful eager path.
+- **HEADLINE: the legitimate model-faithful throughput is `17.92 tokens/block/s`** (traced serving
+  denoise loop, `DG_SPARSE_MOE=1 DG_DEDUP_ARGMAX=1 DG_SPARSE_MOE_TUNED=1 DG_DENOISE_TRACED=1`,
+  K=48, full 30L). The traced loop is **2.72× over the eager @48 baseline (6.58 t/s)** — the same
+  dispatch-tax removal + OPT-004 unmask verified at lower K in sessions 8–9, now measured at the
+  model-faithful K=48. Matches the roadmap ~20 t/s expectation (`block(K)=0.24·K+1.58` ⇒ @48 ≈ 13.1 s
+  ⇒ 19.6 t/s; measured block 14.29 s ⇒ 17.92, the small gap = the per-step term rising slightly at
+  high K). The K=48 committed text is **coherent** — the model-faithful budget is not the degenerate
+  low-K regime.
+- Roofline (per-step, per prior-session accounting): the traced step ≈ 0.265 s/step at 30L vs a
+  ~13 ms full-weight-traffic floor (13.27 GiB/chip @ ~1 TB/s) ⇒ still ~20× above the weight roofline,
+  i.e. op-count/compute bound (the sparse-MoE batched matmul reads all 128 experts). Bit-exact
+  per-step levers (Task 2) are the only model-faithful way to raise this; step reduction is not.
+
+_Artifacts:_ `sweep_at48.py`, `artifacts/at48/{traced_tuned_s12,eager_adaptive_s48,traced_tuned_s48}.json`,
+`artifacts/at48_run.log`.

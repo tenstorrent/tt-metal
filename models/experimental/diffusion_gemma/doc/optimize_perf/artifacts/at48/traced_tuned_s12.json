@@ -1,0 +1,32 @@
+{
+  "label": "traced_tuned_s12",
+  "env": {
+    "DG_SPARSE_MOE": "1",
+    "DG_DEDUP_ARGMAX": "1",
+    "DG_SPARSE_MOE_TUNED": "1",
+    "DG_DENOISE_TRACED": "1"
+  },
+  "steps": 12,
+  "blocks": 3,
+  "ttft_s": 31.386757826432586,
+  "per_block_latency_s": [
+    30.0032967380248,
+    4.403049871791154,
+    4.398738166783005
+  ],
+  "steady_block_latency_s": 4.40089401928708,
+  "tokens_per_block_per_s": 58.16999884070614,
+  "denoise_steps_per_block": [
+    12,
+    12,
+    12
+  ],
+  "halted_per_block": [
+    false,
+    false,
+    false
+  ],
+  "committed_sha": "ea37787ec5408384",
+  "text_chars": 906,
+  "text_head": " diffusion language model is a generative model that produces text by iteratively refining a noisy input signal into a coherent sequence, rather than generating it word-by-word like traditional autoregressive models.\n\n m"
+}

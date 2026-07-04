@@ -68,9 +68,11 @@ def default_configs():
         # Multi-step batching at the SAME budgets as the single-step points above — the
         # committed_sha must match single-step at each K (quality-safe) and the block latency
         # shows how much the per-replay dispatch bubbles flatten toward 100 at a higher K.
-        {"label": "multistep_tuned_s12", "env": MULTISTEP, "steps": 12, "blocks": 3},
-        {"label": "multistep_tuned_s8", "env": MULTISTEP, "steps": 8, "blocks": 3},
+        # Ordered SMALLEST-window-first: a whole-block trace-region overflow FATALs and poisons
+        # the device, so run the smallest (lowest-risk) capture first to keep the earlier results.
         {"label": "multistep_tuned_s6", "env": MULTISTEP, "steps": 6, "blocks": 3},
+        {"label": "multistep_tuned_s8", "env": MULTISTEP, "steps": 8, "blocks": 3},
+        {"label": "multistep_tuned_s12", "env": MULTISTEP, "steps": 12, "blocks": 3},
         {"label": "traced_untuned_s12", "env": UNTUNED, "steps": 12, "blocks": 3},
         {"label": "eager_tuned_s12", "env": EAGER, "steps": 12, "blocks": 3},
     ]
