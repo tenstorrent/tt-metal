@@ -458,3 +458,35 @@ prefix KV; the real, correct, verified number is now **13.04 t/s @24 steps** (Le
 batched commit). The `path_to_30tps` row-2 projection (11.28 t/s @48-step fixed budget) is realized and
 exceeded at the 24-step budget. Next: adaptive early-halt + traced serving denoise toward 30 (the block is
 now **denoise-step bound** again, per the roadmap — the commit is ~10–26% of the block).
+
+### Step-count / adaptive early-halt — VERIFIED curve + honest crossover (2026-07-04 session 4)
+
+Measured on QB2, 30L, `DG_SPARSE_MOE=1`, **batched commit (default, correct)**, `serving_smoke`, per-block:
+
+| step budget | mean block latency | **tokens/block/s (VERIFIED, correct KV)** | halted? |
+|---|---|---|---|
+| 24 | 19.64 s | **13.04** | [False, False] |
+| 48 (advertised max, all-prompts) | 38.28 s | **6.69** | [False, False, False] |
+
+Two-point fit (24↔48): **eager per-step ≈ 0.777 s** (30L, sparse MoE + terminal + 5 host readbacks/step),
+**commit + per-block fixed ≈ 1.0 s** (batched commit is now ~3–5% of the block — Lever B fully removed the
+commit as a bottleneck; the block is **denoise-step bound**). So `t/s(K) = 256 / (0.777·K + ~1.0)`, and
+**30 t/s ⇔ K ≈ 9–10 eager steps.**
+
+**Adaptive early-halt DOES NOT reach 30 t/s on the current RUN-first output — and correct-KV did not change
+that.** Running the full advertised 48-step budget with the correct batched commit (`task2_adaptive_48budget_3blk`),
+**all three blocks ran 48 steps, `halted=[False,False,False]`.** The halt is gated on `entropy_mean < 0.005`
+(config `entropy_stop_threshold`), and the #48291-marginal per-step decisions keep mean entropy above that —
+a **model-fidelity** property, not a commit property (correct KV only affects block N+1's *conditioning*, not
+whether block N's entropy converges). Even the natural halt range observed on other content (18–38 steps) gives
+only ~10–16 t/s eager, still short of 30.
+
+**Honest verdict (task: adaptive only, don't lower advertised max):** the advertised-budget (48-step) verified
+number is **6.69 t/s**; the 24-step point is **13.04 t/s**. Pure adaptive step-count cannot deliver verified 30
+t/s — it needs halt at ~9 eager steps, far below any plausible convergence, and early-halt never fires under
+#48291. The lever that makes 30 land at a *plausible* step count is **traced serving denoise** (the eager loop
+runs the step at 0.777 s vs the *traced* 0.461 s measured by `prof_denoise_step.py` — a 1.35–1.7× per-step
+headroom the eager serving loop leaves on the table): with traced denoise `t/s(K)=256/(0.461·K+~1.0)` ⇒ 30 t/s
+⇔ K ≈ 17 steps, which IS within the plausible early-halt band once #48291 lets blocks converge. So verified 30
+t/s = traced serving denoise (+ terminal trim) + adaptive halt to ~16–18 steps — the task-4 direction — not
+step-count alone. Artifacts: `artifacts/task2_adaptive_48budget_3blk.{json,log}`, `leverB_verified_batched_30L_s24.json`.

@@ -1,0 +1,31 @@
+{
+  "prompt_len": 24,
+  "prompt_aligned_256": false,
+  "cache_len": 32,
+  "canvas_length": 256,
+  "max_denoising_steps": 48,
+  "gumbel_mode": "argmax",
+  "blocks_emitted": 3,
+  "tokens_emitted": 768,
+  "ttft_s": 40.21954012801871,
+  "per_block_latency_s": [
+    38.57897629914805,
+    37.91679232986644,
+    38.64806416677311
+  ],
+  "mean_block_latency_s": 38.282428248319775,
+  "tokens_per_block_per_s": 6.6871411170537725,
+  "denoise_steps_per_block": [
+    48,
+    48,
+    48
+  ],
+  "halted_per_block": [
+    false,
+    false,
+    false
+  ],
+  "final_next_pos": 800,
+  "text_chars": 1258,
+  "text": " diffusion language model is a generative model that creates text by starting with random noise or discrete tokens and iteratively refines them into a coherent sequence through a denoising process. (\u6269\u6563\u8bed\u8a00\u6a21\u578b\u662f\u4e00\u79cd\u751f\u6210\u6a21\u578b\uff0c\u5b83\u901a\u8fc7\u4ece\u968f\u673a\u566a\u58f0\u6216\u79bb\u6563\u4ee4\u724c\u5f00\u59cb\uff0c\u5e76\u901a\u8fc7\u53bb\u566a\u8fc7\u7a0b\u4e0d\u65ad\u7ec6\u5316\uff0c \u5f62\u6210\u4e00\u3057\u305f\u3057\u305f\u306e\u3042\u308b\u30c6\u30ad\u30b9\u30c8\u5217\u3092\u4f5c\u6210\u3057\u307e\u3059.)\n\nWait, I see I accidentally included some translation artifacts there. Here is the clear English one-sentence explanation:\n\n**A diffusion language model is a generative model that produces text by iteratively transforming a chaotic state of random noise into a structured sequence through a denoising process.** (Actually, a simpler sentence:)\n\nLet me provide that again for you: (Wait, I should just provide the answer clearly.)\n\n**Actually, the simplest answer is:**\n**A diffusion language model is a generative model that produces text by iteratively transforming a chaotic state of random noise into a structured sequence through a denoising process.** (Actually, I should say: ****A diffusion language model is a generative model that produces text by iteratively transforming a chaotic state of random noise into a structured sequence through a denoising process.**\n\nWait, I'll more sentence\n\n\n\n**A a language model is a generative model that generates text by. (.1.  \n a language model"
+}
