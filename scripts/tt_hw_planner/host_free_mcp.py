@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""host-free-mcp — the deterministic stop gate for emit-e2e PHASE 4 (`--host-free`).
+"""host-free-mcp — the deterministic stop gate for emit-e2e PHASE 4 (host-free / trace-capturable).
 
 Model-agnostic: it does not know any architecture. It runs ``_trace_capture_probe`` (a generic scan for
 the host ops that block a device trace — per-layer weight streaming, host token feed, missing KV cache,
