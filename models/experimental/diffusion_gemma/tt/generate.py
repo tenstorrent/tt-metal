@@ -11,6 +11,7 @@ the DiffusionGemma-local commit decode path.
 
 from __future__ import annotations
 
+import os
 from numbers import Integral
 from typing import Callable, NamedTuple
 
@@ -25,6 +26,7 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
     make_generation_logits_fn_builder_from_checkpoint_state,
 )
 from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block as tt_denoise_block
+from models.experimental.diffusion_gemma.tt.denoise_loop import device_loop_denoise_block
 from models.experimental.diffusion_gemma.tt import sampling as TS
 
 
@@ -788,6 +790,23 @@ def _resolve_default_commit_fn(page_table=None, page_tables_per_layer=None) -> C
     return select_commit_fn()
 
 
+def _resolve_default_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
+    """Pick the denoise loop: device-only fixed-step loop when opted in, else eager.
+
+    ``DG_DENOISE_DEVICE_LOOP`` selects :func:`device_loop_denoise_block` — the
+    device-resident fixed-step loop with no per-step host readback (removes the 5
+    readbacks + the ``torch.equal`` halt check the eager :func:`denoise_block` pays
+    every step; ~179 ms/step of the 30L serving step). Behaviourally identical to the
+    eager loop whenever early-halt does not fire (RUN-first under #48291), but it
+    discards the per-step trajectory records and cannot early-halt, so it stays
+    opt-in until early-halt is either recovered in a trace-safe shape or confirmed
+    unneeded for the serving contract.
+    """
+    if os.environ.get("DG_DENOISE_DEVICE_LOOP", "0").lower() in ("1", "true", "yes", "on"):
+        return device_loop_denoise_block
+    return tt_denoise_block
+
+
 def denoise_and_commit_block(
     tt_model,
     logits_fn,
@@ -799,7 +818,7 @@ def denoise_and_commit_block(
     noise_tokens_fn=None,
     page_table=None,
     page_tables_per_layer=None,
-    denoise_block_fn: Callable[..., DenoiseTrajectory] = tt_denoise_block,
+    denoise_block_fn: Callable[..., DenoiseTrajectory] | None = None,
     commit_fn: Callable[..., None] | None = None,
 ) -> GeneratedBlock:
     """Denoise one canvas, commit the clean argmax, and advance position.
@@ -815,6 +834,8 @@ def denoise_and_commit_block(
     """
     if commit_fn is None:
         commit_fn = _resolve_default_commit_fn(page_table, page_tables_per_layer)
+    if denoise_block_fn is None:
+        denoise_block_fn = _resolve_default_denoise_block_fn()
     _set_q_rope_offset(logits_fn, start_pos)
     trajectory = denoise_block_fn(
         logits_fn,

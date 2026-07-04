@@ -271,6 +271,45 @@ def run_fixed_denoise_steps(
     return committed
 
 
+def device_loop_denoise_block(
+    logits_fn: TtLogitsFn,
+    init_canvas: ttnn.Tensor,
+    config: DiffusionConfig,
+    *,
+    gumbel_noise_fn: Optional[TtNoiseFn] = None,
+    noise_tokens_fn: Optional[TtNoiseFn] = None,
+    constants: "Optional[DenoiseConstants]" = None,
+) -> DenoiseTrajectory:
+    """``denoise_block``-compatible wrapper over the device-only fixed-step loop.
+
+    Same signature / return type as :func:`denoise_block`, but runs
+    :func:`run_fixed_denoise_steps` — the device-resident loop with **no per-step
+    host readback** and **no data-dependent early-halt** — then reads back only the
+    final committed argmax once. Removes the 5 host readbacks/step (argmax, entropy,
+    sampled, accept, canvas) + the ``torch.equal`` halt check that the eager
+    ``denoise_block`` pays every step (~179 ms/step of the 30L serving step).
+
+    Behaviourally identical to ``denoise_block`` **whenever early-halt does not fire**
+    (both commit the final step's clean argmax after the full budget). Early-halt is
+    currently a no-op on RUN-first output (mean entropy never clears the 0.005
+    threshold under #48291), so the committed tokens are bit-identical — verified by
+    comparing committed tokens with the eager path. Returns empty per-step records
+    (``num_steps = max`` steps, ``halted = False``); callers that need the trajectory
+    records must use the eager :func:`denoise_block`.
+    """
+    committed_dev = run_fixed_denoise_steps(
+        logits_fn,
+        init_canvas,
+        config,
+        gumbel_noise_fn=gumbel_noise_fn,
+        noise_tokens_fn=noise_tokens_fn,
+        constants=constants,
+    )
+    committed_host = _ids_to_torch(committed_dev)
+    committed_dev.deallocate(True)
+    return DenoiseTrajectory(committed_host, config.max_denoise_steps, False, [])
+
+
 def _to_host_torch(tensor: ttnn.Tensor) -> torch.Tensor:
     device = tensor.device()
     if device is not None and hasattr(device, "get_num_devices") and device.get_num_devices() > 1:

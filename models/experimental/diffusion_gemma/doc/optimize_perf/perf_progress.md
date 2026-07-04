@@ -490,3 +490,46 @@ headroom the eager serving loop leaves on the table): with traced denoise `t/s(K
 ⇔ K ≈ 17 steps, which IS within the plausible early-halt band once #48291 lets blocks converge. So verified 30
 t/s = traced serving denoise (+ terminal trim) + adaptive halt to ~16–18 steps — the task-4 direction — not
 step-count alone. Artifacts: `artifacts/task2_adaptive_48budget_3blk.{json,log}`, `leverB_verified_batched_30L_s24.json`.
+
+### 100-path start — per-step overhead measured + device-only (trace-ready) denoise loop (2026-07-04 session 4)
+
+**Measured the denoise-step decomposition on device** (`prof_denoise_step.py`, L=2/4 two-point fit, `DG_SPARSE_MOE=1`;
+`artifacts/task4_traced_step_sweep.log`):
+
+| step form | per-layer | fixed | **30L step** | source |
+|---|---|---|---|---|
+| eager **device** step (tight loop, no readback) | 18.38 ms | 47.1 ms | **598 ms** | prof eager |
+| **traced** step (warm Metal trace) | 13.69 ms | 50.2 ms | **461 ms** | prof traced (`RESULT_TRACED`) |
+| eager **serving** step (5 host readbacks + halt + adapter + noise upload) | — | — | **~725–756 ms** | serving_smoke back-out |
+
+So there are two stacked per-step overheads over the 461 ms traced floor: **~137 ms/step eager dispatch** (removed by
+tracing) and **~130–260 ms/step serving-loop host work** (5 readbacks + `torch.equal` halt + per-step host noise upload
++ self-cond adapter python).
+
+**LANDED — device-only (trace-ready) denoise loop** (`tt/denoise_loop.py::device_loop_denoise_block`, opt-in
+`DG_DENOISE_DEVICE_LOOP=1`, wired via `generate._resolve_default_denoise_block_fn`). It runs the existing
+`run_fixed_denoise_steps` (device-resident, **no per-step host readback**, no `torch.equal` halt) and reads back only the
+final committed argmax once. **Verified BIT-IDENTICAL** to the eager loop: same 24-step run, seed 0, **committed text
+character-for-character identical** (494 chars both) — because early-halt never fires (§step-count), so the fixed-budget
+device loop and the eager loop commit the same final argmax.
+
+| loop | block latency | **tokens/block/s** | committed text |
+|---|---|---|---|
+| eager `denoise_block` (5 readbacks/step + halt) | 19.64 s | 13.04 | reference |
+| **device-only `device_loop_denoise_block`** (`DG_DENOISE_DEVICE_LOOP=1`) | 18.90 s | **13.55** | **bit-identical** |
+
+The direct win is modest (~1.04×; the readbacks cost only ~31 ms/step, less than projected). Its real value: it is the
+**trace-ready** form — the eager loop's 5 per-step host readbacks make it un-traceable, so `device_loop_denoise_block` is
+the prerequisite for the ~137 ms/step tracing win. Opt-in (discards per-step trajectory records + cannot early-halt);
+recommended-on for serving throughput, kept off by default so record-consuming callers (text_demo/tests) are unaffected.
+Artifacts: `artifacts/task4_deviceloop_30L_s24.{json,log}`, `task4_traced_step_sweep.log`. No gemma4 edits.
+
+**Next (scoped, not landed): trace-capture the device-only loop** (win B, ~137 ms/step → step 725→~590 ms → block @24
+~15.7 s → ~16 t/s). Blockers to solve, from the measurement: (1) per-step renoise tokens are host-uploaded each step
+(`make_seeded_host_noise_tokens_fn`) — `from_torch` is a WRITE, forbidden in trace capture; must pre-upload all ≤48
+steps' seeded renoise tokens to persistent device buffers and index them, refilled per block; (2) the self-conditioning
+adapter's prev-logits state must be a persistent trace buffer updated in-place (prof only traced a single reset-per-step
+step, not the stateful loop). Both are the standard traced-decode input-buffer pattern; `run_fixed_denoise_steps` already
+takes preallocated `constants`, and `verify_trace_safe_loop.py` proved the device-feedback loop is trace-safe with a
+synthetic logits fn. The other big in-repo per-step lever is `path_to_100tps` rank 2 (OPT-004 matmul-geometry tuning of
+the 5 untuned `tt/sparse_moe.py` matmuls, MoE 10.5→~5–6 ms/layer → ~150 ms/step).
