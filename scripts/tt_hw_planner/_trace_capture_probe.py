@@ -34,9 +34,15 @@ _LADDER = [
     (
         "decode_step",
         None,
-        "No fixed-shape, trace-capturable decode_step(state). Add a single-token decode_step whose tensor "
-        "shapes are constant every step, then expose trace_capture_selftest(device) that wraps it in "
-        "ttnn.begin_trace_capture / end_trace_capture.",
+        "Expose the GENERIC decode contract the perf/2CQ engine binds to (perf_adapter), and trace it: "
+        "(1) decode_prefill(input_ids)->state seeds the resident KV/SSM once (and any cross-attention KV "
+        "for a seq2seq decoder); (2) decode_step(state)->state runs exactly ONE fixed-shape, host-op-free "
+        "token (on-device argmax feed, constant [1,1] shapes every step) and returns the advanced state; "
+        "(3) decode_write_inputs(state)->None stages the NEXT token on command-queue 1 -- this hook is what "
+        "flips the engine into the trace+2CQ path. Then trace_capture_selftest(device) must wrap a "
+        "decode_step in ttnn.begin_trace_capture / end_trace_capture and replay it. Use these EXACT public "
+        "names: they are the model-agnostic seam the optimize/2CQ tool reads; the BODY is yours to write "
+        "for this architecture.",
     ),
 ]
 
@@ -60,17 +66,34 @@ _AR_MARKERS = (
 )
 
 
+def _stage_names(src: str) -> list:
+    m = re.search(r"PIPELINE_STAGES\s*=\s*\[([^\]]*)\]", src)
+    if not m:
+        return []
+    return re.findall(r"[\"']([A-Za-z0-9_]+)[\"']", m.group(1))
+
+
+def _stage_contract_ok(src: str, stage: str) -> bool:
+    if stage == "decode":
+        return bool(re.search(r"def\s+decode_step\s*\(", src)) and bool(
+            re.search(r"def\s+decode_write_inputs\s*\(", src)
+        )
+    return all(
+        bool(re.search(r"def\s+%s_%s\s*\(" % (re.escape(stage), suf), src))
+        for suf in ("trace_setup", "trace_step", "write_inputs")
+    )
+
+
 def probe(demo_dir: Path) -> dict:
     src = _read(demo_dir)
     lad = {name: (pat, guidance) for name, pat, guidance in _LADDER}
     is_ar = bool(re.search(_AR_MARKERS, src))
     blockers = []
+    stages = _stage_names(src)
 
-    # residency: UNIVERSAL — any model whose weights do not fit resident streams per layer.
     if re.search(lad["residency"][0], src):
         blockers.append({"rung": "residency", "guidance": lad["residency"][1]})
 
-    # token_feed + kv_cache: AUTOREGRESSIVE-ONLY (a feed-forward model has no token loop / KV).
     if is_ar:
         if re.search(lad["token_feed"][0], src):
             blockers.append({"rung": "token_feed", "guidance": lad["token_feed"][1]})
@@ -79,21 +102,36 @@ def probe(demo_dir: Path) -> dict:
         if reprefill and not has_kv:
             blockers.append({"rung": "kv_cache", "guidance": lad["kv_cache"][1]})
 
-    # trace-capturable entry: UNIVERSAL, but the UNIT differs by class — a fixed-shape decode_step for an
-    # autoregressive model, or a fixed-shape forward pass for a feed-forward model (encoder / vocoder / etc).
-    if not ("begin_trace_capture" in src and re.search(r"def\s+trace_capture_selftest", src)):
-        if is_ar:
-            g = lad["decode_step"][1]
-        else:
-            g = (
-                "No trace-capturable entry for this feed-forward model. The trace UNIT is the steady-state "
-                "FORWARD pass (not a decode step): make its input shapes FIXED and its forward host-op-free, "
-                "then expose trace_capture_selftest(device) that wraps ONE forward in "
-                "ttnn.begin_trace_capture / end_trace_capture. For a multi-stage pipeline (encoder / decoder / "
-                "vocoder, e.g. Seamless) do this PER STAGE — an AR decoder stage additionally needs the "
-                "decode-step / KV rungs, a conv/vocoder stage only needs residency + fixed-shape forward."
-            )
+    has_trace_hook = ("begin_trace_capture" in src) and bool(re.search(r"def\s+trace_capture_selftest", src))
+    if is_ar:
+        has_contract = bool(re.search(r"def\s+decode_step\s*\(", src)) and bool(
+            re.search(r"def\s+decode_write_inputs\s*\(", src)
+        )
+        if not (has_trace_hook and has_contract):
+            blockers.append({"rung": "trace_entry", "guidance": lad["decode_step"][1]})
+    elif not has_trace_hook:
+        g = (
+            "No trace-capturable entry for this feed-forward model. The trace UNIT is the steady-state "
+            "FORWARD pass (not a decode step): make its input shapes FIXED and its forward host-op-free, "
+            "then expose trace_capture_selftest(device) that wraps ONE forward in "
+            "ttnn.begin_trace_capture / end_trace_capture, and (forward-2CQ) a forward_step(inputs) + "
+            "write_inputs(inputs) CQ1 staging hook so the generic engine can overlap the next input "
+            "upload with compute. For a multi-stage pipeline (encoder / decoder / vocoder, e.g. Seamless) "
+            "do this PER STAGE — an AR decoder stage additionally needs the decode-step / KV rungs, a "
+            "conv / vocoder stage only needs residency + fixed-shape forward."
+        )
         blockers.append({"rung": "trace_entry", "guidance": g})
+
+    missing_stage = [s for s in stages if not _stage_contract_ok(src, s)]
+    if stages and missing_stage:
+        g = (
+            "PIPELINE_STAGES declares %s but these stages lack the trace+2CQ contract: %s. "
+            "Emit per stage (COMMAND 3): a one-shot stage needs <stage>_trace_setup / "
+            "<stage>_trace_step / <stage>_write_inputs (pin the variable dim to a fixed C, hoist "
+            "the shape-dependent constants from the HF reference OUTSIDE the trace); an AR decode "
+            "stage needs decode_step + decode_write_inputs (resident self-/cross-attn KV)." % (stages, missing_stage)
+        )
+        blockers.append({"rung": "trace_stage", "guidance": g})
 
     trace_ready = not blockers
     device_capture = None
@@ -105,6 +143,7 @@ def probe(demo_dir: Path) -> dict:
         "trace_ready": bool(trace_ready and (device_capture is None or device_capture.get("ok"))),
         "static_blockers": blockers,
         "device_capture": device_capture,
+        "stages": stages,
     }
 
 
