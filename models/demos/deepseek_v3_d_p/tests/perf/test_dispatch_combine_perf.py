@@ -20,20 +20,27 @@ combine kernel (first_expert_id=0) interprets them correctly, then slices the
 gate outputs to [0:1] for LB's single dispatch group.
 """
 
+import os
+
 import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import run_model_device_perf_test_per_op
 
-# Top 4 absolute hottest (layer, col) pairs from LONGBOOK_QA_ENG_25600.
-# Each token picks 8 of 256 experts; "in-col share" = fraction of those picks
-# landing in the column's 64 experts (uniform random would be 25%).
-_REAL_INDICES_PICKS: list[tuple[int, int]] = [
+# Default: the 4 absolute hottest (layer, col) pairs from LONGBOOK_QA_ENG_25600. Each token picks 8 of
+# 256 experts; "in-col share" = fraction of those picks landing in the column's 64 experts (uniform
+# random would be 25%). Set TT_DS_DISPATCH_SWEEP=1 to instead sweep every captured MoE layer (dsv3
+# layers 3..60) across all 4 Galaxy columns — measure-only (no baselines for the swept pairs).
+_REAL_INDICES_HOTTEST: list[tuple[int, int]] = [
     # (layer, col)
     (27, 2),  # 43.2% in-col share — hottest in the corpus
     (38, 0),  # 41.2%
     (50, 0),  # 39.9%
     (28, 1),  # 39.5%
 ]
+if os.getenv("TT_DS_DISPATCH_SWEEP") == "1":
+    _REAL_INDICES_PICKS: list[tuple[int, int]] = [(layer, col) for layer in range(3, 61) for col in range(4)]
+else:
+    _REAL_INDICES_PICKS = _REAL_INDICES_HOTTEST
 _REAL_INDICES_TOPOS = [("linear", 2), ("ring", 2)]
 
 # Per-(topo, nlinks, layer, col) baselines in nanoseconds. Dispatch and combine
@@ -126,8 +133,9 @@ _DISPATCH_COMBINE_PERF_PARAMS = [
         topo,
         nlinks,
         expected_per_op={
-            "DispatchDeviceOperation": _DISPATCH_REAL_INDICES_EXPECTED_NS[(topo, nlinks, layer, col)],
-            "CombineDeviceOperation": _COMBINE_REAL_INDICES_EXPECTED_NS[(topo, nlinks, layer, col)],
+            # .get() -> None for swept (layer, col) pairs with no recorded baseline: measure-only.
+            "DispatchDeviceOperation": _DISPATCH_REAL_INDICES_EXPECTED_NS.get((topo, nlinks, layer, col)),
+            "CombineDeviceOperation": _COMBINE_REAL_INDICES_EXPECTED_NS.get((topo, nlinks, layer, col)),
         },
         margin=0.045 if topo == "ring" else 0.03,
         captured_layer=layer,
