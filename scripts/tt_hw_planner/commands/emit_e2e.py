@@ -291,6 +291,104 @@ def _build_cc_fix_prompt(*, model_id, demo_dir, pcc) -> str:
     )
 
 
+def cmd_emit_e2e(args) -> int:
+    rc = _emit_e2e_phase_a(args)
+    if rc == 0 and bool(getattr(args, "host_free", False)):
+        return _run_phase_b_host_free(args)
+    return rc
+
+
+def _build_host_free_prompt(*, model_id, demo_dir, pcc) -> str:
+    return (
+        f"You are running emit-e2e PHASE 4 for {model_id} in {demo_dir}. The pipeline is ALREADY correct "
+        f"and fully on-device for COMPUTE (e2e PCC >= {pcc}). Your job now: make the DECODE STEP "
+        f"host-free and trace-capturable, WITHOUT regressing PCC, so trace + 2CQ can run.\n\n"
+        "LOOP: call mcp__host-free-mcp__termination_check FIRST every iteration. It is the SOLE stop "
+        "authority. It returns next_target = the next host op blocking a device trace, with generic "
+        "guidance. Fix EXACTLY that, re-run termination_check. can_stop=true only when the decode is "
+        "trace-capturable AND correctness still passes.\n\n"
+        "PRINCIPLES (apply to whatever architecture is in front of you — do not assume one): a device "
+        "trace cannot contain ANY host op, so every host touch must leave the steady-state step. Typical "
+        "rungs the gate will surface: (1) RESIDENCY — stop per-layer weight streaming; make weights "
+        "resident (for an MoE call get_shard_plan for the expert-parallel residency scheme; build layers "
+        "once, not build/evict). (2) KV CACHE — replace full re-prefill with a persistent on-device KV "
+        "cache + single-token step (ref models/tt_transformers/tt/attention.py). (3) ON-DEVICE TOKEN "
+        "FEED — write the ttnn.argmax result into a fixed [1,1] input on device; drop torch.cat / "
+        "re-upload / .item(). (4) FIXED-SHAPE decode_step(state) + expose trace_capture_selftest(device) "
+        "that wraps it in ttnn.begin_trace_capture/end_trace_capture. For an SSM/Mamba layer, a "
+        "fixed-shape step means a persistent recurrent STATE tensor updated in place. NEVER weaken or "
+        "skip a gate; NEVER reintroduce a host op to make PCC pass. When trace captures, add "
+        "num_command_queues=2 for the 2CQ overlap."
+    )
+
+
+def _run_phase_b_host_free(args) -> int:
+    import json as _json
+    import os as _os
+
+    from .. import cc_harness
+
+    model_id = args.model_id
+    demo_dir = _resolve_demo_dir(args)
+    pcc = float(getattr(args, "pcc_target", 0.9) or 0.9)
+    timeout_s = int(getattr(args, "agent_timeout_s", 0) or 0) or 14400
+    agent_bin = getattr(args, "agent_bin", "claude") or "claude"
+    max_rounds = int(getattr(args, "max_grade_rounds", 0) or 0) or 3
+
+    repo_root = Path(__file__).resolve().parents[3]
+    thp_dir = repo_root / "scripts" / "tt_hw_planner"
+    server_path = thp_dir / "host_free_mcp.py"
+    pybin = str(repo_root / "python_env" / "bin" / "python")
+    if not Path(pybin).is_file():
+        pybin = sys.executable
+    mcp_env = {
+        "E2E_MCP_DEMO_DIR": str(demo_dir),
+        "E2E_MCP_PCC": str(pcc),
+        "E2E_MCP_TIMEOUT": str(timeout_s),
+        "TT_HW_PLANNER_HOST_FREE": "1",
+        "TT_METAL_HOME": str(repo_root),
+        "PYTHONPATH": str(repo_root),
+        "PATH": f"{repo_root / 'python_env' / 'bin'}{_os.pathsep}/usr/bin:/bin",
+    }
+    cfg = cc_harness.build_mcp_config(pybin, server_path, mcp_env, "host-free-mcp")
+    cfg_path = thp_dir / f".host_free_mcp_config_{re.sub(r'[^A-Za-z0-9._-]', '_', model_id)}.json"
+    cfg_path.write_text(_json.dumps(cfg, indent=2))
+    env = dict(_os.environ)
+    env["TT_METAL_HOME"] = str(repo_root)
+    env["PYTHONPATH"] = str(repo_root)
+    env["TT_HW_PLANNER_HOST_FREE"] = "1"
+
+    def gate_fn():
+        return cc_harness.gate_status(pybin, thp_dir, "host_free_mcp", mcp_env, repo_root)
+
+    prompt = _build_host_free_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc)
+    allowed = ["mcp__host-free-mcp__termination_check", "Read", "Edit", "Write", "Bash", "Grep", "Glob"]
+    sep = "=" * 78
+    print("\n" + sep)
+    print("  ===== PHASE 4 (--host-free): make the decode host-free / trace-capturable =====")
+    print(sep)
+    res = cc_harness.run_cc_loop(
+        prompt=prompt,
+        mcp_config_path=cfg_path,
+        allowed_tools=allowed,
+        cwd=repo_root,
+        env=env,
+        gate_fn=gate_fn,
+        max_rounds=max_rounds,
+        claude_bin=agent_bin,
+    )
+    final = gate_fn()
+    tr = bool(final.get("can_stop"))
+    print("\n" + sep)
+    print(f"  host-free (PHASE 4): rounds={res['rounds']} trace_ready={tr} halted={res['halted']}")
+    if not tr and isinstance(final.get("next_target"), dict):
+        print(
+            f"  still blocked at: {final['next_target'].get('rung')} — {final['next_target'].get('reason', '')[:200]}"
+        )
+    print(sep)
+    return 0 if tr else 1
+
+
 def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_rounds) -> int:
     """emit-e2e cc engine: after the builder runs, drive the fix loop through the shared cc harness
     against the e2e_mcp deterministic gate (which REUSES the same G1–G4 `_run_deterministic_gates` the
@@ -362,7 +460,7 @@ def _source_phase2_shard_stubs(demo_dir: Path) -> list:
     return sourced
 
 
-def cmd_emit_e2e(args) -> int:
+def _emit_e2e_phase_a(args) -> int:
     try:
         from ..cli import _quiet_framework_logging
 

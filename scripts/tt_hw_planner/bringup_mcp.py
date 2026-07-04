@@ -309,7 +309,8 @@ def get_shard_plan(component: str) -> dict:
     implementations to study; YOU reason out the actual scheme for this component (which weights split
     on which axis, which collective, expert- vs weight-parallel) and gathered-PCC judges it. eligible=
     false = a replicate-only role (norm/embedding/rotary/activation/bias) that shards in no scheme."""
-    g = _shard.shard_guidance(component)
+    _goal = "host_free" if os.environ.get("TT_HW_PLANNER_HOST_FREE") == "1" else None
+    g = _shard.shard_guidance(component, goal=_goal)
     if g is None:
         return {
             "component": component,
