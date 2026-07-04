@@ -537,12 +537,18 @@ def _run_full_pipeline_ms():
     env["TT_PERF_LAYERS"] = "0"
     env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS", "1")
     env.setdefault("TT_PERF_TRACE", "1")
+    env["TT_PERF_PREFILL_TRACE"] = "1"
     env.pop("TT_METAL_DEVICE_PROFILER", None)
     cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node]
     if case:
         cmd += ["-k", case]
     per_tokens = []
     walls = []
+    prefills = []
+    tp = dp = 1
+    shard = False
+    batch = 1
+    decode_path = prefill_path = "n/a"
     last_err = None
     for _ in range(_FULLPIPE_SAMPLES):
         try:
@@ -557,11 +563,62 @@ def _run_full_pipeline_ms():
                     per_tokens.append(float(line.split("TRACE_PER_TOKEN_MS=", 1)[1].split()[0]))
                 except Exception:  # noqa: BLE001
                     pass
+            elif "TRACE_PREFILL_MS=" in line:
+                try:
+                    prefills.append(float(line.split("TRACE_PREFILL_MS=", 1)[1].split()[0]))
+                except Exception:  # noqa: BLE001
+                    pass
             elif "FORWARD_WALL_MS=" in line:
                 try:
                     walls.append(float(line.split("FORWARD_WALL_MS=", 1)[1].split()[0]))
                 except Exception:  # noqa: BLE001
                     pass
+            m = _re.search(r"DP=(\d+)\s+TP=(\d+)", line)
+            if m:
+                dp, tp = int(m.group(1)), int(m.group(2))
+            if "shard_active=True" in line:
+                shard = True
+            if "TRACE_REPLAY_PATH=" in line:
+                mb = _re.search(r"batch=(\d+)", line)
+                if mb:
+                    batch = int(mb.group(1))
+                try:
+                    decode_path = line.split("TRACE_REPLAY_PATH=", 1)[1].split()[0]
+                except Exception:  # noqa: BLE001
+                    pass
+            if "TRACE_PREFILL_PATH=" in line:
+                try:
+                    prefill_path = line.split("TRACE_PREFILL_PATH=", 1)[1].split()[0]
+                except Exception:  # noqa: BLE001
+                    pass
+    dec = statistics.median(per_tokens) if per_tokens else None
+    pf = statistics.median(prefills) if prefills else None
+    if dec is not None or pf is not None:
+        isl = env.get("TT_PERF_SEQ_LEN", os.environ.get("TT_PERF_SEQ_LEN", "128"))
+        osl = env.get("TT_PERF_MAX_NEW_TOKENS", "1")
+        tsu = (1000.0 / dec) if dec else 0.0
+        sys.stderr.write(
+            "[full-pipeline-gate] PERF_SCORECARD mesh=%dx%d TP=%d DP=%d shard=%s on_device=%s "
+            "ISL=%s OSL=%s batch=%d TTFT_ms=%s prefill_path=%s decode_ms=%s decode_path=%s TSU=%.2f TS=%.2f\n"
+            % (
+                dp,
+                tp,
+                tp,
+                dp,
+                shard,
+                (dec is not None or pf is not None),
+                isl,
+                osl,
+                batch,
+                ("%.2f" % pf) if pf is not None else "NA",
+                prefill_path,
+                ("%.4f" % dec) if dec is not None else "NA",
+                decode_path,
+                tsu,
+                tsu * batch,
+            )
+        )
+        sys.stderr.flush()
     if per_tokens:
         return statistics.median(per_tokens), "trace", None
     if walls:
