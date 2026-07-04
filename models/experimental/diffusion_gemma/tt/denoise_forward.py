@@ -612,15 +612,24 @@ class DenoiseLogitsAdapter:
         self.q_rope_offset = q_rope_offset
         self.logits_from_tokens = logits_from_tokens
         self.prev_logits = None
-        # Trace-safe self-conditioning: persistent in-place [1,1,C,hidden] signal buffer
+        # Trace-safe self-conditioning: persistent [1,1,C,hidden] signal buffer(s)
         # (for the single-step traced loop; KV-cache-style cross-replay state).
         self.trace_safe_self_conditioning = False
         self.signal_buf = None
+        # Ping-pong (double-buffered) signal: read buffer != write buffer within a step.
+        # Added to test whether an in-place signal_buf read+write was the "self-cond trace
+        # race" — it is NOT: the in-place default is decision-fidelity-preserving and
+        # ping-pong is BIT-IDENTICAL to it on device (the race was a probe harness bug —
+        # a reused init buffer allocated after trace capture, clobbered by trace scratch;
+        # see perf_progress.md session 8). Kept opt-in (default off) as a verified-equivalent
+        # option; the shipped traced path uses the in-place default. See #47465.
+        self.signal_ping_pong = False
+        self.signal_buf_b = None
         # Cross-block-trace-reusable canvas RoPE (constant-shape per-layer-type buffers).
         self.use_canvas_rope = False
         self._canvas_rope_bufs = {}
 
-    def prepare_trace_safe_self_conditioning(self, *, canvas_len: int, dtype=ttnn.bfloat16):
+    def prepare_trace_safe_self_conditioning(self, *, canvas_len: int, dtype=ttnn.bfloat16, ping_pong: bool = False):
         """Preallocate the persistent in-place self-cond signal buffer OUTSIDE any trace.
 
         Intended for the **single-step traced loop** (``tt/denoise_loop.py``): one
@@ -636,19 +645,30 @@ class DenoiseLogitsAdapter:
         ``post_norm(embed + 0)``. ``reset_signal_buffer`` must be called before each
         block's step 0 to re-zero. See #47465.
         """
+        self.signal_ping_pong = ping_pong
         if self.self_conditioning is None:
             self.trace_safe_self_conditioning = True
             self.signal_buf = None
+            self.signal_buf_b = None
             return
         hidden_size = self.self_conditioning.hidden_size
         if self.signal_buf is not None:
             self.signal_buf.deallocate(True)
-        self.signal_buf = ttnn.zeros(
-            [1, 1, canvas_len, hidden_size],
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.tt_model.mesh_device,
-        )
+        if self.signal_buf_b is not None:
+            self.signal_buf_b.deallocate(True)
+            self.signal_buf_b = None
+
+        def _zeros():
+            return ttnn.zeros(
+                [1, 1, canvas_len, hidden_size],
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.tt_model.mesh_device,
+            )
+
+        self.signal_buf = _zeros()
+        if ping_pong:
+            self.signal_buf_b = _zeros()
         self.trace_safe_self_conditioning = True
 
     def reset_signal_buffer(self):
@@ -660,6 +680,21 @@ class DenoiseLogitsAdapter:
         """
         if self.signal_buf is not None:
             ttnn.mul(self.signal_buf, 0.0, output_tensor=self.signal_buf)
+        if self.signal_buf_b is not None:
+            ttnn.mul(self.signal_buf_b, 0.0, output_tensor=self.signal_buf_b)
+
+    def _signal_read_write_bufs(self, step: int):
+        """Return (read_buf, write_buf) for this step's self-cond signal.
+
+        In-place (default): read == write == signal_buf. Ping-pong: even steps read
+        buffer A and write buffer B, odd steps swap — so step N reads exactly the
+        buffer step N-1 wrote, and no step reads+writes the same address in-place.
+        """
+        if not self.signal_ping_pong:
+            return self.signal_buf, self.signal_buf
+        if step % 2 == 0:
+            return self.signal_buf, self.signal_buf_b
+        return self.signal_buf_b, self.signal_buf
 
     # --- Cross-block-trace-reusable canvas RoPE (second single-step-trace blocker) ---
     #
@@ -736,14 +771,14 @@ class DenoiseLogitsAdapter:
         self.use_canvas_rope = False
 
     def _trace_safe_call(self, canvas_tokens, step: int):
-        del step
         tt_model = self.tt_model
+        read_buf, write_buf = self._signal_read_write_bufs(step)
         canvas_hidden = embed_canvas_tokens(tt_model, canvas_tokens)
         if self.self_conditioning is None:
             conditioned = canvas_hidden
         else:
-            # Uniform: forward over the persistent signal buffer (zeroed for step 0).
-            conditioned = self.self_conditioning.forward(canvas_hidden, self.signal_buf)
+            # Uniform: forward over the persistent signal read buffer (zeroed for step 0).
+            conditioned = self.self_conditioning.forward(canvas_hidden, read_buf)
             canvas_hidden.deallocate(True)
         logits = denoise_logits_forward(
             tt_model,
@@ -764,7 +799,7 @@ class DenoiseLogitsAdapter:
                 self.self_conditioning_embedding_weight,
                 compute_kernel_config=self.self_conditioning_compute_kernel_config,
             )
-            ttnn.copy(new_signal, self.signal_buf)
+            ttnn.copy(new_signal, write_buf)
             new_signal.deallocate(True)
         return logits
 

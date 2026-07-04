@@ -17,17 +17,18 @@ a traced decode already uses. N traces are captured (one per step index) so each
 own temperature ``T[i]`` and reads its own renoise tokens ``noise[i]``; all N read/write the
 SAME persistent ``canvas_buf`` / ``signal_buf`` / ``committed_buf``.
 
-*** DEVICE-VERIFIED STATUS (2026-07-04 session 7) ***
-The single-step trace MECHANISM now RUNS end-to-end (the prior "~54 min hang" was a cold-JIT
-compile, not a deadlock; two real trace-capture bugs — a cold-copy host-write and an
-argmax(ROW_MAJOR)-vs-committed_buf(TILE) layout mismatch — are fixed by cloning the persistent
-buffers from the real first-step outputs and warming the copies before capture). But the
-single-step architecture does NOT eliminate the self-cond race: ``RESULT_REFACTOR`` = 100%
-(adapter refactor bit-exact), ``match_vs_eager`` = 100% (first replay == eager), yet
-``traced_vs_traced`` = 90-92% (steps=4) — two replays still disagree. Per-step syncing
-(``DG_PROBE_SYNC_PER_STEP=1``) does not help. Since self-cond OFF traces at 100% and self-cond
-adds all-reduces, the residual nondeterminism is most likely a CCL-in-trace determinism issue
-(deep / likely upstream), not a buffer-management bug. See ``perf_progress.md`` session 7.
+*** DEVICE-VERIFIED STATUS (2026-07-04 session 8) — the "race" was a PROBE BUG ***
+RESOLVED. The historical ``traced_vs_traced`` ~66-92% was NOT a self-cond race, NOT CCL-in-trace,
+NOT in-place aliasing — it was THIS PROBE reusing an ``init_dev`` buffer allocated AFTER trace
+capture. A Metal trace bakes its intermediate-tensor addresses at capture time; a buffer
+allocated into post-capture-freed memory overlaps that trace scratch and is CLOBBERED on every
+replay, so the 2nd+ replay copied corrupted data into the canvas. ``probe_selfcond_race.py``
+proved it: ``--reuse-init`` = 66% vs ``--reuse-init --prealloc-init`` = 100% (in-place AND
+ping-pong bit-identical, refuting the aliasing theory); fresh-upload-per-replay = 100%. Fix here:
+allocate ``init_dev`` BEFORE capture. Now ``RESULT_REFACTOR`` = 100%, ``match_vs_eager`` = 100%,
+AND ``traced_vs_traced`` = 100%. The single-step traced denoise loop is decision-fidelity-
+preserving. ``probe_traced_serving.py`` confirms the same across blocks (CROSSBLOCK_OK, off1
+100%). See ``perf_progress.md`` session 8.
 
 It proves, on device:
   A. the trace-safe self-cond adapter refactor (uniform ``forward`` over a persistent
@@ -217,12 +218,22 @@ def run(num_layers, canvas_length, steps, prompt, max_seq_len):
             _nc0.deallocate(True)
             _am0.deallocate(True)
             _c0.deallocate(True)
+            # init_dev (the canvas-init SOURCE copied into canvas_buf at each replay's reset)
+            # MUST be allocated BEFORE trace capture. A trace bakes its intermediate-tensor
+            # addresses at capture time; a buffer allocated into post-capture-freed memory
+            # overlaps that trace scratch and is CLOBBERED by every replay — so REUSING it
+            # across the two replays made the 2nd replay copy corrupted data into the canvas.
+            # THIS — not a self-cond race, not CCL, not in-place aliasing — is the entire cause
+            # of the historical "traced_vs_traced ~90%": probe_selfcond_race.py measured
+            # --reuse-init = 66% vs --reuse-init --prealloc-init = 100% (in-place AND ping-pong
+            # bit-identical). Reserving init_dev's region before capture keeps trace scratch off
+            # it, so reuse is now bit-exact. See perf_progress.md session 8.
+            init_dev = make_init()
             ttnn.synchronize_device(mesh)
             adapter.reset_signal_buffer()
             traces = _capture_step_traces(mesh, adapter, cfg, canvas_buf, committed_buf, noise_list, consts)
             ttnn.synchronize_device(mesh)
 
-            init_dev = make_init()
             traced_ids, _warm_ms = _replay_block(mesh, adapter, traces, canvas_buf, committed_buf, init_dev)
             traced_ids2, block_ms = _replay_block(mesh, adapter, traces, canvas_buf, committed_buf, init_dev)
             init_dev.deallocate(True)

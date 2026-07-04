@@ -97,9 +97,12 @@ def _replay_block(mesh, adapter, traces, canvas_buf, committed_buf, init_dev, st
     return _committed_ids(committed_buf), ms
 
 
-def run(num_layers, canvas_length, steps, num_blocks, prompt, max_seq_len, do_commit):
+def run(num_layers, canvas_length, steps, num_blocks, prompt, max_seq_len, do_commit, trace_region_size=6000000000):
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, ttnn.FabricReliabilityMode.STRICT_INIT, None)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=2000000000)
+    # Single-step traces are captured ONE-PER-STEP, so total trace memory ~ steps * per-step
+    # trace size (~168 MB/trace at 30L). 12 steps at 30L needs ~2.02 GB, 24 needs ~4.03 GB, so
+    # default 6 GB covers up to ~36 steps. DRAM headroom on QB2 (~32 GB/chip) is ample.
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=trace_region_size)
     try:
         mi = build_tt_model_from_checkpoint_dir(
             mesh, CKPT, max_batch_size=1, max_seq_len=max_seq_len, num_layers=num_layers, create_kv_cache=True
@@ -179,13 +182,50 @@ def run(num_layers, canvas_length, steps, num_blocks, prompt, max_seq_len, do_co
         try:
             adapter.prepare_canvas_rope_buffers(canvas_len=canvas_length)
             adapter.update_canvas_rope_buffers(off0)  # populate for capture
-            canvas_buf = make_init()
-            committed_buf = make_init()
+            adapter.q_rope_offset = off0
+            adapter.use_canvas_rope = True  # traced path uses the constant-shape canvas RoPE buffer
+
+            # WARM the persistent trace-write-target buffers by cloning the REAL first-step
+            # outputs (exact dtype/layout/memory spec match) and running the in-trace copies
+            # ONCE eagerly. Otherwise the cold copy(next_canvas->canvas_buf)/(argmax->committed_buf)
+            # compiled INSIDE begin_trace_capture enqueues a host write -> "Writes not supported
+            # during trace capture" (fd_mesh_command_queue.cpp:665). Same fix as
+            # probe_singlestep_traced.py session 7; run under use_canvas_rope so the RoPE path warms too.
+            adapter.reset_signal_buffer()
+            _c0 = make_init()
+            _t0 = DL.temperature_at_step(0, cfg.max_denoise_steps, cfg.temperature_start, cfg.temperature_end)
+            _logits0 = adapter(_c0, 0)
+            _nc0, _am0 = DL.denoise_step_next_canvas(
+                _logits0,
+                temperature=_t0,
+                entropy_budget=cfg.entropy_budget,
+                gumbel_noise=None,
+                noise_tokens=noise_list[0],
+                constants=consts,
+            )
+            DL._deallocate_logits_if_unowned(adapter, _logits0)
+            canvas_buf = ttnn.clone(_nc0)
+            committed_buf = ttnn.clone(_am0)
+            ttnn.copy(_nc0, canvas_buf)
+            ttnn.copy(_am0, committed_buf)
+            _nc0.deallocate(True)
+            _am0.deallocate(True)
+            _c0.deallocate(True)
+            ttnn.synchronize_device(mesh)
+
+            # init_dev (the canvas-init SOURCE copied into canvas_buf each block) MUST be
+            # allocated BEFORE trace capture. A trace bakes its intermediate-tensor
+            # addresses at capture time; a buffer allocated into post-capture-freed memory
+            # overlaps that trace scratch and is CLOBBERED by every replay — so reusing it
+            # across replays/blocks corrupts the canvas from the 2nd replay on. Reserving its
+            # region before capture keeps trace scratch off it. (Root cause of the phantom
+            # "self-cond race": probe_selfcond_race.py --reuse-init vs --reuse-init
+            # --prealloc-init = 66% vs 100%. See perf_progress.md session 8.)
+            init_dev = make_init()
             adapter.reset_signal_buffer()
             traces = _capture_step_traces(mesh, adapter, cfg, canvas_buf, committed_buf, noise_list, consts)
             ttnn.synchronize_device(mesh)
 
-            init_dev = make_init()
             traced0_ids, warm_ms = _replay_block(mesh, adapter, traces, canvas_buf, committed_buf, init_dev, off0)
             traced0b_ids, b0_ms = _replay_block(mesh, adapter, traces, canvas_buf, committed_buf, init_dev, off0)
             traced1_ids, b1_ms = _replay_block(mesh, adapter, traces, canvas_buf, committed_buf, init_dev, off1)
@@ -250,6 +290,7 @@ def main():
     ap.add_argument("--prompt", default="Explain what a diffusion language model is in one sentence.")
     ap.add_argument("--max-seq-len", type=int, default=1024)
     ap.add_argument("--no-commit", action="store_true", help="skip the commit/serving-perf phase (correctness only)")
+    ap.add_argument("--trace-region-size", type=int, default=6000000000)
     args = ap.parse_args()
     run(
         args.num_layers,
@@ -259,6 +300,7 @@ def main():
         args.prompt,
         args.max_seq_len,
         do_commit=not args.no_commit,
+        trace_region_size=args.trace_region_size,
     )
 
 

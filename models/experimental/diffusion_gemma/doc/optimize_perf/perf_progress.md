@@ -806,3 +806,56 @@ this session. Next investment: root-cause the self-cond CCL-in-trace nondetermin
 soft-embedding / gated-MLP all-reduce to a deterministic reduction, or compute the signal outside the trace between
 per-step replays), or pursue the non-tracing 30-path levers. Artifacts: `probe_singlestep_traced.py` (fixed +
 device-verified), `probe_copy_trace.py` (no-model copy-in-trace isolation micro-test).
+
+## Session summary (2026-07-04 session 8) — the "self-cond race" was a PROBE BUG; traced serving loop VERIFIED, 58 t/s @12
+
+### The 3-session "self-cond trace race" is RESOLVED — it was never a model/CCL/self-cond defect
+
+The historical `traced_vs_traced` ~66–92% (sessions 5–7, variously blamed on a self-cond cross-step race,
+then CCL-in-trace nondeterminism "likely upstream") is **entirely a harness bug in the probes**: they allocate the
+reused `init_dev` canvas-source buffer **AFTER** `begin_trace_capture` and reuse it across replays. A Metal trace bakes
+its intermediate-tensor addresses at capture time; a buffer allocated into post-capture-freed memory **overlaps that
+trace scratch and is CLOBBERED on every replay**, so the 2nd+ replay copies corrupted data into the canvas. The first
+replay is always correct (its `init_dev` data is still intact), which is why `match_vs_eager` was always 100% while
+`traced_vs_traced` was low.
+
+**Proven decisively** (`probe_selfcond_race.py`, real 26B, L=6, self-cond ON, 5 fresh replays each vs the eager reference):
+
+| pattern | replays vs eager | note |
+|---|---|---|
+| fresh init upload per replay (the SERVING pattern) | **all 100%** | each replay re-uploads valid init |
+| reuse init allocated AFTER capture (session-7 probe pattern) | 100%, then **66–70%** | trace scratch clobbers reused init |
+| reuse init **allocated BEFORE capture** (`--prealloc-init`) | **all 100%** | reserving the region keeps scratch off it |
+
+- **Ping-pong double-buffering the self-cond signal is BIT-IDENTICAL to in-place** (66.02%, 69.92%, … match to the digit),
+  which independently **refutes** the "in-place `signal_buf` WAR aliasing" theory — the divergence is not in the signal
+  path at all. (A `ping_pong` option was added to `DenoiseLogitsAdapter.prepare_trace_safe_self_conditioning`, opt-in,
+  default off, device-verified equivalent; the in-place default is correct so ping-pong is not needed.)
+- The fix everywhere: **allocate every persistent cross-replay buffer (canvas/committed/signal/rope/noise/init) BEFORE
+  trace capture.** Applied to `probe_singlestep_traced.py` and `probe_traced_serving.py`. After the fix
+  `probe_singlestep_traced.py` gives `traced_vs_traced` = 100%.
+
+**Consequence:** the single-step traced denoise loop **is decision-fidelity-preserving**. No CCL change, no upstream fix,
+no eager-signal fallback needed. The session-5/6/7 "two remaining blockers" collapse: (1) the self-cond "race" was a probe
+artifact, and (2) cross-block RoPE reuse was already built and is now verified bit-exact.
+
+### Traced SERVING loop — VERIFIED bit-exact + measured, full 30L (`probe_traced_serving.py`, fixed)
+
+`DG_SPARSE_MOE=1 DG_DEDUP_ARGMAX=1 DG_SPARSE_MOE_TUNED=1`, 30 layers, batched commit, per-block metric. Single-step
+traces captured ONCE at block 0's offset, replayed for every block with the canvas-RoPE buffer refreshed per block.
+Trace region bumped to 6 GB (12 single-step traces at 30L ≈ 2.0 GB; ~168 MB/trace).
+
+| depth | correctness | ms/step (traced, 30L) | mean block latency | **tokens/block/s** |
+|---|---|---|---|---|
+| RESULT_REFACTOR (eager trace-safe adapter) | 100% vs original eager | — | — | — |
+| **steps=12** | **CROSSBLOCK_OK** (off0 100%, off0_tvt 100%, off1 100%) | **257.93** | **4.406 s** | **58.11** |
+
+- **off0_tvt = 100.0%** — the historical "race" metric, now bit-exact (was ~66% pre-fix).
+- **off1_match_vs_eager = 100.0%** — cross-block RoPE reuse is bit-exact (one captured trace set serves every block).
+- ms/step 257.93 at 30L traced **beats** the session-4 461 ms *traced-step* projection: tracing removes the ~137 ms/step
+  dispatch tax AND unmasks OPT-004's 3.49× MoE (both compound; §session-7 predicted exactly this).
+
+**Headline: the traced serving denoise loop is VERIFIED decision-fidelity-preserving and runs 58.11 tokens/block/s @12
+steps at full 30L — nearly 2× the 30 t/s target** (vs 13.93 eager stacked-combo). The block is now commit-bound-ish
+(commit ≈ 1.3 s of the 4.4 s block). Next: 24-step number + wire into serving_smoke behind an opt-in flag (per-block
+noise refreshed into persistent buffers), verify serving_smoke traced == eager, land.
