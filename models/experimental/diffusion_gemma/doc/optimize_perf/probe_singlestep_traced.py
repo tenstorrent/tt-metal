@@ -10,21 +10,35 @@ management bug (in-place, fresh-tensor, and prev_logits-chain self-cond all give
 the identical 60.5%). Crucially a SINGLE self-cond step traces at 100% (STEPS=1),
 so the race is purely CROSS-STEP inside one trace.
 
-This probe validates the fix: capture ONE denoise step as a Metal trace and replay
-it once per step, carrying the cross-step state (canvas + self-cond signal) in
-persistent device buffers updated in-place across replays — the KV-cache pattern a
-traced decode already uses. N traces are captured (one per step index) so each
-bakes its own temperature ``T[i]`` and reads its own renoise tokens ``noise[i]``;
-all N read/write the SAME persistent ``canvas_buf`` / ``signal_buf`` / ``committed_buf``.
+This probe was HYPOTHESIZED (session 5) to fix the race: capture ONE denoise step as a
+Metal trace and replay it once per step, carrying the cross-step state (canvas + self-cond
+signal) in persistent device buffers updated in-place across replays — the KV-cache pattern
+a traced decode already uses. N traces are captured (one per step index) so each bakes its
+own temperature ``T[i]`` and reads its own renoise tokens ``noise[i]``; all N read/write the
+SAME persistent ``canvas_buf`` / ``signal_buf`` / ``committed_buf``.
+
+*** DEVICE-VERIFIED STATUS (2026-07-04 session 7) ***
+The single-step trace MECHANISM now RUNS end-to-end (the prior "~54 min hang" was a cold-JIT
+compile, not a deadlock; two real trace-capture bugs — a cold-copy host-write and an
+argmax(ROW_MAJOR)-vs-committed_buf(TILE) layout mismatch — are fixed by cloning the persistent
+buffers from the real first-step outputs and warming the copies before capture). But the
+single-step architecture does NOT eliminate the self-cond race: ``RESULT_REFACTOR`` = 100%
+(adapter refactor bit-exact), ``match_vs_eager`` = 100% (first replay == eager), yet
+``traced_vs_traced`` = 90-92% (steps=4) — two replays still disagree. Per-step syncing
+(``DG_PROBE_SYNC_PER_STEP=1``) does not help. Since self-cond OFF traces at 100% and self-cond
+adds all-reduces, the residual nondeterminism is most likely a CCL-in-trace determinism issue
+(deep / likely upstream), not a buffer-management bug. See ``perf_progress.md`` session 7.
 
 It proves, on device:
   A. the trace-safe self-cond adapter refactor (uniform ``forward`` over a persistent
      zeroed-for-step-0 signal buffer) is BIT-EXACT to the eager reference (original
-     ``condition(None)`` + prev_logits chain), eager-vs-eager.
-  B. the single-step traced loop committed argmax matches the eager reference
-     (self-cond ON), and is self-consistent across two block replays.
+     ``condition(None)`` + prev_logits chain), eager-vs-eager (``RESULT_REFACTOR``).
+  B. the single-step trace captures + replays without fatal, and the FIRST replay's committed
+     argmax matches the eager reference (``match_vs_eager``); ``traced_vs_traced`` exposes the
+     residual self-cond race (< 100%).
 
-*** DEVICE-OWNERSHIP: run only when QB2 is free. ***
+*** DEVICE-OWNERSHIP: run only when QB2 is free. A trace-capture FATAL poisons the device
+    (the next open_mesh_device hangs) — reset with ``tt-smi -r`` after any capture fatal. ***
 """
 from __future__ import annotations
 
@@ -81,13 +95,23 @@ def _capture_step_traces(mesh, adapter, cfg, canvas_buf, committed_buf, noise_li
 
 
 def _replay_block(mesh, adapter, traces, canvas_buf, committed_buf, init_dev):
-    """One block: reset persistent state, then replay every step trace in order."""
+    """One block: reset persistent state, then replay every step trace in order.
+
+    ``DG_PROBE_SYNC_PER_STEP=1`` inserts a device sync AFTER each per-step trace (so
+    trace N's in-place signal_buf WRITE fully lands before trace N+1's READ). Device-
+    tested 2026-07-04 session 7: it does NOT fix the self-cond cross-step race
+    (traced-vs-traced 90.2% sync-off vs 91.8% sync-on, within noise) — the race is not
+    a cross-trace ordering hazard, so it is left OFF by default.
+    """
+    sync_per_step = os.environ.get("DG_PROBE_SYNC_PER_STEP", "0") == "1"
     ttnn.copy(init_dev, canvas_buf)
     adapter.reset_signal_buffer()  # zero signal_buf so step 0 == post_norm(embed)
     ttnn.synchronize_device(mesh)
     t0 = time.perf_counter()
     for tid in traces:
         ttnn.execute_trace(mesh, tid, blocking=False)
+        if sync_per_step:
+            ttnn.synchronize_device(mesh)
     ttnn.synchronize_device(mesh)
     ms = (time.perf_counter() - t0) * 1e3
     return _committed_ids(committed_buf), ms
@@ -161,8 +185,39 @@ def run(num_layers, canvas_length, steps, prompt, max_seq_len):
         # ---- (B) single-step TRACED loop (N traces, persistent-buffer threading) ----
         traced_ids = None
         try:
-            canvas_buf = make_init()  # persistent (holds the init canvas)
-            committed_buf = make_init()  # persistent (overwritten with argmax each step)
+            # Allocate the persistent trace-write-target buffers by CLONING the ACTUAL first-step
+            # outputs, so their spec (dtype/layout/memory_config) matches the copy source EXACTLY,
+            # and run the copy eagerly to WARM its program cache. This fixes two real trace-capture
+            # bugs (device-verified 2026-07-04 session 7):
+            #   (1) next_canvas is TILE uint32 but argmax is ROW_MAJOR uint32 (argmax_last_dim) — a
+            #       from_torch TILE committed_buf hits "input layout ROW_MAJOR != output TILE"
+            #       (copy_device_operation.cpp:114);
+            #   (2) run_fixed_denoise_steps threads the canvas via return values, so the two
+            #       ttnn.copy(next_canvas->canvas_buf)/(argmax->committed_buf) are never program-cache
+            #       warmed — a COLD copy compiled INSIDE begin_trace_capture enqueues a host write ->
+            #       "Writes not supported during trace capture" (fd_mesh_command_queue.cpp:665).
+            # Clone-from-real-output fixes BOTH: exact spec match + the eager copy warms the program.
+            adapter.reset_signal_buffer()
+            _c0 = make_init()
+            _t0 = DL.temperature_at_step(0, cfg.max_denoise_steps, cfg.temperature_start, cfg.temperature_end)
+            _logits0 = adapter(_c0, 0)
+            _nc0, _am0 = DL.denoise_step_next_canvas(
+                _logits0,
+                temperature=_t0,
+                entropy_budget=cfg.entropy_budget,
+                gumbel_noise=None,
+                noise_tokens=noise_list[0],
+                constants=consts,
+            )
+            DL._deallocate_logits_if_unowned(adapter, _logits0)
+            canvas_buf = ttnn.clone(_nc0)  # persistent (holds the init canvas; spec == next_canvas)
+            committed_buf = ttnn.clone(_am0)  # persistent (spec == argmax, ROW_MAJOR)
+            ttnn.copy(_nc0, canvas_buf)  # warm the exact copy programs
+            ttnn.copy(_am0, committed_buf)
+            _nc0.deallocate(True)
+            _am0.deallocate(True)
+            _c0.deallocate(True)
+            ttnn.synchronize_device(mesh)
             adapter.reset_signal_buffer()
             traces = _capture_step_traces(mesh, adapter, cfg, canvas_buf, committed_buf, noise_list, consts)
             ttnn.synchronize_device(mesh)

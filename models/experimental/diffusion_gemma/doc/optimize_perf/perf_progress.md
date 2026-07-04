@@ -748,3 +748,61 @@ A `git merge` of either would only re-apply already-present diffs (risking reint
 action is to retire them, not merge. Worktree `tt-metal-g` (dg-opt-g-opt004) removed; stale local branches
 `dg-opt-f100` + `dg-opt-g-opt004` deleted (their SHAs remain on `origin/*` for provenance). gemma4 gate stays the
 1-line dealloc.
+
+### The traced single-step loop "HANG" — ROOT-CAUSED: it was never a deadlock
+
+The prior "KNOWN BLOCKER: `probe_singlestep_traced.py` HANGS (~54 min, no RESULT = deadlock)" is **resolved and
+reframed**. Instrumenting the probe with flushed phase markers (`_probe_ss_dbg.py`) localized the truth on device:
+
+1. **The "~54 min hang" was a cold-JIT compile, not a deadlock** — same lesson as OPT-004. With the JIT disk cache
+   warm, the probe reaches trace capture in ~4 min (build + 2 eager sections) and then fails FAST with a clean
+   `TT_FATAL`. There is no lock/deadlock anywhere in the trace-capture + self-cond + rope-mats path.
+2. **Two real, stacked trace-capture bugs (both now FIXED):**
+   - **Cold-copy host-write.** `ttnn.copy(next_canvas → canvas_buf)` is a device op, but `run_fixed_denoise_steps`
+     (the eager warmup) threads the canvas via return values, so this copy is NEVER program-cache-warmed. A COLD copy
+     compiled *inside* `begin_trace_capture` enqueues a host write → `TT_FATAL: Writes are not supported during trace
+     capture` (`fd_mesh_command_queue.cpp:665`). A no-model micro-test (`_probe_copy_trace.py`) proved all four copy
+     forms (`copy` into from_torch/zeros/clone, `assign`) are TRACE-SAFE *when warmed first* — i.e. the cause is the
+     missing warmup, not the destination-buffer allocation style (a hypothesis this refuted).
+   - **argmax layout mismatch.** `argmax` is **ROW_MAJOR** uint32 (from `argmax_last_dim`) while `committed_buf` (from
+     `host_canvas_to_device`/`from_torch`) is **TILE** → `ttnn.copy(argmax, committed_buf)` fails
+     `input_tensor_a.layout() == out_tensor.layout()` (`copy_device_operation.cpp:114`). This was masked by bug (1)
+     firing first on the earlier copy.
+   - **Combined fix (landed in `probe_singlestep_traced.py`):** allocate the persistent trace-write-target buffers by
+     **cloning the ACTUAL first-step outputs** — `canvas_buf = clone(next_canvas)` [TILE], `committed_buf = clone(argmax)`
+     [ROW_MAJOR] — so their spec matches the copy source exactly, and run the copy eagerly once to warm the program.
+     One change fixes both bugs.
+3. **Device hygiene discovery:** a trace-capture FATAL **poisons the device** — the *next* `open_mesh_device` hangs at
+   0% CPU (observed twice). `tt-smi -r` recovers it. Added to the probe docstring + this log. (A clean, non-fatal
+   exit leaves the device healthy — no reset needed.)
+
+**The mechanism now RUNS** (1L/4-step, device-verified): `RESULT_REFACTOR` = 100% (trace-safe self-cond adapter
+bit-exact to eager), N single-step traces capture + replay with **no fatal**, `RESULT_SINGLESTEP_TRACED
+ms_per_step≈90 (1L) match_vs_eager=100.0%` — the first replay's committed argmax matches the eager reference exactly.
+
+### BUT the self-cond race PERSISTS — the single-step architecture does NOT fix it (refutes the session-5 plan)
+
+Session 5 hypothesized the single-step trace (replay-once-per-step, KV-cache-style persistent buffers) would eliminate
+the whole-loop self-cond race because STEPS=1 traces at 100%. **Device-verified false:** with the mechanism running,
+`RESULT_TRACED_VS_TRACED = 52% (steps=2) / 90-92% (steps=4)` — two replays of the SAME captured traces still disagree,
+the same race the whole-loop showed (60.5%). Tested `DG_PROBE_SYNC_PER_STEP=1` (a device sync after each per-step trace
+so trace N's signal_buf write lands before trace N+1 reads it) — **no effect** (90.2% → 91.8%, noise), so the race is
+NOT a cross-trace ordering hazard the single-step form can serialize away.
+
+**Isolation of the remaining blocker.** `match_vs_eager` = 100% (first replay reliably correct) but `traced_vs_traced`
+< 100% ⇒ the trace replay is nondeterministic *across* replays, specifically on the self-cond feedback (session-5:
+self-cond OFF traces at 100% for both replays). The self-cond path adds all-reduces (soft-embedding matmul + gated MLP,
+TP-sharded) that the self-cond-OFF path does not, so the residual nondeterminism is most consistent with a
+**CCL-in-trace determinism issue** — a device-resident buffer (signal_buf) fed by a traced all-reduce whose result is
+not bit-reproducible across replays. That is a deep, likely-**upstream** (ttnn CCL / trace) problem, not a
+DiffusionGemma-local buffer-management bug — the three session-5 buffer variants and this session's clone+sync all
+leave it unchanged.
+
+**Verdict for the path to 30.** The traced serving loop remains the binding lever to verified 30 t/s (§step-7 A/B: the
+eager step is dispatch-bound, tracing removes ~137 ms/step + would unlock OPT-004's masked 3.49× MoE), and its
+trace-capture blockers are now cleared — but it is **not decision-fidelity-preserving** while the self-cond feedback
+races (traced_vs_traded ~90%). Per the "verify bit-exact BEFORE wiring into serving" rule, it is NOT wired into serving
+this session. Next investment: root-cause the self-cond CCL-in-trace nondeterminism (candidate: force the self-cond
+soft-embedding / gated-MLP all-reduce to a deterministic reduction, or compute the signal outside the trace between
+per-step replays), or pursue the non-tracing 30-path levers. Artifacts: `probe_singlestep_traced.py` (fixed +
+device-verified), `probe_copy_trace.py` (no-model copy-in-trace isolation micro-test).
