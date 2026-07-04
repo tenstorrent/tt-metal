@@ -37,32 +37,38 @@ from ...parallel.manager import CCLManager
 from ...utils.tensor import bf16_tensor, local_device_to_torch
 
 
-@dataclasses.dataclass
-class DiffusionGemmaPipelineConfig:
-    mesh_device: ttnn.MeshDevice
-    tp_axis: int = 0
-    num_links: int = 1
-    topology: ttnn.Topology = ttnn.Topology.Linear
-    # Sampler tuning. Defaults match HF generation_config.json defaults.
-    max_denoising_steps: int = 48
-    entropy_bound: float = 0.1
-    temperature_start: float = 0.8
-    temperature_end: float = 0.4
-    # Expert weights are the dominant DRAM consumer at real config (30 layers × 128 experts
-    # × per-expert projection weights). bfp8 fits comfortably where bf16 OOMs, and
-    # demos/gemma4's own MoEBlock default is bfp8 — so precision at the router path is not
-    # further degraded by this choice. Router weights stay at bf16 since the router logic is
-    # more precision-sensitive and its state is small enough to fit at bf16.
-    expert_dtype: ttnn.DataType = ttnn.bfloat8_b
-    router_dtype: ttnn.DataType = ttnn.bfloat16
-
-
 class DiffusionGemmaPipeline:
     """Driver: HF processor → encoder → decoder loop → text."""
 
+    @dataclasses.dataclass
+    class Config:
+        """Pipeline configuration.
+
+        Kept as a nested class so callers get one entry point:
+        ``DiffusionGemmaPipeline.Config(...)`` alongside
+        ``DiffusionGemmaPipeline.from_pretrained(...)``.
+        """
+
+        mesh_device: ttnn.MeshDevice
+        tp_axis: int = 0
+        num_links: int = 1
+        topology: ttnn.Topology = ttnn.Topology.Linear
+        # Sampler tuning. Defaults match HF generation_config.json defaults.
+        max_denoising_steps: int = 48
+        entropy_bound: float = 0.1
+        temperature_start: float = 0.8
+        temperature_end: float = 0.4
+        # Expert weights are the dominant DRAM consumer at real config (30 layers × 128 experts
+        # × per-expert projection weights). bfp8 fits comfortably where bf16 OOMs, and
+        # demos/gemma4's own MoEBlock default is bfp8 — so precision at the router path is not
+        # further degraded by this choice. Router weights stay at bf16 since the router logic is
+        # more precision-sensitive and its state is small enough to fit at bf16.
+        expert_dtype: ttnn.DataType = ttnn.bfloat8_b
+        router_dtype: ttnn.DataType = ttnn.bfloat16
+
     def __init__(
         self,
-        config: DiffusionGemmaPipelineConfig,
+        config: "DiffusionGemmaPipeline.Config",
         tt_model: DiffusionGemmaForBlockDiffusion,
         hf_model,  # HF DiffusionGemmaForBlockDiffusion (used for non-TT scaffolding only)
         hf_processor,
@@ -73,6 +79,13 @@ class DiffusionGemmaPipeline:
         self.hf_model = hf_model
         self.hf_processor = hf_processor
         self.hf_generation_config = hf_generation_config
+        # Diagnostic capture points. When ``_debug_capture_decoder_hidden`` is True, each
+        # ``_run_decoder`` call also snapshots the pre-lm_head decoder hidden state to
+        # ``_last_decoder_hidden_host`` (torch fp32). Off by default so we don't pay the
+        # device→host copy per denoising step in the hot generate() loop.
+        self._debug_capture_decoder_hidden = False
+        self._last_decoder_hidden_host: torch.Tensor | None = None
+        self._last_encoder_hidden = None
 
     # -------------------------------------------------------------------------
     # Construction
@@ -315,9 +328,9 @@ class DiffusionGemmaPipeline:
             max_denoising_steps=self.config.max_denoising_steps,
         )
         logits_processor = LinearTemperatureScheduleLogitsProcessor(
-            temperature_start=self.config.temperature_start,
-            temperature_end=self.config.temperature_end,
-            num_steps=self.config.max_denoising_steps,
+            t_min=self.config.temperature_start,
+            t_max=self.config.temperature_end,
+            max_denoising_steps=self.config.max_denoising_steps,
         )
         stopping = StableAndConfidentStoppingCriteria()
 
@@ -503,14 +516,19 @@ class DiffusionGemmaPipeline:
             soft_emb = (soft_probs @ embed_w).to(torch.bfloat16) * (text_cfg.hidden_size**0.5)
             tt_self_cond_signal = bf16_tensor(soft_emb.unsqueeze(0), device=mesh_device)
 
-        # Single clean decoder step: decoder + lm_head + softcap on-device.
-        out = self.tt_model.decoder_step(
+        # Split the on-device decoder + lm_head into two calls so the caller can inspect the
+        # pre-lm_head hidden state for diagnostics. ``_apply_lm_head`` will deallocate
+        # ``decoder_h`` inside itself, so we snapshot to host first if diagnostics are on.
+        decoder_h = self.tt_model.model.decoder(
             tt_canvas,
             decoder_position_ids,
             encoder_kv_cache=encoder_kv,
             decoder_attention_masks=tt_decoder_masks,
             self_conditioning_signal=tt_self_cond_signal,
         )
+        if getattr(self, "_debug_capture_decoder_hidden", False):
+            self._last_decoder_hidden_host = local_device_to_torch(decoder_h).to(torch.float32)
+        out = self.tt_model._apply_lm_head(decoder_h)
         # Bring to host as fp32 for the sampler math. local_device_to_torch returns the
         # single-device replica with its on-device shape preserved — typically [B, canvas, vocab].
         # The HF sampler expects exactly that shape; do NOT squeeze (otherwise we lose the

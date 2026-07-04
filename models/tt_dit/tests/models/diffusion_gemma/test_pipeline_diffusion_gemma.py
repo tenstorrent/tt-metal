@@ -199,10 +199,12 @@ def test_pipeline_diffusion_gemma(
     except Exception as e:
         logger.warning(f"encoder PCC assert (should not fire, no threshold): {e}")
 
-    # 2b. One decoder forward at the seed canvas (same as before), PCC only, no assert.
+    # 2b. One decoder forward at the seed canvas. We also capture the pre-lm_head hidden
+    # state so we can tell whether drift accumulates in the layer stack or in lm_head+softcap.
     decoder_position_ids = torch.arange(
         input_ids.shape[1], input_ids.shape[1] + canvas_length, dtype=torch.long
     ).unsqueeze(0)
+    pipeline._debug_capture_decoder_hidden = True
     tt_logits = pipeline._run_decoder(
         seed_canvas,
         encoder_kv,
@@ -211,12 +213,39 @@ def test_pipeline_diffusion_gemma(
         encoder_seq_len=input_ids.shape[1],
         self_cond_logits=None,
     )
+    pipeline._debug_capture_decoder_hidden = False
+    tt_dec_h_host = pipeline._last_decoder_hidden_host
+    if tt_dec_h_host is not None and tt_dec_h_host.ndim == 4 and tt_dec_h_host.shape[0] == 1:
+        tt_dec_h_host = tt_dec_h_host.squeeze(0)
+
+    # HF reference: rerun the model with output_hidden_states to grab the last decoder hidden.
+    # Cheapest way: monkey-call the decoder submodule directly, exactly how HF does it internally.
+    with torch.no_grad():
+        # Rebuild the encoder side to reuse its KV cache — but for the pre-lm_head diagnostic
+        # we only need HF's own final decoder hidden state, so a second forward with
+        # output_hidden_states=True is fine.
+        hf_full = hf_model(
+            input_ids=input_ids,
+            decoder_input_ids=seed_canvas,
+            output_hidden_states=True,
+        )
+        # HF's DiffusionGemmaForBlockDiffusion returns decoder_hidden_states as a tuple of
+        # (input_embeds, layer_1, ..., layer_N, final_norm). Take the last entry (post final norm).
+        hf_dec_h = hf_full.decoder_hidden_states[-1]  # [B, canvas, hidden]
+
     logger.info("=" * 70)
-    logger.info(f"[2b] Decoder logits — hf {hf_logits.shape}, tt {tt_logits.shape}")
+    logger.info(f"[2b] Decoder hidden (pre-lm_head) — hf {hf_dec_h.shape}, tt {tt_dec_h_host.shape}")
+    try:
+        assert_quality(hf_dec_h, tt_dec_h_host)  # logs PCC; no threshold, no raise
+    except Exception as e:
+        logger.warning(f"pre-lm_head PCC assert (should not fire, no threshold): {e}")
+
+    logger.info("=" * 70)
+    logger.info(f"[2c] Decoder logits (post lm_head + softcap) — hf {hf_logits.shape}, tt {tt_logits.shape}")
     try:
         assert_quality(hf_logits, tt_logits)  # logs PCC; no threshold, no raise
     except Exception as e:
-        logger.warning(f"decoder PCC assert (should not fire, no threshold): {e}")
+        logger.warning(f"post lm_head PCC assert (should not fire, no threshold): {e}")
 
     # ------------------------------------------------------------------
     # 3. Full diffusion loop with per-step decoded text.
@@ -240,9 +269,9 @@ def test_pipeline_diffusion_gemma(
         max_denoising_steps=pipeline.config.max_denoising_steps,
     )
     logits_processor = LinearTemperatureScheduleLogitsProcessor(
-        temperature_start=pipeline.config.temperature_start,
-        temperature_end=pipeline.config.temperature_end,
-        num_steps=pipeline.config.max_denoising_steps,
+        t_min=pipeline.config.temperature_start,
+        t_max=pipeline.config.temperature_end,
+        max_denoising_steps=pipeline.config.max_denoising_steps,
     )
     stopping = StableAndConfidentStoppingCriteria()
 
