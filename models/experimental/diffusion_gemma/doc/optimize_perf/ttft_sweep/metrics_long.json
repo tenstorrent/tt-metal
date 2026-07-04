@@ -1,0 +1,25 @@
+{
+  "prompt_len": 373,
+  "prompt_aligned_256": false,
+  "cache_len": 384,
+  "canvas_length": 256,
+  "max_denoising_steps": 48,
+  "gumbel_mode": "argmax",
+  "blocks_emitted": 1,
+  "tokens_emitted": 256,
+  "ttft_s": 211.43337845196947,
+  "per_block_latency_s": [
+    197.27390539413318
+  ],
+  "mean_block_latency_s": 197.27390539413318,
+  "tokens_per_block_per_s": 1.2976881026841236,
+  "denoise_steps_per_block": [
+    38
+  ],
+  "halted_per_block": [
+    true
+  ],
+  "final_next_pos": 640,
+  "text_chars": 341,
+  "text": "nia\n\nIt appears that you have repeated the instruction \"Consider the following background material carefully\" many times, but **you have not provided the actual background material yet.**\n\nPlease provide the text, data, or information you would like me to consider, and I will be happy to assist you with your request based on that material."
+}

@@ -1,0 +1,25 @@
+{
+  "prompt_len": 18,
+  "prompt_aligned_256": false,
+  "cache_len": 32,
+  "canvas_length": 256,
+  "max_denoising_steps": 48,
+  "gumbel_mode": "argmax",
+  "blocks_emitted": 1,
+  "tokens_emitted": 256,
+  "ttft_s": 152.47059175511822,
+  "per_block_latency_s": [
+    150.85744227282703
+  ],
+  "mean_block_latency_s": 150.85744227282703,
+  "tokens_per_block_per_s": 1.6969663288936168,
+  "denoise_steps_per_block": [
+    27
+  ],
+  "halted_per_block": [
+    true
+  ],
+  "final_next_pos": 288,
+  "text_chars": 4,
+  "text": "\u662f\u5df4\u9ece\u3002"
+}

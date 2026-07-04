@@ -1,0 +1,28 @@
+{
+  "prompt_len": 66,
+  "prompt_aligned_256": false,
+  "cache_len": 96,
+  "canvas_length": 256,
+  "max_denoising_steps": 48,
+  "gumbel_mode": "argmax",
+  "blocks_emitted": 2,
+  "tokens_emitted": 512,
+  "ttft_s": 197.9206654871814,
+  "per_block_latency_s": [
+    188.15322760026902,
+    109.32933960203081
+  ],
+  "mean_block_latency_s": 109.32933960203081,
+  "tokens_per_block_per_s": 2.341548946804804,
+  "denoise_steps_per_block": [
+    36,
+    18
+  ],
+  "halted_per_block": [
+    true,
+    true
+  ],
+  "final_next_pos": 608,
+  "text_chars": 935,
+  "text": "\u5c3cSpring is arguably the most beautiful time to visit Japan, thanks to the cherry blossoms (sakura) and mild weather. This 14-day \"Golden Route\" itinerary balances the high-energy neon of Tokyo with the deep traditions of the Kansai region.\n\n### **Phase 1: Tokyo (Days 1\u20135) \u2013 Modern Meets Tradition**\n\n**Day 1: Arrival & Shinjuku**\n*   **Activity:** Arrive at Narita/Haneda. Check into your hotel (Shinjuku or Shibuya recommended for transit ease).\n*   **Evening:** Explore **Shinjuku Government Building** for free panoramic views. Walk through **Omoide Yokocho** (Memory Lane) for yakitori.\n*   **Food:** Welcome-night bowl of ramen at a local \"Ichiran\" style.\n\n**Day 2: Old Tokyo & Pop Culture**\n*   **Morning:** **Senso-ji Temple** in Asakusa (Tokyo\u2019s oldest). Walk through Nakamise Market.\n*   **Afternoon:** Take the water bus to Sumida River to **Odaiba** or head to **Akihabara** for electronics and anime culture.\n*   **Evening"
+}
