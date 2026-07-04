@@ -551,3 +551,93 @@ decision-fidelity check (the self-cond signal feeds the diffusion decisions), so
 in-repo per-step lever is `path_to_100tps` rank 2 (OPT-004 matmul-geometry tuning of the 5 untuned `tt/sparse_moe.py`
 matmuls, MoE 10.5→~5–6 ms/layer). Artifacts: `probe_traced_denoise_loop.py`,
 `artifacts/task4_traced_loop_probe_L6{,_noselfcond}.log`.
+
+## Session summary (2026-07-04 session 5) — self-cond trace-blocker ROOT-CAUSED as a cross-step RACE; dedup + OPT-004 landed
+
+### The self-cond whole-loop trace blocker is a RACE, not address instability (prior diagnosis REFUTED)
+
+The session-4 hypothesis — "chained fresh-alloc `prev_logits` is not address-stable; fix with a persistent in-place
+buffer" — is **wrong**. Three self-cond feedback variants were built and traced (real adapter, L=6, 8 steps,
+`DG_SPARSE_MOE=1`, `probe_traced_denoise_loop.py`), and **all three give the IDENTICAL 60.5% committed match**:
+1. original `prev_logits` chain (fresh full-logits threaded via adapter attribute),
+2. persistent in-place `signal_buf` updated with `ttnn.copy` each step,
+3. fresh single-consumer `signal` tensor threaded like the canvas.
+
+Two new diagnostics settle the mechanism:
+- **eager-vs-eager = 100.0%** — the self-cond feedback loop is fully deterministic eagerly (so it is NOT bf16
+  feedback chaos, and the trace is not merely amplifying a real per-step numerical delta).
+- **traced-vs-traced = 60.5%** — **two replays of the *same* captured trace disagree.** That is a genuine RACE
+  (a read-before-write / stale-buffer hazard the trace does not order), not a systematic op difference and not
+  non-determinism of the kernels. Self-cond OFF traces at **100%** (both replays and vs eager), so the race is
+  introduced solely by the self-cond feedback reading the previous step's LM-head logits inside the same trace.
+- **STEPS=1 = 100.0%** (traced-vs-traced AND traced-vs-eager, `TRACED_LOOP_OK`) — a **single** self-cond step traces
+  perfectly. **⇒ the race is purely CROSS-STEP inside one whole-loop trace, not within a step.**
+
+**Consequence for the architecture.** The whole-loop trace (capture all N steps, replay once) cannot carry the
+self-cond feedback (race), and the buffer-management fixes the prior session scoped do NOT resolve it (they change
+nothing — identical 60.5%). The correct shape is a **single-step trace replayed once per step**, carrying the
+cross-step state (canvas + self-cond signal) in persistent device buffers updated **across replays** — the exact
+KV-cache pattern a traced decode uses, which has no cross-step feedback *inside* a trace (STEPS=1 proves each step
+traces at 100%). The trace-safe adapter (`DenoiseLogitsAdapter.prepare_trace_safe_self_conditioning` /
+`_trace_safe_call`, uniform `forward(embed, signal_buf)` with a zeroed step-0 buffer = bit-exact `condition(None)`)
+is that adapter; `probe_singlestep_traced.py` validates the single-step mechanism.
+
+**Second, independent blocker for a traced SERVING loop (new finding, missed by the session-4 projection):**
+`q_rope_offset` (= `start_pos`) advances per block and `_get_rope_mats(seq_len=q_rope_offset+C)` returns a
+**growing** `cos[:,:, :seq_len,:]` slice that is baked into the trace — so a captured trace (whole-loop OR
+single-step) is only valid for the block it was captured on. Cross-block trace **reuse** (required for any net
+win — per-block re-capture ≈ eager cost) needs a **constant-shape persistent canvas-rope buffer** (the C canvas
+rows, updated per block outside the trace, `start_offset=0` into `_apply_rope_chunked`), threaded into
+`denoise_attention` diffusion-gemma-locally. This is a second substantial sub-build; the session-4 "traced loop →
+20 t/s" projection measured a single block's *replay* and did not account for cross-block re-capture. **Net: the
+traced serving loop = single-step trace mechanism (self-cond fixed) + constant-shape rope-mats reuse — scoped and
+architected here, not landed unverified.** Artifacts: `artifacts/task1_{diag_eagereager,diag_tvt,freshsignal,steps1}_L6.log`.
+
+### Lever (terminal argmax dedup, `path_to_100tps` rank 3) — LANDED, device-verified (474713ec259)
+
+`DG_DEDUP_ARGMAX` (opt-in, default off). In the argmax regime `denoise_step` ran two full-vocab (262144) argmax
+reductions/step (`argmax(logits/T)` for `sampled` + `argmax(logits)` for the commit); positive scaling is
+order-preserving so the dedup computes the raw-logit argmax once and clones the tiny index for `sampled`.
+Self-contained device verify (`verify_terminal_dedup.py`, synthetic production-vocab logits): committed argmax /
+entropy / accept-mask **HARD bit-exact OFF==ON**, `dedup sampled == default argmax` (0 ties on the input),
+`T==1.0` fully bit-exact + multi-step loop equivalence PASS; timing **43.04 → 28.05 ms/step terminal sampling =
+14.99 ms saved (34.8%)**, layer-count-independent ⇒ ~1.05× on the 30L block. `verify_terminal_dedup.py`.
+
+### Lever (OPT-004 matmul-geometry tuning, `path_to_100tps` rank 2/lever 1) — MERGED + device-verified (014c47177f7, c2c5f4cf0ec)
+
+`DG_SPARSE_MOE_TUNED` (opt-in, default off; flag-off = byte-identical auto-config prototype). Adds explicit
+`program_config` geometry to the 5 previously-untuned `ttnn.matmul` calls in `tt/sparse_moe.py` (batched gate/up/down +
+gather `disp^T@hidden` + combine `comb@down`) — the batched experts read the ~415 MB (bf16) / ~220 MB (bfp8) bank at only
+~46 GB/s (~18% of @256). Batched gate/up/down use `MatmulMultiCoreReuseProgramConfig` (`per_core_M=Mt`, `per_core_N=Nt`
+forced by the reuse factory → E=128 blocks distributed 1/core), gather/combine use 2D
+`MatmulMultiCoreReuseMultiCastProgramConfig`. Same dtype/fidelity (HiFi2) ⇒ pure geometry, PCC must equal untuned.
+Device grid measured **11×10 = 110 cores** (not the doc's 13×10=130). Per-matmul device result (real 26B layer-0):
+**gate/up (the dominant K=88 matmul) untuned 4.176 → tuned 0.593 ms = 7.05× at PCC 0.99986** (pure geometry, correct).
+Full-MoE tuned-vs-untuned + PCC-vs-dense via `verify_opt004_fullmoe.py` (focused verify; the full
+`bench_opt004_matmul_geometry.py` per-candidate SWEEP is compile-heavy and was skipped).
+
+### Traced serving loop — the two remaining blockers (scoped, NOT landed unverified)
+
+Per the §diagnosis above, a traced serving loop needs BOTH:
+1. **Single-step trace mechanism** (self-cond fix): capture one denoise step, replay once/step, cross-step state (canvas +
+   self-cond signal) in persistent buffers threaded ACROSS replays (KV-cache pattern; STEPS=1 traces at 100%). The
+   trace-safe adapter is built; `probe_singlestep_traced.py` validates it (RESULT_REFACTOR = adapter eager bit-exactness;
+   RESULT_SINGLESTEP_TRACED = mechanism). Per-step temperature `T[i]` handled by capturing N single-step traces (one per
+   step index, each baking `T[i]` + reading `noise[i]`) — no device-scalar temperature, fidelity-safe.
+2. **Cross-block rope-mats reuse**: `q_rope_offset` (= start_pos) advances per block and bakes into the trace via the
+   growing `_get_rope_mats(seq_len=qro+C)` slice, so a captured trace is valid only for its block. Reuse across blocks
+   (mandatory — per-block re-capture ≈ eager cost, no win) needs a constant-shape persistent canvas-rope buffer (C rows,
+   `start_offset=0` into `_apply_rope_chunked`, content updated per block outside the trace), threaded into
+   `denoise_attention` diffusion-gemma-locally. This is the second substantial sub-build and is why the session-4 "traced
+   → 20 t/s" projection (a single block's replay) overstated the near-term serving win.
+
+Both are architected here; landing them (verified bit-exact + serving t/s) is the next investment toward 30.
+
+### Landed-lever stack (t/s accounting)
+
+On top of the session-4 verified **13.04 t/s @24-step** (sparse MoE + batched commit, both default) the session-5
+opt-in levers stack: **dedup** ~1.05× (14.99 ms/step, device-verified bit-exact), **OPT-004** MoE geometry (gate/up
+matmul 7.05× device-verified; layer-level via `verify_opt004_fullmoe.py`), and the already-landed **device loop**
+`DG_DENOISE_DEVICE_LOOP` ~1.04× (bit-identical, session 4). Each is independently device-verified; enable with
+`DG_SPARSE_MOE=1 DG_DEDUP_ARGMAX=1 DG_SPARSE_MOE_TUNED=1 DG_DENOISE_DEVICE_LOOP=1`. None reaches 30 alone — the
+step-count × per-step-traced multiplier (the traced serving loop, blocked above) is still required for verified 30.

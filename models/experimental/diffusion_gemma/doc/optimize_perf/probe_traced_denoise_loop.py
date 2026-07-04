@@ -85,6 +85,13 @@ def run(num_layers, canvas_length, steps, prompt, max_seq_len):
             adapter.self_conditioning_embedding_weight = None
             logger.info("[probe] self-conditioning DISABLED (stateless loop)")
 
+        # Trace-safe self-conditioning: persistent [1,1,C,hidden] signal buffer updated
+        # in-place each step (vs the eager fresh-alloc prev_logits chain that broke trace
+        # replay). Expect committed_match ~100% with self-cond ON.
+        if os.environ.get("DG_PROBE_TRACE_SAFE_SC", "0") == "1":
+            adapter.prepare_trace_safe_self_conditioning(canvas_len=canvas_length)
+            logger.info("[probe] trace-safe self-conditioning ENABLED (persistent signal buffer)")
+
         cfg = DiffusionConfig(canvas_length=canvas_length, max_denoise_steps=steps)
         vocab = int(getattr(mi.tokenizer, "vocab_size", 262144))
 
@@ -125,12 +132,21 @@ def run(num_layers, canvas_length, steps, prompt, max_seq_len):
         traced_ms = None
         traced_ids = None
         try:
-            # warm program cache
+            # warm program cache — also an EAGER run: compare its committed argmax to the
+            # eager baseline to separate intrinsic bf16 feedback non-determinism (eager!=eager)
+            # from a trace-replay bug (eager==eager but traced!=eager).
             warm = DL.run_fixed_denoise_steps(
                 adapter, make_init(), cfg, gumbel_noise_fn=None, noise_tokens_fn=noise_tokens_fn, constants=consts
             )
             ttnn.synchronize_device(mesh)
+            warm_ids = _committed_ids(warm)
             warm.deallocate(True)
+            eager_eager_match = (eager_ids == warm_ids).float().mean().item()
+            print(
+                f"RESULT_EAGER_VS_EAGER layers={num_layers} steps={steps} "
+                f"match={eager_eager_match*100:.1f}% committed[:8]={warm_ids[:8].tolist()}",
+                flush=True,
+            )
 
             init_dev = make_init()
             tid = ttnn.begin_trace_capture(mesh, cq_id=0)
@@ -139,14 +155,21 @@ def run(num_layers, canvas_length, steps, prompt, max_seq_len):
             )
             ttnn.end_trace_capture(mesh, tid, cq_id=0)
             ttnn.synchronize_device(mesh)
-            # replay once (warm), then time
+            # replay once (warm), capture its committed ids
             ttnn.execute_trace(mesh, tid, blocking=False)
             ttnn.synchronize_device(mesh)
+            traced_ids_replay1 = _committed_ids(committed_traced)
             t0 = time.perf_counter()
             ttnn.execute_trace(mesh, tid, blocking=False)
             ttnn.synchronize_device(mesh)
             traced_ms = (time.perf_counter() - t0) * 1e3
             traced_ids = _committed_ids(committed_traced)
+            # traced-vs-traced: self-consistent (systematic eager!=traced) vs race (traced!=traced)?
+            tt_match = (traced_ids_replay1 == traced_ids).float().mean().item()
+            print(
+                f"RESULT_TRACED_VS_TRACED layers={num_layers} steps={steps} match={tt_match*100:.1f}%",
+                flush=True,
+            )
             ttnn.release_trace(mesh, tid)
             logger.info(
                 f"[traced] block_ms={traced_ms:.1f} ms/step={traced_ms/steps:.1f} committed[:8]={traced_ids[:8].tolist()}"

@@ -550,6 +550,23 @@ class DenoiseLogitsAdapter:
     The controller calls ``logits_fn(canvas_tokens, step)``. This adapter turns
     that narrow callback into the real W2 path: token embedding, optional
     self-conditioning from the previous step's logits, and denoise logits forward.
+
+    **Trace-safe self-conditioning** (``prepare_trace_safe_self_conditioning``).
+    The default eager path threads the self-cond signal across steps as the
+    previous step's *full* ``[1,1,C,vocab]`` logits, freshly allocated every step
+    (``self.prev_logits``). A fixed Metal trace bakes in buffer addresses and one
+    fixed unrolled graph, and this chained fresh-alloc cross-step state does not
+    replay bit-exactly — the whole-loop trace committed argmax diverged (60.5%
+    match) with self-cond ON while a self-cond-OFF / stateless loop traced at
+    100% (``doc/optimize_perf/probe_traced_denoise_loop.py``). The trace-safe
+    variant carries the cross-step state as the small ``[1,1,C,hidden]``
+    soft-embedding **signal** in a persistent, preallocated buffer updated
+    **in-place** each step (``ttnn.copy``), so its device address is fixed. Step 0
+    still uses the ``condition(None)`` branch (``post_norm(embed)``) and only
+    *writes* the buffer; steps 1+ *read* the buffer written by the immediately
+    preceding step. This is bit-exact to the eager path (same ``soft_embedding``
+    math, just computed at the producer step's end and copied) and carries no
+    stale cross-block state (step 0 never reads the buffer). See #47465.
     """
 
     def __init__(
@@ -573,8 +590,87 @@ class DenoiseLogitsAdapter:
         self.q_rope_offset = q_rope_offset
         self.logits_from_tokens = logits_from_tokens
         self.prev_logits = None
+        # Trace-safe self-conditioning: persistent in-place [1,1,C,hidden] signal buffer
+        # (for the single-step traced loop; KV-cache-style cross-replay state).
+        self.trace_safe_self_conditioning = False
+        self.signal_buf = None
+
+    def prepare_trace_safe_self_conditioning(self, *, canvas_len: int, dtype=ttnn.bfloat16):
+        """Preallocate the persistent in-place self-cond signal buffer OUTSIDE any trace.
+
+        Intended for the **single-step traced loop** (``tt/denoise_loop.py``): one
+        denoise step is captured as a Metal trace and replayed once per step, with
+        the self-cond signal carried across replays in this persistent buffer,
+        updated in-place each step — exactly the KV-cache pattern that a traced
+        decode uses (and which, unlike a *whole-loop* trace with cross-step
+        feedback, does not race: a single self-cond step traces at 100%, verified in
+        ``probe_traced_denoise_loop.py`` STEPS=1). Uniform-graph: **every** step runs
+        ``forward(embed, signal_buf)``; step 0 reads the zeroed buffer, which is
+        bit-exact to the ``condition(None)`` (=``post_norm(embed)``) branch because
+        ``forward`` with a zero signal has ``pre_norm(0)=0`` → gate/up/down all zero →
+        ``post_norm(embed + 0)``. ``reset_signal_buffer`` must be called before each
+        block's step 0 to re-zero. See #47465.
+        """
+        if self.self_conditioning is None:
+            self.trace_safe_self_conditioning = True
+            self.signal_buf = None
+            return
+        hidden_size = self.self_conditioning.hidden_size
+        if self.signal_buf is not None:
+            self.signal_buf.deallocate(True)
+        self.signal_buf = ttnn.zeros(
+            [1, 1, canvas_len, hidden_size],
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.tt_model.mesh_device,
+        )
+        self.trace_safe_self_conditioning = True
+
+    def reset_signal_buffer(self):
+        """Zero the persistent signal buffer (call before each block's step 0).
+
+        Outside any trace (a fill is a WRITE, forbidden in capture). Step 0 then
+        reads zeros -> ``forward(embed, 0) == post_norm(embed)``, matching the eager
+        step-0 ``condition(None)`` branch bit-for-bit.
+        """
+        if self.signal_buf is not None:
+            ttnn.mul(self.signal_buf, 0.0, output_tensor=self.signal_buf)
+
+    def _trace_safe_call(self, canvas_tokens, step: int):
+        del step
+        tt_model = self.tt_model
+        canvas_hidden = embed_canvas_tokens(tt_model, canvas_tokens)
+        if self.self_conditioning is None:
+            conditioned = canvas_hidden
+        else:
+            # Uniform: forward over the persistent signal buffer (zeroed for step 0).
+            conditioned = self.self_conditioning.forward(canvas_hidden, self.signal_buf)
+            canvas_hidden.deallocate(True)
+        logits = denoise_logits_forward(
+            tt_model,
+            prompt_hidden_by_layer=self.prompt_hidden_by_layer,
+            canvas_hidden=conditioned,
+            q_rope_offset=self.q_rope_offset,
+            prompt_len=self.prompt_len,
+        )
+        if conditioned is not canvas_hidden:
+            conditioned.deallocate(True)
+        if self.self_conditioning is not None:
+            # Update the persistent signal buffer in-place for the next step (logits
+            # is fully consumed within this step: soft_embedding here + the loop's
+            # decision path). Across single-step trace replays the buffer persists.
+            new_signal = self.self_conditioning.soft_embedding(
+                logits,
+                self.self_conditioning_embedding_weight,
+                compute_kernel_config=self.self_conditioning_compute_kernel_config,
+            )
+            ttnn.copy(new_signal, self.signal_buf)
+            new_signal.deallocate(True)
+        return logits
 
     def __call__(self, canvas_tokens, step: int):
+        if self.trace_safe_self_conditioning:
+            return self._trace_safe_call(canvas_tokens, step)
         old_prev_logits = self.prev_logits
         logits = self.logits_from_tokens(
             self.tt_model,
@@ -597,6 +693,7 @@ class DenoiseLogitsAdapter:
         return self.prev_logits is logits
 
     def reset(self):
+        # signal_buf persists across blocks (re-zeroed per block via reset_signal_buffer).
         if self.prev_logits is not None:
             self.prev_logits.deallocate(True)
             self.prev_logits = None
