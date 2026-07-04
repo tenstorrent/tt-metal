@@ -160,6 +160,9 @@ models/experimental/petr/resources/*.pth
 .claude
 .cursor/.DS_store
 
+# /perturb skill: generated timing-sweep report (regenerated per run, never committed)
+perturb_report*.md
+
 # Generated rank binding files (machine-specific, regenerated at runtime via generate_rank_bindings.py)
 2x4_multi_mesh_cyclic_rank_binding.yaml
 2x8_2x4_3_mesh_rank_binding.yaml
