@@ -11,6 +11,7 @@ tests and the real W2 denoise logits path.
 
 from __future__ import annotations
 
+import os
 from typing import Callable, List, NamedTuple, Optional
 
 import torch
@@ -22,6 +23,71 @@ from models.experimental.diffusion_gemma.tt import sampling as TS
 
 TtLogitsFn = Callable[[ttnn.Tensor, int], ttnn.Tensor]
 TtNoiseFn = Callable[[int], ttnn.Tensor]
+
+
+def dedup_argmax_enabled() -> bool:
+    """Whether the opt-in argmax-sampling terminal dedup is on (``DG_DEDUP_ARGMAX``).
+
+    Off by default so the released terminal path is byte-for-byte unchanged. When
+    on, :func:`denoise_step` collapses the two redundant full-vocab argmax
+    reductions into one in the argmax-sampling (``gumbel_noise is None``) regime —
+    the RUN-first serving default (``serving.GUMBEL_MODES[0] == "argmax"``). See
+    :func:`_sample_and_argmax` for the bit-exactness argument and
+    ``doc/optimize_perf/verify_terminal_dedup.py`` for the device gate.
+    """
+    return os.environ.get("DG_DEDUP_ARGMAX", "0").lower() in ("1", "true", "yes", "on")
+
+
+def _sample_and_argmax(logits, temperature: float, gumbel_noise, *, dedup_argmax: bool):
+    """Return ``(sampled, argmax)`` uint32 token-index tensors for one denoise step.
+
+    Default path (unchanged): an independent Gumbel-max draw and a clean argmax,
+    each a full-vocab (262144) reduction — two ~14 ms ROW_MAJOR argmaxes/step. In
+    the argmax regime the two reductions are over *different* tensors: ``sampled =
+    argmax_last_dim(logits / T)`` (``gumbel_max`` scales first) and ``argmax =
+    argmax_last_dim(logits)`` (raw).
+
+    Dedup fast path — taken only when ``dedup_argmax`` **and** ``gumbel_noise is
+    None`` **and** ``temperature > 0``. It computes the raw-logit argmax ONCE and
+    clones the tiny ``[B, 1, L, 1]`` index for ``sampled``, dropping the second
+    262144-wide reduction **and** the ``logits / T`` multiply.
+
+    Correctness:
+
+    * ``argmax`` (the committed clean-argmax token), ``entropy``, and the
+      entropy-budget ``accept`` mask are **bit-identical** to the default path by
+      construction — the dedup does not touch ``argmax_last_dim(logits)`` or
+      ``token_entropy``, and ``accept`` is a pure function of ``entropy``.
+    * In exact arithmetic ``argmax(logits / T) == argmax(logits)`` for any ``T > 0``
+      (positive scaling is order-preserving), so ``sampled`` is the same token.
+      On device the logits are **bf16**, so the default path's ``logits / T``
+      multiply can, at a position whose top-2 logits are adjacent bf16 values,
+      round them equal and flip that position's ``sampled`` index to the tie's
+      first index. The dedup takes ``sampled = argmax(logits)`` (the un-rescaled
+      ranking), so it differs from the default ``sampled`` **only at exactly those
+      temperature-rescale rounding ties** — positions where the default path's own
+      two argmaxes already disagree (``sampled != argmax``). There the dedup makes
+      ``sampled`` equal the committed ``argmax`` (more self-consistent, and within
+      the model's existing bf16 error). At ``T == 1.0`` the multiply is a no-op, so
+      the dedup is fully bit-identical.
+
+    The two returned tensors are distinct objects (independent ownership: callers
+    deallocate ``sampled`` while keeping ``argmax`` as the commit candidate), so
+    the free/readback contract is preserved with no aliasing.
+    """
+    if dedup_argmax and gumbel_noise is None and temperature > 0:
+        argmax = TS.argmax_last_dim(logits)
+        argmax = ttnn.typecast(argmax, ttnn.uint32)
+        # Clone the [B,1,L,1] index (not a second 262144-wide argmax). Preserve the
+        # ROW_MAJOR uint32 layout `gumbel_max`→`argmax_last_dim` would have emitted
+        # so `renoise`'s downstream multiply/add sees the same tensor shape/layout.
+        sampled = ttnn.clone(argmax, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return sampled, argmax
+    sampled = TS.gumbel_max(logits, temperature, gumbel_noise)
+    sampled = ttnn.typecast(sampled, ttnn.uint32)
+    argmax = TS.argmax_last_dim(logits)
+    argmax = ttnn.typecast(argmax, ttnn.uint32)
+    return sampled, argmax
 
 
 class TtDenoiseStepResult(NamedTuple):
@@ -143,6 +209,7 @@ def denoise_step(
     gumbel_noise,
     noise_tokens,
     constants: "Optional[DenoiseConstants]" = None,
+    dedup_argmax: "Optional[bool]" = None,
 ):
     """Run one device denoise decision step with injected noise.
 
@@ -155,14 +222,20 @@ def denoise_step(
     ``constants`` supplies preallocated accept/renoise constants for trace-safe
     capture (no per-step ``ttnn.full``/``zeros_like`` host writes); ``None`` keeps
     the eager per-call allocation.
+
+    ``dedup_argmax`` opts into the argmax-sampling terminal dedup (one full-vocab
+    argmax instead of two); ``None`` consults ``DG_DEDUP_ARGMAX``. It is a no-op
+    unless ``gumbel_noise is None`` (argmax sampling); there the committed
+    ``argmax``, ``entropy``, and ``accept`` mask stay bit-identical and only
+    ``sampled``/``canvas`` can move, at bf16 temperature-rescale ties — see
+    :func:`_sample_and_argmax`.
     """
+    if dedup_argmax is None:
+        dedup_argmax = dedup_argmax_enabled()
     budget_t = constants.budget_t if constants is not None else None
     accept_zeros = constants.accept_zeros if constants is not None else None
     renoise_ones = constants.renoise_ones if constants is not None else None
-    sampled = TS.gumbel_max(logits, temperature, gumbel_noise)
-    sampled = ttnn.typecast(sampled, ttnn.uint32)
-    argmax = TS.argmax_last_dim(logits)
-    argmax = ttnn.typecast(argmax, ttnn.uint32)
+    sampled, argmax = _sample_and_argmax(logits, temperature, gumbel_noise, dedup_argmax=dedup_argmax)
     entropy = TS.token_entropy(logits, temperature=temperature)
     entropy_for_accept = ttnn.reshape(entropy, (entropy.shape[0] * entropy.shape[1], entropy.shape[2]))
     accept_flat = entropy_budget_accept(entropy_for_accept, entropy_budget, budget_t=budget_t, zeros=accept_zeros)
@@ -189,6 +262,7 @@ def denoise_step_next_canvas(
     gumbel_noise,
     noise_tokens,
     constants: "Optional[DenoiseConstants]" = None,
+    dedup_argmax: "Optional[bool]" = None,
 ):
     """One device denoise step returning only the device-resident feedback tensors.
 
@@ -197,6 +271,10 @@ def denoise_step_next_canvas(
     ``(next_canvas, argmax)`` where ``next_canvas`` is the accepted/renoised canvas
     consumed by the next step and ``argmax`` is the clean-argmax commit candidate.
     The intermediate decision tensors (accept mask / entropy / sampled) are freed.
+
+    ``dedup_argmax`` forwards the argmax-sampling terminal dedup (``None`` consults
+    ``DG_DEDUP_ARGMAX``); the extra ``ttnn.clone`` it introduces is a pure device
+    op, so the trace stays capturable.
     """
     res = denoise_step(
         logits,
@@ -205,6 +283,7 @@ def denoise_step_next_canvas(
         gumbel_noise=gumbel_noise,
         noise_tokens=noise_tokens,
         constants=constants,
+        dedup_argmax=dedup_argmax,
     )
     res.accept_mask.deallocate(True)
     res.entropy.deallocate(True)
@@ -220,6 +299,7 @@ def run_fixed_denoise_steps(
     gumbel_noise_fn: Optional[TtNoiseFn] = None,
     noise_tokens_fn: Optional[TtNoiseFn] = None,
     constants: "Optional[DenoiseConstants]" = None,
+    dedup_argmax: "Optional[bool]" = None,
 ):
     """Fixed-count, device-only denoise loop for trace-safe capture.
 
@@ -236,6 +316,10 @@ def run_fixed_denoise_steps(
     Returns the device-resident committed argmax ``[B,1,L,1]``. ``init_canvas`` is
     consumed. Intended to be called inside ``begin_trace_capture``/``end_trace_capture``
     with a warmed program cache and device-resident per-step noise tensors.
+
+    ``dedup_argmax`` opts into the argmax-sampling terminal dedup (``None`` consults
+    ``DG_DEDUP_ARGMAX``). The dedup adds only a ``ttnn.clone`` (a device op) and no
+    host writes, so a fixed-budget trace still captures cleanly.
     """
     canvas = init_canvas
     committed: Optional[ttnn.Tensor] = None
@@ -253,6 +337,7 @@ def run_fixed_denoise_steps(
             gumbel_noise=gumbel_noise,
             noise_tokens=noise_tokens,
             constants=constants,
+            dedup_argmax=dedup_argmax,
         )
         if gumbel_noise is not None and hasattr(gumbel_noise, "deallocate"):
             gumbel_noise.deallocate(True)
@@ -322,6 +407,7 @@ def denoise_block(
     *,
     gumbel_noise_fn: Optional[TtNoiseFn] = None,
     noise_tokens_fn: Optional[TtNoiseFn] = None,
+    dedup_argmax: "Optional[bool]" = None,
 ) -> DenoiseTrajectory:
     """Run a device denoise trajectory and return host decision records.
 
@@ -329,6 +415,14 @@ def denoise_block(
     check and the trajectory harness, this reads back only per-step ``[B, L]``
     decision tensors: argmax, entropy, sampled ids, accept mask, and canvas.
     ``init_canvas`` is consumed; each superseded device canvas is deallocated.
+
+    ``dedup_argmax`` opts into the argmax-sampling terminal dedup (``None``
+    consults ``DG_DEDUP_ARGMAX``). The halt check and committed tokens read
+    ``argmax``/``entropy`` (bit-identical either way), so early-halt and the
+    committed output are unchanged; only the recorded ``sampled`` ids (and thus the
+    accepted-position canvas) can move, and only at bf16 temperature-rescale ties
+    where the default path's own ``sampled`` already disagrees with ``argmax`` (see
+    :func:`_sample_and_argmax`). At ``T == 1.0`` the trajectory is identical.
     """
     if gumbel_noise_fn is None or noise_tokens_fn is None:
         raise ValueError("denoise_block requires injected gumbel_noise_fn and noise_tokens_fn")
@@ -352,6 +446,7 @@ def denoise_block(
             entropy_budget=config.entropy_budget,
             gumbel_noise=gumbel_noise,
             noise_tokens=noise_tokens,
+            dedup_argmax=dedup_argmax,
         )
         if gumbel_noise is not None and hasattr(gumbel_noise, "deallocate"):
             gumbel_noise.deallocate(True)
