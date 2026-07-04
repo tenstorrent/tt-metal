@@ -238,14 +238,7 @@ def _parse_deepseek(tc: dict) -> _DeepSeekSpec:
     return spec
 
 
-# Maps the example's moe_type onto the library DeepSeekConfig's (moe_type, moe_parallel_type).
-# A None parallel_type means "not MoE-parallel" (no expert sharding axis is requested).
-_MOE_TYPE_TO_LIB: dict[str, tuple[str, str | None]] = {
-    "dense": ("dense", None),
-    "sparse": ("sparse", None),
-    "sparse_tp": ("sparse", "tp"),
-    "sparse_ep": ("sparse", "ep"),
-}
+_MOE_TYPES = ("dense", "sparse", "sparse_tp", "sparse_ep")
 
 
 def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
@@ -254,15 +247,14 @@ def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
     # variant; sparse_tp/sparse_ep additionally shard experts across a mesh axis.
     assert isinstance(cfg.spec, _DeepSeekSpec)
     spec = cfg.spec
-    if spec.moe_type not in _MOE_TYPE_TO_LIB:
-        raise ValueError(f"Unknown moe_type={spec.moe_type!r}; expected one of {sorted(_MOE_TYPE_TO_LIB)}")
-    lib_moe_type, parallel_type = _MOE_TYPE_TO_LIB[spec.moe_type]
+    if spec.moe_type not in _MOE_TYPES:
+        raise ValueError(f"Unknown moe_type={spec.moe_type!r}; expected one of {list(_MOE_TYPES)}")
 
     # Resolve the expert-sharding axis for sparse_tp/sparse_ep: "tp" under full-model TP, else
-    # the axis resolved from device_config.moe_axis (set on the spec in main()). If neither is
-    # available the library falls back to single-chip SparseMoE, so no axis is not an error.
+    # the axis resolved from device_config.moe_axis (set on the spec in main()). With no usable
+    # axis the library falls back to single-chip SparseMoE, so a missing axis is not an error.
     moe_axis_name = None
-    if parallel_type is not None:
+    if spec.moe_type in ("sparse_tp", "sparse_ep"):
         moe_axis_name = "tp" if use_tp else spec.moe_axis_name
 
     h = spec.moe_hyperparam
@@ -283,7 +275,7 @@ def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
             n_limited_groups=h.n_limited_groups,
             score_func=h.score_func,
             route_scale=h.route_scale,
-            moe_type=lib_moe_type,
+            moe_type=spec.moe_type,
             q_lora_rank=spec.q_lora_rank,
             kv_lora_rank=spec.kv_lora_rank,
             qk_nope_head_dim=spec.qk_nope_head_dim,
@@ -293,7 +285,6 @@ def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
             rope_theta=spec.theta,
             runner_type=cfg.runner_type,
             moe_axis_name=moe_axis_name,
-            moe_parallel_type=parallel_type or "tp",
             use_tp=use_tp,
         )
     )

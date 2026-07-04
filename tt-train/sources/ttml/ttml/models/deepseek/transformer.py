@@ -87,10 +87,10 @@ class DeepSeekBlock(AbstractModuleBase):
             moe_type = str(getattr(config, "moe_type", "sparse")).lower()
             if moe_type == "dense":
                 self.ffn = MoE(config)
-            elif moe_type == "sparse":
-                mesh = _ttml.maybe_mesh()
+            elif moe_type in ("sparse", "sparse_tp", "sparse_ep"):
                 # Resolve the MoE axis: full-model TP → "tp", else moe_axis_name
                 # if it points at a real axis with size > 1, else no MoE axis.
+                mesh = _ttml.maybe_mesh()
                 if use_tp:
                     moe_axis_name = "tp"
                 else:
@@ -106,20 +106,18 @@ class DeepSeekBlock(AbstractModuleBase):
                         else None
                     )
 
-                parallel_type = str(getattr(config, "moe_parallel_type", "tp")).lower()
-                if moe_axis_name is None:
-                    # No MoE axis (single-chip or pure replication) — fall back
-                    # to SparseMoE regardless of moe_parallel_type. "ep" with no
-                    # axis is a no-op.
+                if moe_type == "sparse" or moe_axis_name is None:
+                    # Plain sparse, or a sparse_tp/sparse_ep variant with no usable
+                    # MoE axis (single-chip / pure replication) — SparseMoE.
                     self.ffn = SparseMoE(config)
-                elif parallel_type == "ep":
+                elif moe_type == "sparse_ep":
                     self.ffn = SparseMoEEP(config, axis_name=moe_axis_name)
-                else:  # "tp"
+                else:  # sparse_tp
                     self.ffn = SparseMoETP(config)
             else:
                 raise ValueError(
-                    f"DeepSeekBlock: unknown moe_type={moe_type!r}; expected 'sparse' or 'dense' "
-                    f"(from DeepSeekConfig.moe_type)"
+                    f"DeepSeekBlock: unknown moe_type={moe_type!r}; expected one of "
+                    f"'dense', 'sparse', 'sparse_tp', 'sparse_ep' (from DeepSeekConfig.moe_type)"
                 )
             self.ffn._debug_layer_id = layer_id
         self.attn_norm = RMSNormLayer(config.dim)

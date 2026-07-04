@@ -49,8 +49,14 @@ class DeepSeekConfig:
     n_limited_groups: int = 1
     score_func: str = "sigmoid"
     route_scale: float = 2.5
-    # "sparse" uses moe_group/moe_ungroup; "dense" uses on-device masked experts.
-    moe_type: Literal["sparse", "dense"] = "sparse"
+    # MoE FFN variant:
+    #   dense     — on-device masked experts (no token grouping)
+    #   sparse    — moe_group/ungroup, single-chip (no MoE parallelism)
+    #   sparse_tp — sparse + tensor-parallel experts (shard the intermediate dim)
+    #   sparse_ep — sparse + expert-parallel (partition the expert list)
+    # sparse_tp/sparse_ep shard across the "tp" axis (use_tp) or moe_axis_name;
+    # with no such axis they fall back to plain sparse.
+    moe_type: Literal["dense", "sparse", "sparse_tp", "sparse_ep"] = "sparse"
     # MLA (q_lora_rank=0 means direct Q projection without LoRA bottleneck)
     q_lora_rank: int = 256
     kv_lora_rank: int = 128
@@ -72,15 +78,6 @@ class DeepSeekConfig:
     # directly; ``moe_axis_name`` is only for MoE-only TP experiments
     # when this flag is False.
     use_tp: bool = False
-    # How to use the MoE axis (the axis that ``SparseMoETP`` would otherwise
-    # use — ``"tp"`` when ``use_tp=True``, else ``moe_axis_name``):
-    #   "tp" — SparseMoETP: every chip holds all E experts, sharded intermediate
-    #          dim; all_reduce after the FFN combines partials.
-    #   "ep" — SparseMoEEP: each chip holds E / D experts (full weights),
-    #          partial dense output, all_reduce after moe_ungroup. Use only
-    #          when the MoE axis is independent from DP (DP+EP on the same
-    #          axis would require an extra routing CCL not implemented yet).
-    moe_parallel_type: Literal["tp", "ep"] = "tp"
 
     def __post_init__(self) -> None:
         if not self.use_tp:
