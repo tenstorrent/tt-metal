@@ -45,6 +45,8 @@ import torch
 from loguru import logger
 from safetensors.torch import load_file
 
+from ...layers.lora import LoRAMixin
+
 _STRIP_PREFIXES = ("model.diffusion_model.", "diffusion_model.", "transformer.", "model.")
 _LOW_RANK_RE = re.compile(r"^(?P<base>.*)\.lora_(?P<slot>A|B|down|up)(?:\.[^.]+)?\.weight$")
 _SLOT_MAP = {"A": "A", "down": "A", "B": "B", "up": "B"}
@@ -144,6 +146,16 @@ def load_ltx_adapter_into(
         raise RuntimeError(f"{path}: no LoRA targets registered — check the adapter's key naming against LTX modules.")
 
     return LTXAdapterHandle(name=name or Path(path).stem, target_indices=target_indices)
+
+
+def iter_lora_modules(root, prefix: str = ""):
+    """Yield (dotted_path, module) for every LoRAMixin descendant of ``root``.
+    Paths match the loader's canonical keys (e.g. ``transformer_blocks.0.attn1.to_qkv``)."""
+    for name, child in root.named_children():
+        path = f"{prefix}.{name}" if prefix else name
+        if isinstance(child, LoRAMixin):
+            yield path, child
+        yield from iter_lora_modules(child, path)
 
 
 # --------------------------------------------------------------------
