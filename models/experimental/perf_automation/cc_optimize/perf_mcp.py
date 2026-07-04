@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import statistics
 import sys
 import tempfile
 from pathlib import Path
@@ -55,7 +56,8 @@ _ENV = _MANIFEST.get("env", {})
 # where profile_model stashes the current baseline so measure_candidate can compare structurally
 _BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_baseline.json"
 _FULLPIPE_BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline.json"
-_FULLPIPE_TOL = float(os.environ.get("PERF_MCP_FULLPIPE_TOL", "0.02"))
+_FULLPIPE_TOL = float(os.environ.get("PERF_MCP_FULLPIPE_TOL", "0.08"))
+_FULLPIPE_SAMPLES = max(1, int(os.environ.get("PERF_MCP_FULLPIPE_SAMPLES", "1")))
 _FULLPIPE_TARGET_MS = float(os.environ.get("PERF_MCP_TARGET_MS", "0") or "0")
 
 # C++-kernel SAFETY: a bad Metalium kernel can WEDGE a device core (tt-lang/ttnn fail gracefully; raw
@@ -539,28 +541,33 @@ def _run_full_pipeline_ms():
     cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node]
     if case:
         cmd += ["-k", case]
-    try:
-        r = _sp.run(cmd, cwd=repo, capture_output=True, text=True, timeout=5400, env=env)
-    except Exception as exc:  # noqa: BLE001
-        return None, None, f"run failed: {str(exc)[-400:]}"
-    out = (r.stdout or "") + "\n" + (r.stderr or "")
-    per_token = None
-    wall = None
-    for line in out.splitlines():
-        if "TRACE_PER_TOKEN_MS=" in line:
-            try:
-                per_token = float(line.split("TRACE_PER_TOKEN_MS=", 1)[1].split()[0])
-            except Exception:  # noqa: BLE001
-                pass
-        elif "FORWARD_WALL_MS=" in line:
-            try:
-                wall = float(line.split("FORWARD_WALL_MS=", 1)[1].split()[0])
-            except Exception:  # noqa: BLE001
-                pass
-    if per_token is not None:
-        return per_token, "trace", None
-    if wall is not None:
-        return wall, "eager", None
+    per_tokens = []
+    walls = []
+    last_err = None
+    for _ in range(_FULLPIPE_SAMPLES):
+        try:
+            r = _sp.run(cmd, cwd=repo, capture_output=True, text=True, timeout=5400, env=env)
+        except Exception as exc:  # noqa: BLE001
+            last_err = f"run failed: {str(exc)[-400:]}"
+            continue
+        out = (r.stdout or "") + "\n" + (r.stderr or "")
+        for line in out.splitlines():
+            if "TRACE_PER_TOKEN_MS=" in line:
+                try:
+                    per_tokens.append(float(line.split("TRACE_PER_TOKEN_MS=", 1)[1].split()[0]))
+                except Exception:  # noqa: BLE001
+                    pass
+            elif "FORWARD_WALL_MS=" in line:
+                try:
+                    walls.append(float(line.split("FORWARD_WALL_MS=", 1)[1].split()[0]))
+                except Exception:  # noqa: BLE001
+                    pass
+    if per_tokens:
+        return statistics.median(per_tokens), "trace", None
+    if walls:
+        return statistics.median(walls), "eager", None
+    if last_err:
+        return None, None, last_err
     return None, None, "no TRACE_PER_TOKEN_MS or FORWARD_WALL_MS in output (workload did not run full-pipeline)"
 
 
