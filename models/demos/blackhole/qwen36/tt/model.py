@@ -500,6 +500,20 @@ class Qwen36Model:
             )
         return logits
 
+    def _final_norm_decode(self, x):
+        """Final RMSNorm before the LM head (TP decode).
+
+        The bare `self.norm(x, DECODE)` runs plain ttnn.rms_norm on a DRAM-interleaved [32,dim]
+        tensor -> single tile-row -> 1 core (~80us/token). Passing the framework's 'lm_head' norm
+        config runs the sharded multi-core norm across lm_head_core_grid instead; output_mem_config
+        is forced back to DRAM so the LM-head matmul input is byte-identical (layout-only change).
+        """
+        if self.num_devices > 1:
+            nc = dict(self.args.get_norm_config("lm_head", Mode.DECODE))
+            nc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
+            return self.norm(x, mode=Mode.DECODE, norm_config=nc)
+        return self.norm(x, mode=Mode.DECODE)
+
     @classmethod
     def from_pretrained(
         cls, device, max_batch_size=1, max_seq_len=2048, n_layers=None, layer_indices=None, hf_model=None
@@ -631,7 +645,7 @@ class Qwen36Model:
         )
         for layer in self.layers:
             x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tt)
-        x = self.norm(x, mode=Mode.DECODE)
+        x = self._final_norm_decode(x)
         logits = self._lm_head(x)
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
         return lt[0].reshape(-1)[: self.vocab_size]
@@ -918,7 +932,7 @@ class Qwen36Model:
         for i, layer in enumerate(self.layers):
             x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tensor)
 
-        x = self.norm(x, mode=Mode.DECODE)
+        x = self._final_norm_decode(x)
         if self._ondev_argmax:
             # Return the PRE-gather vocab-sharded logits so the caller can argmax each 62080-wide
             # shard (cheap) + combine — skips the full-vocab all-gather AND the 248320-wide readback.
@@ -942,7 +956,7 @@ class Qwen36Model:
                 x = layer.forward(x, cos, sin, position_tensor=cur_pos_tensor, page_table=page_table, mode="decode")
             else:
                 x = layer.forward(x, mode="decode")
-        x = self.norm(x, mode=Mode.DECODE)
+        x = self._final_norm_decode(x)
         if self._ondev_argmax:
             # PRE-gather vocab-sharded logits [1,1,vocab/nd] (distinct per device) for on-device
             # greedy: caller argmaxes each shard + combines, skipping the all-gather + big readback.
@@ -2433,7 +2447,7 @@ class Qwen36Model:
             else:
                 x = layer.forward(x, cos=cos, sin=sin, mode="decode")
 
-        x = self.norm(x, mode=Mode.DECODE)
+        x = self._final_norm_decode(x)
         logits = self._lm_head(x)
         ttnn.deallocate(x)
 
