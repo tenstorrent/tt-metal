@@ -230,54 +230,6 @@ def _write_canvas_kv_contiguous(
     v_perm.deallocate(True)
 
 
-def _write_canvas_kv_paged(
-    k_cache,
-    v_cache,
-    canvas_k,
-    canvas_v,
-    *,
-    start_pos: int,
-    canvas_len: int,
-    page_table,
-    config,
-    weights,
-    tp: int,
-):
-    """Write canvas K/V into a paged cache with one ``paged_fill_cache`` per K/V.
-
-    ``paged_fill_cache`` fills logical positions ``0 .. C-1`` of the *given* page
-    table into the physical blocks it maps, so a chunk page table rolled to the
-    block containing ``start_pos`` writes the canvas at absolute positions
-    ``start_pos .. start_pos+C-1``. Requires ``start_pos`` to be block-aligned.
-    """
-    from models.demos.gemma4.tt.attention.operations import effective_block_size
-
-    num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
-    eff_bs = effective_block_size(k_cache, config.head_dim, num_local_kv_heads)
-    if start_pos % eff_bs != 0:
-        raise ValueError(
-            f"paged batched commit requires start_pos ({start_pos}) aligned to block_size ({eff_bs}); "
-            "use the contiguous write path or fall back to the sequential commit"
-        )
-    start_block = start_pos // eff_bs
-    chunk_page_table = ttnn.slice(
-        page_table,
-        [0, start_block],
-        [page_table.shape[0], page_table.shape[1]],
-        memory_config=page_table.memory_config(),
-    )
-    paged_modulo_kwargs = (
-        {"cache_position_modulo": config.cache_position_modulo} if config.cache_position_modulo is not None else {}
-    )
-    ttnn.experimental.paged_fill_cache(
-        k_cache, canvas_k, chunk_page_table, batch_idx=0, block_size=eff_bs, **paged_modulo_kwargs
-    )
-    ttnn.experimental.paged_fill_cache(
-        v_cache, canvas_v, chunk_page_table, batch_idx=0, block_size=eff_bs, **paged_modulo_kwargs
-    )
-    chunk_page_table.deallocate(True)
-
-
 def _manual_gqa_attention_masked(tt_q, tt_k, tt_v, attn_mask):
     """Staged GQA fallback that honors an additive ``[1, 1, Cq, K]`` mask.
 
@@ -430,6 +382,15 @@ def _commit_attention_batched(
     and (per-token) commit paths use.
     """
     validate_q_rope_offset(start_pos)
+    if page_table is not None:
+        # Reject before any device work so we never leave a half-written cache: the
+        # paged commit (offset chunk write + SDPA prefix read from the paged pool) is
+        # not wired. The standalone / serving RUN path uses the contiguous model-owned
+        # cache (page_table=None).
+        raise NotImplementedError(
+            "batched commit does not support paged caches yet (SDPA prefix read from the paged "
+            "pool is unwired); use the sequential commit for paged/vLLM caches (#47557/#47488)"
+        )
     weights = attn.weights
     config = attn.config
     mesh_config = attn.mesh_config
@@ -456,39 +417,18 @@ def _commit_attention_batched(
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
         tt_k = _apply_rope_chunked(tt_k, cos_cache, sin_cache, start_offset=start_pos)
         k_cache, v_cache = kv_cache
-        if page_table is not None:
-            _write_canvas_kv_paged(
-                k_cache,
-                v_cache,
-                tt_k,
-                tt_v,
-                start_pos=start_pos,
-                canvas_len=canvas_len,
-                page_table=page_table,
-                config=config,
-                weights=weights,
-                tp=tp,
-            )
-        else:
-            _write_canvas_kv_contiguous(
-                k_cache,
-                v_cache,
-                tt_k,
-                tt_v,
-                start_pos=start_pos,
-                canvas_len=canvas_len,
-                mesh_device=mesh_device,
-                write_batch=write_batch,
-            )
+        _write_canvas_kv_contiguous(
+            k_cache,
+            v_cache,
+            tt_k,
+            tt_v,
+            start_pos=start_pos,
+            canvas_len=canvas_len,
+            mesh_device=mesh_device,
+            write_batch=write_batch,
+        )
         tt_k.deallocate(True)
         tt_v.deallocate(True)
-
-    if page_table is not None:
-        raise NotImplementedError(
-            "batched commit SDPA read for paged caches is not wired yet; the standalone/serving "
-            "RUN path uses the contiguous model-owned cache (page_table=None). Use the sequential "
-            "commit for paged/vLLM caches (batched-canvas paged decode is tracked in #47557)."
-        )
 
     # Read the frozen prefix ++ freshly-written canvas out of the cache and run the
     # causal-masked SDPA. Reading from the cache (rather than a register concat)
@@ -601,6 +541,17 @@ def commit_hidden_forward_batched(
     caches = kv_caches or tt_model.tt_kv_cache
     canvas_len = canvas_hidden.shape[-2]
     kv_shared_map = getattr(tt_model, "kv_shared_layer_map", {})
+
+    # Per-layer-input (Gemma-3n E2B/E4B) is applied by the sequential commit but not
+    # by the denoise body this mirrors. It is inactive for DiffusionGemma-26B-A4B
+    # (an MoE, ``hidden_size_per_layer_input == 0``), so both paths agree. Guard so a
+    # PLI-bearing model raises here instead of silently diverging from the sequential
+    # commit (flag, don't force).
+    if getattr(tt_model, "hidden_size_per_layer_input", 0):
+        raise NotImplementedError(
+            "batched commit does not apply per-layer inputs (E2B/E4B); this model has "
+            "hidden_size_per_layer_input != 0, so use the sequential commit"
+        )
     hidden_states = canvas_hidden
     for layer_idx in range(len(tt_model.layers)):
         layer_type = _layer_type_for_commit(tt_model, layer_idx)
@@ -672,10 +623,10 @@ def commit_canvas_tokens_batched(
             f"batched commit requires start_pos ({start_pos}) to be a multiple of {TILE_SIZE}; "
             "cache_len is padded to 32 and canvas_len is 256, so this holds for the standard run"
         )
-    if page_tables_per_layer is not None:
+    if page_table is not None or page_tables_per_layer is not None:
         raise NotImplementedError(
-            "batched commit does not support per-layer (hybrid) page tables yet; "
-            "use the sequential commit for the vLLM hybrid-cache path"
+            "batched commit supports only the contiguous model-owned cache (page_table=None); "
+            "use the sequential commit for paged / vLLM hybrid-cache paths (#47557/#47488)"
         )
 
     # commit_hidden_forward_batched consumes canvas_hidden through the layer stack
