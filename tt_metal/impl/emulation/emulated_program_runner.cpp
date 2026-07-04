@@ -10,6 +10,8 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <csignal>
 #if defined(__x86_64__) && defined(__linux__)
 #include <ucontext.h>
@@ -967,6 +969,61 @@ static void emit_metal2_namespaces(
     }
 }
 
+// Machine-wide bound on concurrent JIT clang subprocesses. Parallel emule sweeps
+// launch one clang per cache-miss kernel across many worker processes; unbounded,
+// this over-subscribes RAM and the OOM killer reaps compiles (see jit_compile_kernel).
+// Each clang launch first acquires one of N flock slots in a shared /tmp dir. flock
+// is released by the kernel when the holding process dies, so a killed compile never
+// leaks a slot (a POSIX semaphore would). N defaults to hardware_concurrency and is
+// overridable via TT_EMULE_JIT_JOBS.
+static int jit_max_parallel_compiles() {
+    if (const char* v = std::getenv("TT_EMULE_JIT_JOBS")) {
+        int n = std::atoi(v);
+        if (n > 0) {
+            return n;
+        }
+    }
+    unsigned hc = std::thread::hardware_concurrency();
+    return hc > 0 ? static_cast<int>(hc) : 8;
+}
+
+class JitCompileSlot {
+public:
+    JitCompileSlot() {
+        const int n = jit_max_parallel_compiles();
+        const std::string dir = "/tmp/tt_emule_jit_slots_" + std::to_string(getuid());
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        for (unsigned spin = 0;; ++spin) {
+            for (int i = 0; i < n; ++i) {
+                const std::string slot = dir + "/slot_" + std::to_string(i);
+                int fd = ::open(slot.c_str(), O_CREAT | O_RDWR, 0644);
+                if (fd < 0) {
+                    continue;
+                }
+                if (::flock(fd, LOCK_EX | LOCK_NB) == 0) {
+                    fd_ = fd;
+                    return;
+                }
+                ::close(fd);
+            }
+            // All slots busy: back off (capped) and retry.
+            std::this_thread::sleep_for(std::chrono::milliseconds(std::min(50u + spin * 10u, 500u)));
+        }
+    }
+    ~JitCompileSlot() {
+        if (fd_ >= 0) {
+            ::flock(fd_, LOCK_UN);
+            ::close(fd_);
+        }
+    }
+    JitCompileSlot(const JitCompileSlot&) = delete;
+    JitCompileSlot& operator=(const JitCompileSlot&) = delete;
+
+private:
+    int fd_ = -1;
+};
+
 static std::function<void()> jit_compile_kernel(
     const std::string& kernel_src_path,
     const std::vector<uint32_t>& compile_args,
@@ -1129,7 +1186,10 @@ static std::function<void()> jit_compile_kernel(
     int rc = 0;
     std::string compile_log;
     for (int attempt = 1; attempt <= kMaxCompileAttempts; ++attempt) {
-        rc = std::system(full_cmd.c_str());
+        {
+            JitCompileSlot slot;  // machine-wide cap on concurrent clang (see JitCompileSlot)
+            rc = std::system(full_cmd.c_str());
+        }
         if (rc == 0) {
             break;
         }
