@@ -1,0 +1,31 @@
+{
+  "prompt_len": 24,
+  "prompt_aligned_256": false,
+  "cache_len": 32,
+  "canvas_length": 256,
+  "max_denoising_steps": 8,
+  "gumbel_mode": "argmax",
+  "blocks_emitted": 3,
+  "tokens_emitted": 768,
+  "ttft_s": 4.001409091986716,
+  "per_block_latency_s": [
+    3.0288177491165698,
+    1.7544953250326216,
+    1.730934627354145
+  ],
+  "mean_block_latency_s": 1.7427149761933833,
+  "tokens_per_block_per_s": 146.89722846083612,
+  "denoise_steps_per_block": [
+    8,
+    8,
+    8
+  ],
+  "halted_per_block": [
+    false,
+    false,
+    false
+  ],
+  "final_next_pos": 800,
+  "text_chars": 869,
+  "text": "[multimodal][multimodal]<unused18><unused18>[multimodal][multimodal][multimodal]<unused18>[multimodal][multimodal]<unused28><unused21><unused15>[multimodal][multimodal][multimodal]<unused15>[multimodal]<unused8><unused22><unused22>[multimodal][multimodal]<unused28>[multimodal][multimodal][multimodal]<unused28>[multimodal][multimodal]<unused8><unused28><unused22><unused8><unused18><unused18><unused8><unused18><unused18><unused18><unused28><unused18><unused18><unused18><unused18><unused18><unused18><unused18>[multimodal][multimodal][multimodal]<unused8>[multimodal][multimodal][multimodal]<unused22><unused22><unused22><unused28><unused18><unused18><unused18>[multimodal][multimodal][multimodal]<unused18><unused18><unused15><unused15><unused15><unused15>[multimodal][multimodal][multimodal]<unused36>[multimodal]<unused28>[multimodal]<unused15><unused28><unused28>"
+}

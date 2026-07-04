@@ -1,0 +1,130 @@
+[
+  {
+    "label": "traced_tuned_s12",
+    "env": {
+      "DG_SPARSE_MOE": "1",
+      "DG_DEDUP_ARGMAX": "1",
+      "DG_SPARSE_MOE_TUNED": "1",
+      "DG_DENOISE_TRACED": "1"
+    },
+    "steps": 12,
+    "blocks": 3,
+    "ttft_s": 31.70005367603153,
+    "per_block_latency_s": [
+      30.295185290277004,
+      4.389389886055142,
+      4.408555258065462
+    ],
+    "steady_block_latency_s": 4.398972572060302,
+    "tokens_per_block_per_s": 58.195407178931305,
+    "denoise_steps_per_block": [
+      12,
+      12,
+      12
+    ],
+    "halted_per_block": [
+      false,
+      false,
+      false
+    ],
+    "committed_sha": "ea37787ec5408384",
+    "text_chars": 906,
+    "text_head": " diffusion language model is a generative model that produces text by iteratively refining a noisy input signal into a coherent sequence, rather than generating it word-by-word like traditional autoregressive models.\n\n m"
+  },
+  {
+    "label": "traced_tuned_s5",
+    "env": {
+      "DG_SPARSE_MOE": "1",
+      "DG_DEDUP_ARGMAX": "1",
+      "DG_SPARSE_MOE_TUNED": "1",
+      "DG_DENOISE_TRACED": "1"
+    },
+    "steps": 5,
+    "blocks": 3,
+    "ttft_s": 15.02757481392473,
+    "per_block_latency_s": [
+      13.993964083958417,
+      2.6904039490036666,
+      2.688963576219976
+    ],
+    "steady_block_latency_s": 2.6896837626118213,
+    "tokens_per_block_per_s": 95.17847546189253,
+    "denoise_steps_per_block": [
+      5,
+      5,
+      5
+    ],
+    "halted_per_block": [
+      false,
+      false,
+      false
+    ],
+    "committed_sha": "36295e2dd857f5f8",
+    "text_chars": 213,
+    "text_head": " diffusion language model is a generative model that creates text by iteratively refining a noise into a a a through through a a diffusion process, rather than generating words word-by-word as traditional models.\u3002"
+  },
+  {
+    "label": "traced_tuned_s4",
+    "env": {
+      "DG_SPARSE_MOE": "1",
+      "DG_DEDUP_ARGMAX": "1",
+      "DG_SPARSE_MOE_TUNED": "1",
+      "DG_DENOISE_TRACED": "1"
+    },
+    "steps": 4,
+    "blocks": 3,
+    "ttft_s": 12.499998573213816,
+    "per_block_latency_s": [
+      11.477292159106582,
+      2.486053040251136,
+      2.425109446980059
+    ],
+    "steady_block_latency_s": 2.4555812436155975,
+    "tokens_per_block_per_s": 104.25230306086947,
+    "denoise_steps_per_block": [
+      4,
+      4,
+      4
+    ],
+    "halted_per_block": [
+      false,
+      false,
+      false
+    ],
+    "committed_sha": "61960c051f0e2794",
+    "text_chars": 127,
+    "text_head": " diffusion language model is a generative model that creates text by iteratively refining a noise of of a a a,,,,,,,-----------"
+  },
+  {
+    "label": "traced_tuned_s3",
+    "env": {
+      "DG_SPARSE_MOE": "1",
+      "DG_DEDUP_ARGMAX": "1",
+      "DG_SPARSE_MOE_TUNED": "1",
+      "DG_DENOISE_TRACED": "1"
+    },
+    "steps": 3,
+    "blocks": 3,
+    "ttft_s": 10.204097458161414,
+    "per_block_latency_s": [
+      9.20246892888099,
+      2.141292900778353,
+      2.1466368976980448
+    ],
+    "steady_block_latency_s": 2.143964899238199,
+    "tokens_per_block_per_s": 119.40493992740404,
+    "denoise_steps_per_block": [
+      3,
+      3,
+      3
+    ],
+    "halted_per_block": [
+      false,
+      false,
+      false
+    ],
+    "committed_sha": "3433f4e607123cc8",
+    "text_chars": 155,
+    "text_head": " diffusion language model is a generative model that creates text by iteratively refining random noise or and and into into into into into,,,,,,\u751f\u6210,\u751f\u6210-----\u3002"
+  }
+]

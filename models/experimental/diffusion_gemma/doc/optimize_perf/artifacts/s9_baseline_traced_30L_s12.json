@@ -7,14 +7,14 @@
   "gumbel_mode": "argmax",
   "blocks_emitted": 3,
   "tokens_emitted": 768,
-  "ttft_s": 11.639298313762993,
+  "ttft_s": 31.574421506840736,
   "per_block_latency_s": [
-    10.233528457116336,
-    10.130371217150241,
-    10.076925939880311
+    30.20523496204987,
+    4.381219809874892,
+    4.394284708891064
   ],
-  "mean_block_latency_s": 10.103648578515276,
-  "tokens_per_block_per_s": 25.337381640961528,
+  "mean_block_latency_s": 4.387752259382978,
+  "tokens_per_block_per_s": 58.34422384549114,
   "denoise_steps_per_block": [
     12,
     12,
