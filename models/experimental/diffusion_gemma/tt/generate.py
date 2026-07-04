@@ -27,6 +27,7 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
 )
 from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block as tt_denoise_block
 from models.experimental.diffusion_gemma.tt.denoise_loop import device_loop_denoise_block
+from models.experimental.diffusion_gemma.tt.traced_denoise import traced_denoise_block, traced_denoise_enabled
 from models.experimental.diffusion_gemma.tt import sampling as TS
 
 
@@ -791,17 +792,28 @@ def _resolve_default_commit_fn(page_table=None, page_tables_per_layer=None) -> C
 
 
 def _resolve_default_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
-    """Pick the denoise loop: device-only fixed-step loop when opted in, else eager.
+    """Pick the denoise loop: traced single-step loop or device-only loop when opted in, else eager.
 
-    ``DG_DENOISE_DEVICE_LOOP`` selects :func:`device_loop_denoise_block` — the
-    device-resident fixed-step loop with no per-step host readback (removes the 5
-    readbacks + the ``torch.equal`` halt check the eager :func:`denoise_block` pays
-    every step; ~179 ms/step of the 30L serving step). Behaviourally identical to the
-    eager loop whenever early-halt does not fire (RUN-first under #48291), but it
-    discards the per-step trajectory records and cannot early-halt, so it stays
-    opt-in until early-halt is either recovered in a trace-safe shape or confirmed
-    unneeded for the serving contract.
+    ``DG_DENOISE_TRACED`` selects the traced single-step loop
+    (:func:`traced_denoise_block`) — one Metal trace per denoise step, replayed once per
+    step, cross-step state (canvas + self-cond signal) in persistent buffers and per-block
+    canvas RoPE refreshed outside the trace. Removes the ~137 ms/step host-dispatch tax that
+    masks the sparse-MoE compute win: 257.93 ms/step traced vs ~777 ms/step eager at 30L →
+    58.1 t/s @12, 33.2 @24 (both > 30), verified bit-exact to the eager committed argmax
+    (perf_progress.md session 8). Argmax (``gumbel_noise=None``) regime + contiguous cache
+    only; needs a large trace region (set ``DG_TRACE_REGION_SIZE`` at mesh open).
+
+    ``DG_DENOISE_DEVICE_LOOP`` selects :func:`device_loop_denoise_block` — the device-resident
+    fixed-step loop with no per-step host readback (removes the 5 readbacks + the
+    ``torch.equal`` halt check the eager :func:`denoise_block` pays every step). Behaviourally
+    identical to the eager loop whenever early-halt does not fire (RUN-first under #48291), but
+    it discards the per-step trajectory records and cannot early-halt.
+
+    All non-eager loops stay opt-in until early-halt is either recovered in a trace-safe shape
+    or confirmed unneeded for the serving contract.
     """
+    if traced_denoise_enabled():
+        return traced_denoise_block
     if os.environ.get("DG_DENOISE_DEVICE_LOOP", "0").lower() in ("1", "true", "yes", "on"):
         return device_loop_denoise_block
     return tt_denoise_block

@@ -43,14 +43,23 @@ def _parse_mesh_shape(mesh: str) -> tuple[int, int]:
 
 
 def _open_mesh_device(mesh: str):
+    import os
+
     import ttnn
 
     rows, cols = _parse_mesh_shape(mesh)
     fabric_enabled = rows * cols > 1
     if fabric_enabled:
         ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, ttnn.FabricReliabilityMode.STRICT_INIT, None)
+    # DG_TRACE_REGION_SIZE reserves a Metal trace region (bytes) for the traced denoise loop
+    # (DG_DENOISE_TRACED). Default 0 = current behaviour (no trace region). A single-step trace
+    # is ~168 MB at 30L, so 12 steps needs ~2 GB and 24 steps ~4 GB; 6 GB covers up to ~36 steps.
+    kwargs = {}
+    trace_region_size = int(os.environ.get("DG_TRACE_REGION_SIZE", "0"))
+    if trace_region_size > 0:
+        kwargs["trace_region_size"] = trace_region_size
     try:
-        return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols))
+        return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols), **kwargs)
     except Exception:
         if fabric_enabled:
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)

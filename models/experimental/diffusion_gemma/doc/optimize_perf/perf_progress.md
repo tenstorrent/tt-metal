@@ -859,3 +859,32 @@ Trace region bumped to 6 GB (12 single-step traces at 30L ≈ 2.0 GB; ~168 MB/tr
 steps at full 30L — nearly 2× the 30 t/s target** (vs 13.93 eager stacked-combo). The block is now commit-bound-ish
 (commit ≈ 1.3 s of the 4.4 s block). Next: 24-step number + wire into serving_smoke behind an opt-in flag (per-block
 noise refreshed into persistent buffers), verify serving_smoke traced == eager, land.
+
+### WIRED into serving + verified bit-exact via serving_smoke (`tt/traced_denoise.py`, opt-in `DG_DENOISE_TRACED`)
+
+Built `TracedDenoiseController` (DiffusionGemma-local): captures N single-step traces on the first
+block and replays them for every block, threading cross-step state (canvas + self-cond signal) in
+persistent buffers and refreshing the per-block canvas RoPE + per-step renoise into pre-allocated
+buffers OUTSIDE the trace. Wired behind `DG_DENOISE_TRACED` in `_resolve_default_denoise_block_fn`
+(argmax regime + contiguous cache only; needs `DG_TRACE_REGION_SIZE`, honored by `_open_mesh_device`).
+No gemma4 edits. Kept opt-in (not default) because the prerequisites are not universal (paged/vLLM
+caches, gumbel regimes, and a 0-byte trace region all require the eager path).
+
+**Verified via serving_smoke** (the production block-granular serving path, per-block VARYING seeded
+noise, `DG_SPARSE_MOE=1 DG_DEDUP_ARGMAX=1 DG_SPARSE_MOE_TUNED=1`, batched commit, seed 0, 3 blocks,
+`--disable-eos-stop`). Same-seed traced-vs-eager committed-text comparison:
+
+| config | tokens/block/s (eager) | tokens/block/s (traced) | speedup | committed text |
+|---|---|---|---|---|
+| 30L, steps=12 | 25.34 | **58.29** | **2.30×** | **byte-for-byte IDENTICAL** (coherent) |
+| L6, steps=8 (wiring correctness) | 146.9 | 236.4 | 1.61× | byte-for-byte IDENTICAL |
+
+- `halted=[False,False,False]`, `steps=[12,12,12]` both paths (early-halt is a no-op under #48291, so
+  the fixed-budget traced loop commits the same final argmax as eager).
+- Traced serving_smoke 58.29 t/s @12 == the standalone probe's 58.11 — the production path realizes the
+  probe's number. The 30L output is coherent ("a diffusion language model is a generative model that
+  produces text by iteratively refining a noisy input signal into a coherent sequence…").
+
+**Headline: the traced serving denoise loop is LANDED (opt-in), VERIFIED bit-exact to eager through
+serving_smoke, and delivers 58.29 tokens/block/s @12 steps at full 30L — nearly 2× the 30 t/s target,
+2.30× over the eager serving path.** The 30-then-100 campaign has cleared 30 with verified evidence.

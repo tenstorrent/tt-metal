@@ -1,0 +1,31 @@
+{
+  "prompt_len": 24,
+  "prompt_aligned_256": false,
+  "cache_len": 32,
+  "canvas_length": 256,
+  "max_denoising_steps": 12,
+  "gumbel_mode": "argmax",
+  "blocks_emitted": 3,
+  "tokens_emitted": 768,
+  "ttft_s": 32.65757839009166,
+  "per_block_latency_s": [
+    31.243202539160848,
+    4.381072462070733,
+    4.402509855572134
+  ],
+  "mean_block_latency_s": 4.391791158821434,
+  "tokens_per_block_per_s": 58.290567730160305,
+  "denoise_steps_per_block": [
+    12,
+    12,
+    12
+  ],
+  "halted_per_block": [
+    false,
+    false,
+    false
+  ],
+  "final_next_pos": 800,
+  "text_chars": 906,
+  "text": " diffusion language model is a generative model that produces text by iteratively refining a noisy input signal into a coherent sequence, rather than generating it word-by-word like traditional autoregressive models.\n\n model model model model model model model model\uff0c\uff0c\uff0c\u751f\u6210\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\u3002\uff0c \u3002\u3002\u3002\n\n\n\u3002\u3002 ,\u3002\u3002 \u3002\u3002\u3002\u3002\u3002.\n\n\n\nA diffusion language model is a generative model that produces text by iteratively refining a noisy input sequence into a coherent sequence, rather than generating it word-by-word like traditional autoregressive models.\n\n\n\nA model model model model model model model model model model model model model, model a a a a a a model, model to\u751f\u6210 text, iteratively iteratively,,. ( (\n\n...\n\n\n\n\n\n.\n\n\n diffusion language model model\n\n model\n\n\n\n is is a\n\n\n\n a.\n\n\n\n\n\n model\u3001 ( ( ( ( deno noise) \u3001\u3001\n\n noise ( ( ( noise).\n\n. . (-gressive)):\u3002.\uff0c\u3002\u3002\u3002\u3002\u3002\n    \n.2.\n\n. A diffusion language model is a model model"
+}
