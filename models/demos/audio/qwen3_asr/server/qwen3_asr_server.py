@@ -139,10 +139,10 @@ def _infer(wav, force, max_new_tokens=200):
         pad = torch.zeros(n_mask - audio_embeds.shape[0], audio_embeds.shape[1])
         audio_embeds = torch.cat([audio_embeds, pad], 0)
     inp[mask] = audio_embeds
-    # use_trace=False: the persistent decode trace gives ~2x but HANGS the long-lived server
-    # after a few mixed-shape requests (tt-metal trace-stability issue; see qwen3_asr_decoder).
-    # Decode speed instead comes from on-device argmax (no 151936-vocab host transfer/token).
-    ids = STATE["model"].generate(inp.unsqueeze(0), max_new_tokens=max_new_tokens, use_trace=False)
+    # Greedy decode with host-side argmax: the fastest path that stays stable across the
+    # mixed request shapes of a long-lived server (a persistent decode trace gave ~2x but
+    # hung after a few mixed-shape requests; see qwen3_asr_decoder.generate).
+    ids = STATE["model"].generate(inp.unsqueeze(0), max_new_tokens=max_new_tokens)
     lang, text = _parse(STATE["tok"].decode(ids, skip_special_tokens=False))
     return text, lang, time.time() - t0
 
