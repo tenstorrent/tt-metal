@@ -10,6 +10,8 @@
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_metadata.hpp"  // read_ring_metadata
+#include <tt-metalium/constants.hpp>  // tt::constants::TILE_HEIGHT
 #include <cstdint>
 #include <utility>
 
@@ -30,6 +32,17 @@ constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(7);  // 2
 constexpr uint32_t num_inputs = get_compile_time_arg_val(8);
 constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
 constexpr bool fuse_op = get_compile_time_arg_val(10);
+// KV-pad derivation mode (slot 11): 0=none, 1=metadata (slot/kv args are DRAM addresses read on-device),
+// 2=scalar (slot/kv args are values re-patched per dispatch; 0xFFFFFFFF means inactive).
+// Metadata and scalar modes share five per-core args:
+// slot, kv_actual, chunk_local_tiles, kv_cache_num_layers, kv_cache_layer_idx.
+// Mode 1 appends a metadata accessor after the output accessors; modes 0/2 do not.
+constexpr uint32_t kv_pad_derive_mode = get_compile_time_arg_val(11);
+constexpr bool has_metadata = kv_pad_derive_mode == 1;
+constexpr bool has_scalar_meta = kv_pad_derive_mode == 2;
+constexpr uint32_t kScalarMetaInactive = 0xFFFFFFFFu;
+// Metadata reads use cb_output scratch; cb_meta_id is kept only for standalone all-gather arg layout.
+constexpr uint32_t cb_meta_id [[maybe_unused]] = get_compile_time_arg_val(12);
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
@@ -89,11 +102,18 @@ FORCE_INLINE void prefetch_batch_read_tiles(
 }
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 11;
+    constexpr uint32_t page_size_base_idx = 13;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
         std::get<num_inputs - 1>(inputs_args).next_compile_time_args_offset()>();
+    // meta_args is instantiated unconditionally, so the no-metadata path still needs a valid accessor offset.
+    // Use the input-accessor start; offset 0 names my_chip_id and fails TensorAccessorArgs static_assert.
+    // The value is used only under if constexpr(has_metadata).
+    constexpr uint32_t kMetaArgsOffset = has_metadata
+                                             ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
+                                             : (page_size_base_idx + num_inputs);
+    constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
 
     ///////////////////////////////////////////////////
     // ARGS
@@ -140,6 +160,61 @@ void kernel_main() {
     arg_idx += num_inputs;
     auto output_tensor_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
 
+    // Metadata/scalar modes share a 5-arg layout before OpSignaler. They derive input_batch_base from
+    // slot and input_tile_id_end from kv_actual; metadata changes only where slot/kv_actual come from.
+    // Derived paths use full descriptor valid_pages, so a stale create-time clamp cannot cap the live extent.
+    Noc noc_obj;
+    if constexpr (has_metadata || has_scalar_meta) {
+        const uint32_t slot_arg = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t kv_arg = get_arg_val<uint32_t>(arg_idx++);
+        // chunk_local_tiles (per-device Q slab in tiles): recompute the gather extent on-device so the
+        // gather moves only the logical_n-valid prefix even when the host logical_n is a placeholder.
+        const uint32_t chunk_local_tiles = get_arg_val<uint32_t>(arg_idx++);
+        // (user, layer)-major KV-cache batch dim: cache_batch_idx = slot_id * kv_cache_num_layers +
+        // kv_cache_layer_idx (mirrors the SDPA reader / update_padded_kv_cache). slot_id holds only the
+        // user slot. Defaults (1, 0) reduce to slot_id, keeping callers bit-identical.
+        const uint32_t kv_cache_num_layers = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t kv_cache_layer_idx = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t slot_id = slot_arg;
+        uint32_t kv_actual = kv_arg;
+        bool derive_batch_base = true;
+        bool clamp_extent = true;
+        if constexpr (has_metadata) {
+            // Metadata mode passes the tensor address in both slot_arg and kv_arg to preserve the scalar
+            // layout. Read [slot, kv_actual] into cb_output scratch before the gather loop.
+            const auto md =
+                ttnn::ring_attention::read_ring_metadata(noc_obj, meta_args, slot_arg, CircularBuffer(cb_output_id));
+            slot_id = md.slot;
+            kv_actual = md.kv_actual;
+        } else {                // has_scalar_meta: slot / kv_actual are the values; sentinel => that field inactive.
+            derive_batch_base = slot_arg != kScalarMetaInactive;
+            clamp_extent = kv_arg != kScalarMetaInactive;
+        }
+        // Overwrite input_batch_base with cache_batch_idx * num_heads * Ht * Wt, matching
+        // ring_attention_all_gather_async_detail::input_batch_base_pages.
+        if (derive_batch_base) {
+            const uint32_t cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
+            for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+                input_batch_base[input_idx] = cache_batch_idx * input_batch_head_count[input_idx] *
+                                              input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
+            }
+        }
+        // Clamp the gather to the logical_n-valid prefix (rounded up to whole chunk-slabs). Shared with the
+        // writer via compute_ring_gather_valid_Ht so the two clamps stay identical.
+        if (clamp_extent) {
+            const uint32_t gather_valid_Ht = ttnn::ring_attention::compute_ring_gather_valid_Ht(
+                kv_actual, chunk_local_tiles, ring_size, tt::constants::TILE_HEIGHT);
+            for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+                const uint32_t valid_Ht =
+                    gather_valid_Ht < input_tensor_Ht[input_idx] ? gather_valid_Ht : input_tensor_Ht[input_idx];
+                const uint32_t valid_pages = valid_Ht * input_tensor_Wt[input_idx];
+                if (valid_pages < input_tile_id_end[input_idx]) {
+                    input_tile_id_end[input_idx] = valid_pages;
+                }
+            }
+        }
+    }
+
     OpSignaler op_signaler;
     if constexpr (fuse_op) {
         op_signaler = OpSignaler(arg_idx);
@@ -148,7 +223,6 @@ void kernel_main() {
     const uint32_t cb_fifo_limit = get_local_cb_interface(cb_output_id).fifo_limit;
     const uint32_t cb_fifo_size = get_local_cb_interface(cb_output_id).fifo_size;
 
-    Noc noc_obj;
     CircularBuffer cb_output(cb_output_id);
 
     // Push out our local slice

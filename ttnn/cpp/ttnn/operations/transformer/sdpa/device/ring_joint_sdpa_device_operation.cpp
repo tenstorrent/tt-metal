@@ -164,10 +164,10 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     }
 }
 
-// Re-validate the scalar args that are runtime-patched on a program-cache hit and therefore NOT part of
-// compute_program_hash: kv_cache_batch_idx (indexed KV cache) and logical_n / kv_actual_isl (KV-pad
-// rotation). Everything else is keyed by the hash, so a cache hit guarantees it already passed at miss
-// time. Shared by validate_on_program_cache_miss and validate_on_program_cache_hit to avoid divergence.
+// Re-validate the scalar args that are runtime-patched on a program-cache hit and therefore NOT part of the
+// program hash: kv_cache_batch_idx (indexed KV cache) and logical_n / kv_actual_isl (KV-pad rotation).
+// Everything else is keyed by the hash (attribute_values + tensor_args), so a cache hit guarantees it already
+// passed at miss time. Shared by validate_on_program_cache_miss and validate_on_program_cache_hit to avoid divergence.
 void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     if (args.has_indexed_kv_cache()) {
         const auto K_cache_batch = tensor_args.input_k.logical_shape()[0];
@@ -253,7 +253,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     validate_ring_joint_all_gather_on_program_cache_miss(
-        args.all_gather_operation_attributes, args.all_gather_tensor_args, args.has_indexed_kv_cache());
+        args.all_gather_operation_attributes,
+        args.all_gather_tensor_args,
+        args.has_indexed_kv_cache() || tensor_args.has_metadata());
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
@@ -278,7 +280,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto joint_q_shape = has_joint_tensors ? tensor_args.joint_q.value().logical_shape() : q_shape;
     const auto joint_k_shape = has_joint_tensors ? tensor_args.joint_k.value().logical_shape() : q_shape;
     const auto joint_v_shape = has_joint_tensors ? tensor_args.joint_v.value().logical_shape() : q_shape;
-    const bool has_indexed_kv_cache = args.has_indexed_kv_cache();
+    // Metadata path is indexed (single-slot) too -- the slot is read on-device from metadata[0] instead
+    // of the host kv_cache_batch_idx scalar -- so the same K/V-cache-batch shape exemptions apply.
+    const bool has_indexed_kv_cache = args.has_indexed_kv_cache() || tensor_args.has_metadata();
     const uint32_t NVH = tensor_args.v_num_heads();
     const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim);
 
@@ -286,6 +290,45 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // (latest slab against a growing K cache). Chunk 0 has equal shapes and uses the regular
     // is_causal=True path.
     const bool is_chunked = tensor_args.is_chunked();
+
+    // Structural validation of the trace-safe metadata tensor. The op reads its VALUES (per-chunk slot /
+    // kv_actual) on-device -- by design, so those are intentionally NOT checked on host -- but the kernels
+    // NoC-read it as a DRAM, row-major, uint32 tensor, so reject an incompatible container before the read.
+    if (tensor_args.has_metadata()) {
+        // The metadata path and the host-scalar path encode the same (slot, kv_actual); passing both is
+        // ambiguous (metadata would silently win). Require exactly one.
+        TT_FATAL(
+            !args.has_indexed_kv_cache() && !args.has_kv_pad_rotation(),
+            "RingJointSDPA: pass EITHER kv_cache_batch_idx/kv_actual_isl (host-scalar) OR kv_cache_metadata "
+            "(on-device, trace-safe), not both -- they encode the same (slot, kv_actual).");
+        const auto& metadata = tensor_args.metadata.value();
+        TT_FATAL(metadata.storage_type() == StorageType::DEVICE, "RingJointSDPA metadata tensor must be on device");
+        TT_FATAL(metadata.buffer() != nullptr, "RingJointSDPA metadata tensor must be allocated in a buffer");
+        TT_FATAL(
+            metadata.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "RingJointSDPA metadata tensor must be in DRAM (the reader/writer NoC-read it)");
+        TT_FATAL(
+            metadata.layout() == Layout::ROW_MAJOR,
+            "RingJointSDPA metadata tensor must be ROW_MAJOR. Got {}",
+            metadata.layout());
+        TT_FATAL(
+            metadata.dtype() == DataType::UINT32,
+            "RingJointSDPA metadata tensor must be UINT32. Got {}",
+            metadata.dtype());
+        TT_FATAL(
+            metadata.logical_shape().volume() >= 2,
+            "RingJointSDPA metadata tensor must hold at least [slot_id, actual_start] (>= 2 uint32 elements); "
+            "got volume {}",
+            metadata.logical_shape().volume());
+        // (user, layer)-major KV-cache slot factor consumed with metadata[0]: slot = metadata[0] *
+        // kv_cache_num_layers + kv_cache_layer_idx. Enforce the layer index is in range (defaults 1,0 pass).
+        TT_FATAL(
+            args.kv_cache_num_layers > 0 && args.kv_cache_layer_idx < args.kv_cache_num_layers,
+            "RingJointSDPA (user,layer)-major KV-cache indexing requires kv_cache_num_layers > 0 and "
+            "kv_cache_layer_idx < kv_cache_num_layers. Got num_layers={}, layer_idx={}",
+            args.kv_cache_num_layers,
+            args.kv_cache_layer_idx);
+    }
 
     const auto dtype = input_tensor_q.dtype();
     if ((!args.is_causal && !is_chunked) || args.is_cross) {
@@ -370,7 +413,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     if (has_kv_pad_rotation) {
         // Shape/flag preconditions are pinned by the program hash. The logical_n / kv_actual_isl value
-        // checks live in validate_runtime_patched_scalars (called below; also runs on cache hits).
+        // checks live in validate_runtime_patched_scalars, which also runs on cache hits.
         TT_FATAL(
             is_chunked,
             "kv_actual_isl enables KV-pad-aware rotation and requires chunked-prefill input (Q.seq < K.seq). "
@@ -727,7 +770,10 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     const std::optional<uint32_t> kv_cache_batch_idx,
     const std::optional<uint32_t> kv_actual_isl,
-    const std::optional<uint32_t> latent_v_head_dim) {
+    const std::optional<uint32_t> latent_v_head_dim,
+    const std::optional<ttnn::Tensor>& metadata,
+    const uint32_t kv_cache_num_layers,
+    const uint32_t kv_cache_layer_idx) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -792,6 +838,24 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     auto all_gather_tensor_args = ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs{
         std::move(all_gather_input_tensors), std::move(all_gather_output_tensors)};
 
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_q = input_tensor_q,
+        .input_k = input_tensor_k,
+        .input_v = input_tensor_v,
+        .joint_q = joint_tensor_q,
+        .joint_k = joint_tensor_k,
+        .joint_v = joint_tensor_v,
+        .gathered_k = persistent_output_buffer_k,
+        .gathered_v = persistent_output_buffer_v,
+        .metadata = metadata};
+
+    // KV-pad rotation = logical_n is derived on-device (not baked). Scalar path: kv_actual_isl provided.
+    // Trace-safe metadata path: kv_actual_isl arrives in the tensor, so it's rotation only on chunked shapes.
+    // Computed here (needs tensor_args.is_chunked()) and stored as an attribute so the program hash can
+    // exclude the per-chunk logical_n; mirrors program_factory's kv_pad_rotation_enabled.
+    const bool kv_pad_rotation_enabled =
+        kv_actual_isl.has_value() || (metadata.has_value() && tensor_args.is_chunked());
+
     auto operation_attributes = OperationType::operation_attributes_t(
         joint_strategy,
         scale,
@@ -808,17 +872,10 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         ccl_core_grid_offset,
         kv_cache_batch_idx,
         kv_actual_isl,
-        latent_v_head_dim.value_or(0));
-
-    auto tensor_args = OperationType::tensor_args_t{
-        .input_q = input_tensor_q,
-        .input_k = input_tensor_k,
-        .input_v = input_tensor_v,
-        .joint_q = joint_tensor_q,
-        .joint_k = joint_tensor_k,
-        .joint_v = joint_tensor_v,
-        .gathered_k = persistent_output_buffer_k,
-        .gathered_v = persistent_output_buffer_v};
+        latent_v_head_dim.value_or(0),
+        kv_cache_num_layers,
+        kv_cache_layer_idx,
+        kv_pad_rotation_enabled);
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

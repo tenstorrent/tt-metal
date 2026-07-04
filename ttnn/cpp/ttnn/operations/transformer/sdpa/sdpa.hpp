@@ -95,6 +95,18 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_actual_isl = std::nullopt);
 
+// Trace-safe KV-cache addressing for ring_mla, mutually exclusive with the scalar kv_cache_batch_idx /
+// kv_actual_isl args. The cache slot and prior-valid KV length are read on-device from `tensor` (a uint32 DRAM
+// [slot_id, actual_start, actual_end]; element [2] is unused), so a captured trace replays across prefill
+// chunks without host re-patching. num_layers/layer_idx give the (user, layer)-major physical slot:
+// slot = tensor[0] * num_layers + layer_idx (mirrors update_padded_kv_cache). Defaults (1, 0) reduce to
+// tensor[0] -- a single-layer cache.
+struct KvCacheMetadata {
+    ttnn::Tensor tensor;
+    uint32_t num_layers = 1;
+    uint32_t layer_idx = 0;
+};
+
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_kv,
@@ -115,7 +127,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
-    std::optional<uint32_t> kv_actual_isl = std::nullopt);
+    std::optional<uint32_t> kv_actual_isl = std::nullopt,
+    // Trace-safe metadata path (see KvCacheMetadata above; mutually exclusive with the two scalar args).
+    const std::optional<KvCacheMetadata>& kv_cache_metadata = std::nullopt);
 
 struct ExecuteExpRingJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(

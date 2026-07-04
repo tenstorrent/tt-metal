@@ -4,13 +4,13 @@
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
+#include "kernels/dataflow/ring_joint_work_plan.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_id_sequencer.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -37,73 +37,22 @@ namespace {
 namespace ag_rt = ttnn::ring_attention_all_gather_async_detail;
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
-// Host-side summary of which ring-loop iterations do useful SDPA work. Bits are indexed by ring_iter,
-// not ring_id; kernels still advance their sync/ring-id sequence on every iter before checking the mask.
-struct RingWorkMasks {
-    uint32_t active_ring_iter_mask = 0;
-    uint32_t single_valid_kv_chunk_mask = 0;
-};
-
-struct RingWorkPlan {
-    RingWorkMasks masks;
-    uint32_t last_active_ring_iter = 0;
-};
-
-struct KVPadQMapping {
-    uint32_t q_pre_wrap_start_tile = 0;
-    uint32_t q_pre_wrap_tile_count = 0;
-    uint32_t q_post_wrap_start_tile = 0;
-    uint32_t q_valid_tile_count = 0;
-};
-
-struct TileSegment {
-    uint32_t start_tile = 0;
-    uint32_t tile_count = 0;
-};
-
-struct RingJointRuntimeValues {
-    uint32_t logical_nt = 0;
-    uint32_t active_ring_iter_mask = 0;
-    uint32_t single_valid_kv_chunk_mask = 0;
-    KVPadQMapping kv_pad_q_mapping;
-};
-
 struct RingJointRuntimePlan {
     uint32_t logical_nt = 0;
-    KVPadQMapping kv_pad_q_mapping;
-    RingWorkPlan ring_work_plan;
     bool kernel_chunked = false;
     bool kernel_is_causal = false;
 };
 
-struct RingJointRuntimeDerivation {
-    uint32_t logical_nt = 0;
-    uint32_t ring_size = 0;
-    uint32_t q_local_padded_Nt = 0;
-    uint32_t kv_local_padded_Nt = 0;
-    uint32_t q_chunk_group_tile_count = 0;
-    uint32_t num_local_k_chunks = 0;
-    uint32_t k_chunk_tile_count = 0;
-    uint32_t num_joint_k_chunks = 0;
-    uint32_t joint_seq_len = 0;
-    bool kernel_chunked = false;
-    bool kv_pad_rotation_enabled = false;
-    bool kernel_is_causal = false;
-};
-
+// The reader/writer/compute kernels derive logical_nt / q-mapping / ring masks on-device for every path
+// (see ring_joint::build_ring_work_masks_device + the cb_kv_pad_derived reader->compute handoff), so the
+// only per-chunk runtime args left are logical_nt (static non-rotation source) and the no-trace-rotation
+// kv_actual_isl scalar (re-patched per dispatch on cache hits).
 struct RingJointRuntimeArgLayout {
     uint32_t reader_kv_cache_batch_idx = 0;
     uint32_t reader_logical_nt = 0;
-    uint32_t reader_active_ring_iter_mask = 0;
+    uint32_t reader_kv_actual_isl = 0;
     uint32_t writer_logical_nt = 0;
-    uint32_t writer_active_ring_iter_mask = 0;
-    uint32_t writer_single_valid_kv_chunk_mask = 0;
-    uint32_t compute_logical_nt = 0;
-    uint32_t compute_q_pre_wrap_start_tile = 0;
-    uint32_t compute_q_pre_wrap_tile_count = 0;
-    uint32_t compute_q_post_wrap_start_tile = 0;
-    uint32_t compute_q_valid_tile_count = 0;
-    uint32_t compute_active_ring_iter_mask = 0;
+    uint32_t writer_kv_actual_isl = 0;
     CoreCoord grid_size = {0, 0};
 };
 
@@ -112,6 +61,42 @@ struct RingWritePlan {
     uint32_t forward_writes_expected = 0;
     uint32_t backward_writes_expected = 0;
 };
+
+// The per-dispatch dynamic KV-cache mode, derived once from (attributes, tensor_args). Centralizes the
+// several rotation/slot predicates so program construction and runtime patching consume ONE source rather
+// than re-deriving near-synonym booleans (picking the wrong one is how the gather-extent bug slipped in).
+// The hash gate (attribute_values) can't consume this -- it has no tensor_args -- so it keeps the precomputed
+// kv_pad_rotation_enabled attribute; `derives_extent` is anchored to that attribute here.
+struct RingJointCacheMode {
+    // Cache slot read on-device from metadata[0] (else the host kv_cache_batch_idx scalar / no indexing).
+    bool slot_from_metadata = false;
+    // logical_nt / gather extent derived on-device from the live kv_actual (rotation) rather than baked.
+    bool derives_extent = false;
+    // Where the on-device kv_actual comes from when derives_extent is true.
+    enum class ExtentSource : uint8_t { kNone, kScalar, kMetadata };
+    ExtentSource extent_source = ExtentSource::kNone;
+
+    bool extent_from_metadata() const { return extent_source == ExtentSource::kMetadata; }
+    bool extent_from_scalar() const { return extent_source == ExtentSource::kScalar; }
+};
+
+RingJointCacheMode compute_cache_mode(
+    const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
+    RingJointCacheMode mode;
+    mode.slot_from_metadata = tensor_args.has_metadata();
+    const bool from_metadata = tensor_args.has_metadata() && tensor_args.is_chunked();
+    const bool from_scalar = args.has_kv_pad_rotation() && !from_metadata;
+    mode.extent_source = from_metadata ? RingJointCacheMode::ExtentSource::kMetadata
+                         : from_scalar ? RingJointCacheMode::ExtentSource::kScalar
+                                       : RingJointCacheMode::ExtentSource::kNone;
+    mode.derives_extent = args.kv_pad_rotation_enabled;  // the hashed source of truth
+    // The derived source and the hashed attribute must agree; a mismatch means the attribute was set with a
+    // formula that drifted from this one -- exactly the class of bug this struct exists to prevent.
+    TT_FATAL(
+        (mode.extent_source != RingJointCacheMode::ExtentSource::kNone) == mode.derives_extent,
+        "RingJointCacheMode: extent_source disagrees with kv_pad_rotation_enabled (attribute drift)");
+    return mode;
+}
 
 constexpr uint32_t kReaderKernelIndex = 0;
 constexpr uint32_t kWriterKernelIndex = 1;
@@ -141,7 +126,6 @@ constexpr uint32_t kRingJointChainMcastEnabledCompileArgOffset = ring_joint::kCh
 constexpr uint32_t kReaderBatchChainExtraArgCount = 1;
 constexpr uint32_t kReaderGQAChainExtraArgCount = 1;
 constexpr uint32_t kWriterBaseArgCount = 5;
-constexpr uint32_t kComputeRingSequencerArgCount = 6;
 
 struct CheckedRuntimeArgList {
     KernelDescriptor::RTArgList args;
@@ -170,99 +154,17 @@ struct CheckedRuntimeArgList {
     }
 };
 
-// Match the kernel's local-K to global-sequence tile mapping so the host can prune empty ring iters.
-uint32_t kv_global_tile_for_host_ring_plan(
-    bool is_chunked,
-    uint32_t ring_id,
-    uint32_t local_tile_start,
-    uint32_t q_chunk_group_tile_count,
-    uint32_t q_local_padded_tile_count,
-    uint32_t kv_local_padded_tile_count) {
-    if (is_chunked) {
-        return chunked_kv_global_tile_for_local(
-            ring_id, local_tile_start, q_chunk_group_tile_count, q_local_padded_tile_count);
-    }
-    return ring_id * kv_local_padded_tile_count + local_tile_start;
-}
-
-// Build the per-device ring-loop masks passed to reader/compute/writer. This mirrors the kernel
-// ring-id order, marks ring_iter entries that have non-padded spatial or joint KV work, and applies
-// the same causal unbalanced skip rule used by compute.
-template <bool TrackLastActiveIter>
-RingWorkPlan build_ring_work_plan_impl(
-    const RingWritePlan& ring_write_plan, const RingJointRuntimeDerivation& derivation, bool is_balanced) {
-    RingWorkPlan plan;
-    RingIdSequencer seq(
-        ring_write_plan.device_index,
-        derivation.ring_size,
-        ring_write_plan.backward_writes_expected,
-        ring_write_plan.forward_writes_expected);
-    // RingIdSequencer accepts a sync callback for kernel semaphore waits. Host planning only needs the
-    // same ring-id sequence, so use a no-op callback.
-    auto noop_sync = [](uint32_t, uint32_t) {};
-
-    for (uint32_t ring_iter = 0; ring_iter < derivation.ring_size; ++ring_iter) {
-        const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
-        const bool joint_contributes =
-            ring_id == derivation.ring_size - 1 && derivation.num_joint_k_chunks > 0 && derivation.joint_seq_len != 0;
-        uint32_t valid_spatial_kv_chunks = 0;
-        for (uint32_t k_chunk = 0; k_chunk < derivation.num_local_k_chunks; ++k_chunk) {
-            const uint32_t local_tile_start = k_chunk * derivation.k_chunk_tile_count;
-            if (local_tile_start >= derivation.kv_local_padded_Nt) {
-                continue;
-            }
-            if (kv_global_tile_for_host_ring_plan(
-                    derivation.kernel_chunked,
-                    ring_id,
-                    local_tile_start,
-                    derivation.q_chunk_group_tile_count,
-                    derivation.q_local_padded_Nt,
-                    derivation.kv_local_padded_Nt) < derivation.logical_nt) {
-                valid_spatial_kv_chunks++;
-            }
-        }
-        const uint32_t valid_kv_chunks =
-            valid_spatial_kv_chunks + (joint_contributes ? derivation.num_joint_k_chunks : 0);
-        // Non-pad chunked prefill historically keeps every spatial ring iter active; KV-pad rotation
-        // tightens this to valid chunks so empty pad slabs can be skipped.
-        const bool has_kv_work =
-            (derivation.kernel_chunked && !derivation.kv_pad_rotation_enabled) || valid_spatial_kv_chunks > 0;
-        const bool ring_iter_does_work =
-            (has_kv_work || joint_contributes) &&
-            !(derivation.kernel_is_causal && ring_write_plan.device_index < ring_id && !is_balanced);
-        if (ring_iter_does_work) {
-            plan.masks.active_ring_iter_mask |= (1u << ring_iter);
-            if constexpr (TrackLastActiveIter) {
-                plan.last_active_ring_iter = ring_iter;
-            }
-        }
-        if (valid_kv_chunks <= 1) {
-            plan.masks.single_valid_kv_chunk_mask |= (1u << ring_iter);
-        }
-    }
-
-    return plan;
-}
-
-RingWorkMasks build_ring_work_masks(
-    const RingWritePlan& ring_write_plan, const RingJointRuntimeDerivation& derivation, bool is_balanced) {
-    return build_ring_work_plan_impl<false>(ring_write_plan, derivation, is_balanced).masks;
-}
-
-RingWorkPlan build_ring_work_plan(
-    const RingWritePlan& ring_write_plan, const RingJointRuntimeDerivation& derivation, bool is_balanced) {
-    return build_ring_work_plan_impl<true>(ring_write_plan, derivation, is_balanced);
-}
-
-KVPadQMapping build_kv_pad_q_mapping(
+// Validation-only. The kernels derive the live q-mapping on-device via
+// ring_joint::build_kv_pad_q_mapping_device, but the device path omits the host-only invariant checks (it
+// runs solely after a successful host create -- see the derivation header). This asserts them: the current
+// valid Q range [kv_actual_tile_count, logical_tile_count) fits one fixed global chunk-group, and the
+// resulting valid-Q tile count fits this device's local Q slab.
+void validate_kv_pad_q_mapping(
     uint32_t kv_actual_tile_count,
     uint32_t logical_tile_count,
     uint32_t ring_size,
     uint32_t q_local_padded_tile_count,
     uint32_t device_index) {
-    // The current Q range is [kv_actual_tile_count, logical_tile_count). In KV-pad rotation it is packed into
-    // this device's fixed Q tile slab, but it may straddle one global chunk-group boundary.
-    // Store the first-group segment followed by the optional next-group segment; padded rows stay invalid.
     const uint32_t q_chunk_group_tile_count = ring_size * q_local_padded_tile_count;
     const uint32_t first_group = kv_actual_tile_count / q_chunk_group_tile_count;
     const uint32_t last_group = (logical_tile_count - 1) / q_chunk_group_tile_count;
@@ -274,34 +176,15 @@ KVPadQMapping build_kv_pad_q_mapping(
         logical_tile_count - kv_actual_tile_count,
         q_chunk_group_tile_count);
 
-    const auto intersect_device_group = [&](uint32_t group) -> TileSegment {
-        const uint32_t block_start_tile = group * q_chunk_group_tile_count + device_index * q_local_padded_tile_count;
-        const uint32_t block_end_tile = block_start_tile + q_local_padded_tile_count;
-        const uint32_t start_tile = std::max(kv_actual_tile_count, block_start_tile);
-        const uint32_t end_tile = std::min(logical_tile_count, block_end_tile);
-        if (end_tile <= start_tile) {
-            return {};
-        }
-        return TileSegment{start_tile, end_tile - start_tile};
-    };
-
-    const TileSegment first_segment = intersect_device_group(first_group);
-    const TileSegment second_segment =
-        last_group == first_group ? TileSegment{} : intersect_device_group(first_group + 1);
-
-    KVPadQMapping mapping;
-    mapping.q_pre_wrap_start_tile = first_segment.start_tile;
-    mapping.q_pre_wrap_tile_count = first_segment.tile_count;
-    mapping.q_post_wrap_start_tile = second_segment.start_tile;
-    mapping.q_valid_tile_count = first_segment.tile_count + second_segment.tile_count;
+    const ring_joint::KvPadQMapping m = ring_joint::build_kv_pad_q_mapping_device(
+        kv_actual_tile_count, logical_tile_count, ring_size, q_local_padded_tile_count, device_index);
     TT_FATAL(
-        mapping.q_valid_tile_count <= q_local_padded_tile_count,
+        m.q_valid_tile_count <= q_local_padded_tile_count,
         "KV-pad-aware rotation mapped more valid Q tiles to this device than its local Q slab can hold. "
         "Got q_valid_tile_count={}, q_local_padded_tile_count={}, device_index={}",
-        mapping.q_valid_tile_count,
+        m.q_valid_tile_count,
         q_local_padded_tile_count,
         device_index);
-    return mapping;
 }
 
 RingWritePlan build_ring_write_plan(
@@ -312,11 +195,12 @@ RingWritePlan build_ring_write_plan(
     plan.device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
         tensor_args.input_q, coord, args.all_gather_operation_attributes.cluster_axis);
 
-    auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ttnn::ccl::get_forward_backward_configuration(
-        args.all_gather_operation_attributes.ring_size,
-        plan.device_index,
-        args.all_gather_operation_attributes.topology);
-    (void)dynamic_alternate;
+    // dynamic_alternate is unused here (the SDPA fusion fixes forward/backward roles at create time).
+    [[maybe_unused]] auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
+        ttnn::ccl::get_forward_backward_configuration(
+            args.all_gather_operation_attributes.ring_size,
+            plan.device_index,
+            args.all_gather_operation_attributes.topology);
     if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring && plan.device_index % 2 == 0) {
         std::swap(num_targets_forward, num_targets_backward);
     }
@@ -335,87 +219,22 @@ RingWritePlan build_ring_write_plan(
     return plan;
 }
 
-RingJointRuntimeDerivation build_runtime_derivation(
-    const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    const auto& q_shape = tensor_args.input_q.logical_shape();
-    const bool has_joint_tensors = tensor_args.joint_q.has_value();
-    const uint32_t k_chunk_size = args.get_k_chunk_size();
-    const uint32_t q_local_padded_N = q_shape[2];
-    const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
-    const uint32_t L = has_joint_tensors ? tensor_args.joint_q->logical_shape()[2] : 0;
-
-    RingJointRuntimeDerivation derivation;
-    derivation.logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
-    derivation.ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
-    derivation.q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
-    derivation.kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
-    derivation.q_chunk_group_tile_count = derivation.q_local_padded_Nt * derivation.ring_size;
-    derivation.num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
-    derivation.k_chunk_tile_count = k_chunk_size / tt::constants::TILE_HEIGHT;
-    derivation.num_joint_k_chunks = tt::div_up(L, k_chunk_size);
-    derivation.joint_seq_len = L;
-    // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
-    // non-chunked path.
-    derivation.kernel_chunked = tensor_args.is_chunked() && !args.is_cross;
-    derivation.kv_pad_rotation_enabled = args.has_kv_pad_rotation();
-    derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
-
-    TT_FATAL(
-        derivation.ring_size <= std::numeric_limits<uint32_t>::digits,
-        "Ring-joint host ring-work masks support up to {} ring iterations. Got ring_size={}",
-        std::numeric_limits<uint32_t>::digits,
-        derivation.ring_size);
-
-    return derivation;
-}
-
 RingJointRuntimePlan build_runtime_plan(
-    const ttnn::prim::RingJointSDPAParams& args,
-    const ttnn::prim::RingJointSDPAInputs& tensor_args,
-    const RingWritePlan& ring_write_plan) {
-    const RingJointRuntimeDerivation derivation = build_runtime_derivation(args, tensor_args);
+    const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
+    const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
+    TT_FATAL(
+        ring_size <= std::numeric_limits<uint32_t>::digits,
+        "Ring-joint device ring-work masks (a uint32 bitmask) support up to {} ring iterations. Got ring_size={}",
+        std::numeric_limits<uint32_t>::digits,
+        ring_size);
 
     RingJointRuntimePlan plan;
-    plan.logical_nt = derivation.logical_nt;
-    const uint32_t kv_actual_tile_count =
-        derivation.kv_pad_rotation_enabled ? args.kv_actual_isl.value() / tt::constants::TILE_HEIGHT : 0;
-    if (derivation.kv_pad_rotation_enabled) {
-        plan.kv_pad_q_mapping = build_kv_pad_q_mapping(
-            kv_actual_tile_count,
-            derivation.logical_nt,
-            derivation.ring_size,
-            derivation.q_local_padded_Nt,
-            ring_write_plan.device_index);
-    }
-
-    plan.ring_work_plan = build_ring_work_plan(ring_write_plan, derivation, args.is_balanced);
-    plan.kernel_chunked = derivation.kernel_chunked;
-    plan.kernel_is_causal = derivation.kernel_is_causal;
+    plan.logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
+    // Cross is non-causal on chunked-shaped tensors, so the kernels use the non-chunked path; the
+    // kernel-level causal flag then carries the legacy local-frame causal-stamp semantics.
+    plan.kernel_chunked = tensor_args.is_chunked() && !args.is_cross;
+    plan.kernel_is_causal = args.is_causal && !plan.kernel_chunked;
     return plan;
-}
-
-RingJointRuntimeValues build_runtime_values(
-    const ttnn::prim::RingJointSDPAParams& args,
-    const ttnn::prim::RingJointSDPAInputs& tensor_args,
-    const ttnn::MeshCoordinate& coord) {
-    const RingWritePlan ring_write_plan = build_ring_write_plan(args, tensor_args, coord);
-    const RingJointRuntimeDerivation derivation = build_runtime_derivation(args, tensor_args);
-
-    RingJointRuntimeValues values;
-    values.logical_nt = derivation.logical_nt;
-    if (derivation.kv_pad_rotation_enabled) {
-        const uint32_t kv_actual_tile_count = args.kv_actual_isl.value() / tt::constants::TILE_HEIGHT;
-        values.kv_pad_q_mapping = build_kv_pad_q_mapping(
-            kv_actual_tile_count,
-            derivation.logical_nt,
-            derivation.ring_size,
-            derivation.q_local_padded_Nt,
-            ring_write_plan.device_index);
-    }
-    const RingWorkMasks ring_work_masks = build_ring_work_masks(ring_write_plan, derivation, args.is_balanced);
-    values.active_ring_iter_mask = ring_work_masks.active_ring_iter_mask;
-    values.single_valid_kv_chunk_mask = ring_work_masks.single_valid_kv_chunk_mask;
-    return values;
 }
 
 RingJointRuntimeArgLayout get_runtime_arg_layout(
@@ -441,16 +260,11 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     layout.reader_kv_cache_batch_idx = kReaderBaseBufferArgCount + joint_buffer_args + 2;
     layout.reader_logical_nt = kReaderBaseBufferArgCount + joint_buffer_args + kReaderQWorkArgCount +
                                kRingJointChainConfigArgCount + batch_chain_args + gqa_chain_args;
-    layout.reader_active_ring_iter_mask = layout.reader_logical_nt + 1;
+    // No-trace rotation only: kv_actual_isl scalar follows logical_nt, before the fused-op signaler args
+    // (the kernel reads it there when kv_pad_from_scalar). Index is unused on other paths.
+    layout.reader_kv_actual_isl = layout.reader_logical_nt + 1;
     layout.writer_logical_nt = kWriterBaseArgCount;
-    layout.writer_active_ring_iter_mask = layout.writer_logical_nt + 1;
-    layout.writer_single_valid_kv_chunk_mask = layout.writer_active_ring_iter_mask + 1;
-    layout.compute_logical_nt = kComputeRingSequencerArgCount;
-    layout.compute_q_pre_wrap_start_tile = layout.compute_logical_nt + 1;
-    layout.compute_q_pre_wrap_tile_count = layout.compute_q_pre_wrap_start_tile + 1;
-    layout.compute_q_post_wrap_start_tile = layout.compute_q_pre_wrap_tile_count + 1;
-    layout.compute_q_valid_tile_count = layout.compute_q_post_wrap_start_tile + 1;
-    layout.compute_active_ring_iter_mask = layout.compute_q_valid_tile_count + 1;
+    layout.writer_kv_actual_isl = layout.writer_logical_nt + 1;
     return layout;
 }
 
@@ -460,109 +274,71 @@ void write_runtime_arg(RuntimeArgsData& args, uint32_t index, uint32_t value, co
     args[index] = value;
 }
 
-// Tile-rows of the latent KV the fused all-gather must move for this chunk: the first
-// ceil(logical_n / chunk_global) block-cyclic slabs (a contiguous per-device page prefix), so an
-// oversized (growing) KV cache only moves kv_actual-sized data. Returns nullopt when KV-pad rotation
-// is off (gather the full input). Shared by the descriptor-create path (so the first / cache-miss
-// dispatch is bounded) and the cache-hit override path.
-std::optional<uint32_t> compute_gather_valid_Ht(
-    const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    if (!args.has_kv_pad_rotation()) {
-        return std::nullopt;
-    }
-    const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
-    const uint32_t n_local_q = tensor_args.input_q.padded_shape()[2];  // per-device Q slab (chunk_local)
-    const uint32_t chunk_global = n_local_q * ring_size;
-    const uint32_t valid_slabs = (static_cast<uint32_t>(args.logical_n) + chunk_global - 1) / chunk_global;
-    return valid_slabs * (n_local_q / tt::constants::TILE_HEIGHT);
-}
-
 void apply_ring_joint_scalar_runtime_args(
     Program& program,
     const ttnn::prim::RingJointSDPAParams& args,
     const ttnn::prim::RingJointSDPAInputs& tensor_args,
-    const ttnn::MeshCoordinate& mesh_dispatch_coordinate) {
+    [[maybe_unused]] const ttnn::MeshCoordinate& mesh_dispatch_coordinate) {
+    // This patches only the host-scalar path. Under metadata the slot + kv_actual come from the tensor
+    // (read on-device), so both predicates are false and we early-return; the rotation predicate is routed
+    // through the shared RingJointCacheMode so it can't drift from the program-factory derivation.
+    const RingJointCacheMode cache_mode = compute_cache_mode(args, tensor_args);
     const bool patch_indexed_kv_cache = args.has_indexed_kv_cache();
-    const bool patch_kv_pad_rotation = args.has_kv_pad_rotation();
+    const bool patch_kv_pad_rotation = cache_mode.extent_from_scalar();
     if (!patch_indexed_kv_cache && !patch_kv_pad_rotation) {
         return;
     }
 
-    const RingJointRuntimeValues values = patch_kv_pad_rotation
-                                              ? build_runtime_values(args, tensor_args, mesh_dispatch_coordinate)
-                                              : RingJointRuntimeValues{};
+    // No-trace rotation now derives logical_nt / q-mapping / masks on-device in the kernels from the
+    // per-core kv_actual_isl scalar; the host only re-patches that single scalar per dispatch (compute
+    // reads the reader's on-device derivation via cb_kv_pad_derived, so it needs no per-dispatch patch).
     const RingJointRuntimeArgLayout layout = get_runtime_arg_layout(args, tensor_args);
     const uint32_t num_cores = layout.grid_size.x * layout.grid_size.y;
     const uint32_t kv_cache_batch_idx = args.kv_cache_batch_idx.value_or(0);
+    const uint32_t kv_actual_isl_value = args.kv_actual_isl.value_or(0);
 
-    // Gather inputs (K, plus V when it isn't the latent-V alias of K). Shared by the indexed-slot
-    // and valid-pages patches below.
-    const Tensor& input_k = tensor_args.input_k;
-    const uint32_t num_ag_inputs = tensor_args.has_latent_v() ? 1u : (tensor_args.input_v.has_value() ? 2u : 1u);
-    const std::array<const Tensor*, 2> ag_inputs = {
-        &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
-
-    // Re-patch the fused all-gather readers to gather the single cache slot `kv_cache_batch_idx`.
-    // input_batch_base is uniform across all gather cores/links, so patch every core that runs the
-    // reader. Mirrors the helper's create-time arithmetic so miss and hit paths agree.
-    if (patch_indexed_kv_cache) {
-        const auto patch_all_gather_reader = [&](uint32_t kernel_id) {
+    // Re-patch the fused all-gather scalar derivation inputs (per-core, the proven mechanism). The AG
+    // readers/writer derive the single-slot gather offset (input_batch_base, from the cache slot) and the
+    // gather extent (from kv_actual) on-device from these two scalars, so updating just slot + kv_actual
+    // replaces the former per-core input_batch_base / valid_pages loops (the derivation math moves into the
+    // kernel). Sentinel 0xFFFFFFFF => that field is inactive (indexed-only or rotation-only). The scalar
+    // args sit right after the per-input descriptors + tensor accessors (before the optional signaler),
+    // matching the helper's emission order. Only the scalar path patches these; the metadata/trace path
+    // never enters here (neither patch flag is set under metadata).
+    if (!tensor_args.has_metadata()) {
+        constexpr uint32_t kScalarMetaInactive = 0xFFFFFFFFu;
+        const uint32_t ag_slot = patch_indexed_kv_cache ? kv_cache_batch_idx : kScalarMetaInactive;
+        const uint32_t ag_kv = patch_kv_pad_rotation ? kv_actual_isl_value : kScalarMetaInactive;
+        const uint32_t num_ag_inputs = tensor_args.has_latent_v() ? 1u : (tensor_args.input_v.has_value() ? 2u : 1u);
+        // Shared layout helpers (see ring_attention_all_gather_async_detail) so this re-patch and the AG
+        // arg emission use one source of truth for where [slot, kv_actual] (reader) / [kv_actual] (writer) land.
+        const uint32_t reader_slot_idx = ag_rt::reader_scalar_arg_index(num_ag_inputs);
+        const uint32_t writer_kv_idx = ag_rt::writer_scalar_arg_index(num_ag_inputs);
+        const auto patch_reader_scalar = [&](uint32_t kernel_id) {
             auto& grid_args = GetRuntimeArgs(program, kernel_id);  // [x][y] per-core args
             for (auto& col_args : grid_args) {
                 for (auto& core_args : col_args) {
-                    for (uint32_t in = 0; in < num_ag_inputs; ++in) {
-                        const auto& shape = ag_inputs[in]->padded_shape();
-                        const uint32_t num_heads = shape[1];
-                        const uint32_t Ht = shape[2] / tt::constants::TILE_WIDTH;
-                        const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
-                        const uint32_t input_batch_base =
-                            ag_rt::input_batch_base_pages(kv_cache_batch_idx, num_heads, Ht, Wt);
-                        const uint32_t idx = ag_rt::kReaderRuntimeArgHeaderCount +
-                                             in * ag_rt::kTensorDescriptorFieldCount +
-                                             ag_rt::kInputBatchBaseFieldOffset;
-                        if (core_args.size() > idx) {  // skip cores that don't run this kernel
-                            write_runtime_arg(core_args, idx, input_batch_base, "all_gather_reader.input_batch_base");
-                        }
+                    if (core_args.size() > reader_slot_idx + 1) {  // skip cores that don't run this kernel
+                        write_runtime_arg(core_args, reader_slot_idx, ag_slot, "all_gather_reader.slot");
+                        write_runtime_arg(core_args, reader_slot_idx + 1, ag_kv, "all_gather_reader.kv_actual");
                     }
                 }
             }
         };
-        patch_all_gather_reader(kAllGatherReaderForwardKernelIndex);
-        patch_all_gather_reader(kAllGatherReaderBackwardKernelIndex);
-    }
-
-    // Bound the fused all-gather to the logical_n-valid slab prefix so an oversized (growing) KV
-    // cache only moves kv_actual-sized data instead of the whole physical buffer. The cache is
-    // block-cyclic / slab-major per device, so the valid tokens are the first
-    // ceil(logical_n / chunk_global) slabs == a contiguous page prefix. valid_pages is uniform
-    // across cores/links/devices, so producer/consumer page counts and the ring slice protocol stay
-    // matched (the AG kernels clamp input_tile_id_end to it). Patch readers AND writers — both key
-    // their loops off input_tile_id_end — at their respective header offsets (3 vs 5).
-    const std::optional<uint32_t> gather_valid_Ht = compute_gather_valid_Ht(args, tensor_args);
-    if (gather_valid_Ht.has_value()) {
-        const auto patch_all_gather_valid_pages = [&](uint32_t kernel_id, uint32_t header_count) {
-            auto& grid_args = GetRuntimeArgs(program, kernel_id);  // [x][y] per-core args
+        const auto patch_writer_scalar = [&](uint32_t kernel_id) {
+            auto& grid_args = GetRuntimeArgs(program, kernel_id);
             for (auto& col_args : grid_args) {
                 for (auto& core_args : col_args) {
-                    for (uint32_t in = 0; in < num_ag_inputs; ++in) {
-                        const auto& shape = ag_inputs[in]->padded_shape();
-                        const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
-                        const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
-                        const uint32_t valid_Ht = std::min(*gather_valid_Ht, Ht);
-                        const uint32_t valid_pages = valid_Ht * Wt;
-                        const uint32_t idx =
-                            header_count + in * ag_rt::kTensorDescriptorFieldCount + ag_rt::kValidPagesFieldOffset;
-                        if (core_args.size() > idx) {  // skip cores that don't run this kernel
-                            write_runtime_arg(core_args, idx, valid_pages, "all_gather.valid_pages");
-                        }
+                    if (core_args.size() > writer_kv_idx) {
+                        write_runtime_arg(core_args, writer_kv_idx, ag_kv, "all_gather_writer.kv_actual");
                     }
                 }
             }
         };
-        patch_all_gather_valid_pages(kAllGatherReaderForwardKernelIndex, ag_rt::kReaderRuntimeArgHeaderCount);
-        patch_all_gather_valid_pages(kAllGatherReaderBackwardKernelIndex, ag_rt::kReaderRuntimeArgHeaderCount);
-        patch_all_gather_valid_pages(kAllGatherWriterForwardKernelIndex, ag_rt::kWriterRuntimeArgHeaderCount);
-        patch_all_gather_valid_pages(kAllGatherWriterBackwardKernelIndex, ag_rt::kWriterRuntimeArgHeaderCount);
+        patch_reader_scalar(kAllGatherReaderForwardKernelIndex);
+        patch_reader_scalar(kAllGatherReaderBackwardKernelIndex);
+        patch_writer_scalar(kAllGatherWriterForwardKernelIndex);
+        patch_writer_scalar(kAllGatherWriterBackwardKernelIndex);
     }
 
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -584,52 +360,11 @@ void apply_ring_joint_scalar_runtime_args(
             continue;
         }
 
-        write_runtime_arg(reader_args, layout.reader_logical_nt, values.logical_nt, "reader.logical_nt");
-        write_runtime_arg(
-            reader_args,
-            layout.reader_active_ring_iter_mask,
-            values.active_ring_iter_mask,
-            "reader.active_ring_iter_mask");
-
+        // Re-patch only the kv_actual_isl scalar; the reader/writer re-derive logical_nt / q-mapping /
+        // masks on-device from it, and the reader hands the derived subset to compute via cb_kv_pad_derived.
+        write_runtime_arg(reader_args, layout.reader_kv_actual_isl, kv_actual_isl_value, "reader.kv_actual_isl");
         auto& writer_args = GetRuntimeArgs(program, kWriterKernelIndex, core);
-        write_runtime_arg(writer_args, layout.writer_logical_nt, values.logical_nt, "writer.logical_nt");
-        write_runtime_arg(
-            writer_args,
-            layout.writer_active_ring_iter_mask,
-            values.active_ring_iter_mask,
-            "writer.active_ring_iter_mask");
-        write_runtime_arg(
-            writer_args,
-            layout.writer_single_valid_kv_chunk_mask,
-            values.single_valid_kv_chunk_mask,
-            "writer.single_valid_kv_chunk_mask");
-
-        write_runtime_arg(compute_args, layout.compute_logical_nt, values.logical_nt, "compute.logical_nt");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_q_pre_wrap_start_tile,
-            values.kv_pad_q_mapping.q_pre_wrap_start_tile,
-            "compute.q_pre_wrap_start_tile");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_q_pre_wrap_tile_count,
-            values.kv_pad_q_mapping.q_pre_wrap_tile_count,
-            "compute.q_pre_wrap_tile_count");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_q_post_wrap_start_tile,
-            values.kv_pad_q_mapping.q_post_wrap_start_tile,
-            "compute.q_post_wrap_start_tile");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_q_valid_tile_count,
-            values.kv_pad_q_mapping.q_valid_tile_count,
-            "compute.q_valid_tile_count");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_active_ring_iter_mask,
-            values.active_ring_iter_mask,
-            "compute.active_ring_iter_mask");
+        write_runtime_arg(writer_args, layout.writer_kv_actual_isl, kv_actual_isl_value, "writer.kv_actual_isl");
     }
 }
 
@@ -776,7 +511,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
 
     // q_local_padded_N (Q rows per device) can be shorter than kv_local_padded_N for chunked prefill.
-    const bool indexed_kv_cache = args.has_indexed_kv_cache();
+    // Indexed (single-slot) mode is also engaged on the trace-safe metadata path, where the slot is read
+    // on-device from metadata[0] instead of the host kv_cache_batch_idx scalar.
+    // Single derivation of the dynamic KV-cache mode; the predicates below are named views of it, so no call
+    // site re-derives (or picks the wrong) rotation/slot boolean -- see RingJointCacheMode.
+    const RingJointCacheMode cache_mode = compute_cache_mode(args, tensor_args);
+    const bool slot_from_metadata = cache_mode.slot_from_metadata;
+    const bool indexed_kv_cache = args.has_indexed_kv_cache() || slot_from_metadata;
     // Latent-V mode: V tensors are omitted; the reader reuses K's buffer and
     // reads only the first vDHt head-dim tiles.
     const uint32_t B = q_shape[0];
@@ -801,11 +542,29 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
-    const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation();
-    const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
+    // Named views of cache_mode (above). When derives_extent, the SDPA + AG kernels compute the per-chunk
+    // values (logical_nt / q-mapping / masks + AG input_batch_base + gather extent) on-device; the source
+    // (chunked metadata[1] vs re-patched scalar kv_actual) picks how kv_actual reaches them. Non-rotation
+    // bakes them here. derives_extent mirrors the hashed kv_pad_rotation_enabled attribute (checked in
+    // compute_cache_mode).
+    [[maybe_unused]] const bool kv_pad_from_metadata = cache_mode.extent_from_metadata();
+    const bool kv_pad_rotation_enabled = cache_mode.derives_extent;
+    const bool kv_pad_from_scalar = cache_mode.extent_from_scalar();
+    const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args);
+    // Semantic validation, kept out of build_runtime_plan (construction): the scalar rotation path relies on
+    // the current valid Q fitting one global chunk-group and q_valid <= the local Q slab -- the invariants the
+    // on-device derivation assumes. The metadata path derives + validates entirely on-device (kv_actual_isl
+    // absent here).
+    if (args.kv_actual_isl.has_value()) {
+        validate_kv_pad_q_mapping(
+            args.kv_actual_isl.value() / tt::constants::TILE_HEIGHT,
+            runtime_plan.logical_nt,
+            ring_size,
+            q_local_padded_Nt,
+            ring_write_plan.device_index);
+    }
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(args, tensor_args);
     const uint32_t logical_nt = runtime_plan.logical_nt;
-    const KVPadQMapping& kv_pad_q_mapping = runtime_plan.kv_pad_q_mapping;
 
     /*
     For non-causal case we must provide a padded mask if the K sequence length has been padded
@@ -822,10 +581,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // group size below is that Q-sized region across all devices.
     // diagonal-tile CB slot is shared with is_causal — needed whenever either is on.
     const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * ring_size;
-    // kernel_chunked drives the chunked-prefill math in the kernels and the host ring-work planner.
-    // Cross runs the non-causal full-prefill path on chunked-shaped tensors, so it is excluded; the
-    // kernel-level is_causal flag carries the legacy local-frame causal-stamp semantics (chunked
-    // prefill supersedes it via absolute-coords stamps). Both are derived once in build_runtime_plan.
+    // kernel_chunked drives the chunked-prefill math in the kernels (which derive the ring-work masks
+    // on-device). Cross uses the non-chunked path (excluded from kernel_chunked); the kernel-level is_causal
+    // flag then carries the legacy local-frame causal-stamp semantics. Both derived in build_runtime_plan.
     const bool kernel_chunked = runtime_plan.kernel_chunked;
     const bool kernel_is_causal = runtime_plan.kernel_is_causal;
     const bool diag_tile_enabled = args.is_causal || kernel_chunked;
@@ -1124,16 +882,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // so the zigzag asymmetry doesn't apply — gate on kernel_is_causal, not args.is_causal.
     const bool enable_zigzag_balancing = args.is_balanced && kernel_is_causal && (num_q_chunks % 2 == 0);
 
-    // The masks let kernels skip ring iterations that contain only padded KV, while preserving the
-    // per-iteration sync order described in RingWorkPlan.
-    const RingWorkPlan& ring_work_plan = runtime_plan.ring_work_plan;
-    const uint32_t active_ring_iter_mask = ring_work_plan.masks.active_ring_iter_mask;
-    const uint32_t last_active_ring_iter = ring_work_plan.last_active_ring_iter;
-    const uint32_t single_valid_kv_chunk_mask = ring_work_plan.masks.single_valid_kv_chunk_mask;
-    const uint32_t compile_time_active_ring_iter_mask = kv_pad_rotation_enabled ? 0 : active_ring_iter_mask;
-    const uint32_t compile_time_last_active_ring_iter = kv_pad_rotation_enabled ? 0 : last_active_ring_iter;
-    const uint32_t compile_time_single_valid_kv_chunk_mask = kv_pad_rotation_enabled ? 0 : single_valid_kv_chunk_mask;
-    const KVPadQMapping compile_time_kv_pad_q_mapping = kv_pad_rotation_enabled ? KVPadQMapping{} : kv_pad_q_mapping;
+    // The per-iteration ring-work masks (which iters do useful SDPA work; which chunk is the single valid
+    // one) and the KV-pad q-mapping are derived on-device in the reader/writer/compute for every path -- see
+    // ring_joint::build_ring_work_masks_device and the cb_kv_pad_derived handoff. The host computes no copy.
 
     // Cores actually issuing Q reads. When the flat q-chunk distribution is smaller
     // than the grid the trailing cores get zero work; zigzag distributes pairs, so
@@ -1172,9 +923,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         q_chunk_group_tile_count,
         static_cast<uint32_t>(indexed_kv_cache),
         static_cast<uint32_t>(kv_pad_rotation_enabled),
-        compile_time_active_ring_iter_mask,
-        NHV,
+        NHV,  // slot 29
         static_cast<uint32_t>(v_shares_k_buffer),
+        // Slot 31: trace-safe slot select. When set, the reader reads kv_cache_batch_idx from
+        // metadata[0] on-device (common runtime arg 0) instead of the per-core kv_cache_batch_idx arg.
+        static_cast<uint32_t>(slot_from_metadata),
+        // Slot 32: trace-safe KV-pad derivation. When set, the reader reads kv_actual_isl from
+        // metadata[1], derives logical_nt / q-mapping / ring masks on-device, overrides its own
+        // logical_nt+active_ring_iter_mask, and pushes the compute-needed values to cb_kv_pad_derived.
+        static_cast<uint32_t>(kv_pad_from_metadata),
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1186,6 +943,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TensorAccessorArgs(joint_tensor_q->buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(joint_tensor_k->buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(joint_tensor_v->buffer()).append_to(reader_compile_time_args);
+    }
+    // Metadata accessor follows the tensor accessors and precedes chain semaphore compile args. The reader
+    // uses this one accessor for metadata[0] (slot) and metadata[1] (kv_actual_isl).
+    if (slot_from_metadata) {
+        TensorAccessorArgs(tensor_args.metadata->buffer()).append_to(reader_compile_time_args);
     }
 
     /**
@@ -1293,14 +1055,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<std::uint32_t>(writer_out_row_group_h),
         static_cast<uint32_t>(kernel_chunked),
         q_chunk_group_tile_count,
-        compile_time_active_ring_iter_mask,
-        compile_time_last_active_ring_iter,
-        compile_time_single_valid_kv_chunk_mask,
+        // Slot 31: KV-pad derivation mode -- 0=none (host-provided runtime args), 1=metadata tensor (trace,
+        // NoC read), 2=scalar (no-trace, per-core kv_actual_isl runtime arg). The metadata accessor below is
+        // appended only in mode 1, so output accessors always start at slot 32.
+        static_cast<uint32_t>(kv_pad_from_metadata ? 1u : (kv_pad_from_scalar ? 2u : 0u)),
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
+    // Metadata accessor follows the output accessors (metadata path only); matches the writer kernel's
+    // meta_args_offset, gated on kv_pad_from_metadata. The writer reads kv_actual_isl = metadata[1] via the
+    // folded metadata tensor's accessor.
+    if (kv_pad_from_metadata) {
+        TensorAccessorArgs(tensor_args.metadata->buffer()).append_to(writer_compile_time_args);
+    }
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,
@@ -1345,13 +1114,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(kernel_chunked),
         q_chunk_group_tile_count,
         static_cast<uint32_t>(kv_pad_rotation_enabled),
-        compile_time_kv_pad_q_mapping.q_pre_wrap_start_tile,
-        compile_time_kv_pad_q_mapping.q_pre_wrap_tile_count,
-        compile_time_kv_pad_q_mapping.q_post_wrap_start_tile,
-        compile_time_kv_pad_q_mapping.q_valid_tile_count,
-        compile_time_active_ring_iter_mask,
-        compile_time_last_active_ring_iter,
-        static_cast<uint32_t>(v_shares_k_buffer)};
+        static_cast<uint32_t>(v_shares_k_buffer),
+        // Compute always consumes the reader's cb_kv_pad_derived handoff (logical_nt / q-mapping /
+        // active_ring_iter_mask) regardless of source; this flag just distinguishes the metadata NoC-read
+        // path (in the reader) from the scalar path.
+        static_cast<uint32_t>(kv_pad_from_metadata)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -1462,12 +1229,37 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t cb_signal =
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
 
+    // Per-chunk work-plan CB: reader hands logical_nt, q-mapping, and active_ring_iter_mask to compute.
+    // Compute reads it on every path, so allocate it unconditionally. 64B holds six uint32 values.
+    const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
+
     const std::vector<uint32_t> cb_compile_time_args = {
-        cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,    cb_identity_scale_in,
-        cb_stats_in, cb_prev_out, cb_col_identity, cb_recip_scratch, cb_sum_out,     cb_sum_in,
-        cb_signal,   cb_out,      cb_stats_out,    cb_qk_im,         cb_out_im_A,    cb_out_im_B,
-        cb_max_A,    cb_max_B,    cb_sum_A,        cb_sum_B,         cb_exp_max_diff};
-    const std::vector<uint32_t> reader_cb_compile_time_args = {cb_q_in, cb_k_in, cb_v_in};
+        cb_q_in,
+        cb_k_in,
+        cb_v_in,
+        cb_mask_in,
+        cb_scale_in,
+        cb_identity_scale_in,
+        cb_stats_in,
+        cb_prev_out,
+        cb_col_identity,
+        cb_recip_scratch,
+        cb_sum_out,
+        cb_sum_in,
+        cb_signal,
+        cb_out,
+        cb_stats_out,
+        cb_qk_im,
+        cb_out_im_A,
+        cb_out_im_B,
+        cb_max_A,
+        cb_max_B,
+        cb_sum_A,
+        cb_sum_B,
+        cb_exp_max_diff,
+        // index 23: compute reads the reader-produced KV-pad scalars from here (cb_arg_offset + 23).
+        cb_kv_pad_derived};
+    const std::vector<uint32_t> reader_cb_compile_time_args = {cb_q_in, cb_k_in, cb_v_in, cb_kv_pad_derived};
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
     writer_compile_time_args.insert(
@@ -2219,6 +2011,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
+    // Trace-safe slot select: the reader reads metadata[0] (and, when chunked, metadata[1]) on-device.
+    // Pass the metadata Buffer* as common runtime arg 0 so cache hits rebind the current tensor. The hash
+    // keys metadata presence, not the address; captured traces still need a persistent tensor allocation.
+    if (slot_from_metadata) {
+        // Common arg 0: folded metadata buffer. The reader reads metadata[0] and, when kv_pad_from_metadata,
+        // metadata[1] through the same accessor.
+        // Common args 1/2: (user, layer)-major slot factor -- slot = metadata[0] * kv_cache_num_layers +
+        // kv_cache_layer_idx (matches update_padded_kv_cache); hashed per layer, so plain uint32. Defaults
+        // (1, 0) reduce the slot to metadata[0].
+        reader_kernel.emplace_common_runtime_args(
+            {tensor_args.metadata->buffer(), args.kv_cache_num_layers, args.kv_cache_layer_idx});
+    }
 
     KernelDescriptor writer_kernel{};
     writer_kernel.kernel_source =
@@ -2228,6 +2032,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
+    // Trace-safe KV-pad derivation: the writer reads kv_actual_isl = metadata[1] on-device. Pass the metadata
+    // Buffer* (not its raw address) as common runtime arg 0 so the address is re-patched on cache hits across
+    // distinct metadata tensors (mirrors the reader).
+    if (kv_pad_from_metadata) {
+        writer_kernel.emplace_common_runtime_args({tensor_args.metadata->buffer()});
+    }
 
     KernelDescriptor compute_kernel{};
     compute_kernel.kernel_source =
@@ -2319,9 +2129,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             reader_args.push_back(gqa_chain_max_q[i]);  // For GQA K/V mcast loop padding (per row).
         }
 
+        // logical_nt is the static non-rotation source; the reader derives q-mapping + ring masks on-device
+        // (from it, or from kv_actual on the rotation paths) and hands the compute-needed values over via
+        // cb_kv_pad_derived. active_ring_iter_mask / single_valid_kv_chunk_mask are no longer runtime args.
         reader_args.push_checked(runtime_arg_layout.reader_logical_nt, logical_nt, "reader.logical_nt");
-        reader_args.push_checked(
-            runtime_arg_layout.reader_active_ring_iter_mask, active_ring_iter_mask, "reader.active_ring_iter_mask");
+        if (kv_pad_from_scalar) {
+            // No-trace rotation: the reader derives logical_nt / q-mapping / masks on-device from this scalar
+            // (re-patched per dispatch by apply_ring_joint_scalar_runtime_args).
+            reader_args.push_checked(
+                runtime_arg_layout.reader_kv_actual_isl, args.kv_actual_isl.value_or(0), "reader.kv_actual_isl");
+        }
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         std::vector<uint32_t> reader_signaler_args;
@@ -2337,13 +2154,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         writer_args.push_back(stats_buf);
         writer_args.push_back(global_q_start);
         writer_args.push_back(global_q_end);
+        // See reader above: masks are derived on-device; only logical_nt (+ the scalar) remain runtime args.
         writer_args.push_checked(runtime_arg_layout.writer_logical_nt, logical_nt, "writer.logical_nt");
-        writer_args.push_checked(
-            runtime_arg_layout.writer_active_ring_iter_mask, active_ring_iter_mask, "writer.active_ring_iter_mask");
-        writer_args.push_checked(
-            runtime_arg_layout.writer_single_valid_kv_chunk_mask,
-            single_valid_kv_chunk_mask,
-            "writer.single_valid_kv_chunk_mask");
+        if (kv_pad_from_scalar) {
+            writer_args.push_checked(
+                runtime_arg_layout.writer_kv_actual_isl, args.kv_actual_isl.value_or(0), "writer.kv_actual_isl");
+        }
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
@@ -2357,25 +2173,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compute_args.push_back(device_index);
         compute_args.push_back(forward_writes_expected);
         compute_args.push_back(backward_writes_expected);
-        compute_args.push_checked(runtime_arg_layout.compute_logical_nt, logical_nt, "compute.logical_nt");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_q_pre_wrap_start_tile,
-            kv_pad_q_mapping.q_pre_wrap_start_tile,
-            "compute.q_pre_wrap_start_tile");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_q_pre_wrap_tile_count,
-            kv_pad_q_mapping.q_pre_wrap_tile_count,
-            "compute.q_pre_wrap_tile_count");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_q_post_wrap_start_tile,
-            kv_pad_q_mapping.q_post_wrap_start_tile,
-            "compute.q_post_wrap_start_tile");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_q_valid_tile_count,
-            kv_pad_q_mapping.q_valid_tile_count,
-            "compute.q_valid_tile_count");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
+        // Compute takes no per-chunk work-plan runtime args: it reads logical_nt / q-mapping /
+        // active_ring_iter_mask from the reader's cb_kv_pad_derived handoff (for every path), so a captured
+        // trace replays across chunks without host re-patching.
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 
@@ -2400,10 +2200,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         all_gather_input_tensors.push_back(input_tensor_v);
         all_gather_output_tensors.push_back(gathered_input_tensor_v);
     }
-    // Append the all-gather portion to `desc`. Buffer addresses are auto-patched on cache hits; the
-    // indexed-mode input_batch_base scalar is re-patched in apply_ring_joint_scalar_runtime_args.
+    // Append the all-gather portion to `desc`. Buffer addresses are auto-patched on cache hits; scalar
+    // derivation inputs are patched in apply_ring_joint_scalar_runtime_args.
+    // Single-slot gather is engaged whenever the op is in indexed mode -- either a host kv_cache_batch_idx
+    // (scalar path) or a metadata tensor (trace-safe path, where the slot is read on-device from
+    // metadata[0]). On the metadata path the host slot is absent, so pass a valid placeholder (0) to turn
+    // on single-slot structure; the all-gather reader recomputes the real offset from metadata.
+    const bool ag_indexed = args.has_indexed_kv_cache() || tensor_args.has_metadata();
+    const std::optional<uint32_t> gather_slice_idx =
+        ag_indexed ? std::optional<uint32_t>(args.kv_cache_batch_idx.value_or(0)) : std::nullopt;
     // The trailing kv_cache_batch_idx makes the gather collect only that cache slot (std::nullopt =>
-    // full batch).
+    // full batch). When metadata is supplied the readers read slot_id from metadata[0] on-device.
     ring_attention_all_gather_async_multi_core_with_workers_helper(
         desc,
         all_gather_input_tensors,
@@ -2421,11 +2228,28 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         all_gather_fused_op_signaler,
         args.ccl_core_grid_offset,
         args.all_gather_operation_attributes.core_allocation_strategy,
-        args.kv_cache_batch_idx,
-        // Bound the gather to the logical_n-valid prefix at create time so the first (cache-miss)
-        // dispatch moves only kv_actual-sized data, not the whole oversized cache. Re-patched per
-        // dispatch on cache hits in apply_ring_joint_scalar_runtime_args.
-        compute_gather_valid_Ht(args, tensor_args));
+        gather_slice_idx,
+        // Descriptor valid_pages is always full (nullopt): the rotation paths clamp from the live kv_actual
+        // on-device (a baked chunk-0 bound would cap later chunks -- the on-device clamp only shrinks
+        // input_tile_id_end), and the non-rotation path gathers its full, non-oversized input.
+        std::nullopt,
+        // Folded metadata tensor [slot, start, end]: the AG reader reads slot = metadata[0] and kv_actual =
+        // metadata[1] via one accessor (mode 1).
+        tensor_args.metadata,
+        // chunk_local_tiles: per-device Q slab in tiles, for the reader's on-device gather-extent recompute.
+        tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
+        // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
+        // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
+        args.kv_cache_num_layers,
+        args.kv_cache_layer_idx,
+        // No-trace scalar path: pass the cache slot + kv_actual as scalars so the AG readers/writer derive
+        // input_batch_base + gather extent on-device (per-core args, re-patched per dispatch). nullopt for a
+        // field the op isn't using, so the kernel leaves the create-time descriptor value untouched.
+        (args.has_indexed_kv_cache() && !tensor_args.has_metadata()) ? std::optional<uint32_t>(kv_cache_batch_idx)
+                                                                     : std::nullopt,
+        (args.has_kv_pad_rotation() && !tensor_args.has_metadata())
+            ? std::optional<uint32_t>(args.kv_actual_isl.value_or(0))
+            : std::nullopt);
 
     return desc;
 }

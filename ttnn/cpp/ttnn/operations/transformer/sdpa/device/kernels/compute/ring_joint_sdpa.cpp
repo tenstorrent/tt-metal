@@ -9,10 +9,14 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/cb_api.h"  // ckernel::read_tile_value (UNPACK-mailbox CB scalar read; no cb_interface)
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_work_plan.hpp"  // ring_joint::RingJointWorkPlanSlot
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 template <bool kv_pad_rotation_enabled>
 constexpr void assert_kv_pad_rotation_streaming_only() {
@@ -66,15 +70,7 @@ void kernel_main() {
     constexpr bool chunked_enabled = get_compile_time_arg_val(39) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(40);
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(41) == 1;
-    // Slots 42-47 are retained for compile-time arg index stability; live KV-pad Q mapping
-    // and active-ring masks are runtime args below.
-    constexpr uint32_t kv_pad_q_pre_wrap_start_tile_compile [[maybe_unused]] = get_compile_time_arg_val(42);
-    constexpr uint32_t kv_pad_q_pre_wrap_tile_count_compile [[maybe_unused]] = get_compile_time_arg_val(43);
-    constexpr uint32_t kv_pad_q_post_wrap_start_tile_compile [[maybe_unused]] = get_compile_time_arg_val(44);
-    constexpr uint32_t kv_pad_q_valid_tile_count_compile [[maybe_unused]] = get_compile_time_arg_val(45);
-    constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(46);
-    constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(47);
-    constexpr bool v_shares_k_buffer = get_compile_time_arg_val(48) == 1;
+    constexpr bool v_shares_k_buffer = get_compile_time_arg_val(42) == 1;
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
@@ -113,12 +109,13 @@ void kernel_main() {
     const uint32_t ring_index_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t forward_writes_expected = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_writes_expected = get_arg_val<uint32_t>(argidx++);
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_pad_q_pre_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_pad_q_pre_wrap_tile_count = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    // Per-chunk work plan: filled unconditionally from cb_kv_pad_derived below (reader-derived); not runtime args.
+    uint32_t logical_nt = 0;
+    uint32_t kv_pad_q_pre_wrap_start_tile = 0;
+    uint32_t kv_pad_q_pre_wrap_tile_count = 0;
+    uint32_t kv_pad_q_post_wrap_start_tile = 0;
+    uint32_t kv_pad_q_valid_tile_count = 0;
+    uint32_t active_ring_iter_mask = 0;
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
@@ -129,7 +126,13 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 49;
+    // Compute fixed slot 43: trace-safe KV-pad derivation flag; the CB compile args follow at cb_arg_offset.
+    constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(43) == 1;
+    // No-trace rotation reuses the exact same on-device derivation, sourced from a per-core scalar
+    // kv_actual_isl runtime arg (read + derived in the reader) instead of the metadata tensor. Compute is
+    // agnostic to the source: it consumes the reader's cb_kv_pad_derived handoff whenever either is active.
+    constexpr bool kv_pad_from_scalar = kv_pad_rotation_enabled && !kv_pad_from_metadata;
+    constexpr uint32_t cb_arg_offset = 44;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -156,6 +159,29 @@ void kernel_main() {
     constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 21);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
+    constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
+
+    // Per-chunk work plan from the reader: it derives logical_nt, q-mapping, and active_ring_iter_mask,
+    // then hands them over via cb_kv_pad_derived. The reader pushes this on every path, so compute has
+    // one source and no runtime fork.
+    {
+        // Read the reader-produced scalars via ckernel::read_tile_value (UNPACK-mailbox CB read) -- the
+        // TRISC-safe way to pull a scalar out of a CB, mirroring sparse_sdpa_compute's cb_ctrl. The
+        // CircularBuffer::get_read_ptr() path references the cb_interface global which does not link on
+        // this compute kernel. wait_front/pop_front are LLK intrinsics and link fine.
+        CircularBuffer cb_derived(cb_kv_pad_derived);
+        cb_derived.wait_front(1);
+        logical_nt = ckernel::read_tile_value(cb_kv_pad_derived, /*tile=*/0, ring_joint::kDerivedLogicalNt);
+        kv_pad_q_pre_wrap_start_tile =
+            ckernel::read_tile_value(cb_kv_pad_derived, 0, ring_joint::kDerivedQPreWrapStart);
+        kv_pad_q_pre_wrap_tile_count =
+            ckernel::read_tile_value(cb_kv_pad_derived, 0, ring_joint::kDerivedQPreWrapCount);
+        kv_pad_q_post_wrap_start_tile =
+            ckernel::read_tile_value(cb_kv_pad_derived, 0, ring_joint::kDerivedQPostWrapStart);
+        kv_pad_q_valid_tile_count = ckernel::read_tile_value(cb_kv_pad_derived, 0, ring_joint::kDerivedQValidCount);
+        active_ring_iter_mask = ckernel::read_tile_value(cb_kv_pad_derived, 0, ring_joint::kDerivedActiveRingIterMask);
+        cb_derived.pop_front(1);
+    }
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);

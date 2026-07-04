@@ -7,6 +7,7 @@ from typing import Optional
 import ttnn
 
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
+KvCacheMetadata = ttnn._ttnn.operations.transformer.KvCacheMetadata
 
 
 def _golden_function(

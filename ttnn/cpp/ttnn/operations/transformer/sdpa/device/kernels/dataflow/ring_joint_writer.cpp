@@ -10,7 +10,10 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
+#include "ring_joint_work_plan_device.hpp"  // ring_joint::derive_ring_work_plan (+ RingWorkConfig)
 #include "fused_op_receiver.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 // Eager-path reader: reads the previous ring iteration's normalized output and LSE from DRAM.
 // Used by the non-streaming (old sdpa_ring) path for sigmoid-based inter-iteration merging.
@@ -425,24 +428,32 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
     constexpr bool chunked_enabled = get_compile_time_arg_val(29) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(30);
-    // Slots 31-33 are retained for compile-time arg index stability; live ring-work masks
-    // are runtime args below.
-    constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(31);
-    constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(32);
-    constexpr uint32_t single_valid_kv_chunk_mask_compile [[maybe_unused]] = get_compile_time_arg_val(33);
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. The program factory masks kernel_is_causal off when chunked is on, so only one of
     // the two paths drives the stamp per program — but they share the CB slot layout.
     constexpr bool diag_tile_enabled = (is_causal == 1) || chunked_enabled;
+    // Slot 31: KV-pad derivation mode -- 0=none (host-provided runtime args), 1=metadata tensor (trace,
+    // NoC read of kv_actual_isl from common arg 0 = its DRAM addr), 2=scalar (no-trace, per-core
+    // kv_actual_isl runtime arg). The writer recomputes logical_nt + ring masks on-device in modes 1/2
+    // (it's a dataflow kernel). The metadata accessor is appended only in mode 1, so output accessors
+    // always start at compile-arg slot 32.
+    constexpr uint32_t kv_pad_derive_mode = get_compile_time_arg_val(31);
+    constexpr bool kv_pad_from_metadata = kv_pad_derive_mode == 1;
+    constexpr bool kv_pad_from_scalar = kv_pad_derive_mode == 2;
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and the joint_out_generator.
     constexpr bool has_joint_q = num_joint_q_chunks > 0;
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
 
-    constexpr auto out_args = TensorAccessorArgs<34>();
+    constexpr auto out_args = TensorAccessorArgs<32>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
+    // Metadata accessor (metadata path only) follows the output accessors and precedes the CB compile
+    // args; gate the offset on kv_pad_from_metadata so the no-metadata program never names a non-accessor
+    // compile arg (fall back to a valid unused accessor offset = out_args' slot 32).
+    constexpr uint32_t meta_args_offset = kv_pad_from_metadata ? stats_args.next_compile_time_args_offset() : 32;
+    constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -450,15 +461,26 @@ void kernel_main() {
     const uint32_t stats_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
-    const uint32_t single_valid_kv_chunk_mask = get_arg_val<uint32_t>(argidx++);
+    // logical_nt: static non-rotation value (runtime arg); recomputed on-device below from kv_actual_isl on
+    // the metadata/scalar rotation paths.
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    // Masks are derived on-device below for every path; not runtime args.
+    uint32_t active_ring_iter_mask = 0;
+    uint32_t single_valid_kv_chunk_mask = 0;
+    // No-trace rotation only: kv_actual_isl scalar (re-patched per dispatch). Placed here so the trailing
+    // fused-op signaler args stay contiguous; absent on all other paths.
+    uint32_t kv_actual_isl_scalar = 0;
+    if constexpr (kv_pad_from_scalar) {
+        kv_actual_isl_scalar = get_arg_val<uint32_t>(argidx++);
+    }
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
         argidx);
 
-    // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
-    constexpr uint32_t cb_arg_offset = stats_args.next_compile_time_args_offset();
+    // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm. The CB
+    // compile args start after the metadata accessor when it is present (kv_pad_from_metadata).
+    constexpr uint32_t cb_arg_offset =
+        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : stats_args.next_compile_time_args_offset();
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
@@ -477,6 +499,43 @@ void kernel_main() {
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
 
     Noc noc;
+
+    // Derive the per-chunk work plan once (mirrors the reader; single source in
+    // ring_joint_work_plan_device.hpp). ReadMetadata only on the rotation-metadata path (the writer needs no
+    // slot); Rotation derives logical_nt from kv_actual (else the static runtime arg). The writer consumes
+    // logical_nt + both ring masks; the q-mapping / cache_slot in the result are unused here. Metadata lands
+    // in cb_out's L1 scratch (free before the output loop).
+    {
+        constexpr ring_joint::RingWorkConfig ring_work_cfg{
+            .num_local_k_chunks = num_local_k_chunks,
+            .k_chunk_tile_count = Sk_chunk_t,
+            .kv_local_padded_Nt = kv_local_padded_Nt,
+            .kernel_chunked = chunked_enabled,
+            .q_chunk_group_tile_count = chunk_size_t,
+            .q_local_padded_Nt = q_local_padded_Nt,
+            .num_joint_k_chunks = num_joint_k_chunks,
+            .joint_seq_len = L,
+            .kv_pad_rotation_enabled = kv_pad_from_metadata || kv_pad_from_scalar,
+            .kernel_is_causal = is_causal != 0,
+            .is_balanced = is_balanced != 0,
+        };
+        const auto work_plan = ring_joint::derive_ring_work_plan < ring_work_cfg,
+                   /*ReadMetadata=*/kv_pad_from_metadata,
+                   /*Rotation=*/kv_pad_from_metadata ||
+                       kv_pad_from_scalar > (noc,
+                                             meta_args,
+                                             get_common_arg_val<uint32_t>(ring_joint::kMetadataAddrCommonArg),
+                                             CircularBuffer(cb_out),
+                                             kv_actual_isl_scalar,
+                                             logical_nt,
+                                             fused_op_receiver.seq.ring_index,
+                                             ring_size,
+                                             fused_op_receiver.seq.expected[0],   // backward_writes_expected
+                                             fused_op_receiver.seq.expected[1]);  // forward_writes_expected
+        logical_nt = work_plan.logical_nt;
+        active_ring_iter_mask = work_plan.masks.active_ring_iter_mask;
+        single_valid_kv_chunk_mask = work_plan.masks.single_valid_kv_chunk_mask;
+    }
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
     const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr);

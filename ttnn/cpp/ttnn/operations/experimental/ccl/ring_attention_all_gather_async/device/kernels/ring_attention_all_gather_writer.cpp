@@ -5,12 +5,15 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_metadata.hpp"  // read_ring_metadata
+#include <tt-metalium/constants.hpp>  // tt::constants::TILE_HEIGHT
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
@@ -39,10 +42,26 @@ constexpr uint32_t num_inputs = get_compile_time_arg_val(12);
 constexpr bool direction = get_compile_time_arg_val(13);  // 1 is forward, 0 is backward
 constexpr uint32_t unicast_route_arg0 = get_compile_time_arg_val(14);
 constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(15);
+// KV-pad derivation mode (slot 16): 0=none, 1=metadata (kv arg is a DRAM address read on-device),
+// 2=scalar (kv arg is a value re-patched per dispatch; 0xFFFFFFFF means inactive).
+// Metadata and scalar modes share two per-core args: kv_actual and chunk_local_tiles.
+// Mode 1 appends a metadata accessor; modes 0/2 do not, so output accessors stay stable.
+constexpr uint32_t kv_pad_derive_mode = get_compile_time_arg_val(16);
+constexpr bool has_metadata = kv_pad_derive_mode == 1;
+constexpr bool has_scalar_meta = kv_pad_derive_mode == 2;
+constexpr uint32_t kScalarMetaInactive = 0xFFFFFFFFu;
+// Metadata reads use cb_output scratch; cb_meta_id is kept only for standalone all-gather arg layout.
+constexpr uint32_t cb_meta_id [[maybe_unused]] = get_compile_time_arg_val(17);
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 16;
+    constexpr uint32_t page_size_base_idx = 18;
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
+    // Metadata accessor follows the output accessors (metadata path only); fall back to a valid (unused)
+    // accessor offset when absent so TensorAccessorArgs<> never names a non-accessor compile arg.
+    constexpr uint32_t kMetaArgsOffset = has_metadata
+                                             ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
+                                             : (page_size_base_idx + num_inputs);
+    constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
 
     ///////////////////////////////////////////////////
     // ARGS
@@ -85,6 +104,39 @@ void kernel_main() {
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
     arg_idx += num_inputs;
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
+
+    // Recompute valid_pages on-device with the same formula as the reader. Metadata/scalar modes share the
+    // kv_actual, chunk_local_tiles arg layout; only the kv_actual source differs.
+    // Derived paths use full descriptor valid_pages, so this live clamp controls the output loop.
+    Noc noc_obj;
+    if constexpr (has_metadata || has_scalar_meta) {
+        const uint32_t kv_arg = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t chunk_local_tiles = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t kv_actual = kv_arg;
+        bool clamp_extent = true;
+        if constexpr (has_metadata) {
+            // kv_arg is the metadata tensor address; read metadata[1] into cb_output scratch before output.
+            kv_actual =
+                ttnn::ring_attention::read_ring_metadata(noc_obj, meta_args, kv_arg, CircularBuffer(cb_output_id))
+                    .kv_actual;
+        } else {                  // has_scalar_meta: kv_actual is the value; sentinel => extent clamp inactive.
+            clamp_extent = kv_arg != kScalarMetaInactive;
+        }
+        if (clamp_extent) {
+            // Shared with the reader via compute_ring_gather_valid_Ht so the two clamps stay identical.
+            const uint32_t gather_valid_Ht = ttnn::ring_attention::compute_ring_gather_valid_Ht(
+                kv_actual, chunk_local_tiles, ring_size, tt::constants::TILE_HEIGHT);
+            for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+                const uint32_t valid_Ht =
+                    gather_valid_Ht < input_tensor_Ht[input_idx] ? gather_valid_Ht : input_tensor_Ht[input_idx];
+                const uint32_t valid_pages = valid_Ht * input_tensor_Wt[input_idx];
+                if (valid_pages < input_tile_id_end[input_idx]) {
+                    input_tile_id_end[input_idx] = valid_pages;
+                }
+            }
+        }
+    }
+
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
     /* Args for overlapped all gather */
@@ -95,7 +147,6 @@ void kernel_main() {
         op_signaler_sender = OpSignaler(arg_idx);
     }
 
-    Noc noc_obj;
     CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
     CircularBuffer cb_output(cb_output_id);
 

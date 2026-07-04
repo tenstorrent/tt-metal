@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
+#include "ring_joint_work_plan_device.hpp"  // ring_joint::derive_ring_work_plan (+ RingWorkConfig / slot enum)
 #include "chain_link.hpp"
 #include "fused_op_receiver.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
@@ -194,11 +195,9 @@ void kernel_main() {
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(26);
     constexpr bool indexed_kv_cache = get_compile_time_arg_val(27) == 1;
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(28) == 1;
-    // Slot 29 is retained for compile-time arg index stability; live active-ring mask is a runtime arg below.
-    constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(29);
-    constexpr uint32_t NHV = get_compile_time_arg_val(30);
+    constexpr uint32_t NHV = get_compile_time_arg_val(29);
     // Latent-V mode: absent V is materialized from the prefix of K tiles already in L1.
-    constexpr bool v_shares_k_buffer = get_compile_time_arg_val(31) == 1;
+    constexpr bool v_shares_k_buffer = get_compile_time_arg_val(30) == 1;
     constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     // In-place latent-V (single-tile Q): the compute kernel reads V straight from K^T, so the
@@ -212,7 +211,20 @@ void kernel_main() {
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
     constexpr bool has_joint_inputs = has_joint_q || has_joint_k;
 
-    constexpr auto q_args = TensorAccessorArgs<32>();
+    // Slot 31: trace-safe slot select. When set, kv_cache_batch_idx is read from metadata[0] on-device
+    // (common runtime arg 0 = the folded [slot, start, end] tensor's DRAM addr) instead of the per-core
+    // runtime arg, so a captured trace replays across cache slots. The metadata accessor follows the tensor
+    // accessors (compile-arg slot 32+).
+    constexpr bool slot_from_metadata = get_compile_time_arg_val(31) == 1;
+    // Slot 32: trace-safe KV-pad derivation. When set, the reader reads kv_actual_isl = metadata[1] from the
+    // same folded tensor (common runtime arg 0), derives logical_nt / q-mapping / ring masks on-device, and
+    // hands the compute-needed values to the compute kernel via cb_kv_pad_derived (compute cannot NoC-read
+    // the DRAM tensor).
+    constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(32) == 1;
+    // No-trace rotation: same on-device KV-pad derivation, but kv_actual_isl arrives as a per-core scalar
+    // runtime arg (re-patched per dispatch) instead of the metadata tensor. No NoC read, no new compile arg.
+    constexpr bool kv_pad_from_scalar = kv_pad_rotation_enabled && !kv_pad_from_metadata;
+    constexpr auto q_args = TensorAccessorArgs<33>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -220,6 +232,14 @@ void kernel_main() {
     constexpr uint32_t joint_tensor_args_offset = gathered_v_args.next_compile_time_args_offset();
     constexpr uint32_t post_tensor_args_offset =
         get_post_tensor_args_offset<has_joint_inputs, joint_tensor_args_offset>();
+    // One metadata accessor covers metadata[0] (slot) and metadata[1] (kv_actual_isl). It sits after the
+    // tensor accessors and before chain/CB compile args. Without metadata, use q_args' valid accessor offset
+    // so the unconditional TensorAccessorArgs<> instantiation does not name a non-accessor compile arg.
+    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 33;
+    constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();
+    // Chain/CB compile args start after the metadata accessor when present, else right after the tensors.
+    constexpr uint32_t chains_base_offset =
+        slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -237,7 +257,9 @@ void kernel_main() {
     }
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_cache_batch_idx = get_arg_val<uint32_t>(argidx++);
+    // Trace-safe slot select: kv_cache_batch_idx is read from metadata[0] on-device below (after the CB
+    // ids are known); the per-core arg here is a placeholder 0 on the metadata path.
+    uint32_t kv_cache_batch_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_per_core = global_q_end - global_q_start;
 
     // Head chain runtime args (always present)
@@ -257,8 +279,17 @@ void kernel_main() {
         gqa_max_q_per_core = get_arg_val<uint32_t>(argidx++);
     }
 
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    // logical_nt: static non-rotation value (runtime arg); recomputed on-device below from kv_actual_isl on
+    // the metadata/scalar rotation paths.
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    // active_ring_iter_mask is derived on-device below for every path; not a runtime arg.
+    uint32_t active_ring_iter_mask = 0;
+    // No-trace rotation only: kv_actual_isl scalar (re-patched per dispatch). Placed here so the trailing
+    // fused-op signaler args stay contiguous; absent on all other paths.
+    uint32_t kv_actual_isl_scalar = 0;
+    if constexpr (kv_pad_from_scalar) {
+        kv_actual_isl_scalar = get_arg_val<uint32_t>(argidx++);
+    }
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
         argidx);
@@ -272,17 +303,16 @@ void kernel_main() {
     constexpr uint32_t chain_compile_arg_count = ring_joint::kChainCompileArgCount;
 
     uint32_t head_sender_semaphore_id =
-        get_compile_time_arg_val(post_tensor_args_offset + chain_sender_semaphore_arg_offset);
+        get_compile_time_arg_val(chains_base_offset + chain_sender_semaphore_arg_offset);
     uint32_t head_receiver_semaphore_id =
-        get_compile_time_arg_val(post_tensor_args_offset + chain_receiver_semaphore_arg_offset);
-    uint32_t head_valid_semaphore_id =
-        get_compile_time_arg_val(post_tensor_args_offset + chain_valid_semaphore_arg_offset);
+        get_compile_time_arg_val(chains_base_offset + chain_receiver_semaphore_arg_offset);
+    uint32_t head_valid_semaphore_id = get_compile_time_arg_val(chains_base_offset + chain_valid_semaphore_arg_offset);
     constexpr bool head_mcast_enabled =
-        get_compile_time_arg_val(post_tensor_args_offset + chain_mcast_enabled_arg_offset) == 1;
+        get_compile_time_arg_val(chains_base_offset + chain_mcast_enabled_arg_offset) == 1;
     constexpr uint32_t head_chain_arg_count = chain_compile_arg_count;
     constexpr uint32_t batch_chain_arg_count = k_uses_batch_chain ? chain_compile_arg_count : 0;
     constexpr uint32_t gqa_chain_arg_count = gqa_grouped_kv ? chain_compile_arg_count : 0;
-    constexpr uint32_t batch_chain_ct_offset = post_tensor_args_offset + head_chain_arg_count;
+    constexpr uint32_t batch_chain_ct_offset = chains_base_offset + head_chain_arg_count;
     constexpr uint32_t gqa_chain_ct_offset = batch_chain_ct_offset + batch_chain_arg_count;
 
     // Batch chain semaphores (only present for non-GQA shared-K modes).
@@ -322,10 +352,66 @@ void kernel_main() {
     }
 
     constexpr uint32_t cb_arg_offset =
-        post_tensor_args_offset + head_chain_arg_count + batch_chain_arg_count + gqa_chain_arg_count;
+        chains_base_offset + head_chain_arg_count + batch_chain_arg_count + gqa_chain_arg_count;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
+
+    // Derive the per-chunk work plan once (read metadata + logical_nt / q-mapping / ring masks). ReadMetadata
+    // covers the slot (indexed cache) and/or kv_actual (rotation) coming from the tensor; Rotation derives
+    // logical_nt / q-mapping from kv_actual (else logical_nt is the static runtime arg). See
+    // ring_joint_work_plan_device.hpp. Metadata lands in cb_q_in's L1 scratch (not yet filled here).
+    Noc noc;
+    constexpr ring_joint::RingWorkConfig ring_work_cfg{
+        .num_local_k_chunks = num_local_k_chunks,
+        .k_chunk_tile_count = Sk_chunk_t,
+        .kv_local_padded_Nt = kv_local_padded_Nt,
+        .kernel_chunked = chunked_enabled,
+        .q_chunk_group_tile_count = chunk_size_t,
+        .q_local_padded_Nt = q_local_padded_Nt,
+        .num_joint_k_chunks = num_joint_k_chunks,
+        .joint_seq_len = L,
+        .kv_pad_rotation_enabled = kv_pad_rotation_enabled,
+        .kernel_is_causal = is_causal != 0,
+        .is_balanced = is_balanced != 0,
+    };
+    const auto work_plan = ring_joint::derive_ring_work_plan < ring_work_cfg,
+               /*ReadMetadata=*/slot_from_metadata || kv_pad_from_metadata,
+               /*Rotation=*/kv_pad_from_metadata ||
+                   kv_pad_from_scalar > (noc,
+                                         meta_args,
+                                         get_common_arg_val<uint32_t>(ring_joint::kMetadataAddrCommonArg),
+                                         CircularBuffer(cb_q_in),
+                                         kv_actual_isl_scalar,
+                                         logical_nt,
+                                         fused_op_receiver.seq.ring_index,
+                                         ring_size,
+                                         fused_op_receiver.seq.expected[0],   // backward_writes_expected
+                                         fused_op_receiver.seq.expected[1]);  // forward_writes_expected
+    logical_nt = work_plan.logical_nt;
+    active_ring_iter_mask = work_plan.masks.active_ring_iter_mask;
+    if constexpr (slot_from_metadata) {
+        // KV-cache batch dim is (user, layer)-major: cache_batch_idx = slot * kv_cache_num_layers +
+        // kv_cache_layer_idx (matches update_padded_kv_cache). Defaults (1, 0) reduce this to slot, keeping
+        // single-layer callers bit-identical.
+        const uint32_t kv_cache_num_layers = get_common_arg_val<uint32_t>(ring_joint::kKvCacheNumLayersCommonArg);
+        const uint32_t kv_cache_layer_idx = get_common_arg_val<uint32_t>(ring_joint::kKvCacheLayerIdxCommonArg);
+        kv_cache_batch_idx = work_plan.cache_slot * kv_cache_num_layers + kv_cache_layer_idx;
+    }
+    // Hand the compute-needed subset to compute via cb_kv_pad_derived (slot layout per RingJointWorkPlanSlot).
+    {
+        constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 3);
+        CircularBuffer cb_derived(cb_kv_pad_derived);
+        cb_derived.reserve_back(1);
+        CoreLocalMem<volatile uint32_t> d(cb_derived.get_write_ptr());
+        d[ring_joint::kDerivedLogicalNt] = work_plan.logical_nt;
+        d[ring_joint::kDerivedQPreWrapStart] = work_plan.q_mapping.q_pre_wrap_start_tile;
+        d[ring_joint::kDerivedQPreWrapCount] = work_plan.q_mapping.q_pre_wrap_tile_count;
+        d[ring_joint::kDerivedQPostWrapStart] = work_plan.q_mapping.q_post_wrap_start_tile;
+        d[ring_joint::kDerivedQValidCount] = work_plan.q_mapping.q_valid_tile_count;
+        d[ring_joint::kDerivedActiveRingIterMask] = work_plan.masks.active_ring_iter_mask;
+        cb_derived.push_back(1);
+    }
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -334,8 +420,6 @@ void kernel_main() {
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
     constexpr uint32_t v_cb_entry_tiles = v_shares_k_buffer ? k_chunk_tiles : v_chunk_tiles;
-
-    Noc noc;
 
     // Head chain (query-head level): MHA uses it for K/V; separate-V shared-K uses it for V only.
     ChainLink<head_mcast_enabled, true> head_chain(

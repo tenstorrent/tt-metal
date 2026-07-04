@@ -125,7 +125,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const CoreCoord core_grid_offset,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     std::optional<uint32_t> input_batch_slice_idx,
-    std::optional<uint32_t> gather_valid_Ht) {
+    std::optional<uint32_t> gather_valid_Ht,
+    std::optional<Tensor> metadata,
+    uint32_t chunk_local_tiles,
+    uint32_t kv_cache_num_layers,
+    uint32_t kv_cache_layer_idx,
+    std::optional<uint32_t> scalar_cache_batch_idx,
+    std::optional<uint32_t> scalar_kv_actual) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -254,6 +260,47 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         }}},
     });
 
+    // With metadata, the reader derives the single-slot offset from metadata[0], and reader/writer derive
+    // gather extent from metadata[1]. The read lands in offset 0 of output CB scratch; c_in3 is kept only to
+    // preserve this helper's compile-arg layout for standalone all-gather. It is created only for metadata
+    // programs, so non-metadata programs stay unchanged.
+    const bool has_metadata = metadata.has_value();
+    // No-trace scalar path (mutually exclusive with metadata tensors): slot / kv_actual arrive as per-core
+    // runtime args (in the metadata-address slots), re-patched per dispatch by the fused consumer.
+    // metadata_mode selects the kernel path: 0=none, 1=metadata tensors (NoC), 2=scalar. Sentinel
+    // 0xFFFFFFFF => field inactive.
+    constexpr uint32_t kScalarMetaInactive = 0xFFFFFFFFu;
+    const bool has_scalar_meta = !has_metadata && (scalar_cache_batch_idx.has_value() || scalar_kv_actual.has_value());
+    const uint32_t metadata_mode = has_metadata ? 1u : (has_scalar_meta ? 2u : 0u);
+    // Scalar-mode per-core values (emitted in the same rt-arg slots the metadata addresses occupy).
+    const uint32_t scalar_slot_arg = scalar_cache_batch_idx.value_or(kScalarMetaInactive);
+    const uint32_t scalar_kv_arg = scalar_kv_actual.value_or(kScalarMetaInactive);
+    const uint32_t meta_cb_index = tt::CB::c_in3;
+    if (has_metadata) {
+        // The c_in3 meta CB is allocated for compile-arg-index parity with the standalone all-gather op; the
+        // kernel actually reads metadata into the output CB, so this CB's contents go unused. 32B = one uint32
+        // page with headroom.
+        constexpr uint32_t meta_cb_page_size_bytes = 32;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = meta_cb_page_size_bytes,
+            .core_ranges = sender_forward_core_ranges,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(meta_cb_index),
+                .data_format = tt::DataFormat::RawUInt32,
+                .page_size = meta_cb_page_size_bytes,
+            }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = meta_cb_page_size_bytes,
+            .core_ranges = sender_backward_core_ranges,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(meta_cb_index),
+                .data_format = tt::DataFormat::RawUInt32,
+                .page_size = meta_cb_page_size_bytes,
+            }}},
+        });
+    }
+
     // Tensor Info
     const uint32_t num_inputs = input_tensor.size();
 
@@ -280,6 +327,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         num_inputs,                       // num_inputs
         1,                                // direction
         fuse_op,                          // fused op
+        metadata_mode,  // 11 == kv_pad_derive_mode (0=none, 1=metadata tensors, 2=scalar per-core args)
+        meta_cb_index,  // 12 == cb_meta_id
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_reader_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -291,6 +340,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     for (uint32_t i = 0; i < num_inputs; i++) {
         tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
             .append_to(sender_reader_forward_kernel.compile_time_args);
+    }
+    // Append one metadata accessor after the output accessors; reader uses it for metadata[0] and metadata[1].
+    if (has_metadata) {
+        tt::tt_metal::TensorAccessorArgs(metadata->buffer()).append_to(sender_reader_forward_kernel.compile_time_args);
     }
 
     // Writer
@@ -318,6 +371,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         1,                                        // direction
         unicast_backward_args[0],                 // unicast route arg0 (dst_mesh_id or 0)
         unicast_backward_args[1],                 // unicast route arg1 (dst_chip_id or distance_in_hops)
+        metadata_mode,  // 16 == kv_pad_derive_mode (0=none, 1=metadata tensor, 2=scalar per-core arg)
+        meta_cb_index,  // 17 == cb_meta_id
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -325,6 +380,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     for (uint32_t i = 0; i < num_inputs; i++) {
         tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
             .append_to(sender_writer_forward_kernel.compile_time_args);
+    }
+    // Writer reads metadata[1] only; append the folded metadata accessor.
+    if (has_metadata) {
+        tt::tt_metal::TensorAccessorArgs(metadata->buffer()).append_to(sender_writer_forward_kernel.compile_time_args);
     }
 
     // Backward Direction
@@ -348,6 +407,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         num_inputs,                       // num_inputs
         0,                                // direction
         fuse_op,                          // fused op
+        metadata_mode,  // 11 == kv_pad_derive_mode (0=none, 1=metadata tensors, 2=scalar per-core args)
+        meta_cb_index,  // 12 == cb_meta_id
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_reader_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -359,6 +420,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     for (uint32_t i = 0; i < num_inputs; i++) {
         tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
             .append_to(sender_reader_backward_kernel.compile_time_args);
+    }
+    if (has_metadata) {
+        tt::tt_metal::TensorAccessorArgs(metadata->buffer()).append_to(sender_reader_backward_kernel.compile_time_args);
     }
 
     // Writer
@@ -386,6 +450,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         0,                                         // direction
         unicast_forward_args[0],                   // unicast route arg0 (dst_mesh_id or 0)
         unicast_forward_args[1],                   // unicast route arg1 (dst_chip_id or distance_in_hops)
+        metadata_mode,  // 16 == kv_pad_derive_mode (0=none, 1=metadata tensor, 2=scalar per-core arg)
+        meta_cb_index,  // 17 == cb_meta_id
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -393,6 +459,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     for (uint32_t i = 0; i < num_inputs; i++) {
         tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
             .append_to(sender_writer_backward_kernel.compile_time_args);
+    }
+    if (has_metadata) {
+        tt::tt_metal::TensorAccessorArgs(metadata->buffer()).append_to(sender_writer_backward_kernel.compile_time_args);
     }
 
     /* All gather fusion */
@@ -482,16 +551,25 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             tensor_descriptor_args.push_back(input_tile_id_start);  // 5 == input_tile_id_start
             tensor_descriptor_args.push_back(input_tile_id_end);    // 6 == input_tile_id_end
             tensor_descriptor_args.push_back(input_batch_base);     // 7 == input_batch_base (phase-1 input page offset)
-            // 8 == valid pages per (batch,head) to gather. Default: full input slab (no clamp). When
-            // gather_valid_Ht is set (fused ring_joint_sdpa with an oversized cache), bound it to the
-            // first gather_valid_Ht tile-rows so only kv_actual-sized data moves. The fused path also
-            // re-patches this per dispatch on cache hits (apply_ring_joint_scalar_runtime_args); setting
-            // it here makes the cache-miss (first) dispatch bounded too.
+            // 8 == valid pages per (batch,head). Default: full input slab. When gather_valid_Ht is set,
+            // bound the descriptor to the first gather_valid_Ht tile-rows; derived paths pass full input
+            // here and clamp on-device.
             const uint32_t valid_pages_per_batch_head =
                 gather_valid_Ht.has_value() ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
                                             : single_batch_head_num_pages;
             tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 8 == valid_pages_per_batch_head
         }
+
+        // reader/writer_scalar_arg_index assume each input contributes exactly kTensorDescriptorFieldCount
+        // args; assert the emission honors that so those helpers stay the single source of truth for where the
+        // fused scalar block ([slot, kv] / [kv]) lands -- the re-patch path (apply_ring_joint_scalar_runtime_args)
+        // reads it at that computed index.
+        TT_FATAL(
+            tensor_descriptor_args.size() ==
+                num_inputs * ring_attention_all_gather_async_detail::kTensorDescriptorFieldCount,
+            "AG tensor-descriptor block ({}) must equal num_inputs * kTensorDescriptorFieldCount ({})",
+            tensor_descriptor_args.size(),
+            num_inputs * ring_attention_all_gather_async_detail::kTensorDescriptorFieldCount);
 
         KernelDescriptor::RTArgList reader_forward_rt_args;
         reader_forward_rt_args.push_back(static_cast<uint32_t>(dim));  // dim to gather on
@@ -504,6 +582,20 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_forward_rt_args.push_back(output_tensor[input_idx].buffer());
+        }
+        // Reader metadata/scalar args come before optional signaler args. Metadata mode passes the same
+        // Buffer* for slot and kv_actual; scalar mode passes values or sentinel. The 5-slot layout is stable.
+        if (has_metadata || has_scalar_meta) {
+            if (has_metadata) {
+                reader_forward_rt_args.push_back(metadata->buffer());
+                reader_forward_rt_args.push_back(metadata->buffer());
+            } else {
+                reader_forward_rt_args.push_back(scalar_slot_arg);
+                reader_forward_rt_args.push_back(scalar_kv_arg);
+            }
+            reader_forward_rt_args.push_back(chunk_local_tiles);
+            reader_forward_rt_args.push_back(kv_cache_num_layers);
+            reader_forward_rt_args.push_back(kv_cache_layer_idx);
         }
         if (fuse_op) {
             std::vector<uint32_t> reader_forward_signaler_args;
@@ -524,6 +616,18 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_backward_rt_args.push_back(output_tensor[input_idx].buffer());
+        }
+        if (has_metadata || has_scalar_meta) {
+            if (has_metadata) {
+                reader_backward_rt_args.push_back(metadata->buffer());
+                reader_backward_rt_args.push_back(metadata->buffer());
+            } else {
+                reader_backward_rt_args.push_back(scalar_slot_arg);
+                reader_backward_rt_args.push_back(scalar_kv_arg);
+            }
+            reader_backward_rt_args.push_back(chunk_local_tiles);
+            reader_backward_rt_args.push_back(kv_cache_num_layers);
+            reader_backward_rt_args.push_back(kv_cache_layer_idx);
         }
         if (fuse_op) {
             std::vector<uint32_t> reader_backward_signaler_args;
@@ -549,6 +653,18 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_forward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_forward_rt_args.push_back(output_tensor[input_idx].buffer());
+        }
+        // kv_actual + chunk_local_tiles (read by the writer after the output-buffer addrs and before the
+        // fabric args; metadata OR scalar path) for the on-device gather-extent recompute. Mode 1 passes the
+        // kv_actual_isl DRAM address (NoC-read); mode 2 passes the value (sentinel => inactive). Same 2-slot
+        // layout either way, so the writer's arg_idx is stable.
+        if (has_metadata || has_scalar_meta) {
+            if (has_metadata) {
+                writer_forward_rt_args.push_back(metadata->buffer());
+            } else {
+                writer_forward_rt_args.push_back(scalar_kv_arg);
+            }
+            writer_forward_rt_args.push_back(chunk_local_tiles);
         }
         writer_forward_rt_args.push_back(0u);
         writer_forward_rt_args.push_back(static_cast<uint32_t>(backward_device_coord.has_value()));
@@ -585,6 +701,14 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_backward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer());
+        }
+        if (has_metadata || has_scalar_meta) {
+            if (has_metadata) {
+                writer_backward_rt_args.push_back(metadata->buffer());
+            } else {
+                writer_backward_rt_args.push_back(scalar_kv_arg);
+            }
+            writer_backward_rt_args.push_back(chunk_local_tiles);
         }
         writer_backward_rt_args.push_back(static_cast<uint32_t>(forward_device_coord.has_value()));
         std::vector<uint32_t> writer_backward_extra_args;

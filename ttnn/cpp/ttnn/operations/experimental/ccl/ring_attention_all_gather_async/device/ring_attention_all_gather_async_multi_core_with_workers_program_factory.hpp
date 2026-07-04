@@ -52,6 +52,19 @@ inline uint32_t input_batch_base_pages(
     return batch_idx * num_heads * tensor_height_tiles * tensor_width_tiles;
 }
 
+// Runtime-arg index of the fused ring_joint scalar block, emitted right after the per-input
+// tensor-descriptor blocks and accessor addresses ([slot, kv_actual] on the reader; [kv_actual] on the
+// writer). Single source of truth for the layout so the fused path's emission and its per-dispatch scalar
+// re-patch (apply_ring_joint_scalar_runtime_args) can't drift.
+inline uint32_t reader_scalar_arg_index(uint32_t num_inputs) {
+    // reader: header + num_inputs descriptors + (input + output) accessor addresses.
+    return kReaderRuntimeArgHeaderCount + num_inputs * kTensorDescriptorFieldCount + 2u * num_inputs;
+}
+inline uint32_t writer_scalar_arg_index(uint32_t num_inputs) {
+    // writer: header + num_inputs descriptors + output accessor addresses.
+    return kWriterRuntimeArgHeaderCount + num_inputs * kTensorDescriptorFieldCount + num_inputs;
+}
+
 }  // namespace ring_attention_all_gather_async_detail
 
 // Append all kernels, CBs, semaphores, and runtime args required by the
@@ -83,11 +96,26 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // `output_tensor` — lets a consumer keep a full KV cache as input with a batch-1 gathered buffer
     // (a full-batch output also works; only slot 0 is written). std::nullopt => full batch (default).
     std::optional<uint32_t> input_batch_slice_idx = std::nullopt,
-    // When set, gather only the first `gather_valid_Ht` tile-rows per (batch,head) instead of the
-    // full input height — lets a consumer keep an oversized (growing) KV cache as input while moving
-    // only the valid (e.g. logical_n-sized) prefix. Capped to the input height per gathered tensor.
-    // std::nullopt => gather the full input (default). The fused ring_joint_sdpa path also re-patches
-    // this per dispatch on cache hits (see apply_ring_joint_scalar_runtime_args).
-    std::optional<uint32_t> gather_valid_Ht = std::nullopt);
+    // When set, gather only the first `gather_valid_Ht` tile-rows per (batch,head). Capped to each
+    // gathered tensor's input height. std::nullopt => gather the full input; derived scalar/metadata
+    // paths pass nullopt here and clamp on-device.
+    std::optional<uint32_t> gather_valid_Ht = std::nullopt,
+    // Trace-safe metadata: [slot_id, actual_start, actual_end] in uint32 DRAM. With input_batch_slice_idx
+    // set, the reader derives the single-slot offset from metadata[0]; reader/writer use metadata[1] for
+    // gather extent. std::nullopt => use host descriptor values.
+    std::optional<Tensor> metadata = std::nullopt,
+    // Per-device Q slab in tiles for on-device gather-extent derivation.
+    uint32_t chunk_local_tiles = 0,
+    // (user, layer)-major KV-cache batch dim for derived single-slot gather. Defaults (1, 0) reduce
+    // slot * kv_cache_num_layers + kv_cache_layer_idx to slot.
+    uint32_t kv_cache_num_layers = 1,
+    uint32_t kv_cache_layer_idx = 0,
+    // No-trace scalar path (mutually exclusive with the metadata tensor): the readers/writer
+    // recompute the single-slot gather offset + gather extent on-device from these scalar values, passed
+    // as per-core runtime args (in the same slots the metadata addresses occupy) and re-patched per
+    // dispatch by the fused consumer. 0xFFFFFFFF for either => that field is inactive (indexed-only or
+    // rotation-only). When both are nullopt the scalar path is off.
+    std::optional<uint32_t> scalar_cache_batch_idx = std::nullopt,
+    std::optional<uint32_t> scalar_kv_actual = std::nullopt);
 
 }  // namespace ttnn

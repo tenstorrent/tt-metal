@@ -107,7 +107,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
     bool use_column_major_ccl,
     bool is_balanced,
     std::optional<uint32_t> kv_cache_batch_idx,
-    std::optional<uint32_t> kv_actual_isl) {
+    std::optional<uint32_t> kv_actual_isl,
+    const std::optional<ttnn::transformer::KvCacheMetadata>& kv_cache_metadata) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     return ttnn::transformer::ring_mla(
@@ -130,7 +131,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
         compute_kernel_config,
         strategy,
         kv_cache_batch_idx,
-        kv_actual_isl);
+        kv_actual_isl,
+        kv_cache_metadata);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -277,6 +279,20 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
 }  // namespace
 
 void bind_sdpa(nb::module_& mod) {
+    // Trace-safe KV-cache addressing descriptor for ring_mla (see ttnn::transformer::KvCacheMetadata).
+    nb::class_<ttnn::transformer::KvCacheMetadata>(mod, "KvCacheMetadata")
+        .def(
+            "__init__",
+            [](ttnn::transformer::KvCacheMetadata* self, ttnn::Tensor tensor, uint32_t num_layers, uint32_t layer_idx) {
+                new (self) ttnn::transformer::KvCacheMetadata{std::move(tensor), num_layers, layer_idx};
+            },
+            nb::arg("tensor"),
+            nb::arg("num_layers") = 1,
+            nb::arg("layer_idx") = 0)
+        .def_rw("tensor", &ttnn::transformer::KvCacheMetadata::tensor)
+        .def_rw("num_layers", &ttnn::transformer::KvCacheMetadata::num_layers)
+        .def_rw("layer_idx", &ttnn::transformer::KvCacheMetadata::layer_idx);
+
     const auto* const doc =
         R"doc(
         Causal scaled dot product attention. This API mimics the PyTorch API of the same name.
@@ -654,6 +670,12 @@ void bind_sdpa(nb::module_& mod) {
             kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
                 When passed, enables KV-pad-aware rotation and derives current valid tokens as
                 logical_n - kv_actual_isl.
+            kv_cache_metadata (ttnn.KvCacheMetadata, optional): Trace-safe alternative to the two
+                scalar args above, and mutually exclusive with them. The cache slot and kv_actual_isl are read
+                on-device from a uint32 DRAM tensor [slot_id, actual_start, actual_end] (element [2] is unused;
+                logical_n stays a host arg), so one captured trace replays across chunks without host
+                re-patching. num_layers/layer_idx give the (user, layer)-major physical slot as
+                slot_id * num_layers + layer_idx; defaults (1, 0) reduce it to slot_id. Defaults to None.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
@@ -685,7 +707,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("use_column_major_ccl") = false,
         nb::arg("is_balanced").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
-        nb::arg("kv_actual_isl").noconvert() = nb::none());
+        nb::arg("kv_actual_isl").noconvert() = nb::none(),
+        nb::arg("kv_cache_metadata") = nb::none());
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two

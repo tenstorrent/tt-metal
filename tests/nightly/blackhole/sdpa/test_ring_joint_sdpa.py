@@ -1247,8 +1247,16 @@ def run_ring_mla_sdpa(
     num_iterations=1,
     kv_cache_batch_idx=None,
     cache_batch=2,
+    use_metadata=False,
+    kv_cache_num_layers=1,
+    kv_cache_layer_idx=0,
 ):
-    """Run ring_mla where V is the first d_v columns of the single KV tensor."""
+    """Run ring_mla where V is the first d_v columns of the single KV tensor.
+
+    kv_cache_batch_idx is the USER slot; the physical cache row is user*num_layers + layer_idx
+    (matches update_padded_kv_cache). use_metadata drives the trace-safe path: the user slot is read
+    on-device from a KvCacheMetadata tensor instead of the host kv_cache_batch_idx scalar.
+    """
     if mesh_config.sp_size < 2:
         pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
     if nhk != 1:
@@ -1273,11 +1281,13 @@ def run_ring_mla_sdpa(
         KV = fa_rand(b, nhk, sq, d_k)
         V_prefix = KV[:, :, :, :d_v]
         Q_original, KV_original, V_original = Q, KV, V_prefix
+        physical_slot = None
         if kv_cache_batch_idx is not None:
             assert b == 1, f"ring_mla indexed K/V cache requires Q batch 1, got {b}"
+            physical_slot = kv_cache_batch_idx * kv_cache_num_layers + kv_cache_layer_idx
             assert (
-                0 <= kv_cache_batch_idx < cache_batch
-            ), f"kv_cache_batch_idx {kv_cache_batch_idx} must be in [0, {cache_batch})"
+                0 <= physical_slot < cache_batch
+            ), f"physical slot {physical_slot} (user*num_layers+layer_idx) must be in [0, {cache_batch})"
 
         chunk_order = None
         if is_balanced:
@@ -1290,7 +1300,7 @@ def run_ring_mla_sdpa(
         if kv_cache_batch_idx is not None:
             kv_cache_batch = cache_batch
             KV_input = fa_rand(cache_batch, nhk, sq, d_k)
-            KV_input[kv_cache_batch_idx : kv_cache_batch_idx + 1] = KV
+            KV_input[physical_slot : physical_slot + 1] = KV
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=sdpa_compute_grid,
@@ -1340,6 +1350,15 @@ def run_ring_mla_sdpa(
 
         main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
         main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
+
+        kv_cache_metadata = None
+        if use_metadata:
+            assert kv_cache_batch_idx is not None, "use_metadata requires kv_cache_batch_idx (the user slot)"
+            kv_cache_metadata = ttnn.KvCacheMetadata(
+                tensor=_make_ring_mla_metadata(mesh_device, slot_id=kv_cache_batch_idx, actual_start=0, actual_end=sq),
+                num_layers=kv_cache_num_layers,
+                layer_idx=kv_cache_layer_idx,
+            )
         reference_output = None
         for i in range(num_iterations):
             tt_out, _ = ttnn.transformer.ring_mla(
@@ -1360,7 +1379,8 @@ def run_ring_mla_sdpa(
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=(ccl_column, 0),
                 use_column_major_ccl=True,
-                kv_cache_batch_idx=kv_cache_batch_idx,
+                kv_cache_batch_idx=None if use_metadata else physical_slot,
+                kv_cache_metadata=kv_cache_metadata,
             )
 
             tt_out_torch = ttnn.to_torch(
@@ -2363,6 +2383,7 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
     cache_batch=2,
     pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+    use_metadata=False,
 ):
     sp_size = mesh_config.sp_size
     if sp_size < 2:
@@ -2468,6 +2489,9 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
         reference_outputs = None
         per_chunk_results = []
         cache_entries_after_first_call = None
+        # Keep every metadata tensor alive -> distinct live DRAM addresses, so the reused program must re-bind
+        # the metadata Buffer* on each cache hit (a stale address reads the prior chunk's kv_actual -> PCC fail).
+        metadata_keepalive = []
         for it in range(num_iterations):
             iter_outputs = []
             for i in range(num_chunks):
@@ -2514,6 +2538,21 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
                 tt_q = upload(q_host, q_dtype, sdpa_input_shard_dims)
                 tt_kv = upload(kv_input, kv_dtype, sdpa_kv_shard_dims)
 
+                # Metadata variant: each chunk reads slot + kv_actual_isl on-device from
+                # [slot, actual_start, actual_end]. Passing both scalar inputs as None makes
+                # metadata the source for those values. A fresh tensor per chunk (kept alive above)
+                # gives each cache-hit dispatch a distinct metadata address to re-bind.
+                tt_metadata = (
+                    ttnn.KvCacheMetadata(
+                        tensor=_make_ring_mla_metadata(
+                            mesh_device, slot_id=kv_cache_batch_idx, actual_start=kv_actual_isl, actual_end=logical_n
+                        )
+                    )
+                    if use_metadata
+                    else None
+                )
+                if tt_metadata is not None:
+                    metadata_keepalive.append(tt_metadata)
                 try:
                     tt_out, _ = ttnn.transformer.ring_mla(
                         tt_q,
@@ -2533,8 +2572,9 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
                         subdevice_id=worker_sub_device_id,
                         ccl_core_grid_offset=(ccl_column, 0),
                         use_column_major_ccl=True,
-                        kv_cache_batch_idx=kv_cache_batch_idx,
-                        kv_actual_isl=kv_actual_isl,
+                        kv_cache_batch_idx=None if use_metadata else kv_cache_batch_idx,
+                        kv_actual_isl=None if use_metadata else kv_actual_isl,
+                        kv_cache_metadata=tt_metadata,
                     )
                 except Exception as exc:
                     pytest.fail(
@@ -2907,11 +2947,18 @@ def test_ring_joint_attention_kv_pad_aware_rotation_accuracy(case_name):
     )
 
 
-def test_ring_mla_chunked_kv_actual_isl_indexed_reuse_max_accuracy_and_determinism():
-    """Validate chunked ring_mla with kv_cache_batch_idx, kv_actual_isl, and oversized reusable persistent KV cache."""
+@pytest.mark.parametrize("use_metadata", [False, True], ids=["scalar", "metadata"])
+def test_ring_mla_chunked_kv_actual_isl_indexed_reuse_max_accuracy_and_determinism(use_metadata):
+    """Validate chunked ring_mla with kv_cache_batch_idx, kv_actual_isl, and oversized reusable persistent KV
+    cache. The metadata variant reads slot + kv_actual_isl on-device from the folded metadata tensor per chunk
+    (trace-safe path), golden-verified across all chunks -- subsuming the old standalone metadata-vs-scalar
+    indexed + rotation tests. With a distinct, live metadata tensor per chunk reused by one cached program, it
+    also serves as the metadata Buffer* cache-hit rebinding regression: a stale/baked address would read the
+    prior chunk's kv_actual (a smaller extent) -> wrong gather -> PCC failure."""
     mesh_config = MESH_CONFIG
     run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
         mesh_config,
+        use_metadata=use_metadata,
     )
 
 
@@ -2976,6 +3023,68 @@ def test_ring_mla_nd_sharded_indexed_kv_cache_accuracy():
         rmse_threshold=DEFAULT_RMSE_THRESHOLD,
         kv_cache_batch_idx=1,
         cache_batch=2,
+    )
+
+
+# ============================================================================
+# TRACE-SAFE METADATA PATH
+# ============================================================================
+# ring_mla accepts a replicated uint32 DRAM `metadata` tensor with layout
+# [slot_id, actual_start, actual_end]. The all-gather and SDPA kernels read
+# metadata[0]/metadata[1] on-device for cache slot and kv_actual_isl, so trace
+# replay does not need per-chunk host patching for those values. Accuracy and
+# cache-hit buffer rebinding are both covered by the reuse-max `use_metadata`
+# variant above; only the shared metadata builder lives below.
+
+
+def _make_ring_mla_metadata(mesh_device, slot_id, actual_start, actual_end):
+    """Build the 3-element uint32 DRAM metadata tensor ([1,1,1,3]).
+
+    Layout: [slot_id, actual_start, actual_end]. The op reads metadata[0:2];
+    metadata[2] is unused and logical_n remains a host arg.
+    """
+    payload = torch.tensor([slot_id, actual_start, actual_end], dtype=torch.int64).reshape(1, 1, 1, 3)
+    return ttnn.from_torch(
+        payload,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+@pytest.mark.parametrize("kv_cache_layer_idx", [0, 2], ids=["layer0", "layer2"])
+def test_ring_mla_metadata_multilayer_slot_addressing(kv_cache_layer_idx):
+    """(user, layer)-major KV-cache addressing on the metadata path.
+
+    The metadata tensor carries only the USER slot (metadata[0]); kv_cache_num_layers / kv_cache_layer_idx
+    supply the per-layer factor so the readers land on physical row slot*num_layers + layer_idx -- the layout
+    update_padded_kv_cache writes (mirrors DeepSeek mla.py). run_ring_mla_sdpa places fresh KV at that physical
+    row and golden-checks the output, so a mis-applied layer factor reads the wrong row -> PCC failure. Running
+    distinct layers (0 and the last) proves each reads its own slab. kv_cache_layer_idx is hashed
+    (attribute_values), so each layer keys its own program.
+    """
+    num_users, num_layers, user = 2, 3, 1
+    run_ring_mla_sdpa(
+        MESH_CONFIG,
+        b=1,
+        nhq=4 * MESH_CONFIG.tp_size,
+        nhk=1,
+        sq=128 * MESH_CONFIG.sp_size,
+        d_q=64,
+        d_k=64,
+        d_v=32,
+        q_chunk_size=32,
+        k_chunk_size=32,
+        q_dtype=ttnn.bfloat16,
+        kv_dtype=ttnn.bfloat16,
+        is_balanced=False,
+        kv_cache_batch_idx=user,
+        cache_batch=num_users * num_layers,
+        use_metadata=True,
+        kv_cache_num_layers=num_layers,
+        kv_cache_layer_idx=kv_cache_layer_idx,
     )
 
 
