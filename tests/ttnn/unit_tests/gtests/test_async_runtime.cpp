@@ -133,6 +133,11 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             Tensor output_tensor;
             ttnn::with_command_queue_id(workload_dispatch_cq, [&]() { output_tensor = ttnn::sqrt(input_tensor); });
 
+            // ==== DEBUG tt-metal#43725 — strip before merge ====
+            // Capture sqrt's output buffer (S) address NOW, before `neg` reassigns `output_tensor`.
+            uint64_t dbg_S = static_cast<uint64_t>(output_tensor.buffer()->address());
+            // ==== END DEBUG ====
+
             auto dummy_buffer_0 =
                 tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
 
@@ -145,8 +150,55 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             auto workload_event = ttnn::record_event(device_->mesh_command_queue(*workload_dispatch_cq));
             // Wait until cq 0 prog execution is done
             ttnn::wait_for_event(device_->mesh_command_queue(*io_cq), workload_event);
+
+            // ==== DEBUG tt-metal#43725 — strip before merge ====
+            // Aliasing theory (Fable second opinion): does neg's fresh output buffer (N), allocated during
+            // active dispatch on CQ0, end up aliasing sqrt's still-live output buffer (S)'s DRAM address?
+            // Log every relevant buffer base address per inner iteration. `output_tensor` now holds N, and
+            // the CQ1 read_buffer below sources from output_tensor.buffer(), so READ_SRC == N by construction
+            // (logged separately in case any rebinding occurs). One greppable line per iteration; log_info
+            // flushes so lines survive a later hang/crash.
+            uint64_t dbg_input = static_cast<uint64_t>(input_tensor.buffer()->address());
+            uint64_t dbg_D0 = static_cast<uint64_t>(dummy_buffer_0->address());
+            uint64_t dbg_N = static_cast<uint64_t>(output_tensor.buffer()->address());
+            uint64_t dbg_D1 = static_cast<uint64_t>(dummy_buffer_1->address());
+            uint64_t dbg_read_src = static_cast<uint64_t>(output_tensor.buffer()->address());
+            // ==== END DEBUG ====
+
             // Read using cq 1
             ttnn::read_buffer(io_cq, output_tensor, {readback_data});
+
+            // ==== DEBUG tt-metal#43725 — strip before merge ====
+            int dbg_cmp = std::memcmp(readback_data.get(), expected_data.get(), buf_size_datums * datum_size_bytes);
+            log_info(
+                LogTest,
+                "DBG43725 loop={} input_val={} INPUT=0x{:x} S=0x{:x} D0=0x{:x} N=0x{:x} D1=0x{:x} READ_SRC=0x{:x} "
+                "N_eq_S={} READSRC_eq_S={} memcmp={}",
+                loop,
+                input_val,
+                dbg_input,
+                dbg_S,
+                dbg_D0,
+                dbg_N,
+                dbg_D1,
+                dbg_read_src,
+                (dbg_N == dbg_S) ? 1 : 0,
+                (dbg_read_src == dbg_S) ? 1 : 0,
+                dbg_cmp);
+            if (dbg_cmp != 0) {
+                log_error(
+                    LogTest,
+                    "DBG43725 FAIL loop={} input_val={} N_eq_S={} READSRC_eq_S={} S=0x{:x} N=0x{:x} READ_SRC=0x{:x}",
+                    loop,
+                    input_val,
+                    (dbg_N == dbg_S) ? 1 : 0,
+                    (dbg_read_src == dbg_S) ? 1 : 0,
+                    dbg_S,
+                    dbg_N,
+                    dbg_read_src);
+            }
+            // ==== END DEBUG ====
+
             EXPECT_EQ(std::memcmp(readback_data.get(), expected_data.get(), buf_size_datums * datum_size_bytes), 0)
                 << "Data mismatch at loop " << loop << " input_val " << input_val;
         }
