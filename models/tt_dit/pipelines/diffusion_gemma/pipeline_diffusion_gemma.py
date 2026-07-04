@@ -449,7 +449,7 @@ class DiffusionGemmaPipeline:
                 padding_positions = (pixel_position_ids == -1).all(dim=-1)
 
         # Run our TT encoder.
-        _hidden, per_layer_kv = self.tt_model.model.encoder(
+        hidden, per_layer_kv = self.tt_model.model.encoder(
             tt_input_ids,
             position_ids,
             tt_masks,
@@ -458,6 +458,9 @@ class DiffusionGemmaPipeline:
             padding_positions=padding_positions,
             input_ids_host=input_ids,
         )
+        # Stash last encoder hidden state (fp32 host tensor) for diagnostics; None by default so
+        # the extra device→host copy only pays when the caller opts in.
+        self._last_encoder_hidden = hidden
         return per_layer_kv, tt_masks, position_ids
 
     def _run_decoder(

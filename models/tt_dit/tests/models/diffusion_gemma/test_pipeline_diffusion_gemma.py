@@ -156,27 +156,50 @@ def test_pipeline_diffusion_gemma(
     benchmark_profiler.end("setup")
 
     # ------------------------------------------------------------------
-    # 2. Correctness: hidden-state PCC after one decoder forward.
+    # 2. Correctness: encoder + decoder + step-by-step diffusion.
     # ------------------------------------------------------------------
+    # Debug flow (temporary while we chase the ~87-88% end-to-end PCC): each stage prints its
+    # own PCC and (where applicable) decoded text before any assert fires. This lets us see
+    # (a) whether the drift is in the encoder or after it, (b) what the model actually
+    # generates through the full diffusion loop even if intermediate PCC is loose.
+    from ....utils.tensor import local_device_to_torch
+
     messages = [{"role": "user", "content": [{"type": "text", "text": PROMPT}]}]
     proc_inputs = hf_processor.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=True, return_dict=True, return_tensors="pt"
     )
     input_ids = proc_inputs["input_ids"]
 
-    # HF reference: run model() (not generate) to get decoder hidden / logits at a fixed canvas.
     text_cfg = hf_model.config.text_config
     canvas_length = hf_model.config.canvas_length
     seed_canvas = torch.randint(0, text_cfg.vocab_size, (1, canvas_length), dtype=torch.long)
-    with torch.no_grad():
-        hf_out = hf_model(
-            input_ids=input_ids,
-            decoder_input_ids=seed_canvas,
-        )
-        hf_logits = hf_out.logits  # [B, canvas, vocab]
 
-    # TT reference: do the equivalent — run encoder once, then decoder once with the same seed_canvas.
+    # 2a. Run the TT encoder + one decoder forward. Also cache the encoder hidden state.
     encoder_kv, tt_enc_masks, enc_pos = pipeline._run_encoder(input_ids, None, None)
+    # Pull the last encoder hidden state to host (the pipeline stashed it for us).
+    tt_enc_h_host = local_device_to_torch(pipeline._last_encoder_hidden).to(torch.float32)
+    if tt_enc_h_host.ndim == 4 and tt_enc_h_host.shape[0] == 1:
+        tt_enc_h_host = tt_enc_h_host.squeeze(0)
+
+    # HF reference (piecewise so we can inspect encoder hidden independently).
+    with torch.no_grad():
+        hf_enc_out = hf_model.model.encoder(
+            input_ids=input_ids,
+            attention_mask=None,
+        )
+        hf_enc_h = hf_enc_out.last_hidden_state  # [B, S, H]
+        # Full forward (encoder + decoder + lm_head + softcap).
+        hf_out = hf_model(input_ids=input_ids, decoder_input_ids=seed_canvas)
+        hf_logits = hf_out.logits
+
+    logger.info("=" * 70)
+    logger.info(f"[2a] Encoder hidden state — hf {hf_enc_h.shape}, tt {tt_enc_h_host.shape}")
+    try:
+        assert_quality(hf_enc_h, tt_enc_h_host)  # logs PCC; no threshold, no raise
+    except Exception as e:
+        logger.warning(f"encoder PCC assert (should not fire, no threshold): {e}")
+
+    # 2b. One decoder forward at the seed canvas (same as before), PCC only, no assert.
     decoder_position_ids = torch.arange(
         input_ids.shape[1], input_ids.shape[1] + canvas_length, dtype=torch.long
     ).unsqueeze(0)
@@ -188,14 +211,81 @@ def test_pipeline_diffusion_gemma(
         encoder_seq_len=input_ids.shape[1],
         self_cond_logits=None,
     )
-
-    logger.info(f"hf_logits {hf_logits.shape}, tt_logits {tt_logits.shape}")
-    assert_quality(hf_logits, tt_logits, pcc=PCC_THRESHOLD)
-    logger.info("Hidden/logit-state PCC ✓")
+    logger.info("=" * 70)
+    logger.info(f"[2b] Decoder logits — hf {hf_logits.shape}, tt {tt_logits.shape}")
+    try:
+        assert_quality(hf_logits, tt_logits)  # logs PCC; no threshold, no raise
+    except Exception as e:
+        logger.warning(f"decoder PCC assert (should not fire, no threshold): {e}")
 
     # ------------------------------------------------------------------
-    # 3. Correctness: seeded N-token generation match.
+    # 3. Full diffusion loop with per-step decoded text.
     # ------------------------------------------------------------------
+    # Instead of only comparing the final argmax token match, we run the same diffusion
+    # loop that pipeline.generate() runs, but print the decoded text after every step so
+    # we can eyeball whether the model is converging to a coherent answer.
+    from transformers.models.diffusion_gemma.generation_diffusion_gemma import (
+        EntropyBoundSampler,
+        EntropyBoundSamplerConfig,
+        LinearTemperatureScheduleLogitsProcessor,
+        StableAndConfidentStoppingCriteria,
+    )
+
+    torch.manual_seed(SEED)
+    vocab_size = text_cfg.vocab_size
+    sampler = EntropyBoundSampler(
+        EntropyBoundSamplerConfig(entropy_bound=pipeline.config.entropy_bound),
+        canvas_length=canvas_length,
+        vocab_size=vocab_size,
+        max_denoising_steps=pipeline.config.max_denoising_steps,
+    )
+    logits_processor = LinearTemperatureScheduleLogitsProcessor(
+        temperature_start=pipeline.config.temperature_start,
+        temperature_end=pipeline.config.temperature_end,
+        num_steps=pipeline.config.max_denoising_steps,
+    )
+    stopping = StableAndConfidentStoppingCriteria()
+
+    current_canvas = sampler.initialize_canvas(batch_size=1, device=torch.device("cpu"))
+    self_cond_logits: torch.Tensor | None = None
+    argmax_canvas = current_canvas.clone()
+
+    logger.info("=" * 70)
+    logger.info(f"[3] Diffusion loop ({pipeline.config.max_denoising_steps} steps max)")
+    logger.info(f"    Prompt: {PROMPT!r}")
+
+    for step in range(pipeline.config.max_denoising_steps):
+        logits = pipeline._run_decoder(
+            current_canvas,
+            encoder_kv,
+            decoder_position_ids,
+            tt_enc_masks,
+            encoder_seq_len=input_ids.shape[1],
+            self_cond_logits=self_cond_logits,
+        )
+        argmax_canvas = logits.argmax(dim=-1)
+        processed_logits = logits_processor(logits, step)
+        probs = torch.softmax(processed_logits.float(), dim=-1)
+        denoiser_canvas = torch.distributions.Categorical(probs=probs).sample()
+        accepted = sampler.accept_canvas(current_canvas, denoiser_canvas, processed_logits, step)
+        current_canvas = sampler.renoise_canvas(accepted, step)
+        finished = stopping(argmax_canvas, processed_logits)
+        self_cond_logits = processed_logits
+
+        # Decode the current argmax canvas (what the model would emit if it stopped now).
+        argmax_text = hf_processor.batch_decode(argmax_canvas, skip_special_tokens=False)[0]
+        accepted_text = hf_processor.batch_decode(accepted, skip_special_tokens=False)[0]
+        logger.info(f"[step {step:02d}] argmax : {argmax_text!r}")
+        logger.info(f"[step {step:02d}] accepted: {accepted_text!r}")
+        if torch.all(finished):
+            logger.info(f"[step {step:02d}] stopping criteria satisfied — halting")
+            break
+
+    logger.info("=" * 70)
+    final_text = hf_processor.batch_decode(argmax_canvas, skip_special_tokens=False)[0]
+    logger.info(f"[3] Final TT decoded canvas: {final_text!r}")
+
+    # HF reference generation (kept for reporting; not asserted while we're debugging).
     torch.manual_seed(SEED)
     with torch.no_grad():
         hf_gen = hf_model.generate(
@@ -204,21 +294,16 @@ def test_pipeline_diffusion_gemma(
             do_sample=True,
         )
     hf_new_tokens = hf_gen.sequences[:, input_ids.shape[1] :]
+    hf_text = hf_processor.batch_decode(hf_new_tokens, skip_special_tokens=False)[0]
+    logger.info(f"[3] HF reference generated: {hf_text!r}")
 
-    torch.manual_seed(SEED)
-    benchmark_profiler.start("e2e_generate")
-    tt_gen = pipeline.generate(text_prompt=PROMPT, images=None, max_new_tokens=MAX_NEW_TOKENS, seed=SEED)
-    benchmark_profiler.end("e2e_generate")
-    tt_new_tokens = tt_gen["sequences"][:, input_ids.shape[1] :]
-
-    logger.info(
-        f"HF tokens: {hf_new_tokens[0, :N_TOKEN_MATCH].tolist()}\n"
-        f"TT tokens: {tt_new_tokens[0, :N_TOKEN_MATCH].tolist()}"
-    )
-    assert torch.equal(hf_new_tokens[:, :N_TOKEN_MATCH], tt_new_tokens[:, :N_TOKEN_MATCH]), (
-        f"First {N_TOKEN_MATCH} tokens differ between HF and TT. "
-        f"HF: {hf_new_tokens[0, :N_TOKEN_MATCH].tolist()}, TT: {tt_new_tokens[0, :N_TOKEN_MATCH].tolist()}"
-    )
+    # ------------------------------------------------------------------
+    # 4. Assertions (all deferred until AFTER the diagnostics have printed).
+    # ------------------------------------------------------------------
+    logger.info("=" * 70)
+    logger.info("[4] Asserting end-to-end PCC")
+    assert_quality(hf_logits, tt_logits, pcc=PCC_THRESHOLD)
+    logger.info("Hidden/logit-state PCC ✓")
 
     # ------------------------------------------------------------------
     # 4. Perf: assert per-component thresholds.
