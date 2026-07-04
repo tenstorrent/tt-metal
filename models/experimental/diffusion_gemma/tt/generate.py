@@ -27,7 +27,12 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
 )
 from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block as tt_denoise_block
 from models.experimental.diffusion_gemma.tt.denoise_loop import device_loop_denoise_block
-from models.experimental.diffusion_gemma.tt.traced_denoise import traced_denoise_block, traced_denoise_enabled
+from models.experimental.diffusion_gemma.tt.traced_denoise import (
+    traced_denoise_block,
+    traced_denoise_enabled,
+    traced_denoise_multistep_block,
+    traced_denoise_multistep_enabled,
+)
 from models.experimental.diffusion_gemma.tt import sampling as TS
 
 
@@ -794,6 +799,18 @@ def _resolve_default_commit_fn(page_table=None, page_tables_per_layer=None) -> C
 def _resolve_default_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
     """Pick the denoise loop: traced single-step loop or device-only loop when opted in, else eager.
 
+    ``DG_DENOISE_TRACED_MULTISTEP`` selects the multi-step trace-batching loop
+    (:func:`traced_denoise_multistep_block`) — a WINDOW of ``G`` denoise steps captured into ONE
+    Metal trace (default ``G = max_denoise_steps`` ⇒ the whole fixed-K block in ONE capture + ONE
+    replay), so a block does ``ceil(K/G)`` replays instead of ``K``. It removes the per-replay
+    dispatch bubbles that make the single-step ``block(K) ≈ 0.275·K + 1.09 s`` fixed term scale
+    with ``K``, so 100 t/s (``block ≤ 2.56 s``) holds at a higher, quality-safe step budget rather
+    than only at ~5 steps. Bit-exact to the ``K`` single-step replays (same committed decisions;
+    see :class:`~...tt.traced_denoise.MultiStepTracedDenoiseController`). ``DG_DENOISE_MULTISTEP_GROUP=G``
+    bounds the window / trace-region memory. Same argmax-regime + contiguous-cache prerequisites and
+    the same large ``DG_TRACE_REGION_SIZE`` need as the single-step traced path. Takes precedence
+    over ``DG_DENOISE_TRACED`` when both are set.
+
     ``DG_DENOISE_TRACED`` selects the traced single-step loop
     (:func:`traced_denoise_block`) — one Metal trace per denoise step, replayed once per
     step, cross-step state (canvas + self-cond signal) in persistent buffers and per-block
@@ -812,6 +829,8 @@ def _resolve_default_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
     All non-eager loops stay opt-in until early-halt is either recovered in a trace-safe shape
     or confirmed unneeded for the serving contract.
     """
+    if traced_denoise_multistep_enabled():
+        return traced_denoise_multistep_block
     if traced_denoise_enabled():
         return traced_denoise_block
     if os.environ.get("DG_DENOISE_DEVICE_LOOP", "0").lower() in ("1", "true", "yes", "on"):
