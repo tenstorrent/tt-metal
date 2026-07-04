@@ -641,6 +641,41 @@ Per the §diagnosis above, a traced serving loop needs BOTH:
 
 Both are architected here; landing them (verified bit-exact + serving t/s) is the next investment toward 30.
 
+## Session summary (2026-07-04 session 6) — traced serving loop: canvas-RoPE cross-block reuse BUILT (in progress)
+
+**Key architectural finding (from reading the serving path):** the serving denoise attends to a **FROZEN
+`prompt_len` prefix**. `denoise_and_commit_block` advances only `q_rope_offset` per block
+(`_set_q_rope_offset`); the adapter's prompt-KV read length is fixed at construction, and the batched
+commit writes KV at positions **≥ `prompt_len`**, so the `[0:prompt_len]` prefix the denoise reads is
+**invariant across blocks**. Therefore the ONLY per-block variation inside a denoise step is the **canvas
+RoPE** (`q_rope_offset = start_pos`) — self-cond resets per block, noise/init are content updates outside
+the trace. So the single-step trace (self-cond fixed, session 5) becomes **fully cross-block reusable**
+once the canvas RoPE is made constant-shape. (NB: this frozen-prefix read means block N does **not** attend
+to committed blocks 0..N−1 — a RUN-first / #48291 fidelity property of the existing path, faithfully
+reproduced by the trace; not introduced here.)
+
+**BUILT — constant-shape canvas-RoPE buffer (DiffusionGemma-local, opt-in via provider, default OFF =
+byte-identical):**
+- `DenoiseLogitsAdapter.prepare_canvas_rope_buffers` / `update_canvas_rope_buffers` / `_canvas_rope_provider`
+  (`tt/denoise_forward.py`): per-layer-type constant-shape `[1,1,C,head_dim]` buffers, cloned from the real
+  RoPE cache (dtype/layout/memory match), holding `cos/sin[start_pos:start_pos+C]`; content refreshed per
+  block OUTSIDE the trace via `ttnn.copy` of the offset slice, so the captured trace's RoPE tensor
+  addresses/shapes stay fixed across blocks.
+- Threaded an optional `canvas_rope_provider` through `denoise_logits_forward` → `denoise_hidden_forward` →
+  `_denoise_layer_forward`; when set, applies the buffer at `start_offset=0` (bit-identical to the growing
+  `[:, :, :start_pos+C, :]` slice applied at `start_offset=start_pos`, since RoPE cos/sin depend only on
+  absolute position). Requires the `prefix_kv` path (serving uses it). Default `None` everywhere → the shipped
+  path is byte-for-byte unchanged.
+- Verified valid for serving: the adapter is `make_denoise_logits_adapter_from_kv_cache` → `(K,V)` tuples →
+  `prefix_kv` path (both Q and canvas-K are C rows).
+
+**Verification harness:** `doc/optimize_perf/probe_traced_serving.py` — one device run validates
+`RESULT_REFACTOR` (trace-safe self-cond == original eager), `RESULT_CROSSBLOCK_ROPE` (N single-step traces
+captured at block-0 offset, replayed at block-0 AND block-1 offsets, match the eager reference committed
+argmax at each — i.e. canvas-RoPE bit-exact + cross-block reusable), and `RESULT_SERVING_PERF` (real
+traced-denoise + batched-commit multi-block t/s). Device run pending (checkpoint remap is a ~15-20 min cold
+load, layer-count-independent).
+
 ### Landed-lever stack (t/s accounting)
 
 On top of the session-4 verified **13.04 t/s @24-step** (sparse MoE + batched commit, both default) the session-5
@@ -649,3 +684,44 @@ matmul 7.05× device-verified; layer-level via `verify_opt004_fullmoe.py`), and 
 `DG_DENOISE_DEVICE_LOOP` ~1.04× (bit-identical, session 4). Each is independently device-verified; enable with
 `DG_SPARSE_MOE=1 DG_DEDUP_ARGMAX=1 DG_SPARSE_MOE_TUNED=1 DG_DENOISE_DEVICE_LOOP=1`. None reaches 30 alone — the
 step-count × per-step-traced multiplier (the traced serving loop, blocked above) is still required for verified 30.
+
+## Session summary (2026-07-04 session 7) — STACKED opt-in combo measured; branches confirmed superseded
+
+### The full stacked opt-in combo — VERIFIED +5.3% on the block (same-session A/B)
+
+Measured on QB2, full **30L**, `serving_smoke --max-denoising-steps 24 --num-blocks 3 --disable-eos-stop`,
+steady-state (mean of blocks 1..2), **correct KV** (batched commit default), coherent text. Both configs run
+back-to-back in one session for an apples-to-apples delta (all blocks ran the full 24 steps, `halted=[False,False,False]`):
+
+| config | flags | per-block latencies (s) | steady-state block (s) | **tokens/block/s** |
+|---|---|---|---|---|
+| baseline | `DG_SPARSE_MOE=1` | 19.23 / 19.52 / 19.18 | 19.35 | **13.23** |
+| **full stacked combo** | `+DG_DEDUP_ARGMAX +DG_SPARSE_MOE_TUNED +DG_DENOISE_DEVICE_LOOP` | 18.46 / 18.40 / 18.35 | 18.37 | **13.93** |
+
+**Verdict: the stacked combo is 13.93 t/s = +5.3% over the 13.23 baseline** — real, verified, correct-KV, no hang.
+Back-out: block 19.35 → 18.37 s = **~40 ms/step saved** (24 steps). All 4 flags confirmed to engage in the serving
+path (`serving.py:249 → denoise_and_commit_block → _resolve_default_denoise_block_fn` selects `device_loop_denoise_block`
+under `DG_DENOISE_DEVICE_LOOP=1`; sparse-MoE tuned/dedup are inside the step).
+
+**Honest gap vs isolated-lever projections.** The ~40 ms/step measured is FAR below the sum of the isolated wins
+(device-loop readback ~31 ms/step + OPT-004 gate/up 7.05× + dedup 14.99 ms/step would project ~150 ms/step). The
+device-loop readback removal (~31 ms/step) accounts for most of the measured 40 ms — i.e. **OPT-004-tuned + dedup add
+only ~10 ms/step in the full serving step**, not the ~100+ ms their isolated microbenches suggest. Interpretation: the
+eager serving step is dominated by per-op *dispatch* overhead (the ~137 ms/step eager-dispatch tax, §session-4), which
+masks the per-matmul geometry win — OPT-004's 7.05× is a *compute-time* win on a step whose wall-clock is dispatch-bound.
+**This is direct evidence that the binding lever is the traced serving loop (removes dispatch), not more per-op tuning** —
+consistent with `path_to_100tps` and the §session-5/6 traced-loop scoping. The combo is the right default-on stack, but
+the ~2× headroom to 30 lives in tracing, which remains blocked on the single-step trace mechanism (below).
+
+### Branch consolidation — `dg-opt-f100` + `dg-opt-g-opt004` confirmed SUPERSEDED (no merge needed)
+
+`git diff diffusion-gemma-function <branch>` shows HEAD is a strict SUPERSET of both opt-in branches:
+- `dg-opt-g-opt004`: `tt/sparse_moe.py` is **byte-identical** to HEAD; the OPT-004 bench/doc/verify artifacts are all on
+  HEAD. Its content landed via `014c47177f7` (+ `c2c5f4cf0ec` docs). Diff HEAD→branch = 987 deletions / 6 insertions
+  (the 6 are stale older wording, superseded).
+- `dg-opt-f100`: the dedup (23 refs) is on HEAD via `474713ec259`; HEAD has evolved PAST this branch (HEAD ADDED
+  `device_loop_denoise_block`, which f100 lacks). Diff HEAD→branch = 2507 deletions / 99 insertions.
+A `git merge` of either would only re-apply already-present diffs (risking reintroducing stale content); the correct
+action is to retire them, not merge. Worktree `tt-metal-g` (dg-opt-g-opt004) removed; stale local branches
+`dg-opt-f100` + `dg-opt-g-opt004` deleted (their SHAs remain on `origin/*` for provenance). gemma4 gate stays the
+1-line dealloc.

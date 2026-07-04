@@ -257,20 +257,38 @@ def _denoise_moe_forward(moe, router_input, expert_input):
     return moe.experts(expert_input, dense_routing)
 
 
-def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset):
+def _denoise_layer_forward(
+    tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset, canvas_rope_provider=None
+):
     layer = tt_model.layers[layer_idx]
     residual = hidden_states
     normed = _chunked_norm_forward(layer.input_layernorm, hidden_states)
     prefix_kv = prompt_source if isinstance(prompt_source, (tuple, list)) else None
     kv_hidden = None if prefix_kv is not None else ttnn.concat([prompt_source, normed], dim=2)
+    # Cross-block-trace-reusable RoPE: when a canvas_rope_provider is supplied it returns a
+    # CONSTANT-SHAPE [1,1,C,head_dim] buffer already holding cos/sin for the absolute canvas
+    # positions [start_pos:start_pos+C] (updated per block OUTSIDE the trace); applying it at
+    # start_offset=0 is bit-identical to slicing the growing [:, :, :start_pos+C, :] cache at
+    # start_offset=start_pos (RoPE cos/sin depend only on absolute position). This keeps the
+    # captured trace's RoPE tensor addresses/shapes fixed across blocks. Only valid on the
+    # prefix_kv path (Q and canvas-K are both C rows); the kv_hidden recompute path (K spans the
+    # full prompt+canvas) must keep the growing slice. See #47465.
+    if canvas_rope_provider is not None:
+        if prefix_kv is None:
+            raise ValueError("canvas_rope_provider requires the prefix_kv denoise path")
+        rope_mats = canvas_rope_provider(layer_idx)
+        rope_offset = 0
+    else:
+        rope_mats = tt_model._get_rope_mats(layer_idx, seq_len=q_rope_offset + hidden_states.shape[-2])
+        rope_offset = q_rope_offset
     attn_output = denoise_attention(
         layer.self_attn,
         normed,
-        rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=q_rope_offset + hidden_states.shape[-2]),
+        rope_mats=rope_mats,
         attn_mask=attn_mask,
         kv_hidden_states=kv_hidden,
         prefix_kv=prefix_kv,
-        q_rope_offset=q_rope_offset,
+        q_rope_offset=rope_offset,
     )
     if kv_hidden is not None:
         kv_hidden.deallocate(True)
@@ -319,6 +337,7 @@ def denoise_hidden_forward(
     prompt_len: int | None = None,
     use_explicit_sliding_mask: bool = False,
     mask_builder=build_device_canvas_denoise_mask,
+    canvas_rope_provider=None,
 ):
     """Run the DiffusionGemma denoise backbone to final hidden states.
 
@@ -360,6 +379,7 @@ def denoise_hidden_forward(
                 prompt_source,
                 attn_mask,
                 q_rope_offset,
+                canvas_rope_provider=canvas_rope_provider,
             )
         finally:
             if prompt_source_fn is not None:
@@ -378,6 +398,7 @@ def denoise_logits_forward(
     q_rope_offset: int | None = None,
     prompt_len: int | None = None,
     use_explicit_sliding_mask: bool = False,
+    canvas_rope_provider=None,
 ):
     """Run a short-prompt DiffusionGemma denoise logits forward.
 
@@ -391,6 +412,7 @@ def denoise_logits_forward(
         q_rope_offset=q_rope_offset,
         prompt_len=prompt_len,
         use_explicit_sliding_mask=use_explicit_sliding_mask,
+        canvas_rope_provider=canvas_rope_provider,
     )
     return tt_model._apply_lm_head(hidden_states, is_decode=False)
 
@@ -594,6 +616,9 @@ class DenoiseLogitsAdapter:
         # (for the single-step traced loop; KV-cache-style cross-replay state).
         self.trace_safe_self_conditioning = False
         self.signal_buf = None
+        # Cross-block-trace-reusable canvas RoPE (constant-shape per-layer-type buffers).
+        self.use_canvas_rope = False
+        self._canvas_rope_bufs = {}
 
     def prepare_trace_safe_self_conditioning(self, *, canvas_len: int, dtype=ttnn.bfloat16):
         """Preallocate the persistent in-place self-cond signal buffer OUTSIDE any trace.
@@ -636,6 +661,80 @@ class DenoiseLogitsAdapter:
         if self.signal_buf is not None:
             ttnn.mul(self.signal_buf, 0.0, output_tensor=self.signal_buf)
 
+    # --- Cross-block-trace-reusable canvas RoPE (second single-step-trace blocker) ---
+    #
+    # The single-step trace also bakes in the RoPE cos/sin tensors used inside denoise
+    # attention. The eager path passes ``_get_rope_mats(seq_len=start_pos+C)`` (a GROWING
+    # slice) and applies it at ``start_offset=start_pos`` — so a trace captured on block N
+    # is only valid for block N's start_pos. These methods preallocate a CONSTANT-SHAPE
+    # ``[1,1,C,head_dim]`` canvas RoPE buffer per layer-type whose CONTENT (the cos/sin for
+    # absolute positions ``[start_pos:start_pos+C]``) is refreshed per block OUTSIDE the trace;
+    # ``_denoise_layer_forward`` then applies it at ``start_offset=0``. Because RoPE cos/sin
+    # depend only on absolute position, that is bit-identical to the growing-slice path, and
+    # the trace's RoPE tensor addresses/shapes stay fixed across blocks. See #47465.
+
+    def prepare_canvas_rope_buffers(self, *, canvas_len: int):
+        """Preallocate per-layer-type constant-shape canvas RoPE buffers OUTSIDE any trace.
+
+        The buffers are cloned from the FIRST-``canvas_len`` slice of each layer-type's real
+        RoPE cache, so their dtype / layout / memory_config match the cache exactly (a later
+        ``ttnn.copy`` into them from an offset slice is then a same-spec device copy). Content
+        is overwritten per block by ``update_canvas_rope_buffers``.
+        """
+        tt_model = self.tt_model
+        self._canvas_rope_len = canvas_len
+        self._canvas_rope_bufs = {}
+        layer_types = tt_model.hf_config.layer_types
+        for layer_idx in range(len(tt_model.layers)):
+            layer_type = layer_types[layer_idx]
+            if layer_type in self._canvas_rope_bufs:
+                continue
+            cos_full, sin_full = tt_model._get_rope_mats(layer_idx)
+            bufs = []
+            for full in (cos_full, sin_full):
+                head = ttnn.slice(full, [0, 0, 0, 0], [full.shape[0], full.shape[1], canvas_len, full.shape[3]])
+                bufs.append(ttnn.clone(head))
+                head.deallocate(True)
+            self._canvas_rope_bufs[layer_type] = (bufs[0], bufs[1])
+        self.use_canvas_rope = True
+
+    def update_canvas_rope_buffers(self, start_pos: int):
+        """Refresh canvas RoPE buffer content for a block's absolute ``start_pos`` (OUTSIDE trace)."""
+        if not getattr(self, "use_canvas_rope", False):
+            return
+        if start_pos % 32 != 0:
+            raise ValueError(f"canvas RoPE start_pos must be a 32-tile multiple, got {start_pos}")
+        tt_model = self.tt_model
+        C = self._canvas_rope_len
+        layer_types = tt_model.hf_config.layer_types
+        done = set()
+        for layer_idx in range(len(tt_model.layers)):
+            layer_type = layer_types[layer_idx]
+            if layer_type in done:
+                continue
+            cos_full, sin_full = tt_model._get_rope_mats(layer_idx)
+            cos_buf, sin_buf = self._canvas_rope_bufs[layer_type]
+            for full, buf in ((cos_full, cos_buf), (sin_full, sin_buf)):
+                sliced = ttnn.slice(
+                    full,
+                    [0, 0, start_pos, 0],
+                    [full.shape[0], full.shape[1], start_pos + C, full.shape[3]],
+                )
+                ttnn.copy(sliced, buf)
+                sliced.deallocate(True)
+            done.add(layer_type)
+
+    def _canvas_rope_provider(self, layer_idx):
+        layer_type = self.tt_model.hf_config.layer_types[layer_idx]
+        return self._canvas_rope_bufs[layer_type]
+
+    def release_canvas_rope_buffers(self):
+        for cos_buf, sin_buf in getattr(self, "_canvas_rope_bufs", {}).values():
+            cos_buf.deallocate(True)
+            sin_buf.deallocate(True)
+        self._canvas_rope_bufs = {}
+        self.use_canvas_rope = False
+
     def _trace_safe_call(self, canvas_tokens, step: int):
         del step
         tt_model = self.tt_model
@@ -652,6 +751,7 @@ class DenoiseLogitsAdapter:
             canvas_hidden=conditioned,
             q_rope_offset=self.q_rope_offset,
             prompt_len=self.prompt_len,
+            canvas_rope_provider=self._canvas_rope_provider if self.use_canvas_rope else None,
         )
         if conditioned is not canvas_hidden:
             conditioned.deallocate(True)
