@@ -7,10 +7,23 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+
+def _reset_device() -> str:
+    chips = os.environ.get("TT_HW_PLANNER_RESET_CHIPS", "0,1,2,3")
+    tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    if not Path(tt_smi).exists():
+        return "device reset SKIPPED (tt-smi not found)"
+    try:
+        r = subprocess.run([tt_smi, "-r", chips], capture_output=True, text=True, timeout=420)
+        return "device reset (tt-smi -r %s) rc=%d" % (chips, r.returncode)
+    except Exception as e:  # noqa: BLE001
+        return "device reset FAILED (%s) — a hard boot may be required" % e
 
 
 def _verbose() -> bool:
@@ -237,12 +250,13 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     gate_env["PYTHONPATH"] = str(demo_repo_root) + os.pathsep + gate_env.get("PYTHONPATH", "")
     gate_env["TT_METAL_HOME"] = str(demo_repo_root)
     pytest_out = ""
+    hang_timeout = min(int(timeout_s), int(os.environ.get("E2E_GATE_HANG_TIMEOUT", "2700")))
     try:
         proc = subprocess.run(
             [py, "-m", "pytest", str(e2e_dir), "-p", "no:cacheprovider", "-rA", "-s"],
             capture_output=True,
             text=True,
-            timeout=timeout_s,
+            timeout=hang_timeout,
             cwd=str(demo_repo_root),
             env=gate_env,
         )
@@ -251,7 +265,10 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             tail = "\n".join(pytest_out.splitlines()[-15:])
             reasons.append(f"G2/G3: tests/e2e did not pass (pytest rc={proc.returncode}); tail:\n{tail}")
     except subprocess.TimeoutExpired:
-        reasons.append(f"G2/G3: tests/e2e exceeded {timeout_s}s with no verdict")
+        _rst = _reset_device()
+        reasons.append(
+            f"G2/G3: tests/e2e exceeded {hang_timeout}s with no verdict (likely device/fabric hang) — {_rst}"
+        )
 
     for cnt, kind in re.findall(r"(\d+)\s+(xfailed|xpassed|skipped|errors?)\b", pytest_out):
         if int(cnt) > 0:
