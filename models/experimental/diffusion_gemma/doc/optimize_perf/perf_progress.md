@@ -382,6 +382,58 @@ investment rather than landed unverified (the hard rule is verify KV before keep
 | Lever B — commit_ms speedup | **6.3× measured** (1031 ms vs 6503 ms @ L=6; the "one 256-token forward vs 256 forwards" win is real). |
 | Lever B — KV bit-equivalence | **FAIL (0.43), stays OPT-IN.** Root-caused to the **MoE expert kernel** (see `commit_batching.md`): layer-0 attention / shared_mlp bit-exact, router 0.98 (99.6% expert-mask agree), but `_commit_experts_decode_forward` (sequential, decode `sparse_matmul` nnz=8) diverges **0.17** from the verified-correct batched experts (`moe.experts`/`sparse_experts_forward`, ≈torch 0.9997). The **batched commit is likely *more* correct**; the sequential decode-commit MoE (never PCC-verified, RUN-first) is the suspect reference. Ruled out: masked SDPA (0.998 vs torch), RAW hazard, norms. |
 
+### Combined end-to-end t/s (serving_smoke, full 30L, eager serving path) — 2026-07-04
+
+Measured on QB2 (P150x4), `DG_SPARSE_MOE=1`, 24-step budget, per-block metric (`tokens/block/s`):
+
+| path | mean block latency | **tokens/block/s** | note |
+|---|---|---|---|
+| sparse MoE + **sequential** commit (verified) | 49.58 s | **5.16** | both blocks ran full 24 steps (no early-halt on degenerate output) |
+| sparse MoE + **batched** commit (opt-in, perf-only) | 20.85 s | **12.28** | **2.38× on the block** vs sequential commit |
+
+Back-out (both at 24 steps): **eager per-step ≈ 0.64 s** (30L, sparse MoE + terminal + host readback; ~1.4× the
+461 ms *traced* step — the serving loop is eager, headroom via tracing), **commit_seq ≈ 34 s**, **commit_batched ≈ 5.4 s**
+(6.3× commit, matching the L=6 verify). Commit is ~69% of the sequential block, ~26% of the batched block. Artifacts:
+`artifacts/combined_{seq,batched}_30L_s24.{json,log}`. Note: the batched-commit t/s is a **perf-only** number — its KV
+is not bit-equivalent (§Lever B), so the generated text is not the correctness reference; the sequential path text is
+semi-coherent ("a diffusion language model is a generative model that creates text by starting with random noise…").
+
+**Headline:** the campaign has moved the block from the **1.08 t/s baseline → 5.16 t/s** (Lever A sparse MoE + 24-step,
+verified) and, with the opt-in batched commit, to **12.28 t/s** (Lever A+B, perf-only until the commit KV is verified).
+
+### Step-count sweep (Lever A+B batched, 30L eager serving) — 2026-07-04
+
+t/s vs the denoise step budget (`--max-denoising-steps`), sparse MoE + batched commit. **Early-halt did NOT fire**
+(`halted=false` at every budget) — the degenerate RUN-first output never trips the stability+entropy halt, so these are
+**fixed-budget** points; the *adaptive* benefit (session-2 evidence: real blocks halt at 18–38 steps) applies on real
+content only, and is a #48291-gated quality lever, not a config cut.
+
+| step budget | block latency (steady) | **tokens/block/s (eager)** |
+|---|---|---|
+| 12 | 10.3 s | **24.76** |
+| 24 | 20.9 s | **12.28** |
+| 48 (advertised max, all-prompts) | 38.0 s | **6.73** |
+
+Two-point fit (24↔48): **eager per-step ≈ 0.72 s** (30L), **commit_batched ≈ 2–4 s** (grows mildly with `start_pos`:
+the batched commit's prefix-attending SDPA reads `[0:start_pos+256]`). So at 48 steps the commit is only ~10% of the
+block (vs ~65% for the sequential commit) — Lever B fully removed the commit as the bottleneck; the block is **denoise-step
+bound again**, exactly as the roadmap predicted after commit batching.
+
+**30 t/s trajectory (honest):** the advertised full-budget (48-step, all-prompts) number is **6.73 t/s** eager. 30 t/s is
+**not** reached at any quality-safe eager budget. It needs the *stacked favorable-regime* levers the roadmap already
+scoped, none of which is a new structural win:
+- **traced serving denoise** (the loop is currently eager at ~0.72 s/step; the *traced* step is 0.461 s — a 1.35×
+  headroom on the per-step term that the eager serving loop leaves on the table). With traced denoise: 12-step block ≈
+  12×0.461 + 2 ≈ 7.5 s ⇒ **~34 t/s**; 18-step ≈ **~24 t/s**.
+- **adaptive early-halt to ~12–18 steps** (data-dependent, real content only; not a lowered advertised max).
+- the **verified batched commit** (currently opt-in; §Lever B blocker).
+- **terminal-path trim (lever 5)** is already active in `tt/sampling.py`/`tt/denoise_loop.py` (~13% of the step, ~1.05×);
+  it is baked into the 0.72 s/step above, not a separate measured lever.
+
+So: **30 t/s is reachable in the favorable regime (traced denoise + verified batched commit + ~12-step early-halt on
+easy/median prompts), but NOT for hard prompts at the full 48-step budget** — matching `path_to_30tps.md`. The verified,
+all-prompts, no-quality-tradeoff number today is **5.16 t/s** (sparse MoE + sequential commit, 24-step).
+
 **Bottom line (session 3):** Lever B is now a *running*, 6.3×-faster commit, but it cannot be landed
 by default because its KV cache disagrees (0.43) with the sequential decode-append reference — and the
 divergence is a genuine defect in the **sequential** path's MoE expert kernel, not the batched one.

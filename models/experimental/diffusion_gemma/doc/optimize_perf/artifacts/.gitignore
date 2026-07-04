@@ -1,0 +1,2 @@
+# Large device run logs stay local (compact JSON metrics + perf_progress.md are the evidence)
+*.log

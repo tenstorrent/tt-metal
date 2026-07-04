@@ -1,0 +1,25 @@
+{
+  "prompt_len": 24,
+  "prompt_aligned_256": false,
+  "cache_len": 32,
+  "canvas_length": 256,
+  "max_denoising_steps": 12,
+  "gumbel_mode": "argmax",
+  "blocks_emitted": 1,
+  "tokens_emitted": 256,
+  "ttft_s": 11.727600001730025,
+  "per_block_latency_s": [
+    10.337570445146412
+  ],
+  "mean_block_latency_s": 10.337570445146412,
+  "tokens_per_block_per_s": 24.764039225502394,
+  "denoise_steps_per_block": [
+    12
+  ],
+  "halted_per_block": [
+    false
+  ],
+  "final_next_pos": 288,
+  "text_chars": 363,
+  "text": " diffusion language model is a generative model that creates text by starting with random noise or discrete tokens and iteratively refines them into a coherent sequence through a denoising process.\n\n\n\n\u6a21\u578b model model model model model\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\u3002\uff0c\uff0c\uff0c,\uff0c\u3002\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\uff0c\u3002\u3002\u751f\u6210\u3002.....\n\n**,,, model model model\n\n model\n\n, model model model\uff0c\u3001\u3001\n\n\u3001\u3001\u3001\u3001\u3001\n\n\n.\n\n.\u751f\u6210 ("
+}
