@@ -188,13 +188,32 @@ def _write_canvas_kv_contiguous(
     v_perm = ttnn.transpose(canvas_v, 1, 2)
 
     if write_batch <= 1:
+        # ``paged_update_cache`` requires the update tensor to be HEIGHT_SHARDED with
+        # one core per user (batch), shard width == head_dim, ROW_MAJOR — the exact
+        # contract the proven decode single-user write uses
+        # (``gemma4/tt/attention/decode.py`` ``sequential_kv_write``:
+        # ``single_user_mem`` = 1 core, shard shape ``[TILE, head_dim]``). Our
+        # per-position slice is ``[1, 1, nkv, hd]`` (num_users=1), so reshard it onto
+        # one core with the tile-padded nkv height before the write; a bare
+        # DRAM-interleaved slice trips the op's ``is_sharded()`` assert.
+        shard_h = ((nkv + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+        single_user_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(one_core, [shard_h, hd], ttnn.ShardOrientation.ROW_MAJOR),
+        )
         for t in range(canvas_len):
             kb = ttnn.slice(k_perm, [0, t, 0, 0], [1, t + 1, nkv, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
             vb = ttnn.slice(v_perm, [0, t, 0, 0], [1, t + 1, nkv, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.experimental.paged_update_cache(k_cache, kb, update_idxs=[start_pos + t])
-            ttnn.experimental.paged_update_cache(v_cache, vb, update_idxs=[start_pos + t])
+            kb_s = ttnn.to_memory_config(kb, single_user_mem)
+            vb_s = ttnn.to_memory_config(vb, single_user_mem)
+            ttnn.experimental.paged_update_cache(k_cache, kb_s, update_idxs=[start_pos + t])
+            ttnn.experimental.paged_update_cache(v_cache, vb_s, update_idxs=[start_pos + t])
             kb.deallocate(True)
             vb.deallocate(True)
+            kb_s.deallocate(True)
+            vb_s.deallocate(True)
         k_perm.deallocate(True)
         v_perm.deallocate(True)
         return
@@ -435,10 +454,14 @@ def _commit_attention_batched(
     # means a KV-shared layer transparently sees the source layer's canvas K/V.
     full_k, full_v = _read_cache_kv(kv_cache, end_pos=start_pos + canvas_len)
 
-    tt_q_dram = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-    if tt_q_dram is not tt_q:
-        tt_q.deallocate(True)
-    tt_q = tt_q_dram
+    # tt_q is already DRAM-interleaved (chunked RoPE emits DRAM). Only convert when
+    # it is not — an unconditional no-op ``to_memory_config`` returns a fresh, NOT-
+    # allocated alias here, so the SDPA input dies. Mirrors the guarded decode path
+    # (``commit_decode.py``).
+    if tt_q.memory_config().buffer_type != ttnn.BufferType.DRAM:
+        tt_q_l1 = tt_q
+        tt_q = ttnn.to_memory_config(tt_q_l1, ttnn.DRAM_MEMORY_CONFIG)
+        tt_q_l1.deallocate(True)
 
     tt_sdpa = _sdpa_causal_masked(tt_q, full_k, full_v, attn_mask=attn_mask, head_dim=config.head_dim)
     tt_q.deallocate(True)

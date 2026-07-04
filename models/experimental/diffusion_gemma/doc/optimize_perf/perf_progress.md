@@ -372,3 +372,21 @@ block has flipped to **commit-bound**. The remaining path to 30 t/s is now clear
 with early-halt (~18–25 steps) projects to **~21–28 t/s** — within reach of the 30 target. Lever B is
 a substantial but well-specified build (a verified causal prefill-append), left as the clear next
 investment rather than landed unverified (the hard rule is verify KV before keeping).
+
+## Session summary (2026-07-04 session 3) — consolidation + Lever B device-verify
+
+| item | outcome |
+|---|---|
+| Consolidate branches | **DONE** — cherry-picked `path_to_30tps.md` (roadmap) + the 3 commit-batching commits onto `diffusion-gemma-function`; pushed. gemma4 gate clean. |
+| Lever B batched commit — make it RUN | **FIXED 2 real bugs** — (1) sharded KV write for `paged_update_cache` (was DRAM-interleaved → `is_sharded()` fatal); (2) guarded `to_memory_config` (no-op DRAM alias returned an unallocated SDPA input). Batched commit now runs. |
+| Lever B — commit_ms speedup | **6.3× measured** (1031 ms vs 6503 ms @ L=6; the "one 256-token forward vs 256 forwards" win is real). |
+| Lever B — KV bit-equivalence | **FAIL (0.43), stays OPT-IN.** Root-caused to the **MoE expert kernel** (see `commit_batching.md`): layer-0 attention / shared_mlp bit-exact, router 0.98 (99.6% expert-mask agree), but `_commit_experts_decode_forward` (sequential, decode `sparse_matmul` nnz=8) diverges **0.17** from the verified-correct batched experts (`moe.experts`/`sparse_experts_forward`, ≈torch 0.9997). The **batched commit is likely *more* correct**; the sequential decode-commit MoE (never PCC-verified, RUN-first) is the suspect reference. Ruled out: masked SDPA (0.998 vs torch), RAW hazard, norms. |
+
+**Bottom line (session 3):** Lever B is now a *running*, 6.3×-faster commit, but it cannot be landed
+by default because its KV cache disagrees (0.43) with the sequential decode-append reference — and the
+divergence is a genuine defect in the **sequential** path's MoE expert kernel, not the batched one.
+Landing Lever B (and reaching ~21–28 t/s) is now gated on ONE well-defined task: verify the batched
+commit KV against a **torch** commit reference (bypassing the buggy sequential), or fix
+`_commit_experts_decode_forward` to match `moe.experts`/torch, then flip `DG_COMMIT_BATCHED` on by
+default. Evidence: `verify_commit_batching.py` (per-layer PCC), `probe_commit_l0attn.py` (stage
+isolation), `probe_masked_sdpa.py` (SDPA vs torch), `artifacts/leverB_*.log`.

@@ -271,16 +271,25 @@ def main() -> int:
         worst_where = None
         max_abs = 0.0
         failures = []
+        per_layer = []  # (layer_idx, worst_k_pcc, worst_v_pcc, max_k_absdiff, max_v_absdiff)
         for layer_idx, ((sk, sv), (bk, bv)) in enumerate(zip(seq_region, batched_region)):
+            layer_stats = {"K": (1.0, 0.0), "V": (1.0, 0.0)}
             for name, s_shards, b_shards in (("K", sk, bk), ("V", sv, bv)):
                 for dev, (s, b) in enumerate(zip(s_shards, b_shards)):
                     pcc = _pcc(s, b)
                     diff = float((s - b).abs().max())
                     max_abs = max(max_abs, diff)
+                    lp, ld = layer_stats[name]
+                    layer_stats[name] = (min(lp, pcc), max(ld, diff))
                     if pcc < worst_pcc:
                         worst_pcc, worst_where = pcc, f"layer{layer_idx}.{name}.dev{dev}"
                     if pcc < args.pcc:
                         failures.append((layer_idx, name, dev, pcc, diff))
+            per_layer.append((layer_idx, *layer_stats["K"], *layer_stats["V"]))
+
+        print("per-layer worst PCC (K / V), max_abs (K / V):")
+        for li, kp, kd, vp, vd in per_layer:
+            print(f"  layer {li:2d}  K pcc={kp:.5f} max={kd:.3e}   V pcc={vp:.5f} max={vd:.3e}")
 
         print("=" * 72)
         print(

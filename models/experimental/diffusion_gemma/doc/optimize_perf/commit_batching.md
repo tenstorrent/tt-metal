@@ -137,6 +137,58 @@ before/after.
 - **`write_batch>1`** (fast contiguous write) unproven on device; default is the per-position
   write that matches the sequential op exactly.
 
+## Device verification results (2026-07-04, QB2 1x4) — **NOT bit-equivalent → stays opt-in**
+
+`verify_commit_batching.py` was run on the real 26B-A4B backbone (L=6, contiguous cache).
+Two real bugs were found and fixed to make the batched path RUN at all:
+
+1. **Sharded KV write** (`_write_canvas_kv_contiguous`): `paged_update_cache` requires a
+   HEIGHT_SHARDED, one-core-per-user update tensor (shard width == head_dim); the per-position
+   canvas-K/V slice was DRAM-interleaved and tripped `input_tensor.is_sharded()`. Fixed by
+   resharding each `[1,1,nkv,hd]` slice onto one core with the tile-padded shard, exactly like
+   the proven decode `sequential_kv_write` (`gemma4/tt/attention/decode.py`).
+2. **`to_memory_config` no-op alias** (`_commit_attention_batched`): the chunked RoPE already
+   emits DRAM, so an unconditional `to_memory_config(tt_q, DRAM)` returned a fresh **unallocated**
+   alias and the SDPA input died (`is_allocated()`). Fixed with the guarded `if buffer_type != DRAM`
+   convert, mirroring `commit_decode.py`.
+
+**Commit speedup (real):** batched commit ≈ **6.3× faster** than the 256 sequential decode-appends
+(1031 ms vs 6503 ms at L=6, sparse denoise MoE; 6.6× with dense).
+
+**KV bit-equivalence: FAIL.** worst KV PCC **0.43** at L=6 (threshold 0.997). The divergence was
+localized layer-by-layer with `probe_commit_l0attn.py`:
+
+| layer-0 stage | PCC (batched vs sequential) |
+|---|---|
+| attention output | **0.99992** (bit-exact) |
+| shared_mlp input | **0.99994** (bit-exact) |
+| shared_mlp output | **0.99975** (bit-exact) |
+| router output (dense_routing) | 0.98097 — expert-mask agreement **99.6%**, both nnz=8 |
+| **MoE expert output** | **0.16551** (catastrophic) |
+
+**Root cause = the MoE EXPERT KERNEL, not routing.** Everything up to and including the router is
+bit-exact / near-exact; the routed-expert *output* is near-uncorrelated (0.17). Diluted by the
+bit-exact shared_mlp + residual, this gives ~0.94 layer-1 KV, compounding to 0.43 by layer 5 (and
+would be worse across 30). Crucially:
+- The batched commit's experts (`moe.experts` dense, and `sparse_experts_forward`) are **independently
+  verified ≈ torch/dense at 0.9997** (denoise + leverA). Dense-MoE and sparse-MoE batched variants
+  give the *same* 0.43, so it is not the sparse-gather approximation.
+- The sequential commit's `_commit_experts_decode_forward` (decode `sparse_matmul` nnz=8) is the
+  **outlier** — it has never been PCC-verified vs torch (RUN-first path). It diverges 0.17 from the
+  verified-correct batched experts on identical routing + bit-exact input.
+
+**Conclusion:** the batched commit is **likely more correct** than the sequential decode-append
+reference; they simply disagree because `_commit_experts_decode_forward` appears defective. Per the
+hard rule (verify before landing), the batched commit **stays opt-in / default-off**. It is NOT that
+the batched path is wrong — the *reference* is suspect. Also ruled out with device evidence: masked
+flash SDPA (`probe_masked_sdpa.py`, 0.998 vs torch), a read-after-write cache hazard (a
+`synchronize_device` before the read changed nothing), and the layer-body norms (bit-exact).
+
+**To land Lever B next session (unlocks the path to 30 t/s):** verify the batched commit KV against a
+**torch commit reference** (not the buggy sequential), OR reconcile / fix `_commit_experts_decode_forward`
+against `moe.experts`/torch so the two commit paths agree — then flip the default. This is also a
+#48291-relevant finding: the RUN commit may be writing slightly-wrong prefix KV.
+
 ## How to enable / verify
 
 ```bash
