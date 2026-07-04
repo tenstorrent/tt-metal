@@ -81,7 +81,7 @@ def probe(demo_dir: Path) -> dict:
 
     # trace-capturable entry: UNIVERSAL, but the UNIT differs by class — a fixed-shape decode_step for an
     # autoregressive model, or a fixed-shape forward pass for a feed-forward model (encoder / vocoder / etc).
-    if not re.search(r"def decode_step|def decode_trace|begin_trace_capture|def trace_capture_selftest", src):
+    if not ("begin_trace_capture" in src and re.search(r"def\s+trace_capture_selftest", src)):
         if is_ar:
             g = lad["decode_step"][1]
         else:
@@ -116,7 +116,7 @@ def _device_selftest(demo_dir: Path) -> dict | None:
         return {"ok": False, "reason": "cannot import tt.pipeline: %s" % e}
     fn = getattr(mod, "trace_capture_selftest", None)
     if fn is None:
-        return None
+        return {"ok": False, "reason": "no trace_capture_selftest hook to run a real device capture"}
     try:
         ok = bool(fn())
         return {"ok": ok, "reason": "" if ok else "trace_capture_selftest returned False"}
