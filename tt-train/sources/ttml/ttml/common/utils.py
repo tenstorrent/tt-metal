@@ -65,19 +65,12 @@ def build_mesh(device_config) -> "ttml.Mesh":
         axis_names[active] = enabled_names[0]
     else:
         if len(enabled_names) != n:
-            # Allow DP-only on a 2D mesh (axis 0 becomes "dp"). The remaining axis stays a
-            # placeholder ("_i") that the caller may rename (e.g. to "moe_tp") to shard only
-            # the MoE expert dim while the batch is data-parallel across "dp".
-            if enabled_names == ["dp"]:
-                axis_names[0] = "dp"
-            else:
-                raise ValueError(
-                    f"Mesh {shape} requires {n} parallelisms enabled "
-                    f"(any subset of enable_ddp / enable_fsdp / enable_tp); got enabled={enabled_names}"
-                )
-        else:
-            for i, name in enumerate(enabled_names):
-                axis_names[i] = name
+            raise ValueError(
+                f"Mesh {shape} requires {n} parallelisms enabled "
+                f"(any subset of enable_ddp / enable_fsdp / enable_tp); got enabled={enabled_names}"
+            )
+        for i, name in enumerate(enabled_names):
+            axis_names[i] = name
     return ttml.Mesh(shape, tuple(axis_names))
 
 

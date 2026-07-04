@@ -66,14 +66,14 @@ class DeepSeekConfig:
     # with this name (size > 1), MoE blocks use SparseMoETP — every
     # chip in that axis holds all routed experts with each expert's
     # intermediate dim sharded across the axis. Set to None to disable.
-    moe_tp_axis_name: str | None = None
+    moe_axis_name: str | None = None
     # Full-model TP on the named mesh axis ``"tp"`` (attention, dense MLP,
     # LM head, and sparse MoE). When True, ``SparseMoETP`` uses ``"tp"``
-    # directly; ``moe_tp_axis_name`` is only for MoE-only TP experiments
+    # directly; ``moe_axis_name`` is only for MoE-only TP experiments
     # when this flag is False.
     use_tp: bool = False
     # How to use the MoE axis (the axis that ``SparseMoETP`` would otherwise
-    # use — ``"tp"`` when ``use_tp=True``, else ``moe_tp_axis_name``):
+    # use — ``"tp"`` when ``use_tp=True``, else ``moe_axis_name``):
     #   "tp" — SparseMoETP: every chip holds all E experts, sharded intermediate
     #          dim; all_reduce after the FFN combines partials.
     #   "ep" — SparseMoEEP: each chip holds E / D experts (full weights),

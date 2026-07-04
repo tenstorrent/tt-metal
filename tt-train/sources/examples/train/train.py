@@ -793,17 +793,17 @@ def main() -> None:
 
     mesh = build_mesh(device_cfg)
 
-    # Optional MoE-only tensor-parallel axis (DeepSeek). device_cfg.moe_tp_axis is an index
+    # Optional MoE-only tensor-parallel axis (DeepSeek). device_cfg.moe_axis is an index
     # into mesh_shape; rename that mesh axis to "moe_tp" (unless it already carries a
     # parallelism name) and record it on the DeepSeek spec so SparseMoETP/EP shards experts
     # across it. When enable_tp is true, MoE uses the "tp" axis and this is ignored.
-    moe_ax = device_cfg.moe_tp_axis
+    moe_ax = device_cfg.moe_axis
     resolved_moe_axis: str | None = None
     if moe_ax != -1:
         shape = tuple(int(s) for s in device_cfg.mesh_shape)
         if not (0 <= moe_ax < len(shape)):
             raise ValueError(
-                f"device_config.moe_tp_axis ({moe_ax}) is out of range for mesh_shape of length {len(shape)}"
+                f"device_config.moe_axis ({moe_ax}) is out of range for mesh_shape of length {len(shape)}"
             )
         names = list(mesh.axis_names)
         logical = names[moe_ax]
@@ -817,7 +817,7 @@ def main() -> None:
     # Record the resolved MoE axis on the DeepSeek spec so sparse_tp/sparse_ep shard experts
     # across it (tp-vs-ep comes from the spec's moe_type). No-op for non-DeepSeek models.
     if model_cfg.model_type == "deepseek":
-        model_cfg.spec.moe_tp_axis_name = resolved_moe_axis
+        model_cfg.spec.moe_axis_name = resolved_moe_axis
 
     if device_cfg.enable_ddp or device_cfg.enable_tp or moe_ax != -1:
         print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")

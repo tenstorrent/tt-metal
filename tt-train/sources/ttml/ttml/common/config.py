@@ -34,7 +34,7 @@ class DeviceConfig:
         # MoE experts on. The axis is registered on the mesh under the name
         # "moe_tp". Whether that axis is used as tensor- or expert-parallel is
         # chosen by the model's moe_type (sparse_tp vs sparse_ep), not here.
-        self.moe_tp_axis = int(device_config.get("moe_tp_axis", -1))
+        self.moe_axis = int(device_config.get("moe_axis", -1))
         self.enable_fsdp = device_config.get("enable_fsdp", False)
         # Defaults to True: build as deferred metadata -> fully_shard -> materialize already-sharded,
         # so large models (e.g. 32B) never materialize a full replicated copy on one chip.

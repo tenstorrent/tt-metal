@@ -89,12 +89,12 @@ class DeepSeekBlock(AbstractModuleBase):
                 self.ffn = MoE(config)
             elif moe_type == "sparse":
                 mesh = _ttml.maybe_mesh()
-                # Resolve the MoE axis: full-model TP → "tp", else moe_tp_axis_name
+                # Resolve the MoE axis: full-model TP → "tp", else moe_axis_name
                 # if it points at a real axis with size > 1, else no MoE axis.
                 if use_tp:
                     moe_axis_name = "tp"
                 else:
-                    tp_name = getattr(config, "moe_tp_axis_name", None)
+                    tp_name = getattr(config, "moe_axis_name", None)
                     moe_axis_name = (
                         tp_name
                         if (

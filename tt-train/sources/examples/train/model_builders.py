@@ -82,12 +82,12 @@ class _DeepSeekSpec:
     #   sparse_tp — sparse + tensor-parallel experts (shard the intermediate dim)
     #   sparse_ep — sparse + expert-parallel (partition the expert list)
     # sparse_tp / sparse_ep shard across the "tp" axis (full-model TP) or the mesh axis
-    # named by device_config.moe_tp_axis; with no such axis they degrade to plain sparse.
+    # named by device_config.moe_axis; with no such axis they degrade to plain sparse.
     moe_type: Literal["dense", "sparse", "sparse_tp", "sparse_ep"] = "sparse"
     moe_hyperparam: _MoEHyperparam = field(default_factory=_MoEHyperparam)
-    # Resolved MoE-parallel mesh axis name, filled from device_config.moe_tp_axis in
+    # Resolved MoE-parallel mesh axis name, filled from device_config.moe_axis in
     # train.py:main() (not parsed from YAML). None => no MoE-only TP axis.
-    moe_tp_axis_name: str | None = None
+    moe_axis_name: str | None = None
 
 
 @dataclass
@@ -259,11 +259,11 @@ def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
     lib_moe_type, parallel_type = _MOE_TYPE_TO_LIB[spec.moe_type]
 
     # Resolve the expert-sharding axis for sparse_tp/sparse_ep: "tp" under full-model TP, else
-    # the axis resolved from device_config.moe_tp_axis (set on the spec in main()). If neither is
+    # the axis resolved from device_config.moe_axis (set on the spec in main()). If neither is
     # available the library falls back to single-chip SparseMoE, so no axis is not an error.
-    moe_tp_axis_name = None
+    moe_axis_name = None
     if parallel_type is not None:
-        moe_tp_axis_name = "tp" if use_tp else spec.moe_tp_axis_name
+        moe_axis_name = "tp" if use_tp else spec.moe_axis_name
 
     h = spec.moe_hyperparam
     inter_dim = spec.inter_dim or _default_mlp_inter_dim(cfg.embedding_dim)
@@ -292,7 +292,7 @@ def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
             max_seq_len=cfg.max_sequence_length,
             rope_theta=spec.theta,
             runner_type=cfg.runner_type,
-            moe_tp_axis_name=moe_tp_axis_name,
+            moe_axis_name=moe_axis_name,
             moe_parallel_type=parallel_type or "tp",
             use_tp=use_tp,
         )

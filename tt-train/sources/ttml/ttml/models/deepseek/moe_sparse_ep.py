@@ -63,7 +63,7 @@ class SparseMoEEP(MoE):
         # the same axis carries EP-sharded experts instead of TP-sharded ones.
         # (DP + EP on the same axis would need an extra routing CCL, not used here.)
         if axis_name is None:
-            axis_name = getattr(config, "moe_tp_axis_name", None) or "tp"
+            axis_name = getattr(config, "moe_axis_name", None) or "tp"
         super().__init__(config, expert_ep_axis_name=axis_name)
         self.axis_name = axis_name
         self.cluster_axis = ttml.mesh().axis_index(axis_name)
