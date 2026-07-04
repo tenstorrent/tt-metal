@@ -524,12 +524,30 @@ the prerequisite for the ~137 ms/step tracing win. Opt-in (discards per-step tra
 recommended-on for serving throughput, kept off by default so record-consuming callers (text_demo/tests) are unaffected.
 Artifacts: `artifacts/task4_deviceloop_30L_s24.{json,log}`, `task4_traced_step_sweep.log`. No gemma4 edits.
 
-**Next (scoped, not landed): trace-capture the device-only loop** (win B, ~137 ms/step → step 725→~590 ms → block @24
-~15.7 s → ~16 t/s). Blockers to solve, from the measurement: (1) per-step renoise tokens are host-uploaded each step
-(`make_seeded_host_noise_tokens_fn`) — `from_torch` is a WRITE, forbidden in trace capture; must pre-upload all ≤48
-steps' seeded renoise tokens to persistent device buffers and index them, refilled per block; (2) the self-conditioning
-adapter's prev-logits state must be a persistent trace buffer updated in-place (prof only traced a single reset-per-step
-step, not the stateful loop). Both are the standard traced-decode input-buffer pattern; `run_fixed_denoise_steps` already
-takes preallocated `constants`, and `verify_trace_safe_loop.py` proved the device-feedback loop is trace-safe with a
-synthetic logits fn. The other big in-repo per-step lever is `path_to_100tps` rank 2 (OPT-004 matmul-geometry tuning of
-the 5 untuned `tt/sparse_moe.py` matmuls, MoE 10.5→~5–6 ms/layer → ~150 ms/step).
+**Trace-capture the device-only loop (win B) — DEVICE-PROVEN 2.29× + blocker ISOLATED** (`probe_traced_denoise_loop.py`,
+real adapter, L=6, 8 steps, `DG_SPARSE_MOE=1`, pre-uploaded per-step renoise buffers). Capturing the whole
+`run_fixed_denoise_steps` device loop (real adapter forward + frozen prompt-KV read) as ONE Metal trace and replaying it:
+
+| self-conditioning | eager ms/step | **traced ms/step** | **win** | committed match |
+|---|---|---|---|---|
+| ENABLED (default) | 354.4 | 155.4 | **2.28×** | **60.5% ✗** |
+| DISABLED | 303.4 | 132.4 | **2.29×** | **100.0% ✓** |
+
+**So the traced serving denoise loop is trace-correct AND ~2.29× faster — the SOLE correctness blocker is the
+self-conditioning.** (Contrast: `verify_trace_safe_loop.py`'s *stateless* synthetic logits fn traces at 99.9%; the real
+adapter's only cross-step mutable state is self-cond.) Projected to 30L: traced serving step ~461 ms (prof) vs eager
+~756 ms → **block @24 ~12.6 s → ~20 t/s** (from 13.55), **@12 steps ~36 t/s** — the traced loop is THE lever to verified
+30 (with adaptive halt to ~12–18 steps). The per-step renoise host-upload blocker is already solved (pre-upload to
+persistent device buffers; `run_fixed_denoise_steps` takes preallocated `constants`).
+
+**Root cause of the self-cond blocker** (`DenoiseLogitsAdapter`, `tt/denoise_forward.py:577-593`): `self.prev_logits` is a
+**fresh `[1,1,256,262144]` alloc each step**, chained (step N reads step N-1's buffer, then deallocs it), and **step 0 is
+special** (`prev_logits=None` → self-cond skipped). A fixed Metal trace bakes in buffer addresses and runs one fixed graph
+for every step, so (a) the chained fresh-alloc `prev_logits` is not address-stable across replays and (b) step-0's
+skip-vs-condition cannot vary within a fixed graph. **Fix (scoped, DiffusionGemma-local, next session):** make the
+self-cond signal use a **persistent preallocated `prev_logits` buffer** updated **in-place** each step, with step 0 fed a
+**zeroed signal** (or run step 0 eager + steps 1..N−1 traced), reset per block. This is a real adapter change with a
+decision-fidelity check (the self-cond signal feeds the diffusion decisions), so it is scoped, not landed. The other big
+in-repo per-step lever is `path_to_100tps` rank 2 (OPT-004 matmul-geometry tuning of the 5 untuned `tt/sparse_moe.py`
+matmuls, MoE 10.5→~5–6 ms/layer). Artifacts: `probe_traced_denoise_loop.py`,
+`artifacts/task4_traced_loop_probe_L6{,_noselfcond}.log`.
