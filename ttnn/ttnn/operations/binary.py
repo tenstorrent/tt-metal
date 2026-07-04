@@ -508,3 +508,43 @@ def _golden_function_logical_right_shift(input_tensor_a, shift_amt, *args, **kwa
 ttnn.attach_golden_function(ttnn.logical_right_shift, golden_function=_golden_function_logical_right_shift)
 
 __all__ = []
+
+# --- Scalar-Tensor form for commutative binary ops -----------------------------
+# Some binary ops are algebraically commutative (add, multiply, logical_and/or/xor,
+# squared_difference, logaddexp, logaddexp2). Their tensor-scalar overload only
+# accepts (Tensor, Scalar); this shim also lets callers write (Scalar, Tensor).
+# Non-commutative ops (subtract, divide, ldexp, xlogy, remainder, logical_right_shift)
+# are NOT wrapped — those need a real inverse kernel (rsub/rdiv/etc.).
+
+_COMMUTATIVE_BINARY_OPS = (
+    "add",
+    "multiply",
+    "logical_and",
+    "logical_or",
+    "logical_xor",
+    "squared_difference",
+    "logaddexp",
+    "logaddexp2",
+)
+
+
+def _make_scalar_tensor_shim(inner, op_name):
+    def wrapper(a, b, *args, **kwargs):
+        if isinstance(b, ttnn.Tensor) and not isinstance(a, ttnn.Tensor):
+            a, b = b, a
+            la = kwargs.pop("input_tensor_a_activations", None)
+            lb = kwargs.pop("input_tensor_b_activations", None)
+            if la is not None:
+                kwargs["input_tensor_b_activations"] = la
+            if lb is not None:
+                kwargs["input_tensor_a_activations"] = lb
+        return inner(a, b, *args, **kwargs)
+
+    wrapper.__name__ = f"{op_name}_st_shim"
+    return wrapper
+
+
+for _op_name in _COMMUTATIVE_BINARY_OPS:
+    _op = getattr(ttnn, _op_name, None)
+    if _op is not None and hasattr(_op, "function"):
+        _op.function = _make_scalar_tensor_shim(_op.function, _op_name)
