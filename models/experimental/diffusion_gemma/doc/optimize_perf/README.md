@@ -78,6 +78,22 @@ eager, device canvas feedback).
 - `verify_trace_safe_loop.py` — trace-safe fixed-step loop correctness (device canvas feedback).
 - `artifacts/*.log` — raw run logs; `tracy/` — tt-perf-report CSV/tables.
 
+## OPT-004 — matmul-geometry tuning of the 5 sparse-MoE matmuls (rank 2)
+
+The sparse MoE's 5 `ttnn.matmul` calls (`tt/sparse_moe.py`) were never given a `program_config` — the
+Lever-A prototype let the op auto-select, reading the expert bank at only ~46 GB/s (~18% of the @256
+roofline). OPT-004 adds explicit core-grid + `in0_block_w` geometry (batched gate/up/down force
+`per_core_N==Nt` and distribute the 128 experts across the grid → 128 cores / 1 expert each on BH;
+gather/combine use 2D configs), opt-in via **`DG_SPARSE_MOE_TUNED=1`** (flag-off = byte-identical
+prototype). Targets MoE 10.5 → ~5–6 ms/layer.
+
+- `opt004_matmul_geometry.md` — per-matmul shape/tile/grid/`in0_block_w`/subblock/L1-budget rationale +
+  the TTNN op-contract facts (`per_core_N==Nt`, `split_work_to_cores`, 2D M-over-y/N-over-x) that fix
+  the geometry, and the expected-impact reconciliation.
+- `bench_opt004_matmul_geometry.py` — device verify + candidate-sweep bench: untuned-vs-tuned per matmul
+  (PCC ≈ 1.0), a geometry sweep per role, and full-MoE off-vs-on latency + PCC-vs-dense.
+  **Write-only; run on QB2 when the device is free.**
+
 ## Commit batching (#47557) — the 31.5 s/block commit
 
 The commit row above (256 single-token decode-appends = **31.5 s/block**) is the next lever. The
