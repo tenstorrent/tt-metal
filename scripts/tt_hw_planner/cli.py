@@ -11180,18 +11180,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             "(current behavior, no parallelism guidance)."
         ),
     )
-    pe2e.add_argument(
-        "--host-free",
-        action="store_true",
-        dest="host_free",
-        help=(
-            "After the correctness gate passes, run PHASE 4: rewrite the decode to be host-free / "
-            "trace-capturable (weights resident, KV cache, on-device token feed) driven by a "
-            "trace-capture gate, so trace + 2CQ + TPS can run. Model-agnostic: the gate detects the "
-            "host ops present and drives only the rungs that apply. Default off = emit-e2e stops at the "
-            "correct on-device-compute pipeline (byte-identical to before)."
-        ),
-    )
     pe2e.set_defaults(func=cmd_emit_e2e)
 
     popt = sub.add_parser(

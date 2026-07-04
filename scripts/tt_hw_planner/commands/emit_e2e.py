@@ -293,8 +293,11 @@ def _build_cc_fix_prompt(*, model_id, demo_dir, pcc) -> str:
 
 def cmd_emit_e2e(args) -> int:
     rc = _emit_e2e_phase_a(args)
-    if rc == 0 and bool(getattr(args, "host_free", False)):
-        return _run_phase_b_host_free(args)
+    if rc != 0:
+        return rc
+    if os.environ.get("E2E_SKIP_HOST_FREE") == "1":
+        return rc
+    _run_phase_b_host_free(args)
     return rc
 
 
@@ -365,7 +368,7 @@ def _run_phase_b_host_free(args) -> int:
     allowed = ["mcp__host-free-mcp__termination_check", "Read", "Edit", "Write", "Bash", "Grep", "Glob"]
     sep = "=" * 78
     print("\n" + sep)
-    print("  ===== PHASE 4 (--host-free): make the decode host-free / trace-capturable =====")
+    print("  ===== PHASE 4: make the decode host-free / trace-capturable (always run) =====")
     print(sep)
     res = cc_harness.run_cc_loop(
         prompt=prompt,
