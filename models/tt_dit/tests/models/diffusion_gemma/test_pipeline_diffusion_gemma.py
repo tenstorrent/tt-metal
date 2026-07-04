@@ -200,11 +200,13 @@ def test_pipeline_diffusion_gemma(
         logger.warning(f"encoder PCC assert (should not fire, no threshold): {e}")
 
     # 2b. One decoder forward at the seed canvas. We also capture the pre-lm_head hidden
-    # state so we can tell whether drift accumulates in the layer stack or in lm_head+softcap.
+    # state so we can tell whether drift accumulates in the layer stack or in lm_head+softcap,
+    # AND per-layer hidden states so we can find WHICH layer(s) introduce the drift.
     decoder_position_ids = torch.arange(
         input_ids.shape[1], input_ids.shape[1] + canvas_length, dtype=torch.long
     ).unsqueeze(0)
     pipeline._debug_capture_decoder_hidden = True
+    pipeline.tt_model.model.decoder._debug_capture_per_layer_hidden = True
     tt_logits = pipeline._run_decoder(
         seed_canvas,
         encoder_kv,
@@ -214,6 +216,8 @@ def test_pipeline_diffusion_gemma(
         self_cond_logits=None,
     )
     pipeline._debug_capture_decoder_hidden = False
+    pipeline.tt_model.model.decoder._debug_capture_per_layer_hidden = False
+    tt_per_layer_hidden = pipeline.tt_model.model.decoder._last_per_layer_hidden
     tt_dec_h_host = pipeline._last_decoder_hidden_host
     if tt_dec_h_host is not None and tt_dec_h_host.ndim == 4 and tt_dec_h_host.shape[0] == 1:
         tt_dec_h_host = tt_dec_h_host.squeeze(0)
@@ -256,6 +260,31 @@ def test_pipeline_diffusion_gemma(
         assert_quality(hf_dec_h, tt_dec_h_host)  # logs PCC; no threshold, no raise
     except Exception as e:
         logger.warning(f"pre-lm_head PCC assert (should not fire, no threshold): {e}")
+
+    # [2b-per-layer] Per-layer decoder hidden PCC. HF exposes ``hidden_states`` as the tuple
+    # (input_embeds, layer_1_out, layer_2_out, ..., layer_N_out, final_norm). We compare the
+    # per-layer outputs. This is diagnostic — no thresholds; find WHICH layer(s) introduce drift.
+    tt_layer_types = list(pipeline.tt_model.model.decoder.layer_types)
+    if len(hf_full.hidden_states) >= len(tt_per_layer_hidden) + 1:
+        import math
+
+        logger.info("[2b-per-layer] TT vs HF hidden-state PCC per layer:")
+        prev_pcc = None
+        for i, tt_h in enumerate(tt_per_layer_hidden):
+            hf_h = hf_full.hidden_states[i + 1]
+            a = hf_h.detach().flatten().to(torch.float64)
+            b = tt_h.detach().flatten().to(torch.float64)
+            cov = torch.cov(torch.stack([a, b]))
+            pcc = (cov[0, 1] / (math.sqrt(cov[0, 0].item()) * math.sqrt(cov[1, 1].item()) + 1e-30)).item()
+            delta = f"  Δ={((pcc - prev_pcc) * 100):+.3f}pp" if prev_pcc is not None else ""
+            lt = tt_layer_types[i][:8]
+            logger.info(f"  layer {i:02d} ({lt:>8}): PCC={pcc * 100:7.4f}%{delta}")
+            prev_pcc = pcc
+    else:
+        logger.warning(
+            f"HF hidden_states has {len(hf_full.hidden_states)} entries — expected "
+            f">= {len(tt_per_layer_hidden) + 1}. Per-layer diagnostic skipped."
+        )
 
     logger.info("=" * 70)
     logger.info(f"[2c] Decoder logits (post lm_head + softcap) — hf {hf_logits.shape}, tt {tt_logits.shape}")
@@ -313,7 +342,7 @@ def test_pipeline_diffusion_gemma(
             self_cond_logits=self_cond_logits,
         )
         argmax_canvas = logits.argmax(dim=-1)
-        processed_logits = logits_processor(logits, cur_step=step)
+        processed_logits = logits_processor(current_canvas, logits, cur_step=step)
         probs = torch.softmax(processed_logits.float(), dim=-1)
         denoiser_canvas = torch.distributions.Categorical(probs=probs).sample()
         accepted = sampler.accept_canvas(current_canvas, denoiser_canvas, processed_logits, step)
