@@ -442,3 +442,64 @@ commit KV against a **torch** commit reference (bypassing the buggy sequential),
 `_commit_experts_decode_forward` to match `moe.experts`/torch, then flip `DG_COMMIT_BATCHED` on by
 default. Evidence: `verify_commit_batching.py` (per-layer PCC), `probe_commit_l0attn.py` (stage
 isolation), `probe_masked_sdpa.py` (SDPA vs torch), `artifacts/leverB_*.log`.
+
+## Lever 4 (terminal-path trim) — argmax-reduction dedup — **DEVICE-FREE BUILT** (opt-in `DG_DEDUP_ARGMAX`, pending device verify) — session 4
+
+`path_to_100tps.md` rank 3 / lever 4 ("dedup the two full-vocab argmaxes over 262144"). This is the
+first, safest, and largest device-free-buildable slice of the terminal-path trim. It lands in
+`tt/denoise_loop.py`; **no gemma4 edits**; the default path is byte-for-byte unchanged (opt-in behind
+`DG_DEDUP_ARGMAX`, mirroring `DG_COMMIT_BATCHED`).
+
+**The redundancy (from the code).** In the argmax-sampling regime (`gumbel_noise is None` — the
+RUN-first serving default, `serving.GUMBEL_MODES[0] == "argmax"`), `denoise_step` issues **two**
+full-vocab (262144) argmax reductions per step over *different* tensors:
+`sampled = argmax_last_dim(logits / T)` (`gumbel_max` scales first) and `argmax = argmax_last_dim(logits)`
+(the clean commit candidate). Each ROW_MAJOR argmax over the production vocab is ~14.4 ms
+(`tt/sampling.py` `argmax_last_dim` docstring: 1240 ms TILE → 14.4 ms ROW_MAJOR). Note the two prior
+bench variants (`bench_sampling_step.py` `share_z` / `chunked_entropy`) only dedup the *temperature
+multiply* — they still emit **two** `argmax_last_dim(z)` reductions — so the reduction dedup was
+genuinely unbuilt.
+
+**The dedup.** `_sample_and_argmax` computes the raw-logit argmax **once** and clones the tiny
+`[B,1,L,1]` index for `sampled`, dropping one 262144-wide reduction **and** the `logits / T` multiply
+per step.
+
+**Correctness (by code inspection; the verify script is the device gate).**
+- The committed `argmax`, `entropy`, and the entropy-budget `accept` mask are **bit-identical** to the
+  default path by construction — the dedup does not touch `argmax_last_dim(logits)` or `token_entropy`,
+  and `accept` is a pure function of `entropy`. So the **committed token and the early-halt decision
+  are unchanged**.
+- `argmax(logits / T) == argmax(logits)` exactly for any `T > 0` (positive scaling is order-preserving),
+  so `sampled` is the same token in exact arithmetic. On device the logits are **bf16**, so the
+  default's `logits / T` multiply can, at a position whose top-2 logits are adjacent bf16 values, round
+  them equal and flip that position's `sampled` index. The dedup's `sampled = argmax(logits)` therefore
+  differs from the default `sampled` **only at exactly those temperature-rescale ties** — positions
+  where the default path's own two argmaxes already disagree (`sampled != argmax`) — and there it lands
+  on the committed argmax (more self-consistent, within the model's existing bf16 error). At `T == 1.0`
+  the multiply is a no-op, so it is fully bit-identical. The verify script asserts this exact
+  characterization (`dedup sampled == default argmax` everywhere) and reports the tie count.
+- Trace-safe: the only added op is a device-side `ttnn.clone` of a 256-element index (no host write),
+  so a fixed-budget capture is unaffected. It threads through `denoise_step`,
+  `denoise_step_next_canvas`, `run_fixed_denoise_steps`, and `denoise_block`, so `DG_DEDUP_ARGMAX`
+  reaches the eager serving path (`serving.decode_block → denoise_and_commit_block → denoise_block`)
+  with **no `generate.py` / `serving.py` edits**.
+
+**Expected multiplier (honest, regime-dependent).** Removes ~14 ms/step (one 262144-wide argmax) plus
+the full-vocab temperature multiply → **fixed overhead 49.24 → ~35 ms/step (~1.4× on the fixed term)**.
+Against today's ~0.72 s sparse-MoE eager step (30L) that is only ~2%; but per `path_to_100tps.md` the
+fixed term is ~40% of the **target** 122 ms step (100 t/s regime), where this is ~11% of the step
+(~1.13×). It is the first of lever 4's three pieces; the remaining two (fuse entropy intermediates —
+prototyped in `bench_sampling_step.py` `share_z`/`chunked_entropy`; tighter LM-head vocab shard) carry
+the rest of the plan's fixed 49 → ~25 ms (~2×). This lever **stacks multiplicatively** with Lever A
+(sparse MoE) and Lever B (batched commit) and is content-independent (it fires every step).
+
+**How to verify (device, owned by another agent — not run here).**
+1. `python doc/optimize_perf/verify_terminal_dedup.py` → part A/B HARD asserts bit-exact committed
+   argmax / entropy / accept + the tie characterization; part C reports the traced ms/step OFF vs ON
+   (expect ~14 ms/step saved at production vocab). Non-zero exit on any HARD failure.
+2. End-to-end: `serving_smoke` with `DG_SPARSE_MOE=1 DG_DEDUP_ARGMAX=1` vs `DG_DEDUP_ARGMAX` unset —
+   confirm identical committed text (argmax-mode RUN) and the per-block latency drop, then keep
+   opt-in until the device numbers land (same convention as `DG_COMMIT_BATCHED`).
+
+_Artifacts:_ `tt/denoise_loop.py` (`_sample_and_argmax`, `dedup_argmax_enabled`),
+`doc/optimize_perf/verify_terminal_dedup.py`.
