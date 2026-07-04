@@ -62,9 +62,17 @@ class SparseMoETP(MoE):
         K = self.n_activated
         E = self.num_experts
 
-        # Input is replicated across the TP axis (this is the convention
-        # in this codebase — preceding TP modules end with all_reduce).
-        # No gather needed.
+        # If the MoE (TP) axis is also the data-parallel axis, the batch is
+        # sharded across it — all_gather the full batch so every chip's experts
+        # see all tokens (re-scattered at the end). No-op otherwise: under
+        # full-model / MoE-only TP the input is already replicated on the axis.
+        mesh = ttml.mesh()
+        dp_gather = (
+            mesh.has_axis("dp") and mesh.axis_size("dp") > 1 and mesh.axis_index("dp") == self.cluster_axis
+        )
+        if dp_gather:
+            x = ttml.ops.distributed.all_gather(x, 0, self.cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED)
+
         B, _, S, _dim = list(x.get_value().shape)
         x = self._memory_snapshot(x, "START")
 
@@ -146,6 +154,11 @@ class SparseMoETP(MoE):
             # weight grad, not shared_out. Safe to release these values now.
             pre_add_output.get_value().deallocate(force=True)
             shared_out.get_value().deallocate(force=True)
+
+        # Re-shard the (replicated, full-batch) output back onto the DP axis so
+        # downstream layers stay data-parallel. Mirror of the entry all_gather.
+        if dp_gather:
+            output = ttml.ops.distributed.scatter(output, 0, self.cluster_axis)
 
         output = self._memory_snapshot(output, "END")
         return output

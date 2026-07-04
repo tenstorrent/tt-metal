@@ -84,6 +84,18 @@ class SparseMoEEP(MoE):
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         K = self.n_activated
+
+        # If the EP axis is also the data-parallel axis, the batch is sharded
+        # across it — all_gather the full batch so every chip's local experts
+        # see all tokens (re-scattered at the end). No-op otherwise: EP normally
+        # sits on an axis independent of DP, where the input is already replicated.
+        mesh = ttml.mesh()
+        dp_gather = (
+            mesh.has_axis("dp") and mesh.axis_size("dp") > 1 and mesh.axis_index("dp") == self.cluster_axis
+        )
+        if dp_gather:
+            x = ttml.ops.distributed.all_gather(x, 0, self.cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED)
+
         B, _, S, _dim = list(x.get_value().shape)
         x = self._memory_snapshot(x, "START")
 
@@ -167,6 +179,11 @@ class SparseMoEEP(MoE):
             # two tensor values are not needed downstream — release them now.
             pre_add_output.get_value().deallocate(force=True)
             shared_out.get_value().deallocate(force=True)
+
+        # Re-shard the (replicated, full-batch) output back onto the DP axis so
+        # downstream layers stay data-parallel. Mirror of the entry all_gather.
+        if dp_gather:
+            output = ttml.ops.distributed.scatter(output, 0, self.cluster_axis)
 
         output = self._memory_snapshot(output, "END")
         return output
