@@ -12,6 +12,8 @@ helpers; this module owns the real denoise attention wiring.
 
 from __future__ import annotations
 
+import os
+
 import torch
 import ttnn
 
@@ -243,6 +245,15 @@ def _denoise_router_forward(router, hidden_states):
 
 def _denoise_moe_forward(moe, router_input, expert_input):
     dense_routing = _denoise_router_forward(moe.router, router_input)
+    # True-sparse token-gather MoE (~13x cheaper than the dense-128 path). Opt-in via env while
+    # PCC / traced-t/s is validated; default flips once verified. See tt/sparse_moe.py.
+    if os.environ.get("DG_SPARSE_MOE", "0") == "1":
+        from models.experimental.diffusion_gemma.tt.sparse_moe import sparse_experts_forward
+
+        capacity = int(os.environ.get("DG_SPARSE_MOE_CAPACITY", "32"))
+        out = sparse_experts_forward(moe.experts, expert_input, dense_routing, capacity=capacity)
+        dense_routing.deallocate(True)
+        return out
     return moe.experts(expert_input, dense_routing)
 
 

@@ -268,6 +268,41 @@ decides the safe C (bump to 48/64 if needed, still 6–8× vs dense).
 _Artifacts:_ `bench_gather_moe.py`, `bench_ondevice_dispatch.py`,
 `artifacts/leverA_gather_moe_C32.log`, `artifacts/leverA_ondevice_dispatch_C32.log`.
 
+### Full in-repo module + traced t/s — **LANDED** (`tt/sparse_moe.py`, opt-in `DG_SPARSE_MOE=1`)
+
+Built `models/experimental/diffusion_gemma/tt/sparse_moe.py` (`sparse_experts_forward`, drop-in for
+`moe.experts`), wired into `_denoise_moe_forward` behind `DG_SPARSE_MOE` (default off pending the
+#48291 fidelity review; `DG_SPARSE_MOE_CAPACITY` sets C). Trace-safe: constant/scratch buffers are
+preallocated + cached outside the trace (in-trace `zeros/ones/full` raise "Writes not supported
+during trace capture"); `ttnn.scatter` verified out-of-place so the cached zero-base reuse is exact.
+
+**Correctness (real 26B MoE layer, real router routing):**
+- MoE output PCC vs dense = **0.99969**; real expert load max 25–31, mean 16 → **capacity 32 drops 0
+  pairs** (method is exact when nothing is dropped).
+- Full denoise LAYER PCC vs dense = **0.987–0.993** (random input); dense-vs-dense = 1.0 (deterministic).
+  The layer delta is bf16 kernel rounding (batched matmul vs sparse_matmul) amplified through the
+  post-MoE RMSNorm — smaller than the model's existing ~0.93-vs-fp32 bf16 error (fidelity is the
+  deferred #48291 track).
+
+**Traced denoise step (same-harness `prof_denoise_step.py`, warmed Metal trace, L=2/4 linear fit):**
+
+| | dense traced | sparse traced | speedup |
+|---|---|---|---|
+| L=2 ms/step | 331.5 | 77.6 | |
+| L=4 ms/step | 612.8 | 105.0 | |
+| per-layer ms | 140.65 | **13.7** | **10.3×** |
+| 30-layer step (proj, F=50.2ms) | 4269.7 | **461.2** | **9.26×** |
+
+Tracing helps the many-small-op sparse path more than eager (eager per-layer 20 ms → traced 13.7 ms).
+
+**Block t/s @ 48 steps:** `256 / (48×461.2 + 31432)ms` = **4.78 t/s** (dense 1.08) → **~4.4×**. With
+early-halt (~18–25 steps) ~6 t/s. **The block is now COMMIT-BOUND** (commit 31.4 s = 59% of the
+block) — Lever B (commit batching) is the next critical path, and the sparse MoE also applies to the
+commit's 256-token re-encode (MoE is position-independent), so Lever A + B compound.
+
+_Artifacts:_ `tt/sparse_moe.py`, `verify_sparse_moe.py`, `artifacts/leverA_verify_sparse_moe.log`,
+`artifacts/leverA_traced_{dense,sparse}_L{2,4}.log`, `artifacts/leverA_step_*.log`.
+
 ## Session summary (2026-07-04)
 
 | lever | outcome |

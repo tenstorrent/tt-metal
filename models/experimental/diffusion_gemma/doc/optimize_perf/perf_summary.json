@@ -92,6 +92,31 @@
     }
   },
 
+  "lever_A_token_gather_moe_LANDED_2026_07_04_s2": {
+    "verdict": "DECISIVE WIN — landed opt-in (DG_SPARSE_MOE=1), tt/sparse_moe.py",
+    "module": "models/experimental/diffusion_gemma/tt/sparse_moe.py",
+    "approach": "GShard capacity dispatch built ON-DEVICE from router topk (topk+scatter+cumsum+gather+col math, all trace-safe); gather via disp^T@x matmul; batched matmul over active experts (one C-token tile/expert); combine via comb@down matmul; TP all-reduce. Input TP-replicated -> gather/scatter local per device.",
+    "moe_only_ms_per_layer": {"dense_128": 137.07, "sparse_ondevice": 10.54, "speedup_x": 13.0, "pcc_vs_dense": 0.99969},
+    "denoise_step_traced_ms": {
+      "dense_L2": 331.5, "dense_L4": 612.8, "dense_per_layer": 140.65, "dense_30L_proj": 4269.7,
+      "sparse_L2": 77.6, "sparse_L4": 105.0, "sparse_per_layer": 13.7, "sparse_30L_proj": 461.2,
+      "fixed_overhead_ms": 50.2, "step_speedup_x": 9.26, "per_layer_speedup_x": 10.3,
+      "note": "same-harness prof_denoise_step.py, warmed Metal trace, iters=5, L=2/4 linear fit. Both share F=50.2ms."
+    },
+    "correctness": {
+      "moe_output_pcc_vs_dense": 0.99969, "full_layer_pcc_vs_dense": "0.987-0.993 (random input)",
+      "dense_vs_dense_layer_pcc": 1.0, "real_expert_load": "max 25-31, mean 16, over-32=0 -> capacity 32 drops 0 pairs",
+      "note": "exact method when 0 dropped; the layer delta is bf16 kernel rounding (batched matmul vs sparse_matmul) amplified via post-MoE RMSNorm. Smaller than the model's existing ~0.93-vs-fp32 bf16 error (fidelity #48291, deferred)."
+    },
+    "tokens_per_block_per_s": {
+      "at_48_steps": {"dense": 1.08, "sparse": 4.78, "block_ms_sparse": 53570, "commit_ms": 31432,
+        "note": "denoise 48*461=22138ms + commit 31432ms; block now COMMIT-BOUND (59%) -> Lever B is the next critical path"},
+      "at_25_steps_earlyhalt": {"sparse": 5.97}, "at_18_steps_earlyhalt": {"sparse": 6.45}
+    },
+    "trace_safety": "constant/scratch buffers (ones/zeros/full) preallocated + cached outside the trace (in-trace allocation raises 'Writes not supported during trace capture'); ttnn.scatter verified out-of-place so zero-base reuse is correct; index tensors must be UINT32.",
+    "no_gemma4_edits": true
+  },
+
   "decode_ms_per_token_device": null,
   "named_limitations": [
     "CORRECTED 2026-07-04: the per-layer denoise cost is the dense-128 experts forward (137.60 ms/layer, clean non-profiled microbench), NOT chunked RoPE/GQA/norms as previously stated. It is transpose/data-movement bound, ~65-85x above weight & compute rooflines. Precision/trace/chunk-size/L1 levers all washed out or blocked; only token-gather true-sparse MoE or commit batching remain.",
