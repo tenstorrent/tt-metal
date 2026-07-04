@@ -173,9 +173,7 @@ class MoE(AbstractModuleBase):
         if ep_sharded:
             mesh = ttml.maybe_mesh()
             if mesh is None or not mesh.has_axis(moe_axis_name):
-                raise ValueError(
-                    f"MoE: moe_axis_name={moe_axis_name!r} requires an open mesh with that axis"
-                )
+                raise ValueError(f"MoE: moe_axis_name={moe_axis_name!r} requires an open mesh with that axis")
             D = mesh.axis_size(moe_axis_name)
             E = config.n_routed_experts
             if E % D != 0:
@@ -210,9 +208,7 @@ class MoE(AbstractModuleBase):
         elif tp_sharded:
             mesh = ttml.maybe_mesh()
             if mesh is None or not mesh.has_axis(moe_axis_name):
-                raise ValueError(
-                    f"MoE: moe_axis_name={moe_axis_name!r} requires an open mesh with that axis"
-                )
+                raise ValueError(f"MoE: moe_axis_name={moe_axis_name!r} requires an open mesh with that axis")
             D = mesh.axis_size(moe_axis_name)
             if I % D != 0:
                 raise ValueError(

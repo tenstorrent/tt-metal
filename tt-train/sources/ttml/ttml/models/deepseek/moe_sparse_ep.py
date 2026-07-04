@@ -90,9 +90,7 @@ class SparseMoEEP(MoE):
         # see all tokens (re-scattered at the end). No-op otherwise: EP normally
         # sits on an axis independent of DP, where the input is already replicated.
         mesh = ttml.mesh()
-        dp_gather = (
-            mesh.has_axis("dp") and mesh.axis_size("dp") > 1 and mesh.axis_index("dp") == self.cluster_axis
-        )
+        dp_gather = mesh.has_axis("dp") and mesh.axis_size("dp") > 1 and mesh.axis_index("dp") == self.cluster_axis
         if dp_gather:
             x = ttml.ops.distributed.all_gather(x, 0, self.cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED)
 

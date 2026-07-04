@@ -802,9 +802,7 @@ def main() -> None:
     if moe_ax != -1:
         shape = tuple(int(s) for s in device_cfg.mesh_shape)
         if not (0 <= moe_ax < len(shape)):
-            raise ValueError(
-                f"device_config.moe_axis ({moe_ax}) is out of range for mesh_shape of length {len(shape)}"
-            )
+            raise ValueError(f"device_config.moe_axis ({moe_ax}) is out of range for mesh_shape of length {len(shape)}")
         names = list(mesh.axis_names)
         logical = names[moe_ax]
         if logical.startswith("_"):
