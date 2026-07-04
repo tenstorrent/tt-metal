@@ -96,7 +96,7 @@ class DiffusionGemmaPipeline:
         cls,
         model_id: str,
         *,
-        config: DiffusionGemmaPipelineConfig,
+        config: "DiffusionGemmaPipeline.Config",
         torch_dtype: torch.dtype = torch.bfloat16,
     ) -> "DiffusionGemmaPipeline":
         """Build the pipeline from an HF checkpoint.
@@ -119,7 +119,7 @@ class DiffusionGemmaPipeline:
         return cls(config, tt_model, hf_model, hf_processor, hf_gen_config)
 
     @staticmethod
-    def _build_tt_model_from_hf(hf_model, config: DiffusionGemmaPipelineConfig) -> DiffusionGemmaForBlockDiffusion:
+    def _build_tt_model_from_hf(hf_model, config: "DiffusionGemmaPipeline.Config") -> DiffusionGemmaForBlockDiffusion:
         """Construct our TT model with hyperparameters from the HF config and load weights."""
         import os
 
@@ -547,3 +547,8 @@ class DiffusionGemmaPipeline:
             if (canvas == eid).any():
                 return True
         return False
+
+
+# Backwards-compatible alias — the config class lives inside ``DiffusionGemmaPipeline`` as
+# ``.Config`` but external callers (existing tests) still import ``DiffusionGemmaPipelineConfig``.
+DiffusionGemmaPipelineConfig = DiffusionGemmaPipeline.Config
