@@ -64,7 +64,7 @@ class SparseMoEEP(MoE):
         # (DP + EP on the same axis would need an extra routing CCL, not used here.)
         if axis_name is None:
             axis_name = getattr(config, "moe_axis_name", None) or "tp"
-        super().__init__(config, expert_ep_axis_name=axis_name)
+        super().__init__(config, moe_axis_name=axis_name)
         self.axis_name = axis_name
         self.cluster_axis = ttml.mesh().axis_index(axis_name)
 

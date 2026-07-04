@@ -17,7 +17,8 @@ expert's intermediate dim (I) sharded across the cluster axis. Per chip:
     4. moe_ungroup                               → partial [B, 1, S, H]
     5. all_reduce across cluster_axis            → full [B, 1, S, H]
 
-Routed expert weights are created in `MoE.__init__(..., expert_tp_axis_name=...)`
+Routed expert weights are created in `MoE.__init__(..., moe_axis_name=...)` (TP path,
+selected by `config.moe_type == "sparse_tp"`)
 via `ttml.init.uniform(..., mapper=...)` so there is no dense `Expert` linear
 copy and no device→host→device seeding path.
 
@@ -52,7 +53,7 @@ class SparseMoETP(MoE):
             axis_name = "tp"
         else:
             axis_name = getattr(config, "moe_axis_name", None) or "tp"
-        super().__init__(config, expert_tp_axis_name=axis_name)
+        super().__init__(config, moe_axis_name=axis_name)
         self.axis_name = axis_name
         self.cluster_axis = ttml.mesh().axis_index(self.axis_name)
 

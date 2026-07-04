@@ -123,8 +123,7 @@ class MoE(AbstractModuleBase):
         self,
         config,
         *,
-        expert_tp_axis_name: str | None = None,
-        expert_ep_axis_name: str | None = None,
+        moe_axis_name: str | None = None,
     ) -> None:
         super().__init__()
 
@@ -163,32 +162,33 @@ class MoE(AbstractModuleBase):
         # parameters (``SparseMoETP``) created directly with a mesh mapper — no
         # dense-on-device weights and no host readback from a duplicate LinearLayer.
         H, I = config.dim, config.moe_inter_dim
-        if expert_tp_axis_name is not None and expert_ep_axis_name is not None:
-            raise ValueError(
-                "MoE: expert_tp_axis_name and expert_ep_axis_name are mutually exclusive — "
-                "pick TP-sharded experts (intermediate dim split) OR EP-sharded experts "
-                "(expert list split), not both."
-            )
+        # moe_type decides how routed experts are sharded across moe_axis_name:
+        #   sparse_ep — partition the expert list; sparse_tp — shard each expert's
+        #   intermediate dim. Otherwise (dense / plain sparse / no axis) build
+        #   replicated dense Expert modules.
+        moe_type = str(getattr(config, "moe_type", "sparse")).lower()
+        ep_sharded = moe_axis_name is not None and moe_type == "sparse_ep"
+        tp_sharded = moe_axis_name is not None and moe_type == "sparse_tp"
 
-        if expert_ep_axis_name is not None:
+        if ep_sharded:
             mesh = ttml.maybe_mesh()
-            if mesh is None or not mesh.has_axis(expert_ep_axis_name):
+            if mesh is None or not mesh.has_axis(moe_axis_name):
                 raise ValueError(
-                    f"MoE: expert_ep_axis_name={expert_ep_axis_name!r} requires an open mesh with that axis"
+                    f"MoE: moe_axis_name={moe_axis_name!r} requires an open mesh with that axis"
                 )
-            D = mesh.axis_size(expert_ep_axis_name)
+            D = mesh.axis_size(moe_axis_name)
             E = config.n_routed_experts
             if E % D != 0:
                 raise ValueError(
                     f"MoE: n_routed_experts ({E}) must be divisible by axis "
-                    f"{expert_ep_axis_name!r} size ({D}) for EP-sharded experts"
+                    f"{moe_axis_name!r} size ({D}) for EP-sharded experts"
                 )
             self.e_local = E // D
-            self._ep_axis_name = expert_ep_axis_name
+            self._ep_axis_name = moe_axis_name
             # Mapper shards dim 0 of the init tensor across the EP mesh axis.
             # Init shape (D, 1, I, H) → each EP shard gets (1, 1, I, H), i.e.
             # the i-th Parameter on shard r holds global expert r*E_local + i.
-            mapper = ttml.mesh().axis_mapper(expert_ep_axis_name, tdim=0)
+            mapper = ttml.mesh().axis_mapper(moe_axis_name, tdim=0)
             k_in = math.sqrt(1.0 / H)
             init_gate = ttml.init.uniform(-k_in, k_in)
             k_mid = math.sqrt(1.0 / I)
@@ -207,20 +207,20 @@ class MoE(AbstractModuleBase):
                 self.w_up.append(up)
                 self.w_down.append(down)
             self.experts = ModuleList([])
-        elif expert_tp_axis_name is not None:
+        elif tp_sharded:
             mesh = ttml.maybe_mesh()
-            if mesh is None or not mesh.has_axis(expert_tp_axis_name):
+            if mesh is None or not mesh.has_axis(moe_axis_name):
                 raise ValueError(
-                    f"MoE: expert_tp_axis_name={expert_tp_axis_name!r} requires an open mesh with that axis"
+                    f"MoE: moe_axis_name={moe_axis_name!r} requires an open mesh with that axis"
                 )
-            D = mesh.axis_size(expert_tp_axis_name)
+            D = mesh.axis_size(moe_axis_name)
             if I % D != 0:
                 raise ValueError(
-                    f"MoE: moe_inter_dim={I} must be divisible by axis {expert_tp_axis_name!r} size ({D}) "
+                    f"MoE: moe_inter_dim={I} must be divisible by axis {moe_axis_name!r} size ({D}) "
                     "for TP-sharded routed experts"
                 )
-            mapper_gate = ttml.mesh().axis_mapper(expert_tp_axis_name, tdim=2)
-            mapper_down = ttml.mesh().axis_mapper(expert_tp_axis_name, tdim=3)
+            mapper_gate = ttml.mesh().axis_mapper(moe_axis_name, tdim=2)
+            mapper_down = ttml.mesh().axis_mapper(moe_axis_name, tdim=3)
             k_in = math.sqrt(1.0 / H)
             init_gate = ttml.init.uniform(-k_in, k_in)
             k_mid = math.sqrt(1.0 / I)
@@ -253,7 +253,7 @@ class MoE(AbstractModuleBase):
         # weights, optimizer state, and compute on every chip in the TP row.
         # Uses whichever MoE axis is active — works for full-model TP
         # (axis="tp"), MoE-only TP (axis="moe_tp" or similar), and EP.
-        shared_axis = expert_tp_axis_name or expert_ep_axis_name
+        shared_axis = moe_axis_name if (ep_sharded or tp_sharded) else None
         if config.n_shared_experts > 0:
             self.shared_experts = DeepSeekMLP(
                 config.dim,
