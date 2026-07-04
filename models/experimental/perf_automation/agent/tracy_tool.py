@@ -16,6 +16,7 @@ gappy when median op-to-op gap > 6.5 microseconds (medians only, never sums).
 from __future__ import annotations
 
 import csv
+import math
 import re
 import shutil
 import statistics
@@ -262,9 +263,10 @@ def refine(
 
 def _to_float(value: str) -> float | None:
     try:
-        return float(value)
+        f = float(value)
     except (TypeError, ValueError):
         return None
+    return None if math.isnan(f) else f
 
 
 def _raw_index(raw_csv: str | Path) -> dict[int, dict[str, str]]:
