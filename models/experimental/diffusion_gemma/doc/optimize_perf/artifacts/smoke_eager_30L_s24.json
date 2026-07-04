@@ -1,0 +1,31 @@
+{
+  "prompt_len": 24,
+  "prompt_aligned_256": false,
+  "cache_len": 32,
+  "canvas_length": 256,
+  "max_denoising_steps": 24,
+  "gumbel_mode": "argmax",
+  "blocks_emitted": 3,
+  "tokens_emitted": 768,
+  "ttft_s": 20.08677218016237,
+  "per_block_latency_s": [
+    18.68696059891954,
+    18.866838520858437,
+    18.581609478686005
+  ],
+  "mean_block_latency_s": 18.72422399977222,
+  "tokens_per_block_per_s": 13.672128682241476,
+  "denoise_steps_per_block": [
+    24,
+    24,
+    24
+  ],
+  "halted_per_block": [
+    false,
+    false,
+    false
+  ],
+  "final_next_pos": 800,
+  "text_chars": 1052,
+  "text": " diffusion language model is a generative model that creates text by iteratively refining random noise into a coherent sequence through a learned denoising process, rather than predicting tokens-by-one like traditional autoregressive models.  models a generative model that creates text by iteratively refining random noise into a coherent sequence through a learned denoising process, rather than predicting one one one-- models models. \n\n(Wait, let me provide the clean, English English as requested):\n\n**A diffusion language model is a generative model that creates text by iteratively refining random noise into a coherent sequence through a learned denoising process, rather than predicting tokens one-by-one like traditional autoregressive models.** \n\n\n ( (Wait, the me a):, ** for language models** a models.,,,\n\n\n\n noise is a coherent sentence.\n\n \ufffdising  \ufffd \ufffd \u2822 \ufffd\ufffd   \n** a diffusion language model is a model, which creates text text text text random noise noise  into a into into into sequence    .** (Wait, the))\n\n,...\n\n** a a a.\n\n .\uff0c\u3002. \n.\n,\n "
+}

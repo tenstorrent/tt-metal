@@ -877,7 +877,12 @@ noise, `DG_SPARSE_MOE=1 DG_DEDUP_ARGMAX=1 DG_SPARSE_MOE_TUNED=1`, batched commit
 | config | tokens/block/s (eager) | tokens/block/s (traced) | speedup | committed text |
 |---|---|---|---|---|
 | 30L, steps=12 | 25.34 | **58.29** | **2.30×** | **byte-for-byte IDENTICAL** (coherent) |
+| 30L, steps=24 | 13.67 | **33.28** | **2.43×** | **byte-for-byte IDENTICAL** |
 | L6, steps=8 (wiring correctness) | 146.9 | 236.4 | 1.61× | byte-for-byte IDENTICAL |
+
+Both 30L budgets clear 30 t/s (58.29 @12, 33.28 @24), both bit-exact, `halted=[F,F,F]`, full `steps` both
+paths. The eager @24 (13.67) reproduces the session-4/7 baseline (13.04–13.93), so the 2.43× is the clean
+traced-vs-eager serving delta at the same budget.
 
 - `halted=[False,False,False]`, `steps=[12,12,12]` both paths (early-halt is a no-op under #48291, so
   the fixed-budget traced loop commits the same final argmax as eager).
