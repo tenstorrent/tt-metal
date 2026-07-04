@@ -189,10 +189,66 @@ flash SDPA (`probe_masked_sdpa.py`, 0.998 vs torch), a read-after-write cache ha
 against `moe.experts`/torch so the two commit paths agree — then flip the default. This is also a
 #48291-relevant finding: the RUN commit may be writing slightly-wrong prefix KV.
 
+## RESOLUTION (2026-07-04 session 4) — batched commit is CORRECT → now the DEFAULT
+
+The tie-break the previous session left open ("verify the batched commit KV against a
+**torch** reference, not the buggy sequential") is **done and decisive.** A torch MoE
+oracle — hand-rolled to match HF `transformers.models.diffusion_gemma`
+(`DiffusionGemmaTextRouter` + `DiffusionGemmaTextExperts`), loaded from the real
+layer-0 checkpoint weights, run in fp32 on the **identical bit-exact** layer-0 commit
+MoE input the device computed (`probe_moe_vs_torch.py`):
+
+| MoE output vs torch oracle (layer-0, real weights, bit-exact input) | PCC |
+|---|---|
+| **batched commit** (`moe.experts` / `sparse_experts_forward`) | **0.9936** |
+| sequential commit (`_commit_experts_decode_forward`, decode `sparse_matmul` nnz=8) | **0.1542** |
+| (input bit-exactness batched↔sequential: expert_input PCC 0.9999; routing agree 0.9968) | |
+
+**Verdict: the batched commit MoE reproduces the torch reference (bf16-kernel accuracy,
+like the rest of the model); the sequential decode-commit MoE is near-uncorrelated with
+torch — it is genuinely DEFECTIVE.** So the 0.43 batched-vs-sequential KV disagreement
+was the *sequential* path being wrong, exactly as hypothesized. Every other commit-layer
+component (attention, shared_mlp, router, norms) was already bit-exact between the two
+paths (`probe_commit_l0attn.py`) and the two attention implementations are independent
+(decode flash-decode vs prefill masked-SDPA) yet agree at 0.99992 — cross-implementation
+corroboration that the batched attention/RoPE/mask/KV-write is also correct. The batched
+commit is therefore **both faster (~6.3×) and strictly more correct**.
+
+**Landed:** `DG_COMMIT_BATCHED` now defaults **ON** (`batched_commit_enabled()` default
+"1"); `_resolve_default_commit_fn(page_table, page_tables_per_layer)` forces the
+sequential path only for **paged/vLLM** caches (batched supports the contiguous
+model-owned cache; paged batched SDPA-read is #47488). Set `DG_COMMIT_BATCHED=0` to force
+sequential. No `models/demos/gemma4/` edits (the gate stays the 1-line dealloc).
+
+**Verified combined t/s (serving_smoke, full 30L, `DG_SPARSE_MOE=1`, 24-step, same session):**
+
+| commit path | block latency | **tokens/block/s** | commit KV vs torch |
+|---|---|---|---|
+| sequential (old default) | 49.94 s | **5.13** | 0.154 (defective) |
+| **batched (new default)** | 19.64 s | **13.04** | **0.994 (correct)** |
+
+**2.54× on the block AND a correctness fix.** Generated block-0 text is coherent
+("…a generative model that creates text by starting with random noise… iteratively
+refines them into a coherent sequence through a denoising process."); later-block
+degeneration is the deferred #48291 fidelity issue, not a commit defect. Artifacts:
+`probe_moe_vs_torch.py`, `artifacts/leverB_moe_vs_torch_L0.log`,
+`artifacts/leverB_verified_{batched,seq}_30L_s24.{json,log}`.
+
+> Note: `verify_commit_batching.py` (batched-vs-sequential PCC) is now a **non-gate** —
+> it compares against the defective sequential reference, so its FAIL is expected and
+> meaningless. `probe_moe_vs_torch.py` (batched-vs-torch) is the correct gate.
+
 ## How to enable / verify
 
 ```bash
-# Enable the batched commit for a run (opt-in):
+# Batched commit is the DEFAULT now (torch-verified correct). Force sequential with:
+DG_COMMIT_BATCHED=0 python -m models.experimental.diffusion_gemma.demo.text_demo ...
+
+# The correct gate — batched vs a torch MoE oracle (run when QB2 is free):
+DG_CKPT=/path/to/diffusiongemma-26B-A4B-it \
+  python models/experimental/diffusion_gemma/doc/optimize_perf/probe_moe_vs_torch.py
+
+# (legacy, now a non-gate — compares against the DEFECTIVE sequential reference):
 DG_COMMIT_BATCHED=1 python -m models.experimental.diffusion_gemma.demo.text_demo ...
 
 # Device verify (KV bit-equivalence + commit_ms before/after) — run when QB2 is free:

@@ -666,20 +666,30 @@ def commit_canvas_tokens_batched(
 
 
 def batched_commit_enabled() -> bool:
-    """Whether the opt-in batched commit is enabled via ``DG_COMMIT_BATCHED``."""
-    return os.environ.get("DG_COMMIT_BATCHED", "0").lower() in ("1", "true", "yes", "on")
+    """Whether the batched single-prefill commit is enabled.
+
+    **Default ON** (``DG_COMMIT_BATCHED`` unset ⇒ batched): the batched commit was
+    device-verified against a torch MoE oracle (``probe_moe_vs_torch.py``,
+    ``artifacts/leverB_moe_vs_torch_L0.log``) to be **correct** (layer-0 MoE PCC vs
+    HF torch = 0.994), while the previous default — the sequential
+    ``_commit_experts_decode_forward`` decode-MoE — is *defective* (PCC vs torch =
+    0.154). The batched commit is thus both faster (~6.3×) and more correct. Set
+    ``DG_COMMIT_BATCHED=0`` to force the (buggy, but paged-cache-capable) sequential
+    path — e.g. for paged / vLLM hybrid caches the batched path does not support yet.
+    """
+    return os.environ.get("DG_COMMIT_BATCHED", "1").lower() in ("1", "true", "yes", "on")
 
 
 def select_commit_fn(batched: bool | None = None):
-    """Return the commit callable: batched when opted in, else sequential.
+    """Return the commit callable: batched (default) unless forced off / paged.
 
-    ``batched=None`` consults ``DG_COMMIT_BATCHED``. Kept here (not in ``generate``)
-    so the default sequential path has no dependency on this module.
+    ``batched=None`` consults ``DG_COMMIT_BATCHED`` (default on). Kept here (not in
+    ``generate``) so the commit dispatch lives with the batched implementation.
     """
     from models.experimental.diffusion_gemma.tt.generate import commit_canvas_tokens
 
     use_batched = batched_commit_enabled() if batched is None else batched
     if use_batched:
-        logger.info("[commit] using batched single-prefill commit (DG_COMMIT_BATCHED)")
+        logger.info("[commit] using batched single-prefill commit (torch-verified correct, default)")
         return commit_canvas_tokens_batched
     return commit_canvas_tokens

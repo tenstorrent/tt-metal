@@ -772,15 +772,19 @@ def _empty_device_generation(batch_size: int, prompt_len: int, *, device=None) -
     )
 
 
-def _resolve_default_commit_fn() -> Callable[..., None]:
-    """Pick the commit path: batched single-prefill when opted in, else sequential.
+def _resolve_default_commit_fn(page_table=None, page_tables_per_layer=None) -> Callable[..., None]:
+    """Pick the commit path: batched single-prefill (default) unless paged.
 
-    The batched path (``DG_COMMIT_BATCHED``) is imported lazily so the default
-    sequential path keeps no dependency on ``tt.commit_batched`` (which imports
-    helpers from this module).
+    The batched commit (``tt.commit_batched``, now the torch-verified-correct
+    default) supports only the contiguous model-owned cache; for a paged / vLLM
+    hybrid cache it raises, so force the sequential path when a page table is
+    present. Imported lazily so the sequential path keeps no import dependency on
+    ``tt.commit_batched`` (which imports helpers from this module).
     """
     from models.experimental.diffusion_gemma.tt.commit_batched import select_commit_fn
 
+    if page_table is not None or page_tables_per_layer is not None:
+        return commit_canvas_tokens  # batched unsupported for paged caches (#47488)
     return select_commit_fn()
 
 
@@ -804,12 +808,13 @@ def denoise_and_commit_block(
     is a ``DenoiseLogitsAdapter`` this helper updates its ``q_rope_offset`` so
     canvas RoPE positions advance with each committed block.
 
-    ``commit_fn`` defaults to the sequential single-token commit
-    (:func:`commit_canvas_tokens`); set ``DG_COMMIT_BATCHED=1`` to select the
-    batched single-prefill commit, or pass ``commit_fn`` explicitly.
+    ``commit_fn`` defaults to the torch-verified-correct batched single-prefill
+    commit (:func:`commit_canvas_tokens_batched`) for contiguous caches, falling
+    back to the sequential commit for paged caches; set ``DG_COMMIT_BATCHED=0`` to
+    force sequential, or pass ``commit_fn`` explicitly.
     """
     if commit_fn is None:
-        commit_fn = _resolve_default_commit_fn()
+        commit_fn = _resolve_default_commit_fn(page_table, page_tables_per_layer)
     _set_q_rope_offset(logits_fn, start_pos)
     trajectory = denoise_block_fn(
         logits_fn,

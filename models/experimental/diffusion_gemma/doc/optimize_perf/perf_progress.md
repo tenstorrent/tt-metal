@@ -442,3 +442,19 @@ commit KV against a **torch** commit reference (bypassing the buggy sequential),
 `_commit_experts_decode_forward` to match `moe.experts`/torch, then flip `DG_COMMIT_BATCHED` on by
 default. Evidence: `verify_commit_batching.py` (per-layer PCC), `probe_commit_l0attn.py` (stage
 isolation), `probe_masked_sdpa.py` (SDPA vs torch), `artifacts/leverB_*.log`.
+
+## Session summary (2026-07-04 session 4) — **Lever B LANDED (torch-verified) + it's a correctness fix**
+
+| item | outcome |
+|---|---|
+| **Torch oracle for the commit MoE** (`probe_moe_vs_torch.py`) | **DONE, DECISIVE.** Hand-rolled HF `DiffusionGemma` MoE (router+experts), real layer-0 weights, fp32, run on the **identical bit-exact** layer-0 commit MoE input. PCC(torch, **batched**)=**0.9936** vs PCC(torch, sequential)=**0.1542**. The **sequential** `_commit_experts_decode_forward` is genuinely DEFECTIVE; the batched commit is correct. |
+| **Flip `DG_COMMIT_BATCHED` default ON** | **LANDED.** `batched_commit_enabled()` default "1"; `_resolve_default_commit_fn` forces sequential only for paged/vLLM caches. `DG_COMMIT_BATCHED=0` forces sequential. gemma4 gate stays the 1-line dealloc. |
+| **Verified combined t/s (30L, sparse MoE, 24-step)** | sequential **5.13 t/s** (49.94 s/block, KV 0.154) → **batched 13.04 t/s** (19.64 s/block, KV 0.994). **2.54× on the block AND a correctness fix.** Block-0 text coherent. |
+
+**Bottom line (session 4):** Lever B is **landed as the default**, and it's not just a perf lever — the
+batched commit writes the **correct** KV (torch-verified 0.994) while the old sequential default wrote
+**broken** KV (0.154). The previously-recorded "verified 5.16 t/s" was verified-to-RUN but writing wrong
+prefix KV; the real, correct, verified number is now **13.04 t/s @24 steps** (Lever A sparse MoE + Lever B
+batched commit). The `path_to_30tps` row-2 projection (11.28 t/s @48-step fixed budget) is realized and
+exceeded at the 24-step budget. Next: adaptive early-halt + traced serving denoise toward 30 (the block is
+now **denoise-step bound** again, per the roadmap — the commit is ~10–26% of the block).
