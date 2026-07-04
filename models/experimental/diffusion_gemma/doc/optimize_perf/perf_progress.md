@@ -148,8 +148,39 @@ large, higher-risk rewrite scoped as the next big lever.
 _Baseline confirmed:_ dense-128 = 137.08 ms/call. Artifacts: `lever2_moe_bench.log`,
 `lever3_sparse_proto.log`.
 
-### Lever-4 quick win under test: MoE prefill chunk size
+### Lever-4 quick wins — ALL washed out or blocked (hard device evidence)
 
-Denoise MoE splits 256 → 8 chunks of 32 (`PREFILL_CHUNK_SIZE=32`), paying the transpose reorder 8×.
-Sweeping chunk ∈ {32,64,128,256} (bit-equivalent, monkeypatched) to see if fewer/larger chunks cut
-overhead — `bench_chunk_sweep.py` (results pending).
+| candidate | result | evidence |
+|---|---|---|
+| BFP8/BFP4 expert precision | **won't help** — weight traffic is only ~1.6 ms/layer; MoE is transpose-bound | roofline reconciliation above |
+| per-token `nnz=8` sparse (decode path on 256) | **BLOCKED** — `sparse_matmul` sparsity per M-tile-group, not per-token | `lever3_sparse_proto.log` |
+| larger prefill chunk (64/128/256) | **BLOCKED** — `num_blocks_total <= num_cores_available` core overflow | `lever4_chunk_sweep.log` |
+| MoE intermediates DRAM→L1 | **washout 1.01×** (137.09 → 135.14 ms), PCC 1.0 | `lever4_moe_l1.log` |
+
+The in-repo DRAM copy reproduces the shared path exactly (137.08 ms, PCC 1.0), confirming the
+transpose is an intrinsic slow-reorder kernel (not a DRAM-placement artifact); L1 barely moves it.
+
+## Conclusion & remaining levers
+
+**The wall is the dense-128 experts forward: 137 ms/layer × 30 ≈ 4.1 s = ~99% of the denoise step.**
+It is data-movement/transpose bound (~65–85× above weight & compute rooflines), and every quick,
+low-risk lever (trace, precision, per-token sparsity, chunk size, L1 placement) has been ruled out
+with device evidence. The two remaining wins are both larger rewrites:
+
+1. **True-sparse token-gather MoE (biggest lever).** Sort the 256 canvas tokens by their top-8
+   expert assignments into contiguous per-expert batches, run a dense matmul per expert on only its
+   ~16 tokens (padded to a 32-tile), scatter back weighted. Cuts experts computed 128→~effective-32
+   (after tile padding) ⇒ cuts BOTH the transpose reorder and compute ~4–8×. Risk (mission-flagged):
+   the on-device gather/permute + scatter overhead may erase the win — must be prototyped and
+   measured before the full rewrite. Needs `sort`/`gather`/`scatter`/permute over 256×8 assignments,
+   variable per-expert token counts (capacity/pad handling), all TP-sharded and trace-safe.
+2. **Commit batching (256 decodes → 1 causal prefill-append).** The commit re-encodes the finished
+   256-token canvas as 256 sequential single-token decode-appends (`generate.py:623`), paying the
+   full 30-layer weight traffic 256× (≈31.5 s/block). One causal 256-token prefill-append writes all
+   KV in a single backbone pass (≈4.2 s, one denoise-step-equivalent) → ~7× on the commit, ~1.25×
+   on the block at ~25 steps. Needs a DiffusionGemma-local causal prefill-append at offset `start_pos`
+   (analogous to the existing `commit_decode.py`), verified by KV-cache PCC vs the 256-decode path.
+   Also skip the discarded final-norm+LM-head in the commit (small safe sub-win, ~3% of commit).
+
+Neither lever alone reaches 30 t/s (the step's 30× dense-MoE is fundamental); the token-gather MoE
+is the only structural path to a materially cheaper per-step, and is the correct next investment.

@@ -59,8 +59,42 @@
     "measured_vs_roofline": "traced ~4176 ms/step is ~85-170x the bandwidth roofline -> denoise per-layer is op-count bound (manual chunked RoPE, staged GQA fallback, chunked norms), not DRAM-bandwidth bound; traced ~= eager (~3%) confirms op-cost not dispatch-gap"
   },
 
+  "lever_audit_2026_07_04": {
+    "session_sha_start": "d795da27e6b",
+    "measured_path_is_eager": true,
+    "lever1_traced_decode": {
+      "verdict": "washout",
+      "eager_denoise_block_ms_per_step_L2": 359.27,
+      "traced_device_only_ms_per_step_L2": 331.52,
+      "host_readback_overhead_ms_per_step": 27.76,
+      "overhead_pct_at_30L": 0.66,
+      "note": "measured serving path (serving.decode_block -> denoise_block) is eager with 5 host readbacks/step + torch.equal halt; readback is a fixed ~28ms/step = 0.66% of the 30L step; a fixed-48-step trace would also remove the eager early-halt. Whole-run tracy GAP_FRACTION=81% is a device-profiler artifact, not real host gap."
+    },
+    "moe_clean_microbench_bf16_256canvas": {
+      "expert_weight_dtype_actual": "BFLOAT16",
+      "moe_forward_ms_per_layer": 138.46,
+      "router_ms": 3.21,
+      "experts_dense128_ms_per_layer": 137.60,
+      "shared_mlp_ms": 2.33,
+      "weight_roofline_ms_per_layer_at_256GBps": 1.6,
+      "compute_roofline_ms_per_layer": 2.0,
+      "conclusion": "dense-128 experts forward is ~99% of the per-layer denoise step and ~65-85x above BOTH weight and compute rooflines -> data-movement/transpose-reorder bound (expert-major transpose ~87ms + 8-chunk overhead), NOT weight- or compute-bound. Corrects the earlier RoPE/GQA/norm attribution."
+    },
+    "ruled_out_quick_levers": {
+      "bfp8_bfp4_expert_precision": "won't help (weight traffic only ~1.6ms/layer; MoE is transpose-bound)",
+      "per_token_nnz8_sparse_on_256": "BLOCKED: TT_FATAL sparsity.logical_volume()==batch_length (sparse_matmul sparsity is per M-tile-group, not per-token)",
+      "larger_prefill_chunk_64_128_256": "BLOCKED: num_blocks_total <= num_cores_available core overflow",
+      "moe_intermediates_dram_to_l1": "washout 1.01x (137.09 -> 135.14 ms, PCC 1.0)"
+    },
+    "remaining_levers_scoped": {
+      "true_sparse_token_gather_moe": "biggest lever; sort tokens by expert into per-expert batches, dense matmul per expert, scatter weighted; cuts transpose+compute ~4-8x; RISK: on-device gather/scatter overhead may wash out (against the TT dense-all-experts grain); prototype+measure before full rewrite",
+      "commit_batching_256decodes_to_1_prefill_append": "~7x on the 31.5s commit (~1.25x block at 25 steps); needs DiffusionGemma-local causal 256-token prefill-append at offset start_pos, verified by KV-cache PCC; also skip discarded commit LM-head (~3% of commit)"
+    }
+  },
+
   "decode_ms_per_token_device": null,
   "named_limitations": [
+    "CORRECTED 2026-07-04: the per-layer denoise cost is the dense-128 experts forward (137.60 ms/layer, clean non-profiled microbench), NOT chunked RoPE/GQA/norms as previously stated. It is transpose/data-movement bound, ~65-85x above weight & compute rooflines. Precision/trace/chunk-size/L1 levers all washed out or blocked; only token-gather true-sparse MoE or commit batching remain.",
     "hardware-profiler-limited: build_Release has ENABLE_TRACY=OFF (confirmed CMakeCache); TT_METAL_DEVICE_PROFILER and python -m tracy raise 'requires a Tracy-enabled build'. tt-perf-report op-level CSV unavailable without a full ttnn rebuild that would disrupt the shared venv. Metal TRACE capture/replay itself works, so per-step/per-block/full-generation numbers ARE from a traced measured path; only the Tracy op-attribution table is substituted by synchronized per-op device-time tables.",
     "backbone per-layer denoise (137.55 ms/layer traced) is op-count bound from manual chunked RoPE, staged GQA fallback, and chunked norms; identified as the dominant next optimization target (DiffusionGemma-local, ~3-5x headroom to the bandwidth roofline)."
   ]
