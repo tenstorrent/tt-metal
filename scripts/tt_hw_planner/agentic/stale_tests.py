@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 @dataclass
@@ -148,9 +148,48 @@ def restore_stale_test(*, demo_dir: Path, component: str, safe_id: str) -> Optio
     return live
 
 
+def restore_orphaned_stale_tests(*, model_id: str, demo_dir: Path) -> List[str]:
+    """Self-heal: restore any ``*.stale_after_decomposition`` test whose live
+    counterpart is missing AND whose component is NOT in ``no_emit_tests``.
+
+    Under normal decomposition/recompose flow, a stale archive and a no_emit
+    entry are created together and cleared together — but partial-failure
+    decomposition runs, overlay resets, or a scaffold rerun on top of a
+    partially-restored state can leave a component in the corrupted "stale
+    file exists, not suppressed, not live" state. In that state the gate
+    has no test to run on the parent, never selects it, and its attempt
+    count stays 0 forever.
+
+    Only restores when the parent is NOT currently in no_emit — a
+    deliberately-decomposed parent's stale test is left in place.
+    """
+    from ..overlay_manager import load_no_emit_tests
+
+    pcc_dir = demo_dir / "tests" / "pcc"
+    if not pcc_dir.is_dir():
+        return []
+    no_emit = set(load_no_emit_tests(model_id).keys())
+
+    restored: List[str] = []
+    for stale in pcc_dir.glob("test_*.py.stale_after_decomposition"):
+        live = stale.with_suffix("")
+        if live.exists():
+            continue
+        comp_safe = live.stem[len("test_") :] if live.stem.startswith("test_") else live.stem
+        if comp_safe in no_emit:
+            continue
+        try:
+            stale.rename(live)
+        except OSError:
+            continue
+        restored.append(comp_safe)
+    return restored
+
+
 __all__ = [
     "StaleVerdict",
     "archive_stale_test",
     "detect_stale_decomposed_test",
+    "restore_orphaned_stale_tests",
     "restore_stale_test",
 ]

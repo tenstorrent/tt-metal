@@ -17,6 +17,25 @@ from pathlib import Path
 from typing import List
 
 
+def _restore_orphaned_stale_tests(model_id: str, demo_dir: Path) -> int:
+    """Restore live PCC tests for parents whose stale archive survives but
+    that aren't currently no_emit'd — the corrupted state where a parent has
+    no test AND isn't recompose-gated, so nothing can ever pick it up."""
+    try:
+        from ..agentic.stale_tests import restore_orphaned_stale_tests
+
+        restored = restore_orphaned_stale_tests(model_id=model_id, demo_dir=demo_dir)
+        if restored:
+            print(
+                f"  [restore] restored {len(restored)} orphaned parent PCC test(s) "
+                f"(stale archive present, not no_emit'd): {', '.join(restored)}"
+            )
+        return len(restored)
+    except Exception as exc:
+        print(f"  [restore] non-fatal error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 0
+
+
 def _reinject_orphan_children(model_id: str, demo_dir: Path) -> int:
     """Re-add decomposition children that survive as on-disk stubs but are
     missing from bringup_status.json (e.g. after a re-scaffold that overwrote
@@ -316,10 +335,12 @@ def run_bringup_cc(
 
     _banner(f"Step 6/6  Bring-up (cc engine) — harness loop on the per-component gate for {model_id}")
 
+    _restore_orphaned_stale_tests(model_id, Path(demo_dir))
     _reinject_orphan_children(model_id, Path(demo_dir))
     _reconcile_recompose(model_id, Path(demo_dir))
 
     def _on_round(round_no, st):
+        _restore_orphaned_stale_tests(model_id, Path(demo_dir))
         _reinject_orphan_children(model_id, Path(demo_dir))
         _reconcile_recompose(model_id, Path(demo_dir))
 
