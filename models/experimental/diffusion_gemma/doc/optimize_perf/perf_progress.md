@@ -203,3 +203,32 @@ therefore provably identical.
 independent, so at 30 layers it is the same ~83 ms/block ≈ 0.26% of the 31.5 s commit — a genuine
 waste removal but a negligible fraction of the block. Recorded honestly: real, free, zero-risk, but
 not a needle-mover toward 30 t/s. No gemma4 edits (change is in DiffusionGemma-local commit code).
+
+## Lever 5 — 2 command queues / host-gap removal — **little headroom (per lever-1 evidence)**
+
+Lever 1 established the denoise step is **op-cost bound, not dispatch-gap bound**: traced ≈ eager
+(within ~2% on the reduced model) and the per-step host readback is only 27.76 ms (~0.66% at 30L).
+The whole-run tracy `GAP_FRACTION=81%` is a device-profiler artifact, not real host gap. 2 command
+queues overlap compute with I/O, but the step is compute (dense-MoE) bound with negligible I/O to
+overlap, so 2-CQ / host-gap removal offers little for the denoise step. It could still help the
+serving orchestration around block boundaries, but that is dominated by the same per-step MoE.
+Not pursued; the leverage is entirely in the per-step MoE (lever 3).
+
+## Session summary (2026-07-04)
+
+| lever | outcome |
+|---|---|
+| 1 traced-decode baseline | **washout** — readback 27.76 ms/step (0.66% at 30L); op-cost bound |
+| 2 op-topology audit | **done** — corrected: dense-128 experts forward = 137.6 ms/layer = ~99% of step, transpose-bound |
+| 3 true-sparse MoE | quick paths **blocked** (per-token nnz=8, larger chunk); token-gather rewrite scoped |
+| 4 precision/config | **all ruled out** — BFP8/BFP4 no help (not weight-bound), L1 washout (1.01×) |
+| commit LM-head skip | **LANDED** — 83 ms/block, bit-exact, zero-risk |
+| 5 2-CQ / host-gap | little headroom (op-cost bound) |
+
+**Bottom line:** the decode throughput is architecturally gated by the dense-128-expert MoE forward
+run 30 layers × ~18–48 steps/block; the per-step 4.18 s is ~99% MoE and transpose/data-movement
+bound. Reaching 30 t/s (8.5 s/block) requires a ~25× cheaper per-step, achievable only by a
+fundamentally cheaper MoE — the **token-gather true-sparse MoE** (biggest, prototype-first, risks
+gather/scatter washout) or a fused-MoE kernel. **Commit batching** (256 decode-appends → 1 causal
+prefill-append, ~7× on the commit, ~1.25× block) is the clearest lower-risk sizeable next win. All
+quick levers were tried and ruled out with device evidence.
