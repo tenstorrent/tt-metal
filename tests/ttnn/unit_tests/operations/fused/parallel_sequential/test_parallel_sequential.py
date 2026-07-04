@@ -244,7 +244,19 @@ class TestInfrastructure:
 class TestSequentialExecution:
     """Core sequential chain execution tests."""
 
-    @pytest.mark.parametrize("num_phases", [2, 3, 4])
+    @pytest.mark.parametrize(
+        "num_phases",
+        [
+            2,
+            3,
+            # TT_METAL_LLK_ASSERTS run overflows the TENSIX kernel config buffer
+            # for this fused 4-phase LN/RMS chain (70800 > 70656 bytes).
+            pytest.param(
+                4,
+                marks=skip_with_llk_assert("4-phase norm chain exceeds kernel config buffer with LLK asserts enabled."),
+            ),
+        ],
+    )
     @stress_test_program_cache
     def test_norm_chain(self, device, num_phases):
         """Mixed LN/RMS chain of varying length on single core."""
