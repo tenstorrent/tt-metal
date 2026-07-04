@@ -407,6 +407,10 @@ def run_model_device_perf_test_per_op(
             )
         measured_ns = float(rows["DEVICE KERNEL DURATION [ns]"].sum())
         measured_per_op[op_substring] = measured_ns
+        # No baseline for this op (e.g. a full layer/col sweep): report the measurement, skip the assert.
+        if expected_ns is None:
+            logger.info(f"[per-op] {op_substring}: measured={measured_ns:,.0f} ns  (no baseline — measure only)")
+            continue
         lo = (1 - margin) * expected_ns
         hi = (1 + margin) * expected_ns
         passing = lo <= measured_ns <= hi
@@ -425,6 +429,8 @@ def run_model_device_perf_test_per_op(
         key = f"{op_substring} DEVICE KERNEL DURATION [ns]"
         post_processed_results[key] = measured_ns
         expected_ns = expected_per_op[op_substring]
+        if expected_ns is None:
+            continue
         expected_results[f"Lower Threshold {key}"] = (1 - margin) * expected_ns
         expected_results[f"Upper Threshold {key}"] = (1 + margin) * expected_ns
 
