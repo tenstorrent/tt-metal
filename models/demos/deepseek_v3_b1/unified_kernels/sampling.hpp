@@ -197,16 +197,24 @@ ALWI void sampling_add_binary_tile_first_column(uint32_t idst0, uint32_t idst1, 
 // these local so the core API can continue defaulting to the kernel-wide
 // MATH_FIDELITY macro, while sampling can force HiFi4 in only the softmax
 // normalization path.
-template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation, MathFidelity math_fidelity>
+template <PoolType reduce_type, ReduceDim reduce_dim, MathFidelity math_fidelity>
 ALWI void sampling_reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure(icb, icb_scaler, ocb, call_line);
-#ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler)));
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, math_fidelity, enforce_fp32_accumulation>()));
-    if constexpr (enforce_fp32_accumulation) {
-        MATH((tensix_sync()));
-        MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11)));
+#ifdef ARCH_BLACKHOLE
+    // BH REDUCE_ROW SUM/AVG uses MVMUL with swapped operands (scaler→SrcA, data→SrcB)
+    // Reconfig formats to match: SrcA=scaler format, SrcB=data
+    constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
+    if constexpr (swap_operands) {
+        state_configure(icb_scaler, icb, ocb, call_line);
+        reconfig_data_format(icb_scaler, icb);
+    } else {
+        state_configure(icb, icb_scaler, ocb, call_line);
     }
+#else
+    state_configure(icb, icb_scaler, ocb, call_line);
+#endif
+#ifndef ARCH_QUASAR
+    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(icb, icb_scaler)));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, math_fidelity>(icb, icb_scaler)));
 #else
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, math_fidelity>(icb)));
@@ -214,12 +222,11 @@ ALWI void sampling_reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, 
     PACK((llk_pack_reduce_mask_config<reduce_dim, ckernel::PackMode::Default>(ocb)));
 }
 
-template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation, MathFidelity math_fidelity>
+template <PoolType reduce_type, ReduceDim reduce_dim, MathFidelity math_fidelity>
 ALWI void sampling_reduce_tile(
     uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
 #ifndef ARCH_QUASAR
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, math_fidelity, false, enforce_fp32_accumulation>(
-        icb, icb_scaler, idst)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, math_fidelity>(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
 #else
     MATH((llk_math_reduce(idst)));
@@ -264,12 +271,10 @@ void trisc_fused_softmax_top_p_sampling_block() {
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-1");
         reconfig_data_format(in_cb, scaler_cb);
-        sampling_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, false, MathFidelity::HiFi4>(
-            in_cb, scaler_cb, exp_cb);
+        sampling_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, MathFidelity::HiFi4>(in_cb, scaler_cb, exp_cb);
 
         tile_regs_acquire();
-        sampling_reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW, false, MathFidelity::HiFi4>(
-            in_cb, scaler_cb, 0, 0, 0);
+        sampling_reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW, MathFidelity::HiFi4>(in_cb, scaler_cb, 0, 0, 0);
         reduce_uninit();
     }
     // Step 2: Compute DST[0, 0, 0] = x_i - max(x_i, dim=0), x_i = in_cb,
@@ -313,12 +318,10 @@ void trisc_fused_softmax_top_p_sampling_block() {
         // Since the result is a column strip, we need to reduce along the column dimension
         DeviceZoneScopedN("SP-TOPP-TRISC-5");
         reconfig_data_format(exp_cb, scaler_cb);
-        sampling_reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL, false, MathFidelity::HiFi4>(
-            exp_cb, scaler_cb, probs_cb);
+        sampling_reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL, MathFidelity::HiFi4>(exp_cb, scaler_cb, probs_cb);
         tile_regs_acquire();
         // MATH wait for DST register to be available
-        sampling_reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL, false, MathFidelity::HiFi4>(
-            exp_cb, scaler_cb, 0, 0, 0);
+        sampling_reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL, MathFidelity::HiFi4>(exp_cb, scaler_cb, 0, 0, 0);
         reduce_uninit();
         // Step 6: Compute DST[0, 0, 0] = 1/sum(exp(x_i - max(x_i, dim=0))), sum(exp(x_i - max(x_i, dim=0))) comes from
         // DST in Step 5

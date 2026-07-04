@@ -7,10 +7,10 @@
 #include <cstring>
 
 #include <random>
-#include <chrono>
 
 #include <tt_stl/aligned_allocator.hpp>
 #include <tt_stl/assert.hpp>
+#include "dispatch/dispatch_mem_map.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/memcpy.hpp"
 #include "dispatch_settings.hpp"
@@ -109,6 +109,21 @@ vector_aligned<uint32_t> DeviceCommand<hugepage_write>::cmd_vector() const {
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait(
     uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type) {
+    // If there are no stream registers (Quasar), translate stream flags to memory flags and calculate the L1 worker
+    // completion counter address from the stream index.
+    if (!MetalContext::instance().hal().has_stream_registers() &&
+        (flags & (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM))) {
+        const auto& mem_map = MetalContext::instance().dispatch_mem_map();
+        const uint32_t first_stream = mem_map.get_dispatch_stream_index(0);
+        address = mem_map.get_dispatch_message_addr_start() + mem_map.get_sync_offset(stream - first_stream);
+        uint32_t new_flags = flags & ~(CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM);
+        new_flags |= CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY;
+        if (flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM) {
+            new_flags |= CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_MEMORY;
+        }
+        flags = new_flags;
+        stream = 0;
+    }
     auto initialize_wait_cmds = [&](CQPrefetchCmd* relay_wait, CQDispatchCmd* wait_cmd) {
         relay_wait->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
         relay_wait->relay_inline.dispatcher_type = dispatcher_type;
@@ -712,7 +727,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_num_worker_sems(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_set_sub_device_worker_counts(
-    tt::stl::Span<const uint32_t> workers_per_sub_device, DispatcherSelect dispatcher_type) {
+    ttsl::Span<const uint32_t> workers_per_sub_device, DispatcherSelect dispatcher_type) {
     TT_ASSERT(workers_per_sub_device.size() <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     auto data_sizeB = workers_per_sub_device.size() * sizeof(uint32_t);
     uint32_t lengthB = sizeof(CQDispatchCmd) + data_sizeB;
@@ -783,7 +798,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_data(
 }
 
 template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::add_dispatch_set_write_offsets(tt::stl::Span<const uint32_t> write_offsets) {
+void DeviceCommand<hugepage_write>::add_dispatch_set_write_offsets(ttsl::Span<const uint32_t> write_offsets) {
     TT_ASSERT(write_offsets.size() <= CQ_DISPATCH_MAX_WRITE_OFFSETS);
     size_t data_sizeB = write_offsets.size() * sizeof(uint32_t);
     size_t cmd_size = sizeof(CQDispatchCmd) + data_sizeB;
@@ -1078,7 +1093,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large(
     uint16_t alignment,
     uint16_t num_sub_cmds,
     const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
-    const std::vector<tt::stl::Span<const uint8_t>>& data_collection,
+    const std::vector<ttsl::Span<const uint8_t>>& data_collection,
     std::vector<uint8_t*>*
         data_collection_buffer_ptr,  // optional. Stores the location each data segment was written to
     const uint32_t offset_idx,
@@ -1131,7 +1146,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large_unicast(
     uint16_t alignment,
     uint16_t num_sub_cmds,
     const std::vector<CQDispatchWritePackedLargeUnicastSubCmd>& sub_cmds,
-    const std::vector<tt::stl::Span<const uint8_t>>& data_collection,
+    const std::vector<ttsl::Span<const uint8_t>>& data_collection,
     std::vector<uint8_t*>*
         data_collection_buffer_ptr,  // optional. Stores the location each data segment was written to
     const uint32_t offset_idx,
