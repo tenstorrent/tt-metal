@@ -41,7 +41,6 @@ public:
     autograd::TensorPtr operator()(const autograd::TensorPtr& tensor) override;
 
 private:
-    autograd::TensorPtr forward_impl(const autograd::TensorPtr& tensor, bool input_is_replicated);
     void initialize_tensors(uint32_t in_features, uint32_t out_features, bool has_bias = true);
 
     autograd::TensorPtr m_weight;

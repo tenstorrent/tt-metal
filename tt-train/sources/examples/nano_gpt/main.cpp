@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <CLI/CLI.hpp>
-#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -342,7 +341,7 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string training_config_name =
-        std::string(CONFIGS_FOLDER) + "/training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8.yaml";
+        std::string(CONFIGS_FOLDER) + "/training_configs/training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -429,11 +428,6 @@ int main(int argc, char **argv) {
             {.enable_ddp = device_config.enable_ddp,
              .enable_tp = device_config.enable_tp,
              .enable_cp = device_config.enable_cp});
-        const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
-        fmt::println(
-            "Parallelism context initialized: tp_axis={} tp_size={}",
-            pctx.get_tp_axis().has_value() ? static_cast<int>(*pctx.get_tp_axis()) : -1,
-            pctx.get_tp_size());
     }
 
     if (multihost_config.enable_mpi) {
@@ -521,30 +515,8 @@ int main(int argc, char **argv) {
                     "Omitting vocab_size is only valid for plain text (character-tokenized) data.");
             }
             auto &yaml_node = std::get<YAML::Node>(data_source);
-            auto tokens = yaml_node["tokens"].template as<std::vector<uint32_t>>();
-            if (tokens.empty()) {
-                throw std::runtime_error("Pre-tokenized data must contain at least one token.");
-            }
-            const auto max_token = *std::max_element(tokens.begin(), tokens.end());
-            if (max_token >= current_vocab_size) {
-                throw std::runtime_error(fmt::format(
-                    "Pre-tokenized data contains token id {} but model vocab_size is {}. "
-                    "Increase/pad vocab_size so every token id is in [0, vocab_size).",
-                    max_token,
-                    current_vocab_size));
-            }
-            if (yaml_node["tokenizer_vocab_size"]) {
-                const auto tokenizer_vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>();
-                if (max_token >= tokenizer_vocab_size) {
-                    fmt::println(
-                        "Warning: tokenized data max token id {} is >= tokenizer_vocab_size metadata {}. "
-                        "Continuing because model vocab_size {} covers the token ids.",
-                        max_token,
-                        tokenizer_vocab_size,
-                        current_vocab_size);
-                }
-            }
-            return ttml::datasets::InMemoryTokenDataset(tokens, sequence_length);
+            auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
+            return dataset;
         }
     };
 
@@ -807,13 +779,10 @@ int main(int argc, char **argv) {
     };
 
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(multihost_config);
-    // pipeline_parallel_llama still hardcodes gather_output=true at the LM head, so its
-    // last-stage logits are full-vocab
-    // const bool use_vocab_parallel_loss = device_config.enable_tp && !is_pipeline_parallel_enabled(multihost_config);
-    const bool use_vocab_parallel_loss = false;
-    fmt::println(
-        "Loss path: {}",
-        use_vocab_parallel_loss ? "vocab_parallel_cross_entropy_loss" : "full-vocab cross_entropy_loss");
+    // All TP-enabled LM heads (TP-only and PP+TP) emit vocab-sharded logits, so the loss
+    // path is uniformly vocab_parallel_cross_entropy_loss whenever TP is on.
+    const bool use_vocab_parallel_loss = device_config.enable_tp;
+
     // Training loop
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {

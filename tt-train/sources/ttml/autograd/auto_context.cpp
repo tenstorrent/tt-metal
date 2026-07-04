@@ -4,8 +4,6 @@
 
 #include "auto_context.hpp"
 
-#include <fmt/core.h>
-
 #include <optional>
 #include <sstream>
 
@@ -219,17 +217,6 @@ ParallelismContext::ParallelismContext(
             m_num_tp_devices = mesh_shape[m_tp_axis.value()];
         }
     }
-
-    fmt::println(
-        "[ttml] ParallelismContext initialized: mesh_shape={} ddp_axis={} cp_axis={} tp_axis={} ddp_size={} cp_size={} "
-        "tp_size={}",
-        mesh_shape,
-        m_ddp_axis.has_value() ? static_cast<int>(*m_ddp_axis) : -1,
-        m_cp_axis.has_value() ? static_cast<int>(*m_cp_axis) : -1,
-        m_tp_axis.has_value() ? static_cast<int>(*m_tp_axis) : -1,
-        m_num_ddp_devices,
-        m_num_cp_devices,
-        m_num_tp_devices);
 }
 
 [[nodiscard]] const ParallelismContext& AutoContext::get_parallelism_context() const {

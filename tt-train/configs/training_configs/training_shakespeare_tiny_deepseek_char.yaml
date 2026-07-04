@@ -5,13 +5,13 @@ training_config:
   batch_size: 4
   num_epochs: 1
   max_steps: 5000
-  use_clip_grad_norm: false
+  use_clip_grad_norm: true
   clip_grad_norm_max_norm: 1.0
-  data_path: "${TT_METAL_RUNTIME_ROOT}/tt-train/data/shakespeare_deepseek_v2_lite.yaml"
-  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/moe/deepseek_16B.yaml"
+  data_path: "data/shakespeare.txt"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/moe/tiny_deepseek_char.yaml"
   optimizer:
     type: AdamW
-    lr: 0.0001
+    lr: 0.0003
     beta1: 0.9
     beta2: 0.999
     epsilon: 1.0e-8
@@ -20,16 +20,8 @@ training_config:
     stochastic_rounding: true
 
 device_config:
-  # Full DeepSeek TP: TP size must divide num_heads (12), inter_dim (4096),
-  # and moe_inter_dim (768). Use TP-only for now: SparseMoETP's host-loop FFN
-  # consumes one offsets vector, while DDP+TP produces per-DP-row offsets.
-  # DP+TP needs per-shard variable_matmul runtime args before it is safe.
-  mesh_shape: [4, 8]
-  enable_tp: true
-  enable_ddp: true
-  # MoE-only TP (no general TP): use e.g. mesh [8, 4], enable_ddp: true,
-  # enable_tp: false, moe_tp_axis: 1 — do not use TP=32 with num_heads=12.
-  moe_tp_axis: -1
+  enable_ddp: false
+  mesh_shape: [1,1]
 
 eval_config:
   repetition_penalty: 1.0

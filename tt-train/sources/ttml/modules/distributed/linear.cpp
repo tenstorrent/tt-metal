@@ -4,8 +4,6 @@
 
 #include "linear.hpp"
 
-#include <fmt/core.h>
-
 #include <cmath>
 
 #include "autograd/auto_context.hpp"
@@ -45,9 +43,9 @@ autograd::TensorPtr RowParallelLinear::operator()(const autograd::TensorPtr& ten
     x = ops::linear_op(x, m_weight, /* bias */ nullptr);
 
     /*
-        All reduce with noop backward to avoid double all reduce in backward pass. This happens due to broadcast (no
-       op in forward pass) does all reduce in backward pass. See similar implementation in fairscale for more
-       details. https://github.com/facebookresearch/fairscale/blob/main/fairscale/nn/model_parallel/mappings.py#L102
+        All reduce with noop backward to avoid double all reduce in backward pass. This happens due to broadcast (no op in forward pass)
+        does all reduce in backward pass. See similar implementation in fairscale for more details.
+        https://github.com/facebookresearch/fairscale/blob/main/fairscale/nn/model_parallel/mappings.py#L102
     */
     x = ops::distributed::all_reduce(x, /* noop_backward */ m_input_is_parallel, m_shard_dim);
     if (m_bias != nullptr) {
@@ -109,16 +107,9 @@ ColumnParallelLinear::ColumnParallelLinear(
 }
 
 autograd::TensorPtr ColumnParallelLinear::operator()(const autograd::TensorPtr& tensor) {
-    return forward_impl(tensor, /* input_is_replicated */ false);
-}
-
-autograd::TensorPtr ColumnParallelLinear::forward_impl(
-    const autograd::TensorPtr& tensor, const bool input_is_replicated) {
     auto x = tensor;
-    if (!input_is_replicated) {
-        // Broadcast data along TP dimension to ensure all TP devices in each DP group have the same data.
-        x = ops::distributed::broadcast(x, m_shard_dim);
-    }
+    // Broadcast data along TP dimension to ensure all TP devices in each DP group have the same data
+    x = ops::distributed::broadcast(x, m_shard_dim);
     x = ops::linear_op(x, m_weight, m_bias);
     if (m_gather_output) {
         // All-gather output along TP dimension to gather sharded outputs within each DP group
