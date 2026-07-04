@@ -44,6 +44,9 @@ public:
     static constexpr uint32_t kAutoHostReadThreadCount = 32;
 
     struct Config {
+        // Payload spec streamed device -> host. std::nullopt = metadata-only mode: no DRAM
+        // backing tensor, only the metadata record is sent (metadata_size_bytes must be > 0),
+        // payload_size_bytes()==0, and reads go through read_metadata() (read_from_tensor throws).
         std::optional<TensorSpec> global_spec;
         std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
         std::optional<distributed::MeshComposerConfig> composer_config;

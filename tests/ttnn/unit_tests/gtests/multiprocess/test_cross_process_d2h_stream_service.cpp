@@ -436,6 +436,9 @@ void run_connector_metadata(const CrossProcessCase& cs, const std::string& servi
     g_cross_rank_world->barrier();
 }
 
+// Producer rank of the cross-process metadata-only round-trip (models the prefill worker):
+// builds a metadata-only service, exports its descriptor, then per iteration pushes a record
+// via the worker op for the connector rank to read.
 void run_owner_metadata_only(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const CrossProcessCase& cs,
@@ -459,6 +462,7 @@ void run_owner_metadata_only(
     Tensor record_dev = ttnn::distributed::distribute_tensor(
                             Tensor::from_vector<uint32_t>(std::vector<uint32_t>(n, 0), record_spec), *rep)
                             .to_device(mesh_device.get());
+
     g_cross_rank_world->barrier();
     for (uint32_t iter = 0; iter < cs.num_iterations; ++iter) {
         const auto md = make_metadata_pattern(iter, cs.metadata_size_bytes);
@@ -468,28 +472,33 @@ void run_owner_metadata_only(
             ttnn::distributed::distribute_tensor(Tensor::from_vector<uint32_t>(words, record_spec), *rep);
         copy_to_device(host_record, record_dev);
         ttnn::experimental::outbound_socket_service_sync(service, record_dev);
-        g_cross_rank_world->barrier();  // connector reads here
-        g_cross_rank_world->barrier();
+        g_cross_rank_world->barrier();  // release the connector to read this iteration's record
+        g_cross_rank_world->barrier();  // wait until it has finished reading
         Finish(mesh_device->mesh_command_queue());
     }
     g_cross_rank_world->barrier();
 }
+
+// Consumer rank of the cross-process metadata-only round-trip (models the prefill scheduler):
+// connect()s to the exported service and reads each record back, verifying value + that
+// connect reconstructed metadata-only mode.
 void run_connector_metadata_only(const CrossProcessCase& cs, const std::string& service_id) {
     auto service = tt::tt_metal::D2HStreamService::connect(service_id, /*timeout_ms=*/30000);
     EXPECT_EQ(service->metadata_size_bytes(), cs.metadata_size_bytes);
     EXPECT_EQ(service->payload_size_bytes(), 0u)
         << "connect() must reconstruct metadata-only mode (num_socket_pages==0)";
+
     g_cross_rank_world->barrier();
     for (uint32_t iter = 0; iter < cs.num_iterations; ++iter) {
-        g_cross_rank_world->barrier();
+        g_cross_rank_world->barrier();  // wait for the owner to push this iteration's record
         std::vector<std::byte> md(cs.metadata_size_bytes);
         service->read_metadata(md);
-        service->barrier();
+        service->barrier();  // drain the socket after reading
         const auto expected = make_metadata_pattern(iter, cs.metadata_size_bytes);
         std::vector<uint8_t> got(md.size());
         std::memcpy(got.data(), md.data(), md.size());
         EXPECT_EQ(got, expected) << "connector metadata-only mismatch at iter " << iter;
-        g_cross_rank_world->barrier();
+        g_cross_rank_world->barrier();  // signal the owner this record has been consumed
     }
     g_cross_rank_world->barrier();
 }
@@ -716,6 +725,8 @@ TEST_F(CrossProcessD2HStreamServiceFixture, Sharded_Sweep) {
     }
 }
 
+// Two-rank cross-process metadata-only test: rank 0 owns/produces, rank 1 connects/consumes.
+// Exercises export_descriptor -> connect round-trip with num_socket_pages == 0.
 TEST_F(CrossProcessD2HStreamServiceFixture, MetadataOnly) {
     const std::string service_id = "cross_process_d2h_metadata_only";
     const tt::tt_metal::CoreRange worker_cores({0, 0}, {0, 0});  // single worker

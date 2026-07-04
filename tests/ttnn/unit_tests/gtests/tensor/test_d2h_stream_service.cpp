@@ -413,6 +413,9 @@ void run_d2h_stream_service_case(
     }
 }
 
+// Single-mesh end-to-end exercise of the metadata-only D2H path: build a service with no
+// DRAM payload, then per iteration push a distinct record through the worker op and read it
+// back on the host, checking the value and cross-chip equality.
 void run_d2h_metadata_only_case(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::CoreRange& worker_cores,  // single core -> num_workers == 1
@@ -461,7 +464,7 @@ void run_d2h_metadata_only_case(
         // Host pulls the record off each chip's socket; read_metadata asserts cross-chip equality.
         std::vector<std::byte> out(metadata_size_bytes);
         service.read_metadata(out);
-        service.barrier();
+        service.barrier();  // drain the socket before flushing the CQ / reusing record_dev
         tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
 
         std::vector<uint8_t> got(metadata_size_bytes);
@@ -813,6 +816,7 @@ TEST_F(D2HStreamServiceTest, Sharded_WorkerSync_Sweep) {
     }
 }
 
+// One worker, one 16B record, default fifo -- verifies the metadata-only path works.
 TEST_F(D2HStreamServiceTest, MetadataOnly_WorkerOp) {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
@@ -820,6 +824,8 @@ TEST_F(D2HStreamServiceTest, MetadataOnly_WorkerOp) {
     const tt::tt_metal::CoreRange worker_cores({0, 0}, {0, 0});  // single designated worker
     run_d2h_metadata_only_case(this->mesh_device_, worker_cores, /*metadata_size_bytes=*/16, /*fifo_size_bytes=*/4096);
 }
+
+// Same metadata-only path across a few record sizes to catch page-size / alignment issues.
 TEST_F(D2HStreamServiceTest, MetadataOnly_WorkerOp_Sizes) {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
@@ -830,6 +836,10 @@ TEST_F(D2HStreamServiceTest, MetadataOnly_WorkerOp_Sizes) {
         run_d2h_metadata_only_case(this->mesh_device_, worker_cores, md, /*fifo_size_bytes=*/4096);
     }
 }
+
+// Perf check (disabled by default; needs hardware): confirms the device-issued completion
+// path (worker op -> read_metadata) is cheaper per record than the old full-device
+// Synchronize barrier it replaces. Path A times the new path, Path B the old one.
 TEST_F(D2HStreamServiceTest, DISABLED_MetadataOnly_Microbench) {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
