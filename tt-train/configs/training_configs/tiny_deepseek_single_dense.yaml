@@ -1,0 +1,28 @@
+training_config:
+  project_name: "tt_train_tiny_deepseek_single_dense"
+  seed: 5489
+  batch_size: 1
+  num_epochs: 1
+  max_steps: 20
+  use_clip_grad_norm: false
+  data_path: "data/shakespeare.txt"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/moe/tiny_deepseek_char_dense.yaml"
+  optimizer:
+    type: AdamWFullPrecision
+    lr: 0.0001
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+
+device_config:
+  mesh_shape: [1, 1]
+  enable_ddp: false
+  enable_tp: false
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0
