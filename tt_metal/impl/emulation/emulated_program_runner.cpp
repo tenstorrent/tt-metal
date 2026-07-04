@@ -157,6 +157,12 @@ thread_local uint32_t __emule_dram_unreserved_base = 0;
 thread_local const uint64_t* __emule_dram_tensor_ranges = nullptr;
 thread_local uint32_t __emule_dram_tensor_ranges_count = 0;
 
+// Size (bytes) of the DRAM backing store whose base is __emule_self->bridge_dram; set
+// per-fiber in launch_cores (mirrors the bridge_dram handoff). Consumed only by
+// __emule_dram_ptr for a coarse backing-store bounds check. 0 means "unknown" — the
+// check is skipped, so the fast path is never regressed when it is unset or ASAN is off.
+thread_local uint64_t __emule_bridge_dram_size = 0;
+
 // ---------------------------------------------------------------------------
 // Bank mapping arrays — populated from SoC descriptor before kernel launch.
 // Exported via -rdynamic so JIT .so files can resolve them at dlopen time.
@@ -201,6 +207,16 @@ static inline void emule_require_self(const char* fn) {
 
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
     emule_require_self(__func__);
+    // ASAN out-of-bounds DRAM backing-store check. Catches offsets past the end of the DRAM
+    // buffer entirely (the L1 path has this; DRAM was a blind spot). Inert when ASAN is off or
+    // the size is unknown — __emule_bridge_dram_size stays 0 (set only when asan_enabled in
+    // launch_cores), so the fast path is never regressed.
+    if (__emule_bridge_dram_size > 0 && offset >= __emule_bridge_dram_size) {
+        __emule_asan_panic(
+            "[ASAN ERROR] Out-of-Bounds DRAM Access: offset 0x%lx exceeds DRAM size 0x%lx\n",
+            offset,
+            __emule_bridge_dram_size);
+    }
     // ASAN out-of-bounds DRAM check (inert when TT_METAL_EMULE_ASAN off — ranges stay null). Range-test
     // in 32 bits to match the live-range registry (uint32_t start/end); the 64-bit offset is used only
     // for the backing-store address. Assumes DRAM addresses fit in 32 bits (true for every WH/BH config).
@@ -3146,6 +3162,7 @@ static constexpr size_t kMaxResolvedPrograms = 256;
 static void launch_cores(
     std::vector<CoreSetup>& core_setups,
     uint8_t* dram_data,
+    uint64_t dram_data_size,
     std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr,
     ChipId device_id,
     bool defer_run,
@@ -3238,7 +3255,8 @@ static void launch_cores(
             // (shared across parked fibers on a worker); per-fiber ASAN state + the per-core ObjectIntent
             // snapshot/verify are a follow-up, so ASAN is aimed at single-device runs.
             sched.spawn(
-                [ki_ptr, lx, ly, cb_array, oob_state, sem_base = cs.sem_base, sem_size = cs.sem_size]() {
+                [ki_ptr, lx, ly, cb_array, oob_state, dram_data_size, sem_base = cs.sem_base,
+                 sem_size = cs.sem_size]() {
                     auto& ki = *ki_ptr;
                     __processor_id = ki.processor_id;
                     __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
@@ -3246,6 +3264,9 @@ static void launch_cores(
                     __emule_kernel_name = ki.kernel_name.empty() ? nullptr : ki.kernel_name.c_str();
                     __emule_pending_noc_reads = 0;
                     set_sanitizer_thread_locals(oob_state, sem_base, sem_size);
+                    // Backing-store size for __emule_dram_ptr's OOB check; gated on ASAN so it stays
+                    // 0 (inert) when off, mirroring set_sanitizer_thread_locals' oob.asan_enabled gate.
+                    __emule_bridge_dram_size = oob_state.asan_enabled ? dram_data_size : 0;
                     try {
                         for (size_t t = 0; t < ki.variants.size(); ++t) {
                             if (ki.run_all_variants) {
@@ -3256,6 +3277,7 @@ static void launch_cores(
                         }
                         sweep_per_kernel_dirty_cbs(oob_state, cb_array, ki.processor_id, lx, ly);
                     } catch (...) {
+                        __emule_bridge_dram_size = 0;
                         clear_sanitizer_thread_locals();
                         std::throw_with_nested(std::runtime_error(
                             "EMULE: kernel on core (" + std::to_string(lx) + "," + std::to_string(ly) +
@@ -3263,6 +3285,7 @@ static void launch_cores(
                     }
                     __emule_kernel_name = nullptr;
                     __emule_pending_noc_reads = 0;
+                    __emule_bridge_dram_size = 0;
                     clear_sanitizer_thread_locals();
                 },
                 std::move(ctx),
@@ -3390,9 +3413,10 @@ static void dispatch_to_device(
     setup_core_state(impl, device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, core_setups);
 
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
+    uint64_t dram_data_size = dram_core ? dram_core->l1_size() : 0;
 
     OobStateOwner oob = build_oob_tensor_state(device, device_id);
-    launch_cores(core_setups, dram_data, core_map_ptr, device_id, defer_run, oob.state);
+    launch_cores(core_setups, dram_data, dram_data_size, core_map_ptr, device_id, defer_run, oob.state);
 }
 
 // ---------------------------------------------------------------------------
