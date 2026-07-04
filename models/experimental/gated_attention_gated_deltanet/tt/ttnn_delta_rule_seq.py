@@ -45,6 +45,49 @@ _TILE = 32
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
+def _bmm_progcfg(device, mt, nt, kt):
+    """Batched-matmul program config: one full [mt,nt] output block per core, with the batch
+    spread across the whole device grid. TTNN's auto-config pins the recurrence's [128,128]@[128,128]
+    per-chunk bmms (kk, qk) to ~16 cores (one 4x4-tile output tiled across cores, batch looped
+    serially); here num_output_blocks = batch so the ~192 chunk-batch elements fan out over ~130
+    cores instead. Pure parallelization — matmul math is config-independent.
+
+    Returns None (-> TTNN auto-config, prior behaviour) when device is None or the shapes don't
+    tile cleanly.
+    """
+    if device is None or mt < 1 or nt < 1 or kt < 1:
+        return None
+    try:
+        grid = device.compute_with_storage_grid_size()
+        per_core_M, per_core_N = mt, nt
+        # out_subblock: largest h*w <= 4 tiles (fp32 DST limit) dividing per_core_M/N
+        osb_h, osb_w, best = 1, 1, 0
+        for h in range(1, per_core_M + 1):
+            if per_core_M % h:
+                continue
+            for w in range(1, per_core_N + 1):
+                if per_core_N % w:
+                    continue
+                if h * w <= 4 and h * w > best:
+                    best, osb_h, osb_w = h * w, h, w
+        # in0_block_w: largest divisor of kt, capped at 4 for L1 safety in fp32
+        in0_bw = 1
+        for c in (4, 3, 2, 1):
+            if c <= kt and kt % c == 0:
+                in0_bw = c
+                break
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            in0_block_w=in0_bw,
+            out_subblock_h=osb_h,
+            out_subblock_w=osb_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+        )
+    except Exception:
+        return None
+
+
 def chunk_gated_delta_rule_seq_adapter(
     q,  # [B, T, H, K]
     k,  # [B, T, H, K]
@@ -211,13 +254,12 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
     batch = L.shape[0]
 
     D_mat = ttnn.multiply(L, eye_1cc, memory_config=mc)  # [batch, C, C]
-    D_diag = ttnn.sum(D_mat, dim=-1, memory_config=mc)  # [batch, C]
-    D_inv = ttnn.reciprocal(D_diag, memory_config=mc)  # [batch, C] all in (0, 1]
+    # keepdim -> D_inv_row is [batch, C, 1] straight from the reduce (no reshape+clone; the
+    # [batch,C]->[batch,C,1] reshape is a TILE relayout). Col form still needs one reshape.
+    D_diag = ttnn.sum(D_mat, dim=-1, keepdim=True, memory_config=mc)  # [batch, C, 1]
+    D_inv_row = ttnn.reciprocal(D_diag, memory_config=mc)  # [batch, C, 1] all in (0, 1]
     ttnn.deallocate(D_diag)
-    # Clone after reshape: reshape is a view sharing D_inv's buffer.
-    D_inv_row = ttnn.clone(ttnn.reshape(D_inv, [batch, C, 1], memory_config=mc), memory_config=mc)
-    D_inv_col = ttnn.clone(ttnn.reshape(D_inv, [batch, 1, C], memory_config=mc), memory_config=mc)
-    ttnn.deallocate(D_inv)
+    D_inv_col = ttnn.clone(ttnn.reshape(D_inv_row, [batch, 1, C], memory_config=mc), memory_config=mc)
 
     # N = D^{-1} (L - D) via row scaling
     L_strict = ttnn.subtract(L, D_mat, memory_config=mc)
@@ -367,6 +409,10 @@ def chunk_gated_delta_rule_seq(
     if scale is None:
         scale = K**-0.5
 
+    # Batched-bmm progcfg for the per-chunk [C,C]@[C,C] matmuls (kk, qk): fan the chunk-batch
+    # across the full device grid instead of the ~16-core auto-config. Same math (see _bmm_progcfg).
+    _bmm_cfg = _bmm_progcfg(mesh_device, chunk_size // _TILE, chunk_size // _TILE, K // _TILE)
+
     # Zero inputs past valid_len (fixed T bucket, variable real length). Per-row valid_len: BH rows b*H..(b+1)*H.
     _is_per_row = isinstance(valid_len, (list, tuple))
     if _is_per_row or (valid_len is not None and valid_len < T):
@@ -457,12 +503,12 @@ def chunk_gated_delta_rule_seq(
     _cmc = ttnn.DRAM_MEMORY_CONFIG if chunk_size > 64 else None
 
     # ---- Decay preprocessing ----
-    g_c_3d = ttnn.reshape(g_c, [batch, 1, chunk_size], memory_config=None)
-    decay = ttnn.reshape(
-        ttnn.matmul(g_c_3d, triu_ones, memory_config=None, compute_kernel_config=_hifi_cfg),
-        [batch, chunk_size],
-        memory_config=None,
-    )
+    # decay = g_c @ triu_ones (prefix-sum of g along the chunk). triu_ones is broadcast across
+    # the batch, so the per-batch [1,C]@[C,C] bmm (M=1 -> pinned to ~4 cores) is bit-identical to
+    # a single 2D [batch,C]@[C,C] matmul, which spreads the batch rows across ~24 cores. Same
+    # math, same HiFi4/fp32 fidelity — pure parallelization win.
+    triu_ones_2d = ttnn.reshape(triu_ones, [chunk_size, chunk_size], memory_config=None)
+    decay = ttnn.matmul(g_c, triu_ones_2d, memory_config=None, compute_kernel_config=_hifi_cfg)
     decay_offset = decay[:, 0:1]
     decay_raw = decay
     decay = ttnn.subtract(decay_raw, decay_offset, memory_config=None)
@@ -490,7 +536,7 @@ def chunk_gated_delta_rule_seq(
     del k
     k_c = ttnn.move(k_c)
     k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=_cmc)
-    kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+    kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg, program_config=_bmm_cfg)
     ttnn.deallocate(k_c_t)
 
     _ck("kk", kk)
@@ -524,12 +570,13 @@ def chunk_gated_delta_rule_seq(
 
     # ---- Normalize to unit-diagonal: L_unit = D^{-1} L_mat ----
     D_mat = ttnn.multiply(L_mat, _eye_1cc, memory_config=_cmc)
-    D_diag = ttnn.sum(D_mat, dim=-1, memory_config=_cmc)
+    # keepdim -> reduce writes [batch, C, 1] directly; skips the [batch,C]->[batch,C,1] reshape,
+    # which on TILE is a physical relayout (~60us). Bit-identical to sum+reshape.
+    D_diag = ttnn.sum(D_mat, dim=-1, keepdim=True, memory_config=_cmc)
     _ck("D_diag", D_diag)
-    D_inv = ttnn.reciprocal(D_diag, memory_config=_cmc)
-    _ck("D_inv", D_inv)
+    D_inv_row = ttnn.reciprocal(D_diag, memory_config=_cmc)  # [batch, C, 1] row-broadcast scale
+    _ck("D_inv", D_inv_row)
     ttnn.deallocate(D_diag)
-    D_inv_row = ttnn.reshape(D_inv, [batch, chunk_size, 1], memory_config=_cmc)
 
     L_strict = ttnn.subtract(L_mat, D_mat, memory_config=_cmc)
     ttnn.deallocate(D_mat)
@@ -548,16 +595,14 @@ def chunk_gated_delta_rule_seq(
 
     # ---- intra_attn = (q_decay @ k.T) * L_mask * lower_causal ----
     decay_3d = ttnn.reshape(decay, [BH, num_chunks, chunk_size], memory_config=None)
-    decay_raw_3d = ttnn.reshape(decay_raw, [BH, num_chunks, chunk_size], memory_config=None)
 
     decay_last_raw = ttnn.reshape(ttnn.sum(g_c, dim=-1, memory_config=None), [BH, num_chunks, 1], memory_config=None)
     decay_last_normalized = ttnn.reshape(decay_3d[:, :, -1:], [BH, num_chunks, 1], memory_config=None)
 
-    decay_raw_exp_4d = ttnn.reshape(
-        ttnn.exp(ttnn.clip(decay_raw_3d, min=-20.0, max=0.0), memory_config=_cmc),
-        [BH, num_chunks, chunk_size, 1],
-        memory_config=_cmc,
-    )
+    # decay_raw_exp_4d == exp(clip(decay_raw)) again, just rank-4: identical values to decay_exp
+    # ([batch,C,1]). Reuse via a cheap leading-dim split instead of recomputing exp+clip and
+    # relaying out decay_raw_3d. Bit-identical.
+    decay_raw_exp_4d = ttnn.reshape(decay_exp, [BH, num_chunks, chunk_size, 1], memory_config=_cmc)
     q_c_4d = ttnn.to_layout(
         ttnn.reshape(q_c, [BH, num_chunks, chunk_size, K], memory_config=None),
         ttnn.TILE_LAYOUT,
@@ -602,7 +647,7 @@ def chunk_gated_delta_rule_seq(
     combined_mask_4d = ttnn.multiply(L_mask_4d, lower_causal_4d, memory_config=_cmc)
     ttnn.deallocate(L_mask_4d)
     k_c_4d_t = ttnn.transpose(k_c_4d, 2, 3, memory_config=_cmc)
-    qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+    qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg, program_config=_bmm_cfg)
     ttnn.deallocate(k_c_4d_t)
     intra_attn_4d = ttnn.multiply(qk_4d, combined_mask_4d, memory_config=_cmc)
     ttnn.deallocate(qk_4d)
