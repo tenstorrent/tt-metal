@@ -28,12 +28,13 @@ _GN_MODE = os.environ.get("HY_GN_MODE", "dist").lower()
 
 
 def _all_reduce_sum(ccl, t: ttnn.Tensor, *, mesh_axis: int) -> ttnn.Tensor:
-    """Sum a small (per-group) stat tensor across one mesh axis. all_gather concatenates
-    each shard's value on dim0, then reduce — equal shard sizes make this an exact sum."""
+    """Sum a small per-group stat tensor (or several stacked on dim1) across one mesh
+    axis. all_gather concatenates each shard's value on dim0, then reduce — equal shard
+    sizes make this an exact sum."""
     if mesh_axis is None or ccl.mesh_device.shape[mesh_axis] == 1:
         return t
-    g = ccl.all_gather(t, dim=0, mesh_axis=mesh_axis, use_hyperparams=False)  # [nshard,1,G,1]
-    s = ttnn.sum(g, dim=0, keepdim=True)  # [1,1,G,1]
+    g = ccl.all_gather(t, dim=0, mesh_axis=mesh_axis, use_hyperparams=False)  # [nshard,*,G,1]
+    s = ttnn.sum(g, dim=0, keepdim=True)  # [1,*,G,1]
     ttnn.deallocate(g)
     return s
 
@@ -78,10 +79,17 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
     ttnn.deallocate(csum)
     ttnn.deallocate(csumsq)
 
-    # all-reduce the tiny per-group stat tensors to global sums, then finalize mean/var
+    # Stack sum/sumsq into one [1,2,G,1] tensor so each mesh axis needs only ONE
+    # all_gather+sum round trip instead of two (sum and sumsq separately) — halves
+    # the AllGatherAsync dispatch count for this stat all-reduce.
+    stats = ttnn.concat([local_sum, local_sumsq], dim=1)  # [1,2,G,1]
+    ttnn.deallocate(local_sum)
+    ttnn.deallocate(local_sumsq)
     for ax in (h_mesh_axis, w_mesh_axis):
-        local_sum = _all_reduce_sum(ccl, local_sum, mesh_axis=ax)
-        local_sumsq = _all_reduce_sum(ccl, local_sumsq, mesh_axis=ax)
+        stats = _all_reduce_sum(ccl, stats, mesh_axis=ax)
+    local_sum = ttnn.slice(stats, [0, 0, 0, 0], [1, 1, G, 1])
+    local_sumsq = ttnn.slice(stats, [0, 1, 0, 0], [1, 2, G, 1])
+    ttnn.deallocate(stats)
     mesh_h = ccl.mesh_device.shape[h_mesh_axis] if h_mesh_axis is not None else 1
     mesh_w = ccl.mesh_device.shape[w_mesh_axis] if w_mesh_axis is not None else 1
     count = float(n_local * Cg * mesh_h * mesh_w)

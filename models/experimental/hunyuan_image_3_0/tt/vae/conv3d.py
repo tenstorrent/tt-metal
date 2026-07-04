@@ -49,6 +49,32 @@ register_conv3d_configs(
     }
 )
 
+# Hardware-swept exact blockings, applied and PCC-verified one at a time against
+# the full decoder (not just an isolated single call) since blocking choice can
+# interact badly with repeated/chunked invocation under the program cache in
+# ways a single-call comparison won't catch. See bruteforce_conv3d_sweep_hunyuan.py.
+# (h_factor, w_factor, C_in, C_out, kernel, T, H, W) -> blocking
+_BLOCKINGS.update(
+    {
+        (1, 1, 512, 512, (3, 3, 3), 4, 130, 130): (64, 256, 2, 4, 8),  # 22.2x, full-decode PCC verified
+        (1, 1, 128, 128, (3, 3, 3), 4, 130, 514): (64, 128, 2, 16, 8),  # 10.6x
+        (1, 1, 256, 256, (3, 3, 3), 4, 130, 258): (64, 256, 2, 2, 16),  # 20.9x
+        (1, 1, 1024, 1024, (3, 3, 3), 2, 66, 66): (64, 256, 1, 8, 8),  # 14.8x
+        (1, 1, 1024, 4096, (3, 3, 3), 2, 66, 66): (64, 256, 1, 8, 8),  # 16.6x
+        (1, 1, 512, 1024, (3, 3, 3), 4, 130, 130): (64, 256, 1, 8, 8),  # 13.9x
+        (1, 1, 256, 512, (3, 3, 3), 4, 130, 258): (64, 256, 2, 2, 16),  # 21.0x
+        (1, 1, 1024, 1024, (3, 3, 3), 1, 34, 34): (64, 256, 1, 4, 8),  # 11.9x
+        # (1, 1, 128, 3, (3, 3, 3), 4, 130, 514): (128, 32, 2, 8, 16),  # REJECTED:
+        # full-decode PCC 0.499 (vs 0.999941 baseline) despite passing an isolated
+        # single-call PCC check at 0.999995. This is the conv_out layer; some
+        # interaction with repeated/chunked invocation under program cache breaks
+        # it. Needs a different candidate blocking re-swept and re-verified, or
+        # leave on the channel-keyed fallback above.
+        (1, 1, 1024, 1024, (1, 1, 1), 1, 64, 64): (1024, 512, 1, 8, 4),  # 208.5x
+        (1, 1, 32, 1024, (3, 3, 3), 1, 34, 34): (32, 256, 1, 2, 16),  # 6.8x
+    }
+)
+
 
 def promote_conv3d_fallback_to_exact(
     *,
