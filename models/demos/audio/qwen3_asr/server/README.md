@@ -47,8 +47,9 @@ curl -s -X POST http://127.0.0.1:8002/v1/audio/transcriptions -F file=@clip.wav 
 The entrypoint wires ttnn to the mounted tt-metal (`uv pip install -e /work`, ~9s) then runs
 uvicorn. Mounts: tt-metal→/work, extracted checkpoint→/models/qwen3_asr_text_decoder, HF cache.
 First request of each new prefill length pays a one-time JIT (~1.5 RTF); later requests ~0.1.
-(No silence warmup — it corrupted the reused KV cache. Server uses `use_trace=False` for robustness;
-reusing one decode trace in-server is a TODO that would bring RTF back to ~0.05.)
+(Server uses host-side argmax greedy decode for robustness across mixed request shapes; a reused
+in-server decode trace was prototyped but removed — it destabilized the long-lived server — and
+re-landing it stably (RTF back to ~0.05) is a TODO.)
 
 ### Dev-container alternative (manual)
 `docker exec qwen3asr-dev bash /work/models/demos/audio/qwen3_asr/server/setup_container.sh` then

@@ -24,17 +24,12 @@ def main():
                                 args.weight_cache_path(ttnn.bfloat16), use_paged_kv_cache=False)
         ie = torch.from_numpy(np.load(f"{GOLDEN}/inputs_embeds.npy")).float().unsqueeze(0)
 
-        # untraced
-        ids_u = model.generate(ie, max_new_tokens=64, use_trace=False)
-        # traced (warm: run twice, time the second)
-        ids_t = model.generate(ie, max_new_tokens=64, use_trace=True)
         t0 = time.time()
-        ids_t = model.generate(ie, max_new_tokens=64, use_trace=True)
+        ids = model.generate(ie, max_new_tokens=64)
         dt = time.time() - t0
 
-        txt = tok.decode(ids_t, skip_special_tokens=True).strip()
-        print(f"[traced] {len(ids_t)} tok in {dt:.2f}s ({len(ids_t)/dt:.1f} tok/s)")
-        print(f"[match traced==untraced] {ids_t == ids_u}  (untraced {len(ids_u)} tok)")
+        txt = tok.decode(ids, skip_special_tokens=True).strip()
+        print(f"[decode] {len(ids)} tok in {dt:.2f}s ({len(ids)/dt:.1f} tok/s)")
         print(f"[tt ] {txt!r}")
         print(f"[ref] {REF!r}")
     finally:

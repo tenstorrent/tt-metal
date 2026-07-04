@@ -44,8 +44,10 @@ Single `Qwen3ASRForConditionalGeneration` ("Thinker"), three parts:
       **Steady-state RTF = 0.076 on one P150** (12s clip) vs CPU-bf16 ~0.30 → ~4× faster. Decoder
       30 tok/s; one-time setup (weight preprocess + build) ~3s. Transcription coherent & near-identical
       to the reference (bf16 greedy drifts a few words).
-- [x] **Speed** — decode trace (`generate(use_trace=True)`, needs `open_device(trace_region_size=...)`):
-      30.8 → 53.5 tok/s (~1.7×), tokens byte-identical. End-to-end RTF 0.076 → **0.044** (~7× vs CPU-bf16).
+- [~] **Speed (decode trace)** — a persistent decode trace was prototyped (~1.7×: 30.8 → 53.5 tok/s,
+      tokens byte-identical, RTF 0.076 → 0.044) but **removed**: it destabilized the long-lived server
+      across mixed request shapes. The shipped path is host-argmax greedy decode (steady-state RTF 0.076).
+      Re-landing a stable in-server decode trace is future work.
 - [x] **Raw wav + language auto-detect** (`reference/prep_wav.py` + `demo/demo_wav.py`): no language hint.
       EN (jim_keller, 20s, RTF 0.059): **byte-identical to CPU Qwen3-ASR**, detected English.
       JA (patlabor, 20s, RTF 0.048): semantically identical to CPU (bf16 homophone swaps only), detected

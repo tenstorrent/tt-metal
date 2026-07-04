@@ -18,7 +18,7 @@ from qwen3_asr_decoder import Qwen3ASRDecoder  # noqa
 
 
 def gen(model, ie, n=16):
-    return model.generate(ie, max_new_tokens=n, use_trace=False)
+    return model.generate(ie, max_new_tokens=n)
 
 
 def main():
