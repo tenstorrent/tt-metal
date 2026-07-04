@@ -11181,6 +11181,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             "(current behavior, no parallelism guidance)."
         ),
     )
+    pe2e.add_argument(
+        "--max-grade-rounds",
+        type=int,
+        default=0,
+        dest="max_grade_rounds",
+        help=(
+            "Max agent fix-loop rounds against the combined gate (default 3). Raise it for the hard "
+            "host-free work (residency / KV / on-device token feed / decode step) so the agent gets "
+            "enough edit-and-recheck attempts."
+        ),
+    )
     pe2e.set_defaults(func=cmd_emit_e2e)
 
     popt = sub.add_parser(

@@ -78,6 +78,8 @@ def termination_check() -> dict:
         return {"can_stop": False, "halt": True, "halt_reason": "E2E_MCP_DEMO_DIR not set", "next_target": None}
     demo = Path(_DEMO_DIR)
 
+    os.environ.pop("E2E_REQUIRE_ON_DEVICE", None)
+
     ok, reasons = _run_deterministic_gates(demo, _PCC, _TIMEOUT)
     if not ok:
         return {
