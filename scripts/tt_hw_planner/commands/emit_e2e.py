@@ -297,8 +297,7 @@ def cmd_emit_e2e(args) -> int:
         return rc
     if os.environ.get("E2E_SKIP_HOST_FREE") == "1":
         return rc
-    _run_phase_b_host_free(args)
-    return rc
+    return _run_phase_b_host_free(args)
 
 
 def _build_host_free_prompt(*, model_id, demo_dir, pcc) -> str:
