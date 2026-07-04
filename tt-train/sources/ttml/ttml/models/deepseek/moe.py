@@ -258,8 +258,7 @@ class MoE(AbstractModuleBase):
             self.shared_experts = DeepSeekMLP(
                 config.dim,
                 config.n_shared_experts * config.moe_inter_dim,
-                use_tp=(shared_axis is not None),
-                tp_axis_name=(shared_axis or "tp"),
+                tp_axis_name=shared_axis,
             )
         else:
             self.shared_experts = None

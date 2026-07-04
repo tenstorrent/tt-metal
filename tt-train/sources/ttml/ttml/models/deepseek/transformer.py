@@ -25,9 +25,9 @@ class RMSNormLayer(AbstractModuleBase):
 class DeepSeekMLP(AbstractModuleBase):
     """SwiGLU feed-forward network: w2(silu(w1(x)) * w3(x))."""
 
-    def __init__(self, dim: int, inter_dim: int, *, use_tp: bool = False, tp_axis_name: str = "tp") -> None:
+    def __init__(self, dim: int, inter_dim: int, *, tp_axis_name: str | None = None) -> None:
         super().__init__()
-        if use_tp:
+        if tp_axis_name is not None:
             self.w1 = ColumnParallelLinear(
                 dim,
                 inter_dim,
@@ -82,7 +82,7 @@ class DeepSeekBlock(AbstractModuleBase):
         self.attn = MultiHeadLatentAttention(config, rope_params)
         use_tp = bool(getattr(config, "use_tp", False))
         if layer_id < config.n_dense_layers:
-            self.ffn = DeepSeekMLP(config.dim, config.inter_dim, use_tp=use_tp)
+            self.ffn = DeepSeekMLP(config.dim, config.inter_dim, tp_axis_name="tp" if use_tp else None)
         else:
             moe_type = str(getattr(config, "moe_type", "sparse")).lower()
             if moe_type == "dense":
