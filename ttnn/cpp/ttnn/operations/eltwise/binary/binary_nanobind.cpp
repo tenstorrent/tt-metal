@@ -58,7 +58,7 @@ constexpr auto kRelationalDtypes =
     "UINT8 "
     "(cast to UINT16)";
 constexpr auto kFloatAndInt32Dtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32";
-constexpr auto kMaximumMinimumDtypes =
+constexpr auto kFloatAndInt32UInt32Dtypes =
     "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295])";
 constexpr auto kFloatOnlyDtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32";
 constexpr auto kBitwiseShiftDtypes = "INT32, UINT16 (range: [0, 65535]), UINT32 (range: [0, 4294967295])";
@@ -1748,7 +1748,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::remainder),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::remainder),
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        detail::kFloatAndInt32Dtypes,
+        detail::kFloatAndInt32UInt32Dtypes,
         detail::kSameDtypeRequiredFootnote);
 
     detail::bind_binary_operation<"add">(
@@ -2051,7 +2051,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryUnaryMaxScalarFn>(&ttnn::minimum),
         static_cast<detail::BinaryUnaryMaxTensorFn>(&ttnn::minimum),
         " ",
-        detail::kMaximumMinimumDtypes);
+        detail::kFloatAndInt32UInt32Dtypes);
 
     detail::bind_binary_composite<"atan2">(
         mod,
@@ -2196,7 +2196,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryUnaryMaxScalarFn>(&ttnn::maximum),
         static_cast<detail::BinaryUnaryMaxTensorFn>(&ttnn::maximum),
         R"doc(Supported range for :attr:`input_tensor_b` when its of scalar type is [-16777216, 16777216])doc",
-        detail::kMaximumMinimumDtypes);
+        detail::kFloatAndInt32UInt32Dtypes);
 
     detail::bind_prelu<"prelu">(
         mod,

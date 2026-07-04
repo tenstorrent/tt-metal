@@ -20,7 +20,7 @@ void kernel_main() {
 
     constexpr uint32_t in1_cb = get_compile_time_arg_val(0);
     constexpr uint32_t in2_cb = get_compile_time_arg_val(1);
-    uint32_t in_cb = in1_cb;
+    [[maybe_unused]] uint32_t in_cb = in1_cb;
     if (!is_input1) {
         in_cb = in2_cb;
     }

@@ -37,11 +37,13 @@ void kernel_main() {
     const uint32_t cb_slot = cb.get_write_ptr();
     cb.push_back(1);
 
+    Noc noc;
+
     for (uint32_t i = page_start; i < page_end; i++) {
-        noc_async_read_sharded(cb_slot, s, i, 0, original_page_size_bytes);
+        noc_async_read_sharded(noc, cb_slot, s, i, 0, original_page_size_bytes);
         noc_async_read_barrier();
         for (uint32_t k = 0; k < num_repeats; k++) {
-            noc_async_write_sharded(cb_slot, d, i, k * original_page_size_bytes, original_page_size_bytes);
+            noc_async_write_sharded(noc, cb_slot, d, i, k * original_page_size_bytes, original_page_size_bytes);
         }
         noc_async_write_barrier();
     }

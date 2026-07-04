@@ -504,10 +504,9 @@ bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
 }
 
-// TODO: this should subtract out links used by runtime for dispatching to non-mmio capable devices, tracked by #27196
-size_t get_num_available_routing_planes_in_direction(FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
+size_t get_num_usable_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_num_available_routing_planes_in_direction(fabric_node_id, routing_direction);
+    return control_plane.get_num_usable_routing_planes(fabric_node_id, routing_direction);
 }
 namespace experimental {
 
@@ -536,12 +535,12 @@ size_t get_number_of_available_routing_planes(
         cluster_axis_directions_to_check.size());
     const auto& directions_to_check = cluster_axis_directions_to_check[cluster_axis];
 
-    size_t planes_dir0 =
-        control_plane.get_num_available_routing_planes_in_direction(fabric_node_in_row_or_col, directions_to_check[0]);
-    size_t planes_dir1 =
-        control_plane.get_num_available_routing_planes_in_direction(fabric_node_in_row_or_col, directions_to_check[1]);
-    TT_FATAL(planes_dir0 == planes_dir1, "Routing planes are not equal");
-    return planes_dir0;
+    size_t planes_dir0 = control_plane.get_num_usable_routing_planes(fabric_node_in_row_or_col, directions_to_check[0]);
+    size_t planes_dir1 = control_plane.get_num_usable_routing_planes(fabric_node_in_row_or_col, directions_to_check[1]);
+    // Take the min: dispatch-reserved planes can legitimately reduce the count in only one of the two
+    // opposing directions on an MMIO chip (e.g., the tunnel descends only southward), making the two
+    // values asymmetric while both remain valid. Conservatively take what both directions can support.
+    return std::min(planes_dir0, planes_dir1);
 }
 
 }  // namespace experimental

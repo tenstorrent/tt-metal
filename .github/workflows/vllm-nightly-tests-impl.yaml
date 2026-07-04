@@ -46,6 +46,7 @@ jobs:
           # Tomasz Cheda (U091SNDA4TS) - Structured output tests
           # Radoica Draskic (U08BH66EXAL) - DP tests
           # Harry Andrews (U08TJ70UFRT), Stuti Raizada (U06F3ER8X9A) - GPT-OSS
+          # Aniruddha Tupe (U08HL8X1ECD) - Qwen3.6 models
 
           # Note: This matrix must be kept in sync with the original static matrix
           #
@@ -201,7 +202,7 @@ jobs:
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "default-chat-template-kwargs": "{\"enable_thinking\": false}",
               "multimodal": false,
-              "owner_id": "U08HL8X1ECD" # Aniruddha Tupe
+              "owner_id": "U08HL8X1ECD"
             },
             {
               "name": "[WH-GLX] GPT-OSS-120B (low-latency)",
