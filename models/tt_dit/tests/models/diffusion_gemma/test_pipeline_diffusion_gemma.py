@@ -218,20 +218,37 @@ def test_pipeline_diffusion_gemma(
     if tt_dec_h_host is not None and tt_dec_h_host.ndim == 4 and tt_dec_h_host.shape[0] == 1:
         tt_dec_h_host = tt_dec_h_host.squeeze(0)
 
-    # HF reference: rerun the model with output_hidden_states to grab the last decoder hidden.
-    # Cheapest way: monkey-call the decoder submodule directly, exactly how HF does it internally.
+    # HF reference: grab the last decoder hidden state (what lm_head sees). We could ask the
+    # top-level ForBlockDiffusion for output_hidden_states, but its return shape is ambiguous
+    # (encoder or decoder?). Safer: recompute the linear-algebra inverse of lm_head+softcap on
+    # the HF logits — that gives us exactly what the decoder produced.
+    #
+    #   softcap(x) = tanh(x / cap) * cap
+    #   pre_softcap = atanh(hf_logits / cap) * cap
+    #   pre_lm_head = pre_softcap @ pinv(lm_head.weight)     ← too expensive for vocab=262144
+    #
+    # atanh is well-defined for |y| < cap, and hf_logits are all in that range by construction.
+    # But inverting lm_head is a 262144×2816 pinv — not cheap. Instead: just call the HF decoder
+    # directly with output_hidden_states=True and take the last hidden state. That gives us the
+    # exact tensor lm_head consumes with no inversion math.
     with torch.no_grad():
-        # Rebuild the encoder side to reuse its KV cache — but for the pre-lm_head diagnostic
-        # we only need HF's own final decoder hidden state, so a second forward with
-        # output_hidden_states=True is fine.
         hf_full = hf_model(
             input_ids=input_ids,
             decoder_input_ids=seed_canvas,
             output_hidden_states=True,
         )
-        # HF's DiffusionGemmaForBlockDiffusion returns decoder_hidden_states as a tuple of
-        # (input_embeds, layer_1, ..., layer_N, final_norm). Take the last entry (post final norm).
-        hf_dec_h = hf_full.decoder_hidden_states[-1]  # [B, canvas, hidden]
+        # `hidden_states` is the tuple of decoder hidden states (input_embeds, layer_1, ..., final_norm)
+        # — the last entry has shape [B, canvas, hidden] and is what lm_head consumes.
+        hf_dec_h = hf_full.hidden_states[-1]
+        assert hf_dec_h.shape == (
+            seed_canvas.shape[0],
+            canvas_length,
+            text_cfg.hidden_size,
+        ), (
+            f"unexpected hf_dec_h shape {hf_dec_h.shape} — expected "
+            f"({seed_canvas.shape[0]}, {canvas_length}, {text_cfg.hidden_size}). If HF's "
+            f"hidden_states is actually the encoder's, we need to grab it a different way."
+        )
 
     logger.info("=" * 70)
     logger.info(f"[2b] Decoder hidden (pre-lm_head) — hf {hf_dec_h.shape}, tt {tt_dec_h_host.shape}")
@@ -273,7 +290,10 @@ def test_pipeline_diffusion_gemma(
         t_max=pipeline.config.temperature_end,
         max_denoising_steps=pipeline.config.max_denoising_steps,
     )
-    stopping = StableAndConfidentStoppingCriteria()
+    stopping = StableAndConfidentStoppingCriteria(
+        stability_threshold=pipeline.config.stability_threshold,
+        confidence_threshold=pipeline.config.confidence_threshold,
+    )
 
     current_canvas = sampler.initialize_canvas(batch_size=1, device=torch.device("cpu"))
     self_cond_logits: torch.Tensor | None = None

@@ -58,6 +58,9 @@ class DiffusionGemmaPipeline:
         entropy_bound: float = 0.1
         temperature_start: float = 0.8
         temperature_end: float = 0.4
+        # StableAndConfidentStoppingCriteria hyperparameters (HF defaults).
+        stability_threshold: int = 2
+        confidence_threshold: float = 0.9
         # Expert weights are the dominant DRAM consumer at real config (30 layers × 128 experts
         # × per-expert projection weights). bfp8 fits comfortably where bf16 OOMs, and
         # demos/gemma4's own MoEBlock default is bfp8 — so precision at the router path is not
@@ -332,7 +335,10 @@ class DiffusionGemmaPipeline:
             t_max=self.config.temperature_end,
             max_denoising_steps=self.config.max_denoising_steps,
         )
-        stopping = StableAndConfidentStoppingCriteria()
+        stopping = StableAndConfidentStoppingCriteria(
+            stability_threshold=self.config.stability_threshold,
+            confidence_threshold=self.config.confidence_threshold,
+        )
 
         # 3. Outer (canvas) loop.
         cur_input_ids = input_ids
