@@ -214,6 +214,39 @@ overlap, so 2-CQ / host-gap removal offers little for the denoise step. It could
 serving orchestration around block boundaries, but that is dominated by the same per-step MoE.
 Not pursued; the leverage is entirely in the per-step MoE (lever 3).
 
+## Lever A — TRUE-SPARSE token-gather MoE — **DECISIVE GO** (prototype, 2026-07-04 session 2)
+
+**Question (GO/NO-GO):** does gathering only the top-8 active experts' tokens (vs computing all 128)
+beat the dense-128 path, or does gather/scatter overhead erase the win?
+
+**Prototype** (`bench_gather_moe.py`, real 26B layer-0 MoE, real router routing, 256 canvas, C=32,
+10 iters, host-built dispatch indices — the on-device dispatch is measured separately below):
+
+The canvas input is REPLICATED across the (1,4) TP mesh (experts are TP-sharded on the intermediate
+dim, NOT expert-parallel), so **gather/scatter over the token dim is LOCAL per device** — no
+cross-device dispatch needed, unlike deepseek's `all_to_all_dispatch` (which needs a 16-row ring).
+
+| stage | ms/call | vs dense |
+|---|---|---|
+| 0: dense-128 prefill (the wall) | **137.08** | 1.00× |
+| 1: batched-experts only (gate/up/geglu/down on [E,C,H], no gather/scatter) | **8.89** | **15.42×** |
+| 2: FULL — embedding-gather + batched experts + combine-matmul + all-reduce | **10.93** | **12.54×** |
+| 3: PCC(full, dense) | **0.99970** | — |
+
+- Gather/scatter overhead = 10.93 − 8.89 = **~2 ms** (NOT a washout).
+- Capacity 32 (one 32-token tile per expert) captured **all 2048 (token,expert) pairs, 0 dropped**
+  for this input (2048 pairs / 128 experts = 16 avg, well under 32). PCC 0.9997.
+- Batched matmul over 128 experts (each a 32-token tile) is 15.4× cheaper than the dense-128
+  sparse-matmul because it computes 128×32 token-expert products instead of 8chunks×128×32 = 8×
+  fewer, AND it emits experts as the leading batch dim so it **avoids the 87 ms expert-major
+  transpose** entirely (the dense path's dominant cost).
+
+**This is the structural win the whole campaign was pointed at.** Replacing the 137 ms/layer dense
+MoE with ~11 ms/layer collapses the ~99%-MoE denoise step ~12×. Next: measure the on-device dispatch
+(trace-safe gather-index building from router topk), then full in-repo module + traced t/s.
+
+_Artifacts:_ `bench_gather_moe.py`, `artifacts/leverA_gather_moe_C32.log`.
+
 ## Session summary (2026-07-04)
 
 | lever | outcome |
