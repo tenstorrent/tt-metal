@@ -368,7 +368,7 @@ class DiffusionGemmaPipeline:
                     self_cond_logits=self_cond_logits,
                 )
                 argmax_canvas = logits.argmax(dim=-1)
-                processed_logits = logits_processor(logits, step)
+                processed_logits = logits_processor(logits, cur_step=step)
                 # Sample (categorical) for the denoiser canvas.
                 probs = torch.softmax(processed_logits.float(), dim=-1)
                 denoiser_canvas = torch.distributions.Categorical(probs=probs).sample()

@@ -313,7 +313,7 @@ def test_pipeline_diffusion_gemma(
             self_cond_logits=self_cond_logits,
         )
         argmax_canvas = logits.argmax(dim=-1)
-        processed_logits = logits_processor(logits, step)
+        processed_logits = logits_processor(logits, cur_step=step)
         probs = torch.softmax(processed_logits.float(), dim=-1)
         denoiser_canvas = torch.distributions.Categorical(probs=probs).sample()
         accepted = sampler.accept_canvas(current_canvas, denoiser_canvas, processed_logits, step)

@@ -256,8 +256,25 @@ class Gemma4Attention(Module):
         v_out = v
 
         # 5. Decoder cross-attention: prepend the encoder cache along the seq axis.
+        # For sliding_attention layers with long encoder prompts, HF *slices* the encoder
+        # cache to its last ``sliding_window`` tokens before concatenating with the canvas
+        # (see ``create_diffusion_decoder_attention_mask`` in HF's modeling_diffusion_gemma:
+        # ``sliding_mask = full_mask[..., sliding_start_idx:sliding_end_idx]`` +
+        # ``pad(sliding_mask, (0, canvas_length), value=True)``). Every canvas query then
+        # attends to (last-W of encoder cache) + (all canvas tokens) with a bidirectional
+        # zero mask. This is a *different* mechanism from encoder self-attention's
+        # per-query sliding, so we implement it by slicing the cache here — NOT by passing
+        # ``sliding_window_size`` to SDPA in the decoder path.
+        # For short encoder prompts (src_seq ≤ sliding_window) the slice is a no-op.
         if encoder_kv is not None:
             k_enc, v_enc = encoder_kv
+            if self.is_sliding and self.sliding_window is not None:
+                src_seq = k_enc.shape[2]
+                if src_seq > self.sliding_window:
+                    start = src_seq - self.sliding_window
+                    # ttnn.slice is [start_indices, end_indices] over all dims.
+                    k_enc = ttnn.slice(k_enc, [0, 0, start, 0], [*k_enc.shape[:2], src_seq, k_enc.shape[3]])
+                    v_enc = ttnn.slice(v_enc, [0, 0, start, 0], [*v_enc.shape[:2], src_seq, v_enc.shape[3]])
             k = ttnn.concat([k_enc, k], dim=2)
             v = ttnn.concat([v_enc, v], dim=2)
 
@@ -274,6 +291,20 @@ class Gemma4Attention(Module):
 
         # 7. SDPA with scale=1.0 (HF Gemma 4 explicitly sets scaling=1.0 — q_norm replaces the 1/sqrt(d)
         # normalization). ttnn SDPA: is_causal and attn_mask are mutually exclusive.
+        #
+        # sliding_window_size (encoder-mode only): HF Gemma 4 enforces per-query sliding-window
+        # for ``sliding_attention`` layers via the SDPA op (see
+        # ``demos/gemma4/tt/attention/operations.py::chunked_prefill_sdpa_sliding``). This
+        # applies to encoder self-attention. For decoder cross-attention HF uses a different
+        # mechanism (slice the encoder cache to last-W, then bidirectional attention), which
+        # we handle above by slicing ``encoder_kv``. So: only pass ``sliding_window_size``
+        # when we're in encoder mode (``encoder_kv is None``).
+        _sliding_window_size = (
+            self.sliding_window
+            if (self.is_sliding and self.sliding_window is not None and encoder_kv is None)
+            else None
+        )
+        _sdpa_kwargs = {"sliding_window_size": _sliding_window_size} if _sliding_window_size is not None else {}
         attn = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -283,6 +314,7 @@ class Gemma4Attention(Module):
             scale=1.0,
             program_config=self.sdpa_config,
             compute_kernel_config=self.compute_config,
+            **_sdpa_kwargs,
         )
 
         # 8. (B, H_local, S, D) → (B, S, H_local * D) → 4D → o_proj → 4D [1, B, S, hidden_size].
