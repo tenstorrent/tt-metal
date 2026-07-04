@@ -9548,6 +9548,7 @@ def _cmd_up_core(args) -> int:
                 demo_dir=_dd,
                 agent_bin=(getattr(args, "auto_agent_bin", None) or "claude"),
                 mesh=getattr(args, "mesh", None),
+                max_attempts=getattr(args, "auto_max_attempts_per_component", 2),
             )
 
         _phase2_only = bool(getattr(args, "phase2_only", False))

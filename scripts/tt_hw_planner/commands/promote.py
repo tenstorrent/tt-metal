@@ -94,6 +94,7 @@ def cmd_promote(args) -> int:
             demo_dir=demo_dir,
             agent_bin=(getattr(args, "auto_agent_bin", None) or "claude"),
             mesh=getattr(args, "mesh", None),
+            max_attempts=getattr(args, "auto_max_attempts_per_component", 2),
         )
 
     mem_fit_rc = _enforce_memory_fit_or_abort(
