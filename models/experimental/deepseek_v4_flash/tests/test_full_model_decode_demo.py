@@ -42,7 +42,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (
     resolve_snapshot_dir,
 )
 
-_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash"
+_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark"
 _DEFAULT_TEXT = "Tell me the name of the top 10 songs of all time."
 if int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "1024")) < 10:
     _DEFAULT_TEXT = "Tell"
@@ -252,6 +252,174 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
     assert generated, "no tokens were generated"
     logger.info(f"PROMPT    : {tokenizer.decode(prompt_ids)!r}")
     logger.info(f"GENERATED : {tokenizer.decode(generated)!r}  ({len(generated)} tokens)")
+
+
+def _build_dspark(mesh_device, config, loader, top_cache):
+    """Build the ttnn :class:`DSparkModel` on the main model's reserved submesh
+    (``model.dspark_device``). Args + MTP-stage count come from the DSpark
+    checkpoint (the same weights the main model loads)."""
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import dspark_reference as REF  # noqa: E402
+    from models.experimental.deepseek_v4_flash.tt.dspark import DSparkModel
+
+    n_mtp = REF.count_mtp_stages(loader)
+    args = REF.DSparkArgs.from_config_json(loader.snapshot_dir / "config.json", n_mtp_layers=n_mtp)
+    args.temperature = 0.0
+    return args, DSparkModel, REF
+
+
+@pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(14400)
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2})],
+    indirect=["device_params"],
+    ids=["fabric_2d"],
+)
+@pytest.mark.parametrize("text", (_DEFAULT_TEXT,))
+def test_full_model_dspark_speculative(mesh_device, reset_seeds, text: str) -> None:
+    """DSpark speculative-draft demo on the full ttnn stack.
+
+    The 43-layer main model runs on submeshes 0..6 (``layers_per_device == 7``);
+    the DSpark speculative module runs on the reserved 8th submesh
+    (``model.dspark_device``). At every step the main model emits both the next
+    token (greedy) and the DSpark hidden *tap* (``decode_main_hidden``), which
+    DSpark consumes to draft the next ``block_size`` tokens.
+
+    This measures DSpark's **draft acceptance length** against the main model's
+    own greedy trajectory — the quantity that determines the achievable
+    speculative speedup — using only the eager decode + draft path. The batched
+    verify-forward and KV rollback needed to *realise* that speedup in wall-clock
+    are a separate follow-up; here the main model's greedy stream is the
+    verification target directly, so no rollback is required.
+
+    Needs the full stack (the DSpark tap layers 40/41/42 must exist): do not cap
+    with ``DEEPSEEK_V4_DECODE_LAYERS``.
+    """
+    from transformers import AutoTokenizer
+    from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
+
+    loader = DeepseekV4WeightLoader(_DEFAULT_MODEL_DIR)
+    config = DeepseekV4Config.from_pretrained(loader.snapshot_dir)
+    config._attn_implementation = "eager"
+    tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
+
+    args, DSparkModel, REF = _build_dspark(mesh_device, config, loader, None)
+    target = tuple(args.dspark_target_layer_ids)
+    config.dspark_target_layer_ids = target
+    assert config.num_hidden_layers > max(target), "DSpark demo needs the full stack (tap layers 40/41/42)"
+
+    max_new_tokens = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "48"))
+    rope = _build_rope(config, _pad_to_tile(512 + max_new_tokens))
+    top_cache = WeightCache(os.path.join(_CACHE_DIR, "full_decode", "ttnn")) if _CACHE_DIR else None
+
+    model = DeepSeekV4Model(
+        config, loader, mesh_device, cache=top_cache, weight_dtype=_WEIGHT_DTYPE, use_submeshes=True
+    )
+    lm_head = Linear(
+        _w(loader, "lm_head.weight"),
+        model.last_device,
+        top_cache.file("lm_head") if top_cache else None,
+        dtype=_WEIGHT_DTYPE,
+    )
+    dspark_cache = WeightCache(os.path.join(_CACHE_DIR, "dspark")) if _CACHE_DIR else None
+    dspark = DSparkModel(args, loader, model.dspark_device, cache=dspark_cache, weight_dtype=_WEIGHT_DTYPE)
+    block = args.dspark_block_size
+    logger.info(f"main model on submeshes 0..6, DSpark on reserved submesh; block_size={block}")
+
+    prompt = render_message(0, [{"role": "user", "content": text}], "chat")
+    prompt_ids: list[int] = list(tokenizer(prompt)["input_ids"])
+    real_len = len(prompt_ids)
+    model.reset_caches()
+
+    def _to_dspark(main_hidden_tt) -> "ttnn.Tensor":
+        """Socket-move a main-model ``main_hidden`` tap onto the DSpark submesh."""
+        return model.to_dspark_device(main_hidden_tt)
+
+    # --- prefill: eager-decode each prompt token, collect the tap sequence --- #
+    tap_seq: list[torch.Tensor] = []
+    next_id = config.eos_token_id
+    for pos in range(real_len):
+        hidden, main_hidden = model.decode_main_hidden(prompt_ids[pos], pos, rope)
+        logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()
+        next_id = int(logits[0].argmax().item())
+        tap_seq.append(ttnn.to_torch(main_hidden).reshape(1, 1, -1).float())
+    dspark_dim = tap_seq[0].shape[-1]
+    seq_tt = ttnn.from_torch(
+        torch.cat(tap_seq, dim=1).reshape(1, 1, real_len, dspark_dim),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=model.dspark_device,
+    )
+    dspark.prefill(seq_tt)
+    logger.info(f"prefill ({real_len} tokens) -> first token {next_id} {tokenizer.decode([next_id])!r}")
+
+    # --- generation: greedy main stream + per-step DSpark draft blocks ------- #
+    import time
+
+    generated: list[int] = [next_id]
+    drafts: dict[int, list[int]] = {}  # absolute pos -> drafted tokens for pos+1..pos+block
+    draft_time = 0.0
+    draft_calls = 0
+    eos_id = config.eos_token_id
+    for step in range(1, max_new_tokens):
+        if next_id == eos_id:
+            logger.info("hit EOS; stopping")
+            break
+        pos = real_len + step - 1
+        cur = next_id
+        hidden, main_hidden = model.decode_main_hidden(cur, pos, rope)
+        logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()
+        next_id = int(logits[0].argmax().item())
+        generated.append(next_id)
+
+        main_hidden_ds = _to_dspark(main_hidden)
+        t0 = time.perf_counter()
+        draft_ids, _, conf = dspark.forward_spec(cur, main_hidden_ds, pos)  # forces device sync (to_torch inside)
+        if step > 1:  # skip step 1 (kernel JIT / first-run warmup)
+            draft_time += time.perf_counter() - t0
+            draft_calls += 1
+        drafts[pos] = draft_ids.reshape(-1).tolist()[1:]  # predictions for pos+1..
+        logger.info(
+            f"step {step:3d} (pos {pos:4d}): main -> {next_id} {tokenizer.decode([next_id])!r}; "
+            f"draft {drafts[pos][: min(block, 4)]}"
+        )
+
+    # --- acceptance analysis: how far each draft block matches the main stream #
+    # ``generated[0]`` is the greedy token at absolute position ``real_len`` (the
+    # first *new* token); ``generated[k]`` sits at absolute position
+    # ``real_len + k``. A draft made at ``pos`` predicts positions ``pos+1+j``.
+    accepted_lengths: list[int] = []
+    for pos, block_ids in drafts.items():
+        acc = 0
+        for j, tid in enumerate(block_ids):
+            real_pos = pos + 1 + j  # absolute position this draft token predicts
+            gen_idx = real_pos - real_len  # generated[0] == position real_len
+            if 0 <= gen_idx < len(generated) and generated[gen_idx] == tid:
+                acc += 1
+            else:
+                break
+        accepted_lengths.append(acc)
+
+    assert generated, "no tokens were generated"
+    mean_acc = sum(accepted_lengths) / len(accepted_lengths) if accepted_lengths else 0.0
+    logger.info(f"PROMPT    : {tokenizer.decode(prompt_ids)!r}")
+    logger.info(f"GENERATED : {tokenizer.decode(generated)!r}  ({len(generated)} tokens)")
+    logger.info(
+        f"DSpark draft acceptance: mean {mean_acc:.2f} / {block} tokens over {len(accepted_lengths)} blocks "
+        f"(implied speculative speedup ~= {1 + mean_acc:.2f}x with a batched verify-forward)"
+    )
+    if draft_calls:
+        per_call = draft_time / draft_calls
+        # A forward_spec drafts a whole block (block tokens) in one call.
+        logger.info(
+            f"DSpark draft model throughput: {block / per_call:.2f} draft-tok/s "
+            f"({per_call * 1e3:.1f} ms/block of {block} tokens, {draft_calls} timed calls; "
+            f"eager host-driven markov loop, not traced)"
+        )
 
 
 @pytest.mark.skip(reason="perf benchmark; run explicitly with DEEPSEEK_V4_PERF_ITERS set")

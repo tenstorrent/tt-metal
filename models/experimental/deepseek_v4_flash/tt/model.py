@@ -132,7 +132,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             for i in range(self.num_submeshes):
                 self.submeshes.append(full_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, i)))
             self.first_device = self.submeshes[0]
-            self.last_device = self.submeshes[-1]
+            self.last_device = self.submeshes[-2]
 
             # Create socket pairs between submeshes for copying hidden_states .
             # One pair per (from_id, to_id) with from_id != to_id; reused for all forward passes.
@@ -171,7 +171,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         self.layers: list[DeepSeekV4DecoderLayer] = []
         self.layer_devices: list[ttnn.MeshDevice] = []
-        self.layers_per_device = 6  # 43 layers across 8 devices.
+        # 43 layers across 7 devices (ceil(43/7) = 7 -> submeshes 0..6), leaving the
+        # 8th submesh free for the DSpark speculative module (see ``dspark_device``).
+        self.layers_per_device = 7
         for li in range(n):
             if self.use_submeshes:
                 layer_device_id = li // self.layers_per_device
@@ -212,6 +214,16 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # than the head and mismatch devices.
         if self.layer_devices:
             self.last_device = self.layer_devices[-1]
+
+        # Reserve a submesh not occupied by any decoder layer for the DSpark
+        # speculative module. With ``layers_per_device == 7`` the 43-layer stack
+        # ends on submesh 6, so submesh 7 is free; fall back to the last submesh
+        # (shared) if a larger stack / smaller mesh leaves none spare.
+        self.dspark_device = None
+        if self.use_submeshes:
+            used = {li // self.layers_per_device for li in range(n)}
+            free = [i for i in range(self.num_submeshes) if i not in used]
+            self.dspark_device = self.submeshes[free[0]] if free else self.submeshes[-1]
 
         # Per-layer decode state (sliding K=V + optional compressor projections).
         self.sliding_window = config.sliding_window
@@ -362,7 +374,42 @@ class DeepSeekV4Model(DeepSeekV4Module):
         streams.deallocate(True)
         return output_tensor
 
+    def _socket_move(self, tensor, from_submesh_id: int, to_submesh_id: int):
+        """Move ``tensor`` up the adjacent-submesh socket chain (device-to-device).
+
+        The pre-built socket pairs only connect ``(k, k+1)``, so a move to a higher
+        submesh hops one link at a time. ``from_submesh_id <= to_submesh_id`` (the
+        DSpark tap layers and its device are never below their source)."""
+        for k in range(from_submesh_id, to_submesh_id):
+            tensor = self._copy_streams_between_submeshes(tensor, k, k + 1)
+        return tensor
+
+    def to_dspark_device(self, tensor):
+        """Socket-transfer a ``last_device`` tensor onto the reserved DSpark submesh
+        (one adjacent hop, ``last -> dspark``), avoiding a host round-trip."""
+        last_id = self.num_layers and ((self.num_layers - 1) // self.layers_per_device)
+        dspark_id = next(i for i in range(self.num_submeshes) if self.submeshes[i] is self.dspark_device)
+        return self._socket_move(tensor, last_id, dspark_id)
+
+    def decode_main_hidden(self, token_id: int, pos: int, rope: dict) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """Like :meth:`decode` but also returns the DSpark ``main_hidden`` tap.
+
+        ``main_hidden`` is the concatenation (over the feature axis) of the
+        residual-stream stack's mean over the ``hc_mult`` axis at each layer in
+        ``config.dspark_target_layer_ids`` — ``[B, 1, len(target)*hidden]`` — the
+        input the DSpark speculative module consumes. Returns ``None`` for the tap
+        when no target layer is within the (possibly capped) stack.
+        """
+        target = set(getattr(self.config, "dspark_target_layer_ids", []) or [])
+        return self._decode_impl(token_id, pos, rope, collect_targets=target)
+
     def decode(self, token_id: int, pos: int, rope: dict) -> ttnn.Tensor:
+        hidden, _ = self._decode_impl(token_id, pos, rope, collect_targets=set())
+        return hidden
+
+    def _decode_impl(
+        self, token_id: int, pos: int, rope: dict, collect_targets: set
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Generate one step: feed ``token_id`` at absolute position ``pos`` against
         the running KV cache; returns ``[B, 1, 1, hidden]`` (apply ``lm_head`` for logits).
 
@@ -380,6 +427,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         rope_cache: dict = {}
         last_submesh_id = 0
+        target_means: list[ttnn.Tensor] = []
         for li, layer in enumerate(self.layers):
             if self.use_submeshes:
                 current_submesh_id = li // self.layers_per_device
@@ -403,9 +451,22 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 self.kv_caches[li],
                 input_ids=ids,
             )
+            if li in collect_targets:
+                # DSpark tap: mean over the hc_mult stream axis -> [B, 1, 1, D],
+                # tagged with the submesh it currently lives on (target layers can
+                # straddle submeshes, e.g. 40/41 on submesh 5, 42 on submesh 6).
+                sm_id = current_submesh_id if self.use_submeshes else 0
+                target_means.append((sm_id, ttnn.mean(streams, dim=2, keepdim=True)))
             last_submesh_id = current_submesh_id
             _profile(this_device)
-        return self.norm(self.hc_head(streams))
+        main_hidden = None
+        if target_means:
+            # Gather every tap onto the last layer's submesh over the device sockets
+            # (no host round-trip), then concat on-device along the feature axis.
+            dest_id = last_submesh_id if self.use_submeshes else 0
+            gathered = [self._socket_move(t, sm_id, dest_id) for sm_id, t in target_means]
+            main_hidden = ttnn.concat(gathered, dim=-1) if len(gathered) > 1 else gathered[0]
+        return self.norm(self.hc_head(streams)), main_hidden
 
     # ------------------------------------------------------------------ #
     # Traced decode (one reusable trace per submesh / device)
