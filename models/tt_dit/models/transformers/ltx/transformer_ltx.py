@@ -67,6 +67,7 @@ class LTXTransformerBlock(Module):
             "parallel_config": parallel_config,
             "is_fsdp": is_fsdp,
             "apply_gated_attention": apply_gated_attention,
+            "lora_enabled": lora_enabled,
         }
 
         # FSDP fractures FFN weights across the SP axis (on top of the TP fracture);
@@ -93,6 +94,7 @@ class LTXTransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            lora_enabled=lora_enabled,
         )
         self.adaln_coeff = 9 if cross_attention_adaln else 6
         # Outer-param layout (coeff, 1, 1, D): keeps each modulation parameter on the
@@ -133,6 +135,7 @@ class LTXTransformerBlock(Module):
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
                 fsdp_mesh_axis=fsdp_mesh_axis,
+                lora_enabled=lora_enabled,
             )
             self.audio_scale_shift_table = Parameter(
                 total_shape=[self.adaln_coeff, 1, 1, audio_dim],
@@ -490,6 +493,7 @@ class LTXTransformerModel(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -499,6 +503,7 @@ class LTXTransformerModel(Module):
         self.num_layers = num_layers
         self.has_audio = has_audio
         self.cross_attention_adaln = cross_attention_adaln
+        self.lora_enabled = lora_enabled
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
@@ -632,6 +637,7 @@ class LTXTransformerModel(Module):
                     has_audio=has_audio,
                     apply_gated_attention=apply_gated_attention,
                     cross_attention_adaln=cross_attention_adaln,
+                    lora_enabled=lora_enabled,
                 )
             )
 

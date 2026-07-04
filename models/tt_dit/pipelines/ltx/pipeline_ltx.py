@@ -208,6 +208,7 @@ class LTXPipeline:
         run_warmup: bool = False,
         traced: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
+        lora_enabled: bool = False,
     ):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
@@ -244,6 +245,10 @@ class LTXPipeline:
             )
         self.vae_parallel_config = vae_parallel_config
         self.mode = mode
+        # On-device fuse-mode LoRA: swap via bind_active on the transformer's LoRA
+        # Linears (weight.data += A@B), not the host-fuse+reload path used by
+        # extra_transformer_variants.
+        self.lora_enabled = lora_enabled
 
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
@@ -514,6 +519,7 @@ class LTXPipeline:
             has_audio=self.mode == "av",
             apply_gated_attention=self._has_gate,
             cross_attention_adaln=self._cross_attention_adaln,
+            lora_enabled=self.lora_enabled,
         )
 
     def _new_upsampler(self) -> LTXLatentUpsampler:

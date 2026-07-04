@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear
+from ....layers.linear import ColParallelLinear, LoRAColParallelLinear
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -61,6 +61,7 @@ class LTXAttention(Module):
         query_input_dim: int | None = None,
         output_dim: int | None = None,
         apply_gated_attention: bool = False,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -105,13 +106,17 @@ class LTXAttention(Module):
 
         self.kv_input_dim = context_dim if (context_dim is not None and not is_self) else dim
 
-        if is_self:
-            self.to_qkv = ColParallelLinear(dim, 3 * dim, chunks=3, **col_parallel_kwargs)
-        else:
-            self.to_q = ColParallelLinear(self.query_input_dim, dim, **col_parallel_kwargs)
-            self.to_kv = ColParallelLinear(self.kv_input_dim, 2 * dim, chunks=2, **col_parallel_kwargs)
+        # Fuse-mode LoRA lives in weight.data, so the chunked (to_qkv/to_kv) and
+        # fused-addcmul (to_out) paths work unchanged; runtime mode is unsupported here.
+        ColCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
 
-        self.to_out = ColParallelLinear(
+        if is_self:
+            self.to_qkv = ColCls(dim, 3 * dim, chunks=3, **col_parallel_kwargs)
+        else:
+            self.to_q = ColCls(self.query_input_dim, dim, **col_parallel_kwargs)
+            self.to_kv = ColCls(self.kv_input_dim, 2 * dim, chunks=2, **col_parallel_kwargs)
+
+        self.to_out = ColCls(
             dim,
             self.output_dim,
             bias=True,
