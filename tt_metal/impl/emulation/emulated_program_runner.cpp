@@ -140,16 +140,16 @@ thread_local uint32_t __emule_l1_host_ranges_count = 0;
 thread_local uint64_t* __emule_l1_resolved_ranges = nullptr;
 thread_local uint32_t* __emule_l1_resolved_ranges_count = nullptr;
 thread_local uint32_t __emule_l1_resolved_ranges_capacity = 0;
-thread_local uint32_t __emule_cb_reserved_pages[64] = {};
-thread_local uint32_t __emule_cb_waited_pages[64] = {};
+thread_local uint32_t __emule_cb_reserved_pages[EMULE_NUM_CBS] = {};
+thread_local uint32_t __emule_cb_waited_pages[EMULE_NUM_CBS] = {};
 // Dirty-CB leak flags: set by reserve/wait, cleared by push/pop; still-set at
 // kernel exit is the leak. Decoupled from the window counters. See SANITIZER_CHECKS.md §11.
-thread_local bool __emule_cb_reserve_dangling[64] = {};
-thread_local bool __emule_cb_wait_dangling[64] = {};
-thread_local const char* __emule_cb_reserve_file[64] = {};
-thread_local uint32_t __emule_cb_reserve_line[64] = {};
-thread_local const char* __emule_cb_wait_file[64] = {};
-thread_local uint32_t __emule_cb_wait_line[64] = {};
+thread_local bool __emule_cb_reserve_dangling[EMULE_NUM_CBS] = {};
+thread_local bool __emule_cb_wait_dangling[EMULE_NUM_CBS] = {};
+thread_local const char* __emule_cb_reserve_file[EMULE_NUM_CBS] = {};
+thread_local uint32_t __emule_cb_reserve_line[EMULE_NUM_CBS] = {};
+thread_local const char* __emule_cb_wait_file[EMULE_NUM_CBS] = {};
+thread_local uint32_t __emule_cb_wait_line[EMULE_NUM_CBS] = {};
 thread_local bool __emule_cb_boundary_strict = false;
 
 // DRAM equivalent of __emule_l1_tensor_ranges; consumed only by __emule_dram_ptr below.
@@ -994,6 +994,11 @@ public:
         const std::string dir = "/tmp/tt_emule_jit_slots_" + std::to_string(getuid());
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
+        if (!std::filesystem::is_directory(dir, ec)) {
+            // Slot dir unavailable — degrade to no concurrency cap rather than spin
+            // forever trying to open lock files under a missing directory.
+            return;
+        }
         for (unsigned spin = 0;; ++spin) {
             for (int i = 0; i < n; ++i) {
                 const std::string slot = dir + "/slot_" + std::to_string(i);
@@ -1163,7 +1168,11 @@ static std::function<void()> jit_compile_kernel(
     }
     cmd << define_flags;
     cmd << " \"" << wrapper_path << "\"";
-    cmd << " 2>&1";
+    // Redirect compiler output to a per-compile log so the retry logic below can
+    // read it back: an empty log after a nonzero rc means the compiler was killed
+    // (OOM under parallel load), which is retryable; a non-empty log is a real error.
+    std::string compile_log_path = dir + "/compile.log";
+    cmd << " > \"" << compile_log_path << "\" 2>&1";
 
     std::string full_cmd = cmd.str();
     log_debug(tt::LogMetal, "JIT compile: {}", full_cmd);
@@ -1180,7 +1189,7 @@ static std::function<void()> jit_compile_kernel(
     // concurrent clang jobs across worker processes; the OOM killer then reaps a
     // clang subprocess, yielding a nonzero rc with an EMPTY compile.log. A genuine
     // compile error always writes diagnostics, so retry only the no-diagnostics
-    // (killed-under-pressure) case, with jittered backoff so a retry can succeed
+    // (killed-under-pressure) case, with linear backoff so a retry can succeed
     // once sibling compiles finish and free memory. Real errors fail fast.
     constexpr int kMaxCompileAttempts = 5;
     int rc = 0;
@@ -1219,7 +1228,7 @@ static std::function<void()> jit_compile_kernel(
             compile_log = compile_log.substr(compile_log.size() - max_log_bytes);
         }
         throw std::runtime_error(
-            "jit_compile_kernel: compiler failed (exit " + std::to_string(rc) + ") for kernel: " + kernel_src_path +
+            "jit_compile_kernel: compiler failed (status " + std::to_string(rc) + ") for kernel: " + kernel_src_path +
             (compile_log.empty() ? " [no compiler diagnostics — likely killed under resource pressure]"
                                  : "\n--- compiler output ---\n" + compile_log));
     }
