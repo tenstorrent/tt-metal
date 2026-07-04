@@ -713,6 +713,29 @@ masks the per-matmul geometry win — OPT-004's 7.05× is a *compute-time* win o
 consistent with `path_to_100tps` and the §session-5/6 traced-loop scoping. The combo is the right default-on stack, but
 the ~2× headroom to 30 lives in tracing, which remains blocked on the single-step trace mechanism (below).
 
+### OPT-004 full-MoE layer number — the session-5 compile blocker RESOLVED (was cold-JIT-cache)
+
+`verify_opt004_fullmoe.py --num-layers 2 --iters 10` (real 26B layer-0 MoE, mesh (1,4), TP=4, capacity 32),
+tuning ALL FIVE configs (gather + gate_up + down + combine):
+
+```
+RESULT_OPT004_MOE capacity=32 untuned_ms=10.083 tuned_ms=2.892 speedup=3.49 pcc_tuned_vs_untuned=0.99964
+```
+
+**The full sparse_experts_forward is 10.08 → 2.89 ms = 3.49×, PCC(tuned,untuned) = 0.99964** — the land gate
+(pure geometry ⇒ PCC preserved). This CLOSES the session-5 open item: the "pathologically slow first-call compile
+(>7 min / 27 min CPU)" of the down/2D configs did **not** reproduce — it was a **cold JIT cache** (first-ever compile
+of these program configs). The disk JIT cache is now warm (step-1 log: 95.4% hits), so the tuned configs compile
+normally. Independently corroborated by the step-1 combo run, which built full-30L with `DG_SPARSE_MOE_TUNED=1` and
+produced coherent text in 42 s — all 5 tuned configs compiled + ran. The tuned MoE (2.89 ms) beats the
+`path_to_100tps` rank-2 projection (5–6 ms) and approaches the ~1.6 ms weight roofline.
+
+**Reconciles the step-7 A/B gap.** OPT-004 saves ~7.2 ms/layer of DEVICE-COMPUTE (× 30 = ~215 ms/step), but the
+eager serving step is host-dispatch-bound, so that compute win is hidden — hence OPT-004 added only ~10 ms/step to
+the serving A/B. `_time_sparse` measures pipelined device compute (async dispatch, one sync at the end) and DOES see
+the 3.49×. **⇒ OPT-004 + the traced serving loop COMPOUND**: tracing removes the dispatch tax that currently masks
+the 3.49× MoE win. This makes the traced serving loop the single highest-value remaining lever (§below).
+
 ### Branch consolidation — `dg-opt-f100` + `dg-opt-g-opt004` confirmed SUPERSEDED (no merge needed)
 
 `git diff diffusion-gemma-function <branch>` shows HEAD is a strict SUPERSET of both opt-in branches:
