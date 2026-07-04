@@ -411,7 +411,7 @@ class _InterleavedMigrationDriver:
         self._inflight: dict = {}  # request_id -> (slot_id, actual_start, actual_end)
         self._cursor = 0  # completions consumed so far (== next expected seq)
         self._migrated_chunks = 0  # chunks already migrated
-        self._migrated_layers = 0  # cumualtive layers already migrated
+        self._migrated_layers = 0  # cumulative layers already migrated
         self._tokens: list = []  # outstanding migrate tokens (deferred wait_complete => overlap)
         # Diagnostics only. _router (master LayerCompletionRouter, may be None) exposes .processed = the
         # total acks the router has INJECTED into the channel; comparing it to our consumed _cursor tells
@@ -1275,7 +1275,7 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         assert migration_endpoint is not None, "rank 0 must hold the migration client for interleaved migrate"
         # Granularity flag: "layerwise" (default) migrates each chunk's layers as they ack — finer
         # overlap; "chunkwise" waits for a chunk's full 61-layer ack then migrates it in one shot.
-        granularity = os.environ.get("PREFILL_MIGRATION_GRANULARITY", "chunkwise").strip().lower()
+        granularity = os.environ.get("PREFILL_MIGRATION_GRANULARITY", "layerwise").strip().lower()
         if granularity not in ("layerwise", "chunkwise"):
             raise ValueError(f"PREFILL_MIGRATION_GRANULARITY must be 'layerwise' or 'chunkwise', got {granularity!r}")
         mig_driver = _InterleavedMigrationDriver(

@@ -48,7 +48,7 @@ def _serialize_table_to_path(table, path: str) -> None:
 def _resolve_queue_names() -> tuple[str, str, str]:
     return (
         # Default shmem queue names. Overridable via PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE.
-        os.environ.get("PREFILL_MIGRATION_CMD_QUEUE", "/prefill_mid_cmd_1"),
+        os.environ.get("PREFILL_MIGRATION_CMD_QUEUE", "/prefill_mig_cmd_1"),
         os.environ.get("PREFILL_MIGRATION_TABLE_QUEUE", "/prefill_mig_tbl_1"),
         os.environ.get("PREFILL_MIGRATION_RESP_QUEUE", "/prefill_mig_rsp_1"),
     )

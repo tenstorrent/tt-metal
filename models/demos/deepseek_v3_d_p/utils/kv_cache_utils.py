@@ -6,11 +6,11 @@ Utilities for KVPE cache initialization and management.
 """
 
 import socket
-import zlib
 
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, get_num_dram_banks
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 
 # This is a predefined constant for the number of contiguous tokens in a DRAM bank
@@ -20,15 +20,6 @@ NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 # disaggregation address-table striding must both use the device's actual count to stay consistent.
 BH_NUM_DRAM_BANKS = 8
 PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
-
-
-def get_num_dram_banks(mesh_device):
-    """Usable DRAM banks on this device. Full Blackhole = 8; harvested parts expose fewer (e.g. 7).
-
-    The KV cache ND-shards round-robin across these banks and the disaggregation address table replays
-    that exact striping (`curr_bank_id = (curr_bank_id + 1) % num_banks`), so both MUST derive the count
-    from the same device. dram_grid_size().x is the number of DRAM cores/banks the device exposes."""
-    return mesh_device.dram_grid_size().x
 
 
 def create_kv_chunk_address_table_ds(
@@ -166,83 +157,6 @@ def create_kv_chunk_address_table_ds(
                     (layer_current_position, layer_max_position) = device_position_indices_high_strip[row]
 
     return lookup_table
-
-
-def _host_tag_int():
-    """Per-host stable 31-bit id (crc32 of hostname, masked to fit the signed-int32 allgather).
-
-    Ranks on the same physical host produce the SAME value; different hosts (almost certainly)
-    differ. ``allgather_int`` is the only collective primitive exposed and it carries a signed
-    32-bit int, so a hostname STRING cannot be gathered directly — we gather this tag instead and
-    rebuild a stable per-host string ``host-{tag:08x}`` on every rank (matching tt-blaze's
-    migration_table_hook convention). A host owns multiple mesh rows but a given row never spans
-    hosts, so one tag per owning rank correctly groups every FNID to its worker.
-    """
-    return zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF
-
-
-def allgather_kv_stage_layout(mesh_device, tt_kvpe_cache, mesh_shape, first_layer_idx, num_my_layers):
-    """COLLECTIVE (all ranks): all-gather each rank's pipeline-STAGE layout so one merged table can
-    span every layer across every host -- tt-blaze's layer->mesh merge strategy.
-
-    In this pipeline-parallel deployment each rank owns a contiguous LAYER range
-    ``[first_layer_idx, first_layer_idx + num_my_layers)`` and holds the KV for those layers across
-    its FULL mesh (all SP rows x TP cols). A migration worker needs ONE table covering every layer,
-    but ``mesh_device``/``buffer_address()`` only expose THIS rank's mesh + KV base. So every rank
-    contributes, via ``allgather_int``:
-
-      * its layer range ``(first_layer_idx, num_my_layers)`` -- the analog of tt-blaze's my_layer_id
-      * KV-cache base address (64-bit, split lo/hi for the 32-bit int gather)
-      * usable DRAM bank count (harvested parts differ, so gather it rather than assume)
-      * a per-host tag (see :func:`_host_tag_int`)
-      * the ``(mesh_id, chip_id)`` of every ``(row, col)`` fabric node in its FULL mesh
-
-    EVERY rank must call this with identical ``mesh_shape`` (the per-(row,col) loop must be symmetric
-    for the collective to line up). Returns a per-rank list of stage dicts:
-    ``{rank, first_layer, count, base_addr, num_banks, host_tag, fnids[row][col]}``.
-    """
-    rows = mesh_shape[0]
-    cols = mesh_shape[1]
-    base_addr = int(tt_kvpe_cache.buffer_address())
-    num_banks = get_num_dram_banks(mesh_device)
-
-    all_first = ttnn.distributed_context_allgather_int(int(first_layer_idx))
-    all_count = ttnn.distributed_context_allgather_int(int(num_my_layers))
-    all_lo = ttnn.distributed_context_allgather_int(base_addr & 0xFFFFFFFF)
-    all_hi = ttnn.distributed_context_allgather_int((base_addr >> 32) & 0xFFFFFFFF)
-    all_banks = ttnn.distributed_context_allgather_int(int(num_banks))
-    all_host = ttnn.distributed_context_allgather_int(_host_tag_int())
-
-    # Each rank enumerates its FULL mesh (every SP row x TP col) and gathers (mesh_id, chip_id) per
-    # coord -- unlike the layers, the whole mesh belongs to this rank's stage, so no row-splitting.
-    all_mesh = [[None] * cols for _ in range(rows)]
-    all_chip = [[None] * cols for _ in range(rows)]
-    for r in range(rows):
-        for c in range(cols):
-            fid = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c))
-            all_mesh[r][c] = ttnn.distributed_context_allgather_int(int(fid.mesh_id))
-            all_chip[r][c] = ttnn.distributed_context_allgather_int(int(fid.chip_id))
-
-    size = len(all_lo)
-    stages = []
-    for rk in range(size):
-        base = ((all_hi[rk] & 0xFFFFFFFF) << 32) | (all_lo[rk] & 0xFFFFFFFF)
-        fnids = [
-            [ttnn.FabricNodeId(ttnn.MeshId(all_mesh[r][c][rk]), all_chip[r][c][rk]) for c in range(cols)]
-            for r in range(rows)
-        ]
-        stages.append(
-            {
-                "rank": rk,
-                "first_layer": all_first[rk],
-                "count": all_count[rk],
-                "base_addr": base,
-                "num_banks": all_banks[rk],
-                "host_tag": all_host[rk],
-                "fnids": fnids,
-            }
-        )
-    return stages
 
 
 def create_kv_chunk_address_table_kimi(

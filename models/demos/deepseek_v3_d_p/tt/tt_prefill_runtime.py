@@ -322,7 +322,7 @@ class TtPrefillRuntime:
         path: str,
         *,
         first_layer_idx: int = 0,
-        num_my_layers: int = None,
+        num_my_layers: Optional[int] = None,
         stage_layout=None,
     ) -> str:
         """Build + serialize the KV-chunk address table for the engine-owned `kv_cache` to
