@@ -947,6 +947,7 @@ def _host_gate(prof: dict, blocking: list, attempts: list) -> dict | None:
     return None
 
 
+@mcp.tool()
 def termination_check() -> dict:
     """THE BINDING STOP GATE and SOLE authority on 'optimize more or not' — you may declare DONE ONLY
     when this returns can_stop=true. It decides PURELY from its own deterministic measurement (the
