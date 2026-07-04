@@ -396,6 +396,195 @@ def test_all_cores_lockstep_then_per_core_then_reverse(device):
         assert per_core_tensors[i].is_allocated()
 
 
+def test_per_core_width_sharded_tiled_bfp4_round_trip(device):
+    """FORMAT coverage: per-core allocation coexists with WIDTH_SHARDED + TILE_LAYOUT +
+    BFLOAT4_B for a (7168, 576) tensor on the 18-core grid (0,8)-(8,9), with a couple of
+    co-resident per-core tensors on (0,8)/(0,9) (so per-core addresses are non-uniform).
+
+    NOTE: this is a host ``from_torch``/``to_torch`` round-trip, which is SYMMETRIC (both
+    sides used the same buffer address), so it does NOT catch the per-core data-movement
+    address bug — it passed even while that bug was live, because the isolated co-resident
+    topology differs from the real dense run. The authoritative guard for that bug is
+    ``test_per_core_kernel_readback_honors_per_core_address`` (kernel reads at the per-core
+    address). This test only verifies that the BFP4/TILE/WIDTH-sharded per-core creation
+    path round-trips at all.
+    """
+    H, W = 7168, 576
+    kv_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(8, 9))])
+    kv_cores = list(ttnn.corerange_to_cores(kv_grid, row_wise=True))
+    num_cores = len(kv_cores)
+    assert num_cores == 18
+    shard_w = W // num_cores  # 32
+
+    # Phase 1: prior per-core alloc on (0,8) and (0,9) — the two cores that
+    # relocate in the real run (kv_norm gamma / k_rope co-residents).
+    relocate_cores = [ttnn.CoreCoord(0, 8), ttnn.CoreCoord(0, 9)]
+    prealloc = [_create_single_core_tensor(device, c, 2048) for c in relocate_cores]
+
+    # Phase 2: WIDTH_SHARDED, TILE_LAYOUT, BFP4 per-core tensor with distinct
+    # nonzero data per column-shard (column block c filled with value c+1).
+    data = torch.zeros(H, W, dtype=torch.float32)
+    for c in range(num_cores):
+        data[:, c * shard_w : (c + 1) * shard_w] = float(c + 1)
+
+    shard_spec = ttnn.ShardSpec(kv_grid, [H, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    mem_config.experimental_set_per_core_allocation(True)
+
+    tensor = ttnn.from_torch(
+        data, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+
+    addrs = {(c.x, c.y): tensor.experimental_per_core_buffer_address(c) for c in kv_cores}
+    base = addrs[(1, 8)]
+    relocated = [(c.x, c.y) for c in kv_cores if addrs[(c.x, c.y)] != base]
+    print(f"\n[REPRO-KVA] distinct_addrs={len(set(addrs.values()))} relocated={relocated} base_addr={base}")
+
+    result = ttnn.to_torch(ttnn.from_device(tensor)).float()
+    # per column-shard: mean abs (BFP4 is lossy, but zero stays ~zero)
+    zero_shards = []
+    for c in range(num_cores):
+        block = result[:, c * shard_w : (c + 1) * shard_w]
+        if float(block.abs().mean().item()) < 1e-3:
+            zero_shards.append((c, (kv_cores[c].x, kv_cores[c].y)))
+    print(f"[REPRO-KVA] zero_shards={len(zero_shards)}/{num_cores}: {zero_shards}")
+    assert not zero_shards, (
+        f"{len(zero_shards)}/{num_cores} WIDTH-sharded BFP4 per-core column-shards read back ZERO "
+        f"(BFP4/TILE/WIDTH per-core creation round-trip is broken): {zero_shards}"
+    )
+
+
+# Inline data-movement kernel: copy `num_bytes` from a per-core SOURCE L1 address
+# (passed as a runtime arg, exactly how blaze wires weights via
+# experimental_per_core_buffer_address(core)) into a lockstep DESTINATION L1 address
+# on the same core. A plain local L1->L1 word copy — no CB / NOC / TensorAccessor needed.
+_PER_CORE_READBACK_KERNEL = r"""
+#include "api/dataflow/dataflow_api.h"
+
+void kernel_main() {
+    const uint32_t src_addr  = get_arg_val<uint32_t>(0);  // per-core source base (kernel's view)
+    const uint32_t dst_addr  = get_arg_val<uint32_t>(1);  // lockstep destination base
+    const uint32_t num_bytes = get_arg_val<uint32_t>(2);
+
+    volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+    volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+    const uint32_t num_words = num_bytes >> 2;
+    for (uint32_t i = 0; i < num_words; ++i) {
+        dst[i] = src[i];
+    }
+}
+"""
+
+
+def test_per_core_kernel_readback_honors_per_core_address(device):
+    """REGRESSION test for the per-core data-movement address bug.
+
+    Unlike the host round-trip tests above, this introduces the asymmetry the bug
+    needs: a kernel reads each core's shard at the per-core address
+    (``experimental_per_core_buffer_address(core)``, wired as a runtime arg exactly how
+    blaze's matmul reads weights), while ``from_torch`` writes via the host
+    data-movement path.
+
+    The defect: host data movement wrote every core's shard at the uniform scalar
+    ``buffer.address()`` (== cores[0]'s address) plus the core's logical page offset,
+    instead of at each core's independent per-core address. Host round-trips
+    (``to_torch``) can't see this because they use the same scalar on both sides. A
+    kernel reading at the per-core address CAN: a core whose per-core address sits
+    *below* the scalar by more than the write's page span reads whatever is there
+    (zeros), not the written data — exactly what made 16/18 kv_a cores read zero
+    (-> kv-cache inf) in the full dense run.
+
+    To reproduce robustly in isolation we recreate that key geometry directly: a
+    per-core triangle pre-alloc with a step (``PREALLOC_STEP``) far LARGER than the
+    shard/page size pushes each core's per-core address far below cores[0]'s (the
+    scalar), while the buggy host write only advances by the small page size. So the
+    written bytes and the kernel's read address diverge on (almost) every core.
+
+    With the fix (host data movement honors ``get_per_core_address``), the kernel reads
+    real data on every core. With the fix reverted, the diverged cores read zeros and
+    this test FAILS.
+    """
+    grid = device.compute_with_storage_grid_size()
+    cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
+    num_cores = len(cores)
+
+    SHARD_BYTES = 1024  # small page; word-aligned
+    PREALLOC_STEP = 4096  # > SHARD_BYTES: spreads per-core addresses apart faster than
+    #                       the host write advances (and stays within an L1 bank: the
+    #                       largest core's pre-alloc is num_cores * PREALLOC_STEP)
+
+    # Phase 1: triangle pre-alloc with a LARGE step. cores[0] consumes the least (=>
+    # highest address => the scalar buffer.address()); each later core sits a full
+    # PREALLOC_STEP lower. The buggy host write advances only by SHARD_BYTES per core,
+    # so it never reaches the far-lower per-core addresses.
+    triangle_tensors = {}
+    for i, core in enumerate(cores):
+        triangle_tensors[i] = _create_single_core_tensor(device, core, (i + 1) * PREALLOC_STEP)
+
+    # Phase 2: the SOURCE per-core sharded tensor with DISTINCT NONZERO data per core.
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    shard_spec = ttnn.ShardSpec(core_grid, [1, SHARD_BYTES], ttnn.ShardOrientation.ROW_MAJOR)
+    src_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    src_mem.experimental_set_per_core_allocation(True)
+
+    data = torch.zeros(num_cores, SHARD_BYTES, dtype=torch.uint8)
+    for i in range(num_cores):
+        data[i, :] = (i % 255) + 1
+    src = ttnn.from_torch(data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=src_mem)
+
+    # Precondition: per-core addresses must be non-uniform, else scalar == per-core and
+    # the bug is structurally invisible.
+    src_addrs = [src.experimental_per_core_buffer_address(c) for c in cores]
+    assert len(set(src_addrs)) > 1, f"expected non-uniform per-core addresses; got {len(set(src_addrs))} distinct"
+
+    # DESTINATION: a lockstep (uniform-address) uint8 tensor the kernel copies into,
+    # read back reliably via to_torch.
+    dst_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    dst = ttnn.from_torch(
+        torch.zeros(num_cores, SHARD_BYTES, dtype=torch.uint8),
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=dst_mem,
+    )
+    dst_base = dst.buffer_address()  # lockstep: uniform across cores
+
+    # Wire the kernel: per core, source = the per-core address (the kernel's true view),
+    # destination = the lockstep base.
+    rt_args = ttnn.RuntimeArgs()
+    for c in cores:
+        rt_args[c.x][c.y] = [src.experimental_per_core_buffer_address(c), dst_base, SHARD_BYTES]
+
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=_PER_CORE_READBACK_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+        core_ranges=core_grid,
+        compile_time_args=[],
+        runtime_args=rt_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    program = ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[])
+
+    ttnn.generic_op([src, dst], program)
+
+    result = ttnn.to_torch(ttnn.from_device(dst))
+    mismatched = [i for i in range(num_cores) if not torch.equal(result[i], data[i])]
+    zero_rows = [i for i in range(num_cores) if int(result[i].max().item()) == 0]
+    print(
+        f"\n[KERNEL-READBACK] distinct_src_addrs={len(set(src_addrs))} "
+        f"mismatched={len(mismatched)}/{num_cores} zero={len(zero_rows)}/{num_cores}"
+    )
+    assert not mismatched, (
+        f"{len(mismatched)}/{num_cores} cores' kernel-read shards differ from the written data "
+        f"({len(zero_rows)} read ALL-ZERO) — host data movement wrote at the uniform scalar "
+        f"buffer.address() instead of the per-core address the kernel reads "
+        f"(reproduces dense kv_a inf). rows={mismatched[:32]}"
+    )
+
+    for i in range(num_cores):
+        assert triangle_tensors[i].is_allocated()
+
+
 def test_triangle_allocation_then_uniform_sharded(device):
     """Triangle per-core allocation on ALL compute cores, then a per-core sharded tensor.
 
