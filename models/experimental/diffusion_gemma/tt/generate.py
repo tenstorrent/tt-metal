@@ -772,6 +772,18 @@ def _empty_device_generation(batch_size: int, prompt_len: int, *, device=None) -
     )
 
 
+def _resolve_default_commit_fn() -> Callable[..., None]:
+    """Pick the commit path: batched single-prefill when opted in, else sequential.
+
+    The batched path (``DG_COMMIT_BATCHED``) is imported lazily so the default
+    sequential path keeps no dependency on ``tt.commit_batched`` (which imports
+    helpers from this module).
+    """
+    from models.experimental.diffusion_gemma.tt.commit_batched import select_commit_fn
+
+    return select_commit_fn()
+
+
 def denoise_and_commit_block(
     tt_model,
     logits_fn,
@@ -784,14 +796,20 @@ def denoise_and_commit_block(
     page_table=None,
     page_tables_per_layer=None,
     denoise_block_fn: Callable[..., DenoiseTrajectory] = tt_denoise_block,
-    commit_fn: Callable[..., None] = commit_canvas_tokens,
+    commit_fn: Callable[..., None] | None = None,
 ) -> GeneratedBlock:
     """Denoise one canvas, commit the clean argmax, and advance position.
 
     ``start_pos`` is the absolute canvas start for this block. When ``logits_fn``
     is a ``DenoiseLogitsAdapter`` this helper updates its ``q_rope_offset`` so
     canvas RoPE positions advance with each committed block.
+
+    ``commit_fn`` defaults to the sequential single-token commit
+    (:func:`commit_canvas_tokens`); set ``DG_COMMIT_BATCHED=1`` to select the
+    batched single-prefill commit, or pass ``commit_fn`` explicitly.
     """
+    if commit_fn is None:
+        commit_fn = _resolve_default_commit_fn()
     _set_q_rope_offset(logits_fn, start_pos)
     trajectory = denoise_block_fn(
         logits_fn,
