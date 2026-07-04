@@ -37,6 +37,7 @@ def build_canvas_denoise_mask(
     window_half: int | None = None,
     inclusive: bool = True,
     prompt_fully_visible: bool = False,
+    causal: bool = False,
     neg_inf: float = float("-inf"),
     dtype: torch.dtype = torch.float32,
     device=None,
@@ -49,6 +50,18 @@ def build_canvas_denoise_mask(
     ``layer_type="full_attention"`` → all-attend. ``layer_type="sliding_attention"``
     → HF-style bidirectional sliding visibility, requiring ``sliding_window``.
 
+    ``causal=True`` (the COMMIT phase — #47557 commit batching) turns the mask into
+    a *causal* prefix+canvas mask: a canvas query at absolute position
+    ``prompt_len + i`` attends key position ``p`` iff ``p <= prompt_len + i`` (all of
+    the frozen prefix ``0..prompt_len-1`` plus canvas positions ``0..i``). For a
+    ``sliding_attention`` layer the causal window is additionally clipped to the last
+    ``sliding_window`` positions (``prompt_len + i - p < sliding_window``). This is the
+    per-token visibility that the sequential single-token decode-append produces
+    (each committed token's decode SDPA attends causally over the frozen cache), so a
+    single 256-query masked prefill reproduces the 256 sequential appends. ``causal``
+    composes with ``layer_type`` (full vs sliding) and is mutually exclusive with the
+    ``local_window`` op-test path.
+
     ``local_window=True`` (NON-canonical, op-test only) → symmetric window of
     half-width ``window_half`` over absolute positions; ``inclusive`` toggles
     ``|q-k| <= W`` vs ``< W``; ``prompt_fully_visible`` keeps all prompt keys visible
@@ -56,6 +69,23 @@ def build_canvas_denoise_mask(
     path, never as the denoise reference.
     """
     total_k = prompt_len + canvas_len
+    if causal:
+        if local_window:
+            raise ValueError("causal=True is mutually exclusive with local_window=True")
+        q_abs = canvas_positions(prompt_len, canvas_len, device=device).unsqueeze(1)  # [C, 1]
+        k_abs = torch.arange(total_k, device=device).unsqueeze(0)  # [1, P+C]
+        allowed = k_abs <= q_abs  # causal: key at or before the query's absolute position
+        if layer_type == "sliding_attention":
+            if sliding_window is None or sliding_window <= 0:
+                raise ValueError("sliding_window must be positive for sliding_attention")
+            # Last ``sliding_window`` positions inclusive of self (HF causal-sliding:
+            # attend iff 0 <= q_abs - k_abs < sliding_window).
+            allowed = allowed & ((q_abs - k_abs) < sliding_window)
+        elif layer_type not in (None, "full_attention"):
+            raise ValueError(f"unsupported layer_type {layer_type!r}")
+        return torch.where(
+            allowed, torch.zeros((), dtype=dtype, device=device), torch.full((), neg_inf, dtype=dtype, device=device)
+        )
     if local_window:
         if window_half is None:
             raise ValueError("window_half is required when local_window=True")
