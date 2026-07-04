@@ -45,7 +45,7 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const
     // otherwise the single-op BH workaround body is used. Both prepend unpack_srca unless unpacking to dest.
     if (skip_bh_workaround)
     {
-        static constexpr std::uint32_t unpack_srcb_zerosrc = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::UNP_NOP, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+        static constexpr std::uint32_t unpack_srcb_zerosrc = TT_OP_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_zerosrc, unpack_srcb_set_dvalid);
         if (!unpack_to_dest)
         {
