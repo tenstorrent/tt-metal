@@ -77,6 +77,79 @@ _Artifacts:_ `bench_loop_readback.py`, `artifacts/lever1_readback_L2.log`,
 
 ## Lever 2 — Operation-topology audit — _in progress_
 
-Need a clean per-op device-time breakdown of ONE traced denoise step (reduced layer) to locate the
-true critical path (MoE `sparse_matmul` dense-128-expert vs `PermuteDeviceOperation` reorder vs
-attention vs norms). Prior whole-run tracy is polluted by prefill+commit+profiler distortion.
+Clean 1-layer eager Tracy capture (`lever2_tracy_L1.log`, per-step over 3 steps). **Caveat:** the
+device-profiler dropped many device rows ("no device perf row" skips) so `SparseMatmulDeviceOperation`
+reads **0 ms in the denoise region** (clearly wrong — it is 16.27 ms for 3 ops in the prefill
+region). MoE compute time is therefore under-counted; treat absolute op ms as lower bounds.
+
+**Per denoise step (1 layer), reliable signal:**
+
+| op | ms/step (1L) | %fw | note |
+|---|---|---|---|
+| `PermuteDeviceOperation` (MoE expert-major reorder) | **86.9** | 70% | biggest op; `transpose(gate/up,1,3)` feeding down `sparse_matmul` |
+| `ArgMaxDeviceOperation` (terminal, 2×/step) | 20.2 | 16% | over 262144 vocab; already ROW_MAJOR-optimized; **fixed per-step** |
+| `BinaryNgDeviceOperation` | 10.2 | 8% | mostly MoE elementwise (routing-mul, geglu) |
+| `SparseMatmulDeviceOperation` (MoE dense-128 compute) | ~60 (missing) | — | inferred: prefill 16ms/32-tok × 8 chunks |
+| `MatmulDeviceOperation` (attention/shared_mlp) | 0.8 | <1% | |
+
+**Findings feeding the levers:**
+
+1. **The MoE dominates the per-layer step (~80%)** = Permute reorder (~87 ms) + sparse-matmul
+   compute (~60 ms). BOTH scale with **num_experts computed (128)**. The dense-128 pattern
+   (`prefill.py`: `nnz = num_experts × group_size`, all-ones sparsity, routing applied *after* to
+   zero 120/128) is the structural waste. The Permute is intrinsic to that pattern
+   (`moe_transpose_investigation.md`: in-place rewrite = 0%, cost just relocates) — so the only way
+   to shrink it is to compute **fewer experts** (lever 3), not to rewrite the transpose.
+2. **`sparse_matmul` sparsity granularity is per-GROUP (per 32-token tile), not per-token.** The
+   256-canvas is 8 chunks × 32 tokens; each chunk's 32 tokens share one sparsity row, so they need
+   ~all 128 experts. True per-token top-8 needs `group_size=1` (256 tiny tiles → padding erases the
+   win) OR a **token-gather rewrite** (sort tokens by expert). The gemma4 **decode** path already
+   uses `nnz=top_k=8` (true sparse) but only for seq_len=1.
+3. **Commit = 256 sequential single-token decode-appends** (`generate.py:623`). Each pays the full
+   30-layer weight traffic → weight cost paid 256× instead of amortized once. It also computes a
+   full 2816×262144 **LM head per token and discards it** (`commit_canvas_tokens` deallocates the
+   logits). Batching the commit into one 256-token causal prefill-append is a ~256× weight
+   amortization; skipping the LM head is a smaller safe sub-win.
+4. **ArgMax is fixed per-step** (~20 ms), so it is ~0.5% of the 30-layer step — not worth chasing.
+
+### Clean MoE microbench (`bench_moe.py`, non-profiled wall-clock, 256 canvas)
+
+| quantity | value |
+|---|---|
+| expert weight dtype (actual) | **BFLOAT16** (DiffusionGemma overrides gemma4's bfp8 default) |
+| MoE forward (router+experts) | 138.46 ms/layer |
+| — router only | 3.21 ms |
+| — **experts only (dense-128)** | **137.60 ms** |
+| — shared_mlp only | 2.33 ms |
+
+**The dense-128 experts forward IS the per-layer denoise cost** (~137 ms/layer ≈ README per-layer;
+router/shared_mlp/attention are single-digit ms). At 30 layers this is ~99% of the ~4176 ms step.
+
+**Roofline reconciliation (per layer, per chip @256 GB/s):** expert weights (bf16) ≈ 415 MB →
+**~1.6 ms weight roofline**; dense-128 compute ≈ 106 GFLOP → **~2 ms compute roofline**. Measured
+137 ms is **~65–85× above both** → the experts forward is **data-movement / op-overhead bound**
+(the expert-major transpose reorder ~87 ms + 8-chunk op overhead), NOT weight- or compute-bound.
+
+**Consequence:** BFP8/BFP4 expert precision does **NOT** help (weight traffic is only 1.6 ms; the
+bottleneck is the transpose reorder). The only lever that cuts 137 ms/layer is computing **fewer
+experts** (transpose + compute both scale with num_experts=128) — i.e. true-sparse.
+
+### Lever-3 prototype (`bench_sparse_moe.py`): per-token nnz=8 — **BLOCKED**
+
+Routing is exactly top-8/token (min=max=8 non-zero → the `nnz=8` invariant holds). But feeding the
+256-token canvas to the decode path (per-token `nnz=top_k=8`) fails:
+`TT_FATAL: sparsity.logical_volume() == batch_length` (sparse_matmul_device_operation.cpp:154).
+`sparse_matmul` sparsity granularity is per M-tile-group, not per-token; per-token top-8 would need
+`group_size=256` (each token its own 32-tile) → 32× M-padding that erases the 16× expert win.
+**True-sparse therefore requires a token-gather rewrite** (sort tokens by expert → contiguous
+per-expert batches), whose gather/scatter overhead is the mission's flagged washout risk. This is a
+large, higher-risk rewrite scoped as the next big lever.
+
+_Baseline confirmed:_ dense-128 = 137.08 ms/call. Artifacts: `lever2_moe_bench.log`,
+`lever3_sparse_proto.log`.
+
+### Lever-4 quick win under test: MoE prefill chunk size
+
+Denoise MoE splits 256 → 8 chunks of 32 (`PREFILL_CHUNK_SIZE=32`), paying the transpose reorder 8×.
+Sweeping chunk ∈ {32,64,128,256} (bit-equivalent, monkeypatched) to see if fewer/larger chunks cut
+overhead — `bench_chunk_sweep.py` (results pending).
