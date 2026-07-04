@@ -19,7 +19,7 @@ training_config:
 
 device_config:
   # 8 Blackhole chips, full tensor parallelism (TP=8) on the "tp" axis.
-  # MGD: configs/mgd/bh_galaxy_1_8_line_line.textproto (set TT_MESH_GRAPH_DESC_PATH).
+  # Set TT_MESH_GRAPH_DESC_PATH to a 1x8 mesh graph descriptor for the 8-chip mesh.
   # MoE uses SparseMoETP (experts' intermediate dim sharded across the tp axis).
   mesh_shape: [1, 8]
   enable_tp: true

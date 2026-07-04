@@ -183,10 +183,6 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_program_factory.cpp
-    # MoE Ungroup
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/moe_ungroup.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/device/moe_ungroup_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/device/moe_ungroup_program_factory.cpp
     # SDPA Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
