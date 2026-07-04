@@ -303,7 +303,47 @@ commit's 256-token re-encode (MoE is position-independent), so Lever A + B compo
 _Artifacts:_ `tt/sparse_moe.py`, `verify_sparse_moe.py`, `artifacts/leverA_verify_sparse_moe.log`,
 `artifacts/leverA_traced_{dense,sparse}_L{2,4}.log`, `artifacts/leverA_step_*.log`.
 
-## Session summary (2026-07-04)
+## Lever B — commit batching (256 decode-appends → 1 causal prefill-append) — **SCOPED + QUANTIFIED** (not landed)
+
+After Lever A the block is **commit-bound** (commit 31.4 s = 59% of the 53.5 s block @48 steps), so
+Lever B is now worth **~2× on the block** (more if the commit prefill also uses the sparse MoE),
+not the ~1.25× originally estimated.
+
+**Mechanism (fully mapped from the code):** the commit re-encodes the block's 256 committed tokens
+as 256 *sequential single-token decode-appends* (`commit_canvas_tokens` → `commit_decode_forward`),
+paying the full 30-layer weight traffic 256×. The correct batched form is ONE **causal
+prefill-append** of the 256 tokens at absolute offset `start_pos`: each token attends to the frozen
+prefix (all visible) + earlier block tokens (causal), and writes its K/V to the cache. That is a
+256-token forward = a denoise-step-equivalent in compute.
+
+**Quantified potential** (the append compute is a 256-token forward; the traced denoise step
+measured it at **461 ms/30L** with sparse MoE, ~4270 ms with dense):
+- commit with **sparse MoE**: ~0.6–1.0 s (KV-write overhead included) vs 31.4 s = **~30–50×**.
+- commit with **dense prefill MoE** (simpler): ~4.2 s vs 31.4 s = **~7×**.
+
+Combined Lever A + B block t/s (sparse commit): **@48 steps ~11 t/s, @25 steps ~21 t/s, @18 steps
+~28 t/s** (near the 30 target with early-halt). Dense-commit variant: @48 ~9.7, @25 ~16 t/s.
+
+**Why not landed this session (honest):** the mission framed Lever B as "lower-risk", but the code
+shows it is a substantial new path, and the hard rule is "verify bit-exact/PCC KV BEFORE keeping":
+- `prepare_inputs_prefill` **discards `start_pos`** and Gemma4 computes prefill RoPE internally at
+  positions 0.., so the stock prefill can't append at an offset. RoPE offset IS controllable via the
+  `cos/sin` caches passed in (denoise already does this) — feasible.
+- The short-sequence prefill SDPA (`scaled_dot_product_attention(is_causal=True)`) attends only to
+  the CURRENT chunk, NOT the prefix cache. Correct append needs prefix-attending SDPA
+  (`chunked_prefill_sdpa`, currently only taken for seq > 32768) plus an **offset KV write**
+  (`paged_fill_cache`/`paged_update_cache` at `start_pos`), and the smoke path uses a *contiguous*
+  (non-paged) cache with no offset-fill primitive.
+- Landing a wrong KV-write silently corrupts the cache. A verified build (KV-PCC vs the decode path)
+  is the correct next investment; it is a DiffusionGemma-local `commit_prefill.py` reusing the
+  offset-RoPE machinery + `chunked_prefill_sdpa` + the sparse MoE, gated by a cache-content PCC test.
+
+_Build spec left for the next session:_ `commit_prefill_append(tt_model, canvas_tokens, start_pos)`
+= embed 256 → per layer {norm, causal prefix-attending SDPA at offset RoPE, offset KV write, sparse
+MoE, norms, PLI} → skip LM head; verified by snapshotting cache K/V at the committed positions after
+the batched-append vs after the 256-decode path (PCC), then measured commit_ms.
+
+## Session summary (2026-07-04 session 1)
 
 | lever | outcome |
 |---|---|
@@ -314,10 +354,21 @@ _Artifacts:_ `tt/sparse_moe.py`, `verify_sparse_moe.py`, `artifacts/leverA_verif
 | commit LM-head skip | **LANDED** — 83 ms/block, bit-exact, zero-risk |
 | 5 2-CQ / host-gap | little headroom (op-cost bound) |
 
-**Bottom line:** the decode throughput is architecturally gated by the dense-128-expert MoE forward
-run 30 layers × ~18–48 steps/block; the per-step 4.18 s is ~99% MoE and transpose/data-movement
-bound. Reaching 30 t/s (8.5 s/block) requires a ~25× cheaper per-step, achievable only by a
-fundamentally cheaper MoE — the **token-gather true-sparse MoE** (biggest, prototype-first, risks
-gather/scatter washout) or a fused-MoE kernel. **Commit batching** (256 decode-appends → 1 causal
-prefill-append, ~7× on the commit, ~1.25× block) is the clearest lower-risk sizeable next win. All
-quick levers were tried and ruled out with device evidence.
+## Session summary (2026-07-04 session 2) — **the wall came down**
+
+| lever | outcome |
+|---|---|
+| **A token-gather true-sparse MoE** | **LANDED** — `tt/sparse_moe.py`, on-device dispatch, trace-safe. MoE 137→10.5 ms/layer (13×); **traced denoise step 4270→461 ms (9.26×)**; MoE PCC 0.9997, RUN-verified. Block **1.08→4.78 t/s @48 steps** |
+| B commit batching | **SCOPED + QUANTIFIED** — block now commit-bound (59%); a causal prefill-append with sparse MoE → commit 31.4 s → ~0.6–1.0 s (~30–50×). Substantial verified build (offset RoPE ✓, needs prefix-SDPA + offset KV write + KV-PCC gate). Not landed unverified |
+
+**Bottom line (updated):** Lever A — the token-gather true-sparse MoE — was the decisive structural
+win the campaign was pointed at, and it landed: the dense-128 expert forward (137 ms/layer, ~99% of
+the step, transpose-bound) is replaced by an on-device GShard capacity dispatch + batched matmul
+(10.5 ms/layer), collapsing the **traced denoise step 9.26×** (4270→461 ms). The gather/scatter did
+NOT wash out (~2 ms overhead); the batched matmul also side-steps the 87 ms expert-major transpose.
+Block throughput is now **4.78 t/s @48 steps** (from 1.08) and **~6 t/s** with early-halt — and the
+block has flipped to **commit-bound**. The remaining path to 30 t/s is now clear and quantified:
+**Lever B** (commit batching with the same sparse MoE) takes the commit 31.4 s → ~0.6–1.0 s, which
+with early-halt (~18–25 steps) projects to **~21–28 t/s** — within reach of the 30 target. Lever B is
+a substantial but well-specified build (a verified causal prefill-append), left as the clear next
+investment rather than landed unverified (the hard rule is verify KV before keeping).

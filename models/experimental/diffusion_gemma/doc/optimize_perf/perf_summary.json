@@ -114,6 +114,26 @@
       "at_25_steps_earlyhalt": {"sparse": 5.97}, "at_18_steps_earlyhalt": {"sparse": 6.45}
     },
     "trace_safety": "constant/scratch buffers (ones/zeros/full) preallocated + cached outside the trace (in-trace allocation raises 'Writes not supported during trace capture'); ttnn.scatter verified out-of-place so zero-base reuse is correct; index tensors must be UINT32.",
+    "run_smoke_sparse_on": "DG_TEXT_DEMO_SUCCESS generated_tokens=256 blocks=1 (4-layer, 8-step end-to-end run with DG_SPARSE_MOE=1)",
+    "no_gemma4_edits": true
+  },
+
+  "lever_B_commit_batching_SCOPED_2026_07_04_s2": {
+    "verdict": "SCOPED + QUANTIFIED, not landed (verify KV before keeping)",
+    "current_commit": "256 sequential single-token decode-appends (commit_canvas_tokens -> commit_decode_forward), full 30L weight traffic paid 256x; commit_ms_30L ~= 31432",
+    "batched_form": "ONE causal prefill-append of the 256 committed tokens at offset start_pos (each attends to frozen prefix + earlier block tokens causally, writes K/V). Compute = a 256-token forward = denoise-step-equivalent.",
+    "quantified_potential": {
+      "append_compute_proxy_ms_30L_sparse": 461, "append_compute_proxy_ms_30L_dense": 4270,
+      "commit_ms_sparse_est": "600-1000", "commit_speedup_sparse_x": "30-50",
+      "commit_ms_dense_est": 4200, "commit_speedup_dense_x": 7
+    },
+    "combined_A_plus_B_tps_sparse_commit": {"at_48_steps": 11.2, "at_25_steps": 20.8, "at_18_steps": 28.1},
+    "blockers_found": [
+      "prepare_inputs_prefill discards start_pos; Gemma4 computes prefill RoPE internally at pos 0.. -> stock prefill can't append at offset. RoPE offset IS controllable via cos/sin caches (denoise does this) -> feasible.",
+      "short-seq prefill SDPA (scaled_dot_product_attention is_causal=True) attends only to the current chunk, NOT the prefix cache; correct append needs chunked_prefill_sdpa (prefix-attending) + an offset KV write (paged_fill_cache/paged_update_cache at start_pos); smoke path uses a contiguous non-paged cache with no offset-fill primitive.",
+      "landing a wrong KV-write silently corrupts the cache -> a KV-content-PCC gate vs the decode path is mandatory before keeping."
+    ],
+    "build_spec": "DiffusionGemma-local commit_prefill.py: commit_prefill_append(tt_model, canvas_tokens, start_pos) = embed 256 -> per layer {norm, causal prefix-attending SDPA at offset RoPE, offset KV write, sparse MoE, norms, PLI} -> skip LM head; gate on cache-K/V PCC vs 256-decode path.",
     "no_gemma4_edits": true
   },
 
