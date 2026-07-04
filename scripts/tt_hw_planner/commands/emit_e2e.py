@@ -385,7 +385,7 @@ def _emit_e2e_phase_a(args) -> int:
     agent_bin = getattr(args, "agent_bin", "claude") or "claude"
     timeout_s = int(getattr(args, "agent_timeout_s", 0) or 0) or 14400
     skip_grade = bool(getattr(args, "no_grade", False))
-    max_grade_rounds = int(getattr(args, "max_grade_rounds", 0) or 0) or 3
+    max_grade_rounds = int(getattr(args, "max_grade_rounds", 0) or 0) or 10
 
     # One consolidated full log for the whole run (builder + grader + fix
     # appended in order). Clean screen, complete log, no per-phase scatter.

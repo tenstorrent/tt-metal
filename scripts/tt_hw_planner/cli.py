@@ -11187,7 +11187,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=0,
         dest="max_grade_rounds",
         help=(
-            "Max agent fix-loop rounds against the combined gate (default 3). Raise it for the hard "
+            "Max agent fix-loop rounds against the combined gate (default 10). Raise it for the hard "
             "host-free work (residency / KV / on-device token feed / decode step) so the agent gets "
             "enough edit-and-recheck attempts."
         ),
