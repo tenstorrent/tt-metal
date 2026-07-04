@@ -1,7 +1,7 @@
 training_config:
   project_name: "tt_train_deepseek_16B_8chip_tp"
   seed: 5489
-  batch_size: 4
+  batch_size: 2
   num_epochs: 1
   max_steps: 20
   use_clip_grad_norm: false
