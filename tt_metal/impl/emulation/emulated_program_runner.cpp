@@ -36,6 +36,7 @@
 #include <stdexcept>
 #include <string>
 #include <future>
+#include <chrono>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -1117,10 +1118,50 @@ static std::function<void()> jit_compile_kernel(
     // Safety: all path/flag inputs are derived from tt-metal internals and CMake
     // constants, not from untrusted user input. Kernel defines are written as
     // #define in the wrapper file, not as -D shell flags.
-    int rc = std::system(full_cmd.c_str());
+    //
+    // Parallel emule sweeps can transiently over-subscribe the machine with many
+    // concurrent clang jobs across worker processes; the OOM killer then reaps a
+    // clang subprocess, yielding a nonzero rc with an EMPTY compile.log. A genuine
+    // compile error always writes diagnostics, so retry only the no-diagnostics
+    // (killed-under-pressure) case, with jittered backoff so a retry can succeed
+    // once sibling compiles finish and free memory. Real errors fail fast.
+    constexpr int kMaxCompileAttempts = 5;
+    int rc = 0;
+    std::string compile_log;
+    for (int attempt = 1; attempt <= kMaxCompileAttempts; ++attempt) {
+        rc = std::system(full_cmd.c_str());
+        if (rc == 0) {
+            break;
+        }
+        compile_log.clear();
+        std::ifstream log_file(compile_log_path);
+        if (log_file) {
+            std::ostringstream log_ss;
+            log_ss << log_file.rdbuf();
+            compile_log = log_ss.str();
+        }
+        const bool killed_no_diagnostics = compile_log.find_first_not_of(" \t\r\n") == std::string::npos;
+        if (!killed_no_diagnostics || attempt == kMaxCompileAttempts) {
+            break;  // genuine compile error, or out of retries
+        }
+        log_warning(
+            tt::LogMetal,
+            "JIT compile killed with no diagnostics (rc={}), retry {}/{}: {}",
+            rc,
+            attempt,
+            kMaxCompileAttempts,
+            kernel_src_path);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200 * attempt));
+    }
     if (rc != 0) {
+        constexpr size_t max_log_bytes = 12000;
+        if (compile_log.size() > max_log_bytes) {
+            compile_log = compile_log.substr(compile_log.size() - max_log_bytes);
+        }
         throw std::runtime_error(
-            "jit_compile_kernel: compiler failed (exit " + std::to_string(rc) + ") for kernel: " + kernel_src_path);
+            "jit_compile_kernel: compiler failed (exit " + std::to_string(rc) + ") for kernel: " + kernel_src_path +
+            (compile_log.empty() ? " [no compiler diagnostics — likely killed under resource pressure]"
+                                 : "\n--- compiler output ---\n" + compile_log));
     }
 
     // 8. dlopen
