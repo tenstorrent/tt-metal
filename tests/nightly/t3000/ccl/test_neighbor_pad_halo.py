@@ -368,16 +368,17 @@ def run_halo_vs_async_perf(mesh_device, input_shape, h_dim, w_dim, h_axis, w_axi
 
     halo_us = _trace_and_time(mesh_device, run_halo)
     async_us = _trace_and_time(mesh_device, run_async)
-    # Per-device halo transport: the op sends its halo out + receives the neighbor's halo in (~2x the
-    # compact buffer). GB/s = bytes/time gauges whether the op is bandwidth-bound (near the 2-link
-    # fabric ceiling ~30 GB/s) vs overhead-bound (far below).
-    halo_bytes = total_sticks * C * 2  # compact buffer per device (bf16)
-    gbps = (halo_bytes * 2) / (halo_us * 1e-6) / 1e9
+    # Effective halo-transport bandwidth vs the ~50 GB/s aggregate 2-link fabric ceiling
+    # (12.5 GB/s/link/dir x 2 links x 2 dir). Bytes = the essential halo crossing the fabric per device:
+    # one H-edge (W_dev sticks) + one W-edge (H_dev sticks) per frame. The compact BUFFER is ~2x this and
+    # also holds edge zero-fill that never leaves the chip, so buffer-size/time overstates bandwidth ~4x.
+    transfer_bytes = outer * (H_dev + W_dev) * C * 2  # bf16, minimal halo transport per device
+    gbps = transfer_bytes / (halo_us * 1e-6) / 1e9
     print(f"\n=== PERF (trace wall/iter, device latency) shape={input_shape} outer={outer} 2x4 ===")
     print(f"  neighbor_pad_async (full-pad): {async_us:8.1f} us")
     print(f"  neighbor_pad_halo  (compact):  {halo_us:8.1f} us")
     print(f"  speedup: {async_us / halo_us:.2f}x")
-    print(f"  halo per device: {halo_bytes/1e6:.2f} MB;  achieved: {gbps:.1f} GB/s (send+recv)")
+    print(f"  halo transfer/device: {transfer_bytes/1e6:.2f} MB;  achieved: {gbps:.1f} GB/s ({gbps/50*100:.0f}% of 50)")
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()

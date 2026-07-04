@@ -129,6 +129,12 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     TT_FATAL(op.np_pad_dim2.has_value(), "NpConv3d: fused op requires 2D padding (H+W).");
     const bool is_2d = true;
 
+    // Fabric-mux buffers per channel. 4 is the measured sweet spot on BH-LB 2x4 (+~3pp vs 1; 8 regresses
+    // on L1 pressure). PCC-invariant (channel buffering doesn't touch data). TT_NP_NUM_BUFFERS overrides.
+    const uint8_t np_num_buffers = std::getenv("TT_NP_NUM_BUFFERS")
+                                       ? static_cast<uint8_t>(std::max(1, atoi(std::getenv("TT_NP_NUM_BUFFERS"))))
+                                       : 4;
+
     // H corner-first (PCC-neutral): the H-writer sends the W-boundary corner sticks to the neighbor's L1
     // recv buffer + raises the recv sem BEFORE the bulk middle row, so the neighbor's H recv-wait clears
     // after ~2 sticks instead of the full row. Requires padding==1 (the kernel's corner-first path).
@@ -428,12 +434,18 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                                                          num_sticks_per_halo_dim * page_size / num_links)
                                                       : 0;
     const uint32_t h_frames_per_link = (num_links > 0) ? (outer_dim_size / num_links) : 0;
-    // Auto-engage 2 H workers when the H send is large enough to be bandwidth-bound (>4KB/link/dir) and
-    // each worker gets >=2 frames — tiny shapes stay on the direct path. Zeros only (replicate uses the
-    // direct path, same as W). TT_NP_H_WORKERS overrides for tuning.
+    // Auto-engage H workers by per-(link,dir) bytes, mirroring the W heuristic: 4 for the large,
+    // bandwidth-bound shapes (>256KB/link) — measured to cut the s4-class wall (H exchange is on the op's
+    // critical path, e.g. s4 469us at H4 vs 560us at H2) — and 2 for the >4KB mid band; tiny shapes stay on
+    // the direct path. Requires >=1 frame/worker. Zeros only (replicate uses the direct path, like W).
+    // W4+H4 is PCC byte-exact on all 2x4 prod shapes. TT_NP_H_WORKERS overrides for tuning.
     uint32_t num_h_workers = 1;
-    if (is_padding_zeros && (h_bytes_per_link > 4u * 1024u) && (h_frames_per_link >= 2u)) {
-        num_h_workers = 2;
+    if (is_padding_zeros && (h_frames_per_link >= 2u)) {
+        if (h_bytes_per_link > 256u * 1024u) {
+            num_h_workers = 4;
+        } else if (h_bytes_per_link > 4u * 1024u) {
+            num_h_workers = 2;
+        }
     }
     if (const char* e = std::getenv("TT_NP_H_WORKERS")) {
         num_h_workers = std::max(1, atoi(e));
@@ -650,7 +662,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         const uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
         const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
         auto hmux_cfg = tt::tt_fabric::FabricMuxConfig(
-            static_cast<uint8_t>(num_h_workers), 0, 1, 0, mux_buf_size, l1_base);
+            static_cast<uint8_t>(num_h_workers), 0, np_num_buffers, 0, mux_buf_size, l1_base);
 
         const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/";
         std::set<CoreRange> hw_crs, hm_crs;
@@ -825,13 +837,12 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             const uint32_t l1_base =
                 mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
             const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-            // num_buffers per channel = all_gather's default (1). The BH mux golden is flat across 1..8
-            // buffers at 4KB (15.3-15.5 B/c), and fewer buffers keeps the per-channel L1/credit footprint
-            // small so 4 full-size channels fit without deadlock.
+            // num_buffers per channel: 4 (np_num_buffers) is the measured 2x4 sweet spot (+~3pp); the mux
+            // still fits its full-size channels in L1 at 4. PCC-invariant.
             auto mux_cfg = tt::tt_fabric::FabricMuxConfig(
                 /*num_full_size_channels=*/static_cast<uint8_t>(num_w_workers),
                 /*num_header_only_channels=*/0,
-                /*num_buffers_full_size_channel=*/1,
+                /*num_buffers_full_size_channel=*/np_num_buffers,
                 /*num_buffers_header_only_channel=*/0,
                 mux_buf_size,
                 l1_base);
