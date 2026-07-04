@@ -116,38 +116,22 @@ def _is_torch_wrapper(stub: Path) -> bool:
         return False
 
 
-_FORWARD_NAMES = {"__call__", "forward"}
-_FWD_HOST_CALLS = {"to_torch", "argmax", "multinomial", "topk"}
+def _graduation_block_reason(stub: Path) -> str | None:
+    """Why a PCC-passing stub must NOT graduate, or None if it may — the SINGLE graduation criterion
+    for the cc engine, shared by run_component and record_result, and identical to the fsm loop
+    (`auto_iterate._is_eligible_for_graduation`).
 
-
-def _forward_has_host_ops(stub: Path) -> bool:
-    """(b) Broader than _is_torch_wrapper (which only catches REFERENCE delegation): does the stub's
-    FORWARD (__call__/forward) do a per-call host READBACK (ttnn.to_torch) or host SAMPLING
-    (torch.argmax/topk/multinomial)? These are unambiguous host round-trips. from_torch/from_device are
-    intentionally NOT flagged here (often one-time lazy-init) — the runtime G5 op-scan covers those.
-    Best-effort AST scan (no false block on parse error)."""
-    try:
-        text = stub.read_text(errors="ignore")
-        import ast
-
-        tree = ast.parse(text)
-    except Exception:  # noqa: BLE001
-        return False
-
-    def _cn(node) -> str:
-        f = getattr(node, "func", None)
-        if isinstance(f, ast.Attribute):
-            return f.attr
-        if isinstance(f, ast.Name):
-            return f.id
-        return ""
-
-    for fn in ast.walk(tree):
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name in _FORWARD_NAMES:
-            for node in ast.walk(fn):
-                if isinstance(node, ast.Call) and _cn(node) in _FWD_HOST_CALLS:
-                    return True
-    return False
+    A component graduates iff its PCC test PASSED (>= threshold, asserted inside the test) AND the stub
+    is a NATIVE ttnn forward — i.e. NOT a torch-delegating wrapper. This is UNCONDITIONAL, with no env
+    flags: a trivial PCC pass from a torch-delegating stub is worthless proof (its output is the torch
+    reference itself, == golden, so PCC is ~1.0 without any native ttnn running), so it never graduates
+    (the seamless-m4t / XTTS permissive-run bug)."""
+    if stub.is_file() and _is_torch_wrapper(stub):
+        return (
+            "PCC passed but the stub still delegates to the torch reference "
+            "(_get_torch_submodule / torch-wrapper) — write a native ttnn forward to graduate"
+        )
+    return None
 
 
 def _is_graduated(component: str) -> bool:
@@ -418,9 +402,11 @@ def run_component(component: str, mode: str = "single") -> dict:
     if mode == "shard" and _is_fabric_failure(res.get("summary", "") + "\n" + res.get("details", "")):
         st["fabric_unhealthy"] = True
     _save_state(st)
+    _block = _graduation_block_reason(stub) if bool(res["passed"]) else None
     return {
         "ok": bool(res["passed"]),
-        "graduated": bool(res["passed"]),
+        "graduated": bool(res["passed"]) and _block is None,
+        "graduation_block": _block or "",
         "summary": (res["skip_reason"] or res["summary"])[:1000],
         "failed": bool(res["failed"]),
         "skipped": bool(res["skipped"]),
@@ -469,17 +455,15 @@ def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str
                 pass
 
     if ok:
-        _req_dev = os.environ.get("E2E_REQUIRE_ON_DEVICE") == "1" and os.environ.get("E2E_ALLOW_HOST_DECODE") != "1"
-        if _req_dev and stub.is_file() and (_is_torch_wrapper(stub) or _forward_has_host_ops(stub)):
+        _block = _graduation_block_reason(stub)
+        if _block:
             st.setdefault("consecutive_same_class", {})[component] = 0
             _save_state(st)
             return {
                 "recorded": True,
                 "component": component,
                 "graduated": False,
-                "reason": "on-device required: PCC passed but the stub's forward still does host ops "
-                "(torch delegation / to_torch / from_torch / host argmax) — make it native ttnn to graduate "
-                "(set E2E_ALLOW_HOST_DECODE=1 to waive)",
+                "reason": _block,
             }
         if stub.is_file():
             try:
@@ -709,12 +693,8 @@ def termination_check() -> dict:
     last_text_map = st.get("last_failure_text", {}) or {}
     harness_skip_reasons = st.get("harness_skip_reason", {}) or {}
     loader_resolvable = _rlr.is_enabled() and not _rlr.has_loader(_DEMO_DIR)
-    _require_on_device = (
-        os.environ.get("E2E_REQUIRE_ON_DEVICE") == "1" and os.environ.get("E2E_ALLOW_HOST_DECODE") != "1"
-    )
     terminal = set(st.get("harness_skipped") or [])
-    if not _require_on_device:
-        terminal |= set(st.get("fallback") or [])
+    terminal |= set(st.get("fallback") or [])
     work, needs_cap = [], []
     for c in comps:
         if _grad_for_run(c) or c in terminal:
