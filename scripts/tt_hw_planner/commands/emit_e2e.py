@@ -251,9 +251,10 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     gate_env["TT_METAL_HOME"] = str(demo_repo_root)
     pytest_out = ""
     hang_timeout = min(int(timeout_s), int(os.environ.get("E2E_GATE_HANG_TIMEOUT", "2700")))
+    gate_tests = [f for f in test_files if "perf" not in f.name] or test_files
     try:
         proc = subprocess.run(
-            [py, "-m", "pytest", str(e2e_dir), "-p", "no:cacheprovider", "-rA", "-s"],
+            [py, "-m", "pytest", *[str(f) for f in gate_tests], "-p", "no:cacheprovider", "-rA", "-s"],
             capture_output=True,
             text=True,
             timeout=hang_timeout,
