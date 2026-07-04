@@ -184,3 +184,22 @@ with device evidence. The two remaining wins are both larger rewrites:
 
 Neither lever alone reaches 30 t/s (the step's 30× dense-MoE is fundamental); the token-gather MoE
 is the only structural path to a materially cheaper per-step, and is the correct next investment.
+
+## Lever (commit) — LM-head skip — **LANDED (small, verified)**
+
+The commit (`commit_canvas_tokens`) re-encodes the 256-token canvas as 256 sequential decode-appends
+and **discards the per-token logits** (`generate.py` deallocated them). Each decode still computed a
+full 2816×262144 LM head + final norm that were thrown away. Added `skip_lm_head` to the
+DiffusionGemma-local `commit_decode_forward` / `_commit_model_forward` and set it in
+`commit_canvas_tokens`.
+
+**Correctness — bit-exact by construction:** the KV-cache append happens inside the layer loop
+(`_commit_layer_forward` → `paged_update_cache`), which is byte-for-byte unchanged; `skip_lm_head`
+only skips the post-loop final-norm + LM head (a read→matmul with no KV side effect). The KV cache is
+therefore provably identical.
+
+**Measured** (`bench_commit_skip.py`, controlled before/after, L=2): commit 2297.4 → 2214.3 ms =
+**83.1 ms/block saved** (3.6% at 2 layers). The saving is the LM-head cost, which is layer-count
+independent, so at 30 layers it is the same ~83 ms/block ≈ 0.26% of the 31.5 s commit — a genuine
+waste removal but a negligible fraction of the block. Recorded honestly: real, free, zero-risk, but
+not a needle-mover toward 30 t/s. No gemma4 edits (change is in DiffusionGemma-local commit code).

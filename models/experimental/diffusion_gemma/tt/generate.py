@@ -624,15 +624,16 @@ def commit_canvas_tokens(
         token = canvas_tokens[:, offset]
         position = torch.tensor([start_pos + offset], dtype=torch.int32)
         device_inputs = tt_model.prepare_inputs_decode(token, position, page_table=page_table)
-        logits, _ = commit_decode_forward(
+        hidden, _ = commit_decode_forward(
             tt_model,
             device_inputs[0],
             device_inputs[1],
             device_inputs[2],
             device_inputs[3],
             page_tables_per_layer=page_tables_per_layer,
+            skip_lm_head=True,
         )
-        logits.deallocate(True)
+        hidden.deallocate(True)
         _deallocate_decode_inputs(device_inputs)
 
 

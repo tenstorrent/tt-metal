@@ -543,6 +543,7 @@ def _commit_model_forward(
     position_idx_cache=None,
     pli_combined=None,
     page_tables_per_layer=None,
+    skip_lm_head=False,
 ):
     caches = kv_caches or tt_model.tt_kv_cache
     if page_tables_per_layer is not None and len(page_tables_per_layer) != len(tt_model.layers):
@@ -568,6 +569,12 @@ def _commit_model_forward(
             position_idx_cache=position_idx_cache,
         )
 
+    # The KV cache append happens inside each _commit_layer_forward above, so the
+    # commit's job is complete once the layer loop finishes. When the caller discards
+    # the logits (commit_canvas_tokens), skip the final norm + LM head (a full
+    # hidden×vocab projection computed per token and thrown away).
+    if skip_lm_head:
+        return hidden_states
     hidden_states = _decode_rms_norm_forward(tt_model.norm, hidden_states)
     return tt_model._apply_lm_head(hidden_states, is_decode=True)
 
@@ -582,8 +589,16 @@ def commit_decode_forward(
     on_device_logits=False,
     pli_combined=None,
     page_tables_per_layer=None,
+    skip_lm_head=False,
 ):
-    """Run one DiffusionGemma commit-append decode step."""
+    """Run one DiffusionGemma commit-append decode step.
+
+    ``skip_lm_head`` skips the final norm + LM head when the caller only needs the
+    KV-cache append (logits discarded). The KV write happens inside the layer loop,
+    so the returned value is the pre-norm hidden states; callers must not sample from it.
+    """
+    if skip_lm_head and on_device_logits:
+        raise ValueError("skip_lm_head is incompatible with on_device_logits (no logits produced)")
     if x.dtype in (ttnn.uint32, ttnn.int32):
         input_embeds = tt_model.embed_tokens(x)
         if len(input_embeds.shape) == 3:
@@ -613,7 +628,12 @@ def commit_decode_forward(
         position_idx_cache=position_idx_cache,
         pli_combined=pli_combined,
         page_tables_per_layer=page_tables_per_layer,
+        skip_lm_head=skip_lm_head,
     )
+
+    if skip_lm_head:
+        # KV cache already appended inside the layer loop; final norm + LM head skipped.
+        return logits, None
 
     if on_device_logits:
         assert tt_model.sampling is not None, (
