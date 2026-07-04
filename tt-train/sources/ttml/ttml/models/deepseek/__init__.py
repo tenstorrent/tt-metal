@@ -99,13 +99,6 @@ class DeepSeekConfig:
                 "DeepSeek TP: moe_inter_dim must be divisible by TP size. "
                 f"moe_inter_dim={self.moe_inter_dim}, tp_size={tp_size}"
             )
-        # for name, width in (("inter_dim", self.inter_dim), ("moe_inter_dim", self.moe_inter_dim)):
-        #     local_width = width // tp_size
-        #     if local_width % 32 != 0:
-        #         raise ValueError(
-        #             f"DeepSeek TP: local {name} shard must be divisible by 32 tiles. "
-        #             f"{name}={width}, tp_size={tp_size}, local_shard={local_width}"
-        #         )
         qk_out = self.n_heads * (self.qk_nope_head_dim + self.qk_rope_head_dim)
         kv_up_out = self.n_heads * (self.qk_nope_head_dim + self.v_head_dim)
         attn_out = self.n_heads * self.v_head_dim
