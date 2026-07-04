@@ -17,6 +17,29 @@ from pathlib import Path
 from typing import List
 
 
+def _reinject_orphan_children(model_id: str, demo_dir: Path) -> int:
+    """Re-add decomposition children that survive as on-disk stubs but are
+    missing from bringup_status.json (e.g. after a re-scaffold that overwrote
+    status with a fresh module-tree walk). Mirrors what FSM's auto_iterate
+    does at startup — without this call, recompose lookups silently fail
+    because the plan's child submodule_paths don't resolve to any component."""
+    try:
+        from ..decomposition_consumer import reinject_missing_decomposition_children
+
+        added, notes = reinject_missing_decomposition_children(model_id=model_id, demo_dir=demo_dir)
+        if added:
+            print(
+                f"  [reinject] restored {added} decomposition child(ren) to "
+                f"bringup_status (so their decomposed parent can recompose)"
+            )
+            for n in notes[:20]:
+                print(f"     · {n}")
+        return added
+    except Exception as exc:
+        print(f"  [reinject] non-fatal error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 0
+
+
 def _reconcile_recompose(model_id: str, demo_dir: Path) -> List[str]:
     """When a decomposed parent's children have all graduated, un-mark the parent
     as no_emit, restore its `.stale_after_decomposition` test to live, and lock
@@ -293,9 +316,11 @@ def run_bringup_cc(
 
     _banner(f"Step 6/6  Bring-up (cc engine) — harness loop on the per-component gate for {model_id}")
 
+    _reinject_orphan_children(model_id, Path(demo_dir))
     _reconcile_recompose(model_id, Path(demo_dir))
 
     def _on_round(round_no, st):
+        _reinject_orphan_children(model_id, Path(demo_dir))
         _reconcile_recompose(model_id, Path(demo_dir))
 
     res = cc_harness.run_cc_loop(
