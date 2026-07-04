@@ -290,6 +290,44 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
         if re.search(r"pytest\.xfail|mark\.xfail|pytest\.skip|assert\s+True\b", src):
             reasons.append(f"honesty: {p.name} contains pytest.xfail / pytest.skip / assert True")
 
+    if os.environ.get("E2E_REQUIRE_TRACE") == "1" and not reasons:
+        probe_py = Path(__file__).resolve().parent.parent / "_trace_capture_probe.py"
+        if probe_py.is_file():
+            tenv = dict(os.environ)
+            tenv["TT_METAL_HOME"] = str(demo_repo_root)
+            tenv["PYTHONPATH"] = str(demo_repo_root) + os.pathsep + tenv.get("PYTHONPATH", "")
+            try:
+                tp = subprocess.run(
+                    [py, str(probe_py), str(demo_dir)],
+                    capture_output=True,
+                    text=True,
+                    timeout=hang_timeout,
+                    cwd=str(demo_repo_root),
+                    env=tenv,
+                )
+                tr = None
+                for line in ((tp.stdout or "") + "\n" + (tp.stderr or "")).splitlines():
+                    if line.startswith("TRACE_PROBE="):
+                        try:
+                            tr = json.loads(line.split("=", 1)[1])
+                        except Exception:  # noqa: BLE001
+                            tr = None
+                if tr is None:
+                    reasons.append("G6 trace+2CQ: trace-capture probe produced no verdict (could not run)")
+                elif not tr.get("trace_ready"):
+                    _b = "; ".join(x.get("guidance", x.get("rung", "")) for x in (tr.get("static_blockers") or []))
+                    _cap = (tr.get("device_capture") or {}).get("reason", "")
+                    reasons.append(
+                        "G6 trace+2CQ: pipeline not trace+2CQ-validated per stage — " + (_b or _cap or "capture failed")
+                    )
+            except subprocess.TimeoutExpired:
+                _rst = _reset_device()
+                reasons.append(
+                    f"G6 trace+2CQ: trace-capture probe exceeded {hang_timeout}s (likely device hang) — {_rst}"
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
     return (len(reasons) == 0), reasons
 
 
@@ -403,7 +441,7 @@ def _emit_e2e_phase_a(args) -> int:
     agent_bin = getattr(args, "agent_bin", "claude") or "claude"
     timeout_s = int(getattr(args, "agent_timeout_s", 0) or 0) or 14400
     skip_grade = bool(getattr(args, "no_grade", False))
-    max_grade_rounds = int(getattr(args, "max_grade_rounds", 0) or 0) or 10
+    max_grade_rounds = int(getattr(args, "max_grade_rounds", 0) or 0) or 20
 
     # One consolidated full log for the whole run (builder + grader + fix
     # appended in order). Clean screen, complete log, no per-phase scatter.
@@ -452,7 +490,14 @@ def _emit_e2e_phase_a(args) -> int:
         print(sep)
 
     print("\n  ===== PHASE 1+2: BUILDER agent (plan → build → iterate) =====\n")
-    build_prompt = _build_agent_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc, parallel_note=_parallel_note)
+    _trace_note = (
+        _TRACE_PROMPT_BLOCK
+        if (os.environ.get("E2E_REQUIRE_TRACE") == "1" or os.environ.get("E2E_REQUIRE_ON_DEVICE") == "1")
+        else ""
+    )
+    build_prompt = _build_agent_prompt(
+        model_id=model_id, demo_dir=demo_dir, pcc=pcc, parallel_note=_parallel_note, trace_note=_trace_note
+    )
     rc_build, build_final = _run_agent(
         prompt=build_prompt,
         agent_bin=agent_bin,
@@ -865,7 +910,41 @@ data-parallel replicas). Place the pipeline on the mesh accordingly:
 """
 
 
-def _build_agent_prompt(*, model_id: str, demo_dir: Path, pcc: float, parallel_note: str = "") -> str:
+_TRACE_PROMPT_BLOCK = """
+================ COMMAND 3 — TRACE+2CQ CONTRACT (host-free full pipeline) ================
+AFTER Gates 1-3 pass (correct + on-device), make the pipeline trace+2CQ-capturable per
+STAGE. Derive the stages from the HF reference config (Source A) — architectures /
+is_encoder_decoder / sub-configs give the phases (ForCausalLM -> [prefill, decode];
+encoder-decoder -> [encode, prefill, decode]; add [vocode] for speech output). Record them
+as `PIPELINE_STAGES = [...]` in tt/pipeline.py.
+
+For EACH stage expose, ON THE PIPELINE object, the generic contract the perf/2CQ engine binds:
+  <stage>_trace_setup(inputs): pin the stage's VARIABLE dim (the sequence axis; bound =
+    config max_position_embeddings) to a fixed capacity C, and PRE-UPLOAD the padded input +
+    every shape-dependent constant (causal mask, RoPE sin/cos, KV / cross-attn pad) into
+    PERSISTENT device buffers OUTSIDE the trace. Take the constant VALUES FROM THE HF REFERENCE
+    itself (call rotary_emb / _update_causal_mask; KV shape = kv_heads x head_dim) so they match
+    the golden exactly. Mask the padded positions so output on [0:real_len] is unchanged.
+  <stage>_trace_step(): ONE host-op-free forward at the fixed shape reading ONLY those persistent
+    buffers (NO from_torch / NO per-call ttnn.zeros/arange INSIDE the trace).
+  <stage>_write_inputs(): stage the next input on command-queue 1 (per-token for an AR decode
+    stage; the prompt / next chunk for a one-shot stage) -> flips on the 2CQ path.
+AR stages ALSO keep the decode contract (decode_prefill seeds resident self- AND, for a seq2seq
+decoder, cross-attn KV; decode_step reads them, never recomputes).
+
+Expose trace_capture_selftest(device): for EACH stage in PIPELINE_STAGES, capture ONE step in
+ttnn.begin_trace_capture / end_trace_capture, execute_trace it, then RELEASE the trace before the
+next stage (stage traces must NOT co-reside). Return True only if every stage captured host-free
+AND its trace output matches the reference (PCC). Size trace_region_size from the LARGEST stage
+(pinned C x layers); if a capture overflows the region, shrink C or degrade that stage to
+single-CQ and PRINT the fallback (never silently drop). This recipe is identical for every model
+— derive the specifics from the config; do NOT hardcode a per-model map.
+"""
+
+
+def _build_agent_prompt(
+    *, model_id: str, demo_dir: Path, pcc: float, parallel_note: str = "", trace_note: str = ""
+) -> str:
     return f"""You are bringing up a REAL end-to-end TTNN pipeline for the model
 `{model_id}`. Work in this repository with your tools (Read/Edit/Write/Bash).
 
@@ -966,7 +1045,7 @@ inventing a new layout. Keep iterating (fix the stub/wiring, re-run on the TT de
 gates pass. Use `./python_env/bin/python -m pytest <file> -s` to run on device.
 Report a final summary: which calls are READY, the FINAL_PCC per call, and
 confirm all graduated modules were invoked.
-{parallel_note}"""
+{parallel_note}{trace_note}"""
 
 
 def _resolve_demo_dir(args) -> Path:
