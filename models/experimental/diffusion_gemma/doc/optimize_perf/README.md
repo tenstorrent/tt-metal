@@ -77,3 +77,16 @@ eager, device canvas feedback).
 - `diag_sampling_ops.py`, `diag_argmax_alt.py`, `diag_accept_placement.py` — eager op diagnostics.
 - `verify_trace_safe_loop.py` — trace-safe fixed-step loop correctness (device canvas feedback).
 - `artifacts/*.log` — raw run logs; `tracy/` — tt-perf-report CSV/tables.
+
+## Commit batching (#47557) — the 31.5 s/block commit
+
+The commit row above (256 single-token decode-appends = **31.5 s/block**) is the next lever. The
+batched commit collapses those 256 forwards into **one causal masked prefill-append** over the
+256-token canvas (~7× commit, ~1.25× block t/s), opt-in via `DG_COMMIT_BATCHED=1`.
+
+- `commit_batching.md` — design + the code-inspection bit-exactness argument (batched KV writes
+  == the 256 sequential appends: same positions / per-head norm / RoPE / K/V projections / causal
+  masking / cache layout, differing only in prefill-vs-decode kernel numerics).
+- `verify_commit_batching.py` — device verify: asserts per-layer KV PCC (batched vs sequential)
+  and reports commit_ms before/after. **Write-only; run when the QB2 device is free.**
+- Implementation: `tt/commit_batched.py` (+ `reference/attention_mask.py` `causal=True`).
