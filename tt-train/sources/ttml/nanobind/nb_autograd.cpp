@@ -352,14 +352,9 @@ void py_module(nb::module_& m) {
     {
         auto py_distributed_config = static_cast<nb::class_<DistributedConfig>>(m.attr("DistributedConfig"));
         py_distributed_config.def(nb::init<>());
-        py_distributed_config.def(
-            nb::init<bool, bool, bool>(),
-            nb::arg("enable_ddp") = false,
-            nb::arg("enable_tp") = false,
-            nb::arg("enable_cp") = false);
+        py_distributed_config.def(nb::init<bool, bool>(), nb::arg("enable_ddp") = false, nb::arg("enable_tp") = false);
         py_distributed_config.def_rw("enable_ddp", &DistributedConfig::enable_ddp, "Enable data parallelism");
         py_distributed_config.def_rw("enable_tp", &DistributedConfig::enable_tp, "Enable tensor parallelism");
-        py_distributed_config.def_rw("enable_cp", &DistributedConfig::enable_cp, "Enable context parallelism");
     }
 
     // Module-level create_tensor functions for creating autograd tensors
