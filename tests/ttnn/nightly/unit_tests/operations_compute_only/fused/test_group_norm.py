@@ -103,8 +103,8 @@ def test_get_mask_tensor_num_virtual_cols_zero(device):
 # groupnorm.cpp  validate_dram_grid():
 #   TT_THROW — invalid core_grid for input dimensions; suggests largest valid sub-grid
 #     (param id: invalid_grid_with_suggestion)
-#   TT_THROW — cannot find any valid core grid for given Ht, W, num_groups
-#     (param id: no_valid_grid)
+#   TT_THROW — invalid core_grid for padded input dimensions; suggests largest valid sub-grid
+#     (param id: invalid_grid_for_padded_channels)
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "input_shape, num_groups, core_grid, msg_pattern",
@@ -120,13 +120,13 @@ def test_get_mask_tensor_num_virtual_cols_zero(device):
             (1, 1, 32, 48),
             16,
             ttnn.CoreGrid(x=32, y=1),
-            r"Cannot find any valid core grid",
-            id="no_valid_grid",
+            r"Requested core_grid .* is invalid for the input dimensions",
+            id="invalid_grid_for_padded_channels",
         ),
     ],
 )
 def test_validate_dram_grid(input_shape, num_groups, core_grid, msg_pattern, device):
-    x = ttnn.empty(input_shape, dtype=ttnn.DataType.BFLOAT16, device=device)
+    x = ttnn.empty(input_shape, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
     with pytest.raises(RuntimeError, match=msg_pattern):
         ttnn.group_norm(x, num_groups=num_groups, core_grid=core_grid, inplace=False)
 
