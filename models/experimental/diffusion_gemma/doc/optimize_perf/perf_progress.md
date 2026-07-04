@@ -612,9 +612,17 @@ gather `disp^T@hidden` + combine `comb@down`) — the batched experts read the ~
 forced by the reuse factory → E=128 blocks distributed 1/core), gather/combine use 2D
 `MatmulMultiCoreReuseMultiCastProgramConfig`. Same dtype/fidelity (HiFi2) ⇒ pure geometry, PCC must equal untuned.
 Device grid measured **11×10 = 110 cores** (not the doc's 13×10=130). Per-matmul device result (real 26B layer-0):
-**gate/up (the dominant K=88 matmul) untuned 4.176 → tuned 0.593 ms = 7.05× at PCC 0.99986** (pure geometry, correct).
-Full-MoE tuned-vs-untuned + PCC-vs-dense via `verify_opt004_fullmoe.py` (focused verify; the full
-`bench_opt004_matmul_geometry.py` per-candidate SWEEP is compile-heavy and was skipped).
+**gate/up (the dominant K=88 matmul) untuned 4.176 → tuned 0.593 ms = 7.05× at PCC 0.99986** (pure geometry, correct)
+— this is the batched-expert builder used by gate/up/**down**, so the dominant expert compute is verified.
+
+**Honest verification status:** the full 5-config `sparse_experts_forward` tuned verify (`verify_opt004_fullmoe.py`,
+even with the slow dense-128 reference skipped) hit a **pathologically slow first-call compile** of the tuned configs
+(>7 min / ~27 min CPU with no progress, twice) — likely the `down` config (`per_core_N=88`, `in0_block_w=2` → 44
+K-passes) or a 2D gather/combine config — and did not produce the layer-level number this session. OPT-004 is
+**opt-in, default OFF**, so the shipped path is byte-for-byte unchanged; it is landed on the gate/up device
+verification (dominant matmul, correct + 7×) with the compile-time of the down/gather/combine configs flagged as the
+open item **before enabling by default** (candidate fix: cap `per_core_N` / re-pick `in0_block_w` for the down + 2D
+configs; the compile-heavy `bench_opt004_matmul_geometry.py` per-candidate SWEEP is the tool to pick the fast legal one).
 
 ### Traced serving loop — the two remaining blockers (scoped, NOT landed unverified)
 
