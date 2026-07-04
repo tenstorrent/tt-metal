@@ -21,6 +21,31 @@ from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
 
 
+def _tile_preserving_chunk0(x: ttnn.Tensor, n: int) -> list[ttnn.Tensor]:
+    """Split ``x`` into ``n`` size-1 slices along dim 0 WITHOUT leaving TILE layout.
+
+    ``ttnn.chunk`` is a host fallback that untilizes to ROW_MAJOR (and, for the
+    ``(coeff,B,1,D)`` AdaLN modulation, the ``(1,B,1,D)`` slices never re-tile), forcing
+    every downstream ``addcmul``/matmul epilogue to re-tilize the shift/scale/gate vectors
+    (the dominant BF16->BF16 tilize cost per block). Slicing dim 0 -- a non-tile outer dim --
+    on the already-TILE ``shifted`` tensor keeps every slice in TILE, so consumers take the
+    fused LLK path instead of the composite (multiply+add w/ per-input tilize) fallback.
+    Output is bit-identical to ``ttnn.chunk`` (pure layout, no value change).
+
+    ``x`` is already TILE here (``TILE scale_shift_table.data`` + temb; ttnn add promotes to
+    TILE), so no explicit re-tilize is needed -- ``ttnn.slice`` is a trace-safe device op that
+    preserves the input layout, whereas ``ttnn.chunk``'s host untilize is what forced RM."""
+    shape = list(x.shape)
+    out = []
+    for i in range(n):
+        starts = [0] * len(shape)
+        ends = list(shape)
+        starts[0] = i
+        ends[0] = i + 1
+        out.append(ttnn.slice(x, starts, ends))
+    return out
+
+
 class LTXTransformerBlock(Module):
     def __init__(
         self,
@@ -255,7 +280,7 @@ class LTXTransformerBlock(Module):
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         # Video modulation; `_p1` chunks carry +1 baked into the scale slot (see _prepare_torch_state).
         shifted_v = self.scale_shift_table.data + video_temb
-        chunks = ttnn.chunk(shifted_v, self.adaln_coeff, dim=0)
+        chunks = _tile_preserving_chunk0(shifted_v, self.adaln_coeff)
         v_shift_sa, v_scale_sa_p1, v_gate_sa = chunks[0], chunks[1], chunks[2]
         v_shift_ff, v_scale_ff_p1, v_gate_ff = chunks[3], chunks[4], chunks[5]
         if self.cross_attention_adaln:
@@ -280,7 +305,7 @@ class LTXTransformerBlock(Module):
             video_ca_input = ttnn.addcmul(v_shift_ca, self.norm2(video_1BND), v_scale_ca_p1)
             if video_prompt_temb is not None:
                 shifted_prompt_v = self.prompt_scale_shift_table.data + video_prompt_temb
-                v_kv_shift, v_kv_scale_p1 = ttnn.chunk(shifted_prompt_v, 2, dim=0)
+                v_kv_shift, v_kv_scale_p1 = _tile_preserving_chunk0(shifted_prompt_v, 2)
                 video_prompt_mod = ttnn.addcmul(v_kv_shift, video_prompt, v_kv_scale_p1)
             else:
                 video_prompt_mod = video_prompt
