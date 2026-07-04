@@ -242,10 +242,31 @@ cross-device dispatch needed, unlike deepseek's `all_to_all_dispatch` (which nee
   transpose** entirely (the dense path's dominant cost).
 
 **This is the structural win the whole campaign was pointed at.** Replacing the 137 ms/layer dense
-MoE with ~11 ms/layer collapses the ~99%-MoE denoise step ~12×. Next: measure the on-device dispatch
-(trace-safe gather-index building from router topk), then full in-repo module + traced t/s.
+MoE with ~11 ms/layer collapses the ~99%-MoE denoise step ~12×.
 
-_Artifacts:_ `bench_gather_moe.py`, `artifacts/leverA_gather_moe_C32.log`.
+### On-device dispatch (trace-safe) — holds the win (`bench_ondevice_dispatch.py`)
+
+The host-built indices above aren't trace-safe. The real path builds the GShard capacity dispatch
+ON-DEVICE from the router topk (all trace-safe ops): `topk → scatter(mask) → cumsum(pos) →
+gather(pos_per_slot) → col=idx*C+pos → scatter(disp/comb masks)`, then gather = `disp^T @ x`
+(matmul), batched experts, combine = `comb @ down` (matmul), all-reduce.
+
+| phase | ms/call | vs dense |
+|---|---|---|
+| dense-128 (the wall) | 137.07 | 1.00× |
+| on-device dispatch-build ONLY (topk+scatter+cumsum+gather+col math) | **1.87** | — |
+| FULL on-device (dispatch + gather-matmul + experts + combine-matmul + all-reduce) | **10.54** | **13.01×** |
+| PCC(full, dense) | **0.99969** | — |
+
+Dispatch index-building is only **1.87 ms**; the full trace-safe MoE is **10.54 ms/layer**, actually
+faster than the host-index version (fully device-resident). Index tensors must be UINT32 (gather/
+scatter reject INT32). **Capacity note:** total (token,expert) pairs = S×top_k = 2048 always; C=32
+gives 4096 slots = 2× headroom (0 dropped on the test input). Real-data imbalance may exceed 32 for
+a hot expert → those tokens' contribution is dropped; the full-module PCC check on real activations
+decides the safe C (bump to 48/64 if needed, still 6–8× vs dense).
+
+_Artifacts:_ `bench_gather_moe.py`, `bench_ondevice_dispatch.py`,
+`artifacts/leverA_gather_moe_C32.log`, `artifacts/leverA_ondevice_dispatch_C32.log`.
 
 ## Session summary (2026-07-04)
 
