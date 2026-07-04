@@ -54,22 +54,46 @@ def _read(demo_dir: Path) -> str:
     return "\n".join(text)
 
 
+_AR_MARKERS = (
+    r"def generate\b|max_new_tokens|\bnext_token\b|for\s+\w+\s+in\s+range\([^)]*max_new|_sample_tt|"
+    r"argmax\([^)]*dim|decode_prefill|autoregress"
+)
+
+
 def probe(demo_dir: Path) -> dict:
     src = _read(demo_dir)
+    lad = {name: (pat, guidance) for name, pat, guidance in _LADDER}
+    is_ar = bool(re.search(_AR_MARKERS, src))
     blockers = []
 
-    for name, pat, guidance in _LADDER:
-        if pat is not None:
-            if re.search(pat, src):
-                blockers.append({"rung": name, "guidance": guidance})
-        elif name == "kv_cache":
-            has_kv = re.search(r"kv[_ ]?cache|update_cache|paged_update|cache_k\b|past_key|kvcache", src, re.I)
-            reprefill = re.search(r"for .* in range\(.*max_new|re-?prefill|full recompute", src, re.I)
-            if reprefill and not has_kv:
-                blockers.append({"rung": name, "guidance": guidance})
-        elif name == "decode_step":
-            if not re.search(r"def decode_step|def decode_trace|begin_trace_capture", src):
-                blockers.append({"rung": name, "guidance": guidance})
+    # residency: UNIVERSAL — any model whose weights do not fit resident streams per layer.
+    if re.search(lad["residency"][0], src):
+        blockers.append({"rung": "residency", "guidance": lad["residency"][1]})
+
+    # token_feed + kv_cache: AUTOREGRESSIVE-ONLY (a feed-forward model has no token loop / KV).
+    if is_ar:
+        if re.search(lad["token_feed"][0], src):
+            blockers.append({"rung": "token_feed", "guidance": lad["token_feed"][1]})
+        has_kv = re.search(r"kv[_ ]?cache|update_cache|paged_update|cache_k\b|past_key|kvcache", src, re.I)
+        reprefill = re.search(r"for .* in range\(.*max_new|re-?prefill|full recompute", src, re.I)
+        if reprefill and not has_kv:
+            blockers.append({"rung": "kv_cache", "guidance": lad["kv_cache"][1]})
+
+    # trace-capturable entry: UNIVERSAL, but the UNIT differs by class — a fixed-shape decode_step for an
+    # autoregressive model, or a fixed-shape forward pass for a feed-forward model (encoder / vocoder / etc).
+    if not re.search(r"def decode_step|def decode_trace|begin_trace_capture|def trace_capture_selftest", src):
+        if is_ar:
+            g = lad["decode_step"][1]
+        else:
+            g = (
+                "No trace-capturable entry for this feed-forward model. The trace UNIT is the steady-state "
+                "FORWARD pass (not a decode step): make its input shapes FIXED and its forward host-op-free, "
+                "then expose trace_capture_selftest(device) that wraps ONE forward in "
+                "ttnn.begin_trace_capture / end_trace_capture. For a multi-stage pipeline (encoder / decoder / "
+                "vocoder, e.g. Seamless) do this PER STAGE — an AR decoder stage additionally needs the "
+                "decode-step / KV rungs, a conv/vocoder stage only needs residency + fixed-shape forward."
+            )
+        blockers.append({"rung": "trace_entry", "guidance": g})
 
     trace_ready = not blockers
     device_capture = None
@@ -77,6 +101,7 @@ def probe(demo_dir: Path) -> dict:
         device_capture = _device_selftest(demo_dir)
 
     return {
+        "model_class": "autoregressive" if is_ar else "feed_forward",
         "trace_ready": bool(trace_ready and (device_capture is None or device_capture.get("ok"))),
         "static_blockers": blockers,
         "device_capture": device_capture,
