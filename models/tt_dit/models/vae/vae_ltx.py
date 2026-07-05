@@ -226,9 +226,11 @@ class LTXCausalConv3d(Module):
 
         self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
         self._pad_offset_cache: dict[tuple, ttnn.Tensor] = {}
-        # Persistent-padded path (opt-in): neighbor_pad_halo -> compact -> halo_scatter into a padded
-        # buffer -> plain (pad=0) conv, instead of conv3d halo-read mode. Copy-based (ttnn.pad) for now.
-        self._persist_pad = os.environ.get("TT_LTX_PERSIST_PAD") is not None
+        # Persistent-padded path (default on): neighbor_pad_halo -> compact -> halo_scatter into a padded
+        # buffer -> plain (pad=0) conv with in-kernel logical masking, instead of conv3d halo-read mode.
+        # Validated PCC=1.0 and ~6% faster e2e on BH 4x8 1080p (448ms vs 477ms halo-read). Opt out with
+        # TT_LTX_NO_PERSIST_PAD for the halo-read path.
+        self._persist_pad = os.environ.get("TT_LTX_NO_PERSIST_PAD") is None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # LTX-2 stores weights under "conv.weight" and "conv.bias"
