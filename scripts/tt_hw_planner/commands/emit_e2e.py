@@ -130,18 +130,7 @@ _G1_TORCH_DELEGATION = (
     r"_get_torch_submodule\s*\(",
 )
 
-# G1b: tt/pipeline.py may NOT delegate the forward path to HF submodules.
-# The pipeline exists to chain graduated TTNN stubs; calling
-# `hf_model.text_decoder(...)`, `hf_model.t2u_model(...)`, `hf_model.vocoder(...)`
-# etc. in the pipeline forward path silently substitutes host-side HF
-# computation for the graduated stub — which is exactly the failure mode
-# that lets 40 stubs sit in a coverage sweep while only 2 are chained.
-# References to the HF model for reading configs (hf_model.config,
-# hf_model.generation_config) or extracting weights (hf_model.lm_head,
-# hf_model.vocoder.unit_embedding.weight, etc.) are fine.
-# Calling the HF submodule as a computation (hf_model.<X>(...)) is not.
 _G1B_HF_FALLBACK = (
-    # Direct submodule calls
     r"(?<!\w)hf_model\.text_decoder\s*\(",
     r"(?<!\w)hf_model\.t2u_model\s*\(",
     r"(?<!\w)hf_model\.vocoder\s*\(",
@@ -154,44 +143,25 @@ _G1B_HF_FALLBACK = (
     r"(?<!\w)self\.hf_model\.speech_encoder\s*\(",
     r"(?<!\w)self\.hf_model\.text_encoder\s*\(",
     r"(?<!\w)self\.hf_model\.lm_head\s*\(",
-    # Nested submodule calls (e.g. hf_model.vocoder.unit_embedding(...),
-    # hf_model.text_decoder.embed_tokens(...), hf_model.text_decoder.layers[0](...))
     r"(?<!\w)hf_model\.(text_decoder|t2u_model|vocoder|speech_encoder|text_encoder|lm_head)\.\w+\s*\(",
     r"(?<!\w)self\.hf_model\.(text_decoder|t2u_model|vocoder|speech_encoder|text_encoder|lm_head)\.\w+\s*\(",
-    # Even deeper nesting (e.g. hf_model.text_decoder.layers[0].self_attn(...))
     r"(?<!\w)hf_model\.(text_decoder|t2u_model|vocoder|speech_encoder|text_encoder)\.[\w.\[\]0-9]+\s*\(",
     r"(?<!\w)self\.hf_model\.(text_decoder|t2u_model|vocoder|speech_encoder|text_encoder)\.[\w.\[\]0-9]+\s*\(",
 )
 
-# Alias-detection pass: if `<name> = hf_model.<submodule>` appears anywhere,
-# then any subsequent call `<name>(...)` or `<name>.<X>(...)` is a disguised
-# HF-fallback. Kept as a separate pass because a single regex would false-
-# positive on unrelated `voc(` etc. — the AST pass in _check_hf_aliases
-# links assignments to call sites.
 _HF_ALIAS_ROOTS = ("text_decoder", "t2u_model", "vocoder", "speech_encoder", "text_encoder", "lm_head")
 
-# G1b (torch-wrapper part): torch COMPUTE ops in HOT functions are banned —
-# the HOT path must be pure ttnn (`ttnn.<X>(...)` or `stubs[<name>](...)`).
-# Blocklist explicitly enumerates the compute ops that must be TT, not host:
-# matmul/attention/norm/activation/conv/embedding/aggregation. Shape ops
-# (reshape, expand, repeat, cat) and construction (zeros, tensor, arange)
-# stay allowed — they're just prep. Also blocked: everything in
-# `torch.nn.functional.<X>` (that IS the compute API), and `F.<X>` (its
-# common alias).
 _TORCH_COMPUTE_BLOCKLIST = {
-    # matmul family
     "matmul",
     "mm",
     "bmm",
     "addmm",
     "einsum",
-    # normalization
     "layer_norm",
     "batch_norm",
     "group_norm",
     "instance_norm",
     "rms_norm",
-    # activations
     "softmax",
     "log_softmax",
     "sigmoid",
@@ -204,23 +174,18 @@ _TORCH_COMPUTE_BLOCKLIST = {
     "hardswish",
     "hardsigmoid",
     "mish",
-    # attention
     "scaled_dot_product_attention",
-    # convolution
     "conv1d",
     "conv2d",
     "conv3d",
     "conv_transpose1d",
     "conv_transpose2d",
-    # embedding
     "embedding",
     "embedding_bag",
-    # dropout (in HOT, this shouldn't happen anyway)
     "dropout",
     "dropout1d",
     "dropout2d",
     "dropout3d",
-    # sampling / decode (already partly in G5, but block here too)
     "argmax",
     "argmin",
     "topk",
@@ -238,10 +203,6 @@ _G5_HOST_XFER = ("from_torch", "to_torch", "from_device", "to_device")
 _G1B_HOT_FN_NAME = re.compile(
     r"^(run_[a-z0-9]+|__call__|forward|_forward|_apply_[a-z0-9_]+|decode_step|decode_prefill)$" r"|_trace_step$|_step$"
 )
-# Functions whose bodies are ALLOWED to use HF as computation (setup / reference
-# code that runs outside the trace / device forward path). HF is legitimately
-# used in these to compute FIXED reference tensors that seed persistent device
-# buffers before the trace begins — required for trace+2CQ to have stable inputs.
 _G1B_SETUP_FN_NAME = re.compile(
     r"_trace_setup$|_write_inputs$|_reference_for_stage$|^_hf_reference_|"
     r"^_make_stage_inputs$|^_hf_capacities$|^load_hf_model$|^build_tt_stubs$|"
@@ -313,9 +274,8 @@ def _check_hf_fallback(src: str) -> list:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if not _fn_is_hot(node.name):
-            continue  # SETUP function — HF calls allowed here
+            continue
 
-        # Build alias map WITHIN this hot function's body
         aliases: dict = {}
         for sub in ast.walk(node):
             if isinstance(sub, ast.Assign):
@@ -329,17 +289,14 @@ def _check_hf_fallback(src: str) -> list:
             if not isinstance(sub, ast.Call):
                 continue
             f = sub.func
-            # Direct chain hf_model.<X>(...) / hf_model.<X>.<Y>(...) / self.hf_model.*
             if isinstance(f, ast.Attribute):
                 root = _attr_root(f)
                 if root:
-                    # Extract the submodule after "hf_model."
                     tail = root.split("hf_model.", 1)[-1] if "hf_model." in root else ""
                     top = tail.split(".", 1)[0]
                     if top in _HF_ALIAS_ROOTS:
                         hits.append(f"{node.name}(): {_dotted_call(sub)}")
                         continue
-            # Alias-then-call: alias(...) or alias.x(...)
             walker = f
             while isinstance(walker, ast.Attribute):
                 walker = walker.value
@@ -349,11 +306,6 @@ def _check_hf_fallback(src: str) -> list:
             if isinstance(f, ast.Name) and f.id in aliases:
                 hits.append(f"{node.name}(): {f.id}(...) [alias for {aliases[f.id]}]")
                 continue
-            # Torch compute wrappers in HOT — everything on the HOT path must
-            # be ttnn or a graduated stub. Enumerate the known compute-op
-            # blocklist (matmul/norm/attention/activation/conv/embedding);
-            # shape ops (reshape/expand/repeat/cat) and construction (zeros/
-            # tensor/arange) stay unflagged as they don't do math.
             if isinstance(f, ast.Attribute):
                 chain = []
                 walker = f
@@ -363,15 +315,12 @@ def _check_hf_fallback(src: str) -> list:
                 if isinstance(walker, ast.Name):
                     root_name = walker.id
                     leaf = chain[0] if chain else ""
-                    # torch.nn.functional.<X>(...) — the whole compute API, always block
                     if root_name == "torch" and "functional" in chain:
                         hits.append(f"{node.name}(): {_dotted_call(sub)} [torch.nn.functional in HOT path]")
                         continue
-                    # torch.<known-compute-op>(...) — matmul/softmax/etc.
                     if root_name == "torch" and leaf in _TORCH_COMPUTE_BLOCKLIST:
                         hits.append(f"{node.name}(): {_dotted_call(sub)} [torch compute in HOT path]")
                         continue
-                # F.<X>(...) — common alias for torch.nn.functional
                 if isinstance(walker, ast.Name) and walker.id == "F":
                     hits.append(f"{node.name}(): {_dotted_call(sub)} [F.* (torch.nn.functional) in HOT path]")
                     continue
@@ -413,10 +362,6 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     if nonnative:
         reasons.append("G1: stub(s) delegate to the torch reference (not native ttnn): " + ", ".join(nonnative[:8]))
 
-    # G1b: tt/pipeline.py must not call HF submodules as computation. Reading
-    # config/weights is fine; calling `hf_model.text_decoder(...)` etc. as a
-    # forward step silently swaps a graduated TTNN stub for host-side HF —
-    # the "1 real TT stage + coverage-sweep the rest" shortcut.
     tt_dir = demo_dir / "tt"
     hf_hits = []
     for p in sorted(tt_dir.glob("*.py")) if tt_dir.is_dir() else []:
@@ -424,11 +369,6 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             src = p.read_text(errors="ignore")
         except Exception:
             continue
-        # HOT-scoped AST check: only report HF calls inside functions that run
-        # on the traced device path (*_trace_step, decode_step, run_*, __call__,
-        # forward, _apply_*). SETUP functions (*_trace_setup, _reference_*,
-        # _hf_reference_*, load_hf_model, build_tt_stubs, _make_arg_for) are
-        # allowed to use HF for fixed-input injection and reference computation.
         for h in _check_hf_fallback(src)[:6]:
             hf_hits.append(f"{p.name}: {h}")
     if hf_hits:
