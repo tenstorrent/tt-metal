@@ -108,13 +108,17 @@ def test_max_pool2d_resnet50_stem(mesh_device):
     tensor_height = batch_size * input_h * input_w  # 12544
     tensor_width = channels  # 64
 
-    # HEIGHT_SHARDED over an 8x1 grid: 12544 rows = 392 tiles, 392/8 = 49 tiles/core (tile-aligned).
-    # With a CoreRangeSet, create_sharded_memory_config requires use_height_and_width_as_shard_shape=True
-    # and `shape` = the PER-CORE shard shape (not the full tensor). Otherwise it raises
-    # "height and width must be shard shape with CoreRangeSet" at setup and never reaches the op.
-    num_cores = 8
-    shard_height = tensor_height // num_cores  # 1568 rows = 49 tiles
-    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    # HEIGHT_SHARDED, GRID-ADAPTIVE so it runs on BOTH the full 32-core Quasar part AND the 2-core
+    # emulator: pick the largest core count that fits the device grid and evenly divides the 392 height
+    # tiles (392 = 2^3*7^2 -> 2/4/8/14/28 all divide) so the shard stays tile-aligned. With a CoreRangeSet,
+    # create_sharded_memory_config requires use_height_and_width_as_shard_shape=True and `shape` = the
+    # PER-CORE shard shape (else "height and width must be shard shape with CoreRangeSet" at setup).
+    grid = device.compute_with_storage_grid_size()
+    max_cores = grid.x * grid.y
+    height_tiles = tensor_height // 32  # 392
+    num_cores = max(c for c in range(1, max_cores + 1) if height_tiles % c == 0)
+    shard_height = (height_tiles // num_cores) * 32
+    core_grid = ttnn.num_cores_to_corerangeset(num_cores, grid, True)
     mem_config = ttnn.create_sharded_memory_config(
         shape=(1, 1, shard_height, tensor_width),
         core_grid=core_grid,

@@ -143,6 +143,9 @@ def _run_conv2d(
     assert_with_pcc(torch_golden, tt_out.float(), pcc=pcc)
 
 
+# The stem conv routes through conv_bmm_tilize which currently deadlocks on Quasar (see test_conv_hang.py);
+# cap the run so that hang surfaces as a timeout, not a suite block.
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, in_channels, out_channels, input_height, input_width, kernel_size, stride, padding, shard_layout, reshard_if_not_optimal",
@@ -246,6 +249,19 @@ def test_quasar_conv2d(
     shard_layout,
     reshard_if_not_optimal,
 ):
+    # Emulator guard: conv2d auto-sizes its shard grid, so on a small grid (the 2-core emulator) a
+    # large-spatial conv gets a huge per-core activation shard (activation + halo + weights + interm CBs)
+    # and OOMs L1 -- e.g. the 224x224 stem = 50176 sticks / 2 cores = 25088/core. Skip when the grid can't
+    # spread it thin enough; the full 32-core Quasar part (50176/32 = 1568/core) still runs every case.
+    grid = mesh_device.compute_with_storage_grid_size()
+    max_cores = grid.x * grid.y
+    sticks = batch_size * input_height * input_width
+    MAX_STICKS_PER_CORE = 2048
+    if sticks / max_cores > MAX_STICKS_PER_CORE:
+        pytest.skip(
+            f"conv activation = {sticks} sticks over {max_cores} cores = {sticks // max_cores}/core "
+            f"(> {MAX_STICKS_PER_CORE}); OOMs L1 on this small grid -- run on the full Quasar part."
+        )
     _run_conv2d(
         mesh_device,
         batch_size=batch_size,
