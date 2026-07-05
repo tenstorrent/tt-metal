@@ -601,6 +601,70 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     return (len(reasons) == 0), reasons
 
 
+_TT_ONLY_CONTRACT = """
+================ STRICT TT-ONLY CONTRACT — gate WILL auto-fail on violation ================
+
+The TT pipeline MUST be a pure TTNN forward path. The following are FORBIDDEN in the
+pipeline's HOT path (run_*, __call__, forward, _apply_*, decode_step, decode_prefill,
+*_trace_step, *_step and any function you write that gets called from these):
+
+  A. HF orchestration / HF wrappers:
+       - model.generate(...), self.model.generate(...), hf_model.generate(...)
+       - hf_model.<X>(...) or self.model.<X>(...) where <X> is a submodule
+         (text_encoder, text_decoder, t2u_model, vocoder, speech_encoder, lm_head, etc.)
+       - Nested / aliased forms of the above:
+         hf_model.vocoder.unit_embedding(...), voc = hf_model.vocoder → voc.dur_predictor(...)
+       - Monkey-patching HF submodule forwards:
+         self.model.text_decoder.forward = <wrapper>, or ANY assignment to a
+         self.model.<X>.forward attribute. Patched-HF-then-generate() IS Approach B
+         and IS a shortcut — the pipeline must be an EXPLICIT chain, not HF orchestration.
+
+  B. torch compute wrappers (any torch host-side compute op):
+       - torch.matmul, torch.mm, torch.bmm, torch.einsum
+       - torch.softmax, torch.log_softmax
+       - torch.layer_norm, torch.rms_norm, torch.batch_norm, torch.group_norm
+       - torch.embedding, torch.embedding_bag
+       - torch.conv1d, torch.conv2d, torch.conv3d, torch.conv_transpose*
+       - torch.scaled_dot_product_attention
+       - torch.relu, torch.gelu, torch.silu, torch.tanh, torch.sigmoid, torch.leaky_relu
+       - torch.argmax, torch.topk, torch.multinomial (host sampling)
+       - torch.dropout / torch.nn.functional.<X> / F.<X>
+     Shape and dtype ops (torch.zeros, torch.tensor, torch.arange, torch.cat,
+     torch.reshape, torch.expand, torch.repeat_interleave, torch.full_like,
+     torch.manual_seed, torch.no_grad, .to(dtype)) are ALLOWED — they're just prep.
+
+  C. Coverage-sweep shortcut for Gate 2:
+     Any function named coverage_step / coverage_sweep / invoke_all_stubs /
+     _touch_all_graduated / etc. that iterates over graduated stubs and calls
+     each once just to check the "invoked" counter — that DOES NOT count for
+     Gate 2. Every graduated stub must be INSIDE THE REAL FORWARD PATH,
+     with its output actually feeding downstream computation on the way to
+     the final task output. The gate will require this.
+
+REQUIRED SHAPE:
+  Write an EXPLICIT chain as a Python function you author yourself. Example:
+    def run_<task>(inputs, stubs, hf_model, ...):
+        x = stubs["seamless_m4_t_encoder"](inputs["input_ids"])        # TT
+        for step in range(N):
+            y = stubs["seamless_m4_t_decoder"](x, prev_tokens, ...)    # TT
+            prev_tokens = ttnn.argmax(y, ...)                          # TT (on device)
+        units = stubs["seamless_m4_t_t2u_model"](prev_tokens)          # TT
+        wave = stubs["seamless_m4_t_hifi_gan"](units)                  # TT
+        return wave
+
+ALLOWED HF USAGE (SETUP / REFERENCE ONLY — NOT the forward path):
+  1. hf_model.config.<X> / hf_model.generation_config.<X> — pure attribute reads
+  2. weight extraction at build time: hf_model.<X>.<Y>.weight / .bias
+  3. HF calls inside a _hf_reference_<task>() helper — computing the GOLDEN
+     output for PCC comparison against your TT pipeline. This is separate
+     from the TT pipeline.
+  4. HF calls inside <stage>_trace_setup(inputs) — seeding fixed-value
+     persistent buffers BEFORE trace capture begins, so trace+2CQ has stable
+     inputs. The trace_step itself must be pure TT.
+============================================================================================
+"""
+
+
 def _build_cc_fix_prompt(*, model_id, demo_dir, pcc) -> str:
     """Per-round prompt for the emit-e2e cc engine. The gate is the sole authority; the agent works
     exactly the failing gates it names and never weakens them."""
@@ -618,7 +682,8 @@ def _build_cc_fix_prompt(*, model_id, demo_dir, pcc) -> str:
         "trace-capturable (no per-layer weight streaming, no host token loop, a real device trace "
         "captures) so trace + 2CQ can run. next_target may name a host op (residency / token-feed / KV / "
         "fixed-shape decode step) — fix it ON DEVICE the same way, WITHOUT regressing PCC (correctness is "
-        "re-checked first every round, so a host-free edit that breaks PCC is rejected immediately)."
+        "re-checked first every round, so a host-free edit that breaks PCC is rejected immediately).\n"
+        + _TT_ONLY_CONTRACT
     )
 
 
@@ -1038,7 +1103,7 @@ Fix rules:
     demo by routing it through the test's pipeline, not by rewriting wiring.
   - Keep the demo package structure (demo/ + tt/ + tests/ + README) intact.
   - Re-run tests/e2e on the device yourself and confirm they pass before finishing.
-
+{_TT_ONLY_CONTRACT}
 Report what you changed and the device re-run result."""
 
 
@@ -1078,6 +1143,25 @@ Do all of this with your own tools (Read/Bash), then report a verdict.
    snapshot — bring-up is single-phase, so a TP>1 mesh run graduates shardable
    modules DIRECTLY sharded). Confirm the UNION of INVOKED stubs across all task
    heads' runs == that graduated set. Name any graduated module never invoked.
+   IMPORTANT: coverage_step / coverage_sweep / invoke_all_stubs / any function
+   that calls each graduated stub once just to check the "invoked" counter DOES
+   NOT COUNT as invoked-in-forward-path. Every graduated stub must be truly IN
+   the real forward path (its output feeds downstream computation). Flag any
+   stub whose only invocation is via a coverage sweep as WASTE / SHORTCUT.
+
+5. TT-ONLY. Confirm the pipeline is pure TTNN in the forward path:
+   - NO `model.generate(...)` / `hf_model.generate(...)` — HF's host AR loop
+   - NO monkey-patching of HF submodule forwards (`self.model.<X>.forward = ...`)
+   - NO `hf_model.<X>(...)` computation calls (config reads and weight
+     extraction OK)
+   - NO `torch.matmul` / `torch.softmax` / `torch.layer_norm` / `torch.embedding` /
+     `torch.argmax` / `torch.topk` / `torch.multinomial` / `torch.nn.functional.*` /
+     `F.<X>` in the forward path
+   - The pipeline must be an EXPLICIT Python chain calling `stubs["<name>"](...)`
+     directly, readable top-down from `run_<task>()` — not HF orchestration.
+   HF/torch are ONLY allowed in `_hf_reference_<task>()` (golden reference) and
+   `<stage>_trace_setup(...)` (seeding fixed-input persistent buffers). Any
+   violation is a HOLE — flag it in the report.
 
 WRITE the structured machine-readable report to {demo_dir}/grader_report.json
 so the fix agent gets precise targets. Use EXACTLY this schema:
@@ -1315,7 +1399,9 @@ inventing a new layout. Keep iterating (fix the stub/wiring, re-run on the TT de
 gates pass. Use `./python_env/bin/python -m pytest <file> -s` to run on device.
 Report a final summary: which calls are READY, the FINAL_PCC per call, and
 confirm all graduated modules were invoked.
-{parallel_note}{trace_note}"""
+{parallel_note}{trace_note}
+{_TT_ONLY_CONTRACT}
+"""
 
 
 def _resolve_demo_dir(args) -> Path:
