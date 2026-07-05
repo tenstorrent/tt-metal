@@ -124,35 +124,28 @@ class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
                 raise ValueError(
                     "ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX is enabled"
                 )
-        if type and axis:
-            # User provided both valid type and axis, check if they are compatible
-            self.type = type
-            self.axis = axis
-        elif type:
-            # User provided only valid type
-            self.type = type
-            self.axis = get_default_dispatch_core_axis(fabric_tensix_config)
-            logger.debug(f"Using default dispatch core axis for this system: {self.axis}")
-        elif axis:
-            self.axis = axis
-            # User provided only valid axis
-            if self.axis == DispatchCoreAxis.COL:
+        # C++ base has `type`/`axis` as read-only properties; use locals and
+        # pass to super().__init__ instead of setting self.attr.
+        _type, _axis = type, axis
+        if _type and _axis:
+            pass
+        elif _type:
+            _axis = get_default_dispatch_core_axis(fabric_tensix_config)
+            logger.debug(f"Using default dispatch core axis for this system: {_axis}")
+        elif _axis:
+            if _axis == DispatchCoreAxis.COL:
                 # COL axis is not supported for ETH dispatch core type, default to WORKER
-                self.type = DispatchCoreType.WORKER
-                logger.info(
-                    f"{self.axis} axis is only supported on WORKER dispatch core type, defaulting to {self.type}"
-                )
-            elif self.axis == DispatchCoreAxis.ROW:
-                # ROW axis is supported for all dispatch core types, use default type for their system
-                self.type = get_default_dispatch_core_type()
-                logger.debug(f"Using default dispatch core type for this system: {self.type}")
+                _type = DispatchCoreType.WORKER
+                logger.info(f"{_axis} axis is only supported on WORKER dispatch core type, defaulting to {_type}")
+            elif _axis == DispatchCoreAxis.ROW:
+                _type = get_default_dispatch_core_type()
+                logger.debug(f"Using default dispatch core type for this system: {_type}")
         else:
-            # User provided no valid type or axis, use default for their system
-            self.type = get_default_dispatch_core_type()
-            logger.debug(f"Using default dispatch core type for this system: {self.type}")
-            self.axis = get_default_dispatch_core_axis(fabric_tensix_config)
-            logger.debug(f"Using default dispatch core axis for this system: {self.axis}")
-        super().__init__(self.type, self.axis)
+            _type = get_default_dispatch_core_type()
+            logger.debug(f"Using default dispatch core type for this system: {_type}")
+            _axis = get_default_dispatch_core_axis(fabric_tensix_config)
+            logger.debug(f"Using default dispatch core axis for this system: {_axis}")
+        super().__init__(_type, _axis)
 
 
 def CreateDevice(

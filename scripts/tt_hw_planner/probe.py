@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -11,7 +12,15 @@ _HF_ID_PART = r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}"
 _HF_ID_PATTERN = re.compile(rf"^{_HF_ID_PART}(/{_HF_ID_PART})?$")
 
 
+def _is_local_model_dir(model_id: str) -> bool:
+    return (
+        isinstance(model_id, str) and os.path.isdir(model_id) and os.path.isfile(os.path.join(model_id, "config.json"))
+    )
+
+
 def _validate_hf_id(model_id: str) -> str:
+    if _is_local_model_dir(model_id):
+        return model_id
     if not isinstance(model_id, str) or not _HF_ID_PATTERN.match(model_id):
         raise ValueError(f"invalid HuggingFace model id: {model_id!r}")
     return model_id
@@ -249,8 +258,56 @@ def _maybe_fetch_config(model_id: str) -> Optional[dict]:
         return None
 
 
+def _probe_local_model(model_id: str) -> ModelProbe:
+    """Build a ModelProbe from a local directory (bypasses the HF Hub API)."""
+    weight_exts_legacy = (".bin", ".pt", ".pth", ".ckpt", ".msgpack", ".nemo")
+    sf_bytes = 0
+    legacy_bytes = 0
+    for entry in os.listdir(model_id):
+        p = os.path.join(model_id, entry)
+        if not os.path.isfile(p):
+            continue
+        size = os.path.getsize(p)
+        if entry.endswith(".safetensors"):
+            sf_bytes += size
+        elif entry.endswith(weight_exts_legacy):
+            legacy_bytes += size
+    weight_bytes = sf_bytes if sf_bytes > 0 else legacy_bytes
+
+    cfg = _maybe_fetch_config(model_id) or {}
+    pipeline_tag = cfg.get("pipeline_tag")
+    library = "transformers"
+    category = _classify_category(pipeline_tag, [], library)
+    model_type_category = _category_from_model_type(str(cfg.get("model_type", "")))
+    if model_type_category:
+        category = model_type_category
+    elif category == "Unknown" and cfg.get("model_type"):
+        category = "LLM"
+
+    total_params = weight_bytes // 4 if weight_bytes > 0 else None
+    bytes_per_param = (weight_bytes / total_params) if total_params else None
+
+    probe = ModelProbe(
+        model_id=model_id,
+        category=category,
+        pipeline_tag=pipeline_tag,
+        library=library,
+        weight_bytes_total=weight_bytes,
+        weight_bytes_safetensors=sf_bytes,
+        weight_bytes_legacy=legacy_bytes,
+        saved_dtype="F32",
+        saved_dtype_pretty="fp32",
+        total_params=total_params,
+        bytes_per_param_on_disk=bytes_per_param,
+        raw_config=cfg,
+    )
+    return probe
+
+
 def probe_model(model_id: str) -> ModelProbe:
     _validate_hf_id(model_id)
+    if _is_local_model_dir(model_id):
+        return _probe_local_model(model_id)
     try:
         from huggingface_hub import HfApi
     except ImportError:

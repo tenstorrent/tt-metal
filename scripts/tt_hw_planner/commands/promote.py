@@ -8,6 +8,34 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+def _reset_cc_fallbacks(demo_dir: Path) -> None:
+    """Clear per-component fallback list + attempt counters so a promote rerun
+    gets a full attempt budget on every non-graduated component. Keeps
+    last_failure_* and best_pcc so the LLM still sees prior context."""
+    state_path = demo_dir / ".bringup_cc_state.json"
+    if not state_path.is_file():
+        return
+    try:
+        state = json.loads(state_path.read_text())
+    except Exception:
+        return
+    prev_fallback = list(state.get("fallback") or [])
+    prior_attempts = state.get("attempts") or {}
+    if not prev_fallback and not prior_attempts:
+        return
+    state["fallback"] = []
+    state["attempts"] = {}
+    state["consecutive_same_class"] = {}
+    try:
+        state_path.write_text(json.dumps(state, indent=2))
+    except Exception:
+        return
+    if prev_fallback:
+        print(f"  [promote] reset {len(prev_fallback)} CPU-fallback components: {', '.join(prev_fallback)}")
+    if prior_attempts:
+        print(f"  [promote] cleared attempts for {len(prior_attempts)} components (fresh budget)")
+
+
 def _latest_worktree_demo(model_id: str):
     """Find the newest active worktree holding this model's demo, point BRINGUP_ROOT there, and return its demo_dir (or None)."""
     from ..bringup_loop import find_demo_dir
@@ -84,6 +112,8 @@ def cmd_promote(args) -> int:
             file=sys.stderr,
         )
         return 2
+
+    _reset_cc_fallbacks(demo_dir)
 
     if (getattr(args, "engine", "cc") or "cc") == "cc":
         from .._cli_helpers.bringup_cc import run_bringup_cc
