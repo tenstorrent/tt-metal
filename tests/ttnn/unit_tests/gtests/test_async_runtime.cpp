@@ -150,13 +150,11 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             ttnn::wait_for_event(device_->mesh_command_queue(*io_cq), workload_event);
 
             // #43725 diag: capture the buffer addresses in play right before the CQ1 readback. output_tensor
-            // now holds neg's output (N); the read below sources from output_tensor.buffer(), so READ_SRC == N
-            // by construction, but it is captured separately in case any rebinding/indirection occurs.
+            // now holds neg's output (N), which is also the buffer the read below sources from.
             const uint64_t dbg_input = static_cast<uint64_t>(input_tensor.buffer()->address());
             const uint64_t dbg_D0 = static_cast<uint64_t>(dummy_buffer_0->address());
             const uint64_t dbg_N = static_cast<uint64_t>(output_tensor.buffer()->address());
             const uint64_t dbg_D1 = static_cast<uint64_t>(dummy_buffer_1->address());
-            const uint64_t dbg_read_src = static_cast<uint64_t>(output_tensor.buffer()->address());
 
             // Read using cq 1
             ttnn::read_buffer(io_cq, output_tensor, {readback_data});
@@ -164,17 +162,17 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             // Failure-path diagnostics for the intermittent memcmp==-128 flake tracked in #43725. This repeats
             // the comparison the EXPECT_EQ below already performs (host-side, on data already read back) and
             // logs only on a mismatch, so passing runs do zero extra I/O and the timing window that produces
-            // the race is left undisturbed. On a caught failure the addresses discriminate the two leading
-            // theories: N_eq_S / READSRC_eq_S == 1 => neg's output buffer (or the read source) aliased sqrt's
-            // still-live output (premature async buffer-address reuse); both == 0 => the read observed a
-            // distinct buffer, pointing instead at a NOC/completion-ordering race.
+            // the race is left undisturbed. On a caught failure N_eq_S discriminates the two leading theories:
+            // N_eq_S == 1 => neg's output buffer (N) aliased sqrt's still-live output (S), i.e. premature async
+            // buffer-address reuse; N_eq_S == 0 => the read observed a distinct buffer, pointing instead at a
+            // NOC/completion-ordering race.
             const int dbg_cmp =
                 std::memcmp(readback_data.get(), expected_data.get(), buf_size_datums * datum_size_bytes);
             if (dbg_cmp != 0) {
                 log_error(
                     LogTest,
                     "43725_DIAG loop={} input_val={} INPUT=0x{:x} S=0x{:x} D0=0x{:x} N=0x{:x} D1=0x{:x} "
-                    "READ_SRC=0x{:x} N_eq_S={} READSRC_eq_S={} memcmp={}",
+                    "N_eq_S={} memcmp={}",
                     loop,
                     input_val,
                     dbg_input,
@@ -182,9 +180,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
                     dbg_D0,
                     dbg_N,
                     dbg_D1,
-                    dbg_read_src,
                     (dbg_N == dbg_S) ? 1 : 0,
-                    (dbg_read_src == dbg_S) ? 1 : 0,
                     dbg_cmp);
             }
 
