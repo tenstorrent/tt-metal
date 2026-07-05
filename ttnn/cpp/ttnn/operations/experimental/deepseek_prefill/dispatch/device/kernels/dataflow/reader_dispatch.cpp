@@ -414,30 +414,16 @@ void kernel_main() {
                     mcast_weight[d][b + 1] = ww;
                 }
 
-                // Pack up to MCAST_MAX_DESTS total pages per slot, keeping ascending-distance order. A
-                // chip hit by multiple experts of this token (equal distance, different pages) keeps all
-                // its pages in one slot: the fabric writes them to that chip in a single sparse multicast,
-                // and the sender derives the per-chip page count from the repeated distances. Equal
-                // distances are adjacent (sorted above), so each run is one chip; keep a run intact unless
-                // it alone exceeds the per-slot cap (only reachable when top-k > MCAST_MAX_DESTS).
+                // Pack MCAST_MAX_DESTS pages per slot, in ascending-distance order. A same-distance run
+                // (one chip hit by multiple experts of this token) may span a slot boundary: each slot is
+                // an independent sparse multicast whose per-chip page count the sender re-derives from the
+                // contiguous distances it actually holds, so a chip's pages split across two slots still
+                // land correctly. Filling every slot to the cap minimizes the number of fabric calls.
                 uint32_t gi = 0;
                 while (gi < n) {
                     uint32_t g_start = gi;
-                    uint32_t g_count = 0;
-                    while (gi < n && g_count < MCAST_MAX_DESTS) {
-                        uint32_t run = 1;
-                        while (gi + run < n && mcast_dist[d][gi + run] == mcast_dist[d][gi]) {
-                            run++;
-                        }
-                        if (g_count + run > MCAST_MAX_DESTS) {
-                            if (g_count > 0) {
-                                break;  // close this slot so the chip's run stays intact in the next
-                            }
-                            run = MCAST_MAX_DESTS;  // one chip with more pages than a slot holds: hard-split
-                        }
-                        g_count += run;
-                        gi += run;
-                    }
+                    uint32_t g_count = (n - gi < MCAST_MAX_DESTS) ? (n - gi) : MCAST_MAX_DESTS;
+                    gi += g_count;
 
                     // Grouped route_info (resized slot): [0]=direction, [1]=num_dests,
                     // [2..5]=page_idx[0..3], [6..9]=distance[0..3] (only first num_dests valid).
