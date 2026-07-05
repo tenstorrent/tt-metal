@@ -130,6 +130,83 @@ _G1_TORCH_DELEGATION = (
     r"_get_torch_submodule\s*\(",
 )
 
+
+def _class_to_task_slug(cls_name: str, model_prefix: str) -> str:
+    tail = cls_name[len(model_prefix) :] if cls_name.startswith(model_prefix) else cls_name
+    if tail in ("", "Model"):
+        return "base"
+    if tail.startswith("For"):
+        tail = tail[3:]
+    mapping = {
+        "TextToText": "t2tt",
+        "SpeechToText": "s2tt",
+        "TextToSpeech": "t2st",
+        "SpeechToSpeech": "s2st",
+        "CausalLM": "lm",
+        "ConditionalGeneration": "gen",
+        "QuestionAnswering": "qa",
+        "SequenceClassification": "seq_cls",
+        "TokenClassification": "tok_cls",
+        "MaskedLM": "mlm",
+    }
+    return mapping.get(tail, tail.lower())
+
+
+def _enumerate_task_heads(model_id: str) -> list:
+    try:
+        import transformers
+        from transformers import AutoConfig
+    except Exception:
+        return []
+    try:
+        cfg = AutoConfig.from_pretrained(model_id)
+    except Exception:
+        return []
+    prefix_camel = ""
+    archs = getattr(cfg, "architectures", None) or []
+    if archs:
+        base = archs[0]
+        for suffix in ("Model", "ForCausalLM", "ForSeq2SeqLM", "ForConditionalGeneration"):
+            if base.endswith(suffix):
+                prefix_camel = base[: -len(suffix)]
+                break
+        if not prefix_camel:
+            m = re.match(r"^(.+?)(For[A-Z]\w*|Model)$", base)
+            prefix_camel = m.group(1) if m else base
+    if not prefix_camel:
+        model_type = getattr(cfg, "model_type", "") or ""
+        prefix_camel = "".join(part.capitalize() for part in model_type.split("_"))
+    if not prefix_camel:
+        return []
+
+    candidates = []
+    for name in dir(transformers):
+        if not name.startswith(prefix_camel):
+            continue
+        tail = name[len(prefix_camel) :]
+        if tail and tail[0].islower():
+            continue
+        obj = getattr(transformers, name, None)
+        if not isinstance(obj, type):
+            continue
+        if not hasattr(obj, "from_pretrained"):
+            continue
+        if name.endswith("PreTrainedModel") or name.endswith("Config"):
+            continue
+        if tail == "" or tail == "Model" or tail.startswith("For"):
+            has_gen = hasattr(obj, "generate")
+            if has_gen or tail == "Model":
+                candidates.append((name, _class_to_task_slug(name, prefix_camel)))
+    seen = set()
+    unique = []
+    for cls_name, slug in candidates:
+        if cls_name in seen:
+            continue
+        seen.add(cls_name)
+        unique.append({"class": cls_name, "task": slug})
+    return unique
+
+
 _G1B_HF_FALLBACK = (
     r"(?<!\w)hf_model\.text_decoder\s*\(",
     r"(?<!\w)hf_model\.t2u_model\s*\(",
@@ -347,6 +424,19 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
         reasons.append("G4 structure: no tt/ package (standard demo layout)")
     if not (demo_dir / "README.md").is_file():
         reasons.append("G4 structure: no README.md (standard demo layout)")
+
+    if os.environ.get("E2E_ALL_TASKS", "0") == "1":
+        model_id = os.environ.get("E2E_MODEL_ID", "")
+        if model_id:
+            required_heads = _enumerate_task_heads(model_id)
+            emitted_slugs = {p.stem.replace("demo_", "", 1) for p in demo_entrypoints}
+            missing = [h for h in required_heads if h["task"] not in emitted_slugs]
+            if missing:
+                names = ", ".join(f"{h['task']} ({h['class']})" for h in missing)
+                reasons.append(
+                    f"G4 --all-tasks: {len(missing)}/{len(required_heads)} required task-head demo(s) missing: {names} "
+                    f"(one demo/demo_<task>.py per HF-registered head required — do not collapse)"
+                )
 
     stub_dir = demo_dir / "_stubs"
     nonnative = []
@@ -650,6 +740,10 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
         "E2E_MCP_DEMO_DIR": str(demo_dir),
         "E2E_MCP_PCC": str(pcc),
         "E2E_MCP_TIMEOUT": str(timeout_s),
+        "E2E_MODEL_ID": model_id,
+        "E2E_ALL_TASKS": _os.environ.get("E2E_ALL_TASKS", "0"),
+        "E2E_REQUIRE_TRACE": _os.environ.get("E2E_REQUIRE_TRACE", "1"),
+        "E2E_REQUIRE_ON_DEVICE": _os.environ.get("E2E_REQUIRE_ON_DEVICE", "1"),
         "TT_METAL_HOME": str(repo_root),
         "PYTHONPATH": str(repo_root),
         "PATH": f"{repo_root / 'python_env' / 'bin'}{_os.pathsep}/usr/bin:/bin",
@@ -712,6 +806,9 @@ def _emit_e2e_phase_a(args) -> int:
     model_id = args.model_id
     demo_dir = _resolve_demo_dir(args)
     pcc = float(getattr(args, "pcc_target", 0.9) or 0.9)
+
+    os.environ["E2E_MODEL_ID"] = model_id
+    os.environ["E2E_ALL_TASKS"] = "1" if bool(getattr(args, "all_tasks", False)) else "0"
     agent_model = getattr(args, "model", None) or "opus"
     agent_bin = getattr(args, "agent_bin", "claude") or "claude"
     timeout_s = int(getattr(args, "agent_timeout_s", 0) or 0) or 14400
@@ -771,7 +868,12 @@ def _emit_e2e_phase_a(args) -> int:
         else ""
     )
     build_prompt = _build_agent_prompt(
-        model_id=model_id, demo_dir=demo_dir, pcc=pcc, parallel_note=_parallel_note, trace_note=_trace_note
+        model_id=model_id,
+        demo_dir=demo_dir,
+        pcc=pcc,
+        parallel_note=_parallel_note,
+        trace_note=_trace_note,
+        all_tasks=bool(getattr(args, "all_tasks", False)),
     )
     rc_build, build_final = _run_agent(
         prompt=build_prompt,
@@ -1236,11 +1338,31 @@ single-CQ and PRINT the fallback (never silently drop). This recipe is identical
 """
 
 
+def _required_heads_block(model_id: str, all_tasks: bool) -> str:
+    if not all_tasks:
+        return ""
+    heads = _enumerate_task_heads(model_id)
+    if not heads:
+        return ""
+    lines = ["", "REQUIRED TASK HEADS (from HF transformers reference — enumerated automatically):"]
+    for h in heads:
+        lines.append(f"  - {h['class']:<50s} → demo/demo_{h['task']}.py + tests/e2e/test_e2e_{h['task']}.py")
+    lines.append(
+        f"You MUST emit ONE demo entrypoint + ONE e2e test PER head listed above "
+        f'({len(heads)} in total). Do NOT collapse them into a smaller set ("one covers the others" '
+        "is NOT acceptable — the gate counts demo_*.py files against this list). If two heads share "
+        "internal stubs, factor the shared chain into tt/ and have each demo import + call it."
+    )
+    return "\n".join(lines) + "\n"
+
+
 def _build_agent_prompt(
-    *, model_id: str, demo_dir: Path, pcc: float, parallel_note: str = "", trace_note: str = ""
+    *, model_id: str, demo_dir: Path, pcc: float, parallel_note: str = "", trace_note: str = "", all_tasks: bool = False
 ) -> str:
+    heads_note = _required_heads_block(model_id, all_tasks)
     return f"""You are bringing up a REAL end-to-end TTNN pipeline for the model
 `{model_id}`. Work in this repository with your tools (Read/Edit/Write/Bash).
+{heads_note}
 
 There are exactly TWO information sources. Use ONLY these — do NOT read any
 sibling model under models/demos/<other-model>/:
