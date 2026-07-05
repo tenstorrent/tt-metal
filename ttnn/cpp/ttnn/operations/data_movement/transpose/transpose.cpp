@@ -21,8 +21,6 @@ namespace detail {
 using namespace tt::tt_metal::experimental;
 using namespace tt;
 using tt::tt_metal::BufferType;
-using ttnn::operations::data_movement::transpose::adjust_shard_spec_to_shape;
-using ttnn::operations::data_movement::transpose::is_native_transpose_sharding;
 
 inline Tensor transpose_(
     const Tensor& a,
@@ -71,7 +69,10 @@ inline Tensor transpose_(
                     auto output_padded_shape = input_padded_shape;
                     std::swap(output_padded_shape[2], output_padded_shape[3]);
                     auto adjusted = adjust_shard_spec_to_shape(shard_spec, input_padded_shape, output_padded_shape);
-                    if (!adjusted.has_value() ||
+                    // Layout mismatch: synthesize a fresh spec instead of reusing the input's.
+                    const bool layouts_match = !user_requested_layout || output_mem_config.value().memory_layout() ==
+                                                                             a.memory_config().memory_layout();
+                    if (!adjusted.has_value() || !layouts_match ||
                         (a.layout() == Layout::TILE && (adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
                                                         adjusted->shape[1] % tt::constants::TILE_WIDTH != 0))) {
                         shard_derivation_fallback();
@@ -89,7 +90,10 @@ inline Tensor transpose_(
                 output_padded_shape[1] = a.logical_shape()[2];
                 output_padded_shape[2] = tt::round_up(a.logical_shape()[1], tt::constants::TILE_HEIGHT);
                 auto adjusted = adjust_shard_spec_to_shape(shard_spec, input_padded_shape, output_padded_shape);
-                if (!adjusted.has_value() || adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
+                // Layout mismatch: synthesize a fresh spec instead of reusing the input's.
+                const bool layouts_match = !user_requested_layout || output_mem_config.value().memory_layout() ==
+                                                                         a.memory_config().memory_layout();
+                if (!adjusted.has_value() || !layouts_match || adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
                     adjusted->shape[1] % tt::constants::TILE_WIDTH != 0) {
                     shard_derivation_fallback();
                 } else {
@@ -203,10 +207,29 @@ ttnn::Tensor transpose_impl(
         const bool irregular_hw = input_logical.rank() >= 2 && (input_logical[-1] % tt::constants::TILE_WIDTH != 0 ||
                                                                 input_logical[-2] % tt::constants::TILE_HEIGHT != 0);
         if (rm && in_sharded && irregular_hw) {
+            // Snapshot orientation before the L1-interleaved staging hop strips it.
+            std::optional<tt::tt_metal::ShardOrientation> input_orientation_hint;
+            if (input_tensor.shard_spec().has_value()) {
+                input_orientation_hint = input_tensor.shard_spec()->orientation;
+            }
+            auto resolved_mc = memory_config_arg;
+            if (memory_config_arg.has_value() && memory_config_arg->is_sharded() &&
+                !memory_config_arg->shard_spec().has_value()) {
+                const auto& input_padded = input_tensor.padded_shape();
+                const uint32_t n1 = input_logical.get_normalized_index(dim1);
+                const uint32_t n2 = input_logical.get_normalized_index(dim2);
+                ttnn::SmallVector<uint32_t> out_padded_vec(input_padded.cbegin(), input_padded.cend());
+                std::swap(out_padded_vec[n1], out_padded_vec[n2]);
+                auto output_padded_shape = ttnn::Shape(std::move(out_padded_vec));
+                auto spec = generate_transpose_shard_spec(
+                    input_tensor, output_padded_shape, memory_config_arg->memory_layout(), input_orientation_hint);
+                resolved_mc = tt::tt_metal::MemoryConfig(
+                    memory_config_arg->memory_layout(), memory_config_arg->buffer_type(), std::move(spec));
+            }
             const auto interleaved_l1 =
                 tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
             Tensor x = ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt);
-            return transpose_impl(x, dim1, dim2, memory_config_arg, pad_value);
+            return transpose_impl(x, dim1, dim2, resolved_mc, pad_value);
         }
     }
     const auto& input_shape = input_tensor.logical_shape();

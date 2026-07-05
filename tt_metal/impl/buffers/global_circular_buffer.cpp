@@ -135,8 +135,8 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     const auto& hal = MetalContext::instance(context_id).hal();
     TT_FATAL(
         hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "DRAM-sender GlobalCircularBuffer requires programmable DRAM cores; set "
-        "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1");
+        "DRAM-sender GlobalCircularBuffer requires programmable DRAM cores, which auto-enable on Blackhole "
+        "with firmware >= 19.12.0.0 and either no harvested DRAM channels or a single device");
     uint32_t max_num_receivers_per_sender = 0;
     initialize_global_circular_buffer(
         mesh_device,
@@ -413,7 +413,7 @@ const std::vector<std::pair<CoreCoord, CoreRangeSet>>& GlobalCircularBuffer::sen
 }
 
 std::ostream& operator<<(std::ostream& os, const GlobalCircularBuffer& value) {
-    tt::stl::reflection::operator<<(os, value);
+    ttsl::reflection::operator<<(os, value);
     return os;
 }
 
@@ -564,7 +564,7 @@ namespace std {
 
 std::size_t hash<tt::tt_metal::experimental::GlobalCircularBuffer>::operator()(
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_circular_buffer) const {
-    return tt::stl::hash::hash_objects_with_default_seed(global_circular_buffer.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(global_circular_buffer.attribute_values());
 }
 
 }  // namespace std

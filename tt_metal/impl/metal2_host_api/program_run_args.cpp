@@ -305,10 +305,20 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
             inserted,
             "Duplicate DFB '{}' in ProgramRunArgs.dfb_run_overrides. Each DFB must appear at most once.",
             dfb_spec_name);
-        TT_FATAL(
-            !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),
-            "DFB size overrides are not yet implemented for DFB '{}'.",
-            dfb_spec_name);
+        if (dfb_params.entry_size.has_value()) {
+            TT_FATAL(
+                dfb_params.entry_size.value() > 0,
+                "dfb_run_overrides entry for DFB '{}' has entry_size override = 0. entry_size must be set to a "
+                "non-zero value.",
+                dfb_spec_name);
+        }
+        if (dfb_params.num_entries.has_value()) {
+            TT_FATAL(
+                dfb_params.num_entries.value() > 0,
+                "dfb_run_overrides entry for DFB '{}' has num_entries override = 0. num_entries must be set to a "
+                "non-zero value.",
+                dfb_spec_name);
+        }
     }
 
     // Unlike kernels, DFBs don't require DFBRunOverrides.
@@ -326,9 +336,12 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 //
 // The base address always lives in CRTAs (per-enqueue, since the bound MeshTensor's
 // address can change between binds). Additional runtime field words appear immediately
-// after, when the TensorParameter opts into a dynamic accessor field. Currently the
-// only such field is tensor_shape_in_pages, for sharded TensorParameters with
-// dynamic_tensor_shape=true; in that case there are `rank` shape words.
+// after, when the TensorParameter opts into a dynamic accessor field. Two kinds exist,
+// mutually exclusive per binding (discriminated by handle.runtime_field_is_page_size):
+//   - tensor_shape_in_pages, for sharded TensorParameters with dynamic_tensor_shape=true
+//     (`rank` shape words); or
+//   - the aligned page size, for interleaved row-major TensorParameters with
+//     dynamic_tensor_shape=true (one word).
 //
 // Allocation-free by design: this runs once per binding on every enqueue, so callers
 // emit straight into their destination (push_back onto the assembled CRTA vector on the
@@ -342,40 +355,50 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
     const auto address = tensor.address();
     TT_FATAL(
         address <= std::numeric_limits<uint32_t>::max(),
-        "TensorParameter '{}' base address {} exceeds uint32_t max",
+        "Tensor argument for TensorParameter '{}' base address {} exceeds uint32_t max",
         handle.tensor_parameter_name,
         address);
     emit(static_cast<uint32_t>(address));
 
-    if (handle.num_runtime_field_crta_words > 0) {
-        // Currently the only runtime accessor field that lives in CRTAs is tensor_shape_in_pages
-        // (sharded TensorParameter with dynamic_tensor_shape=true). Read it from the bound
-        // MeshTensor's buffer.
-        const tt::tt_metal::Buffer* buffer = tensor.mesh_buffer().get_reference_buffer();
-        TT_FATAL(
-            buffer != nullptr,
-            "Tensor binding '{}' has runtime accessor field CRTA words but no backing Buffer to "
-            "source them from.",
-            handle.tensor_parameter_name);
-        const auto& bds_opt = buffer->buffer_distribution_spec();
-        TT_FATAL(
-            bds_opt.has_value(),
-            "Tensor binding '{}' has runtime accessor field CRTA words but its bound MeshTensor's "
-            "buffer has no BufferDistributionSpec. dynamic_tensor_shape currently requires a sharded "
-            "TensorParameter.",
-            handle.tensor_parameter_name);
-        const auto& tensor_shape = bds_opt->tensor_shape_in_pages();
-        TT_FATAL(
-            tensor_shape.rank() == handle.num_runtime_field_crta_words,
-            "Tensor binding '{}' supplied a MeshTensor whose shape rank ({}) differs from the rank "
-            "({}) reserved at ProgramSpec resolution time. Rank must remain constant across binds; "
-            "only the per-dim shape values may vary.",
-            handle.tensor_parameter_name,
-            tensor_shape.rank(),
-            handle.num_runtime_field_crta_words);
-        for (size_t i = 0; i < tensor_shape.rank(); ++i) {
-            emit(static_cast<uint32_t>(tensor_shape[i]));
-        }
+    if (handle.num_runtime_field_crta_words == 0) {
+        return;
+    }
+
+    // Both runtime-field kinds source their values from the bound MeshTensor's reference buffer.
+    const tt::tt_metal::Buffer* buffer = tensor.mesh_buffer().get_reference_buffer();
+    TT_FATAL(
+        buffer != nullptr,
+        "Tensor argument for TensorParameter '{}' has runtime accessor field CRTA words but no backing Buffer to "
+        "source them from.",
+        handle.tensor_parameter_name);
+
+    if (handle.runtime_field_is_page_size) {
+        // Page-size runtime field (interleaved row-major): emit the buffer's aligned page size, re-derived
+        // each dispatch so it tracks a width-varying tensor across program-cache hits. Exactly one
+        // word by construction (ResolveTensorParameterStaticCTAs reserves a single slot). No
+        // BufferDistributionSpec is involved -- interleaved tensors have none, which is exactly why
+        // the field-kind discriminator exists (the shape path below would FATAL on a missing BDS).
+        emit(static_cast<uint32_t>(buffer->aligned_page_size()));
+        return;
+    }
+
+    // dynamic_tensor_shape (sharded): the runtime tensor's shape-in-pages, one word per dim.
+    const auto& bds_opt = buffer->buffer_distribution_spec();
+    TT_FATAL(
+        bds_opt.has_value(),
+        "Tensor argument for TensorParameter '{}' has no BufferDistributionSpec.",
+        handle.tensor_parameter_name);
+    const auto& tensor_shape = bds_opt->tensor_shape_in_pages();
+    TT_FATAL(
+        tensor_shape.rank() == handle.num_runtime_field_crta_words,
+        "Tensor argument for TensorParameter '{}' supplied a MeshTensor whose shape rank ({}) differs from the rank "
+        "({}) reserved at ProgramSpec resolution time. Rank must remain constant across binds; "
+        "only the per-dim shape values may vary.",
+        handle.tensor_parameter_name,
+        tensor_shape.rank(),
+        handle.num_runtime_field_crta_words);
+    for (size_t i = 0; i < tensor_shape.rank(); ++i) {
+        emit(static_cast<uint32_t>(tensor_shape[i]));
     }
 }
 
@@ -458,7 +481,7 @@ void AttachBorrowedDFBBuffers(
 }
 
 // ============================================================================
-// PUBLIC ENTRY POINTS: SetProgramRunArgs + UpdateTensorArgs + GetProgramRunArgsView
+// PUBLIC ENTRY POINTS: SetProgramRunArgs + UpdateTensorArgs
 // ============================================================================
 
 void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
@@ -499,6 +522,19 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         }
     };
 
+    // Append a kernel's scratchpad CRTA section to `out`, in binding order: one word per scratchpad
+    // binding, holding the scratchpad's allocated L1 base address. The address is 0 here on the first
+    // SetProgramRunArgs (the scratchpad is allocated later, at program-compile time, and the slot is
+    // then patched in place — see ProgramImpl::allocate_scratchpads); on any later re-assembly the
+    // handle already carries the allocated address, so it is filled directly. The section is always
+    // present (sized by the kernel's scratchpad bindings), so the buffer's word count is stable across
+    // re-set calls (install_crtas asserts that).
+    auto append_scratchpad_crtas = [](const auto& scratchpad_handles, std::vector<uint32_t>& out) {
+        for (const auto& handle : scratchpad_handles) {
+            out.push_back(handle.allocated_address);
+        }
+    };
+
     // Install a kernel's assembled CRTA buffer. set_common_runtime_args allocates storage but fatals
     // if called twice, so it can only be used the first time; on subsequent SetProgramRunArgs calls
     // (e.g. re-enqueue with new args) the already-allocated buffer is patched in place. Shared by the
@@ -528,10 +564,12 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     //
     // Layout:
     //   RTA per-node:  [named_rta_0 ... named_rta_N-1, vararg_0 ... vararg_M-1]
-    //   CRTA:          [named_crta_0 ... named_crta_K-1, ta_addr_0 ... ta_addr_B-1, vararg_0 ... vararg_L-1]
+    //   CRTA:          [named_crta_0 ... named_crta_K-1, ta_addr_0 ... ta_addr_B-1, scratch_addr_0 ...
+    //   scratch_addr_S-1,
+    //                   vararg_0 ... vararg_L-1]
     //
     // RTA layout has two sections: named RTAs and RTA varargs.
-    // CRTA layout has three sections: named CRTAs, TensorBinding addresses, and CRTA varargs.
+    // CRTA layout has four sections: named CRTAs, TensorBinding addresses, Scratchpad addresses, and CRTA varargs.
     //
     // TensorBinding address section is used by headergen to emit the `tensor::` namespace tokens.
     // The device-side get_vararg / get_common_vararg helpers invisibly add the combined named-arg + binding
@@ -645,13 +683,15 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             }
         }
 
-        // Assemble the kernel's per-enqueue CRTA buffer in three structurally-separate sections:
+        // Assemble the kernel's per-enqueue CRTA buffer in four structurally-separate sections:
         //   1. User-named CRTAs, in schema order, sourced from common_runtime_arg_values.
         //   2. TensorBinding section, in binding-handle order, sourced from TensorArgument via the
         //      tensor_by_param lookup. Each binding occupies (1 + num_runtime_field_crta_words)
         //      words: [address, optional shape...]. The handle's addr_crta_offset lines up with
         //      the address slot position chosen here.
-        //   3. Common runtime varargs, in caller-supplied order.
+        //   3. Scratchpad section, in binding order, one word each (the allocated L1 base address,
+        //      0 here until allocate_scratchpads patches it at program-compile time).
+        //   4. Common runtime varargs, in caller-supplied order.
         const auto& binding_handles = kernel->tensor_binding_handles();
         std::size_t binding_section_words = 0;
         for (const auto& handle : binding_handles) {
@@ -660,7 +700,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         std::vector<uint32_t> combined_crtas;
         combined_crtas.reserve(
             schema->common_runtime_arg_names.size() + binding_section_words +
-            kernel_common_runtime_varargs(kernel_params).size());
+            kernel->scratchpad_binding_handles().size() + kernel_common_runtime_varargs(kernel_params).size());
         for (const auto& name : schema->common_runtime_arg_names) {
             auto v_it = kernel_params.common_runtime_arg_values.find(name);
             TT_FATAL(
@@ -671,6 +711,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             combined_crtas.push_back(v_it->second);
         }
         append_binding_crtas(binding_handles, combined_crtas);
+        append_scratchpad_crtas(kernel->scratchpad_binding_handles(), combined_crtas);
         combined_crtas.insert(
             combined_crtas.end(),
             kernel_common_runtime_varargs(kernel_params).begin(),
@@ -679,13 +720,12 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         install_crtas(kernel, combined_crtas, kernel_name.get());
     }
 
-    // Second pass: kernels that bind tensors but were omitted from kernel_run_args.
-    // A kernel whose only per-enqueue state is TensorBinding addresses (no named RTAs/CRTAs and no
-    // varargs) is allowed to be absent from kernel_run_args (see ValidateProgramRunArgs). The loop
-    // above only visits kernels present in kernel_run_args, so such a kernel's binding CRTA section
-    // would never be written. Fill it here. This mirrors the fast path UpdateTensorArgs, which
-    // likewise fills bindings for every binding-bearing kernel independent of kernel_run_args.
-    // Kernels without tensor bindings need no CRTA buffer, so this allocates nothing extra for them.
+    // Second pass: kernels that bind tensors and/or a scratchpad but were omitted from kernel_run_args.
+    // A kernel whose only per-enqueue state is TensorBinding addresses and/or a scratchpad (no named
+    // RTAs/CRTAs and no varargs — a scratchpad's address is framework-supplied, not user-supplied) is
+    // allowed to be absent from kernel_run_args (see ValidateProgramRunArgs). The loop above only visits
+    // kernels present in kernel_run_args, so such a kernel's binding + scratchpad CRTA sections would
+    // never be written. Fill them here. Kernels with neither need no CRTA buffer.
     std::unordered_set<std::string> kernels_in_run_args;
     kernels_in_run_args.reserve(params.kernel_run_args.size());
     for (const auto& kernel_params : params.kernel_run_args) {
@@ -697,21 +737,36 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         }
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
         const auto& binding_handles = kernel->tensor_binding_handles();
-        if (binding_handles.empty()) {
+        const auto& scratchpad_handles = kernel->scratchpad_binding_handles();
+        if (binding_handles.empty() && scratchpad_handles.empty()) {
             continue;  // No bindings => nothing to supply; no CRTA dispatch buffer needed.
         }
-        // Binding-only kernel: its CRTA buffer is exactly the binding section (it has no named CRTAs
-        // or varargs, else validation would have required a kernel_run_args entry). install_crtas
-        // allocates the buffer on the first SetProgramRunArgs call and patches it in place on later
-        // ones (e.g. re-enqueue with a new tensor), mirroring the main loop.
+        // Binding-only kernel: its CRTA buffer is exactly the TensorBinding + scratchpad sections (it has
+        // no named CRTAs or varargs, else validation would have required a kernel_run_args entry).
+        // install_crtas allocates the buffer on the first SetProgramRunArgs call and patches it in place
+        // on later ones (e.g. re-enqueue with a new tensor), mirroring the main loop.
         std::vector<uint32_t> combined_crtas;
         append_binding_crtas(binding_handles, combined_crtas);
+        append_scratchpad_crtas(scratchpad_handles, combined_crtas);
         install_crtas(kernel, combined_crtas, kernel_name);
     }
 
     // Process DFB runtime parameters:
+    //   - DFB size overrides (entry_size / num_entries)
     //   - Borrowed-memory DFB backing L1 Buffer*
-    //   - Later, add DFB size overrides (not yet implemented)
+    // Apply size overrides BEFORE attaching borrowed buffers so the borrowed per-bank fit check in
+    // AttachBorrowedDFBBuffers validates the NEW size. Overrides are applied as a single batch so an alias
+    // group can be validated for size agreement before any DFB is mutated.
+    std::vector<detail::ProgramImpl::DfbSizeOverride> size_overrides;
+    size_overrides.reserve(params.dfb_run_overrides.size());
+    for (const auto& dfb_params : params.dfb_run_overrides) {
+        if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
+            continue;
+        }
+        size_overrides.push_back(
+            {program_impl.get_dfb_handle(*dfb_params.dfb), dfb_params.entry_size, dfb_params.num_entries});
+    }
+    program_impl.apply_dfb_size_overrides(size_overrides);
     AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
 }
 
@@ -1031,7 +1086,16 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
             name);
     }
 
-    // DFB run overrides: same checks as the full path (duplicates; size overrides unimplemented).
+    // DFB run overrides: same checks as the full path (duplicates; non-zero size overrides), plus a
+    // partial-path-only guard for borrowed-memory DFBs (below). A resized borrowed DFB must have its
+    // backing TensorParameter supplied in this same update, so AttachBorrowedDFBBuffers re-runs the
+    // per-bank fit check against the new size. The full Set path gets this for free (require_all=true);
+    // on the partial path an invariant backing tensor may be omitted, which would otherwise let a grown
+    // DFB overflow its borrowed buffer's per-bank region unchecked at execution.
+    std::unordered_map<uint32_t, std::string> borrowed_backing;  // dfb_id -> backing TensorParameter name
+    for (const auto& [dfb_id, tp_name] : program_impl.get_dfb_borrowed_bindings()) {
+        borrowed_backing.emplace(dfb_id, tp_name);
+    }
     std::unordered_set<DFBSpecName> dfbs_with_params;
     for (const auto& dfb_params : params.dfb_run_overrides) {
         auto [it, inserted] = dfbs_with_params.insert(dfb_params.dfb);
@@ -1039,10 +1103,36 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
             inserted,
             "Duplicate DFB '{}' in ProgramRunArgs.dfb_run_overrides. Each DFB must appear at most once.",
             dfb_params.dfb);
-        TT_FATAL(
-            !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),
-            "DFB size overrides are not yet implemented for DFB '{}'.",
-            dfb_params.dfb);
+        if (dfb_params.entry_size.has_value()) {
+            TT_FATAL(
+                dfb_params.entry_size.value() > 0,
+                "dfb_run_overrides entry for DFB '{}' has entry_size override = 0. entry_size must be set to a "
+                "non-zero value.",
+                dfb_params.dfb);
+        }
+        if (dfb_params.num_entries.has_value()) {
+            TT_FATAL(
+                dfb_params.num_entries.value() > 0,
+                "dfb_run_overrides entry for DFB '{}' has num_entries override = 0. num_entries must be set to a "
+                "non-zero value.",
+                dfb_params.dfb);
+        }
+        // A resized borrowed-memory DFB needs its backing tensor supplied here so the per-bank fit check
+        // in AttachBorrowedDFBBuffers re-runs against the new size (see the block comment above).
+        const bool resizes = dfb_params.entry_size.has_value() || dfb_params.num_entries.has_value();
+        if (resizes) {
+            if (auto b = borrowed_backing.find(program_impl.get_dfb_handle(dfb_params.dfb.get()));
+                b != borrowed_backing.end()) {
+                TT_FATAL(
+                    params.tensor_args.contains(TensorParamName{b->second}),
+                    "dfb_run_overrides resizes borrowed-memory DFB '{}', but its backing TensorParameter '{}' was "
+                    "not supplied in this UpdateProgramRunArgs. Resizing a borrowed DFB on the partial-update fast "
+                    "path requires supplying its backing tensor, so the per-bank fit check can re-validate against "
+                    "the new size (the full SetProgramRunArgs path enforces this by requiring all tensors).",
+                    dfb_params.dfb,
+                    b->second);
+            }
+        }
     }
 
     // Tensor args: non-invariant TensorParameters must be supplied; invariant ones may be omitted.
@@ -1133,19 +1223,36 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 }
             }
             if (!cvarargs.empty()) {
-                // Common varargs live after the named CRTAs and the tensor-binding address section.
+                // Common varargs live after the named CRTAs, the tensor-binding address section, and the
+                // scratchpad address section.
                 const auto& binding_handles = kernel->tensor_binding_handles();
                 size_t binding_section_words = 0;
                 for (const auto& h : binding_handles) {
                     binding_section_words += 1u + h.num_runtime_field_crta_words;
                 }
-                const size_t crta_vararg_base = schema->common_runtime_arg_names.size() + binding_section_words;
+                const size_t scratchpad_section_words = kernel->scratchpad_binding_handles().size();
+                const size_t crta_vararg_base =
+                    schema->common_runtime_arg_names.size() + binding_section_words + scratchpad_section_words;
                 for (size_t j = 0; j < cvarargs.size(); ++j) {
                     crta.data()[crta_vararg_base + j] = cvarargs[j];
                 }
             }
         }
     }
+
+    // ---- DFB size overrides (stateful: an unspecified DFB retains its current size) ----
+    // Apply BEFORE re-attaching borrowed buffers below, so the borrowed per-bank fit check sees the
+    // new size. Mirrors the SetProgramRunArgs path.
+    std::vector<detail::ProgramImpl::DfbSizeOverride> size_overrides;
+    size_overrides.reserve(params.dfb_run_overrides.size());
+    for (const auto& dfb_params : params.dfb_run_overrides) {
+        if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
+            continue;
+        }
+        size_overrides.push_back(
+            {program_impl.get_dfb_handle(*dfb_params.dfb), dfb_params.entry_size, dfb_params.num_entries});
+    }
+    program_impl.apply_dfb_size_overrides(size_overrides);
 
     // ---- Tensor bindings: patch CRTA address slots for SUPPLIED tensors only ----
     // (Invariant tensors omitted from params keep their previously-patched binding slots.)
@@ -1242,17 +1349,6 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
         }
     }
     return base;
-}
-
-ProgramRunArgsView& GetProgramRunArgsView(Program& program) {
-    (void)program;
-    TT_FATAL(false, "GetProgramRunArgsView is not yet implemented.");
-
-    // This is the fast path, power user API.
-    // Return type was changed to a reference to avoid copying the view.
-    // With this API, we will need to either:
-    //   - Create the view object on the first call and stash it in the Program object.
-    //   - Or, create the view object upon Program construction.
 }
 
 }  // namespace tt::tt_metal::experimental

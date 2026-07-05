@@ -11,6 +11,7 @@
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 
 #include <tt-metalium/constants.hpp>
 
@@ -173,7 +174,7 @@ ttnn::Tensor slice(
         const auto resolved_mc = resolve_mc(source);
         const auto target = can_land_in_preallocated(source) ? optional_output_tensor : std::nullopt;
         auto tensor = ttnn::to_memory_config(source, resolved_mc, std::nullopt, target);
-        tensor = ttnn::to_layout(tensor, input_layout);
+        tensor = ttnn::operations::experimental::quasar::to_layout(tensor, input_layout);
         return tensor;
     });
 
@@ -319,7 +320,8 @@ ttnn::Tensor slice(
         if (!no_step) {
             TT_FATAL(input.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
         }
-        input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
+        input =
+            ttnn::operations::experimental::quasar::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
     }
 
     ttnn::SmallVector<uint32_t> padded_ends = modified_ends;

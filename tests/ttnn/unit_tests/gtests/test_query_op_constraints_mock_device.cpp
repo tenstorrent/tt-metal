@@ -300,7 +300,7 @@ TEST_F(QueryOpConstraintsMockDevice, BinaryAdd) {
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
     const auto& spec_b = spec_a;
 
-    constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+    constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
     auto query = ttnn::graph::query_op_constraints(
         [](auto&&... args) { return ttnn::add(args...); },
@@ -479,6 +479,87 @@ TEST_F(QueryOpConstraintsMockDevice, OptionalStateWithValueMatchesStatefulCore) 
     EXPECT_EQ(
         via_dispatch.new_state.total_allocated_size(BufferType::L1),
         via_core.new_state.total_allocated_size(BufferType::L1));
+}
+
+TEST_F(QueryOpConstraintsMockDevice, WithAllocationsReproducesQueryPlacement) {
+    const auto spec = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{1, 1, 64, 128}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+    auto relu = [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); };
+    const auto mem_cfg = spec.tensor_layout().get_memory_config();
+
+    auto empty_template = experimental::extract_mock_allocator_state(*mock_device_);
+    auto out =
+        ttnn::graph::query_op_constraints_with_initial_state(relu, mock_device_.get(), empty_template, spec, mem_cfg);
+    ASSERT_EQ(out.response.status, ttnn::graph::ExecutionStatus::Success)
+        << "Error: " << out.response.error_message.value_or("none");
+    ASSERT_EQ(out.output_allocations.size(), 1u);
+    EXPECT_EQ(out.output_allocations[0].buffer_type, BufferType::L1);
+    EXPECT_GT(out.output_allocations[0].size_per_bank, 0u);
+
+    // Rebuilding the state from the output's record must reproduce the allocator's real placement.
+    auto built = empty_template.with_allocations(out.output_allocations);
+    EXPECT_EQ(built.total_allocated_size(BufferType::L1), out.new_state.total_allocated_size(BufferType::L1));
+    EXPECT_EQ(built.lowest_occupied(BufferType::L1), out.new_state.lowest_occupied(BufferType::L1));
+}
+
+TEST_F(QueryOpConstraintsMockDevice, WithAllocationsDropRecordFreesSpace) {
+    const auto spec = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{1, 1, 64, 128}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+    auto relu = [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); };
+    const auto mem_cfg = spec.tensor_layout().get_memory_config();
+
+    auto empty_template = experimental::extract_mock_allocator_state(*mock_device_);
+
+    // Collect two live records by threading op 2 on op 1's state.
+    auto out1 =
+        ttnn::graph::query_op_constraints_with_initial_state(relu, mock_device_.get(), empty_template, spec, mem_cfg);
+    ASSERT_EQ(out1.response.status, ttnn::graph::ExecutionStatus::Success);
+    auto out2 =
+        ttnn::graph::query_op_constraints_with_initial_state(relu, mock_device_.get(), out1.new_state, spec, mem_cfg);
+    ASSERT_EQ(out2.response.status, ttnn::graph::ExecutionStatus::Success);
+
+    const auto rec1 = out1.output_allocations[0];
+    const auto rec2 = out2.output_allocations[0];
+
+    auto both = empty_template.with_allocations({rec1, rec2});
+    auto dropped = empty_template.with_allocations({rec2});  // "evict" op 1 = drop its record
+
+    EXPECT_EQ(both.total_allocated_size(BufferType::L1), rec1.size_per_bank + rec2.size_per_bank);
+    EXPECT_EQ(dropped.total_allocated_size(BufferType::L1), rec2.size_per_bank);
+    EXPECT_FALSE(dropped.is_empty(BufferType::L1));
+}
+
+TEST_F(QueryOpConstraintsMockDevice, WithAllocationsFreedSlotIsReused) {
+    // Proves build-from-records ≡ regular dealloc placement: after dropping a record, a fresh
+    // allocation reuses the freed slot exactly as it would on a real device.
+    const auto spec = ttnn::TensorSpec(
+        ttnn::Shape(Array4D{1, 1, 64, 128}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+    auto relu = [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); };
+    const auto mem_cfg = spec.tensor_layout().get_memory_config();
+
+    auto empty_template = experimental::extract_mock_allocator_state(*mock_device_);
+
+    auto out1 =
+        ttnn::graph::query_op_constraints_with_initial_state(relu, mock_device_.get(), empty_template, spec, mem_cfg);
+    ASSERT_EQ(out1.response.status, ttnn::graph::ExecutionStatus::Success);
+    auto out2 =
+        ttnn::graph::query_op_constraints_with_initial_state(relu, mock_device_.get(), out1.new_state, spec, mem_cfg);
+    ASSERT_EQ(out2.response.status, ttnn::graph::ExecutionStatus::Success);
+    const auto rec1 = out1.output_allocations[0];
+    const auto rec2 = out2.output_allocations[0];
+
+    // Drop rec1, then run a new op against the rebuilt state: its output reuses rec1's freed slot.
+    auto after_drop = empty_template.with_allocations({rec2});
+    auto out3 =
+        ttnn::graph::query_op_constraints_with_initial_state(relu, mock_device_.get(), after_drop, spec, mem_cfg);
+    ASSERT_EQ(out3.response.status, ttnn::graph::ExecutionStatus::Success);
+    const auto rec3 = out3.output_allocations[0];
+
+    EXPECT_EQ(rec3.address, rec1.address) << "freed slot should be reused";
+    EXPECT_EQ(rec3.size_per_bank, rec1.size_per_bank);
 }
 
 TEST_F(QueryOpConstraintsMockDevice, WithInitialStateReportsOomAsError) {

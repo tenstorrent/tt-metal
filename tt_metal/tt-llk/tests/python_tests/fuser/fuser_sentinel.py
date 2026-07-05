@@ -15,7 +15,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import EltwiseBinaryReuseDestType
 
 if TYPE_CHECKING:
-    from .compute_node import ComputeNode
+    from .fpu_node import FpuNode
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
     from .pack_node import PackNode
@@ -35,6 +35,11 @@ class FuserSentinel:
     _unpack_B_src: Optional[DataFormat] = field(default=None, repr=False)
     _unpack_B_dst: Optional[DataFormat] = field(default=None, repr=False)
 
+    _unpack_face_r_dim_a: Optional[int] = field(default=None, repr=False)
+    _unpack_num_faces_a: Optional[int] = field(default=None, repr=False)
+    _unpack_face_r_dim_b: Optional[int] = field(default=None, repr=False)
+    _unpack_num_faces_b: Optional[int] = field(default=None, repr=False)
+
     _math_format: Optional[DataFormat] = field(default=None, repr=False)
 
     _pack_src: Optional[DataFormat] = field(default=None, repr=False)
@@ -48,6 +53,10 @@ class FuserSentinel:
         self._unpack_A_dst = None
         self._unpack_B_src = None
         self._unpack_B_dst = None
+        self._unpack_face_r_dim_a = None
+        self._unpack_num_faces_a = None
+        self._unpack_face_r_dim_b = None
+        self._unpack_num_faces_b = None
 
     def reset_math_format(self):
         self._math_format = None
@@ -59,24 +68,26 @@ class FuserSentinel:
     @staticmethod
     def _find_format_node(
         operation: "FusedOperation",
-    ) -> Optional["ComputeNode"]:
-        """Find the first compute node with operand inputs for format inference.
+    ) -> Optional["FpuNode"]:
+        """Find the first FpuNode for format inference.
 
         In a pipeline with mixed FPU and SFPU nodes, only FPU nodes have src_a/src_b
         operands. SFPU nodes operate on data already in the dest register and don't
         drive format configuration.
 
         Returns:
-            The first ComputeNode with src_a or src_b, or None if all nodes are SFPU only.
+            The first FpuNode, or None if all nodes are SFPU only.
         """
-        for node in operation.math.operations:
-            if node.src_a is not None or node.src_b is not None:
+        from .fpu_node import FpuNode
+
+        for node in operation.math.math_nodes:
+            if isinstance(node, FpuNode):
                 return node
         return None
 
     @staticmethod
     def _get_src_formats(
-        compute_node: "ComputeNode",
+        compute_node: "FpuNode",
     ) -> Tuple[DataFormat, Optional[DataFormat]]:
         """Extract src_a and src_b data formats, handling DEST_TO_SRCA routing."""
         src_a_fmt = compute_node.src_a.data_format
@@ -89,7 +100,7 @@ class FuserSentinel:
     def _infer_node_formats(
         self,
         config: "GlobalConfig",
-        compute_node: "ComputeNode",
+        compute_node: "FpuNode",
         output_format: DataFormat,
     ) -> Tuple[DataFormat, DataFormat, DataFormat, DataFormat, DataFormat, DataFormat]:
         """Infer all pipeline formats from a compute node's operands.
@@ -240,7 +251,7 @@ class FuserSentinel:
         if self._unpack_A_src is not None:
             return ""
 
-        output_format = operation.math.pack_nodes[0].output.data_format
+        output_format = operation.math._get_pack_nodes()[0].output.data_format
         unpack_A_src, unpack_A_dst, unpack_B_src, unpack_B_dst, _, _ = (
             self._infer_node_formats(config, compute_node, output_format)
         )
@@ -265,6 +276,11 @@ class FuserSentinel:
             num_faces_b = num_faces_a
             tile_size_b = tile_size_a
 
+        self._unpack_face_r_dim_a = face_r_dim_a
+        self._unpack_num_faces_a = num_faces_a
+        self._unpack_face_r_dim_b = face_r_dim_b
+        self._unpack_num_faces_b = num_faces_b
+
         return (
             f"_llk_unpack_hw_configure_<{dest_acc}>(\n"
             f"    {self._fmt(unpack_A_src)}, {self._fmt(unpack_B_src)},\n"
@@ -278,25 +294,47 @@ class FuserSentinel:
         self,
         config: "GlobalConfig",
         operation: "FusedOperation",
-        compute_node: "ComputeNode",
+        compute_node: "FpuNode",
     ) -> str:
-        """Emit unpack reconfig calls when formats change between compute nodes.
+        """Emit unpack reconfig calls when formats or tile shapes change between compute nodes.
 
-        Called per node from ComputeNode.unpack_configure() inside the tile loop. Compares
-        the node's inferred formats against the currently configured state and emits
-        _llk_unpack_reconfig_data_format_src{a,b}_impl_ only for channels that changed.
+        Called per node from FpuNode.unpack_configure() inside the tile loop. Compares
+        the node's inferred formats and tile shape against the currently configured state
+        and emits _llk_unpack_reconfig_data_format_src{a,b}_impl_ for channels that changed.
+        When tile shapes differ, uses FACE_ROW_MAJOR to reprogram dim/stride registers.
         """
-        output_format = operation.math.pack_nodes[0].output.data_format
+        output_format = operation.math._get_pack_nodes()[0].output.data_format
         new_A_src, new_A_dst, new_B_src, new_B_dst, _, _ = self._infer_node_formats(
             config, compute_node, output_format
         )
 
-        srca_changed = (
+        new_face_r_dim_a = compute_node.src_a.tile_shape.face_r_dim
+        new_num_faces_a = compute_node.src_a.tile_shape.total_num_faces()
+
+        if compute_node.src_b is not None:
+            new_face_r_dim_b = compute_node.src_b.tile_shape.face_r_dim
+            new_num_faces_b = compute_node.src_b.tile_shape.total_num_faces()
+        else:
+            new_face_r_dim_b = new_face_r_dim_a
+            new_num_faces_b = new_num_faces_a
+
+        srca_fmt_changed = (
             self._unpack_A_src != new_A_src or self._unpack_A_dst != new_A_dst
         )
-        srcb_changed = (
+        srcb_fmt_changed = (
             self._unpack_B_src != new_B_src or self._unpack_B_dst != new_B_dst
         )
+        srca_tile_changed = (
+            self._unpack_face_r_dim_a != new_face_r_dim_a
+            or self._unpack_num_faces_a != new_num_faces_a
+        )
+        srcb_tile_changed = (
+            self._unpack_face_r_dim_b != new_face_r_dim_b
+            or self._unpack_num_faces_b != new_num_faces_b
+        )
+
+        srca_changed = srca_fmt_changed or srca_tile_changed
+        srcb_changed = srcb_fmt_changed or srcb_tile_changed
 
         if not (srca_changed or srcb_changed):
             return ""
@@ -311,11 +349,18 @@ class FuserSentinel:
                 or new_A_src.needs_int8_math_config()
                 else "false"
             )
-            code += (
-                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, p_dim_stride_target::IGNORE, {to_from_int8}>(\n"
-                f"    {self._fmt(new_A_src)}, {self._fmt(new_A_dst)}, {compute_node.src_a.tile_size}\n"
-                f");\n"
+            dim_stride = (
+                "p_dim_stride_target::FACE_ROW_MAJOR"
+                if srca_tile_changed
+                else "p_dim_stride_target::IGNORE"
             )
+            code += (
+                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, {dim_stride}, {to_from_int8}>(\n"
+                f"    {self._fmt(new_A_src)}, {self._fmt(new_A_dst)}, {compute_node.src_a.tile_size}"
+            )
+            if srca_tile_changed:
+                code += f", {new_face_r_dim_a}, {new_num_faces_a}"
+            code += "\n);\n"
 
         if srcb_changed:
             srcb_tile_size = (
@@ -330,16 +375,27 @@ class FuserSentinel:
                     or new_B_src.needs_int8_math_config()
                     else "false"
                 )
-                code += (
-                    f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, p_dim_stride_target::IGNORE, {to_from_int8}>(\n"
-                    f"    {self._fmt(new_B_src)}, {self._fmt(new_B_dst)}, {srcb_tile_size}\n"
-                    f");\n"
+                dim_stride = (
+                    "p_dim_stride_target::FACE_ROW_MAJOR"
+                    if srcb_tile_changed
+                    else "p_dim_stride_target::IGNORE"
                 )
+                code += (
+                    f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, {dim_stride}, {to_from_int8}>(\n"
+                    f"    {self._fmt(new_B_src)}, {self._fmt(new_B_dst)}, {srcb_tile_size}"
+                )
+                if srcb_tile_changed:
+                    code += f", {new_face_r_dim_b}, {new_num_faces_b}"
+                code += "\n);\n"
 
         self._unpack_A_src = new_A_src
         self._unpack_A_dst = new_A_dst
         self._unpack_B_src = new_B_src
         self._unpack_B_dst = new_B_dst
+        self._unpack_face_r_dim_a = new_face_r_dim_a
+        self._unpack_num_faces_a = new_num_faces_a
+        self._unpack_face_r_dim_b = new_face_r_dim_b
+        self._unpack_num_faces_b = new_num_faces_b
         return code
 
     def hw_configure_math(
@@ -355,7 +411,7 @@ class FuserSentinel:
         if self._math_format is not None:
             return ""
 
-        output_format = operation.math.pack_nodes[0].output.data_format
+        output_format = operation.math._get_pack_nodes()[0].output.data_format
         compute_node = self._find_format_node(operation)
         if compute_node is not None:
             _, _, _, _, math_fmt, _ = self._infer_node_formats(
@@ -377,16 +433,16 @@ class FuserSentinel:
         self,
         config: "GlobalConfig",
         operation: "FusedOperation",
-        compute_node: "ComputeNode",
+        compute_node: "FpuNode",
     ) -> str:
         """Emit math reconfig when the math format changes between compute nodes.
 
-        Called per node from ComputeNode.math_configure() inside the tile loop.
+        Called per node from FpuNode.math_configure() inside the tile loop.
         """
         if compute_node.src_a is None:
             return ""
 
-        output_format = operation.math.pack_nodes[0].output.data_format
+        output_format = operation.math._get_pack_nodes()[0].output.data_format
         _, _, _, _, new_math, _ = self._infer_node_formats(
             config, compute_node, output_format
         )
@@ -485,7 +541,7 @@ class FuserSentinel:
         self,
         config: "GlobalConfig",
         operation: "FusedOperation",
-        compute_node: "ComputeNode" = None,
+        compute_node=None,
         output_format: DataFormat = DataFormat.Float16_b,
     ):
         """Compute and store format values for golden generation.
@@ -493,8 +549,10 @@ class FuserSentinel:
         Called per compute node during golden computation. When called without
         a compute_node (at operation start), initializes from the first format
         node or from the output format. When called with a compute_node,
-        recomputes only if the node's formats differ from the current state.
+        recomputes only if the node is an FpuNode.
         """
+        from .fpu_node import FpuNode
+
         if compute_node is None:
             fmt_node = self._find_format_node(operation)
             if fmt_node is not None:
@@ -509,7 +567,7 @@ class FuserSentinel:
             self.golden_pack_src = pack_src
             return
 
-        if compute_node.src_a is None and compute_node.src_b is None:
+        if not isinstance(compute_node, FpuNode):
             return
 
         _, _, _, _, math_fmt, pack_src = self._infer_node_formats(

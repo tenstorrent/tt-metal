@@ -44,7 +44,7 @@ std::shared_ptr<distributed::MeshBuffer> create_on_single_device(
     distributed::MeshDevice* mesh_device,
     const distributed::MeshCoordinate& coord) {
     const DeviceAddr device_local_size = std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [](const distributed::ReplicatedBufferConfig& c) { return c.size; },
             [](const distributed::ShardedBufferConfig& config) {
                 const auto [shard_height, shard_width] = config.physical_shard_shape();

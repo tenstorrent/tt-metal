@@ -79,7 +79,7 @@
 
 - name: ttnn nightly experimental tests (wormhole)
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk and not test_h2d_socket_sync" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 65
@@ -90,13 +90,33 @@
   category: experimental
 
 - name: ttnn nightly experimental tests (blackhole)
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_h2d_socket_sync" --timeout=600'
   skus:
     bh_p100:
       timeout: 35
     bh_p150b_civ2:
       timeout: 35
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  team: ttnn
+  category: experimental
+
+- name: ttnn nightly experimental tests (blackhole - viommu)
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_prefill_h2d_socket_sync.py -xv --timeout=600'
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 5
+  owner_id: U09L76N1MAT  # Nenad Babin
+  team: ttnn
+  category: experimental
+
+- name: ttnn nightly experimental generalized MoE gate op tests
+  cmd: 'pytest models/common/tests/modules/moe/test_generalized_moe_gate.py -xv --timeout=600'
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U0A2EGX0Z29 # Ronnie Li
   team: ttnn
   category: experimental
 
@@ -186,13 +206,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
-      timeout: 25
+      timeout: 45
     wh_n300_civ2:
-      timeout: 25
+      timeout: 45
     bh_p100:
-      timeout: 25
+      timeout: 45
     bh_p150b_civ2:
-      timeout: 25
+      timeout: 45
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   category: moreh

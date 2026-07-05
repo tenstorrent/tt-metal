@@ -150,11 +150,12 @@ def test_unpack_tilize_quasar(
                 else DataCopyType.A2D
             ),
             DEST_SYNC(dest_sync_mode),
+        ],
+        runtimes=[
             TILE_COUNT(tile_cnt_A),
             TEST_FACE_DIMS(),
             NUM_FACES(),
         ],
-        runtimes=[],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

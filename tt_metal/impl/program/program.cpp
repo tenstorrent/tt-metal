@@ -340,7 +340,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             kernel_descriptor.compiler_include_paths.begin(), kernel_descriptor.compiler_include_paths.end());
 
         auto config = std::visit(
-            tt::stl::overloaded{
+            ttsl::overloaded{
                 [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
@@ -1273,6 +1273,96 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     this->local_circular_buffer_allocation_needed_ = true;
 }
 
+// Scratchpad is a Metal 2.0-only construct.
+void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
+    if (this->scratchpads_allocated_) {
+        return;
+    }
+
+    const uint64_t base_l1_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
+
+    for (auto& kernels_of_core_type : this->kernels_) {
+        for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            auto& scratchpad_handles = kernel->scratchpad_binding_handles();
+            if (scratchpad_handles.empty()) {
+                continue;
+            }
+            const CoreRangeSet& kernel_cores = kernel->core_range_set();
+
+            for (auto& handle : scratchpad_handles) {
+                // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
+                // (DFBs and CBs are mutually exclusive, so dfb_allocators_ own the whole region.)
+                // Ensure a CircularBufferAllocator exists for each of the kernel's core ranges:
+                // a scratchpad-bearing kernel may have no DFBs, so the allocators may not exist yet.
+                for (const CoreRange& core_range : kernel_cores.ranges()) {
+                    bool exists = false;
+                    for (const CircularBufferAllocator& a : this->dfb_allocators_) {
+                        if (a.core_range == core_range) {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    if (!exists) {
+                        this->dfb_allocators_.emplace_back(core_range);
+                    }
+                }
+
+                // Uniform per-node base address: the scratchpad address is delivered as a CRTA.
+                // It must sit at the same L1 offset everywhere that it exists.
+                // Take the max region-end over EVERY allocator that intersects the kernel's cores
+                // (not just exact-range matches), so the scratchpad cannot overlap a DFB on
+                // an overlapping-but-different core range. Mark each such allocator exactly once.
+                std::vector<CircularBufferAllocator*> touched;
+                for (CircularBufferAllocator& a : this->dfb_allocators_) {
+                    for (const CoreRange& core_range : kernel_cores.ranges()) {
+                        if (a.core_range.intersects(core_range)) {
+                            touched.push_back(&a);
+                            break;
+                        }
+                    }
+                }
+                uint64_t addr = base_l1_address;
+                for (const CircularBufferAllocator* a : touched) {
+                    addr = std::max<uint64_t>(addr, a->get_cb_region_end());
+                }
+                addr = align(addr, alignment);
+                for (CircularBufferAllocator* a : touched) {
+                    a->mark_address(addr, handle.size_bytes, base_l1_address);
+                }
+
+                handle.allocated_address = static_cast<uint32_t>(addr);
+
+                // Patch the allocated address into the kernel's CRTA buffer. This runs at Program-compile
+                // time, upstream of where dispatch delivers runtime args to the device:
+                //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
+                //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
+                //
+                // An implicit CRTA slot to hold the scratchpad address is reserved at Program creation.
+                // (The actual CRTA buffer itself is allocated when SetProgramRunArgs runs.)
+                // Now, we populate the scratchpad address.
+                //
+                TT_FATAL(
+                    !kernel->common_runtime_args().empty(),
+                    "CRTA buffer is not allocated; cannot populate scratchpad addresses for kernel {}. "
+                    "Ensure that SetProgramRunArgs is called before attempting to enqueue a Program.",
+                    kernel->name());
+                TT_FATAL(
+                    handle.allocated_address != 0,
+                    "Internal error: scratchpad '{}' on kernel '{}' "
+                    "has a 0 allocated address (allocation failed or was skipped).",
+                    handle.accessor_name,
+                    kernel->name());
+
+                RuntimeArgsData& crta = kernel->common_runtime_args_data();
+                crta.data()[handle.addr_crta_word] = handle.allocated_address;
+            }
+        }
+    }
+
+    this->scratchpads_allocated_ = true;
+}
+
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     // ZoneScoped;
 
@@ -2013,15 +2103,15 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     }
 }
 
-void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
+    uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
     uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key();
+        BuildEnvManager::get_instance(extract_context_id(mesh_device))
+            .get_device_build_env(mesh_device->build_id())
+            .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
-        // When coordinate virtualization is not enabled, explicitly encode the device
-        // id into the device hash, to always assert on programs being reused across devices.
-        ttsl::hash::hash_combine(device_hash, device->id());
+        ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -2034,37 +2124,35 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
     auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
+        auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
-        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
-            program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
+            program_command_sequence, *this, mesh_device, sub_device_id, use_prefetcher_cache);
 
         program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
 
-        // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
-        // This means programs will contain stale entries in the cache until the program is deleted
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
     } else {
         TT_ASSERT(
             cached_program_command_sequences.at(command_hash).prefetcher_cache_used == use_prefetcher_cache,
             "Prefetcher cache used mismatch for program {} on device {}",
             this->get_id(),
-            device->id());
+            mesh_device->id());
     }
 }
 
-void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
+    uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
     uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key();
+        BuildEnvManager::get_instance(extract_context_id(mesh_device))
+            .get_device_build_env(mesh_device->build_id())
+            .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
-        // When coordinate virtualization is not enabled, explicitly encode the device
-        // id into the device hash, to always assert on programs being reused across devices.
-        device_hash = (device_hash << 32) | (device->id());
+        device_hash = (device_hash << 32) | (mesh_device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -2077,12 +2165,12 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
     auto& trace_cached_program_command_sequences = get_trace_cached_program_command_sequences();
     if (!trace_cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
+        auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
-        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
-            program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
+            program_command_sequence, *this, mesh_device, sub_device_id, use_prefetcher_cache);
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
         program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
         // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
@@ -2093,7 +2181,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
             trace_cached_program_command_sequences.at(command_hash).prefetcher_cache_used == use_prefetcher_cache,
             "Prefetcher cache used mismatch for program {} on device {}",
             this->get_id(),
-            device->id());
+            mesh_device->id());
     }
 }
 
@@ -2405,7 +2493,7 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
 
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
-    tt::stl::Span<ProgramImpl*> programs(programs_array);
+    ttsl::Span<ProgramImpl*> programs(programs_array);
 
     (void)ProgramImpl::finalize_program_offsets(
         extract_context_id(device), device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
@@ -2421,7 +2509,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
-    tt::stl::Span<ProgramImpl*> programs) {
+    ttsl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
     const auto& hal = MetalContext::instance(context_id).hal();

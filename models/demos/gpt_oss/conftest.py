@@ -7,8 +7,6 @@ import os
 
 import pytest
 
-from models.demos.gpt_oss.tt.model_config import ModelArgs
-
 
 def pytest_addoption(parser):
     parser.addoption("--skip-model-load", action="store_true", default=False, help="Skip loading the model state dict")
@@ -19,9 +17,12 @@ def state_dict(request):
     load_model = not request.config.getoption("--skip-model-load")
     model_path = os.getenv("HF_MODEL", None)
     if model_path is None or not load_model:
+        # Explicit skip: build weights purely from the ttnn cache.
         return {}
-    else:
-        return ModelArgs.load_state_dict(model_path, dummy_weights=False)
+    # Defer the (expensive) HF weight load to create_tt_model, which knows the mesh shape +
+    # dtype and can skip it when a warm ttnn cache is already on disk (see
+    # ModelArgs.weight_cache_is_complete). Returning None signals "load if needed".
+    return None
 
 
 @pytest.fixture
