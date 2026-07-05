@@ -1,28 +1,35 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""E2E Full-Model Logit PCC helpers (``models/tt_transformers/tests/test_model.py`` pattern).
+"""E2E logit PCC helpers (``models/tt_transformers/tests/test_model.py`` pattern).
 
-Named "Logit PCC" per tt_transformers documentation; compares post-final-norm **hidden states
-before** ``lm_head``, not logits or predicted tokens. HF greedy token at each decode step is fed
-to both HF and TT decoders (teacher forcing) so small errors do not compound.
+Two comparison modes:
+
+1. **Hidden-state PCC** (``run_e2e_logit_pcc``): post-final-norm hidden states *before* ``lm_head``.
+   Used by fixed-length module E2E tests.
+
+2. **Logits PCC sweep** (``run_e2e_logits_pcc_loop``): full-vocabulary logits after ``lm_head``.
+   Devstral-style ISL sweep; HF-greedy decode feeds both HF and TT after each logits comparison.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import TYPE_CHECKING, List, Tuple
 
 import pytest
 import torch
 import ttnn
 from loguru import logger
 from transformers import AutoProcessor, SeamlessM4Tv2Model
+from transformers.cache_utils import DynamicCache
 
+from models.common.utility_functions import comp_allclose, comp_pcc
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
+from models.experimental.seamless_m4t_v2_large.tests.pcc.test_seamless_m4t_v2_model import _make_tt_model
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import (
     TextDecoderPccInputs,
     align_case_for_tt_prefill,
@@ -46,6 +53,7 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     from_torch_bfloat16_tile,
     from_torch_uint32_rm,
     get_tp,
+    mesh_default_device,
 )
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import (
     create_speech_encoder_parameters,
@@ -55,7 +63,10 @@ from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import (
 from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
     _read_int_row,
     _subsampled_lens_dev,
+    _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX,
+    _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN,
     _tt_speech_enc_attn,
+    _ttnn_ids_from_list,
 )
 from models.experimental.seamless_m4t_v2_large.tt.tt_speech_encoder import TTSeamlessM4Tv2SpeechEncoder
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
@@ -64,6 +75,12 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
     warm_text_decoder_kv_cache_prefill,
 )
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_encoder import TTSeamlessM4Tv2Encoder
+
+if TYPE_CHECKING:
+    from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_token_matching_helpers import (
+        SpeechTokenAccuracyReference,
+        T2ttTokenAccuracyReference,
+    )
 
 # Fixed encoder timeline for E2E logit PCC (text + speech). Text uses ``source_text_for_enc_len``
 # (repeated unit phrase); speech uses synthetic mel stretched/truncated to this length (S2ST: preamble).
@@ -78,6 +95,9 @@ PCC_DECODE_FULL = 0.99
 PCC_DECODE_SPEECH_QUICK = 0.96  # E2E decode step 0: ~0.968 on BH 1×4 with speech encoder hidden
 PCC_DECODE_SPEECH_FULL = 0.96
 PCC_DECODE_S2ST = 0.93  # S2ST (spa): decode step 0 ~0.945 on BH 1×4; use same band as prefill
+# Full-vocabulary logits PCC sweep (``test_seamless_e2e_logit_pcc_sweep.py``).
+LOGIT_PCC_DECODE_STEPS = 10
+LOGIT_PCC_REQUIRED = 0.90
 _SPEECH_ENC_SEQ_BUCKET = 256
 
 
@@ -661,3 +681,399 @@ def run_speech_e2e_logit_pcc(
         pcc_encoder=PCC_ENCODER_SPEECH,
         pcc_prefill=pcc_prefill,
     )
+
+
+# ---------------------------------------------------------------------------
+# Full-vocabulary logits PCC sweep (Devstral-style; uses ``TTSeamlessM4Tv2Model``)
+# ---------------------------------------------------------------------------
+
+
+def _logits_row_for_pcc(logits: torch.Tensor) -> torch.Tensor:
+    """Normalize to ``[1, vocab]`` for ``comp_pcc``."""
+    if logits.ndim == 1:
+        return logits.unsqueeze(0)
+    if logits.ndim == 2:
+        return logits[:1]
+    if logits.ndim == 3:
+        return logits[:, -1, :]
+    raise ValueError(f"Expected 1D–3D logits, got shape {logits.shape}")
+
+
+def assert_logits_pcc(
+    ref_logits: torch.Tensor,
+    tt_logits: torch.Tensor,
+    *,
+    label: str,
+    pcc_required: float = LOGIT_PCC_REQUIRED,
+) -> None:
+    ref_row = _logits_row_for_pcc(ref_logits.float().cpu())
+    tt_row = _logits_row_for_pcc(tt_logits.float().cpu())
+    passing, msg = comp_pcc(ref_row, tt_row, pcc_required)
+    logger.info(comp_allclose(ref_row, tt_row))
+    if passing:
+        logger.info(f"{label}: PASS — {msg}")
+    else:
+        logger.warning(f"{label}: FAIL — {msg}")
+    assert passing, f"{label}: PCC below {pcc_required}: {msg}"
+
+
+def _hf_greedy_token_id(logits: torch.Tensor) -> int:
+    row = _logits_row_for_pcc(logits.float().cpu())
+    return int(row.argmax(dim=-1).item())
+
+
+@torch.no_grad()
+def _hf_prefill_last_logits(
+    hf_model,
+    *,
+    encoder_hidden: torch.Tensor,
+    enc_mask: torch.Tensor,
+    seed_ids: torch.Tensor,
+) -> Tuple[torch.Tensor, DynamicCache]:
+    decoder = hf_model.text_decoder
+    lm_head = hf_model.lm_head
+    p0 = next(decoder.parameters())
+    enc_hidden = encoder_hidden.to(device=p0.device, dtype=p0.dtype)
+    enc_mask_dev = enc_mask.to(device=p0.device, dtype=torch.long)
+    seed_ids_dev = seed_ids.to(device=p0.device)
+    seed_mask = torch.ones_like(seed_ids_dev)
+
+    prefill = decoder(
+        input_ids=seed_ids_dev,
+        attention_mask=seed_mask,
+        encoder_hidden_states=enc_hidden,
+        encoder_attention_mask=enc_mask_dev,
+        use_cache=True,
+        return_dict=True,
+    )
+    prefill_logits = lm_head(prefill.last_hidden_state[:, -1:, :]).float().cpu()
+    return prefill_logits, prefill.past_key_values
+
+
+@torch.no_grad()
+def _hf_decode_step_logits(
+    hf_model,
+    token_id: int,
+    *,
+    encoder_hidden: torch.Tensor,
+    enc_mask: torch.Tensor,
+    cache: DynamicCache,
+) -> Tuple[torch.Tensor, DynamicCache]:
+    decoder = hf_model.text_decoder
+    lm_head = hf_model.lm_head
+    p0 = next(decoder.parameters())
+    enc_hidden = encoder_hidden.to(device=p0.device, dtype=p0.dtype)
+    enc_mask_dev = enc_mask.to(device=p0.device, dtype=torch.long)
+    step_ids = torch.full((1, 1), int(token_id), dtype=torch.long, device=p0.device)
+    step_out = decoder(
+        input_ids=step_ids,
+        encoder_hidden_states=enc_hidden,
+        encoder_attention_mask=enc_mask_dev,
+        past_key_values=cache,
+        use_cache=True,
+        return_dict=True,
+    )
+    return lm_head(step_out.last_hidden_state).float().cpu(), step_out.past_key_values
+
+
+@torch.no_grad()
+def _tt_prefill_last_logits(
+    tt_model,
+    mesh_device: ttnn.Device,
+    hf_model,
+    *,
+    enc_tt: ttnn.Tensor,
+    enc_mask_tt: ttnn.Tensor,
+    seed_ids: torch.Tensor,
+    kv_cache,
+    cross_attn_cache,
+) -> torch.Tensor:
+    seed_len = int(seed_ids.shape[1])
+    batch = 1
+    hidden_size = int(hf_model.config.hidden_size)
+
+    seed_tt = _ttnn_ids_from_list([seed_ids[0].tolist()], mesh_device)
+    warm_out = tt_model._prefill_text_decoder_kv_cache(
+        seed_tt,
+        enc_tt,
+        enc_mask_tt,
+        kv_cache,
+        cross_attn_cache,
+    )
+    ttnn.deallocate(seed_tt)
+
+    local_pos = seed_len - 1
+    last_h = ttnn.slice(warm_out, [0, local_pos, 0], [batch, local_pos + 1, hidden_size], (1, 1, 1))
+    prefill_logits_tt = tt_model._lm_head(last_h)
+    ttnn.deallocate(last_h)
+    tt_prefill = tt_model._logits_row_to_host(prefill_logits_tt, dec_len=1, sharded=False)
+    ttnn.deallocate(prefill_logits_tt)
+    if warm_out is not None:
+        ttnn.deallocate(warm_out)
+    return tt_prefill
+
+
+@torch.no_grad()
+def _tt_decode_step_logits(
+    tt_model,
+    *,
+    token_id: int,
+    position: int,
+    enc_tt: ttnn.Tensor,
+    enc_mask_tt: ttnn.Tensor,
+    kv_cache,
+    cross_attn_cache,
+    cross_attn_cache_valid: bool,
+) -> torch.Tensor:
+    logits_tt = tt_model._decode_token_with_kv_cache(
+        int(token_id),
+        position,
+        enc_tt,
+        enc_mask_tt,
+        kv_cache,
+        cross_attn_cache,
+        cross_attn_cache_valid=cross_attn_cache_valid,
+        batch_size=1,
+    )
+    tt_logits = tt_model._logits_row_to_host(logits_tt, dec_len=1, sharded=False)
+    ttnn.deallocate(logits_tt)
+    return tt_logits
+
+
+@torch.no_grad()
+def run_e2e_logits_pcc_loop(
+    tt_model,
+    mesh_device: ttnn.Device,
+    hf_model,
+    *,
+    encoder_hidden: torch.Tensor,
+    enc_mask: torch.Tensor,
+    seed_ids: torch.Tensor,
+    enc_tt: ttnn.Tensor,
+    enc_mask_tt: ttnn.Tensor,
+    decode_steps: int,
+    log_label: str,
+    pcc_required: float = LOGIT_PCC_REQUIRED,
+) -> None:
+    """Compare HF vs TT logits: seed prefill last position + ``decode_steps`` HF-greedy decode steps."""
+    cfg = hf_model.config
+    seed_len = int(seed_ids.shape[1])
+    max_seq_len = max(64, seed_len + decode_steps + 8)
+    padded_enc = int(enc_tt.shape[1])
+
+    kv_cache, cross_attn_cache = init_text_decoder_kv_cache(
+        mesh_device,
+        num_hidden_layers=cfg.decoder_layers,
+        num_attention_heads=cfg.decoder_attention_heads,
+        hidden_size=cfg.hidden_size,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        encoder_seq_len=padded_enc,
+        tp=tt_model._tp,
+    )
+
+    ref_prefill, hf_cache = _hf_prefill_last_logits(
+        hf_model,
+        encoder_hidden=encoder_hidden,
+        enc_mask=enc_mask,
+        seed_ids=seed_ids,
+    )
+    tt_prefill = _tt_prefill_last_logits(
+        tt_model,
+        mesh_device,
+        hf_model,
+        enc_tt=enc_tt,
+        enc_mask_tt=enc_mask_tt,
+        seed_ids=seed_ids,
+        kv_cache=kv_cache,
+        cross_attn_cache=cross_attn_cache,
+    )
+    assert_logits_pcc(
+        ref_prefill,
+        tt_prefill,
+        label=f"{log_label} prefill last logits",
+        pcc_required=pcc_required,
+    )
+
+    next_tok = _hf_greedy_token_id(ref_prefill)
+    current_pos = seed_len
+    cross_valid = True
+
+    for step in range(decode_steps):
+        ref_logits, hf_cache = _hf_decode_step_logits(
+            hf_model,
+            next_tok,
+            encoder_hidden=encoder_hidden,
+            enc_mask=enc_mask,
+            cache=hf_cache,
+        )
+        tt_logits = _tt_decode_step_logits(
+            tt_model,
+            token_id=next_tok,
+            position=current_pos,
+            enc_tt=enc_tt,
+            enc_mask_tt=enc_mask_tt,
+            kv_cache=kv_cache,
+            cross_attn_cache=cross_attn_cache,
+            cross_attn_cache_valid=cross_valid,
+        )
+        assert_logits_pcc(
+            ref_logits,
+            tt_logits,
+            label=f"{log_label} decode step={step} pos={current_pos} tok={next_tok}",
+            pcc_required=pcc_required,
+        )
+        next_tok = _hf_greedy_token_id(ref_logits)
+        current_pos += 1
+
+    ttnn.deallocate(enc_tt)
+    ttnn.deallocate(enc_mask_tt)
+    for layer in kv_cache:
+        ttnn.deallocate(layer[0])
+        ttnn.deallocate(layer[1])
+    for layer in cross_attn_cache:
+        ttnn.deallocate(layer[0])
+        ttnn.deallocate(layer[1])
+    ttnn.synchronize_device(mesh_device)
+
+
+def _maybe_warmup_speech_encoder_for_logits_sweep(
+    mesh_device: ttnn.Device,
+    hf_model,
+    ref: SpeechTokenAccuracyReference,
+) -> None:
+    """Mirror token-matching sweep: warm speech encoder except mel buckets 1920–2560."""
+    cfg = hf_model.config
+    mel_seq = int(ref.input_features.shape[1])
+    bucket = ((mel_seq + _SPEECH_ENC_SEQ_BUCKET - 1) // _SPEECH_ENC_SEQ_BUCKET) * _SPEECH_ENC_SEQ_BUCKET
+    if _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN <= bucket <= _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX:
+        return
+    warm_enc, warm_mask = tt_encode_speech(
+        mesh_device,
+        hf_model.speech_encoder,
+        cfg,
+        ref.input_features,
+        ref.mel_attention_mask,
+    )
+    ttnn.deallocate(warm_enc)
+    ttnn.deallocate(warm_mask)
+
+
+def effective_logit_pcc_decode_steps(ref_teacher_steps: int, *, task: str, seq_len: int) -> int:
+    """Cap decode steps at HF greedy length (EOS); skip only when ref has zero steps."""
+    if ref_teacher_steps <= 0:
+        pytest.skip(
+            f"{task.upper()} logit-PCC sweep len={seq_len}: HF reference has no decode steps "
+            f"(EOS on prefill or empty mel input)"
+        )
+    effective = min(LOGIT_PCC_DECODE_STEPS, ref_teacher_steps)
+    if effective < LOGIT_PCC_DECODE_STEPS:
+        logger.info(
+            f"{task.upper()} logit-PCC sweep len={seq_len}: capping decode steps "
+            f"{effective}/{LOGIT_PCC_DECODE_STEPS} (HF greedy EOS after {ref_teacher_steps} steps)"
+        )
+    return effective
+
+
+def run_t2tt_e2e_logits_pcc_from_ref(
+    mesh_device: ttnn.Device,
+    hf_model,
+    ref: T2ttTokenAccuracyReference,
+    *,
+    seq_len: int,
+    decode_steps: int = LOGIT_PCC_DECODE_STEPS,
+    pcc_required: float = LOGIT_PCC_REQUIRED,
+) -> None:
+    """TT text encoder → decoder; live HF reference; HF-greedy decode logits PCC."""
+    cfg = hf_model.config
+    t2u_cfg = hf_model.t2u_model.config
+    log_label = f"T2TT-len{seq_len}"
+
+    encoder_hidden = _hf_text_encoder_hidden(hf_model, ref.src_ids, ref.src_mask)
+    enc_mask = ref.src_mask.to(device=encoder_hidden.device, dtype=torch.long)
+
+    with mesh_default_device(mesh_device):
+        tt_model = _make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
+        src_ids_tt = from_torch_uint32_rm(mesh_device, ref.src_ids.to(torch.int32))
+        src_mask_tt = from_torch_uint32_rm(mesh_device, ref.src_mask.to(torch.int32))
+        enc_tt, enc_mask_tt, attn_owned = tt_model._encode_text(src_ids_tt, src_mask_tt)
+        ttnn.deallocate(src_ids_tt)
+        if attn_owned:
+            ttnn.deallocate(src_mask_tt)
+
+        logger.info(
+            f"SeamlessM4Tv2 E2E logits PCC ({log_label}): decode_steps={decode_steps}, "
+            f"pcc>={pcc_required}, teacher=HF_greedy"
+        )
+        run_e2e_logits_pcc_loop(
+            tt_model,
+            mesh_device,
+            hf_model,
+            encoder_hidden=encoder_hidden,
+            enc_mask=enc_mask,
+            seed_ids=ref.seed_ids,
+            enc_tt=enc_tt,
+            enc_mask_tt=enc_mask_tt,
+            decode_steps=decode_steps,
+            log_label=log_label,
+            pcc_required=pcc_required,
+        )
+
+
+def run_speech_e2e_logits_pcc_from_ref(
+    mesh_device: ttnn.Device,
+    hf_model,
+    ref: SpeechTokenAccuracyReference,
+    *,
+    task: str,
+    seq_len: int,
+    decode_steps: int = LOGIT_PCC_DECODE_STEPS,
+    pcc_required: float = LOGIT_PCC_REQUIRED,
+) -> None:
+    """TT speech encoder → decoder; live HF reference; HF-greedy decode logits PCC."""
+    cfg = hf_model.config
+    t2u_cfg = hf_model.t2u_model.config
+    log_label = f"{task.upper()}-len{seq_len}"
+
+    encoder_hidden, enc_mask = _hf_speech_encoder_hidden_and_mask(
+        hf_model,
+        ref.input_features,
+        ref.mel_attention_mask,
+    )
+
+    with mesh_default_device(mesh_device):
+        tt_model = _make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
+        _maybe_warmup_speech_encoder_for_logits_sweep(mesh_device, hf_model, ref)
+        enc_tt, enc_mask_tt = tt_encode_speech(
+            mesh_device,
+            hf_model.speech_encoder,
+            cfg,
+            ref.input_features,
+            ref.mel_attention_mask,
+        )
+        enc_tt, enc_mask_tt = _align_tt_encoder_to_case(
+            mesh_device,
+            enc_tt,
+            enc_mask_tt,
+            ref.decoder_case,
+            pad_id=int(cfg.pad_token_id),
+            hidden_size=int(cfg.hidden_size),
+        )
+
+        logger.info(
+            f"SeamlessM4Tv2 E2E logits PCC ({log_label}): decode_steps={decode_steps}, "
+            f"pcc>={pcc_required}, teacher=HF_greedy"
+        )
+        run_e2e_logits_pcc_loop(
+            tt_model,
+            mesh_device,
+            hf_model,
+            encoder_hidden=encoder_hidden,
+            enc_mask=enc_mask,
+            seed_ids=ref.seed_ids,
+            enc_tt=enc_tt,
+            enc_mask_tt=enc_mask_tt,
+            decode_steps=decode_steps,
+            log_label=log_label,
+            pcc_required=pcc_required,
+        )
