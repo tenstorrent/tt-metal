@@ -130,6 +130,29 @@ _G1_TORCH_DELEGATION = (
     r"_get_torch_submodule\s*\(",
 )
 
+# G1b: tt/pipeline.py may NOT delegate the forward path to HF submodules.
+# The pipeline exists to chain graduated TTNN stubs; calling
+# `hf_model.text_decoder(...)`, `hf_model.t2u_model(...)`, `hf_model.vocoder(...)`
+# etc. in the pipeline forward path silently substitutes host-side HF
+# computation for the graduated stub — which is exactly the failure mode
+# that lets 40 stubs sit in a coverage sweep while only 2 are chained.
+# References to the HF model for reading configs (hf_model.config,
+# hf_model.generation_config) or extracting weights (hf_model.lm_head,
+# hf_model.vocoder.unit_embedding.weight, etc.) are fine.
+# Calling the HF submodule as a computation (hf_model.<X>(...)) is not.
+_G1B_HF_FALLBACK = (
+    r"hf_model\.text_decoder\s*\(",
+    r"hf_model\.t2u_model\s*\(",
+    r"hf_model\.vocoder\s*\(",
+    r"hf_model\.speech_encoder\s*\(",
+    r"hf_model\.text_encoder\s*\(",
+    r"self\.hf_model\.text_decoder\s*\(",
+    r"self\.hf_model\.t2u_model\s*\(",
+    r"self\.hf_model\.vocoder\s*\(",
+    r"self\.hf_model\.speech_encoder\s*\(",
+    r"self\.hf_model\.text_encoder\s*\(",
+)
+
 _G5_HOST_SAMPLING = (
     r"torch\.argmax\s*\(",
     r"torch\.multinomial\s*\(",
@@ -172,6 +195,30 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             nonnative.append(p.stem)
     if nonnative:
         reasons.append("G1: stub(s) delegate to the torch reference (not native ttnn): " + ", ".join(nonnative[:8]))
+
+    # G1b: tt/pipeline.py must not call HF submodules as computation. Reading
+    # config/weights is fine; calling `hf_model.text_decoder(...)` etc. as a
+    # forward step silently swaps a graduated TTNN stub for host-side HF —
+    # the "1 real TT stage + coverage-sweep the rest" shortcut.
+    tt_dir = demo_dir / "tt"
+    hf_hits = []
+    for p in sorted(tt_dir.glob("*.py")) if tt_dir.is_dir() else []:
+        try:
+            src = p.read_text(errors="ignore")
+        except Exception:
+            continue
+        for pat in _G1B_HF_FALLBACK:
+            m = re.search(pat, src)
+            if m:
+                hf_hits.append(f"{p.name}:{pat.split(chr(92))[0].split('.')[-1]}")
+                break
+    if hf_hits:
+        reasons.append(
+            "G1b: tt/pipeline.py calls HF submodules as computation (not chaining "
+            "the graduated TTNN stub) — pipeline is not a real TT forward path: "
+            + ", ".join(hf_hits[:8])
+            + " (use stubs[<name>](...) instead; hf_model is for config/weights/reference only)"
+        )
 
     if os.environ.get("E2E_REQUIRE_ON_DEVICE", "1") != "0" and os.environ.get("E2E_ALLOW_HOST_DECODE") != "1":
         tt_dir = demo_dir / "tt"
