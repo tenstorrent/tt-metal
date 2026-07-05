@@ -77,6 +77,9 @@ tests/scripts/t3000/run_t3000_profiler_tests.sh @mo-tenstorrent @akerteszTT @ten
 tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/scripts/quasar @kstevensTT @fvranicTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
+# Emule software emulation tests
+tests/emule/ @xanderchin @arminaleTT @sgholamiTT @tenstorrent/codeowner-bypass
+
 # TT-STL
 tt_stl/ @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
 tt_stl/**/CMakeLists.txt @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass

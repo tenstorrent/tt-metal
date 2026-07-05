@@ -72,7 +72,7 @@ OutboundSocketServiceSyncOperation::tensor_return_value_t OutboundSocketServiceS
     return tensor_args.backing;
 }
 
-tt::stl::hash::hash_t OutboundSocketServiceSyncOperation::compute_program_hash(
+ttsl::hash::hash_t OutboundSocketServiceSyncOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (args.metadata_only) {
         TT_FATAL(args.metadata_size_bytes > 0, "outbound_socket_service_sync: metadata_only requires metadata");

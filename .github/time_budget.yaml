@@ -88,6 +88,7 @@ ttnn:
     bh_p150b_civ2: 545
     bh_quietbox_2: 55
     bh_p300: 15
+    wh_llmbox: 25
     sim_wormhole_b0: 680
     sim_blackhole: 680
   unit:
@@ -188,6 +189,7 @@ scaleout:
     wh_galaxy: 20
     bh_quietbox_2: 15
     bh_p300: 15
+    wh_llmbox: 20
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100

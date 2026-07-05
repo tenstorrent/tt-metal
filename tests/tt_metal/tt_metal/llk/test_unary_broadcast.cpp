@@ -143,7 +143,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             for (int i = 0; i < vBroadcast.size(); i++) {
                 tempfp32v[i] = static_cast<float>(vBroadcast[i]);
             }
-            tilized_packed_res = pack_as_bfp8_tiles(tt::stl::make_const_span(tempfp32v), true, false);
+            tilized_packed_res = pack_as_bfp8_tiles(ttsl::make_const_span(tempfp32v), true, false);
         } else {
             TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
@@ -157,7 +157,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             auto packed_vec = pack_vector<uint32_t, bfloat16>(tempfp16bv);
             tilized_packed_res = ::unit_tests::compute::gold_standard_tilize(packed_vec, config);
         } else if (T_out == tt::DataFormat::Bfp8_b) {
-            tilized_packed_res = pack_as_bfp8_tiles(tt::stl::make_const_span(vBroadcast), true, false);
+            tilized_packed_res = pack_as_bfp8_tiles(ttsl::make_const_span(vBroadcast), true, false);
         } else {
             TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
@@ -204,16 +204,18 @@ bool check_is_close(
         }
         auto gold_bf16 = unpack_vector<bfloat16, uint32_t>(packed_golden);
         auto res_bf16 = unpack_vector<bfloat16, uint32_t>(device_res);
-        for (size_t i = 0; i < gold_bf16.size(); i++) {
-            if (!is_close(gold_bf16[i], res_bf16[i], 0.0)) {
-                log_unpacked_vectors_for_mismatch(result_label, gold_bf16, res_bf16);
-                TT_THROW(
-                    "{} mismatch at index {} golden={} device={}",
-                    result_label,
-                    i,
-                    static_cast<float>(gold_bf16[i]),
-                    static_cast<float>(res_bf16[i]));
-            }
+        auto it = std::mismatch(gold_bf16.begin(), gold_bf16.end(), res_bf16.begin(), [](bfloat16 a, bfloat16 b) {
+            return is_close(a, b, 0.0f);
+        });
+        if (it.first != gold_bf16.end()) {
+            const size_t i = static_cast<size_t>(it.first - gold_bf16.begin());
+            log_unpacked_vectors_for_mismatch(result_label, gold_bf16, res_bf16);
+            TT_THROW(
+                "{} mismatch at index {} golden={} device={}",
+                result_label,
+                i,
+                static_cast<float>(*it.first),
+                static_cast<float>(*it.second));
         }
         return true;
     }
@@ -226,17 +228,13 @@ bool check_is_close(
         if (gold_refloat.size() != res_refloat.size()) {
             TT_THROW("{} mismatch: size golden={} device={}", result_label, gold_refloat.size(), res_refloat.size());
         }
-        for (size_t i = 0; i < gold_refloat.size(); i++) {
-            if (std::fabs(gold_refloat[i] - res_refloat[i]) > atol) {
-                log_unpacked_vectors_for_mismatch(result_label, gold_refloat, res_refloat);
-                TT_THROW(
-                    "{} mismatch at index {} A={} B={} atol={}",
-                    result_label,
-                    i,
-                    gold_refloat[i],
-                    res_refloat[i],
-                    atol);
-            }
+        auto it = std::mismatch(gold_refloat.begin(), gold_refloat.end(), res_refloat.begin(), [](float a, float b) {
+            return std::fabs(a - b) <= atol;
+        });
+        if (it.first != gold_refloat.end()) {
+            const size_t i = static_cast<size_t>(it.first - gold_refloat.begin());
+            log_unpacked_vectors_for_mismatch(result_label, gold_refloat, res_refloat);
+            TT_THROW("{} mismatch at index {} A={} B={} atol={}", result_label, i, *it.first, *it.second, atol);
         }
         return true;
     }

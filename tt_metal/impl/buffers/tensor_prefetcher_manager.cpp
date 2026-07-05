@@ -834,7 +834,7 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     // (a) Dispatcher write: bump every target DRAM core's signal slot for this CQ. Runs
     // under the api lock we already hold (the method does not re-lock).
     mesh_device_->impl().mesh_command_queue_base(cq_id).enqueue_write_dram_core_counter(
-        tt::stl::Span<const DeviceMemoryAddress>(targets), signal_value, /*blocking=*/false);
+        ttsl::Span<const DeviceMemoryAddress>(targets), signal_value, /*blocking=*/false);
 
     // (b) Queue a WAIT_CQ request. It rides the same async worker path as prefetch
     // requests, so it lands in each socket's FIFO ahead of the next prefetch request;

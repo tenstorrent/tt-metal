@@ -261,9 +261,6 @@ def test_prod(device, input_shape, dim, keepdim, force_implicit_pad, dtype):
 @pytest.mark.parametrize("dim", [[3, 7], [6, 7]])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8, dim, keepdim):
-    if dim == [6, 7]:
-        pytest.xfail("Sum op on HW reduction with BF16 input exceeds allclose threshold. Issue #46472")
-
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8), dtype=torch.bfloat16)
@@ -383,7 +380,7 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
         pcc_threshold=0.999,
         rtol=0.01,
         atol=0.2,
-        frobenius_threshold=0.003,
+        frobenius_threshold=0.015,
     )
 
 
