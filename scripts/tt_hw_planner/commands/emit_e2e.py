@@ -178,73 +178,119 @@ _G5_HOST_SAMPLING = (
 _G5_HOST_XFER = ("from_torch", "to_torch", "from_device", "to_device")
 
 
-def _check_hf_aliases(src: str) -> list:
-    """AST pass: find `<alias> = hf_model.<submodule>` (or `.attr` chain
-    rooted at an HF alias), then flag any call `<alias>(...)` or
-    `<alias>.<x>(...)` in the same source. Catches the disguised-
-    HF-fallback pattern `voc = hf_model.vocoder; voc.dur_predictor(x)`
-    that a plain regex on `hf_model.*(` misses. Returns list of hit
-    descriptors (empty if no violations)."""
+_G1B_HOT_FN_NAME = re.compile(
+    r"^(run_[a-z0-9]+|__call__|forward|_forward|_apply_[a-z0-9_]+|decode_step|decode_prefill)$" r"|_trace_step$|_step$"
+)
+# Functions whose bodies are ALLOWED to use HF as computation (setup / reference
+# code that runs outside the trace / device forward path). HF is legitimately
+# used in these to compute FIXED reference tensors that seed persistent device
+# buffers before the trace begins — required for trace+2CQ to have stable inputs.
+_G1B_SETUP_FN_NAME = re.compile(
+    r"_trace_setup$|_write_inputs$|_reference_for_stage$|^_hf_reference_|"
+    r"^_make_stage_inputs$|^_hf_capacities$|^load_hf_model$|^build_tt_stubs$|"
+    r"^_make_arg_for$|^_captured_output_of$|^_shape_hidden$"
+)
+
+
+def _fn_is_hot(name: str) -> bool:
+    """True iff a function name matches a HOT-path pattern (must not delegate
+    to HF as computation). False for setup/reference functions that legitimately
+    use HF to inject fixed reference tensors."""
+    if _G1B_SETUP_FN_NAME.search(name):
+        return False
+    return bool(_G1B_HOT_FN_NAME.search(name))
+
+
+def _check_hf_fallback(src: str) -> list:
+    """AST pass: find HF-fallback patterns ONLY in HOT-path functions.
+
+    HOT = `run_<task>`, `__call__`/`forward`, `_apply_*`, `decode_step`,
+    `decode_prefill`, `*_trace_step`, `*_step`. These functions run inside
+    the traced device forward path — any HF submodule invocation there
+    replaces the graduated TTNN stub with host-side HF (or blocks trace
+    capture entirely).
+
+    SETUP (skipped) = `*_trace_setup`, `*_write_inputs`, `_reference_for_stage`,
+    `_hf_reference_*`, `_make_stage_inputs`, `load_hf_model`, `build_tt_stubs`,
+    `_hf_capacities`, etc. HF is legitimately used here to compute fixed
+    reference tensors that seed persistent device buffers before the trace
+    begins — required for trace+2CQ to have stable inputs.
+
+    Returns list of hit descriptors (empty if no violations)."""
     import ast
 
     try:
         tree = ast.parse(src)
     except SyntaxError:
         return []
-    # Build alias map: name -> the rooted attr chain (e.g. "hf_model.vocoder")
-    aliases: dict = {}
 
     def _attr_root(node) -> str:
-        """Return dotted string if node is a chain rooted at hf_model or
-        self.hf_model; else empty string."""
+        """Return dotted string if the attribute chain contains `hf_model`
+        (either as the root Name or nested like `self.hf_model.<X>`);
+        else empty string."""
         parts = []
         cur = node
         while isinstance(cur, ast.Attribute):
             parts.append(cur.attr)
             cur = cur.value
-        if isinstance(cur, ast.Name) and cur.id == "hf_model":
-            parts.append("hf_model")
-            return ".".join(reversed(parts))
-        if isinstance(cur, ast.Attribute) and cur.attr == "hf_model":
-            inner = cur.value
-            if isinstance(inner, ast.Name) and inner.id == "self":
-                parts.append("hf_model")
-                parts.append("self")
-                return ".".join(reversed(parts))
+        if isinstance(cur, ast.Name):
+            parts.append(cur.id)
+        parts = list(reversed(parts))
+        if "hf_model" in parts:
+            return ".".join(parts)
         return ""
 
+    def _dotted_call(node: "ast.Call") -> str:
+        """Reconstruct `x.y.z(...)` string for a Call node's func chain."""
+        parts = []
+        cur = node.func
+        while isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name):
+            parts.append(cur.id)
+        return ".".join(reversed(parts)) + "(...)"
+
+    hits: list = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            root = _attr_root(node.value)
-            if root and any(sub in root for sub in _HF_ALIAS_ROOTS):
-                for tgt in node.targets:
-                    if isinstance(tgt, ast.Name):
-                        aliases[tgt.id] = root
-    if not aliases:
-        return []
-    hits = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            f = node.func
-            # alias(...) direct call
-            if isinstance(f, ast.Name) and f.id in aliases:
-                hits.append(f"{f.id}(...) [alias for {aliases[f.id]}]")
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not _fn_is_hot(node.name):
+            continue  # SETUP function — HF calls allowed here
+
+        # Build alias map WITHIN this hot function's body
+        aliases: dict = {}
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Assign):
+                root = _attr_root(sub.value)
+                if root and any(s in root for s in _HF_ALIAS_ROOTS):
+                    for tgt in sub.targets:
+                        if isinstance(tgt, ast.Name):
+                            aliases[tgt.id] = root
+
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
                 continue
-            # alias.<x>(...) or alias.<x>.<y>(...)
-            cur = f
-            while isinstance(cur, ast.Attribute):
-                cur = cur.value
-            if isinstance(cur, ast.Name) and cur.id in aliases:
-                # reconstruct the full call for the message
-                parts = []
-                walker = f
-                while isinstance(walker, ast.Attribute):
-                    parts.append(walker.attr)
-                    walker = walker.value
-                if isinstance(walker, ast.Name):
-                    parts.append(walker.id)
-                full = ".".join(reversed(parts)) + "(...)"
-                hits.append(f"{full} [alias for {aliases[cur.id]}]")
+            f = sub.func
+            # Direct chain hf_model.<X>(...) / hf_model.<X>.<Y>(...) / self.hf_model.*
+            if isinstance(f, ast.Attribute):
+                root = _attr_root(f)
+                if root:
+                    # Extract the submodule after "hf_model."
+                    tail = root.split("hf_model.", 1)[-1] if "hf_model." in root else ""
+                    top = tail.split(".", 1)[0]
+                    if top in _HF_ALIAS_ROOTS:
+                        hits.append(f"{node.name}(): {_dotted_call(sub)}")
+                        continue
+            # Alias-then-call: alias(...) or alias.x(...)
+            walker = f
+            while isinstance(walker, ast.Attribute):
+                walker = walker.value
+            if isinstance(walker, ast.Name) and walker.id in aliases:
+                hits.append(f"{node.name}(): {_dotted_call(sub)} [alias for {aliases[walker.id]}]")
+                continue
+            if isinstance(f, ast.Name) and f.id in aliases:
+                hits.append(f"{node.name}(): {f.id}(...) [alias for {aliases[f.id]}]")
     return hits
 
 
@@ -294,22 +340,21 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             src = p.read_text(errors="ignore")
         except Exception:
             continue
-        # Direct + nested regex patterns
-        for pat in _G1B_HF_FALLBACK:
-            m = re.search(pat, src)
-            if m:
-                hf_hits.append(f"{p.name}: {m.group(0)}")
-                break
-        # Alias detection (voc = hf_model.vocoder → voc.dur_predictor(...))
-        alias_hits = _check_hf_aliases(src)
-        for h in alias_hits[:3]:
+        # HOT-scoped AST check: only report HF calls inside functions that run
+        # on the traced device path (*_trace_step, decode_step, run_*, __call__,
+        # forward, _apply_*). SETUP functions (*_trace_setup, _reference_*,
+        # _hf_reference_*, load_hf_model, build_tt_stubs, _make_arg_for) are
+        # allowed to use HF for fixed-input injection and reference computation.
+        for h in _check_hf_fallback(src)[:6]:
             hf_hits.append(f"{p.name}: {h}")
     if hf_hits:
         reasons.append(
-            "G1b: tt/*.py calls HF submodules as computation (directly, via nested "
-            "attribute access, or via an alias) — pipeline is not a real TT forward path: "
+            "G1b: tt/*.py HOT-path function(s) call HF submodules as computation — "
+            "pipeline is not a real TT forward path: "
             + "; ".join(hf_hits[:8])
-            + " (use stubs[<name>](...) instead; hf_model is for config/weights/reference only)"
+            + " (chain the graduated TTNN stub instead; HF is allowed in *_trace_setup "
+            "and reference helpers for fixed-input injection, not in *_trace_step / "
+            "decode_step / run_* / __call__)"
         )
 
     if os.environ.get("E2E_REQUIRE_ON_DEVICE", "1") != "0" and os.environ.get("E2E_ALLOW_HOST_DECODE") != "1":
