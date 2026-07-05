@@ -11262,10 +11262,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     popt.add_argument(
         "--max-rounds",
         type=int,
-        default=20,
+        default=3,
         dest="max_rounds",
-        help="cc engine: max claude -p rounds per pipeline (default 20). Use 1 for a single optimization "
-        "pass. The deterministic gate can still stop earlier via can_stop.",
+        help="cc engine: max claude -p rounds per pipeline (default 3; one round is a full continuous "
+        "agent session that climbs the whole ladder). Use 1 for a single pass, raise for models with "
+        "lots of headroom. The deterministic gate can still stop earlier via can_stop.",
     )
     popt.add_argument("-k", "--case", dest="case", help="pytest -k case id override (e.g. device_params0)")
     popt.add_argument(
