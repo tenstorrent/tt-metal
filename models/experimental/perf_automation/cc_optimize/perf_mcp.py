@@ -1107,6 +1107,16 @@ def tp_pick_degree(m: int, k: int, n: int) -> dict:
     feasible degree (>= the model's TP floor) on the mesh and return the fastest. Returns
     {best_tp, timings_ms, floor}. best_tp=1 means TP did not help this matmul (keep it single-chip).
     Call this on the tp-fracture rung to pick the level, then apply it and verify_tp_fracture."""
+    if os.environ.get("PERF_MCP_ENABLE_TP_SWEEP") != "1":
+        return {
+            "best_tp": 1,
+            "skipped": (
+                "on-mesh TP sweep disabled by default: it opens a NESTED mesh device and toggles the fabric "
+                "config while a mesh is already resident, which can wedge the inter-chip fabric on ANY "
+                "multi-chip system (recovery needs a board reset). Base TP is already applied by the pipeline "
+                "sharding. Set PERF_MCP_ENABLE_TP_SWEEP=1 to force this sweep."
+            ),
+        }
     try:
         import ttnn
 
@@ -1134,6 +1144,15 @@ def verify_tp_fracture(m: int, k: int, n: int, tp: int = 4) -> dict:
     weight across the mesh, matmul per-chip, all_gather, and compare to the dense single-chip result.
     Returns {ok, pcc, ...}: ok=True when pcc>0.99 (the fracture is mathematically correct). Call this
     on the tp-fracture rung to PROVE a fracture is correct before committing it."""
+    if os.environ.get("PERF_MCP_ENABLE_TP_SWEEP") != "1":
+        return {
+            "ok": False,
+            "skipped": (
+                "on-mesh TP fracture verify disabled by default: it opens a NESTED mesh device and toggles "
+                "the fabric config while a mesh is already resident, which can wedge the inter-chip fabric on "
+                "ANY multi-chip system. Set PERF_MCP_ENABLE_TP_SWEEP=1 to force it."
+            ),
+        }
     try:
         import ttnn
 

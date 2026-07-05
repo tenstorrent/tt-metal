@@ -15,8 +15,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import signal
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 PERF_DIR = "models/experimental/perf_automation"
@@ -407,6 +410,76 @@ def _git(repo_root: Path, *args: str) -> str:
         return ""
 
 
+def _reset_chip_list(devices: str) -> str:
+    """Hardware-agnostic reset target derived purely from --devices: explicit ids pass through, 'single'
+    -> '0', 'all'/'' -> the enumerated chip ids. No board-specific quirks."""
+    d = (devices or "").strip().lower()
+    if d and d not in ("all", "single"):
+        return d
+    if d == "single":
+        return "0"
+    n = _chip_count(devices)
+    return ",".join(str(i) for i in range(n)) if n else ""
+
+
+def _reset_devices(devices: str) -> str:
+    """tt-smi reset the visible chips to recover a wedged fabric. Best-effort; returns a status string."""
+    chips = _reset_chip_list(devices)
+    tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    if not chips or not Path(tt_smi).is_file():
+        return "device reset SKIPPED (tt-smi not found or no chip list)"
+    try:
+        r = subprocess.run([tt_smi, "-r", chips], capture_output=True, text=True, timeout=420)
+        return "tt-smi -r %s rc=%d" % (chips, r.returncode)
+    except Exception as exc:  # noqa: BLE001
+        return "device reset FAILED (%s)" % exc
+
+
+def _progress_token(repo_root: Path, kernel_log: str):
+    """Forward-progress signal for the round watchdog: (committed HEAD, kernel-attempt-log mtime). A live
+    agent advances one of these; a device-wedged agent (blocked in a measurement) advances neither."""
+    try:
+        mt = os.path.getmtime(kernel_log)
+    except OSError:
+        mt = 0.0
+    return (_git(repo_root, "rev-parse", "HEAD"), mt)
+
+
+def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int) -> bool:
+    """Run one `claude -p` round under a forward-progress watchdog. If neither a commit nor a kernel
+    attempt is recorded for stall_sec while the round is alive, treat it as a device wedge: SIGKILL the
+    whole process group (claude + its mcp server + any hung profiler) and reset the device. Returns True
+    if the round was killed as wedged, False if it exited on its own. The NEXT round re-spawns a fresh
+    mcp server + runs on the reset mesh, so a stale cached-mesh handle can't persist across the wedge."""
+    proc = subprocess.Popen(cmd, cwd=str(repo_root), env=cc_env(repo_root, devices), start_new_session=True)
+    last_tok = _progress_token(repo_root, kernel_log)
+    last_change = time.monotonic()
+    while True:
+        try:
+            proc.wait(timeout=60)
+            return False
+        except subprocess.TimeoutExpired:
+            tok = _progress_token(repo_root, kernel_log)
+            if tok != last_tok:
+                last_tok, last_change = tok, time.monotonic()
+            elif time.monotonic() - last_change > stall_sec:
+                break
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        proc.wait(timeout=30)
+    except Exception:  # noqa: BLE001
+        pass
+    rst = _reset_devices(devices)
+    print(
+        "  [optimize/cc] WATCHDOG: round stalled %ds with no forward progress (likely device wedge) — "
+        "killed the round + %s; next round starts a FRESH mcp server on the reset mesh." % (stall_sec, rst)
+    )
+    return True
+
+
 def _baseline_ms() -> float | None:
     try:
         import tempfile
@@ -478,6 +551,22 @@ def optimize_pipeline(
         pass
     before_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
     rounds, can_stop, halted = 0, False, False
+    stall_sec = int(os.environ.get("PERF_MCP_ROUND_STALL_SEC", "2400") or "2400")
+    max_wedge = int(os.environ.get("PERF_MCP_MAX_WEDGE_STRIKES", "2") or "2")
+    wedge_strikes = 0
+    round_cmd = [
+        "claude",
+        "-p",
+        prompt,
+        "--mcp-config",
+        str(cfg_path),
+        "--strict-mcp-config",
+        "--allowedTools",
+        *_ALLOWED_TOOLS,
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ]
     while rounds < max_rounds:
         st = _gate_status(repo_root, mcp_env, devices)
         if st.get("halt"):
@@ -487,23 +576,17 @@ def optimize_pipeline(
         if st.get("can_stop"):
             can_stop = True
             break
-        subprocess.run(
-            [
-                "claude",
-                "-p",
-                prompt,
-                "--mcp-config",
-                str(cfg_path),
-                "--strict-mcp-config",
-                "--allowedTools",
-                *_ALLOWED_TOOLS,
-                "--output-format",
-                "stream-json",
-                "--verbose",
-            ],
-            cwd=str(repo_root),
-            env=cc_env(repo_root, devices),
-        )
+        wedged = _run_round_with_watchdog(round_cmd, repo_root, devices, kernel_log, stall_sec)
+        if wedged:
+            wedge_strikes += 1
+            if wedge_strikes >= max_wedge:
+                print(
+                    "  [optimize/cc] WATCHDOG: %d consecutive wedged rounds — aborting this pipeline "
+                    "(all committed wins are safe)." % wedge_strikes
+                )
+                break
+        else:
+            wedge_strikes = 0
         rounds += 1
     after_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "AFTER")
     if before_ms and after_ms:
