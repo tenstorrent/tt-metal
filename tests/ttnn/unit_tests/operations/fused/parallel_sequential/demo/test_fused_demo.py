@@ -792,7 +792,7 @@ class TestPerfDemos:
 
     # TT_METAL_LLK_ASSERTS run produced incorrect fused output for branch A
     # (PCC=0.004586, Frobenius=1.0) while the unfused companion passed.
-    @skip_with_llk_assert("Fused parallel chains fail numeric checks with LLK asserts enabled.")
+    @skip_with_llk_assert("Issue #49031: Fused parallel chains fail numeric checks with LLK asserts enabled.")
     @pytest.mark.parametrize(
         "perf_mode", ["none"]
     )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
@@ -1278,7 +1278,7 @@ class TestPerfDemos:
 
     # TT_METAL_LLK_ASSERTS run produced incorrect fused output for the left leaf
     # (PCC=0.005098, Frobenius=1.414062) while the unfused companion passed.
-    @skip_with_llk_assert("Fused sharded tree fails numeric checks with LLK asserts enabled.")
+    @skip_with_llk_assert("Issue #49031: Fused sharded tree fails numeric checks with LLK asserts enabled.")
     @pytest.mark.parametrize(
         "perf_mode", ["none"]
     )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
