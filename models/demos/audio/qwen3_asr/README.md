@@ -64,9 +64,37 @@ Single `Qwen3ASRForConditionalGeneration` ("Thinker"), three parts:
 Encoder/decoder validated by PCC against the Phase-1 golden; end-to-end validated by RTF + transcription.
 
 ## Prefill seqlen rule
-Prefill embeds are padded to a multiple of **256** (attention shards seqlen across the core grid and
-each shard must be tile(32)-aligned; 256/8=32). 128 multiples can yield 48-row shards → TT_FATAL.
-Trailing pad rows are causal-masked from the last real token.
+Prefill embeds are padded to a **multiple of 512** (`tt/qwen3_asr_decoder.py:prefill_logits`), min 512.
+Trailing pad rows are causal-masked from the last real token, so padding does not change the last real
+token's logits. Two reasons for 512 specifically:
+- Attention shards seqlen across the core grid and each shard must be tile(32)-aligned; a 128-multiple
+  can yield 48-row shards → TT_FATAL. 256 satisfies alignment on its own.
+- **But 256 cannot be mixed with ≥512 in one long-lived process** — see *Known limitations* below. The
+  decoder MLP reshapes prefill `x` to `[1, S_pad//512, 512, -1]` only when `S_pad >= 512`; a 256-pad
+  prefill takes the no-reshape path. Interleaving the two paths corrupts the model. Forcing every prefill
+  onto the ≥512 reshape path keeps a single, consistent program shape.
+
+## Known limitations
+
+**Length-keyed decoder-state corruption → fixed-length prefill workaround.**
+In the long-lived encoder+decoder server, interleaving requests of *different* real prefill (sequence)
+lengths corrupts the Qwen3 decoder: it "locks" to the first request's length and thereafter emits only
+the language tag + EOS (an empty transcript) for other lengths. Decoder-alone and encoder-alone are each
+stable across lengths in isolation (proven by `tests/test_decoder.py::test_prefill_length_state_regression`
+and `tests/test_audio_encoder.py::test_encoder_length_stability`); the trigger is the encoder/decoder
+interleaving with a *varying* real sequence length — a length-keyed program-cache / KV-shape issue in
+tt-metal, not in this model's code.
+
+Workarounds shipped here (both keep the prefill length constant so the bug never fires):
+- **Op level** (`tt/qwen3_asr_decoder.py`): pad every prefill to the same 512-multiple bucket.
+- **Server level** (`server/qwen3_asr_server.py`, `FIXED_INFER_SEC = 14.0`): pin every `_infer` to a
+  fixed 14 s audio length (pad short clips with silence, silence-chunk long audio into ≤14 s windows), so
+  every request prefills at exactly one length. Cost: a small accuracy trade-off from more/shorter chunks
+  (full-clip CER 0.045 → 0.065, accepted for stability) and wasted compute on padded silence for short
+  clips. See `server/LONGFORM_DESIGN.md` for the tiered chunking design.
+
+This should be root-caused and fixed in tt-metal (length-independent prefill program/KV handling) so the
+fixed-length pin can be removed. Tracking issue draft: see the PR description / filed tt-metal issue.
 
 ## Reference golden
 
