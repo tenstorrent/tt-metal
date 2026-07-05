@@ -108,10 +108,17 @@ def test_avg_pool2d_resnet50_global(mesh_device):
     # CoreRangeSet" at setup). WIDTH_SHARDED keeps the FULL height on every core, so the shard height must
     # be the TILE-PADDED height (nearest_32(49)=64) for the TILE_LAYOUT input to place — this mirrors the
     # model's nearest_32(x.shape[2]) at ttnn_functional_resnet50.py:989.
-    num_cores = 32
+    # WIDTH_SHARDED, GRID-ADAPTIVE (runs on the full 32-core part AND the 2-core emulator): largest core
+    # count that fits the device grid and evenly divides the 64 width tiles (2/4/8/16/32/64) -> tile-aligned
+    # width shard. WIDTH_SHARDED keeps the FULL height per core, so shard height = tile-padded nearest_32(49)
+    # = 64 for the TILE_LAYOUT input. CoreRangeSet -> needs use_height_and_width_as_shard_shape=True + per-core shape.
+    grid = device.compute_with_storage_grid_size()
+    max_cores = grid.x * grid.y
+    width_tiles = tensor_width // 32  # 64
+    num_cores = max(c for c in range(1, max_cores + 1) if width_tiles % c == 0)
     shard_height = ((tensor_height + 31) // 32) * 32  # nearest_32(49) = 64
-    shard_width = tensor_width // num_cores  # 2048 / 32 = 64
-    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})
+    shard_width = (width_tiles // num_cores) * 32
+    core_grid = ttnn.num_cores_to_corerangeset(num_cores, grid, True)
     mem_config = ttnn.create_sharded_memory_config(
         shape=(1, 1, shard_height, shard_width),
         core_grid=core_grid,
