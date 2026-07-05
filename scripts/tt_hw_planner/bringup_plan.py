@@ -347,6 +347,7 @@ def _extract_components_from_module_tree(
     *,
     new_model_id: str,
     new_model_type: Optional[str],
+    demo_dir=None,
 ) -> List[Component]:
     """Module-tree-based component decomposition (2026-05-23 audit
     defect 2). Loads the new model's HF `nn.Module` via AutoModel,
@@ -372,7 +373,7 @@ def _extract_components_from_module_tree(
     try:
         from .module_tree import discover_components_from_hf_id
 
-        discovered = discover_components_from_hf_id(new_model_id)
+        discovered = discover_components_from_hf_id(new_model_id, demo_dir=demo_dir)
     except Exception as exc:
         import sys as _sys
 
@@ -482,6 +483,7 @@ def build_bringup_plan(
         comps = _extract_components_from_module_tree(
             new_model_id=new_model_id,
             new_model_type=new_model_type,
+            demo_dir=repo_root / backend.demo_path,
         )
     elif backend.category in {"CNN", "Image", "Video"}:
         comps = _extract_components_vision(
@@ -505,6 +507,7 @@ def build_bringup_plan(
             supplemental = _extract_components_from_module_tree(
                 new_model_id=new_model_id,
                 new_model_type=new_model_type,
+                demo_dir=repo_root / backend.demo_path,
             )
             primary_names = {c.name for c in comps}
             primary_classes = {c.class_name for c in comps if c.class_name}

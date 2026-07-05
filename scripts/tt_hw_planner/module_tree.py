@@ -450,12 +450,49 @@ def discover_components(
     return discovered
 
 
+def _load_via_reference_loader(model_id: str, demo_dir):
+    """Fallback for non-transformers checkpoints: when AutoModel can't construct the
+    architecture, load the real nn.Module via the model-local reference loader (written
+    by the resolver if absent) so discovery can walk the genuine tree. Model-agnostic;
+    returns the nn.Module or None."""
+    if not demo_dir:
+        return None
+    try:
+        import importlib.util as _ilu
+        from pathlib import Path as _P
+
+        from . import reference_loader_resolver as _rlr
+    except Exception:
+        return None
+    dd = _P(demo_dir)
+    if not _rlr.has_loader(dd):
+        try:
+            _rlr.resolve(
+                model_id=model_id,
+                demo_dir=dd,
+                failure_text="component discovery: AutoModel cannot construct this architecture (non-transformers checkpoint)",
+                enabled=True,
+            )
+        except Exception:
+            return None
+    if not _rlr.has_loader(dd):
+        return None
+    try:
+        _spec = _ilu.spec_from_file_location("_thp_reference_loader", str(_rlr.loader_path(dd)))
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        return _mod.load_reference_model(model_id)
+    except Exception:
+        return None
+
+
 def discover_components_from_hf_id(
     model_id: str,
     *,
     revision: Optional[str] = None,
     trust_remote_code: bool = True,
     load_weights: bool = False,
+    demo_dir=None,
 ) -> List[DiscoveredComponent]:
     """Instantiate the model architecture from its HF config and walk
     the tree.
@@ -494,12 +531,23 @@ def discover_components_from_hf_id(
 
     if install_cpu_compat is not None:
         install_cpu_compat()
+    model = None
+    _orig_exc: Optional[BaseException] = None
     try:
         model = _build()
-    except ImportError:
-        if install_cpu_compat is None or not install_cpu_compat():
-            raise
-        model = _build()
+    except ImportError as _e:
+        _orig_exc = _e
+        if install_cpu_compat is not None and install_cpu_compat():
+            try:
+                model = _build()
+            except Exception as _e2:
+                _orig_exc = _e2
+    except Exception as _e:
+        _orig_exc = _e
+    if model is None:
+        model = _load_via_reference_loader(model_id, demo_dir)
+        if model is None:
+            raise _orig_exc
     try:
         return discover_components(model)
     finally:
