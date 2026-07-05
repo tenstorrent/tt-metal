@@ -1,13 +1,13 @@
 ---
 name: perturb
-description: Reproduce a flaky/timing-dependent kernel failure (suspected undocumented HW race) by injecting NOPs/delays to shift inter-thread/inter-kernel timing until the failure becomes frequent enough to isolate and simulate. Sweeps NOP count × injection position × actor, records the max-error scenario PER actor to a report file (rewritten after each actor finishes so you can stop early), then (on request) minimizes the test around a chosen scenario. Works for tt-metal ttnn op tests and tt-llk kernel tests.
+description: Reproduce a flaky/timing-dependent kernel failure (suspected undocumented HW race) by injecting NOPs/delays to shift inter-thread/inter-kernel timing until the failure becomes frequent enough to isolate and minimize into a deterministic reproducer. Sweeps NOP count × injection position × actor, records the max-error scenario PER actor to a report file (rewritten after each actor finishes so you can stop early), then (on request) minimizes the test around a chosen scenario. Works for tt-metal ttnn op tests and tt-llk kernel tests.
 user_invocable: true
 ---
 
 # /perturb — timing-perturbation reproducer for flaky kernel races
 
 ## What this does & when to use it
-Some failures are timing races (often undocumented-HW-race), invisible to static audits and rare enough that plain re-runs won't reproduce them. This skill deliberately shifts the *relative timing* of the actors in a kernel pipeline by injecting NOPs (compute threads) or RISC delays (dataflow kernels) at synchronization points, sweeping the amount, to widen the race window until the failure becomes frequent — ideally deterministic — so it can be minimized and handed to the simulator (ttsim).
+Some failures are timing races (often undocumented-HW-race), invisible to static audits and rare enough that plain re-runs won't reproduce them. This skill deliberately shifts the *relative timing* of the actors in a kernel pipeline by injecting NOPs (compute threads) or RISC delays (dataflow kernels) at synchronization points, sweeping the amount, to widen the race window until the failure becomes frequent — ideally deterministic — so it can be minimized into a small, known-offset reproducer.
 
 Use when: a test fails intermittently (bad output / NaN / hang), static race audits came back clean, and you need a small, high-frequency, *known-offset* reproducer.
 
@@ -25,7 +25,7 @@ The compute threads and the dataflow kernels need **different NOP primitives** (
 - **Reader/Writer** — these are RISC kernels doing NoC ops, NOT Tensix threads, so `TTI_NOP` does not reach them. Use a **RISC-V `asm volatile("nop")`**.
   - Do **NOT** use `riscv_wait(cycles)` for the fine sweep: it busy-spins reading the WALL_CLOCK MMIO register (`risc_common.h`), so its unit is AICLK cycles (not ms) but the per-iteration MMIO-read overhead is its resolution floor — small N (1..100) becomes coarse/non-linear. Keep `riscv_wait(cycles)` only as a **coarse fallback** (100/500/1k/2k/5k...) to reach large offsets when the fine `asm nop` sweep finds nothing.
 
-**ALWAYS UNROLL** the NOP loop so the injected cycle count is exact (no loop counter/branch overhead) — this matters for a clean monotonic sweep and for telling the simulator the precise offset. Because the count is a compile-time constant, force full unroll with `_Pragma("GCC unroll N")` (N a literal > max sweep count):
+**ALWAYS UNROLL** the NOP loop so the injected cycle count is exact (no loop counter/branch overhead) — this matters for a clean monotonic sweep and for pinning the precise cycle offset in the reproducer. Because the count is a compile-time constant, force full unroll with `_Pragma("GCC unroll N")` (N a literal > max sweep count):
 ```c
 // compute (Tensix):
 #define EMIT_NOPS()      do { _Pragma("GCC unroll 128") for (uint32_t _i=0;_i<(NOP_COUNT);++_i){ TTI_NOP; } } while(0)
@@ -55,10 +55,19 @@ Control everything with compile-time `#define`s so the JIT kernel hash changes p
 - **Reader/Writer:** each is its own translation unit that does NOT include the compute kernel — give each its **own self-contained** `#define`s (e.g. `R_NOP_COUNT`/`R_NOP_POS`, `W_NOP_COUNT`/`W_NOP_POS`) + its own `EMIT_RISC_NOPS`.
 - **Guard every site** so other kernels/TUs are unaffected: `#if (NOP_THREAD==X) && (NOP_POS==Y)` (undefined macros evaluate to 0 in `#if` → inactive). At count 0 everything is behaviorally identical to the original.
 
+## Run every test in slow dispatch mode
+**All test invocations in this skill — every count, every actor, and the `NOP_COUNT=0` baseline — MUST run with fast dispatch disabled:**
+```bash
+export TT_METAL_SLOW_DISPATCH_MODE=1   # or prefix each run: TT_METAL_SLOW_DISPATCH_MODE=1 pytest ...
+```
+Slow dispatch bypasses the asynchronous command-queue path: the host issues one operation at a time and waits for each to complete before the next, using the synchronous `ReadFromBuffer`/`WriteToBuffer` APIs instead of the `Enqueue*` async ones. This removes the fast-dispatch CQ overlap so on-device execution ordering is host-serialized and deterministic. Perturbing timing under slow dispatch therefore isolates the *kernel / coprocessor / NoC* timing race itself rather than a host-dispatch scheduling artifact, and keeps the `(actor, position, NOP_COUNT)` offset meaningful and stable when you replay the reproducer. It also makes the sweep more reproducible (less host-side timing jitter between counts).
+
+Set it once for the whole sweep so every data point is comparable, and confirm it took effect (the run should not create command queues). If a test *only* fails under fast dispatch and never under slow dispatch, that itself is a finding: the race is in the host dispatch layer, not the kernel — note it in the report rather than continuing to perturb the kernel.
+
 ## The sweep
 For each (actor, position):
 1. Set that actor+position active.
-2. Sweep `NOP_COUNT = 0 .. MAXN` (default 100). For each count: `sed` the `#define` in the target source (forces JIT recompile), run the test **10×** in one process, record `fails/10` (data-mismatch or NaN) and any hang/wedge.
+2. Sweep `NOP_COUNT = 0 .. MAXN` (default 100). For each count: `sed` the `#define` in the target source (forces JIT recompile), run the test **10×** in one process **with `TT_METAL_SLOW_DISPATCH_MODE=1`** (see above), record `fails/10` (data-mismatch or NaN) and any hang/wedge.
 3. If a count **hangs/wedges** the device (timeout), stop that sweep and reset (`tt-smi -r`) before continuing — a wedge blocks all further runs.
 Per-count wall time ≈ device-open + JIT recompile + 10 runs. Note: `NOP_COUNT=0` is the baseline (should match the test's normal pass/fail rate).
 
@@ -78,7 +87,7 @@ Maintain a single report file recording, **per actor and per position**, the cou
 For the chosen `(actor, position, NOP_COUNT)`:
 - Find the earliest point in the kernel where an intermediate result can be checked against expected; if you can already conclude "it has failed" there, delete/short-circuit everything downstream → smaller kernel.
 - Keep the perturbation pinned; shrink shapes/loops/tiles while the failure frequency holds.
-- Deliverable: minimal kernel + fixed `(actor, position, NOP_COUNT)` reproducing with high probability, for the simulator. If the sim doesn't fire immediately, nudge NOP_COUNT (or switch to the coarse `riscv_wait` fallback) until it does.
+- Deliverable: minimal kernel + fixed `(actor, position, NOP_COUNT)` reproducing with high probability. If it doesn't fire immediately on replay, nudge NOP_COUNT (or switch to the coarse `riscv_wait` fallback) until it does.
 
 ## Escalations (if the fine 0..100 single-actor sweep finds nothing)
 1. **Coarse magnitude** — larger NOP counts / `riscv_wait(cycles)` at 100/500/1k/2k/5k/10k to reach much bigger offsets.
@@ -87,9 +96,9 @@ For the chosen `(actor, position, NOP_COUNT)`:
 
 ## Applicability: tt-metal AND tt-llk
 The METHOD is identical for both (same Tensix 3-thread + dataflow model); only the MECHANICS differ:
-- **tt-metal (ttnn op tests):** kernels live under `ttnn/cpp/ttnn/operations/.../device/kernels/{compute,dataflow}/`; JIT-compiled when the op runs; test = pytest ttnn test; failure = output/PCC check. Perturb the op's compute kernel + its reader/writer.
-- **tt-llk (kernel tests):** kernels/harness under `tt_metal/tt-llk/tests/` (`tests/sources/`, `tests/python_tests/`); two-phase compile-producer/consumer flow (`CHIP_ARCH` selects arch); failure = the harness's golden comparison. Perturb the test's unpack/math/pack kernels (and its data-movement) the same way. See this repo's `run-test`/`debug-kernel` skills for driving LLK tests.
-In both, the compute-thread injection uses `UNPACK/MATH/PACK`+`TTI_NOP`; dataflow injection uses `asm("nop")`.
+- **tt-metal (ttnn op tests):** kernels live under `ttnn/cpp/ttnn/operations/.../device/kernels/{compute,dataflow}/`; JIT-compiled when the op runs; test = pytest ttnn test; failure = output/PCC check. Perturb the op's compute kernel + its reader/writer. Run with `TT_METAL_SLOW_DISPATCH_MODE=1` (see "Run every test in slow dispatch mode").
+- **tt-llk (kernel tests):** kernels/harness under `tt_metal/tt-llk/tests/` (`tests/sources/`, `tests/python_tests/`); two-phase compile-producer/consumer flow (`CHIP_ARCH` selects arch); failure = the harness's golden comparison. Perturb the test's unpack/math/pack kernels (and its data-movement) the same way. The LLK harness drives kernels directly rather than through the fast-dispatch command queue, but still set `TT_METAL_SLOW_DISPATCH_MODE=1` so any metal-dispatch path it touches stays synchronous. See this repo's `run-test`/`debug-kernel` skills for driving LLK tests.
+In both, the compute-thread injection uses `UNPACK/MATH/PACK`+`TTI_NOP`; dataflow injection uses `asm("nop")`, and every run is in slow dispatch mode.
 
 ## Gotchas
 - A hang wedges the device → `tt-smi -r` before continuing (interactive; ask the user if reset is gated). Do NOT reset for compile errors.
