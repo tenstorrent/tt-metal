@@ -166,6 +166,9 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
  * Pool 2D (Max pool 2D and Avg pool 2D)
  */
 void kernel_main() {
+    // [Quasar bring-up no-op — LLK issue filed] Companion to the compute_pool_2d no-op (pool reduce dest
+    // deadlock). Both reader roles early-return so the pool cores signal done. Remove with the LLK fix.
+    return;
     constexpr uint32_t reader_nindices = get_arg(args::reader_nindices);
     constexpr uint32_t kernel_h = get_arg(args::kernel_h);
     constexpr uint32_t kernel_w = get_arg(args::kernel_w);

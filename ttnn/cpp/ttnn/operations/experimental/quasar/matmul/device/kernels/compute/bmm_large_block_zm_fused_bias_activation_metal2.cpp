@@ -160,6 +160,11 @@ inline void reblock_and_untilize(
 }
 
 void kernel_main() {
+    // [Quasar bring-up no-op — LLK issue filed] The bmm_large_block compute deadlocks in the dest/pack
+    // sync (subblock-independent; confirmed with a consistent out_subblock 1x1 config). No-op all four
+    // 2D-mcast matmul kernels so cores signal done and the resnet sweep continues (output is garbage
+    // during bring-up). Remove once the LLK dest-sync fix lands.
+    return;
     DPRINT("CMPM start\n");  // DEBUG: matmul layer3 hang
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
