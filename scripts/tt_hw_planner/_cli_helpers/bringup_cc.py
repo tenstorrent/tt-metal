@@ -36,6 +36,57 @@ def _restore_orphaned_stale_tests(model_id: str, demo_dir: Path) -> int:
         return 0
 
 
+def _preflight_capture_real_inputs(model_id: str, demo_dir: Path) -> int:
+    """Run the HF model once and record REAL per-component IO tensors to
+    `_captured/<comp>/{args,kwargs,output}.pt` so per-component PCC tests
+    load them instead of falling back to synthetic `_make_arg_for` inputs.
+
+    Mirrors FSM auto_iterate.py's pre-loop capture step. Without this, encoder-
+    decoder composite stubs (decoder, decoder_layer, t2u_model) graduate with
+    `encoder_hidden_states=None` and drop cross-attention entirely — passing
+    per-component PCC but breaking real-pipeline chaining. Only captures
+    non-graduated components; already-graduated ones stay frozen."""
+    try:
+        from ..bringup_loop import _safe_id, _stub_has_graduated_from_autofill
+        from ..capture_inputs import capture_real_inputs
+
+        status_path = demo_dir / "bringup_status.json"
+        if not status_path.is_file():
+            return 0
+        components_all = [
+            str(c.get("name", "")).strip()
+            for c in json.loads(status_path.read_text()).get("components", [])
+            if c.get("status") in ("NEW", "ADAPT") and str(c.get("name", "")).strip()
+        ]
+        # Skip already-graduated (frozen); only capture pending ones.
+        to_capture: List[str] = []
+        for cn in components_all:
+            try:
+                already = _stub_has_graduated_from_autofill(demo_dir / "_stubs" / f"{_safe_id(cn)}.py")
+            except Exception:
+                already = False
+            if not already:
+                to_capture.append(cn)
+        if not to_capture:
+            return 0
+        print(
+            f"  [preflight] running HF model once to capture REAL IO tensors for "
+            f"{len(to_capture)} pending component(s) (skips graduated ones)"
+        )
+        results = capture_real_inputs(
+            model_id=model_id,
+            demo_dir=demo_dir,
+            components=to_capture,
+            verbose=True,
+        )
+        n = sum(1 for info in results.values() if info.get("status") == "captured")
+        print(f"  [preflight] captured {n}/{len(to_capture)} components; per-component PCC tests will use real inputs")
+        return n
+    except Exception as exc:
+        print(f"  [preflight] capture non-fatal error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 0
+
+
 def _reinject_orphan_children(model_id: str, demo_dir: Path) -> int:
     """Re-add decomposition children that survive as on-disk stubs but are
     missing from bringup_status.json (e.g. after a re-scaffold that overwrote
@@ -335,6 +386,7 @@ def run_bringup_cc(
 
     _banner(f"Step 6/6  Bring-up (cc engine) — harness loop on the per-component gate for {model_id}")
 
+    _preflight_capture_real_inputs(model_id, Path(demo_dir))
     _restore_orphaned_stale_tests(model_id, Path(demo_dir))
     _reinject_orphan_children(model_id, Path(demo_dir))
     _reconcile_recompose(model_id, Path(demo_dir))
