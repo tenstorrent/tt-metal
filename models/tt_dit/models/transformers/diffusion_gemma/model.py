@@ -211,8 +211,17 @@ class DiffusionGemmaForBlockDiffusion(Module):
         # ([1, B, S, vocab/tp]). Gather it back so downstream (host-side sampler) sees the
         # full vocab. When lm_head is plain Linear, this is a no-op.
         if getattr(self, "_lm_head_tp", False) and self.parallel_config.tensor_parallel.factor > 1:
-            logits = self.ccl_manager.all_gather_persistent_buffer(
-                logits, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            # ``use_persistent_buffer=False`` because the layer stack's all_gathers use the
+            # same input shape and share the ping-pong cache — leaving that state around
+            # manifests as "Input Tensor is not allocated" on the *next* denoising step's
+            # first all_gather. lm_head runs once per denoising step so the fresh allocation
+            # cost is negligible (same fix pattern as ``self_conditioning``'s all_gather).
+            logits = self.ccl_manager.all_gather(
+                logits,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=False,
+                use_persistent_buffer=False,
             )
         cap = self.final_logit_softcapping
         scaled = ttnn.multiply(logits, 1.0 / cap)

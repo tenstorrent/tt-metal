@@ -144,15 +144,23 @@ class DiffusionGemmaMoE(Module):
         B, S = router_input.shape[-3], router_input.shape[-2]
         H = self.hidden_size
 
-        # Pad ``M`` to the smallest ``PREFILL_BUCKETS`` value the demos/gemma4 sparse_matmul
-        # kernel is tested at (128). Padding only to the next multiple of TILE (32) technically
-        # satisfies the seq_len-is-tile-aligned assert in the prefill kernel, but observed:
-        # M=32 hangs the sparse_matmul mid-forward, likely a resource/program-config edge case
-        # the kernel wasn't tested at (their own tests use M ∈ {128, 1024, 4096}). Padding to
-        # 128 lands on a known-good path.
+        # demos/gemma4's sparse_matmul prefill kernel is only tested at
+        # ``PREFILL_BUCKETS = [128, 1024, 4096]`` (see
+        # ``models/demos/gemma4/tests/test_factory.py``). Padding just to the next tile-aligned
+        # multiple of 32 is *architecturally* legal but hangs at untested M values (observed:
+        # M=32 hangs, M=160/192/224 hang on long prompts). Snap up to the nearest bucket so
+        # every call lands on a known-good path.
+        #   • Encoder prompt ~19 tokens → pads to 128.
+        #   • Canvas 256 tokens         → pads to 1024.
+        #   • Multi-canvas encoder up to 4096 tokens → pads to 4096.
+        #   • Above 4096: fall back to next multiple of TILE (best-effort; user may hang).
         M = B * S
-        _MIN_M = 128
-        M_padded = max(_MIN_M, ((M + TILE - 1) // TILE) * TILE)
+        _PREFILL_BUCKETS = (128, 1024, 4096)
+        _next_bucket = next((b for b in _PREFILL_BUCKETS if M <= b), None)
+        if _next_bucket is not None:
+            M_padded = _next_bucket
+        else:
+            M_padded = ((M + TILE - 1) // TILE) * TILE
         pad_rows = M_padded - M
 
         # demos/gemma4 wants [1, 1, M, H] where M is tile-aligned.
