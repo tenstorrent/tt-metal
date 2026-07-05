@@ -47,46 +47,51 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     const NpHaloScatterParams& op,
     const ttnn::MeshCoordinate& /*mesh_coordinate*/,
     const NpHaloScatterInputs& tensor_args,
-    Tensor& /*tensor_return_value*/) {
+    Tensor& tensor_return_value) {
     Program program{};
 
-    Buffer* src = tensor_args.compact_buffer.buffer();  // [total_sticks, C]
-    Buffer* dst = tensor_args.padded_buffer.buffer();   // [outer, H+2pH, W+2pW, C]
+    Buffer* x_src = tensor_args.interior_src.buffer();   // [B,T,Hd,Wd,C] unpadded (interior source)
+    Buffer* compact = tensor_args.compact_buffer.buffer();  // [total_sticks, C] (border source)
+    Buffer* dst = tensor_return_value.buffer();          // [B,T,Hp,Wp,C] padded output (allocated)
 
-    const auto& pshape = tensor_args.padded_buffer.logical_shape();
-    const uint32_t rank = pshape.size();
-    const uint32_t Wp = pshape[rank - 2];
-    const uint32_t Hp = pshape[rank - 3];
+    const auto& xshape = tensor_args.interior_src.logical_shape();
+    const uint32_t rank = xshape.size();
+    const uint32_t Wd = xshape[rank - 2];
+    const uint32_t Hd = xshape[rank - 3];
     uint32_t outer = 1;  // product of all dims before H (B*T)
     for (uint32_t d = 0; d + 3 < rank; d++) {
-        outer *= pshape[d];
+        outer *= xshape[d];
     }
     const uint32_t pH = op.np_padding_h;
     const uint32_t pW = op.np_padding_w;
-    const uint32_t Hd = Hp - 2 * pH;
-    const uint32_t Wd = Wp - 2 * pW;
+    const uint32_t Hp = Hd + 2 * pH;
+    const uint32_t Wp = Wd + 2 * pW;
 
-    const uint32_t page_size = src->aligned_page_size();
+    const uint32_t page_size = compact->aligned_page_size();
     tt::DataFormat df = datatype_to_dataformat_converter(tensor_args.compact_buffer.dtype());
 
-    // Total border sticks = 2 H-sections (pH*Wd each) + 2 W-sections (Hp*pW each), per frame.
-    const uint32_t total_sticks = outer * (2 * pH * Wd + 2 * pW * Hp);
+    // Every padded page is written once: interior (Hd*Wd) from x + border (2 H-sections pH*Wd + 2
+    // W-sections Hp*pW) from compact, per frame.
+    const uint32_t interior_sticks = outer * Hd * Wd;
+    const uint32_t border_sticks = outer * (2 * pH * Wd + 2 * pW * Hp);
+    const uint32_t total_sticks = interior_sticks + border_sticks;
 
-    // Spread the scatter across the full compute grid: each core copies a contiguous global-stick range.
-    const CoreCoord grid = tensor_args.padded_buffer.device()->compute_with_storage_grid_size();
+    // Spread across the full compute grid: each core copies a contiguous global-stick range.
+    const CoreCoord grid = tensor_return_value.device()->compute_with_storage_grid_size();
     const uint32_t num_cores = std::min<uint32_t>(grid.x * grid.y, std::max<uint32_t>(total_sticks, 1u));
     const CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
     const uint32_t per_core = (total_sticks + num_cores - 1) / num_cores;  // ceil
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
-    constexpr uint32_t cb_pages = 4;  // small ring of stick scratch to overlap read/write
+    constexpr uint32_t cb_pages = 8;  // sticks per barrier batch (in-flight reads/writes)
     CircularBufferConfig cb_cfg =
         CircularBufferConfig(cb_pages * page_size, {{cb_id, df}}).set_page_size(cb_id, page_size);
     CreateCircularBuffer(program, all_cores, cb_cfg);
 
     auto writer_cfg = WriterDataMovementConfig{};
     writer_cfg.compile_args = {page_size, outer, Hp, Wp, Hd, Wd, pH, pW, cb_id, cb_pages};
-    TensorAccessorArgs(*src).append_to(writer_cfg.compile_args);
+    TensorAccessorArgs(*x_src).append_to(writer_cfg.compile_args);
+    TensorAccessorArgs(*compact).append_to(writer_cfg.compile_args);
     TensorAccessorArgs(*dst).append_to(writer_cfg.compile_args);
 
     KernelHandle writer_kernel_id = CreateKernel(
@@ -95,13 +100,17 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
         all_cores,
         writer_cfg);
 
-    // Per-core [src_addr, dst_addr, stick_start, stick_count]; assign contiguous ranges row-wise.
+    // Per-core [x_addr, compact_addr, dst_addr, stick_start, stick_count]; contiguous ranges row-wise.
     uint32_t assigned = 0;
     for (const auto& cr : all_cores.ranges()) {
         for (const auto& c : cr) {
             const uint32_t start = assigned;
             const uint32_t count = (start >= total_sticks) ? 0u : std::min(per_core, total_sticks - start);
-            SetRuntimeArgs(program, writer_kernel_id, c, {src->address(), dst->address(), start, count});
+            SetRuntimeArgs(
+                program,
+                writer_kernel_id,
+                c,
+                {x_src->address(), compact->address(), dst->address(), start, count});
             assigned += count;
         }
     }
@@ -110,15 +119,16 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
 }
 
 // ============================================================================
-// override_runtime_arguments — refresh the (compact, padded) DRAM addresses.
+// override_runtime_arguments — refresh the (x, compact, padded) DRAM addresses.
 // ============================================================================
 void NpHaloScatterMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const NpHaloScatterParams& /*op*/,
     const NpHaloScatterInputs& tensor_args,
-    Tensor& /*tensor_return_value*/) {
-    const uint32_t src_addr = tensor_args.compact_buffer.buffer()->address();
-    const uint32_t dst_addr = tensor_args.padded_buffer.buffer()->address();
+    Tensor& tensor_return_value) {
+    const uint32_t x_addr = tensor_args.interior_src.buffer()->address();
+    const uint32_t compact_addr = tensor_args.compact_buffer.buffer()->address();
+    const uint32_t dst_addr = tensor_return_value.buffer()->address();
 
     for (auto& [coordinate_range, shared_vars] : cached_workload.shared_variables) {
         auto& program = cached_workload.workload.get_programs().at(coordinate_range);
@@ -126,8 +136,9 @@ void NpHaloScatterMeshWorkloadFactory::override_runtime_arguments(
         for (const auto& cr : shared_vars.artifacts.cores.ranges()) {
             for (const auto& c : cr) {
                 auto& args = args_by_core[c.x][c.y];
-                args[0] = src_addr;
-                args[1] = dst_addr;
+                args[0] = x_addr;
+                args[1] = compact_addr;
+                args[2] = dst_addr;
             }
         }
     }

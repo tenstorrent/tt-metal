@@ -9,14 +9,14 @@
 
 namespace ttnn::experimental::prim {
 
-// Local (no-fabric) border scatter: copy the compact halo buffer
-// [H-top | H-bot | W-left | W-right] produced by neighbor_pad_halo into the BORDER of a persistent
-// padded buffer [outer, H+2pH, W+2pW, C] IN PLACE — the interior (already written by the previous
-// conv's padded-output mode) is left untouched. The next conv then reads the padded buffer as a
-// plain coalesced conv (pad=0), avoiding both the interior copy AND the conv3d per-stick halo read.
-//
-// The scatter is the exact inverse of compact_halo_reference() in the NP-halo test: each compact
-// stick maps to a fixed padded page, so it is a pure local DRAM->DRAM stick copy with no arithmetic.
+// Local (no-fabric) repack into a padded buffer [outer, H+2pH, W+2pW, C]: fill the INTERIOR from the
+// unpadded activation `x` and the BORDER from the compact halo buffer [H-top | H-bot | W-left |
+// W-right] produced by neighbor_pad_halo, in a single pass that writes every padded page once. This
+// folds the old ttnn.pad (interior copy) + border scatter into one op; the next conv then reads the
+// padded buffer as a plain coalesced conv (pad=0). The mapping is the inverse of
+// compact_halo_reference() for the border, a plain strided placement for the interior — pure
+// DRAM->DRAM stick copies, no arithmetic. The op ALLOCATES its padded output (uninitialized; every
+// page is written), so no separate pad/zero pass is needed.
 struct NpHaloScatterParams {
     uint32_t np_padding_h;  // H halo rows per side (pH)
     uint32_t np_padding_w;  // W halo cols per side (pW)
@@ -27,8 +27,8 @@ struct NpHaloScatterParams {
 };
 
 struct NpHaloScatterInputs {
-    Tensor compact_buffer;  // [total_sticks, C] compact halo buffer (source, from neighbor_pad_halo)
-    Tensor padded_buffer;   // [outer, H+2pH, W+2pW, C] persistent padded buffer (in place; also output)
+    Tensor compact_buffer;  // [total_sticks, C] compact halo buffer (border source, from neighbor_pad_halo)
+    Tensor interior_src;    // [outer, H, W, C] unpadded activation (interior source)
 };
 
 }  // namespace ttnn::experimental::prim

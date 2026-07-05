@@ -274,42 +274,28 @@ def test_neighbor_pad_halo_padded_border(mesh_device, device_params, input_shape
         np_pad2_cluster_axis=w_axis, np_pad2_num_links=num_links, padding_mode="zeros",
     )
     ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
-    # Step 2: halo_scatter compact -> padded border, in place. Per-device [1,T,Hd+2,Wd+2,C] replicated.
-    padded = ttnn.from_torch(
-        torch.zeros(1, T, Hd + 2 * pH, Wd + 2 * pW, C).bfloat16(), device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
-    )
-    padded = ttnn.experimental.halo_scatter(compact, padded, np_padding_h=pH, np_padding_w=pW)
+    # Step 2: halo_scatter allocates the padded buffer and fills interior (from inp) + border (from
+    # compact). The WHOLE padded buffer must then match neighbor_pad_async's full-pad output.
+    padded = ttnn.experimental.halo_scatter(compact, inp_mesh, np_padding_h=pH, np_padding_w=pW)
     ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
 
     full_dev = ttnn.get_device_tensors(ttnn.from_device(full))
     pad_dev = ttnn.get_device_tensors(ttnn.from_device(padded))
 
-    def border_mask(h, w):
-        m = torch.zeros(h, w, dtype=torch.bool)
-        m[:pH, :] = True
-        m[-pH:, :] = True
-        m[:, :pW] = True
-        m[:, -pW:] = True
-        return m
-
-    bm = border_mask(Hd + 2 * pH, Wd + 2 * pW)
     all_pass = True
     for i in range(mesh_shape[0] * mesh_shape[1]):
         f = ttnn.to_torch(full_dev[i]).reshape(T, Hd + 2 * pH, Wd + 2 * pW, C)
         p = ttnn.to_torch(pad_dev[i]).reshape(T, Hd + 2 * pH, Wd + 2 * pW, C)
-        fb = f[:, bm, :]
-        pb = p[:, bm, :]
-        eq, msg = comp_equal(pb, fb)
+        eq, msg = comp_equal(p, f)
         if not eq:
             all_pass = False
-            _, pcc = comp_pcc(pb, fb, 0.0)
-            print(f"FAIL dev {i}: border pcc={pcc}", flush=True)
+            _, pcc = comp_pcc(p, f, 0.0)
+            print(f"FAIL dev {i}: padded pcc={pcc}", flush=True)
         else:
             print(f"PASS dev {i}", flush=True)
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
-    assert all_pass, "padded halo border != full-pad border"
+    assert all_pass, "repacked padded buffer != full-pad output"
 
 
 @pytest.mark.timeout(180)

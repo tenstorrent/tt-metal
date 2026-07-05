@@ -81,16 +81,17 @@ void bind_halo_scatter(nb::module_& mod) {
     ttnn::bind_function<"halo_scatter", "ttnn.experimental.">(
         mod,
         R"doc(
-        Local (no-fabric) border scatter for the persistent-padded activation pipeline.
+        Local (no-fabric) repack for the persistent-padded activation pipeline.
 
-        Copies the compact halo buffer [H-top | H-bot | W-left | W-right] produced by
-        neighbor_pad_halo into the BORDER of a persistent padded buffer in place, leaving the
-        interior untouched. The next conv then reads the padded buffer as a plain coalesced conv
-        (pad=0), avoiding both the interior copy and the conv3d per-stick halo read.
+        Allocates a padded buffer [B,T,H+2pH,W+2pW,C] and fills it in one pass: interior from
+        interior_src (the unpadded activation) and border from the compact halo buffer
+        [H-top | H-bot | W-left | W-right] produced by neighbor_pad_halo. Folds the old ttnn.pad
+        (interior copy) + border scatter into one op; the next conv reads the result as a plain
+        coalesced conv (pad=0).
 
         Args:
-            compact_buffer (ttnn.Tensor): Compact halo buffer returned by neighbor_pad_halo (source).
-            padded_buffer (ttnn.Tensor): Persistent padded buffer [.., H+2pH, W+2pW, C] (written in place).
+            compact_buffer (ttnn.Tensor): Compact halo buffer returned by neighbor_pad_halo (border source).
+            interior_src (ttnn.Tensor): Unpadded activation [B,T,H,W,C] (interior source).
             np_padding_h (int): H-halo rows per side (must match the neighbor_pad_halo call).
             np_padding_w (int): W-halo columns per side.
 
@@ -98,11 +99,11 @@ void bind_halo_scatter(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Output memory config.
 
         Returns:
-            ttnn.Tensor: The padded buffer, with its border filled.
+            ttnn.Tensor: A newly-allocated padded buffer with interior + border filled.
         )doc",
         &ttnn::experimental::halo_scatter,
         nb::arg("compact_buffer"),
-        nb::arg("padded_buffer"),
+        nb::arg("interior_src"),
         nb::arg("np_padding_h"),
         nb::arg("np_padding_w"),
         nb::kw_only(),

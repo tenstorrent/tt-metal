@@ -27,11 +27,11 @@ struct NpHaloScatterDeviceOperation {
 
 namespace ttnn::prim {
 
-// Primitive entry point: scatter the compact halo buffer into the border of the persistent padded
-// buffer in place, returning the padded buffer.
+// Primitive entry point: repack into a newly-allocated padded buffer (interior from interior_src,
+// border from the compact halo buffer) and return it.
 Tensor halo_scatter(
     const Tensor& compact_buffer,
-    const Tensor& padded_buffer,
+    const Tensor& interior_src,
     const ttnn::experimental::prim::NpHaloScatterParams& params);
 
 }  // namespace ttnn::prim

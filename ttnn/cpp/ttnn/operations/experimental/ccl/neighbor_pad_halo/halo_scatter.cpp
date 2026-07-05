@@ -12,13 +12,13 @@ namespace ttnn::experimental {
 
 ttnn::Tensor halo_scatter(
     const ttnn::Tensor& compact_buffer,
-    const ttnn::Tensor& padded_buffer,
+    const ttnn::Tensor& interior_src,
     uint32_t np_padding_h,
     uint32_t np_padding_w,
     const std::optional<MemoryConfig>& memory_config) {
     TT_FATAL(np_padding_h > 0, "halo_scatter: np_padding_h must be > 0");
 
-    MemoryConfig output_mem_config = memory_config.value_or(padded_buffer.memory_config());
+    MemoryConfig output_mem_config = memory_config.value_or(interior_src.memory_config());
 
     ttnn::experimental::prim::NpHaloScatterParams params{
         .np_padding_h = np_padding_h,
@@ -26,7 +26,7 @@ ttnn::Tensor halo_scatter(
         .output_mem_config = output_mem_config,
     };
 
-    return ttnn::prim::halo_scatter(compact_buffer, padded_buffer, params);
+    return ttnn::prim::halo_scatter(compact_buffer, interior_src, params);
 }
 
 }  // namespace ttnn::experimental

@@ -10,23 +10,21 @@
 
 namespace ttnn::experimental {
 
-// Local (no-fabric) border scatter for the persistent-padded activation pipeline.
-//
-// Copies the compact halo buffer [H-top | H-bot | W-left | W-right] produced by neighbor_pad_halo
-// into the BORDER of a persistent padded buffer `padded_buffer` ([.., H+2pH, W+2pW, C]) IN PLACE.
-// The padded interior is left untouched (it holds the previous conv's output, written via conv3d's
-// padded-output mode), so the next conv can read `padded_buffer` as a plain coalesced conv (pad=0) —
-// avoiding both the interior copy and the conv3d per-stick halo read.
+// Local (no-fabric) repack for the persistent-padded activation pipeline. Allocates a padded buffer
+// [B,T,H+2pH,W+2pW,C] and fills it in one pass: INTERIOR from `interior_src` (the unpadded
+// activation) and BORDER from the compact halo buffer [H-top | H-bot | W-left | W-right] produced by
+// neighbor_pad_halo. Folds the old ttnn.pad (interior copy) + border scatter into one op; the next
+// conv reads the result as a plain coalesced conv (pad=0).
 //
 // Args:
-//   compact_buffer : the compact halo buffer returned by neighbor_pad_halo (source)
-//   padded_buffer  : the persistent padded buffer (written in place; also the return value)
+//   compact_buffer : the compact halo buffer returned by neighbor_pad_halo (border source)
+//   interior_src   : the unpadded activation [B,T,H,W,C] (interior source)
 //   np_padding_h/w : halo rows/cols per side (must match the neighbor_pad_halo call)
 //
-// Returns: padded_buffer, with its border filled.
+// Returns: a newly-allocated padded buffer with interior + border filled.
 ttnn::Tensor halo_scatter(
     const ttnn::Tensor& compact_buffer,
-    const ttnn::Tensor& padded_buffer,
+    const ttnn::Tensor& interior_src,
     uint32_t np_padding_h,
     uint32_t np_padding_w,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);

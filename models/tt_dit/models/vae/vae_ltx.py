@@ -406,13 +406,8 @@ class LTXCausalConv3d(Module):
                     num_links=links,
                     padding_mode="zeros",
                 )
-                # ttnn.pad on a rank-5 tensor only pads the lower dims (H got dropped); reshape to
-                # rank-4 [B*T, H, W, C] where both H and W are paddable, then reshape back.
-                B_, T_, H_, W_, C_ = (x_BTHWC.shape[i] for i in range(5))
-                x4 = ttnn.reshape(x_BTHWC, [B_ * T_, H_, W_, C_])
-                x4 = ttnn.pad(x4, [(0, 0), (pHe, pHe), (pWe, pWe), (0, 0)], value=0.0)
-                padded = ttnn.reshape(x4, [B_, T_, H_ + 2 * pHe, W_ + 2 * pWe, C_])
-                padded = ttnn.experimental.halo_scatter(compact, padded, np_padding_h=pHe, np_padding_w=pWe)
+                # One op: allocate the padded buffer and fill interior (from x) + border (from compact).
+                padded = ttnn.experimental.halo_scatter(compact, x_BTHWC, np_padding_h=pHe, np_padding_w=pWe)
                 return ttnn.experimental.conv3d(
                     input_tensor=padded,
                     weight_tensor=self.weight.data,
