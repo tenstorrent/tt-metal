@@ -336,16 +336,26 @@ class TtIndexer:
         Used to gather the SP×TP seq-sharded top-k indices back to the SP block's full row set."""
         if self.tp_factor == 1:
             return t
-        return ttnn.experimental.all_gather_async(
-            t,
-            dim=dim,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
+        # WORKAROUND(fabric multi-hop line-broadcast deadlock): on a >=3-chip TP line under FABRIC_1D,
+        # gathering the top-k indices deadlocks the fabric for the row-major composite all-gather
+        # (broadcast_rm_writer) AND the tile-aligned native all_gather_async (minimal_default) — the
+        # forwarding erisc's NOC reads never return, credits never come back, workers hang at FWSW.
+        # broadcast_tile_writer (the composite broadcast in TILE layout) is the one multi-hop line kernel
+        # that drains, so force that path here; the concat matches all_gather(dim). Remove once the CCL
+        # kernels are fixed upstream. Validated: full sparse-MLA forward passes SP=2xTP4 (was 4/4 hang).
+        was_rm = t.get_layout() == ttnn.ROW_MAJOR_LAYOUT
+        t_tile = ttnn.to_layout(t, ttnn.TILE_LAYOUT) if was_rm else t
+        shards = ttnn.all_broadcast(
+            t_tile,
             cluster_axis=self.tp_axis,
+            num_links=self.ccl_num_links,
+            topology=self.ccl_topology,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        gathered = ttnn.concat(shards, dim)
+        if was_rm:
+            gathered = ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT)
+        return gathered
 
     def _build_rope_tables(self):
         """Precompute the indexer's natural-path RoPE tables via RotarySetup.get_indexer_rope_tables
