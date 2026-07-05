@@ -353,6 +353,13 @@ def capture_real_inputs(
     if model is None:
         _m, loader_or_err = load_hf_model_cascade(model_id, torch_dtype="float32", verbose=verbose)
         if _m is None:
+            try:
+                from .module_tree import _load_via_reference_loader
+
+                _m = _load_via_reference_loader(model_id, demo_dir)
+            except Exception:
+                _m = None
+        if _m is None:
             if verbose:
                 print(f"  [capture] {loader_or_err}", file=sys.stderr)
             return {c: {"status": "model_load_failed", "error": loader_or_err or "load failed"} for c in components}
