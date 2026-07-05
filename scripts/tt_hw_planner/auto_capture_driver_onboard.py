@@ -34,18 +34,23 @@ generic capture framework. Some components could not be invoked via standard
 forward patterns. Write a Python function that drives this specific HF model
 so its forward hooks fire on the uncaptured components.
 
-The function MUST have this exact signature:
+The function MUST have this signature (the second arg is an OPTIONAL hint that
+is often None -- do NOT rely on it):
 
-    def driver(model, pixel_values):
-        # invoke model so its components get exercised
-        # may construct supporting objects (processors, sessions, etc.)
+    def driver(model, sample_input=None):
+        # Drive `model` end-to-end so forward hooks fire on the uncaptured
+        # components. CONSTRUCT valid inputs YOURSELF for THIS model's modality
+        # using the forward signature below and the model's own API -- e.g. call
+        # the model's native inference / generate / synthesize method, or build
+        # correctly-shaped tensors (text ids, audio, image, etc.).
+        # Do NOT assume the input is an image or `pixel_values`.
         # return None; the caller has hooks installed before calling driver()
         pass
 
 Constraints:
-- Use only HF transformers public API
-- Stay in-process; no network, no file I/O
-- Match a callable with EXACTLY two positional args: (model, pixel_values)
+- Use only the model's own public API (+ standard torch); no network, no file I/O
+- First positional arg is `model`; a second optional arg may be present but is
+  often None -- the driver must build its OWN inputs for THIS model's modality
 - Return None
 - Wrap any failures in try/except -- never raise out of the driver
 
@@ -69,7 +74,7 @@ Components the standard framework could not capture:
 What the generic framework already tried (in order):
     {tried}
 
-Return ONLY a single Python function `def driver(model, pixel_values):` with
+Return ONLY a single Python function `def driver(model, sample_input=None):` with
 no markdown, no prose, no top-level imports outside the function body. The
 function will be saved as a learned driver and loaded on future runs.
 
@@ -80,7 +85,7 @@ OUTPUT FORMAT (strict):
   - No explanatory text after the closing brace
   - Imports go INSIDE the function body, not at module top
 
-If you cannot satisfy these constraints, respond with exactly `def driver(model, pixel_values): return None`
+If you cannot satisfy these constraints, respond with exactly `def driver(model, sample_input=None): return None`
 (the no-op default). Do NOT explain why -- a malformed response is worse than a no-op.
 """
 
@@ -217,12 +222,11 @@ def _validate_driver_source(source: str) -> Tuple[bool, str]:
         return False, "no `def driver(...)` function found at top level"
 
     positional = [a for a in driver_def.args.args if a.arg not in {"self"}]
-    if len(positional) != 2:
-        return False, f"`driver` must take exactly 2 positional args, found {len(positional)}"
+    if not (1 <= len(positional) <= 2):
+        return False, f"`driver` must take 1 or 2 positional args, found {len(positional)}"
 
-    arg_names = [a.arg for a in positional]
-    if arg_names != ["model", "pixel_values"]:
-        return False, f"`driver` args must be (model, pixel_values), got {arg_names}"
+    if positional[0].arg != "model":
+        return False, f"`driver`'s first positional arg must be `model`, got {positional[0].arg!r}"
 
     return True, ""
 
@@ -247,9 +251,12 @@ def _persist_driver(model_class_name: str, source: str) -> Path:
         f"{source.rstrip()}\n\n\n"
         f"@register_capture_driver(matcher=lambda m: type(m).__name__ == "
         f'"{model_class_name}")\n'
-        f"def _registered_driver(model, pixel_values):\n"
+        f"def _registered_driver(model, sample_input=None):\n"
+        f"    import inspect as _insp\n"
         f"    try:\n"
-        f"        driver(model, pixel_values)\n"
+        f"        _p = [q for q in _insp.signature(driver).parameters.values()\n"
+        f"              if q.kind in (q.POSITIONAL_ONLY, q.POSITIONAL_OR_KEYWORD)]\n"
+        f"        driver(model) if len(_p) <= 1 else driver(model, sample_input)\n"
         f"    except Exception:\n"
         f"        pass\n"
     )
