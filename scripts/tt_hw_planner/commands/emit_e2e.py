@@ -173,7 +173,7 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     if nonnative:
         reasons.append("G1: stub(s) delegate to the torch reference (not native ttnn): " + ", ".join(nonnative[:8]))
 
-    if os.environ.get("E2E_REQUIRE_ON_DEVICE") == "1" and os.environ.get("E2E_ALLOW_HOST_DECODE") != "1":
+    if os.environ.get("E2E_REQUIRE_ON_DEVICE", "1") != "0" and os.environ.get("E2E_ALLOW_HOST_DECODE") != "1":
         tt_dir = demo_dir / "tt"
         host_hits = []
         for p in sorted(tt_dir.glob("*.py")) if tt_dir.is_dir() else []:
@@ -290,7 +290,7 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
         if re.search(r"pytest\.xfail|mark\.xfail|pytest\.skip|assert\s+True\b", src):
             reasons.append(f"honesty: {p.name} contains pytest.xfail / pytest.skip / assert True")
 
-    if os.environ.get("E2E_REQUIRE_TRACE") == "1" and not reasons:
+    if os.environ.get("E2E_REQUIRE_TRACE", "1") != "0" and os.environ.get("E2E_ALLOW_NO_TRACE") != "1" and not reasons:
         probe_py = Path(__file__).resolve().parent.parent / "_trace_capture_probe.py"
         if probe_py.is_file():
             tenv = dict(os.environ)
@@ -318,7 +318,9 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                     _b = "; ".join(x.get("guidance", x.get("rung", "")) for x in (tr.get("static_blockers") or []))
                     _cap = (tr.get("device_capture") or {}).get("reason", "")
                     reasons.append(
-                        "G6 trace+2CQ: pipeline not trace+2CQ-validated per stage — " + (_b or _cap or "capture failed")
+                        "G6 trace+2CQ: pipeline not trace+2CQ-validated per stage — "
+                        + (_b or _cap or "capture failed")
+                        + " (set E2E_ALLOW_NO_TRACE=1 to waive for a genuinely non-traceable model)"
                     )
             except subprocess.TimeoutExpired:
                 _rst = _reset_device()
@@ -492,7 +494,7 @@ def _emit_e2e_phase_a(args) -> int:
     print("\n  ===== PHASE 1+2: BUILDER agent (plan → build → iterate) =====\n")
     _trace_note = (
         _TRACE_PROMPT_BLOCK
-        if (os.environ.get("E2E_REQUIRE_TRACE") == "1" or os.environ.get("E2E_REQUIRE_ON_DEVICE") == "1")
+        if (os.environ.get("E2E_REQUIRE_TRACE", "1") != "0" or os.environ.get("E2E_REQUIRE_ON_DEVICE", "1") != "0")
         else ""
     )
     build_prompt = _build_agent_prompt(
