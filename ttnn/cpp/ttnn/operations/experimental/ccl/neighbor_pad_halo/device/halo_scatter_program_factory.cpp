@@ -7,7 +7,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
+#include <algorithm>
 
 using namespace tt::tt_metal;
 
@@ -67,12 +69,20 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     const uint32_t page_size = src->aligned_page_size();
     tt::DataFormat df = datatype_to_dataformat_converter(tensor_args.compact_buffer.dtype());
 
-    CoreCoord core{0, 0};
+    // Total border sticks = 2 H-sections (pH*Wd each) + 2 W-sections (Hp*pW each), per frame.
+    const uint32_t total_sticks = outer * (2 * pH * Wd + 2 * pW * Hp);
+
+    // Spread the scatter across the full compute grid: each core copies a contiguous global-stick range.
+    const CoreCoord grid = tensor_args.padded_buffer.device()->compute_with_storage_grid_size();
+    const uint32_t num_cores = std::min<uint32_t>(grid.x * grid.y, std::max<uint32_t>(total_sticks, 1u));
+    const CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
+    const uint32_t per_core = (total_sticks + num_cores - 1) / num_cores;  // ceil
+
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
     constexpr uint32_t cb_pages = 4;  // small ring of stick scratch to overlap read/write
     CircularBufferConfig cb_cfg =
         CircularBufferConfig(cb_pages * page_size, {{cb_id, df}}).set_page_size(cb_id, page_size);
-    CreateCircularBuffer(program, core, cb_cfg);
+    CreateCircularBuffer(program, all_cores, cb_cfg);
 
     auto writer_cfg = WriterDataMovementConfig{};
     writer_cfg.compile_args = {page_size, outer, Hp, Wp, Hd, Wd, pH, pW, cb_id, cb_pages};
@@ -82,11 +92,21 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/halo_scatter_writer.cpp",
-        core,
+        all_cores,
         writer_cfg);
-    SetRuntimeArgs(program, writer_kernel_id, core, {src->address(), dst->address()});
 
-    return cached_program_t{std::move(program), {NpHaloScatterArtifacts{writer_kernel_id, core}}};
+    // Per-core [src_addr, dst_addr, stick_start, stick_count]; assign contiguous ranges row-wise.
+    uint32_t assigned = 0;
+    for (const auto& cr : all_cores.ranges()) {
+        for (const auto& c : cr) {
+            const uint32_t start = assigned;
+            const uint32_t count = (start >= total_sticks) ? 0u : std::min(per_core, total_sticks - start);
+            SetRuntimeArgs(program, writer_kernel_id, c, {src->address(), dst->address(), start, count});
+            assigned += count;
+        }
+    }
+
+    return cached_program_t{std::move(program), {NpHaloScatterArtifacts{writer_kernel_id, all_cores}}};
 }
 
 // ============================================================================
@@ -102,11 +122,14 @@ void NpHaloScatterMeshWorkloadFactory::override_runtime_arguments(
 
     for (auto& [coordinate_range, shared_vars] : cached_workload.shared_variables) {
         auto& program = cached_workload.workload.get_programs().at(coordinate_range);
-        const auto& core = shared_vars.artifacts.core;
         auto& args_by_core = GetRuntimeArgs(program, shared_vars.artifacts.writer_kernel_id);
-        auto& args = args_by_core[core.x][core.y];
-        args[0] = src_addr;
-        args[1] = dst_addr;
+        for (const auto& cr : shared_vars.artifacts.cores.ranges()) {
+            for (const auto& c : cr) {
+                auto& args = args_by_core[c.x][c.y];
+                args[0] = src_addr;
+                args[1] = dst_addr;
+            }
+        }
     }
 }
 

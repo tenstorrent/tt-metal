@@ -439,7 +439,8 @@ class LTXCausalConv3d(Module):
                 padded = ttnn.reshape(x4, [B_, T_, H_ + 2 * pHe, W_ + 2 * pWe, C_])
                 if os.environ.get("TT_LTX_PP_DEBUG"):
                     print(f"PP x={list(x_BTHWC.shape)} padded={list(padded.shape)} pHe={pHe} pWe={pWe}", flush=True)
-                padded = ttnn.experimental.halo_scatter(compact, padded, np_padding_h=pHe, np_padding_w=pWe)
+                if os.environ.get("TT_LTX_PP_NOSCATTER") is None:
+                    padded = ttnn.experimental.halo_scatter(compact, padded, np_padding_h=pHe, np_padding_w=pWe)
                 return ttnn.experimental.conv3d(
                     input_tensor=padded,
                     weight_tensor=self.weight.data,

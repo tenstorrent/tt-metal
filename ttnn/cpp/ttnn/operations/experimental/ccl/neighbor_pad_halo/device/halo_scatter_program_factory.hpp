@@ -12,7 +12,7 @@ namespace ttnn::experimental::prim {
 
 struct NpHaloScatterArtifacts {
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
-    tt::tt_metal::CoreCoord core{0, 0};
+    tt::tt_metal::CoreRangeSet cores;
 };
 
 struct NpHaloScatterSharedVariables {
