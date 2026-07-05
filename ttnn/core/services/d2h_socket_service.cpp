@@ -889,6 +889,10 @@ std::vector<distributed::D2HSocket*> D2HStreamService::get_sockets() const {
     return out;
 }
 
+DeviceAddr D2HStreamService::get_data_ready_counter_addr(const distributed::MeshCoordinate& coord) const {
+    return get_write_ack_counter_addr(coord);
+}
+
 CoreRange D2HStreamService::get_worker_cores() const {
     TT_FATAL(
         cfg_.worker_cores.has_value(),

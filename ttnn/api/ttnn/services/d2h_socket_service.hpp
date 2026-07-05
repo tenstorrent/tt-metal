@@ -97,6 +97,7 @@ public:
     CoreRange get_worker_cores() const;
     CoreCoord get_metadata_master_core() const;
     DeviceAddr get_write_ack_counter_addr(const distributed::MeshCoordinate& coord) const;
+    DeviceAddr get_data_ready_counter_addr(const distributed::MeshCoordinate& coord) const;
     DeviceAddr get_transfer_done_sem_addr() const;
     DeviceAddr get_worker_metadata_addr() const;
     CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;

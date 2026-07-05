@@ -55,10 +55,14 @@ void bind_outbound_socket_service_sync(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("metadata") = std::nullopt),
         ttnn::overload_t(
-            static_cast<ttnn::Tensor (*)(const tt::tt_metal::D2HStreamService&, const ttnn::Tensor&)>(
-                &ttnn::experimental::outbound_socket_service_sync),
+            static_cast<ttnn::Tensor (*)(
+                const tt::tt_metal::D2HStreamService&,
+                const std::optional<ttnn::Tensor>&,
+                const std::optional<ttnn::Tensor>&)>(&ttnn::experimental::outbound_socket_service_sync),
             nb::arg("service"),
-            nb::arg("record")));
+            nb::kw_only(),
+            nb::arg("input") = std::nullopt,
+            nb::arg("metadata") = std::nullopt));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::outbound_socket_service_sync::detail

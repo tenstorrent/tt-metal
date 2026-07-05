@@ -471,7 +471,7 @@ void run_owner_metadata_only(
         auto host_record =
             ttnn::distributed::distribute_tensor(Tensor::from_vector<uint32_t>(words, record_spec), *rep);
         copy_to_device(host_record, record_dev);
-        ttnn::experimental::outbound_socket_service_sync(service, record_dev);
+        ttnn::experimental::outbound_socket_service_sync(service, /*input=*/std::nullopt, /*metadata=*/record_dev);
         g_cross_rank_world->barrier();  // release the connector to read this iteration's record
         g_cross_rank_world->barrier();  // wait until it has finished reading
         Finish(mesh_device->mesh_command_queue());

@@ -48,6 +48,13 @@ ttnn::Tensor outbound_socket_service_sync(
     const tt::tt_metal::D2DStreamServiceSender& service,
     const ttnn::Tensor& input,
     const std::optional<ttnn::Tensor>& metadata = std::nullopt);
-ttnn::Tensor outbound_socket_service_sync(const tt::tt_metal::D2HStreamService& service, const ttnn::Tensor& record);
+
+// D2H service: {backing+metadata, backing-only, metadata-only}. `input` is the payload to
+// stream (omit for metadata-only); `metadata` is the record (omit for payload-only). At
+// least one must be set.
+ttnn::Tensor outbound_socket_service_sync(
+    const tt::tt_metal::D2HStreamService& service,
+    const std::optional<ttnn::Tensor>& input = std::nullopt,
+    const std::optional<ttnn::Tensor>& metadata = std::nullopt);
 
 }  // namespace ttnn::prim
