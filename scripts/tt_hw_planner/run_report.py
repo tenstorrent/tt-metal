@@ -102,6 +102,66 @@ def _emit_run_report_impl(
         lines.append(f"  - {', '.join(f'`{c}`' for c in sorted(cat_report.pending))}")
     lines.append("")
 
+    # --- Module-by-module table (every component: placement + why + its pytest) ---
+    from .module_tree import safe_identifier
+
+    _dd = str(demo_dir)
+    _mi = _dd.rfind("/models/")
+    demo_rel = _dd[_mi + 1 :] if _mi >= 0 else demo_dir.name  # e.g. models/demos/xtts_v2
+
+    def _reason_for(comp: str, placement: str) -> str:
+        if placement == "ON_DEVICE":
+            return "graduated — native ttnn, PCC-verified"
+        entry = skips.get(comp) or {}
+        r = (entry.get("reason") or "").replace("\n", " ").replace("|", "\\|").strip()
+        if r:
+            return r[:160]
+        return "TTNN op gap" if placement == "KERNEL_MISSING" else "retry next run"
+
+    _rows = (
+        [(c, "ON_DEVICE") for c in sorted(cat_report.on_device)]
+        + [(c, "KERNEL_MISSING") for c in sorted(cat_report.kernel_missing)]
+        + [(c, "PENDING") for c in sorted(cat_report.pending)]
+    )
+    lines.append("## Module placement (all components)")
+    lines.append("")
+    lines.append("| module | on device? | why | per-module pytest |")
+    lines.append("|---|---|---|---|")
+    for comp, placement in _rows:
+        safe = safe_identifier(comp)
+        on_dev = "✅ yes" if placement == "ON_DEVICE" else f"❌ no ({placement})"
+        lines.append(
+            f"| `{comp}` | {on_dev} | {_reason_for(comp, placement)} | "
+            f"`{demo_rel}/tests/pcc/test_{safe}.py::test_{safe}` |"
+        )
+    lines.append("")
+
+    # --- Reproduce: exact commands to re-run every reported result ---
+    _demo_files = [
+        p for p in sorted((demo_dir / "demo").glob("*.py")) if p.name != "__init__.py"
+    ] if (demo_dir / "demo").is_dir() else []
+    _e2e_files = (
+        sorted((demo_dir / "tests" / "e2e").glob("test_*.py")) if (demo_dir / "tests" / "e2e").is_dir() else []
+    )
+    lines.append("## Reproduce")
+    lines.append("")
+    lines.append("Run from the repo root. Per-component PCC (on device):")
+    lines.append("```bash")
+    for comp, _pl in _rows:
+        safe = safe_identifier(comp)
+        lines.append(f"python -m pytest {demo_rel}/tests/pcc/test_{safe}.py::test_{safe} -svv")
+    lines.append("```")
+    if _e2e_files or _demo_files:
+        lines.append("")
+        lines.append("End-to-end / demo:")
+        lines.append("```bash")
+        for p in _e2e_files:
+            lines.append(f"python -m pytest {demo_rel}/tests/e2e/{p.name} -svv")
+        for p in _demo_files:
+            lines.append(f"python -m pytest {demo_rel}/demo/{p.name}::test_demo -svv")
+        lines.append("```")
+    lines.append("")
+
     if skips:
         # Group by category for clearer reading
         by_cat: Dict[str, List[tuple]] = {}

@@ -519,7 +519,9 @@ def _baseline_ms() -> float | None:
         return None
 
 
-def _emit_summary(repo_root: Path, kernel_log: str, model_name: str, task: str, metric: str, start_sha: str) -> None:
+def _emit_summary(
+    repo_root: Path, kernel_log: str, model_name: str, task: str, metric: str, start_sha: str, perf_test: str = ""
+) -> None:
     import importlib.util
 
     try:
@@ -534,8 +536,29 @@ def _emit_summary(repo_root: Path, kernel_log: str, model_name: str, task: str, 
         c = _git(repo_root, "rev-list", f"{start_sha}..HEAD", "--count")
         wins = int(c) if c.isdigit() else None
     branch = _git(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
+    report_csv = ""
+    residual = None
+    try:
+        _runs = repo_root / PERF_DIR / "runs"
+        _rc = sorted(_runs.rglob("*report*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if _rc:
+            report_csv = str(_rc[0])
+        _rr = sorted(_runs.rglob("residual_report.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if _rr:
+            residual = json.loads(_rr[0].read_text())
+    except Exception:  # noqa: BLE001
+        pass
     text = mod.render_summary(
-        kernel_log, _baseline_ms(), model=model_name, task=task, metric=metric, committed_wins=wins, opt_branch=branch
+        kernel_log,
+        _baseline_ms(),
+        model=model_name,
+        task=task,
+        metric=metric,
+        committed_wins=wins,
+        opt_branch=branch,
+        perf_test=perf_test,
+        report_csv=report_csv,
+        residual=residual,
     )
     print("\n" + text + "\n")
     md = _latest_manifest(repo_root / PERF_DIR)
@@ -629,7 +652,7 @@ def optimize_pipeline(
     except Exception:  # noqa: BLE001
         _mf = {}
     _print_scorecard(devices, _mf, pipe, _cov_facts, before_ms, after_ms, model_name)
-    _emit_summary(repo_root, kernel_log, model_name, task, metric, start_sha)
+    _emit_summary(repo_root, kernel_log, model_name, task, metric, start_sha, perf_test=(pipe or {}).get("perf_test", ""))
     return {"task": task, "rounds": rounds, "can_stop": can_stop, "halted": halted}
 
 
