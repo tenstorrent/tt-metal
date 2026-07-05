@@ -28,6 +28,70 @@ from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import line_params, ring_params
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
+
+def _apply_local_iter_env() -> None:
+    # setdefault from a local dev env file so the iteration speedups (kernel prewarm
+    # manifest, resident DiT, warmup/gate toggles) apply to a bare local run without the
+    # broker's -e handoff. Explicit env always wins and an absent file is a no-op, so CI
+    # (this test is checkpoint-gated) and the committed VBench/CLIP gate defaults are
+    # untouched. Flat "KEY: VALUE" lines; override path via LTX_ITER_ENV.
+    path = os.environ.get("LTX_ITER_ENV") or os.path.join(
+        os.environ.get("TT_METAL_HOME", ""), "tmp", "ltx_env_prewarm.yaml"
+    )
+    if not os.path.isfile(path):
+        return
+    applied = []
+    with open(path) as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            key, _, val = line.partition(":")
+            key = key.strip()
+            if key and key not in os.environ:
+                os.environ[key] = val.strip().strip('"').strip("'")
+                applied.append(key)
+    if applied:
+        logger.info(f"LTX iter env: {len(applied)} defaults from {path}: {', '.join(applied)}")
+    _select_profiler_prewarm_manifest()
+
+
+def _select_profiler_prewarm_manifest() -> None:
+    # The device profiler compiles every kernel under a DIFFERENT build_key: build.cpp appends
+    # -DPROFILE_KERNEL=<opts> and -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=<size> to the compiler
+    # defines, and that define string is hashed into build_key. TT_METAL_TRACE_PROFILER flips
+    # PROFILE_KERNEL 1->5 and TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT scales the buffer-size define,
+    # so a profiler run's build_key never matches the normal (non-profiler) prewarm manifest -> every
+    # entry is build_key-mismatch-skipped -> the ~2.5k kernels cold-compile op-by-op (~600s+).
+    #
+    # When the device profiler is on, auto-select the sibling profiler-variant manifest
+    # "<name>.profiler.manifest" (captured under the same profiler recipe, so its build_key matches).
+    # Default (profiler off) is a NO-OP -> the normal manifest is untouched and the run stays
+    # byte-identical. If the variant is missing we leave the normal manifest and warn (prewarm then
+    # harmlessly build_key-skips it, i.e. today's cold-compile behavior -- no corruption). A build_key
+    # that still mismatches (a different profiler recipe) is likewise skipped, never mis-built.
+    if os.environ.get("TT_METAL_DEVICE_PROFILER", "0") in ("", "0", "false", "False"):
+        return
+    manifest = os.environ.get("TT_METAL_KERNEL_PREWARM_MANIFEST")
+    if not manifest:
+        return
+    base, ext = os.path.splitext(manifest)
+    if base.endswith(".profiler"):
+        return  # already a profiler-variant manifest; respect the explicit choice
+    prof_manifest = base + ".profiler" + ext
+    if os.path.isfile(prof_manifest):
+        os.environ["TT_METAL_KERNEL_PREWARM_MANIFEST"] = prof_manifest
+        logger.info(f"LTX iter env: device profiler on -> prewarm manifest {prof_manifest}")
+    else:
+        logger.warning(
+            f"LTX iter env: device profiler on but {prof_manifest} is missing; kernels will "
+            f"cold-compile. Capture it with TT_METAL_KERNEL_MANIFEST_WRITE={prof_manifest}."
+        )
+
+
+_apply_local_iter_env()
+
+
 # Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
 # s2); measured need is ~236 MB at 1080p (get_trace_buffers_size), so 300 MB gives headroom.
 # l1_small_size: native ttnn.conv1d (the depthwise audio taps) runs an UntilizeWithHalo gather
