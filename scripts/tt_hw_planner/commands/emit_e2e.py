@@ -883,12 +883,20 @@ def _emit_e2e_phase_a(args) -> int:
         label="builder",
         log_path=full_log,
     )
+    engine = getattr(args, "engine", "cc") or "cc"
     if rc_build != 0:
-        print(f"\n  ✗ builder agent exited rc={rc_build}; skipping grade")
-        return 1
-    print("  ✓ builder finished (exit 0)")
+        if engine == "cc" and (demo_dir / "tt").is_dir():
+            print(
+                f"\n  ⚠ builder agent exited rc={rc_build}, but {demo_dir}/tt exists — "
+                f"entering CC fix-loop against the gate from current state"
+            )
+        else:
+            print(f"\n  ✗ builder agent exited rc={rc_build}; skipping grade")
+            return 1
+    else:
+        print("  ✓ builder finished (exit 0)")
 
-    if (getattr(args, "engine", "cc") or "cc") == "cc":
+    if engine == "cc":
         return _run_emit_e2e_cc(
             model_id=model_id,
             demo_dir=demo_dir,
