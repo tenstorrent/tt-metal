@@ -11236,6 +11236,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     popt.add_argument("--metric", default="device_ms", help="device_ms | wall_ms | auto")
     popt.add_argument("--max-iter", type=int, default=1000, dest="max_iter")
     popt.add_argument("--budget-usd", type=float, default=1_000_000_000.0, dest="budget_usd")
+    popt.add_argument(
+        "--max-rounds",
+        type=int,
+        default=20,
+        dest="max_rounds",
+        help="cc engine: max claude -p rounds per pipeline (default 20). Use 1 for a single optimization "
+        "pass. The deterministic gate can still stop earlier via can_stop.",
+    )
     popt.add_argument("-k", "--case", dest="case", help="pytest -k case id override (e.g. device_params0)")
     popt.add_argument(
         "--in-place",
