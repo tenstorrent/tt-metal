@@ -33,6 +33,8 @@ ttnn::Tensor conv3d(
     const std::optional<ttnn::Tensor>& halo_buffer = std::nullopt,
     uint32_t logical_h_mask = 0,
     uint32_t logical_w_mask = 0,
-    const std::optional<ttnn::Tensor>& pad_offset_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& pad_offset_tensor = std::nullopt,
+    uint32_t output_pad_h = 0,
+    uint32_t output_pad_w = 0);
 
 }  // namespace ttnn::experimental

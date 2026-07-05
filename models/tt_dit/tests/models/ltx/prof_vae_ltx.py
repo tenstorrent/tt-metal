@@ -331,6 +331,53 @@ def _ltx_conv_input(mesh, pc, c_in, T, H, W):
     return x, lh, lw
 
 
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_conv3d_padded_output(mesh_device, device_params):
+    """Slice 1 validation: conv3d output_pad_h/w places the [H,W] result into the interior of a padded
+    [H+2,W+2] output buffer. The interior must be bit-exact vs the compact conv output; the border is
+    left untouched (filled later by the border op)."""
+    from models.common.utility_functions import comp_pcc
+
+    mesh = mesh_device.create_submesh(ttnn.MeshShape(4, 8))
+    conv, pc = _build_ltx_conv(mesh, 256, 256, 8, 136, 240, use_fused=False)  # s3-like, per-dev 34x30
+    C = conv.in_channels
+    Hd, Wd = 136 // 4, 240 // 8
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    torch.manual_seed(0)
+    x = ttnn.from_torch(
+        torch.randn(1, 8, Hd, Wd, C).bfloat16(), device=mesh, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem
+    )
+
+    def _conv(output_pad_h, output_pad_w):
+        return ttnn.experimental.conv3d(
+            input_tensor=x,
+            weight_tensor=conv.weight.data,
+            bias_tensor=conv.bias.data,
+            device=mesh,
+            config=conv.conv_config,
+            dtype=ttnn.bfloat16,
+            output_channels=conv.out_channels,
+            kernel_size=conv.kernel_size,
+            stride=(1, 1, 1),
+            padding=(1, 1, 1),
+            dilation=(1, 1, 1),
+            padding_mode="zeros",
+            groups=1,
+            compute_kernel_config=conv.compute_kernel_config,
+            output_pad_h=output_pad_h,
+            output_pad_w=output_pad_w,
+        )
+
+    compact = ttnn.to_torch(ttnn.get_device_tensors(ttnn.from_device(_conv(0, 0)))[0])  # [1,8,Hd,Wd,Cout]
+    padded = ttnn.to_torch(ttnn.get_device_tensors(ttnn.from_device(_conv(1, 1)))[0])  # [1,8,Hd+2,Wd+2,Cout]
+    print(f"PADOUT shapes: compact={tuple(compact.shape)} padded={tuple(padded.shape)}", flush=True)
+    interior = padded[:, :, 1:-1, 1:-1, :]
+    ok, pcc = comp_pcc(compact.float(), interior.float(), 0.9999)
+    print(f"PADOUT-INTERIOR-PCC: {pcc} ({'OK' if ok else 'FAIL'})", flush=True)
+    assert ok, f"padded-output interior != compact conv output: {pcc}"
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112 * 8}],

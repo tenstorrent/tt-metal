@@ -90,6 +90,11 @@ struct Conv3dParams {
     // >= logical_*_mask. 0 == disabled.
     uint32_t logical_h_mask = 0;
     uint32_t logical_w_mask = 0;
+    // Padded-output mode (opt-in): the writer places the [H_out,W_out] result into the interior of a
+    // spatially padded [H_out+2*output_pad_h, W_out+2*output_pad_w] output buffer, leaving a border gap
+    // for a later border-fill (persistent padded activations). 0 == compact output.
+    uint32_t output_pad_h = 0;
+    uint32_t output_pad_w = 0;
 };
 
 struct Conv3dInputs {

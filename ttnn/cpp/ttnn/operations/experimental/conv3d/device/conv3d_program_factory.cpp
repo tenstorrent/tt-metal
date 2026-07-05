@@ -870,7 +870,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         static_cast<uint32_t>(weight_share_mode),
         weights_mcast_sender_sem_id,
         weights_mcast_receiver_sem_id,
-        static_cast<uint32_t>(enable_streaming_output)};
+        static_cast<uint32_t>(enable_streaming_output),
+        operation_attributes.output_pad_h,
+        operation_attributes.output_pad_w};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
