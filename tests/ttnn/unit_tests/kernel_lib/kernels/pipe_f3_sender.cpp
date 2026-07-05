@@ -21,23 +21,22 @@ using namespace dataflow_kernel_lib;
 void kernel_main() {
     constexpr uint32_t cb_src = get_compile_time_arg_val(0);
     constexpr uint32_t cb_dst = get_compile_time_arg_val(1);
-    constexpr uint32_t data_ready_sem_id = get_compile_time_arg_val(2);
-    // (slot 3 was the old recipient count — the fan-out now comes from the rect area; PRE_HANDSHAKE is
-    // false here so there is no ack count to carry. Left unread.)
-    constexpr uint32_t payload_pages = get_compile_time_arg_val(4);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t num_iters = get_compile_time_arg_val(6);
-    constexpr auto in_args = TensorAccessorArgs<7>();
+    // Handshake is off here (McastConfig(handshake=false)), so the sender broadcasts without the ack.
+    constexpr auto mc = McastArgs</*CT=*/2, /*RT=*/2>();              // mcast config (CT 2..) + dest rect (RT 2..)
+    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 7, right after the mcast CT block
+    constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 0);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 1);
+    constexpr uint32_t num_iters = get_compile_time_arg_val(SCALARS + 2);
+    constexpr auto in_args = TensorAccessorArgs<SCALARS + 3>();
     constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t input_start_id = get_arg_val<uint32_t>(1);
-    const uint32_t x0 = get_arg_val<uint32_t>(2);
-    const uint32_t y0 = get_arg_val<uint32_t>(3);
-    const uint32_t x1 = get_arg_val<uint32_t>(4);
-    const uint32_t y1 = get_arg_val<uint32_t>(5);
-    const uint32_t output_addr = get_arg_val<uint32_t>(6);
-    const uint32_t self_start_id = get_arg_val<uint32_t>(7);
+    // RT 2..5 = the dest rect INCLUDING this sender's own core (loopback); a 1x1 self-rect (R==1) is the
+    // degenerate case the SenderPipe collapses to a local copy. The sender's own output words follow the
+    // 4-word rect (RT 6,7 = mc.next_runtime_args_offset()+0/+1).
+    const uint32_t output_addr = get_arg_val<uint32_t>(mc.next_runtime_args_offset() + 0);
+    const uint32_t self_start_id = get_arg_val<uint32_t>(mc.next_runtime_args_offset() + 1);
 
     constexpr uint32_t payload_bytes = payload_pages * page_bytes;
 
@@ -59,12 +58,9 @@ void kernel_main() {
     const uint32_t dst_addr = cb_dst_obj.get_write_ptr();
     const uint32_t src_addr = cb_src_obj.get_read_ptr();
 
-    // Sender is IN the rect -> the Pipe infers loopback (hardware writes the payload to self too). No
-    // pre-handshake (fresh single-use dest here). The fan-out is derived from the rect area: a 1x1
-    // self-only box (area==1, in_rect) gives excl==0 -> the degenerate guard collapses to a local copy.
-    // PRE_HANDSHAKE=false, so the consumer-ready id, the ack count, and the Flag signal default are all
-    // omitted entirely (the ctor's ack arg defaults to ACK_EQUALS_FANOUT, unused under no-handshake).
-    SenderPipe<noc_index, data_ready_sem_id, /*PRE_HANDSHAKE=*/false> pipe(noc, McastRect<>{x0, y0, x1, y1});
+    // Sender is IN the rect -> the pipe infers loopback (hardware writes the payload to self too), and a
+    // 1x1 self-only box (R==1) collapses to a local copy (the degenerate guard).
+    auto pipe = mc.sender(noc);
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         pipe.send(src_addr, dst_addr, payload_bytes);
