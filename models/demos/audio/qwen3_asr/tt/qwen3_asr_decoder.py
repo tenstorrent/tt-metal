@@ -46,9 +46,12 @@ class Qwen3ASRDecoder(Transformer):
         S_pad = ((S + 511) // 512) * 512
         if S_pad != S:
             inputs_embeds = torch.nn.functional.pad(inputs_embeds, (0, 0, 0, S_pad - S))
-        prefill_input, rot_g, rot_l, pt, _ = self.prepare_inputs_prefill_embeds(
+        # tt_transformers.Transformer.prepare_inputs_prefill returns 6 values
+        # (tokens, rot_global, rot_local, page_table, chunk_page_table, chunk_start_idx);
+        # we drive a single, non-paged, non-chunked prefill so only the first three matter.
+        prefill_input, rot_g, rot_l = self.prepare_inputs_prefill_embeds(
             inputs_embeds, page_table=None, batch_size=1, user_id=0
-        )
+        )[:3]
         get_last = (last // 32) * 32
         tt_logits = self.ttnn_prefill_forward(
             prefill_input, rot_mats_global=rot_g, rot_mats_local=rot_l, user_id=0,
