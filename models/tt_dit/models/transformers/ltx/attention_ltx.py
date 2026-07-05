@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -43,6 +45,30 @@ class LTXAttention(Module):
         (True, 4864, 32): (192, 128),  # video text cross-attn, stage 2
         (True, 1216, 256): (128, 128),  # audio->video cross-attn, stage 1
         (True, 4864, 256): (192, 256),  # audio->video cross-attn, stage 2
+    }
+
+    # --- LTX_GEN_TUNE (W5) SDPA-chunk overlays for the 2x4-BH mesh gap ---------------------------
+    # mesh_key (True, 4, 2) [sp=4, tp=2] is MISSING from every table above, so ring self-attn (the
+    # dominant gen op) and both video cross-attns fall back to the generic (256,256) chunk. These
+    # overlays fill that gap using the sibling (True,8,4) chunks for the SAME mesh-independent N
+    # (9728 / 38912) plus this mesh's per-device cross-attn Q shards (2432 / 9696). They apply ONLY
+    # when LTX_GEN_TUNE=1 AND mesh_key==(True,4,2); with the flag off the default path is untouched
+    # and byte-identical to the golden md5 that the other workers regress-gate on.
+    GEN_TUNE_sdpa_chunk_size_map = {
+        (True, 4, 2): (128, 512),
+    }
+    # NOTE: the padded N is SP-dependent (pad to sp*tile). Our sp=4 pads stage-2 to 38784 (real
+    # 38760); the sibling (True,8,4) entries use 38912 because sp=8 pads to a larger multiple.
+    # Confirmed from the profile log: "shapes: vN=9728 ... / vN=38784 ... [sp=4]".
+    GEN_TUNE_ring_sdpa_chunk_by_n = {
+        (True, 4, 2, 9728): (96, 256),  # stage 1 video self-attn (N=9728, sp=4 padded)
+        (True, 4, 2, 38784): (192, 512),  # stage 2 video self-attn (N=38784, sp=4 padded; real 38760)
+    }
+    GEN_TUNE_sdpa_chunk_by_shape = {
+        (True, 2432, 32): (128, 128),  # stage 1 video text cross-attn
+        (True, 9696, 32): (192, 128),  # stage 2 video text cross-attn
+        (True, 2432, 256): (128, 128),  # stage 1 audio->video cross-attn
+        (True, 9696, 256): (192, 256),  # stage 2 audio->video cross-attn
     }
 
     def __init__(
@@ -153,7 +179,15 @@ class LTXAttention(Module):
             self.parallel_config.sequence_parallel.factor,
             self.parallel_config.tensor_parallel.factor,
         )
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(mesh_key, self.default_sdpa_chunk_size)
+        # LTX_GEN_TUNE (W5): opt-in tuned SDPA chunks for the (True,4,2) mesh gap. The overlays are
+        # merged only for this exact mesh, so with the flag off (or any other mesh) the three maps
+        # are identical to the class defaults and the selected program configs are byte-identical.
+        gen_tune = os.environ.get("LTX_GEN_TUNE", "0").lower() in ("1", "true", "yes") and mesh_key == (True, 4, 2)
+        chunk_size_map = {**self.sdpa_chunk_size_map, **(self.GEN_TUNE_sdpa_chunk_size_map if gen_tune else {})}
+        ring_chunk_by_n = {**self.ring_sdpa_chunk_by_n, **(self.GEN_TUNE_ring_sdpa_chunk_by_n if gen_tune else {})}
+        chunk_by_shape = {**self.sdpa_chunk_by_shape, **(self.GEN_TUNE_sdpa_chunk_by_shape if gen_tune else {})}
+
+        ring_sdpa_chunk_size = chunk_size_map.get(mesh_key, self.default_sdpa_chunk_size)
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=ring_sdpa_chunk_size[0],
@@ -167,7 +201,7 @@ class LTXAttention(Module):
                 k_chunk_size=chunk[1],
                 exp_approx_mode=False,
             )
-            for (b, sp, tp, n), chunk in self.ring_sdpa_chunk_by_n.items()
+            for (b, sp, tp, n), chunk in ring_chunk_by_n.items()
             if (b, sp, tp) == mesh_key
         }
         self._sdpa_pc_by_shape = {
@@ -177,7 +211,7 @@ class LTXAttention(Module):
                 k_chunk_size=chunk[1],
                 exp_approx_mode=False,
             )
-            for (b, q, kv), chunk in self.sdpa_chunk_by_shape.items()
+            for (b, q, kv), chunk in chunk_by_shape.items()
             if b == mesh_key[0]
         }
 

@@ -14,7 +14,7 @@ from loguru import logger
 
 import ttnn
 
-from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
+from ...models.transformers.ltx.transformer_ltx import LTX_DIT_PREP_RUN, LTXTransformerModel
 from ...utils import walltime
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
@@ -62,10 +62,26 @@ class LTXDistilledPipeline(LTXPipeline):
         valid = {"s1", "s2"}
         assert set(stages).issubset(valid), f"stages must be subset of {valid} (got {stages})"
 
+        # LTX_ITER_FAST=1 runs a single real generate, so warmup only needs to warm each stage's
+        # inner_step kernels + graph state once for the trace capture: one step exercises the same
+        # inner_step/Euler ops as two. The eager upsample/VAE/audio warmups are dropped there too
+        # since gen#0 compiles them on its lone real use (warming would just run them twice). Full
+        # (multi-gen) runs keep the wider warmup so every gen replays a warm set.
+        #
+        # LTX_DIT_PREP_RUN (inner_step captured with prep_run=True, set when LTX_ITER_FAST is in the
+        # env at import time) makes gen#0's first traced step self-warm — its eager prep forward
+        # compiles the s1/s2 kernels + builds graph state using gen#0's own persistent statics. The
+        # s1/s2 mini-denoise below then does nothing gen#0 doesn't already do, so skip it entirely
+        # and keep only the prealloc trace-io + stage statics that gen#0 reuses. When prep_run is off
+        # (CI / quality runs), keep the mini-denoise so the prep_run=False capture finds warm kernels.
+        iter_fast = os.environ.get("LTX_ITER_FAST", "0") in ("1", "true", "True")
+        warmup_steps = 1 if iter_fast else num_inference_steps
+        skip_dit_warmup = LTX_DIT_PREP_RUN
+
         t0 = time.time()
         logger.info(
             f"warmup (distilled 2-stage): {num_frames}f@{height}x{width}, "
-            f"stages={stages}, {num_inference_steps} steps/stage"
+            f"stages={stages}, {warmup_steps} steps/stage"
         )
 
         # Zeros at the real shapes compile the shape-driven kernels; the encoder is warmed
@@ -82,10 +98,10 @@ class LTXDistilledPipeline(LTXPipeline):
 
         # Sigma schedules from the real distilled paths so warmup exercises the
         # same math branches generate() does (incl. the sigma_next == 0 final step).
-        s1_sigmas = list(DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
-        s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
+        s1_sigmas = list(DISTILLED_SIGMA_VALUES)[:warmup_steps] + [0.0]
+        s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES)[:warmup_steps] + [0.0]
 
-        if "s1" in stages:
+        if "s1" in stages and not skip_dit_warmup:
             s1_h, s1_w = height // 2, width // 2
 
             logger.info(f"warmup stage 1: {s1_h}x{s1_w}, σ={s1_sigmas}")
@@ -101,11 +117,14 @@ class LTXDistilledPipeline(LTXPipeline):
                     sigma_values=s1_sigmas,
                     seed=0,
                 )
+        elif skip_dit_warmup:
+            logger.info("LTX_DIT_PREP_RUN: skipping stage-1 warmup denoise (gen#0 self-warms via prep_run)")
 
         if "s2" in stages:
             # Upsample runs between stage 1 and stage 2; compile its kernels here.
-            logger.info(f"warmup upsample → {height}x{width}")
-            self._warmup_upsample(num_frames, height, width)
+            if not iter_fast:
+                logger.info(f"warmup upsample → {height}x{width}")
+                self._warmup_upsample(num_frames, height, width)
 
             # Zero-dummies at the exact shapes the real stage-2 call uses.
             latent_frames, full_lh, full_lw = latent_grid(num_frames, height, width)
@@ -115,35 +134,45 @@ class LTXDistilledPipeline(LTXPipeline):
             )
             dummy_a_init = torch.zeros(1, als.frames, self.in_channels)
 
-            logger.info(f"warmup stage 2: {height}x{width}, σ={s2_sigmas}")
-            # Cold kernel compile for the stage-2 denoise (full-res) — the other dominant
-            # warmup slice.
-            with walltime.timed("warmup", "stage2 build"):
-                self._denoise_no_guidance(
-                    v_p,
-                    a_p,
-                    num_frames=num_frames,
-                    height=height,
-                    width=width,
-                    sigma_values=s2_sigmas,
-                    seed=0,
-                    initial_video_latent=dummy_v_init,
-                    initial_audio_latent=dummy_a_init,
-                )
+            if skip_dit_warmup:
+                logger.info("LTX_DIT_PREP_RUN: skipping stage-2 warmup denoise (gen#0 self-warms via prep_run)")
+            else:
+                logger.info(f"warmup stage 2: {height}x{width}, σ={s2_sigmas}")
+                # Cold kernel compile for the stage-2 denoise (full-res) — the other dominant
+                # warmup slice.
+                with walltime.timed("warmup", "stage2 build"):
+                    self._denoise_no_guidance(
+                        v_p,
+                        a_p,
+                        num_frames=num_frames,
+                        height=height,
+                        width=width,
+                        sigma_values=s2_sigmas,
+                        seed=0,
+                        initial_video_latent=dummy_v_init,
+                        initial_audio_latent=dummy_a_init,
+                    )
 
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
-            self._warmup_decode(num_frames, height, width)
+            if not iter_fast:
+                self._warmup_decode(num_frames, height, width)
 
             # Build + JIT-compile the on-device audio decode on the exact latent
             # shape generate() produces, so the first real audio decode loads
             # from cache instead of building from the checkpoint (cold ~64s).
-            logger.info("warmup audio decode (on-device)")
-            self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
-            # The BWE trace captures on the first POST-cold decode (not the cold one above), and that
-            # capturing pass emits clipped audio. A second warmup decode absorbs the capture so the
-            # first real generate is a clean replay.
-            if self._traced:
+            # The single-generate eager decode is bit-identical to the replay, so the AV mp4 is
+            # unchanged; multi-gen runs keep the warmup capture so every real decode replays (else
+            # gen#1 would decode into the garbage-emitting capture pass).
+            if iter_fast:
+                logger.info("LTX_ITER_FAST=1: skipping warmup audio decode (gen#0 decodes eagerly)")
+            else:
+                logger.info("warmup audio decode (on-device)")
                 self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
+                # The vocoder trace captures on the first POST-cold decode (not the cold one above),
+                # and that capturing pass emits clipped audio. A second warmup decode absorbs the
+                # capture so the first real generate is a clean replay.
+                if self._traced:
+                    self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
 
         # Warm the encoders last: they coresident-evict the VAE decoder (which already evicted the
         # DiT), so they never disturb the denoise/decode kernels compiled above.
@@ -537,6 +566,30 @@ class LTXDistilledPipeline(LTXPipeline):
         s1_height = height // 2
         s1_width = width // 2
 
+        # Per-stage eager override. The DiT trace-capture cost is a FIXED ~2 forwards per stage
+        # (one prep_run compile/alloc forward + one record forward — see @traced_function/Tracer),
+        # independent of step count, so for a single-generate run a stage with few denoise steps can
+        # be faster run EAGER than traced: the capture overhead isn't amortized over enough replays.
+        # Stage 2 (3 steps, the large full-res forward) is the prime case; stage 1 (8 steps) still
+        # amortizes. Eager runs the identical op sequence the trace records+replays, so output is
+        # BYTE-IDENTICAL; only the dispatch mechanism differs. Mirrors the BWE/VAE trace default-OFF
+        # policy for device-compute-bound, few-iteration ops.
+        #
+        # DEFAULT: under LTX_ITER_FAST (single-generate dev iteration — the test skips gen#1, so the
+        # s2 trace is never replayed) default stage 2 to eager. Measured byte-identical (md5==golden)
+        # and faster: job 112435-42 vs 080535-41 — Stage-2 denoise 21.6->17.5s, gen 34.6->30.2s,
+        # broker ~98.5->93.2s. Full multi-gen runs (LTX_ITER_FAST unset — CI / VBench / CLIP quality)
+        # default to all-traced so gen#1 stays a pure replay: byte-identical to the pre-existing path.
+        # Override explicitly via LTX_GEN_EAGER_STAGES (e.g. "" forces all-traced; "s1,s2" eagers both).
+        _iter_fast = os.environ.get("LTX_ITER_FAST", "0") in ("1", "true", "True")
+        eager_stages = {
+            s.strip()
+            for s in os.environ.get("LTX_GEN_EAGER_STAGES", "s2" if _iter_fast else "").split(",")
+            if s.strip()
+        }
+        if eager_stages:
+            logger.info(f"LTX gen: running stages {sorted(eager_stages)} eager (untraced, byte-identical)")
+
         # (label, seconds) rows counted toward the total; prepares and export are excluded.
         timings: list[tuple[str, float]] = []
 
@@ -597,7 +650,7 @@ class LTXDistilledPipeline(LTXPipeline):
             seed=seed,
             image_cond_latent=s1_cond_latent,
             image_cond_strength=cond_strength,
-            traced=self._traced,
+            traced=self._traced and "s1" not in eager_stages,
             trace_key="s1",
         )
         t_stage1 = time.time() - t0
@@ -630,7 +683,7 @@ class LTXDistilledPipeline(LTXPipeline):
             initial_audio_latent=s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio,
             image_cond_latent=full_cond_latent,
             image_cond_strength=cond_strength,
-            traced=self._traced,
+            traced=self._traced and "s2" not in eager_stages,
             trace_key="s2",
         )
         t_stage2 = time.time() - t0

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -19,6 +21,22 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
+
+# When LTX_ITER_FAST is set in the environment at import time, capture inner_step with
+# prep_run=True so gen#0's first traced step self-warms: the tracer runs one eager forward
+# (compiling all kernels + building graph state) before begin_trace_capture, exactly what the
+# warmup mini-denoise did — but reusing gen#0's own persistent statics instead of a throwaway
+# eager pass. That lets warmup_buffers drop the s1/s2 mini-denoise (see LTX_DIT_PREP_RUN use
+# there). inner_step is purely functional (no in-place mutation of any input; only local
+# intermediates are deallocated), so the extra prep forward cannot perturb the captured trace —
+# gen#0's output stays byte-identical.
+#
+# Read at import because @traced_function bakes prep_run at class-definition time. The test's
+# ltx_env_prewarm.yaml applies LTX_ITER_FAST via os.environ.setdefault AFTER this module is
+# imported, so activate the fast path by passing LTX_ITER_FAST=1 in the run's inline env. When
+# unset (CI / VBench / CLIP quality runs) this stays False → prep_run=False + full warmup,
+# byte-identical to the pre-existing behavior.
+LTX_DIT_PREP_RUN = os.environ.get("LTX_ITER_FAST", "0") in ("1", "true", "True")
 
 
 class LTXTransformerBlock(Module):
@@ -762,7 +780,7 @@ class LTXTransformerModel(Module):
             video_padding_mask=video_padding_mask,
         )
 
-    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=LTX_DIT_PREP_RUN)
     def inner_step(
         self,
         *,
