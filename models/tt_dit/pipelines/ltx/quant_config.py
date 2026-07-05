@@ -129,6 +129,28 @@ class QuantConfig:
             ring_sdpa=sc,
         )
 
+    @staticmethod
+    def all_bf8_lofi_sdpa_lofi() -> QuantConfig:
+        """all_bf8_lofi plus the self-attention ring SDPA dropped HiFi2 -> LoFi.
+
+        Only the ``sdpa_compute_kernel_config`` fidelity changes (inputs stay bf16 -- the
+        ``_sdpa_input_dtype`` cast is a separate, not-yet-wired tweak). Ring SDPA is the
+        O(seq^2) self-attention (video seq ~9.7k at stage-2), so if stage-2 is attention-
+        compute-bound this roughly halves those matmul phases. Cross-attention SDPA (attn2,
+        seq x prompt_len) is untouched. Quality-sensitive: gate on PCC / a frame check."""
+        cfg = QuantConfig.all_bf8_lofi()
+        cfg.ring_sdpa = SDPAQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc=False)
+        return cfg
+
+    @staticmethod
+    def all_bf8_lofi_sdpa_lofi_fp32acc() -> QuantConfig:
+        """all_bf8_lofi with the ring self-attention SDPA at LoFi and fp32 dest accumulation.
+        fp32 dest keeps SDPA's running softmax max/sum in full precision under LoFi, where the
+        packed-dest path leaves the reduced-mantissa accumulators too coarse."""
+        cfg = QuantConfig.all_bf8_lofi()
+        cfg.ring_sdpa = SDPAQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc=True)
+        return cfg
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
