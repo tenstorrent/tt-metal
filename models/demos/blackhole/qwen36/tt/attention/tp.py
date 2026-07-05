@@ -127,6 +127,9 @@ class TPAttention:
         self._wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
         self._fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
         self._qg_deint = self._fused_qkv
+        # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
+        # QWEN36_NLP_DECODE_HEADS=0 falls back to the plain reshape/slice path.
+        self._use_nlp_decode_heads = os.environ.get("QWEN36_NLP_DECODE_HEADS", "1") == "1"
         self.k_caches = None
         self.v_caches = None
         # External paged KV cache (vLLM/contract path); internal caches kept for demo fallback
@@ -242,6 +245,85 @@ class TPAttention:
         """Prefill concat-heads via nlp_concat_heads (post-gate)."""
         return ttnn.experimental.nlp_concat_heads(gated, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    def _make_heads_decode(self, qg, kp, vp, B):
+        """Decode head-split via nlp_create_qkv_heads_decode (the batched-decode idiom).
+
+        Returns (q, gate, k, v): q [1,B,NH,HD], gate [1,B,NH,HD], k/v [1,B,NKV,HD], all L1-interleaved.
+        The kernel only shuffles a fused Q|K|V, so the gate half of qg is split off first and applied
+        post-SDPA exactly like the reshape path. The fused tensor is kept in L1 to dodge the Blackhole
+        interleaved-reader bug (tt-metal #16667: DRAM input zeros odd-indexed Q rows). The height-sharded
+        output is returned to L1-interleaved so the existing rms_norm / partial-rope / SDPA-decode path
+        is unchanged.
+        """
+        NH, NKV, HD = self.NH, self.NKV, self.HD
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        if self._qg_deint:
+            # De-interleaved qg: contiguous q / gate halves.
+            q_flat = ttnn.slice(qg, (0, 0, 0, 0), (1, 1, B, NH * HD), memory_config=_L1)
+            gate_flat = ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, B, 2 * NH * HD), memory_config=_L1)
+            ttnn.deallocate(qg)
+        else:
+            # Interleaved qg: [q;gate] per head -> split then re-flatten to [1,1,B,NH*HD].
+            qg_r = ttnn.reshape(qg, (1, B, NH, 2 * HD), memory_config=_L1)
+            ttnn.deallocate(qg)
+            q_part = ttnn.slice(qg_r, (0, 0, 0, 0), (1, B, NH, HD), memory_config=_L1)
+            gate_part = ttnn.slice(qg_r, (0, 0, 0, HD), (1, B, NH, 2 * HD), memory_config=_L1)
+            ttnn.deallocate(qg_r)
+            q_flat = ttnn.reshape(q_part, (1, 1, B, NH * HD), memory_config=_L1)
+            ttnn.deallocate(q_part)
+            gate_flat = ttnn.reshape(gate_part, (1, 1, B, NH * HD), memory_config=_L1)
+            ttnn.deallocate(gate_part)
+        qkv = ttnn.concat([q_flat, kp, vp], dim=-1, memory_config=_L1)
+        ttnn.deallocate(q_flat)
+        ttnn.deallocate(kp)
+        ttnn.deallocate(vp)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            qkv, num_heads=NH, num_kv_heads=NKV, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        )
+        ttnn.deallocate(qkv)
+        q = ttnn.sharded_to_interleaved(q, _L1)
+        k = ttnn.sharded_to_interleaved(k, _L1)
+        v = ttnn.sharded_to_interleaved(v, _L1)
+        gate = ttnn.reshape(gate_flat, (1, B, NH, HD), memory_config=_L1)
+        ttnn.deallocate(gate_flat)
+        return q, gate, k, v
+
+    def _concat_heads_decode(self, gated, B):
+        """Decode concat-heads via nlp_concat_heads_decode. gated [1,B,NH,HD] L1 -> [1,B,NH*HD] L1.
+
+        The op wants a height-sharded input ([1,B,heads-padded-to-32,HD], one core per user), so the
+        gated SDPA output is resharded across `B` cores first (a grid-width-aligned rectangle — a
+        ragged core set is rejected by the height-sharded mem config). Output is width-sharded, then
+        returned to L1-interleaved so the downstream o_proj matmul is unchanged.
+        """
+        from models.tt_transformers.tt.model_config import num_to_corerange
+
+        NH, HD = self.NH, self.HD
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        grid = self.mesh.compute_with_storage_grid_size()
+        gx = min(B, grid.x)
+        if B >= gx and B % gx != 0:
+            gx = max(x for x in range(gx, 0, -1) if B % x == 0 and B // x <= grid.y)
+        core_grid = ttnn.CoreRangeSet({num_to_corerange(B, grid_x=gx, grid_y=grid.y)})
+        shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, HD),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        gated_sh = ttnn.to_memory_config(gated, shard_cfg)
+        ttnn.deallocate(gated)
+        out_sh = ttnn.experimental.nlp_concat_heads_decode(gated_sh, num_heads=NH)
+        ttnn.deallocate(gated_sh)
+        out = ttnn.sharded_to_interleaved(out_sh, _L1)  # [1, 1, 32, NH*HD] (batch padded to 32)
+        ttnn.deallocate(out_sh)
+        # nlp_concat_heads_decode always emits batch padded to 32; slice back to the real B before
+        # the reshape (a no-op at B=32, required for B<32 e.g. the B=1 demo/vLLM path).
+        if out.shape[-2] != B:
+            out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, B, NH * HD), memory_config=_L1)
+        return ttnn.reshape(out, (1, B, NH * HD), memory_config=_L1)
+
     def reset_state(self):
         def z():
             return ttnn.from_torch(
@@ -325,7 +407,9 @@ class TPAttention:
 
         qg, kp, vp = self._qkv(x)
 
-        if self._qg_deint:
+        if self._use_nlp_decode_heads:
+            q, gate, k, v = self._make_heads_decode(qg, kp, vp, B)
+        elif self._qg_deint:
             # De-interleaved qg: slice contiguous q/gate halves, then split heads
             q = ttnn.reshape(
                 ttnn.slice(qg, (0, 0, 0, 0), (1, 1, B, NH * HD), memory_config=_L1), (1, B, NH, HD), memory_config=_L1
@@ -336,16 +420,20 @@ class TPAttention:
                 memory_config=_L1,
             )
             ttnn.deallocate(qg)
+            k = ttnn.reshape(kp, (1, B, NKV, HD), memory_config=_L1)
+            ttnn.deallocate(kp)
+            v = ttnn.reshape(vp, (1, B, NKV, HD), memory_config=_L1)
+            ttnn.deallocate(vp)
         else:
             qg_r = ttnn.reshape(qg, (1, B, NH, HD * 2), memory_config=_L1)
             ttnn.deallocate(qg)
             q = ttnn.slice(qg_r, (0, 0, 0, 0), (1, B, NH, HD), memory_config=_L1)
             gate = ttnn.slice(qg_r, (0, 0, 0, HD), (1, B, NH, HD * 2), memory_config=_L1)
             ttnn.deallocate(qg_r)
-        k = ttnn.reshape(kp, (1, B, NKV, HD), memory_config=_L1)
-        ttnn.deallocate(kp)
-        v = ttnn.reshape(vp, (1, B, NKV, HD), memory_config=_L1)
-        ttnn.deallocate(vp)
+            k = ttnn.reshape(kp, (1, B, NKV, HD), memory_config=_L1)
+            ttnn.deallocate(kp)
+            v = ttnn.reshape(vp, (1, B, NKV, HD), memory_config=_L1)
+            ttnn.deallocate(vp)
 
         # Hybrid QK norm: raw weights at decode (flat attention, robust to per-step noise)
         q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm_flat"], memory_config=_L1)
@@ -429,8 +517,11 @@ class TPAttention:
         ttnn.deallocate(attn_out)
         ttnn.deallocate(gate)
 
-        gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
-        ttnn.deallocate(gated)
+        if self._use_nlp_decode_heads:
+            gated_flat = self._concat_heads_decode(gated, B)  # consumes + deallocates gated
+        else:
+            gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
+            ttnn.deallocate(gated)
         wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
