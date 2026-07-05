@@ -478,6 +478,7 @@ class EagerLLMExecutor:
         prompt_lens: torch.Tensor | None = None,  # [batch_size], int64
         empty_slots: list[int] | None = None,
         start_pos: torch.Tensor | None = None,  # [batch_size], int64
+        sampling_params: SamplingParams | None = None,  # accepted for parity; eager path never traces
     ) -> torch.Tensor:  # [batch_size, 1, vocab_size], float32
         """Compile prefill for specific inputs. Returns logits from warmup run.
 
@@ -1084,6 +1085,7 @@ class TracedLLMExecutor:
         prompt_lens: torch.Tensor | None = None,  # [batch_size], int64
         empty_slots: list[int] | None = None,
         start_pos: torch.Tensor | None = None,  # [batch_size], int64
+        sampling_params: SamplingParams | None = None,
     ) -> torch.Tensor | None:  # [batch_size, 1, vocab_size] or None if already compiled
         """Compile prefill for specific inputs. Returns logits from warmup run.
 
@@ -1106,6 +1108,13 @@ class TracedLLMExecutor:
         trace_key = self._get_prefill_trace_key(tokens)
         if self.trace_id_prefill[trace_key] is not None:
             return None
+
+        # Allocate persistent on-device sampling buffers BEFORE the prefill trace is captured
+        # (self.prefill_forward below). If they are first materialised during decode-trace capture
+        # (while this prefill trace is live), tt-metal places them unsafely and a decode-trace buffer
+        # clobbers the k tensor on replay -> corrupt k -> sampling-writer hang. See
+        # _prealloc_sampling_buffers.
+        self._prealloc_sampling_buffers(sampling_params)
 
         logits = self.prefill_forward(
             tokens,
@@ -1469,6 +1478,28 @@ class TracedLLMExecutor:
 
         return tt_output
 
+    def _prealloc_sampling_buffers(self, sampling_params) -> None:
+        """Materialise the *persistent* on-device sampling buffers before ANY trace is captured.
+
+        The k/p/temp param tensors and Sampling1D's device buffers were previously created lazily
+        inside ``_capture_decode_trace`` — i.e. AFTER the prefill trace is already live. tt-metal
+        flags this ("Allocating device buffers is unsafe due to the existence of an active trace",
+        allocator.cpp) and the buffers can land where a decode-trace buffer overlaps them; on replay
+        the trace clobbers the ``k`` tensor, the sampling writer reads a corrupt (huge) k and walks
+        its top-p loop out of L1 -> hard device hang (seen on perf batch-32 + perf_decode_tuning
+        "LoFi" on N300; LoFi shifts the decode-trace layout so the overlap lands on ``k``).
+        Allocating them here, with no trace active, gives them stable addresses that the prefill and
+        decode traces reserve around. Idempotent: the later capture-time calls reuse these caches.
+        """
+        if sampling_params is None or self.model.sampling is None:
+            return
+        # k/p/temp param tensors (cached on the eager engine; returns None for force-argmax models).
+        self._eager._get_decode_sampling_kpt(sampling_params)
+        # Sampling1D persistent device buffers (local indices / offsets / seeds / user ids).
+        if hasattr(self.model.sampling, "load_device_buffers"):
+            self.model.sampling.load_device_buffers()
+        logger.info("Pre-allocated on-device sampling buffers before trace capture")
+
     def _capture_decode_trace(self, tokens, start_pos, page_table, kv_cache, sampling_on_device, sampling_params=None):
         """Compile + capture decode trace."""
         self._eager.decode_forward(
@@ -1626,6 +1657,7 @@ def _compile_prefill_and_decode(
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             start_pos=start_pos,
+            sampling_params=sampling_params,
         )
 
     # todo)) check these against what is actually running in TTTv1 --> the prefill_forward may run sampling on device!
