@@ -21,6 +21,7 @@ import re
 import shutil
 import statistics
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -252,8 +253,53 @@ def refine(
         cmd += ["--id-range", id_range]
     if arch:
         cmd += ["--arch", arch]
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        blob = (exc.stderr or "") + (exc.stdout or "")
+        if "Unknown math fidelity" not in blob:
+            raise
+        # Upstream tt-perf-report (==1.2.2) gap: its fidelity_map knows only
+        # HiFi4/HiFi2/LoFi and hard-errors on HiFi3, a legitimate ttnn.MathFidelity
+        # value (LoFi<HiFi2<HiFi3<HiFi4) that the device runs and tracy reports
+        # correctly. Any model that emits a HiFi3 matmul would otherwise be
+        # un-profilable. Re-run the SAME invocation IN-PROCESS with tflops_per_core
+        # patched to interpolate HiFi3 = HiFi4 * 4/3 (3 vs 4 fidelity phases ->
+        # throughput ∝ 1/phases; lands between HiFi2 and HiFi4, matching the table's
+        # own HiFi2 == HiFi4*2). Non-regressive: only the HiFi3-crash path takes this
+        # branch; every normal report still uses the CLI above.
+        _refine_in_process_hifi3(cmd)
     return Path(out_csv)
+
+
+def _refine_in_process_hifi3(cmd: list[str]) -> None:
+    """Run tt-perf-report's main() in-process with a HiFi3-aware tflops table.
+
+    ``cmd`` is the exact ``["tt-perf-report", raw, "--csv", out, ...]`` argv that
+    crashed on ``Unknown math fidelity: HiFi3``. We monkeypatch
+    ``ArchitectureSpec.tflops_per_core`` to add HiFi3, invoke main(), then always
+    restore the original method and argv so nothing leaks to later calls."""
+    import tt_perf_report.perf_report as _pr
+
+    spec_cls = _pr.ArchitectureSpec
+    orig_tflops = spec_cls.tflops_per_core
+
+    def _tflops_with_hifi3(self, math_fidelity: str) -> float:
+        if math_fidelity == "HiFi3":
+            return self.tflops_hifi4 * 4.0 / 3.0
+        return orig_tflops(self, math_fidelity)
+
+    old_argv = sys.argv
+    spec_cls.tflops_per_core = _tflops_with_hifi3
+    try:
+        sys.argv = list(cmd)  # main() reads argv via argparse; cmd[0] is prog
+        _pr.main()
+    except SystemExit as exc:  # argparse/main may sys.exit(0) on success
+        if exc.code not in (0, None):
+            raise
+    finally:
+        spec_cls.tflops_per_core = orig_tflops
+        sys.argv = old_argv
 
 
 # ---------------------------------------------------------------------------
