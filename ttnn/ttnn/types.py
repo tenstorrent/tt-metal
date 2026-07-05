@@ -119,3 +119,11 @@ FaceGeometry = ttnn._ttnn.program_descriptor.FaceGeometry
 compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs
+
+# Host-side mcast helper (counterpart of kernel_lib/mcast_pipe). Mcast1D = per-row/column families;
+# Mcast2D = one mcast over a single rectangle (matmul-1d: single sender -> whole grid).
+Mcast1D = ttnn._ttnn.mcast_host.Mcast1D
+Mcast1DShape = ttnn._ttnn.mcast_host.Mcast1DShape
+Mcast2D = ttnn._ttnn.mcast_host.Mcast2D
+McastConfig = ttnn._ttnn.mcast_host.McastConfig
+McastDataReady = ttnn._ttnn.mcast_host.McastDataReady
