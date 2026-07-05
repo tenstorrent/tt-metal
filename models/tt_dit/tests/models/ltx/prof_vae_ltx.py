@@ -152,13 +152,13 @@ def test_prof_vae_ltx_per_conv(mesh_device, device_params):
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 def test_prof_vae_ltx_devicetime(mesh_device, device_params):
     # Run under: python -m tracy -p -r -m pytest <this>::test_prof_vae_ltx_devicetime
     # Flushes the on-device profiler after each resnet/upsample block to stay under the
     # 1000-zone tracy buffer; the CSV then holds every op's DEVICE FW DURATION. Sum over one
     # forward = true device-active time. Host wall is printed for the dispatch-bound fraction.
-    mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    mesh = mesh_device.create_submesh(ttnn.MeshShape(4, 8))
     tt_decoder = _build_tt_decoder(mesh)
 
     for mod in _walk(tt_decoder):
@@ -217,7 +217,7 @@ def _prepare_decode_input(tt_decoder, latent):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200000000}],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 def test_prof_vae_ltx_trace(mesh_device, device_params):
     """TRUE traced-decode WALL: capture the device-only decode as one ttnn trace and replay it, so the
     wall/iter is the real e2e device time with no host-dispatch gap. This is the metric the per-shape
@@ -225,7 +225,7 @@ def test_prof_vae_ltx_trace(mesh_device, device_params):
 
     LTX_USE_FUSED=1 (default) = hybrid per-shape routing; =0 = all-standalone. Run both to compare.
     """
-    mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    mesh = mesh_device.create_submesh(ttnn.MeshShape(4, 8))
     tt_decoder = _build_tt_decoder(mesh)
 
     # Skip-ablation: identity-patch an op type so the traced-wall drop = its TRUE e2e contribution
@@ -329,6 +329,133 @@ def _ltx_conv_input(mesh, pc, c_in, T, H, W):
         dtype=ttnn.bfloat16,
     )
     return x, lh, lw
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112 * 8}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_bench_conv_halo_vs_plain(mesh_device, device_params):
+    """TRACED, ISOLATED conv3d device latency at PRODUCTION blocking: plain conv (over a pre-padded
+    buffer, spatial pad 0) vs halo-read conv (raw input + compact halo buffer, spatial pad 1 + in-kernel
+    logical mask). Dummy buffers — device time is shape/config-dependent, not content-dependent — so no
+    NP op is needed. This is the clean answer to 'is the halo-read conv slower than plain conv on 4x8',
+    free of the untraced per-block-flush distortion in the tracy device-FW numbers.
+
+    logical_h/w = physical * 17/18 (H) and 15/16 (W): the LTX 34->36 / 60->64 s0 pad ratio, held through
+    the x2 upsamples, so the mask activates on exactly the boundary devices it does in production."""
+    import time as _t
+
+    from models.tt_dit.models.vae.vae_ltx import _get_pad_offset
+
+    mesh = mesh_device.create_submesh(ttnn.MeshShape(4, 8))
+    hf, wf = tuple(mesh.shape)
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    def _tt(run, n=30):
+        run()
+        ttnn.synchronize_device(mesh)
+        tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+        run()
+        ttnn.end_trace_capture(mesh, tid, cq_id=0)
+        ttnn.synchronize_device(mesh)
+        t0 = _t.perf_counter()
+        for _ in range(n):
+            ttnn.execute_trace(mesh, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh)
+        us = (_t.perf_counter() - t0) * 1e6 / n
+        ttnn.release_trace(mesh, tid)
+        return us
+
+    # (id, c_in, c_out, T, H_logical_full, W_logical_full, H_phys_full, W_phys_full).
+    # The swept LTX _BLOCKINGS keys use LOGICAL per-dev (s1 17x15, s2/s3 34x30, s4 68x60); the ACTUAL
+    # tensor is physical (s0's 34->36/60->64 pad propagates: s1 18x16, s2/s3 36x32, s4 72x64). So build
+    # the config from logical dims (hits the swept entry, as the decoder does) but run on the physical
+    # tensor. logical_h/w = the logical full dims (mask zeros global >= logical, i.e. the pad tail).
+    SHAPES = [
+        ("s0", 1024, 1024, 21, 36, 64, 36, 64),
+        ("s1", 512, 512, 39, 68, 120, 72, 128),
+        ("s2", 512, 512, 75, 136, 240, 144, 256),
+        ("s3", 256, 256, 147, 136, 240, 144, 256),
+        ("s4", 128, 128, 147, 272, 480, 288, 512),
+    ]
+    rows = []
+    for sid, c_in, c_out, T, Hlog, Wlog, Hphys, Wphys in SHAPES:
+        conv, pc = _build_ltx_conv(mesh, c_in, c_out, T, Hlog, Wlog, use_fused=False)
+        cfg = conv.conv_config
+        C = conv.in_channels
+        Hd, Wd = Hphys // hf, Wphys // wf
+        pH = pW = 1
+        pT = conv.kernel_size[0] // 2
+        logical_h = Hlog
+        logical_w = Wlog
+        raw = ttnn.from_torch(
+            torch.zeros(1, T, Hd, Wd, C).bfloat16(), device=mesh, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem
+        )
+        padded = ttnn.from_torch(
+            torch.zeros(1, T, Hd + 2 * pH, Wd + 2 * pW, C).bfloat16(),
+            device=mesh,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=mem,
+        )
+        total_sticks = T * 2 * pH * Wd + T * 2 * pW * (Hd + 2 * pH)
+        halo_buf = ttnn.from_torch(
+            torch.zeros(total_sticks, C).bfloat16(), device=mesh, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem
+        )
+        offset = _get_pad_offset({}, raw, pc, mesh)
+
+        def _conv(inp, padding, halo=None, lh=0, lw=0, off=None):
+            return ttnn.experimental.conv3d(
+                input_tensor=inp,
+                weight_tensor=conv.weight.data,
+                bias_tensor=conv.bias.data,
+                device=mesh,
+                config=cfg,
+                dtype=ttnn.bfloat16,
+                output_channels=conv.out_channels,
+                kernel_size=conv.kernel_size,
+                stride=(1, 1, 1),
+                padding=padding,
+                dilation=(1, 1, 1),
+                padding_mode="zeros",
+                groups=1,
+                compute_kernel_config=conv.compute_kernel_config,
+                halo_buffer=halo,
+                logical_h_mask=lh,
+                logical_w_mask=lw,
+                pad_offset_tensor=off,
+            )
+
+        def _safe(run):
+            try:
+                return _tt(run)
+            except Exception as e:  # noqa: BLE001
+                print(f"  {sid} measure failed: {type(e).__name__}: {str(e)[:120]}", flush=True)
+                return None
+
+        plain = _safe(lambda: _conv(padded, (pT, 0, 0)))
+        halo_nm = _safe(lambda: _conv(raw, (pT, pH, pW), halo=halo_buf))  # halo-read, no logical mask
+        halo = _safe(lambda: _conv(raw, (pT, pH, pW), halo=halo_buf, lh=logical_h, lw=logical_w, off=offset))
+        rows.append((sid, C, c_out, T, Hd, Wd, plain, halo_nm, halo))
+        r1 = f"{halo_nm/plain:.2f}x" if (plain and halo_nm) else "n/a"
+        r2 = f"{halo/plain:.2f}x" if (plain and halo) else "n/a"
+        print(
+            f"CONV-ISO {sid}: perdev {Hd}x{Wd} C{C}->{c_out} T{T}  "
+            f"plain={plain if plain is None else round(plain,1)}  halo_nomask={halo_nm if halo_nm is None else round(halo_nm,1)} ({r1})  "
+            f"halo_mask={halo if halo is None else round(halo,1)} ({r2})",
+            flush=True,
+        )
+    print("\n===== CONV-ISO SUMMARY (traced, production blocking, 4x8) =====", flush=True)
+    for sid, C, c_out, T, Hd, Wd, plain, halo_nm, halo in rows:
+        r1 = f"{halo_nm/plain:.2f}x" if (plain and halo_nm) else "n/a"
+        r2 = f"{halo/plain:.2f}x" if (plain and halo) else "n/a"
+        p = "OOM" if plain is None else f"{plain:8.1f}"
+        hn = "OOM" if halo_nm is None else f"{halo_nm:8.1f}"
+        h = "OOM" if halo is None else f"{halo:8.1f}"
+        print(f"  {sid:4} {Hd:3}x{Wd:<3} C{C:4}->{c_out:<4} T{T:3}: plain {p:>8}  halo_nomask {hn:>8} ({r1})  halo_mask {h:>8} ({r2})", flush=True)
 
 
 @pytest.mark.parametrize(
@@ -750,12 +877,12 @@ def test_dual_output_decode_pcc(mesh_device, device_params):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200000000}],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 def test_halo_vs_fullpad_decode_pcc(mesh_device, device_params):
     from models.common.utility_functions import comp_pcc
     from models.tt_dit.utils.tensor import fast_device_to_host
 
-    mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    mesh = mesh_device.create_submesh(ttnn.MeshShape(4, 8))
     tt_decoder = _build_tt_decoder(mesh)
     torch.manual_seed(123)
     latent = _latent()
@@ -763,6 +890,33 @@ def test_halo_vs_fullpad_decode_pcc(mesh_device, device_params):
     concat_dims = [None, None]
     concat_dims[tt_decoder.parallel_config.height_parallel.mesh_axis] = 2
     concat_dims[tt_decoder.parallel_config.width_parallel.mesh_axis] = 3
+
+    # NP_CAPTURE_SHAPES: record every neighbor_pad_halo call's full (physical) [B,T,H,W,C] input as seen
+    # per the mesh sharding, so the op-level 4x8 sweep list reflects the real decode shapes (s0 34x60 is
+    # padded to a mesh-divisible 36x64 here). One warmup decode, dump uniques, done — no PCC compare.
+    if os.environ.get("NP_CAPTURE_SHAPES"):
+        h_factor, w_factor = tuple(mesh.shape)
+        seen = {}
+        orig_np = ttnn.experimental.neighbor_pad_halo
+
+        def _capture(input_tensor_mesh, *a, **k):
+            s = tuple(input_tensor_mesh.shape)  # per full tensor: [B,T,H,W,C] (H,W are physical/padded)
+            seen[s] = seen.get(s, 0) + 1
+            return orig_np(input_tensor_mesh, *a, **k)
+
+        ttnn.experimental.neighbor_pad_halo = _capture
+        _ = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
+        ttnn.synchronize_device(mesh)
+        ttnn.experimental.neighbor_pad_halo = orig_np
+        print(f"\nNP_CAPTURE h_factor={h_factor} w_factor={w_factor}", flush=True)
+        for s, n in sorted(seen.items()):
+            B, T, H, W, C = s
+            print(
+                f"NP_SHAPE {list(s)}  calls={n}  perdev={H // h_factor}x{W // w_factor}  "
+                f"div_ok={H % h_factor == 0 and W % w_factor == 0}",
+                flush=True,
+            )
+        return
 
     halo_convs = [m for m in _walk(tt_decoder) if getattr(m, "_use_halo_conv", False)]
     assert halo_convs, "no conv is halo-enabled — check _use_halo_conv gating / NP_NO_HALO_CONV"

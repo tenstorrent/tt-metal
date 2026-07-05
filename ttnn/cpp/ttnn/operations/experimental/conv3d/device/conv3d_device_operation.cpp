@@ -260,7 +260,9 @@ ttsl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
         weight_tensor.dtype(),
         weight_tensor.memory_config(),
         weight_tensor.logical_shape(),
-        bias_tensor.has_value());
+        bias_tensor.has_value(),
+        tensor_args.halo_buffer.has_value(),
+        tensor_args.pad_offset_tensor.has_value());
 
     return hash;
 }
@@ -329,7 +331,10 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<Tensor>& halo_buffer) {
+    const std::optional<Tensor>& halo_buffer,
+    uint32_t logical_h_mask,
+    uint32_t logical_w_mask,
+    const std::optional<Tensor>& pad_offset_tensor) {
     using OperationType = ttnn::experimental::prim::Conv3dDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -349,7 +354,9 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .dilation =
             (config.dilation != default_dilation && dilation_ == default_dilation) ? config.dilation : dilation_,
         .padding_mode = padding_mode_,
-        .groups = groups_};
+        .groups = groups_,
+        .logical_h_mask = logical_h_mask,
+        .logical_w_mask = logical_w_mask};
     TT_FATAL(
         config.dilation == default_dilation || dilation_ == default_dilation || config.dilation == dilation_,
         "dilation in Conv3dConfig and op args must match when both are set. config=({}, {}, {}), args=({}, {}, {})",
@@ -363,7 +370,8 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .input_tensor = input_tensor,
         .weight_tensor = weight_tensor,
         .bias_tensor = bias_tensor,
-        .halo_buffer = halo_buffer};
+        .halo_buffer = halo_buffer,
+        .pad_offset_tensor = pad_offset_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

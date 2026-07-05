@@ -86,6 +86,10 @@ struct Conv3dParams {
     std::array<uint32_t, 3> dilation;
     std::string padding_mode;
     uint32_t groups;
+    // Logical-pad masking (opt-in, halo mode only): zero interior sticks whose global spatial index is
+    // >= logical_*_mask. 0 == disabled.
+    uint32_t logical_h_mask = 0;
+    uint32_t logical_w_mask = 0;
 };
 
 struct Conv3dInputs {
@@ -97,6 +101,9 @@ struct Conv3dInputs {
     // Temporal (T) boundary positions still zero-pad. Section geometry is derived in the program factory
     // from the input shape + padding. Only meaningful with padding_mode "zeros".
     std::optional<const Tensor> halo_buffer;
+    // Per-device [h_start, w_start] global spatial offset (uint32, one page per device), read by the
+    // reader to evaluate the logical-pad mask when masking is enabled.
+    std::optional<const Tensor> pad_offset_tensor;
 };
 
 namespace detail {

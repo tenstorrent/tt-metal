@@ -415,13 +415,28 @@ _LTX_PROD_2x4 = [
     ([1, 147, 272, 480, 128], "s4_res_out_C128"),  # per-dev 136x120, C_in=128 (s4_res / s4_out)
 ]
 
+# 4x8 physical shapes (h_factor=4, w_factor=8), CAPTURED live from the all-standalone decode
+# (prof_vae_ltx NP_CAPTURE_SHAPES, LTX_USE_FUSED=0). The latent 34x60 pads once to 36x64 at the decode
+# input (34->36 div4=9, 60->64 div8=8) and that padding PROPAGATES through the x2 upsamples, so every
+# stage's physical dims are the per-device shard x factor: 36x64 -> 72x128 -> 144x256 -> 288x512 (the
+# masked pad region is carried, not re-trimmed). These differ from _LTX_PROD_2x4's logical dims. The
+# trailing comment is the per-call count in one decode (relative op-time weight).
+_LTX_PROD_4x8 = [
+    ([1, 21, 36, 64, 128], "s0_conv_in_C128"),  # per-dev  9x8,   C_in=128    (x1)
+    ([1, 21, 36, 64, 1024], "s0_res_up_C1024"),  # per-dev  9x8,   C_in=1024   (x5, 2048B page, largest)
+    ([1, 39, 72, 128, 512], "s1_res_up_C512"),  # per-dev 18x16,  C_in=512    (x5)
+    ([1, 75, 144, 256, 512], "s2_res_C512"),  # per-dev 36x32,  C_in=512    (x9)
+    ([1, 147, 144, 256, 256], "s3_res_chg_C256"),  # per-dev 36x32,  C_in=256    (x13, s3_res / s3_chg)
+    ([1, 147, 288, 512, 128], "s4_res_out_C128"),  # per-dev 72x64,  C_in=128    (x9, s4_res / s4_out)
+]
+
 
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112 * 64}], indirect=True
 )
-@pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_2x4, ids=[s[1] for s in _LTX_PROD_2x4])
+@pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_4x8, ids=[s[1] for s in _LTX_PROD_4x8])
 def test_neighbor_pad_halo_prod_perf(mesh_device, device_params, input_shape, shape_id):
     run_halo_vs_async_perf(
         mesh_device, input_shape=input_shape, h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1, num_links=2
@@ -439,7 +454,7 @@ def _fabric_router_config_8k():
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -451,7 +466,7 @@ def _fabric_router_config_8k():
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_2x4, ids=[s[1] for s in _LTX_PROD_2x4])
+@pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_4x8, ids=[s[1] for s in _LTX_PROD_4x8])
 def test_neighbor_pad_halo_prod_perf_8k(mesh_device, device_params, input_shape, shape_id):
     run_halo_vs_async_perf(
         mesh_device, input_shape=input_shape, h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1, num_links=2
@@ -461,13 +476,13 @@ def test_neighbor_pad_halo_prod_perf_8k(mesh_device, device_params, input_shape,
 # Byte-exact PCC with the 8 KB fabric payload: the coalesce forms larger (up to 32-stick) bank packets, so
 # this guards that the bigger-packet path is still exact.
 @pytest.mark.timeout(300)
-@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": _fabric_router_config_8k()}],
     indirect=True,
 )
-@pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_2x4, ids=[s[1] for s in _LTX_PROD_2x4])
+@pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_4x8, ids=[s[1] for s in _LTX_PROD_4x8])
 def test_neighbor_pad_halo_prod_pcc_8k(mesh_device, device_params, input_shape, shape_id):
     run_neighbor_pad_halo_2d(
         mesh_device,
@@ -537,12 +552,12 @@ def test_neighbor_pad_halo_upsampler_pcc(mesh_device, device_params, padding_mod
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
-@pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_2x4, ids=[s[1] for s in _LTX_PROD_2x4])
+@pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_4x8, ids=[s[1] for s in _LTX_PROD_4x8])
 def test_neighbor_pad_halo_prod_pcc(mesh_device, device_params, padding_mode, input_shape, shape_id):
-    # Byte-exact PCC of the compact halo buffer on the production LTX 2x4 shapes (the mux path for zeros).
+    # Byte-exact PCC of the compact halo buffer on the production LTX 4x8 shapes (the mux path for zeros).
     run_neighbor_pad_halo_2d(
         mesh_device,
         input_shape=input_shape,
@@ -757,6 +772,38 @@ def run_conv3d_halo_vs_fullpad_2d(mesh_device, input_shape, C_out, kernel_size, 
     out_halo = do_conv(inp_mesh, (pT, pH, pW), halo=halo_buf)
     ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
 
+    if os.environ.get("NP_CONV_PERF"):
+        # Decompose the e2e halo-vs-fullpad delta: halo_path = np_halo + conv_halo_read; fullpad_path =
+        # np_async(persistent) + conv_plain. Isolates whether the halo-mode conv3d (spatial padding active
+        # -> boundary blocks skip the coalesced gather) is the net-loss source on small 4x8 shards.
+        def _np_async():
+            return ttnn.experimental.neighbor_pad_async(
+                inp_mesh, [h_dim, w_dim], [pH, pW], [pH, pW], "zeros", [h_axis, w_axis],
+                [h_sem, w_sem], [barrier_sem], num_links=[num_links, num_links],
+                memory_config=mem, topology=ttnn.Topology.Linear, persistent_output_buffer=persist)
+
+        def _np_halo():
+            return ttnn.experimental.neighbor_pad_halo(
+                inp_mesh, halo_buf, np_padding_h=pH, np_padding_w=pW, np_cluster_axis=h_axis,
+                np_num_links=num_links, np_topology=ttnn.Topology.Linear, h_neighbor_semaphore=h_sem,
+                barrier_semaphore=barrier_sem, w_neighbor_semaphore=w_sem, np_pad_dim2=w_dim,
+                np_pad2_left=pW, np_pad2_right=pW, np_pad2_cluster_axis=w_axis, np_pad2_num_links=num_links,
+                padding_mode="zeros")
+
+        a = _trace_and_time(mesh_device, _np_async)
+        hh = _trace_and_time(mesh_device, _np_halo)
+        cp = _trace_and_time(mesh_device, lambda: do_conv(full, (pT, 0, 0)))
+        ch = _trace_and_time(mesh_device, lambda: do_conv(inp_mesh, (pT, pH, pW), halo=halo_buf))
+        print(
+            f"CONV-PERF shape={input_shape} Cout={C_out} k={kernel_size}: np_async={a:.1f} np_halo={hh:.1f} "
+            f"conv_plain={cp:.1f} conv_halo_read={ch:.1f} | fullpad_path={a + cp:.1f} halo_path={hh + ch:.1f} "
+            f"delta={hh + ch - (a + cp):+.1f} us",
+            flush=True,
+        )
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
+        return
+
     gold_dev = ttnn.get_device_tensors(ttnn.from_device(out_gold))
     halo_dev = ttnn.get_device_tensors(ttnn.from_device(out_halo))
     all_pass = True
@@ -774,20 +821,19 @@ def run_conv3d_halo_vs_fullpad_2d(mesh_device, input_shape, C_out, kernel_size, 
     assert all_pass, "halo conv3d != full-pad conv3d"
 
 
-@pytest.mark.timeout(400)
-@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, C_out, kernel_size",
     [
-        ([1, 4, 68, 120, 64], 64, (3, 3, 3)),  # small 34x60 C64
-        ([1, 8, 136, 240, 64], 128, (3, 3, 3)),  # mid 68x120 C64
-        ([1, 21, 34, 60, 1024], 1024, (3, 3, 3)),  # ltx_s0_res: 17x15, C_in=C_out=1024
-        ([1, 21, 34, 60, 1024], 4096, (3, 3, 3)),  # ltx_s0_up: C_out=4096
-        ([1, 16, 68, 120, 384], 192, (1, 3, 3)),  # k133 spatial (pT=0): 34x60
-        ([1, 21, 18, 32, 128], 1024, (3, 3, 3)),  # ups_initial: 9x8 (small W_dev)
+        ([1, 8, 36, 64, 1024], 1024, (3, 3, 3)),  # s0 padded: per-dev 9x8, C_in=C_out=1024
+        ([1, 8, 72, 128, 512], 512, (3, 3, 3)),  # s1: per-dev 18x16
+        ([1, 8, 144, 256, 512], 512, (3, 3, 3)),  # s2: per-dev 36x32
+        ([1, 8, 144, 256, 256], 256, (3, 3, 3)),  # s3: per-dev 36x32
+        ([1, 8, 288, 512, 128], 128, (3, 3, 3)),  # s4: per-dev 72x64
     ],
-    ids=["small_C64", "mid_C64", "s0_res_C1024", "s0_up_C4096", "k133_spatial", "ups_initial_9x8"],
+    ids=["s0_36x64_C1024", "s1_72x128_C512", "s2_144x256_C512", "s3_144x256_C256", "s4_288x512_C128"],
 )
 def test_conv3d_halo_vs_fullpad(mesh_device, device_params, input_shape, C_out, kernel_size):
     pH, pW = kernel_size[1] // 2, kernel_size[2] // 2

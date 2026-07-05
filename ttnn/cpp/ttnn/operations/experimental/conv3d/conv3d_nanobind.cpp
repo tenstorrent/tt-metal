@@ -63,7 +63,10 @@ void bind_conv3d(nb::module_& mod) {
         nb::arg("groups") = 1,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("halo_buffer") = nb::none());
+        nb::arg("halo_buffer") = nb::none(),
+        nb::arg("logical_h_mask") = 0u,
+        nb::arg("logical_w_mask") = 0u,
+        nb::arg("pad_offset_tensor") = nb::none());
 
     // Register to ttnn.experimental namespace
     ttnn::bind_function<"prepare_conv3d_weights", "ttnn.experimental.">(

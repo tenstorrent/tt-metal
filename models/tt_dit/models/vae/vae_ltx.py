@@ -27,7 +27,7 @@ from ...utils.conv3d import (
     conv_pad_width,
     get_conv3d_config,
 )
-from ...utils.tensor import typed_tensor
+from ...utils.tensor import typed_tensor, typed_tensor_2dshard
 
 # Fold each resnet block's terminal residual-add into the next block's norm1 (dual-output RMSNorm) within
 # a mid-block chain. OFF by default: the decode's RM-input norm at non-tile-aligned spatial dims hits a
@@ -52,6 +52,34 @@ def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
             mesh_axis=parallel_config.width_parallel.mesh_axis,
             shard_dim=3,
             dtype=dtype,
+        )
+    return cache[key]
+
+
+def _get_pad_offset(cache, x_BTHWC, parallel_config, mesh_device):
+    """Per-device [h_start, w_start] global spatial offset for conv3d's in-kernel logical-pad mask.
+    Sharded so device (hi, wi) reads its own pair [hi*H_dev, wi*W_dev]; H_dev/W_dev are uniform per
+    device because conv_pad_* pads to a multiple of the mesh factor. Lets the halo path mask pad
+    positions inside the conv3d read instead of a full-tensor pre-mul."""
+    hf = parallel_config.height_parallel.factor
+    wf = parallel_config.width_parallel.factor
+    h_dev, w_dev = x_BTHWC.shape[2], x_BTHWC.shape[3]
+    key = (hf, wf, h_dev, w_dev)
+    if key not in cache:
+        off = torch.zeros(hf, wf, 2, dtype=torch.int32)
+        for hi in range(hf):
+            for wi in range(wf):
+                off[hi, wi, 0] = hi * h_dev
+                off[hi, wi, 1] = wi * w_dev
+        cache[key] = typed_tensor_2dshard(
+            off,
+            mesh_device,
+            shard_mapping={
+                parallel_config.height_parallel.mesh_axis: 0,
+                parallel_config.width_parallel.mesh_axis: 1,
+            },
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
         )
     return cache[key]
 
@@ -197,6 +225,7 @@ class LTXCausalConv3d(Module):
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
+        self._pad_offset_cache: dict[tuple, ttnn.Tensor] = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # LTX-2 stores weights under "conv.weight" and "conv.bias"
@@ -271,13 +300,30 @@ class LTXCausalConv3d(Module):
         )
         use_fused = self._use_fused and not h_mask_active
 
-        # Width pre-conv mul-mask: zero pad columns before the halo (neighbor_pad has no W-mask).
-        # Runs in both paths since it operates on the input tensor before the halo exchange.
-        if (
-            logical_w > 0
-            and self.parallel_config.width_parallel.factor > 1
-            and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
-        ):
+        # Pre-conv pad masking. W pad columns must be zeroed on the input in BOTH paths (neighbor_pad has
+        # no W-mask). The full-pad path masks H pad rows inside neighbor_pad (logical_h=...); the compact
+        # neighbor_pad_halo op has no logical_h, so the halo path must mask H here too — folded into the
+        # SAME mul as W (one combined H&W mask) so it pays a single pre-conv mask op, not two full-tensor
+        # muls. Fires only where the physical dim exceeds the logical (e.g. 4x8's s0 pad 34->36 that
+        # propagates through the upsamples); a no-op when every logical dim divides the mesh factor (2x4).
+        wf = self.parallel_config.width_parallel.factor
+        hf = self.parallel_config.height_parallel.factor
+        w_needed = logical_w > 0 and wf > 1 and x_BTHWC.shape[3] * wf > logical_w
+        h_needed = logical_h > 0 and hf > 1 and x_BTHWC.shape[2] * hf > logical_h
+        # Halo path defers pad masking INTO conv3d (in-kernel, per-position on the interior read) via
+        # logical_h/w + a per-device offset — no full-tensor pre-mul. The full-pad path keeps its W
+        # pre-mul (neighbor_pad masks H via logical_h but has no W mask). See _get_pad_offset / conv3d.
+        conv_logical_h = 0
+        conv_logical_w = 0
+        pad_offset_tensor = None
+        if self._use_halo_conv:
+            conv_logical_h = logical_h if h_needed else 0
+            conv_logical_w = logical_w if w_needed else 0
+            if conv_logical_h or conv_logical_w:
+                pad_offset_tensor = _get_pad_offset(
+                    self._pad_offset_cache, x_BTHWC, self.parallel_config, self.mesh_device
+                )
+        elif w_needed:
             x_BTHWC = ttnn.mul(
                 x_BTHWC,
                 _get_w_mask(self._w_mask_cache, x_BTHWC, logical_w, self.parallel_config, self.mesh_device, self.dtype),
@@ -373,6 +419,9 @@ class LTXCausalConv3d(Module):
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
             halo_buffer=halo_buffer,
+            logical_h_mask=conv_logical_h,
+            logical_w_mask=conv_logical_w,
+            pad_offset_tensor=pad_offset_tensor,
         )
 
         return x_BTHWC
