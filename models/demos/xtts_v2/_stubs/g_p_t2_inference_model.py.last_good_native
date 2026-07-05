@@ -1,0 +1,134 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Native TTNN port of `g_p_t2_inference_model` of coqui/XTTS-v2.
+
+Reference submodule: `gpt.gpt_inference`, a
+`TTS.tts.layers.xtts.gpt_inference.GPT2InferenceModel` — the generation-step
+wrapper around the GPT2 stack used inside `GPT.generate()`.
+
+This port covers the deterministic PREFILL step the PCC harness drives
+(`past_key_values=None`, `use_cache=False`), where the module reduces to a plain
+causal forward + LM head:
+
+    prefix_emb = cached_prefix_emb                       # stored via store_prefix_emb
+    gen_inputs = input_ids[:, prefix_len:]
+    gen_emb    = embeddings(gen_inputs) + pos_embedding(0..gen_len)
+    emb        = cat([prefix_emb, gen_emb], dim=1)
+    hidden     = transformer(inputs_embeds=emb)          # causal GPT2
+    logits     = mel_head(final_norm(hidden))            # lm_head = Sequential(norm, linear)
+
+The GPT2 transformer reuses the graduated native `g_p_t2_model` port. Embeddings,
+the final LayerNorm, the LM-head matmul, and all concat/slice run in ttnn. Only
+the integer `input_ids[:, prefix_len:]` slice runs on host (index arithmetic).
+
+The prefix embedding is stateful (set by `store_prefix_emb` on the torch module
+before the ttnn port is built); we snapshot it at build time.
+
+Harness note: the forward takes only kwargs, so the PCC harness supplies a
+throwaway synthetic positional `primary` arg (ignored); real inputs arrive as
+host torch tensors in **kwargs.
+"""
+
+from __future__ import annotations
+
+import ttnn
+
+from models.demos.xtts_v2._stubs.g_p_t2_model import build as _build_gpt2_model
+
+_LN_EPS = 1e-5
+
+
+def build(device, torch_module):
+    """Bind trained weights + the stored prefix and return a native ttnn forward."""
+    import torch
+
+    m = torch_module
+
+    # GPT2 transformer stack (native, graduated port).
+    gpt2_forward = _build_gpt2_model(device, m.transformer.float())
+
+    # Token embedding (ROW_MAJOR for ttnn.embedding) + absolute pos table (TILE).
+    emb_w = ttnn.from_torch(
+        m.embeddings.weight.detach().contiguous().to(torch.bfloat16),
+        dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+    )
+    pos_w = ttnn.from_torch(
+        m.pos_embedding.emb.weight.detach().contiguous().to(torch.bfloat16),
+        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+    )
+
+    # lm_head = Sequential(final_norm: LayerNorm, mel_head: Linear).
+    norm = m.lm_head[0]
+    linear = m.lm_head[1]
+    lnf_w = ttnn.from_torch(
+        norm.weight.detach().contiguous().to(torch.bfloat16),
+        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+    )
+    lnf_b = ttnn.from_torch(
+        norm.bias.detach().contiguous().to(torch.bfloat16),
+        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+    )
+    # nn.Linear weight is [out, in]; ttnn matmul wants [in, out].
+    head_w = ttnn.from_torch(
+        linear.weight.detach().t().contiguous().to(torch.bfloat16),
+        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+    )
+    head_b = ttnn.from_torch(
+        linear.bias.detach().contiguous().to(torch.bfloat16),
+        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+    )
+
+    # The LM head is a 1024->1026 projection whose bf16-accumulated matmul
+    # dominates the output error (PCC-sensitive over 1026 logits). Run it with
+    # HiFi4 + fp32 accumulation so it matches the float32 reference.
+    _head_kernel_cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    model_dim = int(m.embeddings.weight.shape[1])
+
+    # Snapshot the stateful prefix embedding stored via store_prefix_emb().
+    prefix_torch = m.cached_prefix_emb.detach().contiguous().to(torch.bfloat16)
+    prefix_len = int(prefix_torch.shape[1])
+    prefix_tt = ttnn.from_torch(
+        prefix_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+    )
+
+    def forward(_primary=None, *args, **kwargs):
+        import torch as _torch
+
+        input_ids = kwargs["input_ids"]
+        gen_inputs = input_ids[:, prefix_len:]           # host int slice
+        gen_len = int(gen_inputs.shape[1])
+
+        ids_tt = ttnn.from_torch(
+            gen_inputs.to(_torch.int32).contiguous(), dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+        )
+        tok = ttnn.embedding(ids_tt, emb_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        pos = ttnn.slice(pos_w, [0, 0], [gen_len, model_dim])
+        pos = ttnn.reshape(pos, [1, gen_len, model_dim])
+        gen_emb = ttnn.add(tok, pos)                     # [1, gen_len, D]
+
+        emb = ttnn.concat([prefix_tt, gen_emb], dim=1)   # [1, prefix_len+gen_len, D]
+
+        hidden = gpt2_forward(emb)
+        normed = ttnn.layer_norm(hidden, epsilon=_LN_EPS, weight=lnf_w, bias=lnf_b)
+        logits = ttnn.linear(
+            normed, head_w, bias=head_b, compute_kernel_config=_head_kernel_cfg,
+        )  # [1, seq, num_audio_tokens]
+        return logits
+
+    return forward
+
+
+def g_p_t2_inference_model(*args, **kwargs):
+    raise RuntimeError(
+        "g_p_t2_inference_model requires build(device, torch_module) to bind "
+        "trained weights and the stored prefix; the bare callable has no state."
+    )
