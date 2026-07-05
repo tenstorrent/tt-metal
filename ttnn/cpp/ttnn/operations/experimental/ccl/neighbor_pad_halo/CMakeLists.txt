@@ -17,6 +17,9 @@ target_sources(
         neighbor_pad_halo.cpp
         device/neighbor_pad_halo_device_operation.cpp
         device/neighbor_pad_halo_program_factory.cpp
+        halo_scatter.cpp
+        device/halo_scatter_device_operation.cpp
+        device/halo_scatter_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_neighbor_pad_halo PRIVATE ${FixmeOpIncDirs})

@@ -67,6 +67,7 @@ void py_module(nb::module_& mod) {
     ccl::bind_neighbor_pad_async(mod);
     ccl::bind_neighbor_pad_conv3d(mod);
     ccl::bind_neighbor_pad_halo(mod);
+    ccl::bind_halo_scatter(mod);
     ccl::bind_slice_reshard_async(mod);
     ccl::bind_deepseek_moe_reduce_scatter(mod);
     ccl::bind_all_to_all_dispatch_metadata(mod);

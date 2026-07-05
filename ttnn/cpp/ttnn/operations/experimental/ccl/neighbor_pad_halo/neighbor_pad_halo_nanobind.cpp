@@ -13,6 +13,7 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_halo/neighbor_pad_halo.hpp"
+#include "ttnn/operations/experimental/ccl/neighbor_pad_halo/halo_scatter.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/types.hpp"
@@ -73,6 +74,38 @@ void bind_neighbor_pad_halo(nb::module_& mod) {
         nb::arg("np_pad2_num_links"),
         nb::kw_only(),
         nb::arg("padding_mode") = "zeros",
+        nb::arg("memory_config") = nb::none());
+}
+
+void bind_halo_scatter(nb::module_& mod) {
+    ttnn::bind_function<"halo_scatter", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Local (no-fabric) border scatter for the persistent-padded activation pipeline.
+
+        Copies the compact halo buffer [H-top | H-bot | W-left | W-right] produced by
+        neighbor_pad_halo into the BORDER of a persistent padded buffer in place, leaving the
+        interior untouched. The next conv then reads the padded buffer as a plain coalesced conv
+        (pad=0), avoiding both the interior copy and the conv3d per-stick halo read.
+
+        Args:
+            compact_buffer (ttnn.Tensor): Compact halo buffer returned by neighbor_pad_halo (source).
+            padded_buffer (ttnn.Tensor): Persistent padded buffer [.., H+2pH, W+2pW, C] (written in place).
+            np_padding_h (int): H-halo rows per side (must match the neighbor_pad_halo call).
+            np_padding_w (int): W-halo columns per side.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Output memory config.
+
+        Returns:
+            ttnn.Tensor: The padded buffer, with its border filled.
+        )doc",
+        &ttnn::experimental::halo_scatter,
+        nb::arg("compact_buffer"),
+        nb::arg("padded_buffer"),
+        nb::arg("np_padding_h"),
+        nb::arg("np_padding_w"),
+        nb::kw_only(),
         nb::arg("memory_config") = nb::none());
 }
 

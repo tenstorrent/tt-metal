@@ -9,5 +9,6 @@ namespace ttnn::operations::experimental::ccl {
 
 namespace nb = nanobind;
 void bind_neighbor_pad_halo(nb::module_& mod);
+void bind_halo_scatter(nb::module_& mod);
 
 }  // namespace ttnn::operations::experimental::ccl

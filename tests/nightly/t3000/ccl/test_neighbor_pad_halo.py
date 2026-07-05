@@ -214,6 +214,104 @@ def run_neighbor_pad_halo_2d(mesh_device, input_shape, h_dim, w_dim, h_axis, w_a
     assert all_pass, "compact halo mismatch"
 
 
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("input_shape", [[1, 8, 144, 256, 128]], ids=["s3ish"])
+def test_neighbor_pad_halo_padded_border(mesh_device, device_params, input_shape):
+    """Slice 2 validation (Architecture B): neighbor_pad_halo -> compact buffer (unchanged mux path),
+    then halo_scatter copies the compact border into a PADDED [outer,H+2,W+2,C] buffer IN PLACE. The
+    padded border must match neighbor_pad_async's full-pad buffer bit-exact. Interior stays 0 (scatter
+    writes border only); compare only the border positions."""
+    h_dim, w_dim, h_axis, w_axis, pH, pW, num_links = 2, 3, 0, 1, 1, 1, 2
+    mesh_shape = tuple(mesh_device.shape)
+    hf, wf = mesh_shape[h_axis], mesh_shape[w_axis]
+    B, T, Hf, Wf, C = input_shape
+    Hd, Wd = Hf // hf, Wf // wf
+    torch.manual_seed(0)
+    inp = torch.rand(input_shape).bfloat16()
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+    mesh_device.load_sub_device_manager(mgr)
+    sub_id = ttnn.SubDeviceId(0)
+    mesh_device.set_sub_device_stall_group([sub_id])
+    h_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    w_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    dims = [None, None]
+    dims[h_axis], dims[w_axis] = h_dim, w_dim
+    inp_mesh = ttnn.from_torch(
+        inp, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+    )
+    # full-pad reference (async persistent buffer)
+    out_shape = list(input_shape)
+    out_shape[h_dim] += hf * 2 * pH
+    out_shape[w_dim] += wf * 2 * pW
+    persist = ttnn.from_torch(
+        torch.zeros(out_shape).bfloat16(), device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16,
+        memory_config=mem, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+    )
+    full = ttnn.experimental.neighbor_pad_async(
+        inp_mesh, [h_dim, w_dim], [pH, pW], [pH, pW], "zeros", [h_axis, w_axis], [h_sem, w_sem], [barrier_sem],
+        num_links=[num_links, num_links], memory_config=mem, topology=ttnn.Topology.Linear, persistent_output_buffer=persist,
+    )
+    ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
+    # Step 1: neighbor_pad_halo -> compact buffer [total_sticks, C] (mux path, unchanged).
+    h_total = Hd + 2 * pH
+    total_sticks = T * 2 * pH * Wd + T * 2 * pW * h_total
+    compact = ttnn.from_torch(
+        torch.zeros(total_sticks, C).bfloat16(), device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+    )
+    ttnn.experimental.neighbor_pad_halo(
+        inp_mesh, compact, np_padding_h=pH, np_padding_w=pW, np_cluster_axis=h_axis, np_num_links=num_links,
+        np_topology=ttnn.Topology.Linear, h_neighbor_semaphore=h_sem, barrier_semaphore=barrier_sem,
+        w_neighbor_semaphore=w_sem, np_pad_dim2=w_dim, np_pad2_left=pW, np_pad2_right=pW,
+        np_pad2_cluster_axis=w_axis, np_pad2_num_links=num_links, padding_mode="zeros",
+    )
+    ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
+    # Step 2: halo_scatter compact -> padded border, in place. Per-device [1,T,Hd+2,Wd+2,C] replicated.
+    padded = ttnn.from_torch(
+        torch.zeros(1, T, Hd + 2 * pH, Wd + 2 * pW, C).bfloat16(), device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+    )
+    padded = ttnn.experimental.halo_scatter(compact, padded, np_padding_h=pH, np_padding_w=pW)
+    ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
+
+    full_dev = ttnn.get_device_tensors(ttnn.from_device(full))
+    pad_dev = ttnn.get_device_tensors(ttnn.from_device(padded))
+
+    def border_mask(h, w):
+        m = torch.zeros(h, w, dtype=torch.bool)
+        m[:pH, :] = True
+        m[-pH:, :] = True
+        m[:, :pW] = True
+        m[:, -pW:] = True
+        return m
+
+    bm = border_mask(Hd + 2 * pH, Wd + 2 * pW)
+    all_pass = True
+    for i in range(mesh_shape[0] * mesh_shape[1]):
+        f = ttnn.to_torch(full_dev[i]).reshape(T, Hd + 2 * pH, Wd + 2 * pW, C)
+        p = ttnn.to_torch(pad_dev[i]).reshape(T, Hd + 2 * pH, Wd + 2 * pW, C)
+        fb = f[:, bm, :]
+        pb = p[:, bm, :]
+        eq, msg = comp_equal(pb, fb)
+        if not eq:
+            all_pass = False
+            _, pcc = comp_pcc(pb, fb, 0.0)
+            print(f"FAIL dev {i}: border pcc={pcc}", flush=True)
+        else:
+            print(f"PASS dev {i}", flush=True)
+    mesh_device.reset_sub_device_stall_group()
+    mesh_device.clear_loaded_sub_device_manager()
+    assert all_pass, "padded halo border != full-pad border"
+
+
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
