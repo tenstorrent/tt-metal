@@ -177,10 +177,6 @@ class TestConfig:
     SKIP_JUST_FOR_COMPILE_MARKER: ClassVar[str] = "SKIPPED_JUST_FOR_COMPILE"
     SKIP_JUST_FOR_STIMULI_MARKER: ClassVar[str] = "SKIPPED_JUST_FOR_STIMULI"
     _BUILD_DIRS_CREATED: ClassVar[bool] = False
-    # variant_ids this process has already built (or seen already built on disk).
-    # Variants that differ only in runtime args / formats / stimuli collapse to the
-    # same variant_id. Per-process: each xdist worker keeps its own.
-    _BUILT_VARIANT_IDS: ClassVar[set[str]] = set()
     SPEED_OF_LIGHT: ClassVar[bool] = (
         False  # Should everything be converted to compile-time arguments?
     )
@@ -1199,31 +1195,19 @@ class TestConfig:
     def build_elfs(self):
 
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
+        if not self.skip_build_header:
+            header_content = self.generate_build_header()
         done_marker = VARIANT_DIR / ".build_complete"
 
         if TestConfig.INFRA_TESTING:
             return
 
-        # In-process fast path: this worker already built (or saw built) this
-        # variant_id, so there is nothing to compile and nothing to stat. This is
-        # the cheapest exit and collapses runtime-only-differing variants.
-        if self.variant_id in TestConfig._BUILT_VARIANT_IDS:
-            return
-
         self.build_shared_artefacts()
 
-        # Fast path: if build is already complete on disk (e.g. produced by
-        # another xdist worker), skip entirely.
+        # Fast path: if build is already complete, skip entirely
         if done_marker.exists():
             logger.debug("Build already complete for {}", self.variant_id[:12])
-            TestConfig._BUILT_VARIANT_IDS.add(self.variant_id)
             return
-
-        # The build header is only needed for variants we actually compile, so
-        # generate it after the fast-path checks above rather than for every
-        # collected test (the vast majority of which hit a fast path).
-        if not self.skip_build_header:
-            header_content = self.generate_build_header()
 
         # Acquire lock for this variant to prevent concurrent builds
         lock_file = TestConfig.SYNC_DIR / f"{self.variant_id}.lock"
@@ -1232,7 +1216,6 @@ class TestConfig:
         with lock:
             # Check again inside lock in case another process just finished
             if done_marker.exists():
-                TestConfig._BUILT_VARIANT_IDS.add(self.variant_id)
                 return
 
             VARIANT_OBJ_DIR = VARIANT_DIR / "obj"
@@ -1344,8 +1327,6 @@ class TestConfig:
 
             # Mark build as complete so other processes know they can use the artefacts
             done_marker.touch()
-
-        TestConfig._BUILT_VARIANT_IDS.add(self.variant_id)
 
     def read_coverage_data_from_device(self):
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
