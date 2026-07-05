@@ -9567,13 +9567,22 @@ def _cmd_up_core(args) -> int:
                 print("ERROR: --engine cc requires a scaffolded demo (run bring-up first).", file=sys.stderr)
                 return 2
             banner("Step 6/6  Bring-up (cc engine) — harness loop on the per-component gate")
-            return run_bringup_cc(
+            _cc_rc = run_bringup_cc(
                 model_id=MODEL,
                 demo_dir=_dd,
                 agent_bin=(getattr(args, "auto_agent_bin", None) or "claude"),
                 mesh=getattr(args, "mesh", None),
                 max_attempts=getattr(args, "auto_max_attempts_per_component", 2),
             )
+            try:
+                from .run_report import emit_run_report
+
+                _rp = emit_run_report(MODEL, _dd, converged=(_cc_rc == 0))
+                if _rp:
+                    print(f"  [run-report] wrote {_rp}")
+            except Exception:
+                pass
+            return _cc_rc
 
         _phase2_only = bool(getattr(args, "phase2_only", False))
         _phase2 = bool(getattr(args, "phase2", False)) or _phase2_only

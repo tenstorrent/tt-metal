@@ -44,6 +44,9 @@ def render_summary(
     metric: str = "device_ms",
     committed_wins: int | None = None,
     opt_branch: str = "",
+    perf_test: str = "",
+    report_csv: str = "",
+    residual: dict | None = None,
 ) -> str:
     """Return a markdown summary. Degrades gracefully when data is partial."""
     attempts = _read_json(kernel_log_path) or []
@@ -115,6 +118,54 @@ def render_summary(
     if committed_wins is not None:
         suffix = f" (branch {opt_branch})" if opt_branch else ""
         lines.append(f"committed wins: {committed_wins}{suffix}")
+
+    # --- Per-attempt detail: gain of EVERY optimization tried (#5a) ---
+    if attempts:
+        lines.append("")
+        lines.append("Per-attempt detail (every optimization tried, with gain vs baseline):")
+        ah = f"{'op':<34} {'lever':>10} {'ms':>9} {'gain vs base':>13}  result"
+        lines.append(ah)
+        lines.append("-" * len(ah))
+        for a in attempts:
+            if not isinstance(a, dict):
+                continue
+            sig = _op_label(a.get("op_signature", "?"))
+            lever = _level_of(a.get("kernel_kind", "")) or (a.get("kernel_kind") or "?")
+            ms = a.get("measured_ms")
+            ms_s = f"{ms:.2f}" if isinstance(ms, (int, float)) else "—"
+            if baseline_ms and isinstance(ms, (int, float)):
+                gain_s = f"{baseline_ms - ms:+.2f} ms"
+            else:
+                gain_s = "—"
+            res = "✓ win" if a.get("beat_baseline") else "· no gain"
+            lines.append(f"{sig:<34} {lever:>10} {ms_s:>9} {gain_s:>13}  {res}")
+
+    # --- Limitations / suggested manual next steps (#5c) ---
+    _won_ops = {a.get("op_signature") for a in attempts if isinstance(a, dict) and a.get("beat_baseline")}
+    _no_gain = sorted({o for o in by_op} - {o for o in _won_ops if o})
+    lines.append("")
+    lines.append("Limitations / suggested manual next steps:")
+    if _no_gain:
+        shown = ", ".join(_op_label(o, 26) for o in _no_gain[:8]) + (" …" if len(_no_gain) > 8 else "")
+        lines.append(f"- {len(_no_gain)} op(s) tried but no lever beat baseline: {shown}")
+        lines.append("  -> inspect the per-op device report and consider a hand-written kernel or a structural change.")
+    if baseline_ms and final_ms and final_ms >= baseline_ms:
+        lines.append("- No net speedup recorded — the model may already be at its ttnn floor, or the dominant op needs a custom kernel.")
+    if residual:
+        _rv = residual.get("verdict") or residual.get("summary") or residual.get("reason")
+        if _rv:
+            lines.append(f"- Roofline residual: {str(_rv)[:200]}")
+    if not _no_gain and not residual and not (baseline_ms and final_ms and final_ms >= baseline_ms):
+        lines.append("- (none flagged automatically — see the per-op device report for remaining headroom.)")
+
+    # --- Reproduce these numbers (#6) ---
+    lines.append("")
+    lines.append("Reproduce:")
+    lines.append(f"  perf test:  python -m pytest {perf_test} -svv" if perf_test else "  perf test:  (node-id not provided)")
+    if report_csv:
+        lines.append(f"  per-op device report (tt-metal format): {report_csv}")
+
+    lines.append("")
     lines.append(
         "levels: grid -> dtype -> tt-lang -> cpp -> host   |   ✓win = beat baseline, ·try = measured no-gain, — = not attempted"
     )
