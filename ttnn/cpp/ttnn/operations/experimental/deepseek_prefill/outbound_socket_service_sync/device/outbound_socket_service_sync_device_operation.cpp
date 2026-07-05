@@ -39,6 +39,9 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
         "outbound_socket_service_sync: per-coord sender-service state is missing or inconsistent (was the service "
         "built with "
         "sender_worker_cores?)");
+    if (args.metadata_only) {
+        TT_FATAL(args.metadata_size_bytes > 0, "outbound_socket_service_sync: metadata_only requires metadata");
+    }
     if (args.metadata_size_bytes > 0) {
         TT_FATAL(
             args.metadata_size_bytes % 4 == 0,
@@ -74,9 +77,6 @@ OutboundSocketServiceSyncOperation::tensor_return_value_t OutboundSocketServiceS
 
 ttsl::hash::hash_t OutboundSocketServiceSyncOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (args.metadata_only) {
-        TT_FATAL(args.metadata_size_bytes > 0, "outbound_socket_service_sync: metadata_only requires metadata");
-    }
     // Stable across calls for a given (service, config): the changing input address is
     // a BufferBinding (patched on cache hit), NOT part of the hash.
     return operation::hash_operation<OutboundSocketServiceSyncOperation>(
