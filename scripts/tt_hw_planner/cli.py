@@ -337,6 +337,30 @@ def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
         print(f"    {line}")
 
     kind = _classify_load_error(msg)
+
+    try:
+        from . import reference_loader_resolver as _rlr
+
+        _rfiles = _rlr._repo_files(model_id)
+        _hf_native = any(
+            f
+            in (
+                "model.safetensors",
+                "model.safetensors.index.json",
+                "pytorch_model.bin",
+                "pytorch_model.bin.index.json",
+            )
+            for f in _rfiles
+        )
+        if _rfiles and not _hf_native:
+            print(
+                "  non-transformers checkpoint (repo ships no HF-format weights) — proceeding past\n"
+                "  pre-flight; the reference-loader resolver auto-arms at capture and writes a loader."
+            )
+            return True
+    except Exception:
+        pass
+
     if kind in {"gated", "auth", "missing"}:
         _print_gated_or_auth_guidance(model_id, kind)
         return False
