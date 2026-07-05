@@ -23,8 +23,9 @@ template <
     uint32_t DATA_READY_SEM_ID,
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
-    DataReadySignal DATA_READY_SIGNAL>
-SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL>::SenderPipe(
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER>
+SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::SenderPipe(
     const Noc& noc, const McastRect<NOC_ID>& dest, uint32_t consumer_ack_count) :
     noc_(noc), dest_(dest), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {
     // Catch a NoC mismatch early (only meaningful under --dev): the precomputed routing corners and
@@ -35,13 +36,11 @@ SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA
     // happens-before relative to this ctor, so a ctor set(0) would clobber an early ack and hang.
     // Its initial 0 comes from host `CreateSemaphore(..., 0)`.
     //
-    // Initial VALID for the flag cell that set_multicast broadcasts. send() re-asserts it each call
-    // (so a core that also receives on this cell doesn't broadcast a stale INVALID).
-    if constexpr (DATA_READY_SIGNAL == DataReadySignal::Flag) {
-        data_ready_.set(VALID);
-    }
+    // `data_ready` is NOT initialized here either. send() asserts VALID locally right before it
+    // broadcasts the flag (signal_ready_), so a ctor set would be redundant; leaving the cell at its
+    // host-init INVALID keeps the resting state clean for a rotating core that also receives on it.
     // Whether this sender's own core lies in the receiver rect is fixed at construction (my coords
-    // and the rect are both constant now), so compute it ONCE here rather than per send().
+    // and the rect are both constant), so compute it ONCE here rather than per send().
     in_rect_ = my_x[NOC_ID] >= dest_.xlo() && my_x[NOC_ID] <= dest_.xhi() && my_y[NOC_ID] >= dest_.ylo() &&
                my_y[NOC_ID] <= dest_.yhi();
     // Fan-out, derived from the rect area (num_dests == area ± source) — precomputed so send()
@@ -63,8 +62,9 @@ template <
     uint32_t DATA_READY_SEM_ID,
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
-    DataReadySignal DATA_READY_SIGNAL>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL>::send(
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER>
+void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::send(
     uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
     // Degenerate: no receiver cores. If the sender is in its own box and lands a copy elsewhere, do
     // a local copy (a loopback to just self may hang); else nothing.
@@ -89,6 +89,13 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
     send_data_(src_l1, dst_l1, size, loopback, mcast_dests);
     signal_ready_(loopback, mcast_dests);  // the signal rides the same mode as the data
     fence_();
+    // Rotating sender: put our own flag cell back to INVALID now that the broadcast is flushed (the
+    // fence above proved the cell is done as the set_multicast source). Otherwise this core's next
+    // RECEIVER turn would wait(VALID) on the stale VALID we just left and return before the new
+    // sender's data lands. Flag signal only — the Counter path is monotone, never reset.
+    if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
+        data_ready_.set(INVALID);
+    }
 }
 
 template <
@@ -96,8 +103,9 @@ template <
     uint32_t DATA_READY_SEM_ID,
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
-    DataReadySignal DATA_READY_SIGNAL>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL>::send_signal() {
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER>
+void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::send_signal() {
     if (degenerate_) {
         return;  // nobody to signal
     }
@@ -110,8 +118,9 @@ template <
     uint32_t DATA_READY_SEM_ID,
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
-    DataReadySignal DATA_READY_SIGNAL>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL>::send_data_(
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER>
+void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::send_data_(
     uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests) {
     const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
     UnicastEndpoint src_ep;
@@ -135,8 +144,9 @@ template <
     uint32_t DATA_READY_SEM_ID,
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
-    DataReadySignal DATA_READY_SIGNAL>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL>::signal_ready_(
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER>
+void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::signal_ready_(
     bool loopback, uint32_t mcast_dests) {
     const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
@@ -161,8 +171,9 @@ template <
     uint32_t DATA_READY_SEM_ID,
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
-    DataReadySignal DATA_READY_SIGNAL>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL>::fence_() {
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER>
+void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::fence_() {
     noc_.async_writes_flushed();  // SENT — source L1 safe to reuse. The signal proves arrival.
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         // inc_multicast is a NON-POSTED multicast atomic: it expects num_dests acks that the flush
@@ -176,8 +187,9 @@ template <
     uint32_t DATA_READY_SEM_ID,
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
-    DataReadySignal DATA_READY_SIGNAL>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL>::local_copy_(
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER>
+void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::local_copy_(
     uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
     if (src_l1 == dst_l1) {
         return;  // src == dst: nothing to copy
@@ -202,10 +214,16 @@ template <
     uint32_t DATA_READY_SEM_ID,
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
-    DataReadySignal DATA_READY_SIGNAL>
-ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL>::ReceiverPipe(
-    const Noc& noc) :
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS>
+ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::ReceiverPipe(
+    const Noc& noc, const uint32_t (&sender_coords)[2 * NUM_SENDERS]) :
     noc_(noc), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {
+    // Keep the sender coords (copied in, so the caller's array can be a temporary) — the pipe owns them
+    // and never reads runtime args itself.
+    for (uint32_t i = 0; i < 2 * NUM_SENDERS; ++i) {
+        coords_[i] = sender_coords[i];
+    }
     // Init the flag THIS side waits on. The Counter signal needs no reset/init (monotone).
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Flag) {
         data_ready_.set(INVALID);
@@ -216,9 +234,13 @@ template <
     uint32_t DATA_READY_SEM_ID,
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
-    DataReadySignal DATA_READY_SIGNAL>
-void ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL>::receive(
-    uint32_t sender_x, uint32_t sender_y) {
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS>
+void ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::receive(
+    uint32_t round) {
+    ASSERT(round < NUM_SENDERS);  // (--dev only) the round must index a stored sender coord pair
+    const uint32_t sender_x = coords_[2 * round + 0];
+    const uint32_t sender_y = coords_[2 * round + 1];
     if constexpr (PRE_HANDSHAKE) {
         // tell the sender "my dest is free / I am ready" (remote atomic inc on its counter)
         consumer_ready_.up(noc_, sender_x, sender_y, 1);
@@ -235,8 +257,10 @@ template <
     uint32_t DATA_READY_SEM_ID,
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
-    DataReadySignal DATA_READY_SIGNAL>
-uint32_t ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL>::receive_signal() {
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS>
+uint32_t
+ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::receive_signal() {
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         data_ready_.wait_min(++round_);
         return round_;

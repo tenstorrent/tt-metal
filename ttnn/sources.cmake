@@ -133,6 +133,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/operations/core.cpp
     cpp/ttnn-nanobind/operations/trace.cpp
     cpp/ttnn-nanobind/tensor_accessor_args.cpp
+    cpp/ttnn-nanobind/mcast_host.cpp
     cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
 )
 
