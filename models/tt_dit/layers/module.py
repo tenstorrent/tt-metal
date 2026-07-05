@@ -364,6 +364,162 @@ class UnregisteredModule:
         return self.module(*args, **kwargs)
 
 
+# ============================================================================
+# WC (ITER60): SP de-replication of the DiT weight H2D transfer.
+#
+# The distilled DiT weights are TP-sharded but SP-*replicated*: the cached load
+# path (``ttnn.load_tensor`` -> ``to_device``) fans each TP shard to every SP
+# device, so the same bytes cross PCIe SP-many times (~4x on this 2x4 mesh).
+# De-rep instead H2Ds each weight ONCE, 2D-sharded across BOTH the TP and SP
+# axes (1x bytes, spread over all links), then rebuilds the SP-replicated layout
+# on-device with an all-gather over the SP axis (intra-mesh fabric, not PCIe).
+# The per-device tensor is byte-identical to the replicated load (all-gather is a
+# lossless concat of the exact shards), so the golden output md5 is preserved.
+#
+# Entirely gated by LTX_DEREP (default off) via a context object that is set only
+# around the transformer cache load (see ``utils/cache.load_model``). Each tensor
+# independently falls back to the normal replicated load on any error, and a
+# circuit breaker disables de-rep after the first failure so a bad/unsupported
+# path costs at most one op instead of hanging every tensor.
+# ============================================================================
+
+_derep_context: dict | None = None
+
+
+def set_derep_context(ctx: dict | None) -> None:
+    """Install (or clear with ``None``) the active SP de-replication context."""
+    global _derep_context
+    _derep_context = ctx
+
+
+def get_derep_context() -> dict | None:
+    return _derep_context
+
+
+def _derep_plan(parameter: Parameter, ctx: dict) -> dict | None:
+    """Return a de-rep plan for a large SP-replicated weight, else ``None``.
+
+    A parameter qualifies when the SP mesh axis is currently *replicated* (not
+    already sharded), the tensor is large enough to be worth the per-tensor CCL +
+    untilize overhead, and a free tensor dimension exists that stays tile-aligned
+    after being split across the SP axis.
+    """
+    sp_axis = ctx["sp_axis"]
+    device = parameter.device
+    mesh_shape = list(device.shape)
+    if sp_axis is None or sp_axis >= len(mesh_shape):
+        return None
+    sp_size = mesh_shape[sp_axis]
+    if sp_size <= 1:
+        return None
+    mesh_axes = list(parameter.mesh_axes)
+    # Only de-rep weights that are currently REPLICATED on the SP axis.
+    if any(a == sp_axis for a in mesh_axes if a is not None):
+        return None
+    total_shape = parameter.total_shape
+    rank = len(total_shape)
+    nbytes = 2  # bf16
+    for s in total_shape:
+        nbytes *= s
+    if nbytes < ctx["min_bytes"]:
+        return None
+    # Prefer the row dim (rank-2) so the on-device all-gather runs on dim 2 of the
+    # reshaped-4D tensor, matching the SP gather the model already exercises.
+    tile = 32
+    order = ([rank - 2] if rank >= 2 else []) + [rank - 1] + list(range(rank - 2))
+    sp_dim = None
+    for d in order:
+        if 0 <= d < rank and mesh_axes[d] is None and total_shape[d] % (sp_size * tile) == 0:
+            sp_dim = d
+            break
+    if sp_dim is None:
+        return None
+    derep_axes = list(mesh_axes)
+    derep_axes[sp_dim] = sp_axis
+    return {"sp_dim": sp_dim, "mesh_axes": derep_axes, "nbytes": nbytes}
+
+
+def _build_derep_mapper(device: ttnn.MeshDevice, mesh_axes: Sequence[int | None]):
+    """Build a ttnn mesh mapper from per-tensor-dim mesh axes (matches
+    ``utils.tensor.from_torch``)."""
+    mesh_rank = len(list(device.shape))
+    placements = tensor._invert_placements(mesh_axes, output_rank=mesh_rank)
+    placements = [ttnn.PlacementShard(p) if p is not None else ttnn.PlacementReplicate() for p in placements]
+    return ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(placements))
+
+
+def _derep_verify(parameter: Parameter, path: str | Path, full: ttnn.Tensor, ctx: dict) -> None:
+    """Assert the de-rep'd tensor is byte-identical to the replicated load, on a
+    few mesh shards. Best-effort: never raises into the load path."""
+    ref = None
+    try:
+        import torch
+
+        ref = ttnn.load_tensor(path, device=parameter.device)
+        full_shards = ttnn.get_device_tensors(full)
+        ref_shards = ttnn.get_device_tensors(ref)
+        n = min(len(full_shards), len(ref_shards))
+        idxs = sorted({0, min(1, n - 1), n - 1})
+        ok = True
+        for i in idxs:
+            if not torch.equal(ttnn.to_torch(full_shards[i]), ttnn.to_torch(ref_shards[i])):
+                ok = False
+                break
+        logger.info(f"DEREP-VERIFY {Path(path).name}: {'IDENTICAL' if ok else 'MISMATCH!!'} (shards {idxs})")
+        if not ok:
+            ctx["verify_fail"] = ctx.get("verify_fail", 0) + 1
+    except Exception as err:  # noqa: BLE001 - verification must never break the load
+        logger.warning(f"DEREP-VERIFY error on {Path(path).name}: {type(err).__name__}: {err}")
+    finally:
+        if ref is not None:
+            ttnn.deallocate(ref)
+
+
+def _derep_execute(parameter: Parameter, path: str | Path, ctx: dict) -> bool:
+    """Load ``path`` de-replicated. Returns ``True`` if de-rep was applied,
+    ``False`` if the parameter is not a candidate (caller does the normal load).
+    Raises on any de-rep failure (caller falls back + trips the circuit breaker)."""
+    plan = _derep_plan(parameter, ctx)
+    if plan is None:
+        return False
+
+    t0 = time.monotonic()
+    host = ttnn.load_tensor(path, device=None)  # 1x1 logical host tensor (cheap mmap)
+    t1 = time.monotonic()
+    mapper = _build_derep_mapper(parameter.device, plan["mesh_axes"])
+    sharded = ttnn.distribute_tensor(host, mapper, parameter.device)  # H2D, 1x bytes, 2D-sharded
+    del host
+    t2 = time.monotonic()
+    full = ctx["ccl"].all_gather(
+        sharded,
+        dim=plan["sp_dim"],
+        mesh_axis=ctx["sp_axis"],
+        use_hyperparams=False,
+        use_persistent_buffer=False,
+    )
+    ttnn.deallocate(sharded)
+    t3 = time.monotonic()
+    if full.memory_config() != parameter.memory_config:
+        full = ttnn.to_memory_config(full, parameter.memory_config)
+
+    if ctx.get("verify_left", 0) > 0:
+        _derep_verify(parameter, path, full, ctx)
+        ctx["verify_left"] -= 1
+
+    try:
+        parameter.data = full  # runs _check_data (shape/dtype/layout/memcfg/device)
+    except Exception:
+        ttnn.deallocate(full)
+        raise
+
+    ctx["n"] += 1
+    ctx["bytes"] += plan["nbytes"]
+    ctx["t_host"] += t1 - t0
+    ctx["t_dist"] += t2 - t1
+    ctx["t_ag"] += t3 - t2
+    return True
+
+
 class Parameter:
     def __init__(
         self,
