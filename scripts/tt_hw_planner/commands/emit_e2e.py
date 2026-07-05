@@ -170,6 +170,63 @@ _G1B_HF_FALLBACK = (
 # links assignments to call sites.
 _HF_ALIAS_ROOTS = ("text_decoder", "t2u_model", "vocoder", "speech_encoder", "text_encoder", "lm_head")
 
+# G1b (torch-wrapper part): torch COMPUTE ops in HOT functions are banned —
+# the HOT path must be pure ttnn (`ttnn.<X>(...)` or `stubs[<name>](...)`).
+# Blocklist explicitly enumerates the compute ops that must be TT, not host:
+# matmul/attention/norm/activation/conv/embedding/aggregation. Shape ops
+# (reshape, expand, repeat, cat) and construction (zeros, tensor, arange)
+# stay allowed — they're just prep. Also blocked: everything in
+# `torch.nn.functional.<X>` (that IS the compute API), and `F.<X>` (its
+# common alias).
+_TORCH_COMPUTE_BLOCKLIST = {
+    # matmul family
+    "matmul",
+    "mm",
+    "bmm",
+    "addmm",
+    "einsum",
+    # normalization
+    "layer_norm",
+    "batch_norm",
+    "group_norm",
+    "instance_norm",
+    "rms_norm",
+    # activations
+    "softmax",
+    "log_softmax",
+    "sigmoid",
+    "tanh",
+    "relu",
+    "gelu",
+    "silu",
+    "leaky_relu",
+    "elu",
+    "hardswish",
+    "hardsigmoid",
+    "mish",
+    # attention
+    "scaled_dot_product_attention",
+    # convolution
+    "conv1d",
+    "conv2d",
+    "conv3d",
+    "conv_transpose1d",
+    "conv_transpose2d",
+    # embedding
+    "embedding",
+    "embedding_bag",
+    # dropout (in HOT, this shouldn't happen anyway)
+    "dropout",
+    "dropout1d",
+    "dropout2d",
+    "dropout3d",
+    # sampling / decode (already partly in G5, but block here too)
+    "argmax",
+    "argmin",
+    "topk",
+    "multinomial",
+}
+
 _G5_HOST_SAMPLING = (
     r"torch\.argmax\s*\(",
     r"torch\.multinomial\s*\(",
@@ -291,6 +348,33 @@ def _check_hf_fallback(src: str) -> list:
                 continue
             if isinstance(f, ast.Name) and f.id in aliases:
                 hits.append(f"{node.name}(): {f.id}(...) [alias for {aliases[f.id]}]")
+                continue
+            # Torch compute wrappers in HOT — everything on the HOT path must
+            # be ttnn or a graduated stub. Enumerate the known compute-op
+            # blocklist (matmul/norm/attention/activation/conv/embedding);
+            # shape ops (reshape/expand/repeat/cat) and construction (zeros/
+            # tensor/arange) stay unflagged as they don't do math.
+            if isinstance(f, ast.Attribute):
+                chain = []
+                walker = f
+                while isinstance(walker, ast.Attribute):
+                    chain.append(walker.attr)
+                    walker = walker.value
+                if isinstance(walker, ast.Name):
+                    root_name = walker.id
+                    leaf = chain[0] if chain else ""
+                    # torch.nn.functional.<X>(...) — the whole compute API, always block
+                    if root_name == "torch" and "functional" in chain:
+                        hits.append(f"{node.name}(): {_dotted_call(sub)} [torch.nn.functional in HOT path]")
+                        continue
+                    # torch.<known-compute-op>(...) — matmul/softmax/etc.
+                    if root_name == "torch" and leaf in _TORCH_COMPUTE_BLOCKLIST:
+                        hits.append(f"{node.name}(): {_dotted_call(sub)} [torch compute in HOT path]")
+                        continue
+                # F.<X>(...) — common alias for torch.nn.functional
+                if isinstance(walker, ast.Name) and walker.id == "F":
+                    hits.append(f"{node.name}(): {_dotted_call(sub)} [F.* (torch.nn.functional) in HOT path]")
+                    continue
     return hits
 
 
