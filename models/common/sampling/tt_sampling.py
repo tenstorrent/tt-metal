@@ -514,7 +514,17 @@ class TTSampling(LightweightModule):
         empty_slots: list[int] | None = None,
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
-        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+        # Merge the logprobs request into the persistent per-slot state first, then read
+        # the batch-wide flag. The argmax fast-path cannot emit logprobs (it never runs a
+        # softmax over the vocab), so it must be disabled whenever any slot wants them.
+        # Reading the merged flag (rather than the incoming arg) also covers empty_slots
+        # partial updates, where the incoming arg only describes the newly-admitted slots.
+        self.log_probs_calculator.set_log_probs_mode(
+            enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
+        )
+        self._force_argmax_sampling = (
+            self._is_force_argmax_sampling(k, p, temp) and not self.log_probs_calculator.enable_log_probs
+        )
         _log_sampling_debug(
             self._sampling_debug_enabled,
             "TTSampling reset params",
@@ -560,10 +570,6 @@ class TTSampling(LightweightModule):
             ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
             ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
             ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
-
-        self.log_probs_calculator.set_log_probs_mode(
-            enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
-        )
 
     def forward(
         self,
@@ -631,8 +637,8 @@ class TTSampling(LightweightModule):
                 output_tensor=tt_out_tok,
                 keepdim=False,
             )
-            # Argmax path: logprobs not supported (force-argmax is disabled
-            # when logprobs are enabled via format_sampling_params guard).
+            # Argmax path: logprobs not supported. force-argmax is disabled whenever any
+            # slot requests logprobs (see reset_params), so reaching here means none did.
             self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 
