@@ -149,20 +149,6 @@ def restore_stale_test(*, demo_dir: Path, component: str, safe_id: str) -> Optio
 
 
 def restore_orphaned_stale_tests(*, model_id: str, demo_dir: Path) -> List[str]:
-    """Self-heal: restore any ``*.stale_after_decomposition`` test whose live
-    counterpart is missing AND whose component is NOT in ``no_emit_tests``.
-
-    Under normal decomposition/recompose flow, a stale archive and a no_emit
-    entry are created together and cleared together — but partial-failure
-    decomposition runs, overlay resets, or a scaffold rerun on top of a
-    partially-restored state can leave a component in the corrupted "stale
-    file exists, not suppressed, not live" state. In that state the gate
-    has no test to run on the parent, never selects it, and its attempt
-    count stays 0 forever.
-
-    Only restores when the parent is NOT currently in no_emit — a
-    deliberately-decomposed parent's stale test is left in place.
-    """
     from ..overlay_manager import load_no_emit_tests
 
     pcc_dir = demo_dir / "tests" / "pcc"

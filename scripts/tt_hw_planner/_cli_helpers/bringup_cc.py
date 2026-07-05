@@ -18,9 +18,6 @@ from typing import List
 
 
 def _restore_orphaned_stale_tests(model_id: str, demo_dir: Path) -> int:
-    """Restore live PCC tests for parents whose stale archive survives but
-    that aren't currently no_emit'd — the corrupted state where a parent has
-    no test AND isn't recompose-gated, so nothing can ever pick it up."""
     try:
         from ..agentic.stale_tests import restore_orphaned_stale_tests
 
@@ -37,15 +34,6 @@ def _restore_orphaned_stale_tests(model_id: str, demo_dir: Path) -> int:
 
 
 def _preflight_capture_real_inputs(model_id: str, demo_dir: Path) -> int:
-    """Run the HF model once and record REAL per-component IO tensors to
-    `_captured/<comp>/{args,kwargs,output}.pt` so per-component PCC tests
-    load them instead of falling back to synthetic `_make_arg_for` inputs.
-
-    Mirrors FSM auto_iterate.py's pre-loop capture step. Without this, encoder-
-    decoder composite stubs (decoder, decoder_layer, t2u_model) graduate with
-    `encoder_hidden_states=None` and drop cross-attention entirely — passing
-    per-component PCC but breaking real-pipeline chaining. Only captures
-    non-graduated components; already-graduated ones stay frozen."""
     try:
         from ..bringup_loop import _safe_id, _stub_has_graduated_from_autofill
         from ..capture_inputs import capture_real_inputs
@@ -58,7 +46,6 @@ def _preflight_capture_real_inputs(model_id: str, demo_dir: Path) -> int:
             for c in json.loads(status_path.read_text()).get("components", [])
             if c.get("status") in ("NEW", "ADAPT") and str(c.get("name", "")).strip()
         ]
-        # Skip already-graduated (frozen); only capture pending ones.
         to_capture: List[str] = []
         for cn in components_all:
             try:
@@ -88,11 +75,6 @@ def _preflight_capture_real_inputs(model_id: str, demo_dir: Path) -> int:
 
 
 def _reinject_orphan_children(model_id: str, demo_dir: Path) -> int:
-    """Re-add decomposition children that survive as on-disk stubs but are
-    missing from bringup_status.json (e.g. after a re-scaffold that overwrote
-    status with a fresh module-tree walk). Mirrors what FSM's auto_iterate
-    does at startup — without this call, recompose lookups silently fail
-    because the plan's child submodule_paths don't resolve to any component."""
     try:
         from ..decomposition_consumer import reinject_missing_decomposition_children
 
@@ -111,9 +93,6 @@ def _reinject_orphan_children(model_id: str, demo_dir: Path) -> int:
 
 
 def _reconcile_recompose(model_id: str, demo_dir: Path) -> List[str]:
-    """When a decomposed parent's children have all graduated, un-mark the parent
-    as no_emit, restore its `.stale_after_decomposition` test to live, and lock
-    it against re-decomposition. Returns the list of parents recomposed."""
     try:
         from ..agentic.stale_tests import restore_stale_test
         from ..bringup_loop import _safe_id
