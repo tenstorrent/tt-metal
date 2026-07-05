@@ -11,6 +11,7 @@ Automatically downloads weights from HuggingFace if not available locally.
 import json
 import os
 import shutil
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -194,17 +195,33 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             ignore_patterns=["*.safetensors"],  # Don't download weight files
         )
 
+        # Variants that load config/tokenizer without trust_remote_code (e.g. DeepSeek-V3, stock fast
+        # tokenizer) can use the HF snapshot dir directly — no flat copy needed. Skipping it also avoids
+        # writing into a possibly read-only HF cache mount.
+        if not variant.needs_flat_config_dir:
+            logger.success(f"✓ Config files downloaded to: {model_dir}")
+            return Path(model_dir)
+
         # The HF cache stores files as symlinks into blobs/ (content-hash names). With
         # trust_remote_code=True, transformers resolves the remote module to its blob realpath
         # and then looks for its relative-import siblings (e.g. tool_declaration_ts.py) by name in
         # that same dir, which fails in blobs/. Copy into a flat dir of real files so relative
-        # imports resolve by name.
+        # imports resolve by name. The dir name is made dot-free (trust_remote_code can't import a
+        # dynamic module whose dir contains '.'). Weight shards are excluded so we never materialize
+        # the hundreds of GB the snapshot may hold from a prior weight download, and the flat dir lives
+        # in a writable temp location so a read-only HF cache mount doesn't break the copy.
         flat_dir = (
-            cache_dir
-            / "flat_config"
+            Path(tempfile.gettempdir())
+            / "ttnn_flat_config"
             / variant.hf_repo_id.replace("/", "__").replace(".", "_").replace("-", "_").replace("_", "-")
         )
-        shutil.copytree(model_dir, flat_dir, symlinks=False, dirs_exist_ok=True)
+        shutil.copytree(
+            model_dir,
+            flat_dir,
+            symlinks=False,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("*.safetensors"),
+        )
 
         logger.success(f"✓ Config files downloaded to: {model_dir} (flattened to: {flat_dir})")
         return flat_dir
