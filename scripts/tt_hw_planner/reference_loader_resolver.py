@@ -52,6 +52,9 @@ def is_load_failure(failure_text: str) -> bool:
 
 
 def _repo_files(model_id: str) -> List[str]:
+    if os.path.isdir(model_id):
+        base = Path(model_id)
+        return [str(p.relative_to(base)) for p in base.rglob("*") if p.is_file()]
     try:
         from huggingface_hub import list_repo_files
 

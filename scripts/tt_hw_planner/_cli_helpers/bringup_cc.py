@@ -308,7 +308,7 @@ def run_bringup_cc(
     try:
         from .. import reference_loader_resolver as _rlr
 
-        if _rlr.is_enabled() and not _rlr.has_loader(Path(demo_dir)):
+        if not _rlr.has_loader(Path(demo_dir)):
             _files = _rlr._repo_files(model_id)
             _hf_native = any(
                 f
@@ -320,7 +320,8 @@ def run_bringup_cc(
                 )
                 for f in _files
             )
-            if _files and not _hf_native:
+            _non_transformers = bool(_files) and not _hf_native
+            if _non_transformers or _rlr.is_enabled():
                 print(
                     "\n  [loader-resolver] pre-flight: non-transformers checkpoint — resolving reference loader once before the agent loop ..."
                 )
@@ -330,6 +331,7 @@ def run_bringup_cc(
                     failure_text="pre-flight: repo ships no HF-format weights (non-transformers checkpoint)",
                     agent_bin=_agent_abs,
                     cwd=repo_root,
+                    enabled=True,
                 )
                 print(f"  [loader-resolver] pre-flight result: {_pf.get('resolved')} ({_pf.get('reason')})")
     except Exception as _pf_exc:
