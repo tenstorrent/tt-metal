@@ -119,6 +119,7 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 - [Ethernet and Multichip Basics](./tech_reports/EthernetMultichip/BasicEthernetGuide.md) (Updated Sept 20th, 2024)
 - [Blackhole Bring-Up Programming Guide](./tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md) (Updated Dec 18th, 2024)
 - [Sub-Devices](./tech_reports/SubDevices/SubDevices.md) (Updated Jan 7th, 2025)
+- [Reducing RISC-V Instruction Issue with the MOP Expander and Replay Buffer](./tech_reports/MopReplayOptimizer/mop_replay_optimizer.md) (Updated July 5th, 2026)
 
 ## Scaleout Tech Reports
 
