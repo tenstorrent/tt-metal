@@ -57,7 +57,13 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
     }
 
     if (shm_fd_ == -1) {
-        log_warning(tt::LogMetal, "Failed to create shared memory {}: {}", shm_name, strerror(errno));
+        // A denied /dev/shm segment is expected on a shared box where another user created the
+        // per-device region first (mode 0600); tracking degrades gracefully, so it is not a warning.
+        if (errno == EACCES) {
+            log_debug(tt::LogMetal, "Skipping memory-stats shm {}: {}", shm_name, strerror(errno));
+        } else {
+            log_warning(tt::LogMetal, "Failed to create shared memory {}: {}", shm_name, strerror(errno));
+        }
         return;
     }
 
