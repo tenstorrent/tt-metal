@@ -1827,11 +1827,11 @@ SETADCXY:
         - name: CntSetMask
           field_type: BIN
           start_bit: 21
-          description: 001 - unpacker0, 010 - unpacker1, 100 - packer0
+          description: 001 - unpacker0, 010 - unpacker1, 100 - packers
           fcov_point_bins:
             bins: [ {name: "unpacker0", value: "0x1"},
                     {name: "unpacker1", value: "0x2"},
-                    {name: "packer0",   value: "0x4"}]  # FIXME: what about other packers?
+                    {name: "packers",   value: "0x4"}]
     description: "Set address counters for X and Y dimensions. Choose counter set based on the CntSetMask"
 
 INCADCXY:

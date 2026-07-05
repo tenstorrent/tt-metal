@@ -85,6 +85,7 @@ target_include_directories(
         "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/common"
         "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_NAME_LOWER}/common/inc"
         "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_NAME_LOWER}/llk_lib"
+        "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_NAME_LOWER}/llk_lib/hal"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/common"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/llk_api"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/llk_api/llk_sfpu"
