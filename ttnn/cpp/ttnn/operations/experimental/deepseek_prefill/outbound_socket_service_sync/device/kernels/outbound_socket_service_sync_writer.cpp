@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// One-shot worker-side producer for D2DStreamServiceSender -- the inverse of
-// inbound_socket_service_sync_writer.cpp. Instead of draining a service-filled backing tensor
-// into a fresh output, it fills the sender backing tensor from an input activation
-// and signals the persistent sender service that there is data to forward.
+// One-shot worker producer for the outbound socket services (D2DStreamServiceSender +
+// D2HStreamService) -- the inverse of inbound_socket_service_sync_writer.cpp. Fills the
+// service backing tensor from an input and acks data_ready (D2D forwards over fabric, D2H
+// streams to host). metadata_only mode (D2H, no payload): skips the copy, just forwards
+// the record and acks.
 //
 // The input and backing base addresses are runtime BufferBindings, so the program is
 // built once and only the per-dispatch input address is patched on the program-cache

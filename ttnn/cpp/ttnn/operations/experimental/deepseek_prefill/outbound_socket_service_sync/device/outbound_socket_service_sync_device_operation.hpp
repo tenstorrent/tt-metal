@@ -39,11 +39,12 @@ struct OutboundSocketServiceSyncOperation {
 
 namespace ttnn::prim {
 
-// Launch helper. Snapshots the per-coord sender-service state out of `service`, then
-// runs the device operation (build-once / program-cached). Copies `input` into the
-// sender backing tensor and inc's the service's data_ready_counter; does NOT wait for
-// the fabric forward (the host drives the lease via release_fabric_links /
-// wait_for_fabric_links). Returns the (now-filled) backing tensor.
+// Launch helpers (one templated body, see .cpp): snapshot per-coord service state, run the
+// program-cached op, and inc the service's data_ready counter. NON-BLOCKING.
+//   * D2D: copies `input` into the sender backing; forward waits on the host fabric lease
+//     (release_fabric_links / wait_for_fabric_links).
+//   * D2H: {backing+metadata, backing-only, metadata-only}; metadata-only has no payload or
+//     lease. Returns the backing tensor (the record stands in for it in metadata-only).
 ttnn::Tensor outbound_socket_service_sync(
     const tt::tt_metal::D2DStreamServiceSender& service,
     const ttnn::Tensor& input,
