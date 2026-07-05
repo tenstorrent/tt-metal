@@ -195,7 +195,7 @@ It self-detects the checkout, installs any missing agent deps, and checks ttnn/t
 - You are in a **standalone clone** (this is one) — never run `optimize` from a linked git worktree (kernel JIT mixes worktree `.cpp` with main-tree `.hpp` → no trace).
 - **Commit the model dir to git first** — optimize's REVERT needs a clean baseline.
 - Pass the right `--devices` for your board (e.g. `0,1`); a wrong partial spec trips a fabric error.
-- Set `TT_PERF_NUM_CQ=2` only when chasing the 2-CQ trace lever.
+- `TT_PERF_NUM_CQ` defaults to `2` (2-CQ trace lever on). Set to `1` to disable for a single-queue baseline comparison.
 
 ### Handled automatically (don't chase these)
 profiler orphan-marker heal + `libtt_metal.so` rebuild, marker-buffer drain, CSV extraction, device reset (`tt-smi -r`), crash/hang/stale-CSV guards, git checkpoint/revert, fabric-wedge avoidance, the tt-lang auto-install attempt, and CPU stubs for GPU-only packages (`flash_attn`, `mamba_ssm`, …).
