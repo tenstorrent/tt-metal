@@ -188,8 +188,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
                     dbg_cmp);
             }
 
-            EXPECT_EQ(std::memcmp(readback_data.get(), expected_data.get(), buf_size_datums * datum_size_bytes), 0)
-                << "Data mismatch at loop " << loop << " input_val " << input_val;
+            EXPECT_EQ(dbg_cmp, 0) << "Data mismatch at loop " << loop << " input_val " << input_val;
         }
     }
 }
