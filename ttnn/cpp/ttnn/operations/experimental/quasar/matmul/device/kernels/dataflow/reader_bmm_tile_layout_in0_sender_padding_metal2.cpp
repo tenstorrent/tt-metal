@@ -34,6 +34,10 @@
 #include "api/debug/dprint.h"  // DEBUG: matmul layer3 hang localization (remove after)
 
 void kernel_main() {
+    // [Quasar bring-up no-op — LLK issue filed] Companion to the bmm_large_block compute no-op (dest/pack
+    // deadlock). The interleaved-in0 matmul variant uses this reader; early-return so cores signal done.
+    // Remove with the LLK fix.
+    return;
     DPRINT("IN0 start\n");  // DEBUG: matmul layer3 hang
     uint32_t rt_args_idx = 0;
     // in0 tensor args (in0_tensor_addr is now the tensor::in0 binding)

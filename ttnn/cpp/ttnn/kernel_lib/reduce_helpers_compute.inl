@@ -298,9 +298,13 @@ ALWI void reduce(
     ASSERT(input_dfb_id != output_dfb_id);
     ASSERT(input_dfb_id != scaler_dfb_id);
     ASSERT(output_dfb_id != scaler_dfb_id);
+    // [Quasar bring-up] is_valid_dfb_tile_page_size is #ifndef ARCH_QUASAR in dfb_helpers_compute.hpp
+    // (WH/BH-only). Skip these page-size validation asserts on Quasar so the quasar reduction op compiles.
+#ifndef ARCH_QUASAR
     UNPACK(ASSERT(is_valid_dfb_tile_page_size(input_dfb_id, (DataFormat)unpack_src_format[input_dfb_id])));
     UNPACK(ASSERT(is_valid_dfb_tile_page_size(scaler_dfb_id, (DataFormat)unpack_src_format[scaler_dfb_id])));
     PACK(ASSERT(is_valid_dfb_tile_page_size(output_dfb_id, (DataFormat)pack_dst_format[output_dfb_id])));
+#endif
     ASSERT(input_block_shape.rows > 0);
     ASSERT(input_block_shape.cols > 0);
     ASSERT(input_block_shape.batches > 0);
@@ -511,8 +515,13 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize
                 if constexpr (is_sfpu) {
+                    // [Quasar bring-up] sfpu_reduce/_init are #ifndef ARCH_QUASAR in compute_kernel_api.h
+                    // (WH/BH-only; the SFPU reduce path — is_sfpu_reduce_path, INT32 MAX/MIN — is unported
+                    // to Quasar). Guard so -Wtemplate-body doesn't reject the undeclared names on Quasar.
+#ifndef ARCH_QUASAR
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
+#endif
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
@@ -641,12 +650,16 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize per output slot
                 if constexpr (is_sfpu) {
+                    // [Quasar bring-up] SFPU reduce path is #ifndef ARCH_QUASAR (WH/BH-only); guard so the
+                    // quasar reduce compiles. Quasar INT32 MAX/MIN reduce is unsupported until it's ported.
+#ifndef ARCH_QUASAR
                     const uint32_t sfpu_base_dst = get_dst_index(accumulate);
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     for (uint32_t k = 0; k < current_chunk; ++k) {
                         sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
                             sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
                     }
+#endif
                 }
 
                 // Post-reduce operation for each output tile in chunk

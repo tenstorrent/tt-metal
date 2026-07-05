@@ -25,6 +25,9 @@
 #include "api/debug/dprint.h"  // DEBUG: matmul mcast hang diagnosis (remove after)
 
 void kernel_main() {
+    // [Quasar bring-up no-op — LLK issue filed] Companion to the bmm_large_block compute no-op (dest/pack
+    // deadlock). All four 2D-mcast matmul kernels early-return so cores signal done. Remove with the LLK fix.
+    return;
     DPRINT("WRM enter\n");  // DEBUG: matmul pre-kernel_main confirmation (remove after)
     // READER
     uint32_t rt_args_idx = 0;

@@ -33,6 +33,11 @@
 #define TILE_WIDTH 32
 
 void kernel_main() {
+    // [Quasar bring-up no-op — LLK issue filed] The pool tilizeA_B_reduce compute deadlocks at the dest
+    // handshake (pack tile_regs_wait / math WFD / unpack UPTW) after ~4 output sticks. No-op the pool
+    // compute + reader so cores signal done and the resnet sweep continues (output is garbage during
+    // bring-up). Remove once the LLK dest-sync fix lands. (This replaces the earlier UNPACR0_STRIDE no-op.)
+    return;
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
     constexpr uint32_t in_ntiles_c = get_arg(args::in_ntiles_c);
