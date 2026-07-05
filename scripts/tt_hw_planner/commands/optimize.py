@@ -216,7 +216,6 @@ def run_perf_optimization(
     box=None,
     metric="device_ms",
     max_iter=1000,
-    budget_usd=1_000_000_000.0,
     perf_test=None,
     case=None,
     baseline_only=False,
@@ -235,8 +234,6 @@ def run_perf_optimization(
         devices,
         "--max-iter",
         str(max_iter),
-        "--budget-usd",
-        str(budget_usd),
     ]
     if box:
         before += ["--box", box]
@@ -337,7 +334,6 @@ def cmd_optimize(args) -> int:
         box=getattr(args, "box", None),
         metric=args.metric,
         max_iter=args.max_iter,
-        budget_usd=args.budget_usd,
         perf_test=getattr(args, "perf_test", None),
         case=getattr(args, "case", None),
         baseline_only=getattr(args, "baseline_only", False),

@@ -14,7 +14,6 @@ DEMO="${1:-/home/ttuser/tt-metal/models/demos/hf_seamless_m4t_medium}"
 RELDEMO="${DEMO#*/tt-metal/}"                       # repo-relative path for the perf-test pin
 DEVICES="${DEVICES:-0,1}"
 MAX_ITER="${MAX_ITER:-10}"
-BUDGET="${BUDGET:-30}"
 TASKS="${TASKS:-t2t s2tt t2s}"
 
 export TT_METAL_HOME=/home/ttuser/tt-metal PYTHONPATH=/home/ttuser/tt-metal
@@ -27,7 +26,7 @@ for TASK in $TASKS; do
     echo "  TASK: $TASK   ->  $PERF"
     echo "==================================================================="
     if python -m agent.before_loop "$DEMO" --metric device_ms --devices "$DEVICES" \
-        --perf-test "$PERF" -k in0 --max-iter "$MAX_ITER" --budget-usd "$BUDGET"; then
+        --perf-test "$PERF" -k in0 --max-iter "$MAX_ITER"; then
         python -m agent.loop runs || echo "  [loop failed for $TASK; continuing]"
     else
         echo "  [before_loop failed for $TASK; skipping]"

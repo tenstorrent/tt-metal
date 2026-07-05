@@ -27,7 +27,7 @@ while [ "$pass" -lt "$MAX_PASSES" ]; do
     echo "================= $(date) : PASS $pass / $MAX_PASSES ================="
     # re-profile the CURRENT committed model as this pass's baseline, then sweep once
     python -m agent.before_loop "$DEMO" --metric device_ms --devices "$DEVICES" \
-        --perf-test "$PERF" -k in0 --budget-usd 1000000000 --max-iter 1000 2>&1 || {
+        --perf-test "$PERF" -k in0 --max-iter 1000 2>&1 || {
         echo "PASS $pass: before_loop FAILED -> stopping"; break; }
     python -m agent.loop runs 2>&1 || echo "  [loop returned non-zero for pass $pass]"
 

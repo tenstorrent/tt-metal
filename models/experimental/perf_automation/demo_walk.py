@@ -51,7 +51,6 @@ try:
                     "target": 11.0,
                 },
                 "max_iter": 25,
-                "budget_usd": 5.0,
                 "cost_usd": 0.0,
                 "tokens_in": 0,
                 "tokens_out": 0,

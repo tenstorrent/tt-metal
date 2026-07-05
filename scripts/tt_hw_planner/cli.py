@@ -11235,7 +11235,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     popt.add_argument("--box", help="declared TT box for roofline calibration (e.g. p300c, T3K, Galaxy)")
     popt.add_argument("--metric", default="device_ms", help="device_ms | wall_ms | auto")
     popt.add_argument("--max-iter", type=int, default=1000, dest="max_iter")
-    popt.add_argument("--budget-usd", type=float, default=1_000_000_000.0, dest="budget_usd")
     popt.add_argument(
         "--max-rounds",
         type=int,
