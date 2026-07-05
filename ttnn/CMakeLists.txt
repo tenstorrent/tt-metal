@@ -450,6 +450,23 @@ if(WITH_PYTHON_BINDINGS)
     # .. enable link time optimization
     nanobind_lto(ttnn)
 
+    # nanobind_lto() turns on IPO, which under Clang is ThinLTO. The codegen
+    # backend runs at link time, so every relink of _ttnn.so re-codegens all
+    # binding modules even when one .cpp changed. A ThinLTO cache lets lld reuse
+    # codegen for unchanged modules, so incremental relinks only redo the edited
+    # one. Caching is output-neutral. Scoped to this target; skipped when the
+    # global TT_ENABLE_LTO path already wires its own cache.
+    if(NOT TT_LTO_ENABLED AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set(_ttnn_thinlto_cache "${CMAKE_BINARY_DIR}/lto-cache-ttnn")
+        file(MAKE_DIRECTORY "${_ttnn_thinlto_cache}")
+        target_link_options(
+            ttnn
+            PRIVATE
+                $<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-Wl,--thinlto-cache-dir=${_ttnn_thinlto_cache}>
+                $<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-Wl,--thinlto-cache-policy=cache_size_bytes=2g:cache_size_files=10000>
+        )
+    endif()
+
     # .. set the default symbol visibility to 'hidden'
     #nanobind_set_visibility(ttnn)
 
