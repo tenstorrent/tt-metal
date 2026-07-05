@@ -12,7 +12,44 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
+from typing import List
+
+
+def _reconcile_recompose(model_id: str, demo_dir: Path) -> List[str]:
+    """When a decomposed parent's children have all graduated, un-mark the parent
+    as no_emit, restore its `.stale_after_decomposition` test to live, and lock
+    it against re-decomposition. Returns the list of parents recomposed."""
+    try:
+        from ..agentic.stale_tests import restore_stale_test
+        from ..bringup_loop import _safe_id
+        from ..final_categorization import parents_ready_to_recompose
+        from ..overlay_manager import persist_locked_module, remove_no_emit_test
+
+        ready = parents_ready_to_recompose(model_id=model_id, demo_dir=demo_dir)
+        done: List[str] = []
+        for parent in ready:
+            restored = restore_stale_test(demo_dir=demo_dir, component=parent, safe_id=_safe_id(parent))
+            remove_no_emit_test(model_id, parent)
+            persist_locked_module(
+                model_id,
+                parent,
+                reason="children all on device; recomposed as whole-module target",
+            )
+            done.append(parent)
+            print(
+                f"  [recompose] `{parent}` ready — all children on device; restored as "
+                f"whole-module target, locked against re-decomposition"
+                + (f" (restored {restored.name})" if restored else " (live stub kept)")
+            )
+        return done
+    except Exception as exc:
+        print(
+            f"  [recompose] non-fatal error: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return []
 
 
 def _bringup_cc_prompt(model_id: str, demo_dir: Path, pcc: float) -> str:
@@ -22,7 +59,15 @@ def _bringup_cc_prompt(model_id: str, demo_dir: Path, pcc: float) -> str:
         "LOOP every iteration: call mcp__bringup-mcp__termination_check FIRST. It is the SOLE authority "
         "on whether you are done (can_stop=true) and names next_target = {unit: component, rung}. Work "
         "EXACTLY next_target.unit at EXACTLY next_target.rung — do NOT self-select another component or "
-        "rung.\n"
+        "rung. NEVER call fall_back_to_cpu or decompose_component on your own initiative; those are "
+        "cap-time actions the gate emits as rung='fallback' / 'decompose' only after per-component "
+        "attempts are exhausted. Calling them prematurely will return {gated: True} — keep repairing "
+        "instead.\n"
+        "If termination_check returns a non-null `systemic_hint` field: STOP iterating per-component "
+        "and address the shared root cause first. A systemic hint means 3+ components are failing with "
+        "the same class — the fix belongs in tests/pcc/conftest.py or the common `_make_arg_for` "
+        "helper, not in each stub. Fix that first; individual repairs will keep re-hitting the same "
+        "wall until the shared bug is fixed.\n"
         "Handle next_target.rung:\n"
         " - emit / repair: (1) run_component(component) to see the current status/failure; (2) if the "
         "test could NOT even run (import/collection/torch-reference error in the summary), the blocker "
@@ -247,6 +292,12 @@ def run_bringup_cc(
         )
 
     _banner(f"Step 6/6  Bring-up (cc engine) — harness loop on the per-component gate for {model_id}")
+
+    _reconcile_recompose(model_id, Path(demo_dir))
+
+    def _on_round(round_no, st):
+        _reconcile_recompose(model_id, Path(demo_dir))
+
     res = cc_harness.run_cc_loop(
         prompt=prompt,
         mcp_config_path=cfg_path,
@@ -257,6 +308,7 @@ def run_bringup_cc(
         max_rounds=max_rounds,
         claude_bin=agent_bin,
         pre_round=_pre_round,
+        on_round=_on_round,
     )
     final = gate_fn()
     _announce_graduations(final)

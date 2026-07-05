@@ -479,6 +479,11 @@ def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str
         st.setdefault("prev_recorded_class", {})[component] = cls
         st.setdefault("last_failure_class", {})[component] = cls
         st.setdefault("last_pcc", {})[component] = pcc
+    if pcc:
+        hist = st.setdefault("pcc_history", {}).setdefault(component, [])
+        hist.append(pcc)
+        if len(hist) > 16:
+            del hist[: len(hist) - 16]
     _save_state(st)
     return {"recorded": True, "component": component, "graduated": ok}
 
@@ -512,6 +517,27 @@ def _unmark_fallback(component: str) -> None:
     fb.discard(component)
     st["fallback"] = sorted(fb)
     _save_state(st)
+
+
+def _component_is_at_cap(component: str) -> bool:
+    """True iff the component's attempt cap is exhausted. Gate for fallback/decompose."""
+    st = _load_state()
+    last_class_map = st.get("last_failure_class", {}) or {}
+    eff = bringup_ladder.effective_attempt_cap(
+        component,
+        max_attempts_per_component=_MAX_ATTEMPTS,
+        hard_total_attempt_cap=_HARD_CAP,
+        complexity_bonus=0,
+        last_failure_class=last_class_map,
+        last_pcc=st.get("last_pcc", {}) or {},
+    )
+    return bringup_ladder.is_at_cap(
+        component,
+        attempts_per_component=st.get("attempts", {}) or {},
+        consecutive_same_class_attempts=st.get("consecutive_same_class", {}) or {},
+        effective_cap=eff,
+        hard_total_attempt_cap=_HARD_CAP,
+    )
 
 
 def _do_fallback(component: str) -> dict:
@@ -564,7 +590,19 @@ def _do_fallback(component: str) -> dict:
 @mcp.tool()
 def fall_back_to_cpu(component: str) -> dict:
     """Retire a component that exhausted its attempt cap to CPU (mixed execution) — the SAME
-    re-testing CASCADE the fsm loop runs. Only the gate should direct you here (rung 'fallback')."""
+    re-testing CASCADE the fsm loop runs. Only the gate should direct you here (rung 'fallback').
+    Refuses (returns {gated: True}) unless the component is at its attempt cap."""
+    if not _component_is_at_cap(component):
+        st = _load_state()
+        attempts = (st.get("attempts", {}) or {}).get(component, 0)
+        return {
+            "gated": True,
+            "component": component,
+            "reason": (
+                f"cannot fall back yet — component has only {attempts} attempt(s); cap is "
+                f"{_MAX_ATTEMPTS}. Keep repairing until the gate names rung='fallback'."
+            ),
+        }
     return _do_fallback(component)
 
 
@@ -617,7 +655,21 @@ def decompose_component(component: str) -> dict:
     via the shared consumer (children then appear as new components in list_components/
     termination_check), and cascade-retires the PARENT to CPU (the fsm loop retires the parent at cap
     regardless). Only the gate should direct you here (rung 'decompose'). rc: children_added>0 =
-    decomposed; 0 = primitive/leaf (parent still retired)."""
+    decomposed; 0 = primitive/leaf (parent still retired). Refuses (returns {gated: True}) unless
+    the component is at cap — decompose is a one-way door (parent auto-retires to CPU)."""
+    if not _component_is_at_cap(component):
+        st = _load_state()
+        attempts = (st.get("attempts", {}) or {}).get(component, 0)
+        return {
+            "gated": True,
+            "component": component,
+            "decomposed": False,
+            "children_added": 0,
+            "reason": (
+                f"cannot decompose yet — component has only {attempts} attempt(s); cap is "
+                f"{_MAX_ATTEMPTS}. Decompose is a one-way door; keep repairing until at cap."
+            ),
+        }
     st = _load_state()
     decomposed = set(st.get("decomposed") or [])
     decomposed.add(component)
@@ -695,6 +747,12 @@ def termination_check() -> dict:
     loader_resolvable = _rlr.is_enabled() and not _rlr.has_loader(_DEMO_DIR)
     terminal = set(st.get("harness_skipped") or [])
     terminal |= set(st.get("fallback") or [])
+    try:
+        from scripts.tt_hw_planner.agentic.convergence import should_extend_component_cap as _g8_extend
+    except Exception:
+        _g8_extend = None
+    graduated_this_run = sorted(c for c in comps if _grad_for_run(c))
+
     work, needs_cap = [], []
     for c in comps:
         if _grad_for_run(c) or c in terminal:
@@ -714,6 +772,25 @@ def termination_check() -> dict:
             effective_cap=eff,
             hard_total_attempt_cap=_HARD_CAP,
         )
+        if at_cap and _g8_extend is not None:
+            verdict = _g8_extend(
+                component=c,
+                consecutive_same_class=(st.get("consecutive_same_class", {}) or {}).get(c, 0),
+                effective_cap=eff,
+                pcc_history=(st.get("pcc_history", {}) or {}).get(c, []),
+                last_pcc=(st.get("last_pcc", {}) or {}).get(c),
+                last_failure_class=last_class_map.get(c, ""),
+                graduated_this_run=graduated_this_run,
+                extensions_used_for_this_component=(st.get("extensions_used", {}) or {}).get(c, 0),
+            )
+            if getattr(verdict, "extend", False):
+                bump = int(getattr(verdict, "bump", 0) or 0)
+                if bump > 0:
+                    consec = (st.get("consecutive_same_class", {}) or {}).get(c, 0)
+                    st.setdefault("consecutive_same_class", {})[c] = max(0, consec - bump)
+                    st.setdefault("extensions_used", {})[c] = (st.get("extensions_used", {}) or {}).get(c, 0) + 1
+                    _save_state(st)
+                    at_cap = False
         (needs_cap if at_cap else work).append(c)
     can_stop = not work and not needs_cap
     nxt = None
@@ -790,6 +867,29 @@ def termination_check() -> dict:
                 "reason": f"component '{c}' exhausted its attempt cap — call fall_back_to_cpu('{c}') to "
                 f"retire it to CPU (mixed execution) so the pipeline still works.",
             }
+    systemic_hint: str | None = None
+    try:
+        _pending = [c for c in comps if not _grad_for_run(c) and c not in terminal]
+        _class_counts: dict[str, list[str]] = {}
+        for _c in _pending:
+            _cls = last_class_map.get(_c, "") or ""
+            if not _cls or _cls in ("OK", "GRADUATED", "SKIPPED"):
+                continue
+            _class_counts.setdefault(_cls, []).append(_c)
+        _hot = [(cls, cs) for cls, cs in _class_counts.items() if len(cs) >= 3]
+        if _hot:
+            _cls, _cs = sorted(_hot, key=lambda kv: -len(kv[1]))[0]
+            _examples = ", ".join(sorted(_cs)[:5])
+            systemic_hint = (
+                f"SYSTEMIC PATTERN: {len(_cs)} components are failing with class '{_cls}' "
+                f"(e.g. {_examples}). This is likely a TEST-HARNESS / conftest / synthetic-input "
+                f"issue, not per-stub bugs. Fix the shared harness (tests/pcc/conftest.py or the "
+                f"common _make_arg_for helper) BEFORE iterating on individual stubs; per-component "
+                f"repair will keep re-hitting the same wall."
+            )
+    except Exception:
+        systemic_hint = None
+
     return {
         "can_stop": can_stop,
         "halt": False,
@@ -799,6 +899,7 @@ def termination_check() -> dict:
         "fallen_back": sorted(st.get("fallback") or []),
         "harness_skipped": sorted(st.get("harness_skipped") or []),
         "next_target": nxt,
+        "systemic_hint": systemic_hint,
     }
 
 

@@ -128,11 +128,12 @@ HARDWARE: List[Box] = [
         arch="Blackhole",
         chips=4,
         hbm_per_chip_gb=32.0,
-        mesh_shapes=[(2, 2)],
+        mesh_shapes=[(1, 1), (2, 2)],
         eth_link_gbps=0.0,
         default_mesh=(2, 2),
-        notes="4x Blackhole (p150c), 128 GB, physical 2x2 mesh (8 QSFP-DD, 2 links/chip). "
-        "Only the physical [2,2] mesh is available.",
+        notes="4x Blackhole (p150c), 128 GB. Physical fabric is 2x2 (8 QSFP-DD, "
+        "2 links/chip); (1,1) is available for single-chip bring-up on one of "
+        "the 4 chips.",
     ),
     Box(
         name="Galaxy",

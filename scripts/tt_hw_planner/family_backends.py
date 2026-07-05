@@ -255,6 +255,18 @@ _BACKENDS: List[FamilyBackend] = [
         smoke_test_entry="models/tt_transformers/demo/simple_text_demo.py",
         use_module_tree=False,
     ),
+    FamilyBackend(
+        category="STT",
+        name="XTTS-v2 (multilingual TTS)",
+        demo_path="models/demos/xtts_v2",
+        routing_mode="template",
+        canonical_hf_id="/local/ttuser/apande/models/XTTS-v2-hf",
+        notes="Coqui XTTS-v2: multilingual zero-shot text-to-speech model. GPT-2 autoregressive backbone generates prosodic audio tokens from text; a HiFi-GAN vocoder decodes tokens to waveforms; a ResNet-based speaker encoder enables voice cloning. Supports 17 languages. Architecture is all-NEW (no existing tt-metal demo to clone).",
+        model_type_keys=["xtts"],
+        pipeline_tags=["text-to-speech"],
+        smoke_test_entry=None,
+        use_module_tree=True,
+    ),
 ]
 
 
