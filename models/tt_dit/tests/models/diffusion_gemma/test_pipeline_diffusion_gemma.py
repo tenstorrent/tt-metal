@@ -345,6 +345,8 @@ def test_pipeline_diffusion_gemma(
     logger.info(f"[3] Diffusion loop ({pipeline.config.max_denoising_steps} steps max)")
     logger.info(f"    Prompt: {PROMPT!r}")
 
+    # Time the diffusion loop end-to-end so section 5's perf assertion has a duration to check.
+    benchmark_profiler.start("e2e_generate")
     for step in range(pipeline.config.max_denoising_steps):
         logits = pipeline._run_decoder(
             current_canvas,
@@ -371,6 +373,7 @@ def test_pipeline_diffusion_gemma(
         if torch.all(finished):
             logger.info(f"[step {step:02d}] stopping criteria satisfied — halting")
             break
+    benchmark_profiler.end("e2e_generate")
 
     logger.info("=" * 70)
     final_text = hf_processor.batch_decode(argmax_canvas, skip_special_tokens=False)[0]
