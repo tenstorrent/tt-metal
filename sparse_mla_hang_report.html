@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sparse-MLA perf hang — root-cause report</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;
+    --accent:#58a6ff;--good:#3fb950;--bad:#ff7b72;--warn:#d29922;--code:#010409;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  header{padding:26px 32px 18px;border-bottom:1px solid var(--border)}
+  h1{margin:0 0 6px;font-size:22px}
+  header p{margin:2px 0;color:var(--muted);font-size:13px}
+  .wrap{padding:24px 32px 64px;max-width:1180px;margin:0 auto}
+  h2{font-size:16px;margin:32px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+  h3{font-size:14px;margin:20px 0 8px;color:var(--accent)}
+  code,.mono{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+  .verdict{background:var(--panel);border:1px solid var(--border);border-left:4px solid var(--good);
+    border-radius:8px;padding:16px 20px;margin:8px 0 4px}
+  .verdict b{color:var(--good)}
+  .verdict.bad{border-left-color:var(--bad)}
+  .tag{font-size:11px;font-weight:600;padding:1px 8px;border-radius:10px;vertical-align:middle}
+  .tag.solid{background:rgba(63,185,80,.16);color:var(--good);border:1px solid rgba(63,185,80,.4)}
+  .tag.refuted{background:rgba(248,81,73,.15);color:var(--bad);border:1px solid rgba(248,81,73,.4)}
+  .tag.caveat{background:rgba(210,153,34,.15);color:var(--warn);border:1px solid rgba(210,153,34,.4)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px}
+  th,td{border:1px solid var(--border);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel)}
+  td.k{color:var(--muted);white-space:nowrap}
+  .hang{color:var(--bad);font-weight:600}
+  .pass{color:var(--good);font-weight:600}
+  pre{background:var(--code);border:1px solid var(--border);border-radius:6px;padding:12px 14px;
+    overflow-x:auto;font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5;
+    white-space:pre;margin:8px 0}
+  pre .hl{background:rgba(248,81,73,.14);display:inline-block;width:100%}
+  pre .hlg{background:rgba(63,185,80,.12);display:inline-block;width:100%}
+  pre .cm{color:var(--muted)}
+  .note{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--accent);
+    border-radius:6px;padding:12px 16px;margin:12px 0;font-size:13px}
+  .note.warn{border-left-color:var(--warn)}
+  .note b{color:var(--accent)}
+  ul{margin:6px 0;padding-left:22px}li{margin:4px 0}
+  .fp{color:var(--accent)}
+  .small{font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>DeepSeek V3.2 sparse-MLA perf — hang root-cause report</h1>
+  <p>Test: <span class="mono">models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_mla_chunked_perf_impl</span></p>
+  <p>Box: Blackhole LoudBox (8× p150), mesh <b>SP=2 × TP=4</b>, FABRIC_1D · Harness: <span class="mono">scripts/debug_sparse_mla_hang.sh</span> → <span class="mono">run_safe_pytest.sh --dev</span> · 2026-07-03</p>
+</header>
+
+<div class="wrap">
+
+  <div class="verdict">
+    <b>Verdict.</b> The hang is a <b>multi-hop FABRIC_1D line-broadcast deadlock in the CCL kernel</b> used by the
+    indexer's top-k index all-gather across the 4-chip TP axis. On SP=2×TP=4 that gather is a <b>3-hop line
+    multicast</b>, and the deadlock is <b>kernel-specific</b>: <code>broadcast_rm_writer</code> (the row-major composite
+    path) and the native <code>minimal_default</code> all-gather both wedge the fabric, while
+    <code>broadcast_tile_writer</code> (the TILE composite path) drains. The forwarding Ethernet router's NOC0 read
+    responses never return (<code>erisc1 NOC0</code>: reads issued / 0 received), so fabric credits never come back and
+    the broadcast worker spins forever at <code>FWSW</code> → the host times out in <code>synchronize_device</code> just
+    after <code>MLA_END</code>. <b>Fix applied &amp; validated:</b> route the index gather through the TILE composite
+    broadcast — the full forward now passes where it deterministically hung 4/4. This is a model-side workaround for an
+    underlying CCL/fabric bug (2 of 3 multi-hop line-broadcast kernels deadlock), which should be filed upstream.
+  </div>
+
+  <h2>1. The decisive evidence — the deadlock is kernel-specific</h2>
+  <p>The index tensor (<code>[1,1,160,2048]</code> uint32, ROW_MAJOR) is gathered across the TP axis by
+  <code>_tp_all_gather</code> (<span class="mono">indexer.py:493</span>). <code>all_gather_async</code> lowers this three
+  different ways depending on layout/alignment, each to a different CCL kernel. I drove all three on the <em>same</em>
+  hanging config (SP=2×TP=4, FABRIC_1D, 3-hop TP line) and observed:</p>
+  <table>
+    <tr><th>Index gather lowers to</th><th>Worker kernel</th><th>3-hop TP line</th><th>Source</th></tr>
+    <tr><td>ROW_MAJOR → composite AllBroadcast+Concat</td><td class="mono">broadcast_rm_writer</td><td class="hang">HANG</td><td class="small">original code; op-85 hang, 4/4</td></tr>
+    <tr><td>TILE (tile-aligned) → native all-gather</td><td class="mono">minimal_default_{writer,reader}</td><td class="hang">HANG</td><td class="small">1st fix attempt; op-86 hang, same signature</td></tr>
+    <tr><td>TILE → composite AllBroadcast+Concat</td><td class="mono">broadcast_tile_writer</td><td class="pass">PASS ✓</td><td class="small">validated fix; full forward completes</td></tr>
+  </table>
+  <p class="small">Kernel selection: <span class="mono">all_broadcast_program_factory.cpp:216–218</span> (<code>tilized ? broadcast_tile_writer : broadcast_rm_writer</code>) · composite-vs-native selection: <span class="mono">composite_common.cpp:295</span> (ROW_MAJOR → composite) and <span class="mono">:300–303</span> (TILE composite only if padded on gather dim; <code>[…,160,2048]</code> is tile-aligned → native).</p>
+  <div class="note">
+    <b>Why it looked "perf-test-only" and impossible to reproduce.</b> The earlier standalone repro
+    (<code>repro_allbroadcast_fabric1d_hang.py</code>, now removed) broadcast a <b>TILE</b> tensor — so it exercised
+    <code>broadcast_tile_writer</code>, the one kernel that works, and passed 30/30. It never touched the row-major
+    writer that actually hangs. The bug is the kernel, not the full-forward context.
+  </div>
+
+  <h2>2. The failure mechanism</h2>
+  <p class="small"><code>dump_op_window.py</code> / running-ops — only the TP index gather is RUNNING; nothing downstream starts:</p>
+<pre><span class="hl">│ 85 │ RUNNING │ AllBroadcastDeviceOperation │ 0,1,2,3,4,5,6,7 │  Tensor[0] [1,1,160,2048] UINT32</span>
+<span class="cm"># with the TILE→native fix attempt this shifts to op 86 AllGatherAsyncDeviceOperation — same wedge.</span></pre>
+  <p class="small"><code>check_noc_status.py</code> — the forwarding Ethernet router's NOC0 read responses never arrive (writes on the same NIU <em>are</em> acked; only reads hang):</p>
+<pre>Device 4: eth [7-1 (e0,10)]:  Mismatched state:
+<span class="hl">  erisc1 NOC0:  NIU_MST_RD_RESP_RECEIVED  noc_reads_num_issued  40459  0   ← 0 responses</span>
+  erisc1 NOC0:  NIU_MST_NONPOSTED_WR_REQ_SENT  ...  340  340              ← writes fully acked
+  "… the NoC is hung."</pre>
+  <p class="small">watcher — the broadcast worker is parked in the credit-wait loop (<code>FWSW</code> = <code>wait_for_empty_write_slot</code>):</p>
+<pre>Device 4 worker core(x=0,y=0): <span class="hl">FWSW</span>,CRBW,W,W,W  h_id: 85  k_ids:566|565  <span class="cm"># kernel = broadcast_rm_writer</span></pre>
+  <p>Chain: the forwarding router (erisc, sender-channel-1) issues its downstream handshake/flow-control NOC reads to a
+  core that never answers → its receiver channel never drains → credits never return upstream → the injecting
+  <code>broadcast_rm_writer</code> blocks at <code>FWSW</code> → dispatch backs up → <code>synchronize_device</code> never
+  returns. Because ttnn dispatch is async, the host logs <code>MLA_END</code> before the device finishes, so the symptom
+  is "hangs after MLA_END, before signpost('stop')."</p>
+
+  <h2>3. Fix (applied &amp; validated)</h2>
+  <p>Force the index gather through the TILE composite broadcast (<code>broadcast_tile_writer</code>) — semantically
+  identical to <code>all_gather(dim)</code> (this <em>is</em> what <code>composite_all_gather</code> does internally, just
+  pinned to TILE). In <span class="mono">indexer.py</span> <code>_tp_all_gather</code>:</p>
+<pre>was_rm = t.get_layout() == ttnn.ROW_MAJOR_LAYOUT
+t_tile = ttnn.to_layout(t, ttnn.TILE_LAYOUT) if was_rm else t
+<span class="hlg">shards = ttnn.all_broadcast(t_tile, cluster_axis=self.tp_axis, num_links=self.ccl_num_links,
+                            topology=self.ccl_topology, memory_config=ttnn.DRAM_MEMORY_CONFIG)</span>
+gathered = ttnn.concat(shards, dim)                 <span class="cm"># == all_gather(dim)</span>
+if was_rm: gathered = ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT)   <span class="cm"># keep RM contract</span></pre>
+  <p class="small"><b>Validation.</b> Same config that hung 4/4 (3× FABRIC_1D + 1× num_links=1):</p>
+<pre>signpost start → MLA_START → MLA_END → stop
+<span class="hlg">======================== 1 passed, 1 warning in 10.95s ========================</span>
+hang-signature lines (RUNNING / FWSW / noc_reads_num_issued): 0</pre>
+  <div class="note warn">
+    <b>Underlying bug — file upstream.</b> Two of three multi-hop FABRIC_1D line-broadcast kernels deadlock
+    (<code>broadcast_rm_writer</code>, native <code>minimal_default</code> all-gather). This is a CCL/fabric defect, not a
+    DeepSeek-model bug. The workaround above unblocks the model; the real fix belongs in those kernels. CI does not cover
+    this: the Blackhole-box <code>all_broadcast</code> post-commit test only exercises a <b>2-device (single-hop)</b> TILE
+    line (<span class="mono">tests/…/box/all_post_commit/test_new_all_broadcast.py:248</span>).
+  </div>
+
+  <h2>4. What was ruled out (with evidence)</h2>
+  <table>
+    <tr><th>Hypothesis</th><th>Status</th><th>Evidence</th></tr>
+    <tr><td>Ring / topology buffer deadlock</td><td><span class="tag refuted">REFUTED</span></td><td>FABRIC_1D is a <em>line</em> — no topological cycle; deadlock-avoidance isn't even armed (fabric_context.cpp:254).</td></tr>
+    <tr><td>Ethernet link retraining</td><td><span class="tag refuted">REFUTED</span></td><td>Earlier: hang occurred with 0 retrains flagged. Retrain count inconsistent across hangs.</td></tr>
+    <tr><td><code>num_links</code> / routing-plane count</td><td><span class="tag refuted">REFUTED</span></td><td><code>num_links=1</code> hangs identically (op 85, erisc1 NOC0, FWSW) — see <span class="mono">sparse_mla_hang_debug_1link/</span>.</td></tr>
+    <tr><td>Stale build after rebase</td><td><span class="tag refuted">REFUTED</span></td><td><code>_ttnn.so</code> (08:41) post-dates HEAD (07:51); no ccl/fabric source newer than the build; tree clean.</td></tr>
+    <tr><td>Row-major writer <em>specifically</em></td><td><span class="tag refuted">REFUTED</span></td><td>TILE→native <code>minimal_default</code> all-gather also hangs identically. Not RM-only.</td></tr>
+    <tr><td>FABRIC_1D_RING as a fix</td><td><span class="tag refuted">REFUTED</span></td><td>Crashes at bring-up: <code>fabric.cpp:160 forwarding_direction.has_value()</code> — no ring wraparound on the TP axis of this box.</td></tr>
+  </table>
+
+  <h2>5. Investigation trail</h2>
+  <table>
+    <tr><th>Experiment</th><th>Result</th><th>Conclusion</th></tr>
+    <tr><td>Baseline loop, FABRIC_1D, num_links=2</td><td class="hang">3/3 HANG @ op 85</td><td>deterministic op-85 deadlock</td></tr>
+    <tr><td>num_links=1</td><td class="hang">HANG (identical)</td><td>links/planes exonerated</td></tr>
+    <tr><td>Mesh (4,2)/TP=2</td><td class="k">inconclusive</td><td>crashed early in a matmul (grid FATAL) before op 85 — compute-shape confound, discarded</td></tr>
+    <tr><td>Fix v1: gather in TILE (tile-aligned → native)</td><td class="hang">HANG @ op 86</td><td>moved hang to native all-gather → not RM-specific</td></tr>
+    <tr><td>FABRIC_1D_RING + Topology.Ring</td><td class="k">crash @ bring-up</td><td>ring not supported on this axis; not a workaround</td></tr>
+    <tr><td><b>Fix v2: force TILE composite broadcast</b></td><td class="pass">PASS ✓</td><td><b>root cause + fix confirmed</b></td></tr>
+  </table>
+
+  <div class="note warn">
+    <b>Caveats (stated honestly).</b>
+    <ul>
+      <li><span class="tag caveat">replication</span> The fix is validated by <b>1 clean full-forward pass</b> vs 4 prior deterministic hangs at the same op/config. Further replication was blocked by board flakiness (below), not by the op.</li>
+      <li><span class="tag caveat">board</span> The LoudBox's <code>ethernet core 28-25</code> repeatedly wedged on teardown/init after the accumulated hang cycles (<code>"Timed out … active again. Try resetting the board."</code>) — a separate hardware/firmware issue that <code>tt-smi -r</code> only sometimes clears. It contaminated several runs (device-init failures unrelated to the op) and limited replication.</li>
+      <li><span class="tag caveat">workaround</span> The fix is a model-side route-around; the CCL kernel deadlock is the real defect and remains open upstream.</li>
+    </ul>
+  </div>
+
+  <h2>6. Artifacts</h2>
+  <ul>
+    <li><span class="mono">sparse_mla_hang_debug/</span> — baseline 3/3 hang (num_links=2): triage.csv, watcher.log per hang</li>
+    <li><span class="mono">sparse_mla_hang_debug_1link/</span> — num_links=1 hang (op 85, broadcast_rm_writer @ FWSW)</li>
+    <li><span class="mono">sparse_mla_fix_check2/</span> — TILE→native fix attempt: hang @ op 86 AllGatherAsync</li>
+    <li><span class="mono">sparse_mla_ring_check/</span> — FABRIC_1D_RING crash @ fabric.cpp:160</li>
+    <li><span class="mono">sparse_mla_tilebc_check/iter_01.log</span> — <b>validated fix: full forward PASS</b></li>
+    <li>Fix: <span class="mono">models/demos/deepseek_v3_d_p/tt/mla/indexer.py</span> <code>_tp_all_gather</code></li>
+  </ul>
+
+</div>
+</body>
+</html>
