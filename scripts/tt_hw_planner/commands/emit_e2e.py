@@ -297,27 +297,22 @@ def _fn_is_hot(name: str) -> bool:
 
 
 def _check_hf_fallback(src: str) -> list:
-    """AST pass: find HF-fallback patterns ONLY in HOT-path functions.
-
-    HOT = `run_<task>`, `__call__`/`forward`, `_apply_*`, `decode_step`,
-    `decode_prefill`, `*_trace_step`, `*_step`. These functions run inside
-    the traced device forward path — any HF submodule invocation there
-    replaces the graduated TTNN stub with host-side HF (or blocks trace
-    capture entirely).
-
-    SETUP (skipped) = `*_trace_setup`, `*_write_inputs`, `_reference_for_stage`,
-    `_hf_reference_*`, `_make_stage_inputs`, `load_hf_model`, `build_tt_stubs`,
-    `_hf_capacities`, etc. HF is legitimately used here to compute fixed
-    reference tensors that seed persistent device buffers before the trace
-    begins — required for trace+2CQ to have stable inputs.
-
-    Returns list of hit descriptors (empty if no violations)."""
+    """AST pass: find HF-fallback / torch-compute patterns in HOT-path
+    functions and any same-file helpers they call (transitively)."""
     import ast
 
     try:
         tree = ast.parse(src)
     except SyntaxError:
         return []
+
+    funcs_by_name: dict = {}
+    for scope in ast.walk(tree):
+        if not isinstance(scope, (ast.Module, ast.ClassDef)):
+            continue
+        for child in scope.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                funcs_by_name.setdefault(child.name, child)
 
     def _attr_root(node) -> str:
         """Return dotted string if the attribute chain contains `hf_model`
@@ -347,10 +342,15 @@ def _check_hf_fallback(src: str) -> list:
         return ".".join(reversed(parts)) + "(...)"
 
     hits: list = []
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    to_inspect: list = [(fn, None) for name, fn in funcs_by_name.items() if _fn_is_hot(name)]
+    seen: set = set()
+
+    while to_inspect:
+        node, reached_via = to_inspect.pop()
+        if node.name in seen:
             continue
-        if not _fn_is_hot(node.name):
+        seen.add(node.name)
+        if reached_via is not None and _G1B_SETUP_FN_NAME.search(node.name):
             continue
 
         aliases: dict = {}
@@ -362,26 +362,39 @@ def _check_hf_fallback(src: str) -> list:
                         if isinstance(tgt, ast.Name):
                             aliases[tgt.id] = root
 
+        via_suffix = f" [via {reached_via}]" if reached_via else ""
+
         for sub in ast.walk(node):
             if not isinstance(sub, ast.Call):
                 continue
             f = sub.func
+
+            if (
+                isinstance(f, ast.Attribute)
+                and isinstance(f.value, ast.Name)
+                and f.value.id == "self"
+                and f.attr in funcs_by_name
+                and f.attr not in seen
+            ):
+                caller_chain = f"{reached_via}->{node.name}" if reached_via else node.name
+                to_inspect.append((funcs_by_name[f.attr], caller_chain))
+
             if isinstance(f, ast.Attribute):
                 root = _attr_root(f)
                 if root:
                     tail = root.split("hf_model.", 1)[-1] if "hf_model." in root else ""
                     top = tail.split(".", 1)[0]
                     if top in _HF_ALIAS_ROOTS:
-                        hits.append(f"{node.name}(): {_dotted_call(sub)}")
+                        hits.append(f"{node.name}(): {_dotted_call(sub)}{via_suffix}")
                         continue
             walker = f
             while isinstance(walker, ast.Attribute):
                 walker = walker.value
             if isinstance(walker, ast.Name) and walker.id in aliases:
-                hits.append(f"{node.name}(): {_dotted_call(sub)} [alias for {aliases[walker.id]}]")
+                hits.append(f"{node.name}(): {_dotted_call(sub)} [alias for {aliases[walker.id]}]{via_suffix}")
                 continue
             if isinstance(f, ast.Name) and f.id in aliases:
-                hits.append(f"{node.name}(): {f.id}(...) [alias for {aliases[f.id]}]")
+                hits.append(f"{node.name}(): {f.id}(...) [alias for {aliases[f.id]}]{via_suffix}")
                 continue
             if isinstance(f, ast.Attribute):
                 chain = []
@@ -393,13 +406,15 @@ def _check_hf_fallback(src: str) -> list:
                     root_name = walker.id
                     leaf = chain[0] if chain else ""
                     if root_name == "torch" and "functional" in chain:
-                        hits.append(f"{node.name}(): {_dotted_call(sub)} [torch.nn.functional in HOT path]")
+                        hits.append(f"{node.name}(): {_dotted_call(sub)} [torch.nn.functional in HOT path]{via_suffix}")
                         continue
                     if root_name == "torch" and leaf in _TORCH_COMPUTE_BLOCKLIST:
-                        hits.append(f"{node.name}(): {_dotted_call(sub)} [torch compute in HOT path]")
+                        hits.append(f"{node.name}(): {_dotted_call(sub)} [torch compute in HOT path]{via_suffix}")
                         continue
                 if isinstance(walker, ast.Name) and walker.id == "F":
-                    hits.append(f"{node.name}(): {_dotted_call(sub)} [F.* (torch.nn.functional) in HOT path]")
+                    hits.append(
+                        f"{node.name}(): {_dotted_call(sub)} [F.* (torch.nn.functional) in HOT path]{via_suffix}"
+                    )
                     continue
     return hits
 
@@ -454,13 +469,19 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
 
     tt_dir = demo_dir / "tt"
     hf_hits = []
-    for p in sorted(tt_dir.glob("*.py")) if tt_dir.is_dir() else []:
+    scan_targets = []
+    if tt_dir.is_dir():
+        scan_targets.extend(sorted(tt_dir.glob("*.py")))
+    if stub_dir.is_dir():
+        scan_targets.extend([p for p in sorted(stub_dir.glob("*.py")) if not p.name.startswith("_")])
+    for p in scan_targets:
         try:
             src = p.read_text(errors="ignore")
         except Exception:
             continue
+        rel = p.relative_to(demo_dir)
         for h in _check_hf_fallback(src)[:6]:
-            hf_hits.append(f"{p.name}: {h}")
+            hf_hits.append(f"{rel}: {h}")
     if hf_hits:
         reasons.append(
             "G1b: tt/*.py HOT-path function(s) call HF submodules as computation — "
@@ -588,7 +609,22 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
         if re.search(r"pytest\.xfail|mark\.xfail|pytest\.skip|assert\s+True\b", src):
             reasons.append(f"honesty: {p.name} contains pytest.xfail / pytest.skip / assert True")
 
-    if os.environ.get("E2E_REQUIRE_TRACE", "1") != "0" and os.environ.get("E2E_ALLOW_NO_TRACE") != "1" and not reasons:
+    _rt_off = os.environ.get("E2E_REQUIRE_TRACE", "1") == "0"
+    _anno = os.environ.get("E2E_ALLOW_NO_TRACE") == "1"
+    _ack = os.environ.get("E2E_I_KNOW_TRACE_IS_BROKEN") == "1"
+    if _rt_off and not _ack:
+        reasons.append(
+            "G6 trace+2CQ: E2E_REQUIRE_TRACE=0 requires paired E2E_I_KNOW_TRACE_IS_BROKEN=1 "
+            "acknowledgement — refusing to silently skip the trace-capture gate. Without this "
+            "gate, a stub with host-side torch ops or mid-forward host->device writes can pass "
+            "emit-e2e and then fail every trace+2CQ measurement downstream (scorecard N/A). "
+            "Set BOTH env vars if you truly want to waive."
+        )
+    elif _rt_off and _ack:
+        print("[emit-e2e] WARNING: G6 trace+2CQ gate DISABLED via E2E_I_KNOW_TRACE_IS_BROKEN=1")
+        print("[emit-e2e]          emitted pipeline may not run trace+2CQ in optimize.")
+
+    if not _rt_off and not _anno and not reasons:
         probe_py = Path(__file__).resolve().parent.parent / "_trace_capture_probe.py"
         if probe_py.is_file():
             tenv = dict(os.environ)
