@@ -260,40 +260,26 @@ void kernel_main() {
                 bk_k[dir][b + 1] = kv;
                 bk_weight[dir][b + 1] = wv;
             }
-            // Pack up to MCAST_MAX_DESTS total pages per slot, keeping the ascending-distance order from
-            // the sort above. A chip hit by multiple experts of this token (equal distance, different
-            // pages) keeps all its pages in one slot: the fabric writes them to that chip in a single
-            // sparse multicast, and the sender derives the per-chip page count from the repeated
-            // distances. Equal distances are adjacent, so each run is one chip; keep a run intact unless
-            // it alone exceeds the per-slot cap (only reachable when top-k > MCAST_MAX_DESTS).
+            // Pack MCAST_MAX_DESTS pages per slot, in the ascending-distance order from the sort above. A
+            // same-distance run (one chip hit by multiple experts of this token) may span a slot
+            // boundary: each slot is an independent sparse multicast whose per-chip page count the sender
+            // re-derives from the contiguous distances it actually holds, so a chip's pages split across
+            // two slots still land correctly. Filling every slot to the cap minimizes fabric calls.
             uint32_t a = 0;
             while (a < n) {
-                uint32_t gcount = 0;
+                uint32_t gcount = (n - a < MCAST_MAX_DESTS) ? (n - a) : MCAST_MAX_DESTS;
                 uint16_t hop_mask = 0;
-                while (a < n && gcount < MCAST_MAX_DESTS) {
-                    uint32_t run = 1;
-                    while (a + run < n && bk_dist[dir][a + run] == bk_dist[dir][a]) {
-                        run++;
-                    }
-                    if (gcount + run > MCAST_MAX_DESTS) {
-                        if (gcount > 0) {
-                            break;  // close this slot so the chip's run stays intact in the next
-                        }
-                        run = MCAST_MAX_DESTS;  // one chip with more pages than a slot holds: hard-split
-                    }
-                    for (uint32_t r = 0; r < run; r++) {
-                        // Grouped route_info (23 u32): [0]=direction, [1]=num_dests, [2]=token_idx,
-                        // [3..6]=page[4], [7..10]=dist[4], [11..14]=expert[4], [15..18]=k[4], [19..22]=weight[4].
-                        route_info_scratch[3 + gcount] = bk_page[dir][a + r];
-                        route_info_scratch[7 + gcount] = bk_dist[dir][a + r];
-                        route_info_scratch[11 + gcount] = bk_expert[dir][a + r];
-                        route_info_scratch[15 + gcount] = bk_k[dir][a + r];
-                        route_info_scratch[19 + gcount] = (uint32_t)bk_weight[dir][a + r];
-                        hop_mask |= static_cast<uint16_t>(1u << (bk_dist[dir][a + r] - 1));
-                        gcount++;
-                    }
-                    a += run;
+                for (uint32_t r = 0; r < gcount; r++) {
+                    // Grouped route_info (23 u32): [0]=direction, [1]=num_dests, [2]=token_idx,
+                    // [3..6]=page[4], [7..10]=dist[4], [11..14]=expert[4], [15..18]=k[4], [19..22]=weight[4].
+                    route_info_scratch[3 + r] = bk_page[dir][a + r];
+                    route_info_scratch[7 + r] = bk_dist[dir][a + r];
+                    route_info_scratch[11 + r] = bk_expert[dir][a + r];
+                    route_info_scratch[15 + r] = bk_k[dir][a + r];
+                    route_info_scratch[19 + r] = (uint32_t)bk_weight[dir][a + r];
+                    hop_mask |= static_cast<uint16_t>(1u << (bk_dist[dir][a + r] - 1));
                 }
+                a += gcount;
                 emit_slot(dir, gcount, hop_mask);
             }
             bk_count[dir] = 0;
