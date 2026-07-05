@@ -25,6 +25,7 @@ from pathlib import Path
 PERF_DIR = "models/experimental/perf_automation"
 CC_DIR = PERF_DIR + "/cc_optimize"
 DEFAULT_MAX_ROUNDS = 3
+_LAST_SCORECARD: dict = {}
 
 _ALLOWED_TOOLS = [
     "mcp__perf-mcp__profile_model",
@@ -276,6 +277,12 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
                 ms = None
         if "[full-pipeline-gate]" in line:
             print("  [optimize/cc] " + line.strip())
+            if "PERF_SCORECARD" in line:
+                _LAST_SCORECARD.clear()
+                for tok in line.split("PERF_SCORECARD", 1)[1].split():
+                    if "=" in tok:
+                        k, v = tok.split("=", 1)
+                        _LAST_SCORECARD[k] = v
     if ms is not None:
         print(f"  [optimize/cc] FULL-model end-to-end ({label}) = {ms:.1f} ms  (ALL 52 layers, prefill + 1 decode)")
     return ms
@@ -358,7 +365,9 @@ def _coverage_layers(repo_root: Path, mcp_env: dict, devices: str, node, case, n
     return results[-1][0], facts
 
 
-def _print_scorecard(devices: str, manifest: dict, pipe: dict, facts: dict, before_ms, after_ms) -> None:
+def _print_scorecard(
+    devices: str, manifest: dict, pipe: dict, facts: dict, before_ms, after_ms, model_name: str = ""
+) -> None:
     """End-of-run scorecard. UNIVERSAL fields (hardware, TP/DP, fully-on-device, batch, users) print for
     ANY model; token-throughput fields (TTFT / T/S/U / T/S / ISL / OSL) are class-specific and print only
     when the model is autoregressive AND fully on-device, else N/A with the reason. Best-effort, never fails."""
@@ -401,6 +410,26 @@ def _print_scorecard(devices: str, manifest: dict, pipe: dict, facts: dict, befo
         print("\n".join(L))
     except Exception as exc:  # noqa: BLE001
         print(f"  [optimize/cc] scorecard skipped ({exc})")
+    try:
+        if _LAST_SCORECARD.get("TTFT_ms") or _LAST_SCORECARD.get("TSU"):
+            import scorecard_profiles as _sp
+
+            _env = (manifest or {}).get("env", {}) or {}
+            _arch = _env.get("arch") or "?"
+            _chips = _env.get("device_count") or _env.get("mesh_chips") or _chip_count(devices)
+            _meas = {}
+            for _k in ("TTFT_ms", "TSU", "TS", "ISL", "OSL", "batch"):
+                _v = _LAST_SCORECARD.get(_k)
+                if _v is None:
+                    continue
+                try:
+                    _meas[_k] = float(_v) if _k in ("TTFT_ms", "TSU", "TS") else int(float(_v))
+                except Exception:  # noqa: BLE001
+                    _meas[_k] = _v
+            _mid = (manifest or {}).get("model_id") or model_name or pipe.get("task", "")
+            print(_sp.render(_mid, _arch, _chips, _meas))
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [optimize/cc] model_targets card skipped ({exc})")
 
 
 def _git(repo_root: Path, *args: str) -> str:
@@ -599,7 +628,7 @@ def optimize_pipeline(
         _mf = json.loads(Path(manifest_path).read_text())
     except Exception:  # noqa: BLE001
         _mf = {}
-    _print_scorecard(devices, _mf, pipe, _cov_facts, before_ms, after_ms)
+    _print_scorecard(devices, _mf, pipe, _cov_facts, before_ms, after_ms, model_name)
     _emit_summary(repo_root, kernel_log, model_name, task, metric, start_sha)
     return {"task": task, "rounds": rounds, "can_stop": can_stop, "halted": halted}
 
