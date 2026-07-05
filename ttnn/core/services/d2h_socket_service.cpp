@@ -1190,14 +1190,16 @@ void D2HStreamService::read_metadata(ttsl::Span<std::byte> metadata) {
 }
 
 void D2HStreamService::read_metadata_from_sockets(ttsl::Span<std::byte> metadata) {
-    TT_FATAL(!sockets_.empty(), "D2HStreamService::read_from_tensor: expected at least one socket for metadata");
+    TT_FATAL(
+        !sockets_.empty(),
+        "D2HStreamService::read_metadata_from_sockets: expected at least one socket for metadata");
     sockets_.front()->read(metadata_scratch_.data(), /*num_pages=*/1);
     std::memcpy(metadata.data(), metadata_scratch_.data(), metadata.size());
     for (size_t s = 1; s < sockets_.size(); ++s) {
         sockets_[s]->read(metadata_scratch_.data(), /*num_pages=*/1);
         TT_FATAL(
             std::memcmp(metadata.data(), metadata_scratch_.data(), metadata.size()) == 0,
-            "D2HStreamService::read_from_tensor: metadata mismatch across sockets (socket index {})",
+            "D2HStreamService::read_metadata_from_sockets: metadata mismatch across sockets (socket index {})",
             s);
     }
 }
