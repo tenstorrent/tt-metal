@@ -141,17 +141,34 @@ _G1_TORCH_DELEGATION = (
 # hf_model.vocoder.unit_embedding.weight, etc.) are fine.
 # Calling the HF submodule as a computation (hf_model.<X>(...)) is not.
 _G1B_HF_FALLBACK = (
-    r"hf_model\.text_decoder\s*\(",
-    r"hf_model\.t2u_model\s*\(",
-    r"hf_model\.vocoder\s*\(",
-    r"hf_model\.speech_encoder\s*\(",
-    r"hf_model\.text_encoder\s*\(",
-    r"self\.hf_model\.text_decoder\s*\(",
-    r"self\.hf_model\.t2u_model\s*\(",
-    r"self\.hf_model\.vocoder\s*\(",
-    r"self\.hf_model\.speech_encoder\s*\(",
-    r"self\.hf_model\.text_encoder\s*\(",
+    # Direct submodule calls
+    r"(?<!\w)hf_model\.text_decoder\s*\(",
+    r"(?<!\w)hf_model\.t2u_model\s*\(",
+    r"(?<!\w)hf_model\.vocoder\s*\(",
+    r"(?<!\w)hf_model\.speech_encoder\s*\(",
+    r"(?<!\w)hf_model\.text_encoder\s*\(",
+    r"(?<!\w)hf_model\.lm_head\s*\(",
+    r"(?<!\w)self\.hf_model\.text_decoder\s*\(",
+    r"(?<!\w)self\.hf_model\.t2u_model\s*\(",
+    r"(?<!\w)self\.hf_model\.vocoder\s*\(",
+    r"(?<!\w)self\.hf_model\.speech_encoder\s*\(",
+    r"(?<!\w)self\.hf_model\.text_encoder\s*\(",
+    r"(?<!\w)self\.hf_model\.lm_head\s*\(",
+    # Nested submodule calls (e.g. hf_model.vocoder.unit_embedding(...),
+    # hf_model.text_decoder.embed_tokens(...), hf_model.text_decoder.layers[0](...))
+    r"(?<!\w)hf_model\.(text_decoder|t2u_model|vocoder|speech_encoder|text_encoder|lm_head)\.\w+\s*\(",
+    r"(?<!\w)self\.hf_model\.(text_decoder|t2u_model|vocoder|speech_encoder|text_encoder|lm_head)\.\w+\s*\(",
+    # Even deeper nesting (e.g. hf_model.text_decoder.layers[0].self_attn(...))
+    r"(?<!\w)hf_model\.(text_decoder|t2u_model|vocoder|speech_encoder|text_encoder)\.[\w.\[\]0-9]+\s*\(",
+    r"(?<!\w)self\.hf_model\.(text_decoder|t2u_model|vocoder|speech_encoder|text_encoder)\.[\w.\[\]0-9]+\s*\(",
 )
+
+# Alias-detection pass: if `<name> = hf_model.<submodule>` appears anywhere,
+# then any subsequent call `<name>(...)` or `<name>.<X>(...)` is a disguised
+# HF-fallback. Kept as a separate pass because a single regex would false-
+# positive on unrelated `voc(` etc. — the AST pass in _check_hf_aliases
+# links assignments to call sites.
+_HF_ALIAS_ROOTS = ("text_decoder", "t2u_model", "vocoder", "speech_encoder", "text_encoder", "lm_head")
 
 _G5_HOST_SAMPLING = (
     r"torch\.argmax\s*\(",
@@ -159,6 +176,76 @@ _G5_HOST_SAMPLING = (
     r"torch\.topk\s*\(",
 )
 _G5_HOST_XFER = ("from_torch", "to_torch", "from_device", "to_device")
+
+
+def _check_hf_aliases(src: str) -> list:
+    """AST pass: find `<alias> = hf_model.<submodule>` (or `.attr` chain
+    rooted at an HF alias), then flag any call `<alias>(...)` or
+    `<alias>.<x>(...)` in the same source. Catches the disguised-
+    HF-fallback pattern `voc = hf_model.vocoder; voc.dur_predictor(x)`
+    that a plain regex on `hf_model.*(` misses. Returns list of hit
+    descriptors (empty if no violations)."""
+    import ast
+
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    # Build alias map: name -> the rooted attr chain (e.g. "hf_model.vocoder")
+    aliases: dict = {}
+
+    def _attr_root(node) -> str:
+        """Return dotted string if node is a chain rooted at hf_model or
+        self.hf_model; else empty string."""
+        parts = []
+        cur = node
+        while isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name) and cur.id == "hf_model":
+            parts.append("hf_model")
+            return ".".join(reversed(parts))
+        if isinstance(cur, ast.Attribute) and cur.attr == "hf_model":
+            inner = cur.value
+            if isinstance(inner, ast.Name) and inner.id == "self":
+                parts.append("hf_model")
+                parts.append("self")
+                return ".".join(reversed(parts))
+        return ""
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            root = _attr_root(node.value)
+            if root and any(sub in root for sub in _HF_ALIAS_ROOTS):
+                for tgt in node.targets:
+                    if isinstance(tgt, ast.Name):
+                        aliases[tgt.id] = root
+    if not aliases:
+        return []
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            f = node.func
+            # alias(...) direct call
+            if isinstance(f, ast.Name) and f.id in aliases:
+                hits.append(f"{f.id}(...) [alias for {aliases[f.id]}]")
+                continue
+            # alias.<x>(...) or alias.<x>.<y>(...)
+            cur = f
+            while isinstance(cur, ast.Attribute):
+                cur = cur.value
+            if isinstance(cur, ast.Name) and cur.id in aliases:
+                # reconstruct the full call for the message
+                parts = []
+                walker = f
+                while isinstance(walker, ast.Attribute):
+                    parts.append(walker.attr)
+                    walker = walker.value
+                if isinstance(walker, ast.Name):
+                    parts.append(walker.id)
+                full = ".".join(reversed(parts)) + "(...)"
+                hits.append(f"{full} [alias for {aliases[cur.id]}]")
+    return hits
 
 
 def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
@@ -207,16 +294,21 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             src = p.read_text(errors="ignore")
         except Exception:
             continue
+        # Direct + nested regex patterns
         for pat in _G1B_HF_FALLBACK:
             m = re.search(pat, src)
             if m:
-                hf_hits.append(f"{p.name}:{pat.split(chr(92))[0].split('.')[-1]}")
+                hf_hits.append(f"{p.name}: {m.group(0)}")
                 break
+        # Alias detection (voc = hf_model.vocoder → voc.dur_predictor(...))
+        alias_hits = _check_hf_aliases(src)
+        for h in alias_hits[:3]:
+            hf_hits.append(f"{p.name}: {h}")
     if hf_hits:
         reasons.append(
-            "G1b: tt/pipeline.py calls HF submodules as computation (not chaining "
-            "the graduated TTNN stub) — pipeline is not a real TT forward path: "
-            + ", ".join(hf_hits[:8])
+            "G1b: tt/*.py calls HF submodules as computation (directly, via nested "
+            "attribute access, or via an alias) — pipeline is not a real TT forward path: "
+            + "; ".join(hf_hits[:8])
             + " (use stubs[<name>](...) instead; hf_model is for config/weights/reference only)"
         )
 
