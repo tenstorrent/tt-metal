@@ -287,10 +287,12 @@ def test_validate_driver_rejects_missing_driver_name():
 
 def test_validate_driver_rejects_wrong_arg_count():
     ao = _import_module()
-    src = "def driver(model):\n    pass"
-    ok, err = ao._validate_driver_source(src)
-    assert not ok
-    assert "2" in err
+    # New modality-agnostic contract: 1 arg (model) or 2 (model, sample_input) are
+    # valid; 0 args or 3+ args are rejected.
+    assert ao._validate_driver_source("def driver(model):\n    pass")[0]
+    assert ao._validate_driver_source("def driver(model, sample_input=None):\n    pass")[0]
+    assert not ao._validate_driver_source("def driver():\n    pass")[0]
+    assert not ao._validate_driver_source("def driver(model, a, b):\n    pass")[0]
 
 
 def test_validate_driver_rejects_wrong_arg_names():

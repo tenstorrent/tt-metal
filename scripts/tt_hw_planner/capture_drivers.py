@@ -75,6 +75,24 @@ def resolve_custom_driver(model: Any) -> Optional[Callable]:
     return None
 
 
+def _invoke_custom_driver(driver_fn: Callable, model: Any, pixel_values: Any) -> None:
+    """Call a custom/learned driver, adapting to its arity. The modality-agnostic
+    form is ``driver(model)`` (the driver builds its own inputs for the model's
+    modality); the legacy form is ``driver(model, sample_input)``. Both work."""
+    try:
+        params = [
+            p
+            for p in inspect.signature(driver_fn).parameters.values()
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        ]
+    except (TypeError, ValueError):
+        params = []
+    if len(params) <= 1:
+        driver_fn(model)
+    else:
+        driver_fn(model, pixel_values)
+
+
 def _is_optional_or_none(ann: Any) -> bool:
     if ann is type(None):
         return True
@@ -464,7 +482,7 @@ def try_capture_drivers(model: Any, pixel_values: Any) -> Tuple[bool, List[str]]
     custom = resolve_custom_driver(model)
     if custom is not None:
         try:
-            custom(model, pixel_values)
+            _invoke_custom_driver(custom, model, pixel_values)
             attempts.append(f"custom_driver[{getattr(custom, '__name__', 'unknown')}]: ok")
             return True, attempts
         except Exception as exc:
