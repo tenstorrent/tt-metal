@@ -11,10 +11,9 @@ metric name.
 
 Precedence:
   1. target met            -> DONE
-  2. budget exceeded       -> STOPPED
-  3. max iterations hit    -> STOPPED
-  4. no untried levers      -> STOPPED (floor)
-  5. otherwise             -> continue
+  2. max iterations hit    -> STOPPED
+  3. no untried levers      -> STOPPED (floor)
+  4. otherwise             -> continue
 
 Counters (iteration, cost_usd) live in state.json and survive resume.
 """
@@ -48,17 +47,12 @@ def check_exit(state: dict[str, Any]) -> ExitDecision:
     if _target_met(state.get("metric") or {}):
         return "DONE"
 
-    # 2. Cost budget exhausted.
-    budget = state.get("budget_usd")
-    if budget is not None and state.get("cost_usd", 0.0) >= budget:
-        return "STOPPED"
-
-    # 3. Iteration cap hit.
+    # 2. Iteration cap hit.
     max_iter = state.get("max_iter")
     if max_iter is not None and state.get("iteration", 0) >= max_iter:
         return "STOPPED"
 
-    # 4. Per-bucket lever exhaustion is handled by the CHECK_EXIT handler, which
+    # 3. Per-bucket lever exhaustion is handled by the CHECK_EXIT handler, which
     # advances to the next-slowest bucket (via exhausted_buckets) and only STOPs
     # once ALL buckets are exhausted. So it is intentionally NOT a hard stop here.
 

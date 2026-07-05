@@ -17,8 +17,6 @@ def _base(metric=None, **over):
             "current": 14.0,
             "target": 12.0,
         },
-        "budget_usd": 5.0,
-        "cost_usd": 0.5,
         "max_iter": 25,
         "iteration": 4,
         "candidates": ["a", "b"],
@@ -49,11 +47,6 @@ def test_check_exit_target_met_max_metric():
     # max (fps): current 6.5 >= target 6.45 -> DONE; 6.4 -> continue.
     assert check_exit(_base(metric=_metric("max", 6.5, 6.45, name="fps"))) == "DONE"
     assert check_exit(_base(metric=_metric("max", 6.4, 6.45, name="fps"))) == "continue"
-
-
-def test_check_exit_budget_exceeded():
-    assert check_exit(_base(cost_usd=5.0)) == "STOPPED"
-    assert check_exit(_base(cost_usd=6.1)) == "STOPPED"
 
 
 def test_check_exit_max_iter():

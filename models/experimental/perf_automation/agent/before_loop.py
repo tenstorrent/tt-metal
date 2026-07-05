@@ -571,9 +571,8 @@ def before_loop(
                 "target": target,
             },
             # uncapped by default (None) -> exit_policy stops only on roofline target-met or
-            # full bucket exhaustion, never on an arbitrary iter/dollar wall. See --max-iter/--budget-usd.
+            # full bucket exhaustion, never on an arbitrary iter wall. See --max-iter.
             "max_iter": config.get("max_iter"),
-            "budget_usd": config.get("budget_usd"),
             "cost_usd": round(agent_totals["cost_usd"], 6),
             "tokens_in": agent_totals["tokens_in"],
             "tokens_out": agent_totals["tokens_out"],
@@ -602,10 +601,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--direction", default="min", choices=["min", "max"])
     ap.add_argument("--target", type=float)
     # No artificial wall by default: the loop stops at the roofline TARGET (target met -> DONE)
-    # or true bucket exhaustion, NOT at an arbitrary iter/dollar cap. Pass these only to impose a
+    # or true bucket exhaustion, NOT at an arbitrary iter cap. Pass --max-iter only to impose a
     # ceiling deliberately; unset (None) = uncapped (exit_policy treats None as "no limit").
     ap.add_argument("--max-iter", type=int, default=None)
-    ap.add_argument("--budget-usd", type=float, default=None)
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--timeout", type=int, default=10800)
     ap.add_argument("--notes", default="")
@@ -661,7 +659,6 @@ def main(argv: list[str] | None = None) -> int:
             "direction",
             "target",
             "max_iter",
-            "budget_usd",
             "runs",
             "timeout",
             "notes",
