@@ -297,9 +297,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     // Halo-aware mode: spatial (H/W) boundary conv-window positions read from the compact halo buffer
     // instead of zero-padding. Only for zeros mode (the halo carries the neighbor's real pixels).
     const bool halo_mode = tensor_args.halo_buffer.has_value() && is_padding_zeros;
-    // Logical-pad masking: opt-in, halo mode only. Needs the per-device offset tensor and a nonzero
-    // logical dim; otherwise fully off (byte-identical to today for every other conv3d caller).
-    const bool mask_mode = halo_mode && tensor_args.pad_offset_tensor.has_value() &&
+    // Logical-pad masking: opt-in. Needs the per-device offset tensor and a nonzero logical dim;
+    // otherwise fully off (byte-identical to today for every other conv3d caller). Independent of
+    // halo_mode: the persistent-padded plain conv (no halo buffer) reads a padded input and masks its
+    // logical-pad positions in-kernel (caller passes logical+pad as the threshold), avoiding a
+    // separate full-tensor pre-mask mul.
+    const bool mask_mode = tensor_args.pad_offset_tensor.has_value() &&
                            (operation_attributes.logical_h_mask != 0 || operation_attributes.logical_w_mask != 0);
 
     uint32_t in_row_size_bytes = input_tensor.buffer()->aligned_page_size();

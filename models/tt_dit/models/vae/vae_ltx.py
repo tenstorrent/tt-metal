@@ -56,26 +56,6 @@ def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
     return cache[key]
 
 
-def _get_h_mask(cache, x_BTHWC, logical_h, parallel_config, mesh_device, dtype):
-    """Cached mask that zeros height-padding rows beyond logical_h. Mirror of _get_w_mask for dim 2 —
-    used by the persistent-padded path, where neighbor_pad_halo (no logical_h) can't mask H itself."""
-    sharded_h = x_BTHWC.shape[2]
-    key = (sharded_h, logical_h)
-    if key not in cache:
-        padded_h = sharded_h * parallel_config.height_parallel.factor
-        mask = torch.ones(1, 1, padded_h, 1, 1)
-        mask[:, :, logical_h:, :, :] = 0.0
-        cache[key] = typed_tensor(
-            mask,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_axis=parallel_config.height_parallel.mesh_axis,
-            shard_dim=2,
-            dtype=dtype,
-        )
-    return cache[key]
-
-
 def _get_pad_offset(cache, x_BTHWC, parallel_config, mesh_device):
     """Per-device [h_start, w_start] global spatial offset for conv3d's in-kernel logical-pad mask.
     Sharded so device (hi, wi) reads its own pair [hi*H_dev, wi*W_dev]; H_dev/W_dev are uniform per
@@ -245,7 +225,6 @@ class LTXCausalConv3d(Module):
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
-        self._h_mask_cache: dict[tuple, ttnn.Tensor] = {}
         self._pad_offset_cache: dict[tuple, ttnn.Tensor] = {}
         # Persistent-padded path (opt-in): neighbor_pad_halo -> compact -> halo_scatter into a padded
         # buffer -> plain (pad=0) conv, instead of conv3d halo-read mode. Copy-based (ttnn.pad) for now.
@@ -403,24 +382,18 @@ class LTXCausalConv3d(Module):
 
             if self._use_halo_conv and self._persist_pad and h_pad_needed and w_pad_needed:
                 # Persistent-padded: neighbor_pad_halo -> compact -> halo_scatter into a padded buffer ->
-                # plain (pad=0) conv. neighbor_pad_halo has no logical mask, so pre-mask x's logical-pad
-                # rows/cols (dim2/dim3) BEFORE the exchange, so both the interior AND the neighbor halo
-                # are masked (mirrors the full-pad path's H-logical + W-premul masking).
-                if w_needed:
-                    x_BTHWC = ttnn.mul(
-                        x_BTHWC,
-                        _get_w_mask(
-                            self._w_mask_cache, x_BTHWC, logical_w, self.parallel_config, self.mesh_device, self.dtype
-                        ),
-                    )
-                if h_needed:
-                    x_BTHWC = ttnn.mul(
-                        x_BTHWC,
-                        _get_h_mask(
-                            self._h_mask_cache, x_BTHWC, logical_h, self.parallel_config, self.mesh_device, self.dtype
-                        ),
-                    )
+                # plain (pad=0) conv. Logical-pad masking is done IN-KERNEL by the plain conv (no
+                # full-tensor pre-mul): pass logical+pad as the threshold and the per-device offset, so
+                # the conv's masked read zeros both interior and neighbor-halo pad positions. This is the
+                # same in-kernel mask the halo-read path uses, so the pre-mul H/W masks are unnecessary.
                 pHe, pWe = self.external_padding[1], self.external_padding[2]
+                pp_logical_h = (logical_h + pHe) if h_needed else 0
+                pp_logical_w = (logical_w + pWe) if w_needed else 0
+                pp_pad_offset = None
+                if pp_logical_h or pp_logical_w:
+                    pp_pad_offset = _get_pad_offset(
+                        self._pad_offset_cache, x_BTHWC, self.parallel_config, self.mesh_device
+                    )
                 compact = self.ccl_manager.neighbor_pad_halo_only(
                     x_BTHWC,
                     dims=dims,
@@ -437,10 +410,7 @@ class LTXCausalConv3d(Module):
                 x4 = ttnn.reshape(x_BTHWC, [B_ * T_, H_, W_, C_])
                 x4 = ttnn.pad(x4, [(0, 0), (pHe, pHe), (pWe, pWe), (0, 0)], value=0.0)
                 padded = ttnn.reshape(x4, [B_, T_, H_ + 2 * pHe, W_ + 2 * pWe, C_])
-                if os.environ.get("TT_LTX_PP_DEBUG"):
-                    print(f"PP x={list(x_BTHWC.shape)} padded={list(padded.shape)} pHe={pHe} pWe={pWe}", flush=True)
-                if os.environ.get("TT_LTX_PP_NOSCATTER") is None:
-                    padded = ttnn.experimental.halo_scatter(compact, padded, np_padding_h=pHe, np_padding_w=pWe)
+                padded = ttnn.experimental.halo_scatter(compact, padded, np_padding_h=pHe, np_padding_w=pWe)
                 return ttnn.experimental.conv3d(
                     input_tensor=padded,
                     weight_tensor=self.weight.data,
@@ -454,6 +424,9 @@ class LTXCausalConv3d(Module):
                     padding_mode="zeros",
                     dtype=self.dtype,
                     compute_kernel_config=self.compute_kernel_config,
+                    logical_h_mask=pp_logical_h,
+                    logical_w_mask=pp_logical_w,
+                    pad_offset_tensor=pp_pad_offset,
                 )
 
             if self._use_halo_conv:

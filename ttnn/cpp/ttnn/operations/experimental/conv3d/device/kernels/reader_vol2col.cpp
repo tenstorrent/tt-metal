@@ -512,19 +512,35 @@ void gather_rows_to_shard(
                     }
                     }  // end logical_masked else
                 } else {
-                    // Fast path: no padding checks
-                    const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_in) * H_in_W_in +
-                                              static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_in);
-                    read_input_row_maybe_staged<EnableDramReadStaging, dram_read_alignment>(
-                        noc,
-                        in_reader,
-                        page_idx,
-                        c_in_offset_bytes,
-                        in_row_size_bytes,
-                        shard_cb,
-                        shard_offset,
-                        C_in_block_bytes,
-                        dram_read_scratch_cb);
+                    // Fast path: no conv-padding checks. Still honor the logical-pad mask when enabled
+                    // (persistent-padded plain conv reads a padded input; pass logical+pad as the
+                    // threshold): zero any read whose GLOBAL coord is beyond the logical extent. The
+                    // g_mask_logical==0 guard short-circuits for every non-masking caller.
+                    bool logical_masked = false;
+                    if (g_mask_logical_h != 0 &&
+                        static_cast<uint32_t>(static_cast<int32_t>(g_mask_h_start) + h_in) >= g_mask_logical_h) {
+                        logical_masked = true;
+                    } else if (
+                        g_mask_logical_w != 0 &&
+                        static_cast<uint32_t>(static_cast<int32_t>(g_mask_w_start) + w_in) >= g_mask_logical_w) {
+                        logical_masked = true;
+                    }
+                    if (logical_masked) {
+                        zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
+                    } else {
+                        const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_in) * H_in_W_in +
+                                                  static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_in);
+                        read_input_row_maybe_staged<EnableDramReadStaging, dram_read_alignment>(
+                            noc,
+                            in_reader,
+                            page_idx,
+                            c_in_offset_bytes,
+                            in_row_size_bytes,
+                            shard_cb,
+                            shard_offset,
+                            C_in_block_bytes,
+                            dram_read_scratch_cb);
+                    }
                 }
                 if constexpr (N_TRIDS != 0) {
                     if (use_ring) {
