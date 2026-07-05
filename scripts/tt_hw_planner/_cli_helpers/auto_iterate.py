@@ -1781,20 +1781,36 @@ def _run_auto_iterate_loop(
                 try:
                     from .. import reference_loader_resolver as _rlr
 
-                    if _rlr.is_enabled() and not _rlr.has_loader(demo_dir):
-                        _rl_res = _rlr.resolve(
-                            model_id=MODEL,
-                            demo_dir=demo_dir,
-                            failure_text="pre-flight capture could not load the model via AutoModel.from_pretrained",
-                            agent_bin=locals().get("agent_bin", "claude") or "claude",
-                            cwd=BRINGUP_ROOT(),
-                        )
-                        if _rl_res.get("resolved"):
-                            print(f"  [loader-resolver] wrote {_rl_res.get('path')}; re-capturing ...")
-                            _cap_results = capture_real_inputs(
-                                model_id=MODEL, demo_dir=demo_dir, components=_cap_components, verbose=True
+                    if not _rlr.has_loader(demo_dir):
+                        _files = _rlr._repo_files(MODEL)
+                        _hf_native = any(
+                            f
+                            in (
+                                "model.safetensors",
+                                "model.safetensors.index.json",
+                                "pytorch_model.bin",
+                                "pytorch_model.bin.index.json",
                             )
-                            _captured_n = sum(1 for info in _cap_results.values() if info.get("status") == "captured")
+                            for f in _files
+                        )
+                        _non_transformers = bool(_files) and not _hf_native
+                        if _non_transformers or _rlr.is_enabled():
+                            _rl_res = _rlr.resolve(
+                                model_id=MODEL,
+                                demo_dir=demo_dir,
+                                failure_text="pre-flight capture could not load the model via AutoModel.from_pretrained",
+                                agent_bin=locals().get("agent_bin", "claude") or "claude",
+                                cwd=BRINGUP_ROOT(),
+                                enabled=True,
+                            )
+                            if _rl_res.get("resolved"):
+                                print(f"  [loader-resolver] wrote {_rl_res.get('path')}; re-capturing ...")
+                                _cap_results = capture_real_inputs(
+                                    model_id=MODEL, demo_dir=demo_dir, components=_cap_components, verbose=True
+                                )
+                                _captured_n = sum(
+                                    1 for info in _cap_results.values() if info.get("status") == "captured"
+                                )
                 except Exception as _rl_exc:
                     print(f"  [loader-resolver] skipped: {type(_rl_exc).__name__}: {_rl_exc}", file=sys.stderr)
             _ups = upgrade_all_tests_in_demo(demo_dir)
