@@ -1071,7 +1071,9 @@ class ModelArgs:
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
             default_sampling_force_argmax = {
-                "allow_force_argmax": False,
+                # Single-chip only: the argmax fast-path speeds up greedy decode on P150
+                # (~22 -> ~38 t/s/u), but multi-chip meshes are faster on the top-k path.
+                "allow_force_argmax": self.num_devices == 1,
                 "num_links": 1,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
