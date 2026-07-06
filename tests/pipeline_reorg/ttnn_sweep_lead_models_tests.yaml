@@ -1,0 +1,32 @@
+# Sweep batch definitions for the LEAD_MODELS split of the ttnn-run-sweeps workflow.
+#
+# Lead-model sweeps are traced (no op-category field) and route by mesh shape, but
+# unlike model_traced they collapse into only TWO logical lanes — single-chip and
+# galaxy — via LEAD_MODELS_MESH_TEST_GROUPS in
+# tests/sweep_framework/framework/matrix_runner_config.py. Each entry is one such
+# lane; the universal `category` field holds the lane name, which
+# ttnn-run-sweeps-impl.yaml wires to TEST_GROUP_NAME (and, because it starts with
+# `lead-models`, to LEAD_MODELS_RUN=1) so vector_source applies the lead-models
+# capability filter (manifest vector_grouping_mode=mesh).
+#
+# Budget: enforced by verify_time_budget.py (team: ttnn, category: sweep) against
+# .github/time_budget.yaml. Timeouts are first-pass estimates — tune from observed
+# run durations.
+
+- name: ttnn sweeps lead-models single-chip
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  skus:
+    wh_n150:
+      timeout: 120
+  team: ttnn
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  category: lead-models-single-chip
+
+- name: ttnn sweeps lead-models galaxy
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  skus:
+    wh_galaxy:
+      timeout: 200
+  team: ttnn
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  category: lead-models-galaxy

@@ -1,14 +1,17 @@
 name: "[internal] ttnn run sweeps impl"
 
+# Self-contained pipeline-reorg sweeps runner. It:
+#   1. (model_traced/lead_models only) builds the master JSON from the DB,
+#   2. PREPARES sweep vectors and decides the split axis from the sweep name,
+#   3. loads the batcher matrix yaml matching that split (category/mesh/lead_models),
+#   4. runs each batch.
+# Vectors flow between jobs via the sweeps-vectors artifact.
+
 on:
   workflow_call:
     inputs:
-      matrix:
-        description: "JSON matrix of sweep batches for this hw group"
-        required: true
-        type: string
       sweep-name:
-        description: "Resolved sweep name"
+        description: "The sweep to load (e.g. 'ALL SWEEPS (Nightly)' or a single module name)."
         required: true
         type: string
       dev-docker-image:
@@ -23,6 +26,11 @@ on:
         description: "Wheel artifact name"
         required: true
         type: string
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
       skip-on-timeout:
         type: string
         default: "true"
@@ -38,37 +46,236 @@ on:
       fail-on-test-failure:
         type: string
         default: "false"
-      mesh-shape:
+      upload-results:
         type: string
-        default: ""
+        default: "true"
+        description: "Upload homogenized run results to SFTP."
 
 permissions:
   contents: read
 
 jobs:
-  ttnn-run-sweeps-parallel:
-    name: ${{ matrix.batch_display }}
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      max-parallel: 20
-      matrix:
-        include: ${{ fromJSON(inputs.matrix).include }}
+  generate-master-json-from-db:
+    name: 🗄️ Generate Master JSON from Database
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    if: >-
+      inputs.sweep-name == 'ALL SWEEPS (Model Traced)' ||
+      inputs.sweep-name == 'ALL SWEEPS (Lead Models)'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.10"
+      - name: Install dependencies
+        run: pip install psycopg2-binary pyyaml tqdm
+      - name: Generate JSON for lead_models run
+        if: inputs.sweep-name == 'ALL SWEEPS (Lead Models)'
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+        run: |
+          mkdir -p model_tracer/traced_operations
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+            model_tracer/trace_selection_registry.yaml \
+            model_tracer/traced_operations/ttnn_operations_master.json \
+            lead_models
+      - name: Generate JSON for model_traced run
+        if: inputs.sweep-name == 'ALL SWEEPS (Model Traced)'
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+        run: |
+          mkdir -p model_tracer/traced_operations
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+            model_tracer/trace_selection_registry.yaml \
+            model_tracer/traced_operations/ttnn_operations_master.json \
+            model_traced
+      - name: Upload master JSON artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ttnn-operations-master-json
+          path: model_tracer/traced_operations/ttnn_operations_master.json
+          retention-days: 1
+
+  prepare-sweep-vectors:
+    name: Prepare sweep vectors
+    needs: [generate-master-json-from-db]
+    if: >-
+      always() &&
+      (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
+    outputs:
+      split: ${{ steps.decide-split.outputs.split }}
     container:
       image: ${{ inputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.arch }}
-        RUNNER_LABEL: ${{ matrix.runner_label }}
+        ARCH_NAME: wormhole_b0
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
-        TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
-        TEST_GROUP_NAME: ${{ matrix.test_group_name }}
         TRACY_NO_INVARIANT_CHECK: 1
-        LEAD_MODELS_RUN: ${{ startsWith(matrix.test_group_name, 'lead-models') && '1' || '0' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: 30
+    runs-on: tt-ubuntu-2204-N150-viommu-stable
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Decide split axis from sweep name
+        id: decide-split
+        run: |
+          # nightly / comprehensive / single-module runs have no traced hardware
+          # metadata and batch by op category. model_traced routes by mesh topology
+          # (MODEL_TRACED_MESH_TEST_GROUPS); lead_models collapses to its own
+          # single-chip/galaxy mesh lanes (LEAD_MODELS_MESH_TEST_GROUPS).
+          case "${{ inputs.sweep-name }}" in
+            "ALL SWEEPS (Model Traced)") SPLIT=mesh ;;
+            "ALL SWEEPS (Lead Models)")  SPLIT=lead_models ;;
+            *)                           SPLIT=category ;;
+          esac
+          echo "split=$SPLIT" >> "$GITHUB_OUTPUT"
+          echo "Split axis: $SPLIT"
+      - name: 📥 Download database-generated JSON
+        if: >-
+          inputs.sweep-name == 'ALL SWEEPS (Model Traced)' ||
+          inputs.sweep-name == 'ALL SWEEPS (Lead Models)'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ttnn-operations-master-json
+          path: docker-job/model_tracer/traced_operations/
+      - name: Run ttnn sweeps generation (single sweep)
+        if: >-
+          inputs.sweep-name != 'ALL SWEEPS (Nightly)' &&
+          inputs.sweep-name != 'ALL SWEEPS (Comprehensive)' &&
+          inputs.sweep-name != 'ALL SWEEPS (Model Traced)' &&
+          inputs.sweep-name != 'ALL SWEEPS (Lead Models)'
+        run: |
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ inputs.sweep-name }} --group-by hw --tag ci-main
+      - name: Run ttnn sweeps generation (all sweeps - model traced)
+        if: inputs.sweep-name == 'ALL SWEEPS (Model Traced)'
+        run: |
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced all --suite-name model_traced --group-by mesh --tag ci-main
+      - name: Run ttnn sweeps generation (all sweeps - lead models)
+        if: inputs.sweep-name == 'ALL SWEEPS (Lead Models)'
+        run: |
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --suite-name model_traced --group-by mesh --tag ci-main
+      - name: Run ttnn sweeps generation (nightly/comprehensive)
+        if: >-
+          inputs.sweep-name == 'ALL SWEEPS (Nightly)' ||
+          inputs.sweep-name == 'ALL SWEEPS (Comprehensive)'
+        run: |
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --group-by hw --tag ci-main
+      - name: Upload sweep vectors
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sweeps-vectors
+          path: /work/tests/sweep_framework/vectors_export/
+          retention-days: 1
+
+  load-test-matrix:
+    needs: [prepare-sweep-vectors]
+    if: ${{ always() && needs.prepare-sweep-vectors.result == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.filter.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_sweep_${{ needs.prepare-sweep-vectors.outputs.split }}_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            sweep
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "ALL_SKUS_IN_TESTS" \
+            ./.github/sku_config.yaml
+      - name: Select single-sweep hot path
+        id: filter
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          SWEEP: ${{ inputs.sweep-name }}
+        run: |
+          # ALL SWEEPS runs keep the full matrix. A single-module sweep-name keeps
+          # only the one category batch whose op-category prefix-matches it (on a
+          # dot boundary), so a single sweep spins up 1 job, not all ~30.
+          python3 -c '
+          import json, os
+          m = json.loads(os.environ["MATRIX"])
+          s = os.environ["SWEEP"]
+          out = m if s.startswith("ALL SWEEPS") else [
+              e for e in m
+              if s == e.get("category", "") or s.startswith(e.get("category", "") + ".")
+          ]
+          print("matrix=" + json.dumps(out))
+          ' >> "$GITHUB_OUTPUT"
+
+  ttnn-run-sweeps-parallel:
+    needs: [prepare-sweep-vectors, load-test-matrix]
+    name: ${{ matrix.test-group.name }}
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    container:
+      image: ${{ inputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ startsWith(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TRACY_NO_INVARIANT_CHECK: 1
+        # The universal `category` field is wired to its runtime function here.
+        # A lane name (mesh: '*-sweeps', lead-models: 'lead-models-*') selects that
+        # test group's capability filter in vector_source; an op-category (e.g.
+        # 'matmul', 'eltwise.unary') is just batch identity and sets no group.
+        # lead-models lanes additionally flip run-type detection.
+        TEST_GROUP_NAME: ${{ (endsWith(matrix.test-group.category, '-sweeps') || startsWith(matrix.test-group.category, 'lead-models')) && matrix.test-group.category || '' }}
+        LEAD_MODELS_RUN: ${{ startsWith(matrix.test-group.category, 'lead-models') && '1' || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -78,13 +285,14 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    timeout-minutes: 60
-    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job
@@ -93,31 +301,16 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          # Sweep CI default of 5s is too aggressive for traced multi-device
-          # configs on Galaxy: linear/multiply/matmul with sharded I/O can
-          # exceed 5s during reshard + dispatch bring-up, producing false-
-          # positive op-timeouts. Raise to 30s for the whole sweep job so
-          # every op benefits without per-module env-var overrides.
           hang-detection-timeout: 30
-      - name: 📋 Display parallel sweep configuration
+      - name: 📋 Display sweep batch configuration
         run: |
-          echo "::group::🔧 Parallel Sweeps Execution - Configuration"
-          echo "┌─────────────────────────────────────────────────────────────┐"
-          echo "│              Parallel Sweeps Configuration                  │"
-          echo "├─────────────────────────────────────────────────────────────┤"
-          echo "│ Run Mode:             Parallel Execution (${{ matrix.test_group_name }})"
-          echo "│ Batch:                ${{ matrix.batch_display }}"
-          echo "│ Module Selector:      ${{ matrix.module_selector }}"
-          echo "│ Suite Override:       ${{ matrix.suite_name || 'none' }}"
-          echo "│ Architecture:         ${{ matrix.arch }}"
-          echo "│ Runner:               ${{ toJSON(matrix.runs_on) }}"
-          echo "│ Skip on Timeout:      ${{ inputs.skip-on-timeout }}"
-          echo "│ Measure Device Perf:  ${{ inputs.measure-device-perf }}"
-          echo "│ Measure E2E Perf:     ${{ inputs.measure-e2e-perf }}"
-          echo "│ Measure Memory:       ${{ inputs.measure-memory }}"
-          echo "│ Use Database:         ${{ inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' || inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)' }}"
-          echo "│ Mesh Shape Filter:    ${{ inputs.mesh-shape || 'none' }}"
-          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::group::🔧 Sweep batch"
+          echo "│ Batch:      ${{ matrix.test-group.name }}"
+          echo "│ Category:   ${{ matrix.test-group.category }}"
+          echo "│ SKU:        ${{ matrix.test-group.sku }}"
+          echo "│ Runner:     ${{ toJSON(matrix.test-group.runs_on) }}"
+          echo "│ Timeout:    ${{ matrix.test-group.timeout }} min"
+          echo "│ Cmd:        ${{ matrix.test-group.cmd }}"
           echo "::endgroup::"
       - name: Download sweep vectors
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -125,150 +318,165 @@ jobs:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export
       - name: Clear stale kernel cache
-        # A stale/corrupt persisted kernel ELF (e.g. cq_prefetch) left in
-        # ~/.cache/tt-metal-cache from a prior build makes tt_elffile.cpp throw on
-        # load (observed: T3K all_gather FABRIC_2D configs 0256fe6b/0694284f fail
-        # "TT_THROW @ tt_elffile.cpp:405" / hang every retry, yet pass 207/207 on a
-        # runner with a fresh cache). Clear it so kernels JIT-rebuild cleanly.
+        # A stale/corrupt persisted kernel ELF left in ~/.cache/tt-metal-cache from a
+        # prior build makes tt_elffile.cpp throw on load; clear it so kernels JIT-rebuild.
         run: |
           rm -rf "${HOME}/.cache/tt-metal-cache" /github/home/.cache/tt-metal-cache 2>/dev/null || true
           echo "Cleared tt-metal kernel cache"
-      - name: Split sweep vectors by required dispatch axis
-        run: |
-          # Two-pass dispatch-axis design: lead_models traces include configs
-          # that need ROW dispatch (compute 8x9, x=7 cores) and configs that
-          # need COL dispatch (compute 7x10, y=9 cores). Pre-split the vector
-          # set so each pass only sees vectors for its own mesh axis.
-          cd /work
-          python3 tests/sweep_framework/split_vectors_by_axis.py
-          echo "::group::COL partition"; ls tests/sweep_framework/vectors_export_col/ 2>/dev/null | head -20 || true; echo "::endgroup::"
-          echo "::group::ROW partition"; ls tests/sweep_framework/vectors_export_row/ 2>/dev/null | head -20 || true; echo "::endgroup::"
       - name: Run ttnn sweeps (batch)
         run: |
-          MODULE_SELECTOR="${{ matrix.module_selector }}"
-          SUITE_NAME="${{ matrix.suite_name }}"
-          MESH_DIMS="${{ matrix.mesh_dims }}"
-
-          # Set skip-on-timeout flag
-          SKIP_ON_TIMEOUT_FLAG=""
-          if [[ "${{ inputs.skip-on-timeout }}" == "true" ]]; then
-            SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
-          fi
-
-          # Enable device performance when requested
-          DEVICE_PERF_FLAG=""
-          if [[ "${{ inputs.measure-device-perf }}" == "true" ]]; then
-            DEVICE_PERF_FLAG="--device-perf"
-          fi
-
-          # Enable e2e performance when requested
-          E2E_PERF_FLAG=""
-          if [[ "${{ inputs.measure-e2e-perf }}" == "true" ]]; then
-            E2E_PERF_FLAG="--perf-with-cache"
-          fi
-
-          # Enable memory measurement when requested
-          MEMORY_FLAG=""
-          if [[ "${{ inputs.measure-memory }}" == "true" ]]; then
-            MEMORY_FLAG="--measure-memory"
-          fi
-
-          CMD=(
-            python3 tests/sweep_framework/sweeps_runner.py
-            --module-name "$MODULE_SELECTOR"
-            --vector-source vectors_export
-            --result-dest results_export
-            --tag ci-main
-            --summary
-          )
-
-          if [[ -n "$SKIP_ON_TIMEOUT_FLAG" ]]; then
-            CMD+=("$SKIP_ON_TIMEOUT_FLAG")
-          fi
-
-          if [[ -n "$DEVICE_PERF_FLAG" ]]; then
-            CMD+=("$DEVICE_PERF_FLAG")
-          fi
-
-          if [[ -n "$E2E_PERF_FLAG" ]]; then
-            CMD+=("$E2E_PERF_FLAG")
-          fi
-
-          if [[ -n "$MEMORY_FLAG" ]]; then
-            CMD+=("$MEMORY_FLAG")
-          fi
-
-          if [[ -n "$SUITE_NAME" ]]; then
-            CMD+=(--suite-name "$SUITE_NAME")
-          fi
-
-          # Fabric-family split: restrict this job to 1D- or 2D-mesh vectors so a
-          # single process never does a live FABRIC_1D->FABRIC_2D transition.
-          if [[ -n "$MESH_DIMS" ]]; then
-            CMD+=(--mesh-dims "$MESH_DIMS")
-          fi
-          if [[ "${{ inputs.fail-on-test-failure }}" == "true" ]]; then
-            CMD+=("--fail-on-test-failure")
-          fi
-
-          # Two-pass run: COL first, then ROW. Skip a pass when the matching
-          # partition has no vectors for any module in this batch (so we don't
-          # trip "no vectors" errors on ops that are pure-COL or pure-ROW).
-          run_pass() {
-            local axis="$1"
-            local vectors_dir="tests/sweep_framework/vectors_export_${axis}"
-            if [[ ! -d "$vectors_dir" ]]; then
-              echo "[two-pass] $axis partition missing — skipping"
-              return 0
-            fi
-            # If the partition has no vector files matching this batch's modules,
-            # skip — sweeps_runner errors on empty inputs.
-            local matched=0
-            local _IFS_old="$IFS"; IFS=','
-            for module in $MODULE_SELECTOR; do
-              # module is e.g. model_traced.linear_model_traced
-              for f in "$vectors_dir/${module}".*.json "$vectors_dir/${module}.json"; do
-                [[ -f "$f" ]] && matched=1 && break 2
-              done
-            done
-            IFS="$_IFS_old"
-            if [[ "$matched" == "0" ]]; then
-              echo "[two-pass] $axis partition has no vectors for batch modules — skipping"
-              return 0
-            fi
-            echo "[two-pass] === axis=$axis ==="
-            TTNN_DISPATCH_AXIS="$axis" \
-              TTNN_VECTORS_EXPORT_DIR="$vectors_dir" \
-              "${CMD[@]}"
-          }
-
-          set +e
-          run_pass col
-          rc_col=$?
-          run_pass row
-          rc_row=$?
-          set -e
-          # Surface a non-zero exit if either pass actually failed (not just skipped).
-          if [[ $rc_col -ne 0 ]]; then echo "[two-pass] col pass exited $rc_col"; exit $rc_col; fi
-          if [[ $rc_row -ne 0 ]]; then echo "[two-pass] row pass exited $rc_row"; exit $rc_row; fi
+          # The matrix entry's cmd is the hard-coded sweep runner; only the per-run
+          # measurement flags vary, appended here.
+          CMD="${{ matrix.test-group.cmd }}"
+          [[ "${{ inputs.skip-on-timeout }}" == "true" ]] && CMD="$CMD --skip-on-timeout"
+          [[ "${{ inputs.measure-device-perf }}" == "true" ]] && CMD="$CMD --device-perf"
+          [[ "${{ inputs.measure-e2e-perf }}" == "true" ]] && CMD="$CMD --perf-with-cache"
+          [[ "${{ inputs.measure-memory }}" == "true" ]] && CMD="$CMD --measure-memory"
+          [[ "${{ inputs.fail-on-test-failure }}" == "true" ]] && CMD="$CMD --fail-on-test-failure"
+          echo "+ $CMD"
+          eval "$CMD"
       - name: Compute artifact suffix
-        # Must run even when the sweep step fails so the upload step gets a unique
-        # BATCH_SUFFIX; without it the artifact name is incomplete and results may collide.
+        # Must run even when the sweep step fails so the upload step gets a unique suffix.
         if: ${{ always() }}
         shell: bash
         run: |
-          DISPLAY_LABEL="${{ matrix.batch_display }}"
-          SUITE_LABEL="${{ matrix.suite_name }}"
-          GROUP_LABEL="${{ matrix.test_group_name }}"
-          FINGERPRINT="$GROUP_LABEL|$DISPLAY_LABEL"
-          if [[ -n "$SUITE_LABEL" ]]; then
-            FINGERPRINT="$FINGERPRINT|$SUITE_LABEL"
-          fi
+          FINGERPRINT="${{ matrix.test-group.sku }}|${{ matrix.test-group.name }}"
           echo "BATCH_SUFFIX=$(echo -n "$FINGERPRINT" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
+          name: sweeps-results-${{ matrix.test-group.sku }}-batch-${{ env.BATCH_SUFFIX }}
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
+
+  # Downstream run-result interpretation (folded in from the caller): collate every
+  # batch's results, homogenize, publish summary/DB, then SFTP-upload.
+  homogenize-run-result:
+    name: Homogenize run result
+    needs: [ttnn-run-sweeps-parallel]
+    if: |
+      always() &&
+      !cancelled() &&
+      (needs.ttnn-run-sweeps-parallel.result == 'success' || needs.ttnn-run-sweeps-parallel.result == 'failure')
+    container:
+      image: ${{ inputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Download all sweep results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sweeps-results*
+          path: /work/tests/sweep_framework/results_export
+          merge-multiple: true
+      - name: Homogenize sweep results
+        run: |
+          # Determine run type based on sweep name
+          RUN_TYPE="nightly"
+          if [[ "${{ inputs.sweep-name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+            RUN_TYPE="comprehensive"
+          elif [[ "${{ inputs.sweep-name }}" == "ALL SWEEPS (Model Traced)" ]]; then
+            RUN_TYPE="model_traced"
+          elif [[ "${{ inputs.sweep-name }}" == "ALL SWEEPS (Lead Models)" ]]; then
+            RUN_TYPE="lead_models"
+          fi
+          echo "RUN_TYPE=$RUN_TYPE" >> $GITHUB_ENV
+          python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
+      - name: Upload runs
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sweeps-run-result
+          path: /work/tests/sweep_framework/results_export/oprun_*.json
+          retention-days: 7
+      - name: Generate sweep summary
+        continue-on-error: true
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          ARCH_NAME: wormhole_b0
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          python3 /work/.github/actions/sweep-run-analysis/scripts/push_sweep_results.py \
+            --summary-only \
+            /work/tests/sweep_framework/results_export/ \
+            "$RUN_TYPE"
+      - name: Upload test results CSV
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sweep-test-results-csv
+          path: /tmp/sweep_test_results.csv
+          retention-days: 14
+      - name: Push results to database (lead models only)
+        if: env.RUN_TYPE == 'lead_models'
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          ARCH_NAME: wormhole_b0
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          pip install psycopg2-binary
+          python /work/.github/actions/sweep-run-analysis/scripts/push_sweep_results.py \
+            /work/tests/sweep_framework/results_export/ \
+            "lead models"
+
+  upload-results:
+    name: Upload sweep results to SFTP server
+    needs: [homogenize-run-result]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.homogenize-run-result.result == 'success' &&
+      inputs.upload-results == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository (actions only)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: |
+            .github/actions
+      - name: Download sweep results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sweeps-run-result
+          path: tests/sweep_framework/results_export
+      - name: List all downloaded files
+        run: |
+          ls -hal tests/sweep_framework/results_export
+      - name: Upload via SFTP
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
+          username: ml-kernel-op-test-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+          path: ${{ github.workspace }}

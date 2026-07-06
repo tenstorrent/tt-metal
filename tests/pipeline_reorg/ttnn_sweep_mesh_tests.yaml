@@ -1,0 +1,54 @@
+# Sweep batch definitions for the MESH split of the ttnn-run-sweeps workflow.
+#
+# Model-traced sweeps are NOT batched by op category — their vector files carry a
+# .mesh_<rows>x<cols> suffix and are routed to a runner lane by mesh shape
+# (see MODEL_TRACED_MESH_TEST_GROUPS in
+# tests/sweep_framework/framework/matrix_runner_config.py). Each entry is one
+# runner LANE; the universal `category` field holds that lane name, which
+# ttnn-run-sweeps-impl.yaml wires to TEST_GROUP_NAME so sweeps_runner.py's
+# vector_source filters loaded vectors to the lane's allowed mesh shapes (with the
+# manifest's vector_grouping_mode=mesh). Lane -> owned mesh shapes:
+#   wormhole-n150-sweeps   -> 1x1
+#   wormhole-n300-sweeps   -> 1x2, 2x1
+#   wormhole-t3k-sweeps    -> 1x4, 1x8
+#   wormhole-galaxy-sweeps -> 2x4, 4x8, 8x4, 2x16, 16x2, 4x4, 1x32, 32x1
+#
+# Budget: enforced by verify_time_budget.py (team: ttnn, category: sweep) against
+# .github/time_budget.yaml. Timeouts are first-pass estimates — tune from observed
+# run durations.
+
+- name: ttnn sweeps mesh wormhole-n150
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  skus:
+    wh_n150:
+      timeout: 60
+  team: ttnn
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  category: wormhole-n150-sweeps
+
+- name: ttnn sweeps mesh wormhole-n300
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  skus:
+    wh_n300:
+      timeout: 60
+  team: ttnn
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  category: wormhole-n300-sweeps
+
+- name: ttnn sweeps mesh wormhole-t3k
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  skus:
+    wh_llmbox:
+      timeout: 120
+  team: ttnn
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  category: wormhole-t3k-sweeps
+
+- name: ttnn sweeps mesh wormhole-galaxy
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  skus:
+    wh_galaxy:
+      timeout: 200
+  team: ttnn
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  category: wormhole-galaxy-sweeps
