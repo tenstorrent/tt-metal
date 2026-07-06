@@ -164,7 +164,7 @@ struct MinimalMatmulOpReceiver {
                 break;
             }
         }
-#ifdef AG_ALTERNATE_MIDDLE
+#if defined(AG_ALTERNATE_MIDDLE) && AG_ALTERNATE_MIDDLE
         use_interleaved =
             (topology == ttnn::ccl::Topology::Ring) && (num_devices % 2 == 0) && (num_devices > 2) && !has_straddle;
 #endif
@@ -343,7 +343,7 @@ struct MinimalMatmulOpReceiver {
         uint32_t k_block_received = 0;
 
         if (is_first_n_block_iter) {
-#ifdef AG_ALTERNATE_MIDDLE
+#if defined(AG_ALTERNATE_MIDDLE) && AG_ALTERNATE_MIDDLE
             if (use_interleaved) {
                 k_block_received = build_interleaved_k_block(k_block_iter);
             } else
