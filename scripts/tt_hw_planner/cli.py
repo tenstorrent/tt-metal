@@ -340,6 +340,10 @@ def _loader_resolver_available(model_id: str) -> bool:
         return False
 
 
+def _auto_enable_loader_resolver() -> None:
+    os.environ["TT_HW_PLANNER_LOADER_RESOLVER"] = "1"
+
+
 def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
     ok, msg = _can_load_with_transformers(model_id)
     if ok:
@@ -386,13 +390,15 @@ def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
             "  torchvision`). Upgrading transformers will not help."
         )
         return False
-    if _loader_resolver_available(model_id):
+    if kind in {"unknown", "version"} or _loader_resolver_available(model_id):
+        _auto_enable_loader_resolver()
         print(
-            "  Non-transformers / config-less repo: this model does not load via\n"
-            "  AutoModel/AutoConfig, but a reference-loader path is available\n"
-            "  (TT_HW_PLANNER_LOADER_RESOLVER=1 or an existing tests/pcc/_reference_loader.py).\n"
-            "  Proceeding — the reference loader is synthesized before capture and\n"
-            "  every per-component PCC test imports it. Correctness stays PCC-gated."
+            "  transformers cannot load this architecture here (no model_type/auto_map,\n"
+            "  or an unrecognized architecture). Auto-enabling the reference-loader path:\n"
+            "  discovery/scaffold/capture build the module tree via the model's own\n"
+            "  package or trust_remote_code code plus a synthesized\n"
+            "  tests/pcc/_reference_loader.py, and every per-component PCC test imports\n"
+            "  it. No flag needed. Correctness stays PCC-gated."
         )
         return True
     if kind == "unknown":
