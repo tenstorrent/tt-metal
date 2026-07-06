@@ -350,9 +350,11 @@ def test_attention_real_weights_decode(
     cr = cfg.compress_rates[layer_type] if is_compressor else None
 
     kv_cache = _LayerKVCache(cfg.sliding_window, is_compressor)
+    print("seq_len: ", seq_len)
     for pos in range(seq_len):
         cos_d, sin_d, neg_sin_d = _rope_rows(bundle["cos_q"][pos : pos + 1], bundle["sin_q"][pos : pos + 1], device)
         cos_win_d = sin_win_d = None
+        print("pos: ", pos)
         if is_compressor and (pos + 1) // cr > 0:
             n_win = (pos + 1) // cr
             cw, sw = make_rope_table(bundle["cos_win"][:n_win], bundle["sin_win"][:n_win])
@@ -372,8 +374,10 @@ def test_attention_real_weights_decode(
             continue  # seeding the cache; no reference row to compare yet
 
         ref_row = reference[:, pos : pos + 1]
-        out_torch = ttnn.to_torch(out_tt).reshape(ref_row.shape).to(torch.float32)
+        print("ref_row: ", ref_row.shape)
 
+        out_torch = ttnn.to_torch(out_tt).reshape(ref_row.shape).to(torch.float32)
+        print("out_torch: ", out_torch.shape)
         passing, pcc_message = comp_pcc(ref_row, out_torch, pcc=DECODE_PCC_THRESHOLD)
         logger.info(comp_allclose(ref_row, out_torch))
         logger.info(f"[attention layer {layer_idx} ({layer_type}) pos {pos}] PCC: {pcc_message}")
