@@ -16,10 +16,11 @@
 #include "experimental/kernel_args.h"
 #include "api/debug/ring_buffer.h"  // DEBUG pool compute-stall: ring-buffer markers (remove after)
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1  // DEBUG max_pool2d value-inflation repro; set back to 0 when done
 
 #if DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
+#include "api/debug/dprint_tile.h"
 #include "api/debug/dprint_pages.h"
 #include "api/debug/dprint_tensix.h"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -210,6 +211,20 @@ void kernel_main() {
                 UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE12u));
                 UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)chunk));
                 curr_in_cb.wait_front(1);
+#if DEBUG_PRINT == 1
+                // DEBUG max_pool2d value-inflation: dump what the reduce actually reads for the first
+                // output stick. For a constant-0.5 input, the real reduce-input rows should be 0.5 and
+                // any padding/tail rows should be -inf (bf16 0xFF80). A phantom value (e.g. ~1.0 = the
+                // scalar, or stale L1) in the reduce input is the bug. Scalar tile should be all 1.0 for MAX.
+                if (n == 0 && c_i == 0 && chunk == 0) {
+                    UNPACK(DPRINT(
+                        "[POOL-DBG] MAX scalar tile (expect 1.0):\n{}\n",
+                        TSLICE(curr_scalar_cb_id, 0, SliceRange::hw0_32_8(), true, true)));
+                    UNPACK(DPRINT(
+                        "[POOL-DBG] reduce-input in_cb tile0 (data should be input, pad/tail should be -inf):\n{}\n",
+                        TSLICE(curr_in_cb_id, 0, SliceRange::hw0_32_8(), true, true)));
+                }
+#endif
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,

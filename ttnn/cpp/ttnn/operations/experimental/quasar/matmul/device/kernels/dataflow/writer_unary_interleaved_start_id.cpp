@@ -14,11 +14,12 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out = dfb::out;
 
-    // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
-
     Noc noc;
     DataflowBuffer cb_out(dfb::out);
+
+    // QSR: read entry size from the DFB object; the legacy get_local_cb_interface().fifo_page_size is stale for
+    // Metal-2.0 DFBs.
+    const uint32_t page_bytes = cb_out.get_entry_size();
 
 #ifdef OUT_SHARDED
     cb_out.wait_front(num_pages);
