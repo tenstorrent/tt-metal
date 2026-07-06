@@ -5,6 +5,7 @@
 Dispatches to either Gated DeltaNet (linear attention) or Gated Full Attention
 based on the layer index. Both share the same RMSNorm + residual pattern and MLP.
 """
+
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
@@ -127,7 +128,11 @@ class Qwen36DecoderLayer:
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
-            _ff_norm_config = self.args.get_norm_config("ff", _norm_mode)
+            # DECODE ff_norm uses the attn_norm layout (act_shard_hidden, 32-core) so Qwen36MLP's input reshard is a no-op and the norm runs on 32 cores not 8; PREFILL keeps the framework ff config.
+            if _norm_mode == Mode.DECODE:
+                _ff_norm_config = self.args.get_norm_config("attn", _norm_mode)
+            else:
+                _ff_norm_config = self.args.get_norm_config("ff", _norm_mode)
         else:
             # In decode the norm output stays in L1 (as the old rms_norm_ttnn(memory_config=L1) did);
             # in prefill the framework RMSNorm returns interleaved DRAM (matches the old None default).
