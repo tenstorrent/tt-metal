@@ -132,11 +132,6 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
     if (
-        formats.input_format == DataFormat.Float16_b
-        and dest_acc == DestAccumulation.Yes
-    ):
-        pytest.skip("Float16_b not supported with DestAccumulation.Yes")
-    if (
         formats.input_format == DataFormat.Bfp8_b
         and mathop != MathOperation.SfpuAddcmul
     ):
