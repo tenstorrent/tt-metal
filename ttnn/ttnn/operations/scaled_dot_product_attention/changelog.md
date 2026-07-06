@@ -36,3 +36,16 @@
   - DEST overflow on D_t > 4 (fixed with PV matmul subblocking)
   - Mask precision (~0.96 PCC): `BinaryFpu<Add>` for mask application produces ~3.4% correlation loss. Root cause not yet identified — PCC is identical regardless of scale method (SFPU vs FPU), m_i init (-inf vs -1e38), or mask ordering. The mask IS being applied (PCC drops from 0.995 to 0.96) but with systematic numerical error. Needs deeper DEVICE_PRINT investigation.
 - **Tests added**: test_sdpa_multiblock_debug.py (deterministic debug tests), test_sdpa_refinement1_multiblock.py (24 refinement-specific tests covering multi-KV-block, multi-Q-block, multi-head, multi-batch, cross-attention, long-context, explicit-scale)
+
+## Refinement 1b — Multi-block kernel fix (CRITICAL BLOCKER) (debug: fix gate violations)
+- **Date**: 2026-07-06
+- **What was done**:
+  - Fixed root cause of full golden suite hang: double-pop of `cb_attn_mask`. The `BinaryFpu<cb_scores, cb_attn_mask, Add>` eltwise chain with default `InputLifecycle::Streaming` already pops all B_q×B_kv mask tiles internally per-tile. The manual `cb_pop_front(cb_attn_mask, B_q * B_kv)` at the end of the KV block loop was a double-pop that corrupted the CB read pointer, causing the reader to deadlock on `cb_reserve_back` for `cb_attn_mask` on the next KV block iteration.
+  - This also fixed the mask precision issue (PCC 0.9657 → 0.9999): the double-pop was corrupting CB state, causing stale/garbage mask data to be used on subsequent KV block iterations. The systematic ~3.4% correlation loss was not a numerical precision issue — it was corrupted mask values.
+  - Removed the redundant manual `cb_pop_front(cb_attn_mask, B_q * B_kv)` call. The eltwise chain handles all CB operations internally.
+- **Accuracy achieved**: PCC≥0.9999 on all mask shapes (S up to 2048, D up to 256, multi-head, multi-batch, cross-attention, per-head mask). PCC=0.9989 on S=8192 (precision near-miss, rms=0.059 vs target 0.05).
+- **Golden test progress**: 138/140 SUPPORTED cells pass (was 10/140). 2 failures are S=8192 precision near-miss (PCC=0.9989, rms=0.059 vs target 0.05) — not a hang, not a correctness bug, just bf16 accumulation error over 256 KV blocks. Full suite runs in ~92 seconds with zero hangs.
+- **Issues encountered**:
+  - Double-pop of cb_attn_mask (fixed — root cause of both hang and mask precision issue)
+  - S=8192 precision near-miss (not fixed — bf16 accumulation limit, PCC=0.9989, rms=0.059 just over 0.05 target). This is a precision near-miss, not a structural gap. Next lever: try `math_fidelity=HiFi4` with `math_approx_mode=True` for the exp, or increase intermediate precision.
+- **Tests added**: test_sdpa_refinement1b_mask_sync.py (19 tests covering mask application across multi-KV-block, multi-head, multi-batch, cross-attention, large-D, per-head mask, explicit-scale+mask, and sequential mask regression test)

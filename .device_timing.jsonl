@@ -171,3 +171,21 @@
 {"source":"run_safe_pytest","pid":3199892,"started_at_ms":1783366223300,"wait_ms":2,"run_ms":19948,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":1}
 {"source":"run_safe_pytest","pid":3200532,"started_at_ms":1783366250359,"wait_ms":2,"run_ms":270881,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":2}
 {"source":"run_safe_pytest","pid":3202001,"started_at_ms":1783366543843,"wait_ms":2,"run_ms":21552,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_sdpa_refinement1_multiblock.py","exit_code":0}
+{"event": "phase", "phase": "refinement_1", "state": "end", "at_ms": 1783366621062}
+{"event": "phase", "phase": "refinement_1_golden", "state": "start", "at_ms": 1783366621335}
+{"source":"eval_test_runner","pid":3203845,"started_at_ms":1783366621338,"wait_ms":3390,"run_ms":3470565,"test_path":"eval/golden_tests/scaled_dot_product_attention/","exit_code":0}
+{"event": "phase", "phase": "refinement_1_golden", "state": "end", "at_ms": 1783370095295}
+{"source":"run_safe_pytest","pid":3217013,"started_at_ms":1783370099058,"wait_ms":2,"run_ms":281340,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":2}
+{"event": "phase", "phase": "refinement_1_debug", "state": "start", "at_ms": 1783370380421}
+{"source":"tt-probe","pid":3220981,"started_at_ms":1783370803548,"wait_ms":216,"run_ms":20224,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"run_safe_pytest","pid":3221359,"started_at_ms":1783370842108,"wait_ms":1,"run_ms":22064,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
+{"source":"run_safe_pytest","pid":3222300,"started_at_ms":1783370895516,"wait_ms":2,"run_ms":9989,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x128x64_KV1x1x128x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=auto]","exit_code":0}
+{"source":"run_safe_pytest","pid":3222701,"started_at_ms":1783370917337,"wait_ms":1,"run_ms":16775,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x128x512_KV1x1x128x512-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=auto]","exit_code":0}
+{"source":"run_safe_pytest","pid":3223174,"started_at_ms":1783370959473,"wait_ms":2,"run_ms":16932,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x128x1024_KV1x1x128x1024-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=auto]","exit_code":0}
+{"source":"run_safe_pytest","pid":3223621,"started_at_ms":1783370990190,"wait_ms":2,"run_ms":600002,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":143}
+{"source":"tt-probe","pid":3227906,"started_at_ms":1783371928259,"wait_ms":213,"run_ms":31416,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"run_safe_pytest","pid":3228298,"started_at_ms":1783371967798,"wait_ms":2,"run_ms":22495,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":0}
+{"source":"run_safe_pytest","pid":3229139,"started_at_ms":1783371994691,"wait_ms":2,"run_ms":147056,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":3230470,"started_at_ms":1783372177179,"wait_ms":2,"run_ms":19369,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_sdpa_refinement1_multiblock.py","exit_code":0}
+{"source":"run_safe_pytest","pid":3231135,"started_at_ms":1783372202000,"wait_ms":2,"run_ms":10470,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_sdpa_multiblock_debug.py","exit_code":0}
+{"source":"run_safe_pytest","pid":3231676,"started_at_ms":1783372234561,"wait_ms":2,"run_ms":45739,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_sdpa_refinement1b_mask_sync.py","exit_code":0}

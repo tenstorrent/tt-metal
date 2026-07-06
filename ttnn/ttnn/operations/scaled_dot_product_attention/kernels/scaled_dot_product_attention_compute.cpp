@@ -320,10 +320,9 @@ void kernel_main() {
 
             // Cleanup: K and V tiles are already popped by the matmul helpers
             // (WaitAndPopPerKBlock in both Phase 1 QK^T and Phase 12 PV matmuls).
-            // Only pop mask if present.
-            if constexpr (has_mask) {
-                cb_pop_front(cb_attn_mask, B_q * B_kv);
-            }
+            // Mask tiles are already popped by the BinaryFpu<Add> chain in Phase 2b
+            // (InputLifecycle::Streaming pops per-tile internally). Do NOT double-pop.
+            // cb_attn_mask is not popped here — the eltwise chain already drained it.
         }
 
         // Scaler tiles are already consumed per KV block (MAX scaler popped

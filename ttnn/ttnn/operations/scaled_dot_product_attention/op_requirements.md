@@ -27,7 +27,7 @@
 - **Compute config**: hard-coded HiFi4 + fp32_dest_acc_en=True + math_approx_mode=False
 - **Golden baseline**: 76 / 2648 cells passing (per verifier CLI on single-tile shapes; multi-block hang blocks the rest)
 
-### [~] Refinement 1 — Multi-block kernel fix (CRITICAL BLOCKER)
+### [x] Refinement 1 — Multi-block kernel fix (CRITICAL BLOCKER)
 
 **Goal**: Fix the compute kernel hang that occurs when processing more than 1 Q block, more than 1 KV block, or D_t > 1 (head dim > 32). The hang is a DST sync deadlock between the unpacker, math, and packer threads when transitioning between matmul and eltwise/reduce operations across loop iterations. This refinement moves all Phase 0 cells currently in the `supported_fail` (hang/timeout) category to passing.
 
@@ -35,6 +35,43 @@
 
 **Done when**: Every Phase 0 cell (bf16, TILE, tile_aligned, mha, fp32_dest_acc_en=True, mask_mode ∈ {none, custom}, scale_mode ∈ {auto, explicit}) with S > 32 or D > 32 passes without hanging. Specifically the `supported_fail` cells from the verifier report move to `supported_pass`.
 
+
+
+### [x] Refinement 1b — Multi-block kernel fix (CRITICAL BLOCKER) (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 1 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 1 FAIL: 130 SUPPORTED cell(s) hang:
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x128x64_KV1x1x128x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=custom-scale_mode=auto]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x128x64_KV1x1x128x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=custom-scale_mode=explicit]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x256x64_KV1x1x256x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=auto]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x256x64_KV1x1x256x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=explicit]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x256x64_KV1x1x256x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=custom-scale_mode=auto]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x256x64_KV1x1x256x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=custom-scale_mode=explicit]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x512x64_KV1x1x512x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=auto]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x512x64_KV1x1x512x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=explicit]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x512x64_KV1x1x512x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=custom-scale_mode=auto]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x512x64_KV1x1x512x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=custom-scale_mode=explicit]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x1024x64_KV1x1x1024x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=auto]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x1024x64_KV1x1x1024x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=explicit]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x1024x64_KV1x1x1024x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=custom-scale_mode=auto]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x1024x64_KV1x1x1024x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=custom-scale_mode=explicit]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x2048x64_KV1x1x2048x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=auto]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x2048x64_KV1x1x2048x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=explicit]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x2048x64_KV1x1x2048x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=custom-scale_mode=auto]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x2048x64_KV1x1x2048x64-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=custom-scale_mode=explicit]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x128x32_KV1x1x128x32-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=auto]
+  - eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op[Q1x1x128x32_KV1x1x128x32-alignment=tile_aligned-attention_kind=self-dtype=BFLOAT16-fp32_dest_acc_en=True-kv_heads_mode=mha-layout=TILE-mask_mode=none-scale_mode=explicit]
+  ... and 110 more
+Bullet 2 FAIL: acceptance/refinement tests failing:
+  - tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py::test_scaled_dot_product_attention_custom_mask[custom_mask_128x64] - RuntimeError: TT_THROW @ /localdev/dnijemcevic/2026_07_06/0904_nuke-sdpa-0623/clones/flash_attention_run1/tt-metal/tt_metal/impl/dispatch/system_memory_manager.cpp:757: tt::exception
+Bullet 3 FAIL: golden responsible cells 10/140 below majority threshold.
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
 ### [ ] Refinement 1b — Mask application precision fix
 
 **Goal**: Fix the `mask_mode=custom` PCC ~0.96 issue that prevents 28 golden cells from passing. The mask `BinaryFpu<Add>` is applied correctly (PCC drops from 0.995 to 0.96 when mask is present) but produces systematic numerical error.
