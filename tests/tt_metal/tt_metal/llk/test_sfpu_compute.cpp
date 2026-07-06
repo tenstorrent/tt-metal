@@ -733,8 +733,8 @@ std::vector<uint32_t> run_sfpu_pipeline(
             .fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32,
             .dst_full_sync_en = test_config.dst_full_sync_en,
             .math_approx_mode = test_config.approx_mode,
-            .unpack_to_dest_mode = unpack_modes,
             .unpack_to_dest_en = test_config.unpack_to_dest_fp32 || test_config.unpack_to_dest_en,
+            .unpack_to_dest_mode = unpack_modes,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{

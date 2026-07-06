@@ -260,8 +260,8 @@ void run_single_core_transpose(
         compute_hw_config = experimental::ComputeGen2Config{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = test_config.dst_full_sync_en,
-            .unpack_to_dest_mode = unpack_modes,
             .unpack_to_dest_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_modes,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
