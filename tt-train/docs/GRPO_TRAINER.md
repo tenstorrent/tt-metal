@@ -295,7 +295,7 @@ access to `trainer.model` and `trainer.config`.
 > policy weights to the peer after each optimizer step. The trainer
 > itself does not know about this — it just fires `on_step_end`. See
 > the [BoolQ example](../sources/examples/grpo/boolq/README.md) for
-> the shipped pattern (`WeightSyncCallback` + `TttInferenceClient`).
+> the shipped pattern (`WeightSyncCallback` + `MPIRolloutClient`).
 
 ---
 

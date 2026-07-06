@@ -1,0 +1,42 @@
+# Mesh Graph Descriptor for the HostWeightBridge 4->4 transport test.
+#
+# Two [1, 4] meshes (one per MPI rank), each covering FOUR chips:
+#   * Rank 0 (sender)   -> mesh_id 0, a [1, 4] mesh.
+#   * Rank 1 (receiver) -> mesh_id 1, a [1, 4] parent mesh split into four
+#     [1, 1] submeshes.
+#
+# The HostWeightBridge moves weights over MPI (host/PCIe), not over fabric, so
+# the FABRIC graph below is not used for the transfer itself -- it only has to
+# let both meshes open. It mirrors the other configs for consistency.
+#
+# !!! HARDWARE-SPECIFIC TEMPLATE !!!
+# This declares a [1, 4] line per rank spanning four chips (e.g. two eth-linked
+# N300 boards). device_topology / channel counts / connections MUST match your
+# physical wiring; the Python test logic is hardware-agnostic. Adjust for your
+# machine (e.g. on a T3K declare one [2, 4] and bind each rank to a [1, 4] row).
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 4 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

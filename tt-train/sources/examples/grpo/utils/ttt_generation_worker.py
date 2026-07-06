@@ -10,10 +10,10 @@ The worker hosts a ``tt-transformers`` ``Transformer`` on a single
 * :meth:`TttGenerationWorker.generate` -- prefill + decode for a batch
   of pre-tokenised prompts. Returns lists of token IDs. Intended to be
   passed as the ``generate_fn`` callback of
-  :class:`TttInferenceServer`.
+  :class:`MPIRolloutServer`.
 * :meth:`TttGenerationWorker.update_weights` -- one-liner forwarder to
   ``Transformer.update_weights``. Intended to be passed as the
-  ``on_weights_received`` callback of :class:`TttInferenceServer`.
+  ``on_weights_received`` callback of :class:`MPIRolloutServer`.
 
 Design choices:
 
@@ -420,7 +420,7 @@ class TttGenerationWorker:
     def update_weights(self, hf_dict: dict) -> None:
         """Apply a received HF-keyed weight dict to the underlying model.
 
-        Plumbed directly into ``TttInferenceServer(on_weights_received=...)``
+        Plumbed directly into ``MPIRolloutServer(on_weights_received=...)``
         so each ``OP_REQUEST_TRANSFER`` round-trip replaces the worker's
         weights with whatever the ttml peer just pushed.
         """

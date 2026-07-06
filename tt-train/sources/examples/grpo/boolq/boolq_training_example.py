@@ -19,8 +19,8 @@ Topology
   :class:`utils.ttt_generation_worker.TttGenerationWorker` and serves
   generate / weight-transfer RPCs to the ttml rank.
 
-The :class:`utils.inference_bridge.TttInferenceClient` constructor on
-the ttml side and the :class:`utils.inference_bridge.TttInferenceServer`
+The :class:`utils.mpi_rollout.MPIRolloutClient` constructor on
+the ttml side and the :class:`utils.mpi_rollout.MPIRolloutServer`
 constructor on the ttt side block until both have run -- the
 ``WeightBridge`` handshake inside their initialisers pins the two
 ranks together before any RPC happens.
@@ -28,7 +28,7 @@ ranks together before any RPC happens.
 Lifecycle (TTML rank)
 =====================
 
-1. Build :class:`TttInferenceClient` -- handshake completes once the
+1. Build :class:`MPIRolloutClient` -- handshake completes once the
    worker rank also constructs its server.
 2. Build :class:`LlamaGRPOCompleter`. Loads the real instruct tokenizer
    and ttml model into device memory.
@@ -56,7 +56,7 @@ Lifecycle (TTT rank)
    ``disable_disk_cache=True`` so boot is fast and the asymmetric
    ``[1, 2] -> [1, 1]`` mesh handshake does not trip the disk-cache
    collective.
-4. Build :class:`TttInferenceServer` with the worker's ``generate`` and
+4. Build :class:`MPIRolloutServer` with the worker's ``generate`` and
    ``update_weights`` as the two callbacks.
 5. ``server.serve_forever()`` until ``OP_SHUTDOWN``.
 
@@ -104,8 +104,7 @@ import ttnn  # noqa: E402
 # tests/conftest.py's autouse _set_fabric_2d fixture.
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
-from utils.inference_bridge import TTML_RANK, TTT_RANK  # noqa: E402
-
+from utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_4.yaml"
@@ -207,13 +206,13 @@ def _ttml_main() -> None:
     from transformers import AutoTokenizer
     from ttml.common.config import get_model_config
     from ttml.trainers import GRPOTrainer, get_grpo_config
-
-    from utils.inference_bridge import TttInferenceClient
     from utils.llama_grpo_completer import (
         LlamaCompletionCtx,
         LlamaGRPOCompleter,
         WeightSyncCallback,
     )
+    from utils.mpi_rollout import MPIRolloutClient
+    from utils.weight_bridge import HostWeightBridge
 
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.initialize_distributed_context(*sys.argv)
@@ -224,9 +223,11 @@ def _ttml_main() -> None:
     completer: Any = None
     client: Any = None
     try:
-        # Constructor blocks on the WeightBridge handshake -- returns
-        # once the ttt rank has also constructed its TttInferenceServer.
-        client = TttInferenceClient(peer_rank=TTT_RANK, device=mesh_device)
+        # The caller builds the concrete bridge; constructing the client blocks
+        # on its handshake -- returns once the ttt rank has also constructed its
+        # MPIRolloutServer.
+        bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
+        client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
 
         # ------------------------------------------------------------ #
         # Dataset + GRPO config                                         #
@@ -305,13 +306,13 @@ def _ttml_main() -> None:
 
 def _ttt_main() -> None:
     from ttml.common.config import load_config
-
-    from utils.inference_bridge import TttInferenceServer
     from utils.llama_ttt_presets import (
         bf16_attn_bfp8_mlp_optimizations,
         llama_stop_and_pad,
     )
+    from utils.mpi_rollout import MPIRolloutServer
     from utils.ttt_generation_worker import TttGenerationWorker
+    from utils.weight_bridge import HostWeightBridge
 
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
@@ -351,11 +352,14 @@ def _ttt_main() -> None:
             seed=None,
         )
 
-        server = TttInferenceServer(
+        # Single [1, 1] receiver: the mesh is its own sole submesh target, so
+        # receive_weights() returns a length-1 list applied to the one worker.
+        bridge = HostWeightBridge.init_receiver(mesh=mesh_device, peer_rank=TTML_RANK, submeshes=[mesh_device])
+        server = MPIRolloutServer(
             peer_rank=TTML_RANK,
-            device=mesh_device,
+            bridge=bridge,
             generate_fn=worker.generate,
-            on_weights_received=worker.update_weights,
+            on_weights_received=lambda per_submesh: worker.update_weights(per_submesh[0]),
         )
         server.serve_forever()
     finally:
