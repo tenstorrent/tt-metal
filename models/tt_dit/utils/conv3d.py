@@ -475,6 +475,21 @@ _DEFAULT_BLOCKINGS = {
     (128, 48, (3, 3, 3)): (128, 32, 1, 8, 8),  # s4_out
     (1024, 4096, (1, 3, 3)): (256, 32, 1, 1, 1),  # upsampler (kT=1)
     (1024, 128, (3, 3, 3)): (256, 32, 1, 1, 1),  # upsampler final_conv
+    # Wan 2.2 high-compression (TI2V) residual VAE decoder (FIBO: decoder_base_dim=256,
+    # z_dim=48, out_channels=12, dim_mult=[1,2,4,4], 16x spatial). These channel combos have no
+    # swept exact _BLOCKINGS entries; conservative full-Cin defaults OOM L1 at the decoder's
+    # 1024-channel convs. Small C_in_block/C_out_block keep the CB within the 1.5 MB L1 budget
+    # (correctness-first fallback; perf sweep deferred — see sp3 spec open items).
+    (64, 1024, (3, 3, 3)): (64, 32, 1, 1, 1),  # conv_in (z_dim aligned 48->64)
+    (1024, 1024, (3, 3, 3)): (256, 32, 1, 1, 1),  # mid/up0/up1 res
+    (1024, 1024, (1, 3, 3)): (256, 32, 1, 1, 1),  # up0/up1 upsampler spatial conv
+    (1024, 2048, (3, 1, 1)): (256, 32, 1, 1, 1),  # up0/up1 upsampler time_conv
+    (1024, 512, (3, 3, 3)): (256, 32, 1, 1, 1),  # up2 res0 (channel change)
+    (512, 512, (3, 3, 3)): (256, 32, 1, 1, 1),  # up2 res
+    (512, 512, (1, 3, 3)): (256, 32, 1, 1, 1),  # up2 upsampler spatial conv
+    (512, 256, (3, 3, 3)): (256, 32, 1, 1, 1),  # up3 res0 (channel change)
+    (256, 256, (3, 3, 3)): (256, 32, 1, 8, 8),  # up3 res
+    (256, 12, (3, 3, 3)): (256, 32, 1, 8, 8),  # conv_out
 }
 
 

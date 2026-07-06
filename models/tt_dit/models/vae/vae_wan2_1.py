@@ -131,10 +131,17 @@ class WanAttentionBlock(Module):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
+        # SDPA head_dim == dim (single head). For large dim (e.g. the Wan 2.2 high-compression
+        # decoder mid block at dim=1024) the default k_chunk_size=256 overflows L1, so scale the
+        # k chunk down to keep k_chunk_size * dim within the budget that the Wan 2.1 dims (<=384)
+        # already fit. dim<=384 keeps the original (32, 256) chunks byte-for-byte.
+        k_chunk_size = 256
+        while k_chunk_size > 32 and k_chunk_size * dim > 256 * 384:
+            k_chunk_size //= 2
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=32,
-            k_chunk_size=256,
+            k_chunk_size=k_chunk_size,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -1178,6 +1185,182 @@ class WanUpBlock(Module):
         return x_BTHWC, logical_h, logical_w
 
 
+class WanDupUp3D(Module):
+    """Parameter-free residual-shortcut upsampler for the Wan 2.2 (is_residual) decoder up-block.
+
+    Mirrors diffusers ``DupUp3D``: duplicates channels (repeat_interleave) then rearranges them into
+    the temporal (factor_t) and spatial (factor_s x factor_s) dimensions, producing a
+    (T*factor_t, H*factor_s, W*factor_s) upsample without any learnable weights.
+
+    Reference (BCTHW) computes, with factor = factor_t * factor_s * factor_s and
+    repeats = out_channels * factor // in_channels:
+        x = x.repeat_interleave(repeats, dim=C)                       # (B, out_c*factor, T, H, W)
+        x = x.view(B, out_c, factor_t, factor_s, factor_s, T, H, W)
+        x = x.permute(0, 1, 5, 2, 6, 3, 7, 4)                         # (B, out_c, T, ft, H, fs, W, fs)
+        x = x.view(B, out_c, T*factor_t, H*factor_s, W*factor_s)
+        if first_chunk: x = x[:, :, factor_t - 1:]                    # drop leading (factor_t-1) frames
+
+    This class operates in the tt BTHWC (channels-last) layout; the permutation is verified to be
+    bit-exact against the reference (see task report).
+    """
+
+    def __init__(
+        self,
+        *,
+        in_channels: int,
+        out_channels: int,
+        factor_t: int,
+        factor_s: int = 2,
+    ) -> None:
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.factor_t = factor_t
+        self.factor_s = factor_s
+        self.factor = factor_t * factor_s * factor_s
+        assert out_channels * self.factor % in_channels == 0
+        self.repeats = out_channels * self.factor // in_channels
+
+    def forward(self, x_BTHWC: ttnn.Tensor, first_chunk: bool = False) -> ttnn.Tensor:
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanDupUp3D expects ROW_MAJOR input, got {x_BTHWC.layout}"
+        B, T, H, W, C = x_BTHWC.shape
+        ft, fs = self.factor_t, self.factor_s
+        out_c = self.out_channels
+
+        x = ttnn.repeat_interleave(x_BTHWC, self.repeats, dim=4)  # (B, T, H, W, out_c*factor)
+        # channel decomposes as (out_c, factor_t, factor_s_h, factor_s_w)
+        x = ttnn.reshape(x, (B, T, H, W, out_c, ft, fs, fs))
+        # -> (B, T, factor_t, H, factor_s_h, W, factor_s_w, out_c)
+        x = ttnn.permute(x, (0, 1, 5, 2, 6, 3, 7, 4))
+        x = ttnn.reshape(x, (B, T * ft, H * fs, W * fs, out_c))
+        if first_chunk and ft > 1:
+            x = x[:, ft - 1 :, :, :, :]
+        return x
+
+
+class WanResidualUpBlock(Module):
+    """Wan 2.2 residual (is_residual=True) decoder up-block.
+
+    Mirrors ``WanUpBlock`` (num_res_blocks + 1 residual blocks + optional WanResample upsampler) and
+    additionally adds a parameter-free ``avg_shortcut`` (WanDupUp3D) applied to the block input and
+    summed into the block output — matching diffusers ``WanResidualUpBlock``:
+
+        x_copy = x
+        for resnet in resnets: x = resnet(x)
+        if upsampler is not None: x = upsampler(x)
+        if avg_shortcut is not None: x = x + avg_shortcut(x_copy, first_chunk=first_chunk)
+
+    Differences from ``WanUpBlock``: the shortcut branch, and the upsampler uses
+    ``resample_out_dim=out_dim`` (not the default ``dim // 2``) — the residual variant keeps the
+    channel count through the upsample. State-dict keys match ``up_blocks.{i}.resnets.*`` and
+    ``up_blocks.{i}.upsampler.*`` (singular).
+    """
+
+    def __init__(
+        self,
+        *,
+        in_dim: int,
+        out_dim: int,
+        num_res_blocks: int,
+        temperal_upsample: bool = False,
+        up_flag: bool = False,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        res_dims: ConvDims = ConvDims(),
+        tconv_dims: ConvDims = ConvDims(),
+        spatial_dims: ConvDims = ConvDims(),
+    ) -> None:
+        super().__init__()
+
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.num_res_blocks = num_res_blocks
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
+
+        # Residual shortcut across the whole block (parameter-free), only when upsampling.
+        if up_flag:
+            self.avg_shortcut = WanDupUp3D(
+                in_channels=in_dim,
+                out_channels=out_dim,
+                factor_t=2 if temperal_upsample else 1,
+                factor_s=2,
+            )
+        else:
+            self.avg_shortcut = None
+
+        resnets = ModuleList()
+        current_dim = in_dim
+        for _ in range(num_res_blocks + 1):
+            resnets.append(
+                WanResidualBlock(
+                    in_dim=current_dim,
+                    out_dim=out_dim,
+                    mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                    parallel_config=parallel_config,
+                    dtype=dtype,
+                    conv_dims=res_dims,
+                )
+            )
+            current_dim = out_dim
+        self.resnets = resnets
+
+        self.upsampler = None
+        if up_flag:
+            upsample_mode = "upsample3d" if temperal_upsample else "upsample2d"
+            self.upsampler = WanResample(
+                dim=out_dim,
+                mode=upsample_mode,
+                resample_out_dim=out_dim,  # residual variant keeps channels through the upsample
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                dtype=dtype,
+                tconv_dims=tconv_dims,
+                spatial_dims=spatial_dims,
+            )
+
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        logical_h: int,
+        feat_cache: list[ttnn.Tensor] | None = None,
+        feat_idx: list[int] = [0],
+        first_chunk: bool = False,
+        logical_w: int = 0,
+    ) -> tuple[ttnn.Tensor, int, int]:
+        # Keep a copy of the block input (pre-upsample resolution) for the shortcut.
+        x_copy_BTHWC = None
+        if self.avg_shortcut is not None:
+            x_copy_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            x_copy_BTHWC = ttnn.clone(x_copy_BTHWC)
+
+        for resnet in self.resnets:
+            x_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+
+        if self.upsampler is not None:
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            x_BTHWC, logical_h, logical_w = self.upsampler(
+                x_BTHWC,
+                logical_h,
+                feat_cache,
+                feat_idx,
+                logical_w=logical_w,
+            )
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+
+        if self.avg_shortcut is not None:
+            shortcut_BTHWC = self.avg_shortcut(x_copy_BTHWC, first_chunk=first_chunk)
+            shortcut_BTHWC = ttnn.to_layout(shortcut_BTHWC, ttnn.TILE_LAYOUT)
+            x_BTHWC = ttnn.add(x_BTHWC, shortcut_BTHWC)
+
+        return x_BTHWC, logical_h, logical_w
+
+
 class WanDecoder3d(Module):
     def __init__(
         self,
@@ -1202,7 +1385,6 @@ class WanDecoder3d(Module):
     ) -> None:
         super().__init__()
 
-        assert not is_residual, "is_residual is not supported"
         self.dim = dim
         self.z_dim = z_dim
         self.dim_mult = dim_mult
@@ -1277,21 +1459,37 @@ class WanDecoder3d(Module):
             next_h, next_w = stage_hw[i + 1] if up_flag else (0, 0)
             T_res, T_tconv, T_spatial = stage_t[i]
 
-            # Create and add the upsampling block
-            # NOTE: Different codepath if is_residual. Not implemented yet.
-            up_block = WanUpBlock(
-                in_dim=in_dim,
-                out_dim=out_dim,
-                num_res_blocks=num_res_blocks,
-                upsample_mode=upsample_mode,
-                mesh_device=mesh_device,
-                ccl_manager=ccl_manager,
-                parallel_config=parallel_config,
-                dtype=dtype,
-                res_dims=ConvDims(T_res, stage_h, stage_w),
-                tconv_dims=ConvDims(T_tconv, stage_h, stage_w),
-                spatial_dims=ConvDims(T_spatial, next_h, next_w),
-            )
+            # Create and add the upsampling block. The Wan 2.2 residual path uses a residual up-block
+            # (shortcut across the block, channels not halved); the Wan 2.1 path uses WanUpBlock.
+            if is_residual:
+                up_block = WanResidualUpBlock(
+                    in_dim=in_dim,
+                    out_dim=out_dim,
+                    num_res_blocks=num_res_blocks,
+                    temperal_upsample=temperal_upsample[i] if up_flag else False,
+                    up_flag=up_flag,
+                    mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                    parallel_config=parallel_config,
+                    dtype=dtype,
+                    res_dims=ConvDims(T_res, stage_h, stage_w),
+                    tconv_dims=ConvDims(T_tconv, stage_h, stage_w),
+                    spatial_dims=ConvDims(T_spatial, next_h, next_w),
+                )
+            else:
+                up_block = WanUpBlock(
+                    in_dim=in_dim,
+                    out_dim=out_dim,
+                    num_res_blocks=num_res_blocks,
+                    upsample_mode=upsample_mode,
+                    mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                    parallel_config=parallel_config,
+                    dtype=dtype,
+                    res_dims=ConvDims(T_res, stage_h, stage_w),
+                    tconv_dims=ConvDims(T_tconv, stage_h, stage_w),
+                    spatial_dims=ConvDims(T_spatial, next_h, next_w),
+                )
             self.up_blocks.append(up_block)
 
         # output blocks
@@ -1330,7 +1528,8 @@ class WanDecoder3d(Module):
         first_chunk: bool = False,
         logical_w: int = 0,
     ) -> tuple[ttnn.Tensor, int, int]:
-        # NOTE: first_chunk is not used. It would be needed for WanResidualUpBlock.
+        # first_chunk is threaded into WanResidualUpBlock (Wan 2.2) to trim the leading temporal
+        # frame(s) of the residual shortcut on the first chunk; WanUpBlock (Wan 2.1) ignores it.
         ## conv1
         if feat_cache is not None:
             idx = feat_idx[0]
@@ -1352,7 +1551,12 @@ class WanDecoder3d(Module):
 
         ## upsamples
         for up_block in self.up_blocks:
-            x_BTHWC, logical_h, logical_w = up_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+            if isinstance(up_block, WanResidualUpBlock):
+                x_BTHWC, logical_h, logical_w = up_block(
+                    x_BTHWC, logical_h, feat_cache, feat_idx, first_chunk=first_chunk, logical_w=logical_w
+                )
+            else:
+                x_BTHWC, logical_h, logical_w = up_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
 
         ## head
         x_norm_tile_BTHWC = self.norm_out(x_BTHWC)
@@ -1435,7 +1639,6 @@ class WanDecoder(Module):
     ) -> None:
         super().__init__()
 
-        assert not is_residual, "is_residual is not supported"
         self.z_dim = z_dim
         self.temperal_upsample = temperal_downsample[::-1]
         self.out_channels = out_channels
@@ -1520,12 +1723,15 @@ class WanDecoder(Module):
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         if t_chunk_size is None or t_chunk_size >= T:
-            # No-cache full-T single-pass mode
+            # No-cache full-T single-pass mode. The whole tensor is the first (and only) temporal
+            # chunk, so first_chunk=True (matches the reference _decode, which passes first_chunk=True
+            # for i==0). Only the Wan 2.2 residual up-block consumes first_chunk.
             out_BTHWC, new_logical_h, new_logical_w = self.decoder(
                 x_BTHWC,
                 logical_h,
                 feat_cache=None,
                 feat_idx=None,
+                first_chunk=True,
                 logical_w=logical_w,
             )
             output_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
@@ -1538,6 +1744,7 @@ class WanDecoder(Module):
                     logical_h,
                     feat_cache=self._feat_cache,
                     feat_idx=self._conv_idx,
+                    first_chunk=(t_start == 0),
                     logical_w=logical_w,
                 )
                 out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
