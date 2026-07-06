@@ -1702,9 +1702,8 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnboundDFBF
 
     // Set unpack_to_dest_mode referencing a DFB this kernel doesn't bind
     // (in this case, a DFB that doesn't exist in the spec at all).
-    auto& compute_config = std::get<ComputeHardwareConfig>(consumer.hw_config);
-    std::get<ComputeGen2Config>(compute_config).unpack_to_dest_mode = {
-        {DFBSpecName{"nonexistent_dfb"}, UnpackToDestMode::UnpackToDestFp32}};
+    auto& compute_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(consumer.hw_config));
+    compute_config.unpack_to_dest_mode = {{DFBSpecName{"nonexistent_dfb"}, UnpackToDestMode::UnpackToDestFp32}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -1734,9 +1733,8 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithExplicitDefaultUnpackToDestModeSucce
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            std::get<ComputeGen2Config>(config).unpack_to_dest_mode = {
-                {DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
+            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
@@ -1750,10 +1748,9 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithUnpackToDestFp32ModeSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b (non-FP32)
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            std::get<ComputeGen2Config>(config).accumulator_width = experimental::AccumulatorWidth::Wide;
-            std::get<ComputeGen2Config>(config).unpack_to_dest_mode = {
-                {DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            config.accumulator_width = experimental::AccumulatorWidth::Wide;
+            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
@@ -1769,8 +1766,8 @@ TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
     }
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            std::get<ComputeGen2Config>(config).accumulator_width = experimental::AccumulatorWidth::Wide;
+            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            config.accumulator_width = experimental::AccumulatorWidth::Wide;
         }
     }
     // Compute kernel intentionally has no unpack_to_dest_mode entry.
@@ -1804,8 +1801,8 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
     spec.name = "test_program";
 
     auto producer_compute = MakeMinimalComputeKernel("producer_compute");
-    auto& producer_config = std::get<ComputeHardwareConfig>(producer_compute.hw_config);
-    std::get<ComputeGen2Config>(producer_config).accumulator_width = experimental::AccumulatorWidth::Wide;
+    auto& producer_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(producer_compute.hw_config));
+    producer_config.accumulator_width = experimental::AccumulatorWidth::Wide;
 
     auto consumer_dm = MakeMinimalGen2DMKernel("consumer_dm");
 
@@ -1832,10 +1829,9 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
     spec.name = "test_program";
 
     auto producer_compute = MakeMinimalComputeKernel("producer_compute");
-    auto& producer_config = std::get<ComputeHardwareConfig>(producer_compute.hw_config);
-    std::get<ComputeGen2Config>(producer_config).accumulator_width = experimental::AccumulatorWidth::Wide;
-    std::get<ComputeGen2Config>(producer_config).unpack_to_dest_mode = {
-        {DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+    auto& producer_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(producer_compute.hw_config));
+    producer_config.accumulator_width = experimental::AccumulatorWidth::Wide;
+    producer_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
 
     auto consumer_dm = MakeMinimalGen2DMKernel("consumer_dm");
 
@@ -1863,10 +1859,9 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
     }
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
+            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
             // fp32_dest_acc_en stays at its default (false).
-            std::get<ComputeGen2Config>(config).unpack_to_dest_mode = {
-                {DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
         }
     }
     EXPECT_THAT(
@@ -1885,10 +1880,9 @@ TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
     }
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            std::get<ComputeGen2Config>(config).accumulator_width = experimental::AccumulatorWidth::Wide;
-            std::get<ComputeGen2Config>(config).unpack_to_dest_mode = {
-                {DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
+            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            config.accumulator_width = experimental::AccumulatorWidth::Wide;
+            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
@@ -2397,10 +2391,10 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigMathFidelitySucceeds) {
     // Find the compute kernel and set math fidelity options
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            std::get<ComputeGen2Config>(config).math_fidelity = MathFidelity::LoFi;
-            std::get<ComputeGen2Config>(config).accumulator_width = experimental::AccumulatorWidth::Wide;
-            std::get<ComputeGen2Config>(config).math_approx_mode = true;
+            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            config.math_fidelity = MathFidelity::LoFi;
+            config.accumulator_width = experimental::AccumulatorWidth::Wide;
+            config.math_approx_mode = true;
         }
     }
 
@@ -2419,10 +2413,9 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
     }
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            std::get<ComputeGen2Config>(config).accumulator_width = experimental::AccumulatorWidth::Wide;
-            std::get<ComputeGen2Config>(config).unpack_to_dest_mode = {
-                {DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            config.accumulator_width = experimental::AccumulatorWidth::Wide;
+            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
         }
     }
 
@@ -2454,10 +2447,9 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_0"}, "in0"));
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "in1"));
 
-    auto& compute_config = std::get<ComputeHardwareConfig>(consumer.hw_config);
-    std::get<ComputeGen2Config>(compute_config).accumulator_width = experimental::AccumulatorWidth::Wide;
-    std::get<ComputeGen2Config>(compute_config).unpack_to_dest_mode = {
-        {DFBSpecName{"dfb_1"}, UnpackToDestMode::UnpackToDestFp32}};
+    auto& compute_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(consumer.hw_config));
+    compute_config.accumulator_width = experimental::AccumulatorWidth::Wide;
+    compute_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_1"}, UnpackToDestMode::UnpackToDestFp32}};
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb0, dfb1};
