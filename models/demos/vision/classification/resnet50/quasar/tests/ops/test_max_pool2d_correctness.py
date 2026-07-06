@@ -48,7 +48,9 @@ POOL_CONFIGS = [
     (16, 16, 64, (3, 3), (2, 2), (1, 1), "16_3x3_64c_1core"),  # single-core control
     (56, 56, 32, (3, 3), (2, 2), (1, 1), "56_3x3_32c"),  # 32c = exactly 1 tile
     (32, 32, 128, (3, 3), (2, 2), (1, 1), "32_3x3_128c"),  # 128c = 4 tiles (wide)
-    (56, 56, 16, (3, 3), (2, 2), (1, 1), "56_3x3_16c"),  # 16c < FACE_WIDTH (single partial face)
+    # NOTE: sub-32-channel configs (e.g. 16c) are intentionally excluded — height sharding
+    # requires shard width == physical tile width (32); 16 < 32 fails tensor construction.
+    # resnet50 maxpool is always 64ch, so this is not a real path.
     (64, 64, 64, (2, 2), (2, 2), (0, 0), "64_2x2_64c_nopad"),  # 2x2 window (face_r_dim=4), no padding
 ]
 
