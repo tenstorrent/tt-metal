@@ -286,13 +286,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     const uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     const uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
-    // WORKAROUND (Quasar): force out_subblock to 1x1. The Quasar compute dest-sync (MATH_PACK /
-    // SrcA handshake) deadlocks when the matmul_partials spill/reload handles more than one tile
-    // per subblock (out_subblock_num_tiles > 1). Constraining to 1x1 makes partials flow one tile
-    // at a time so the compute pipeline drains. Remove once the underlying LLK dest-sync limitation
-    // is fixed (tt-metal #48679 / tt-llk #48504).
-    const uint32_t out_subblock_h_ntiles = 1;
-    const uint32_t out_subblock_w_ntiles = 1;
+    const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
+    const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
     const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;

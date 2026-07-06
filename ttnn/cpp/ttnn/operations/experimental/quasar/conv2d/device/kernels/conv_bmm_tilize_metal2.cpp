@@ -410,7 +410,8 @@ void kernel_main() {
 #endif
     DataflowBuffer cb_untilize_mode_out(untilize_mode_out_cb_id);
 
-    mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
+    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -455,15 +456,8 @@ void kernel_main() {
                                 in0_num_subblocks_read_last);
                         }
 #endif
-                        mm_block_init_short_with_both_dt(
-                            in0_cb_id,
-                            in1_cb_id,
-                            in0_pretilize_cb_id,
-                            in0_pretilize_cb_id,
-                            false,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
+                        reconfig_data_format(in0_pretilize_cb_id, in1_cb_id, in0_pretilize_cb_id, in0_cb_id);
+                        matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                     }
                 } else {
                     if constexpr (pack_relu && !fuse_bias) {
@@ -511,15 +505,8 @@ void kernel_main() {
                     }
 #endif
 
-                    mm_block_init_short_with_both_dt(
-                        mm_in0_cb_id,
-                        in1_cb_id,
-                        in0_cb_id,
-                        in0_cb_id,
-                        false,
-                        out_subblock_w,
-                        out_subblock_h,
-                        in0_block_w);
+                    reconfig_data_format(in0_cb_id, in1_cb_id, in0_cb_id, mm_in0_cb_id);
+                    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
 
                 cb_mm_in0.wait_front(in0_block_num_tiles);
@@ -560,14 +547,9 @@ void kernel_main() {
                                 matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
                             cb_matmul_partials.pop_front(out_subblock_num_tiles);
-                            mm_block_init_short_with_dt(
-                                mm_in0_cb_id,
-                                in1_cb_id,
-                                matmul_partials_cb,
-                                false,
-                                out_subblock_w,
-                                out_subblock_h,
-                                in0_block_w);
+                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
+                            matmul_block_init(
+                                mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                         } else {
                             tile_regs_acquire();
                         }
