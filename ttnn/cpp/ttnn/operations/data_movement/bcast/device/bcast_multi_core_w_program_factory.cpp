@@ -165,25 +165,25 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreWProgramFactory::create_descriptor
         const uint32_t num_tensor_tiles_per_core = NC * Ht * Wt_per_core;
         const uint32_t Wt_skip = Wt - Wt_per_core;
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                src0_buffer->address(),     // 0
-                0,                          // 1
-                0,                          // 2
-                num_tensor_tiles_per_core,  // 3
-                src1_buffer->address(),     // 4
-                0,                          // 5
-                0,                          // 6
-                num_btensor_tiles,          // 7
-                num_tensor_tiles_per_core,  // 8
-                NC,                         // 9
-                Ht,                         // 10
-                Wt_per_core,                // 11
-                bnc1,                       // 12
-                num_Wtiles_read,            // 13
-                Ht * Wt,                    // 14
-                Wt_skip,                    // 15
+            {
+                src0_buffer,
+                0u,
+                0u,
+                num_tensor_tiles_per_core,
+                src1_buffer,
+                0u,
+                0u,
+                num_btensor_tiles,
+                num_tensor_tiles_per_core,
+                NC,
+                Ht,
+                Wt_per_core,
+                bnc1,
+                num_Wtiles_read,
+                Ht * Wt,
+                Wt_skip,
             });
 
         compute_desc.runtime_args.emplace_back(
@@ -194,12 +194,12 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreWProgramFactory::create_descriptor
                 Wt_per_core  // Wt
             });
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                dst_buffer->address(),
-                0,
-                0,
+            {
+                dst_buffer,
+                0u,
+                0u,
                 Ht,
                 Wt_per_core,
                 num_Wtiles_read,
