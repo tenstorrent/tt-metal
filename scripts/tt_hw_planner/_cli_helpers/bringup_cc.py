@@ -581,11 +581,25 @@ def run_bringup_cc(
     except Exception:
         pass
     print(sep)
-    _reason = (
-        "bring-up complete — gate can_stop (all components graduated or fell back)"
-        if final.get("can_stop")
-        else "bring-up INCOMPLETE — gate wants more work (attempt/iteration budget capped)"
-    )
+    _grad_list = final.get("graduated") or []
+    try:
+        _blocked = (Path(demo_dir) / ".loader_blocker.txt").is_file()
+    except Exception:
+        _blocked = False
+    if not _grad_list and _blocked:
+        _reason = (
+            "STOPPED — could not load/inspect the model (reference loader failed); "
+            "0 components enumerated. See BLOCKER below for the exact cause/fix."
+        )
+    elif not _grad_list:
+        _reason = (
+            "STOPPED — 0 components enumerated (discovery produced no module tree); "
+            "nothing to bring up. See BLOCKER / discovery messages above."
+        )
+    elif final.get("can_stop"):
+        _reason = "bring-up complete — gate can_stop (all components graduated or fell back)"
+    else:
+        _reason = "bring-up INCOMPLETE — gate wants more work (attempt/iteration budget capped)"
     try:
         _emit_bringup_summary_table(model_id, demo_dir, final, stop_reason=_reason)
         _mark_summary_emitted()
