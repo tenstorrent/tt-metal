@@ -384,3 +384,32 @@ EngineCore shutdown/crash left ethernet core 29-25 un-reset (recurring recoverab
 per tt-device-usage; each recovered on first reset + smoke). No profiler/Tracy in this stage. gemma4
 isolation gate held (`git status --porcelain -- models/demos/gemma4/` empty). Server stopped +
 device freed at end.
+
+## #47488 upstream PR prep (Agent A) — 2026-07-06
+
+Goal: commit the block-granular runner + phase-based scheduler + registration change onto a clean
+local feature branch in the vLLM fork and prepare a PR draft, **without** disturbing the
+currently-applied working tree (other agents rely on it).
+
+- **Fork:** `/home/zni/tt-vllm` (remote `tenstorrent/vllm`), base branch `dev` @ `6b4a3a7b4`. The
+  #47488 changes were live as three uncommitted files: `plugins/vllm-tt-plugin/src/vllm_tt_plugin/`
+  `{model_runner.py, platform.py, scheduler.py}` (matches `plugin_47488_*.patch` here).
+- **Branch:** `zni/dg-47488-block-granular` (off `dev`, **local only** — no upstream configured).
+- **Commit SHA:** `a8e957df14c7b769e47579a4a1d502a2b6aca25a` —
+  `[Model-Bringup] Block-granular runner + scheduler for DiffusionGemma (#47488)`. Contains exactly
+  the 3 files (65+/15+/61+ lines). Self-contained message: motivation (256-token block per step vs
+  1-token assumption), per-file rationale, `N==1` byte-identical AR-parity argument, model-owns-KV
+  no-corruption safety note, live QB2 evidence, and the cache-ownership/#47557 follow-up scope.
+- **Working tree preserved:** after committing on the feature branch, the fork was returned to its
+  exact original state — branch `dev`, the same three files unstaged/modified, `git diff`
+  byte-identical to the pre-session snapshot (`/tmp/dg_47488_pristine.diff`). Verified
+  `IDENTICAL_TO_PRISTINE`. No plugin behavior changed for the other agents.
+- **Import verified:** `flock /tmp/dg-mesh.lock timeout 300 ... VLLM_TARGET_DEVICE=empty python -c
+  "import vllm; import vllm_tt_plugin"` → `PLUGIN_OK` (exit 0).
+- **PR draft:** `doc/vllm_integration/PR_47488.md` (title, motivation, per-file changes, QB2 test
+  evidence, risk/compat, and the exact human `git push` / `gh pr create` commands). NOT pushed, NOT
+  opened — left for human review per task constraints.
+
+Human land steps (do NOT auto-run): `cd /home/zni/tt-vllm && git push -u origin
+zni/dg-47488-block-granular` then `gh pr create --repo tenstorrent/vllm --base dev --head
+zni/dg-47488-block-granular --title "..." --body-file .../PR_47488.md` (full commands in PR_47488.md).
