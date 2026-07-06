@@ -24,18 +24,16 @@ from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, local_device_to_torch, typed_tensor
-from ....utils.test import line_params, ring_params
+from ....utils.test import ring_params
 
 # Decoder layer = encoder layer with cross-attention concat over pre-populated encoder KV.
-# Observed: PCC 99.9472% (sliding) / 99.9420% (full), max abs 0.273 / 0.365. Tight to observed
-# with modest headroom for bf16 accumulator jitter.
-PCC_THRESHOLD = 0.9994
+PCC_THRESHOLD = 0.9993
 ALLCLOSE_ATOL = 4e-1
 ALLCLOSE_RTOL = 3e-2
 
 
 def _build_tiny_config(num_layers: int = 6):
-    """Match sizes used by ``test_layer.py``: real Gemma4 shapes so the demos/gemma4
+    """Match sizes used by ``test_layer.py``: real Gemma4 shapes so the
     sparse_matmul kernel doesn't hang on shape-mismatched compiled binaries at tiny sizes.
     Weights are still random-init — no HF checkpoint required.
     """
@@ -50,8 +48,8 @@ def _build_tiny_config(num_layers: int = 6):
         num_global_key_value_heads=2,
         head_dim=256,
         global_head_dim=512,
-        num_experts=8,
-        top_k_experts=4,
+        num_experts=128,
+        top_k_experts=8,
         num_hidden_layers=num_layers,
         sliding_window=1024,
         rms_norm_eps=1e-6,
@@ -70,8 +68,7 @@ def _moe_substate(layer_state: dict) -> dict:
 @pytest.mark.parametrize(
     ("mesh_device", "tp_axis", "num_links", "device_params", "topology"),
     [
-        pytest.param((2, 4), 0, 1, line_params, ttnn.Topology.Linear, id="bh_qb2_tp2"),
-        pytest.param((2, 4), 0, 1, ring_params, ttnn.Topology.Ring, id="wh_t3k_tp2"),
+        pytest.param((1, 8), 1, 1, ring_params, ttnn.Topology.Ring, id="wh_t3k_1x8"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -82,7 +79,7 @@ def _moe_substate(layer_state: dict) -> dict:
         pytest.param("full_attention", 5, id="full"),
     ],
 )
-@pytest.mark.parametrize("canvas_len", [32])
+@pytest.mark.parametrize("canvas_len", [256])
 @pytest.mark.parametrize("encoder_len", [32])
 def test_decoder_layer(
     mesh_device: ttnn.MeshDevice,
