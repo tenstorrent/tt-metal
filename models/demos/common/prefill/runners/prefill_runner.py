@@ -261,15 +261,16 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
 
 
 def _socket_next(h2d_service) -> tuple:
-    """Block on the next producer push: returns (tt_tokens, {slot_id, actual_start, actual_end})
-    decoded from the 12-byte PrefillMetadata. Used only by the unbounded request loop (rank 0 input)."""
+    """Block on the next producer push: returns (tt_tokens, {slot_id, actual_start, actual_end},
+    tt_metadata). The device metadata tensor is returned (not discarded) so it can be propagated into
+    the model's per-layer ack send. Used only by the unbounded request loop (rank 0 input)."""
     import torch
 
     tt_tokens, tt_metadata = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES
     )
     m = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
-    return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
+    return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}, tt_metadata
 
 
 def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_size: int, hidden_size: int):
@@ -335,7 +336,7 @@ def _d2d_recv(inbound) -> tuple:
         f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
         f"[xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
     )
-    return act, meta
+    return act, meta, md
 
 
 def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
@@ -466,14 +467,15 @@ def run_request_loop(
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            inp, meta = _socket_next(h2d_service)  # slot/start/end from the producer
+            inp, meta, md = _socket_next(h2d_service)  # slot/start/end from the producer
         else:
-            inp, meta = _d2d_recv(d2d_in)
+            inp, meta, md = _d2d_recv(d2d_in)
         if _is_shutdown_sentinel(meta):
-            # End of stream: drop the throwaway payload, hand the sentinel to the next rank so it too
-            # unblocks and exits, then fall through to the graceful drain below.
+            # End of stream: drop the throwaway payload + its metadata tensor, hand the sentinel to the
+            # next rank so it too unblocks and exits, then fall through to the graceful drain below.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
+            ttnn.deallocate(md)
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
@@ -517,8 +519,21 @@ def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=
             kv_actual = c * cfg.chunk_size
             inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
             meta = {"slot_id": slot_id, "actual_start": kv_actual, "actual_end": kv_actual + cfg.chunk_size}
+            md = ttnn.from_torch(
+                torch.tensor([meta["slot_id"], meta["actual_start"], meta["actual_end"]], dtype=torch.int32).reshape(
+                    1, 1, 1, -1
+                ),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=runtime.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.create_mesh_mapper(
+                    runtime.mesh_device,
+                    ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
+                ),
+            )
         else:
-            inp, meta = _d2d_recv(d2d_in)
+            inp, meta, md = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
         t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out)
         if first is None:
