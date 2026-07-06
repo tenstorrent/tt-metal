@@ -131,9 +131,9 @@ class Qwen36ModelArgs(ModelArgs):
         self.attn_qkv_fused_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.attn_qkv_fused_dim_tp)
         self.mlp_w1_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.hidden_dim // tp)
         self.mlp_w3_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.hidden_dim // tp)
-        # row-parallel: [in_tp, hidden]
-        self.gdn_out_weight_memcfg = tpc.create_dram_sharded_mem_config(self.gdn_value_dim_tp, self.dim)
-        self.attn_wo_weight_memcfg = tpc.create_dram_sharded_mem_config(self.attn_out_dim_tp, self.dim)
+        # row-parallel out-projections: DRAM-INTERLEAVED (None -> plain ttnn.linear); DRAM-sharding narrow-K here loses to the interleaved 1D kernel and adds 2 reshards/layer.
+        self.gdn_out_weight_memcfg = None
+        self.attn_wo_weight_memcfg = None
         self.mlp_w2_weight_memcfg = tpc.create_dram_sharded_mem_config(self.hidden_dim // tp, self.dim)
 
         # DRAM-sharded matmul progcfgs (decode, M=1)
