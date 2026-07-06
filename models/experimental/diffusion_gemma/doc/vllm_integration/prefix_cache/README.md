@@ -11,10 +11,18 @@ prompt token-id sequence*, that **skips re-prefilling a prompt whose aligned
 token span is a full prefix of the K/V already resident in the contiguous cache**.
 
 - **What is bit-exact and shipped (behind the flag):** reuse when the incoming
-  request's aligned prompt is byte-identical to a *leading span* of the resident
-  cache's aligned prompt (`new_aligned == resident_aligned[:new_cache_len]`). This
-  covers the two provable cases — **exact full-prompt match** and **aligned proper
-  prefix** (new prompt ⊑ resident prompt). Reuse skips the entire prefill forward.
+  request's aligned prompt is byte-identical to the resident cache's aligned prompt
+  in full — **exact full-prompt match**. Reuse skips the entire prefill forward and
+  is **bit-exact on device** (verified: 0/256 committed-argmax mismatches, QB2).
+- **What is fp32-correct but NOT bit-exact in bf16 (opt-in "approximate" tier,
+  default OFF):** reuse of a byte-identical *proper prefix* (new prompt ⊑ resident
+  prompt, shorter). Mathematically the span is reusable, but **on device in bf16 it
+  is not bit-exact** — the resident wrote that span inside a *longer* prefill, and
+  the SDPA reduction over the longer (masked) key span rounds differently than a
+  standalone shorter prefill. Measured on QB2: **57/256 committed-argmax tokens flip**
+  — exactly the #48291-class small-probability drift. So proper-prefix reuse is gated
+  behind `PrefixKVCache(allow_shorter_prefix=True)` and is **not** enabled by the
+  shipped default; it is reported (`shorter_prefix_misses`) but skipped.
 - **What fundamentally needs #47488 (documented, not shipped):** reuse when the
   new prompt *extends* the shared prefix with a differing suffix (the common
   system-prompt-shared case). That requires the suffix tokens to cross-attend to
@@ -46,14 +54,18 @@ would have written. Three properties guarantee that for the shipped cases:
 2. **Causal prefill ⇒ position `i`'s K/V depends only on tokens `[0:i]`.** Prefill
    attention is causal. Token `i`'s hidden state (hence its K/V projection)
    attends only to `[0:i]`; positions `> i` and the trailing padded columns are
-   masked to `-inf` → 0 after softmax and never contribute. So the K/V written at
-   position `i` is a pure function of `tokens[0:i]` (plus absolute position `i`),
-   **independent of the total prefill length**. Therefore prefilling a long prompt
-   `A` and then reading back its leading span `[0:L]` yields exactly the K/V a
-   standalone prefill of `A[:L]` would produce — *provided* `A[:L]` is the literal
-   token span (no alignment-pad mismatch; see §Alignment). This is the standard
-   APC correctness argument, and it is *stronger* here because it is the same
-   physical cache, not a copy.
+   masked to `-inf` → 0 after softmax and never contribute. So *in exact
+   arithmetic* the K/V written at position `i` is a pure function of `tokens[0:i]`
+   (plus absolute position `i`), independent of the total prefill length. For the
+   **exact-full-match** case this holds bit-exactly on device (the reuse is literally
+   the same computation — verified 0/256). **Caveat for a shorter prefix (measured):
+   in bf16 this is NOT bit-exact.** The SDPA kernel reduces the score/`V` matmul over
+   the *padded* key span, and although masked positions contribute 0 mathematically,
+   the bf16 accumulation over a longer key span rounds differently than over a shorter
+   one — so the leading `[0:L]` K/V written inside a long prefill of `A` differs at the
+   bf16 level from a standalone prefill of `A[:L]`. On QB2 this flipped 57/256 committed
+   argmax tokens (a diffusion decision, per #48291). Hence proper-prefix reuse is
+   *fp32-correct but bf16-approximate* and is gated off by default.
 
 3. **Sliding-window + full-attention layers both preserve it.** Gemma-4
    interleaves sliding-window (`θ=1e4`, window 1024) and full-attention (`θ=1e6`)
@@ -87,15 +99,17 @@ to be overwritten by its own decode, so it is never claimed as reusable).
 Prefill pads the prompt to a 32-tile multiple (`_pad_prompt_tokens_for_prefill`)
 and the denoise read covers the *aligned* `cache_len`, **including** the pad
 positions. So the reuse span must match the resident cache byte-for-byte over the
-*entire* `new_cache_len` (real tokens **and** any pad). The shipped rule enforces
-exactly this: `resident_aligned[:new_cache_len] == new_aligned`. Practical effect:
+*entire* `new_cache_len` (real tokens **and** any pad). The rule enforces exactly this
+byte-identity: `resident_aligned[:new_cache_len] == new_aligned`. Practical effect:
 
-- **exact full match** (`new_aligned == resident_aligned`) always qualifies;
-- an **aligned proper prefix** qualifies when the new prompt length is a 32-multiple
-  (its pad is empty, so its aligned tokens equal the resident's leading real
-  tokens);
-- a non-32-aligned proper prefix does *not* qualify, because its zero-pad would
-  claim positions that hold the resident's real-token K/V — correctly rejected.
+- **exact full match** (`new_aligned == resident_aligned`) qualifies for the shipped
+  **bit-exact** reuse;
+- an **aligned proper prefix** (new prompt length a 32-multiple, so its pad is empty
+  and its aligned tokens equal the resident's leading real tokens) is byte-identical
+  over its span but only reusable in the **approximate tier** (bf16 caveat above);
+- a non-32-aligned proper prefix does *not* qualify at all, because its zero-pad would
+  claim positions that hold the resident's real-token K/V — correctly rejected
+  (`plan.shorter_prefix` is False; it lands in `matched_len < cache_len`).
 
 ## How the prototype works
 
@@ -173,8 +187,28 @@ are identical; any output difference would come *only* from the prompt K/V, whic
 reuse keeps bit-identical. Cases exercised: **exact full match** (`B == A`) and
 **aligned proper prefix** (`B = A` truncated at a 32-token boundary).
 
-Run outcome + metrics: see `work_log.md` (`DG_PREFIX_CACHE_SMOKE_*` markers) and
-`prefix_cache_smoke.json`.
+### Device result (QB2, `--num-layers 2`, 1 block, 2 steps — `prefix_cache_smoke_reduced.json`)
+
+`DG_PREFIX_CACHE_SMOKE_SUCCESS required_bit_exact_pass=True all_reused=True
+exact:bit_exact=True,mismatch=0,reused=True prefix:bit_exact=False,mismatch=57,reused=True`
+
+- **exact-match reuse: bit-exact — 0/256 committed-argmax mismatches**, prefill
+  skipped (`reused_on=True`, `prefill_time_on_s=0.0`). This is the shipped bit-exact
+  reuse and it **meets the acceptance bar**.
+- **aligned-proper-prefix reuse (approximate tier): 57/256 committed tokens flip** —
+  the measured bf16 SDPA reduction-length drift documented above. Correctly gated off
+  by default.
+
+The reduced (2-layer) target is the mechanism proof; the reuse decision, cache
+skip, RoPE offset, denoise read and commit are layer-count-independent, so the
+bit-exactness result carries to full depth. A full-depth (30-layer) run for the
+*realistic* prefill-time saving was attempted but blocked by the recurring
+`ethernet core 29-25` device fault at `open_mesh_device` (a known recoverable
+hardware flake, orchestrator-coordinated reset — see `work_log.md` DEVICE_PROBLEM),
+**not** a code issue. Prefill wall-time saved scales with depth: at 2 layers the
+skipped prefill was ~0.13 s; at full depth prefill is ~60 s (recorded full-depth
+serving-smoke TTFT in the parent README), so exact-match reuse skips ≈ that whole
+cost.
 
 ## Status
 
@@ -182,4 +216,9 @@ Run outcome + metrics: see `work_log.md` (`DG_PREFIX_CACHE_SMOKE_*` markers) and
       correctness argument and the #47488 boundary.
 - [x] Prototype behind `DG_PREFIX_CACHE` (default OFF): `tt/prefix_cache.py`,
       `tt/serving.py` wiring, `tt/generator_vllm.py` opt-in wiring.
-- [ ] Device bit-exact check under `flock` (see `work_log.md` for the live run).
+- [x] Device bit-exact check under `flock`: **exact-match reuse is bit-exact
+      (0/256), prefill skipped** (`prefix_cache_smoke_reduced.json`). The bf16
+      shorter-prefix limitation (57/256) is measured and gated off.
+- [~] Full-depth realistic-saving run blocked by the recurring eth-core-29-25
+      device fault (recoverable, orchestrator reset) — DEVICE_PROBLEM in `work_log.md`.
+- [10 CPU tests] `tests/test_prefix_cache.py` pins the reuse decision.
