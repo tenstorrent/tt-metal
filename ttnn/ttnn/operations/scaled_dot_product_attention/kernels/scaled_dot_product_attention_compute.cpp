@@ -40,30 +40,18 @@ constexpr uint32_t cb_scaler = 31;
 // instead of 0). A large negative value like -1e38 ensures exp(-1e38) ≈ 0
 // while remaining a valid finite float.
 constexpr float NEG_INF_F = -1e38f;
-constexpr uint32_t NEG_INF_BITS = 0xFE967699;  // float bits of -1e38f
 
 // Helper: fill a CB with num_tiles of a constant value (raw LLK init)
 // Uses the correct tile_regs protocol: acquire → fill → commit → wait → pack → release → push
+// Must call pack_reconfig_data_format before pack_tile — the packer may be
+// configured for a different CB's format from the previous operation.
 void init_cb_constant_f(uint32_t cb_id, uint32_t num_tiles, float value) {
     fill_tile_init();
+    PACK((pack_reconfig_data_format(cb_id)));
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_reserve_back(cb_id, 1);
         tile_regs_acquire();
         fill_tile(0, value);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_id);
-        tile_regs_release();
-        cb_push_back(cb_id, 1);
-    }
-}
-
-void init_cb_constant_bits(uint32_t cb_id, uint32_t num_tiles, uint32_t fill_bits) {
-    fill_tile_init();
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_reserve_back(cb_id, 1);
-        tile_regs_acquire();
-        fill_tile_bitcast(0, fill_bits);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, cb_id);
@@ -106,7 +94,7 @@ void kernel_main() {
     constexpr uint32_t PV_NUM_SUBBLOCKS_N = (D_t + PV_SUBBLOCK_W - 1) / PV_SUBBLOCK_W;
 
     // Phase 0: Init persistent state (m_i=neg_inf, l_i=0, O_i=0)
-    init_cb_constant_bits(cb_m, B_q, NEG_INF_BITS);  // m_i = neg_inf
+    init_cb_constant_f(cb_m, B_q, NEG_INF_F);        // m_i = neg_inf
     init_cb_constant_f(cb_l, B_q, 0.0f);             // l_i = 0
     init_cb_constant_f(cb_o, B_q * D_t, 0.0f);       // O_i = 0
 
@@ -369,7 +357,7 @@ void kernel_main() {
         cb_pop_front(cb_m, B_q);
 
         // Re-init persistent state for next Q block.
-        init_cb_constant_bits(cb_m, B_q, NEG_INF_BITS);
+        init_cb_constant_f(cb_m, B_q, NEG_INF_F);
         init_cb_constant_f(cb_l, B_q, 0.0f);
         init_cb_constant_f(cb_o, B_q * D_t, 0.0f);
     }

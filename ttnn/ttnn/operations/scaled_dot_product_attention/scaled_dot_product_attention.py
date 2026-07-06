@@ -83,21 +83,27 @@ INPUT_TAGGERS = {
 #    fp32_dest_acc_en=True only.
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "mask_mode": ["none", "custom"],
     "scale_mode": ["auto", "explicit"],
     "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha"],
-    "fp32_dest_acc_en": [True],
+    "fp32_dest_acc_en": [True, False],
 }
 
 
 # 3. EXCLUSIONS
-#    Phase 0 has no exclusions inside the SUPPORTED rectangle.
+#    fp32 input + fp32_dest_acc_en=False: the FP32 input requires fp32 dest
+#    accumulation to maintain precision through the matmul/softmax chain.
+#    16-bit dest would truncate the FP32 mantissa too aggressively for
+#    the online softmax accumulation to converge. Mirrors the softmax op's
+#    fp32+False EXCLUSION.
 
-EXCLUSIONS: list[dict] = []
+EXCLUSIONS: list[dict] = [
+    {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+]
 
 
 # 4. validate()

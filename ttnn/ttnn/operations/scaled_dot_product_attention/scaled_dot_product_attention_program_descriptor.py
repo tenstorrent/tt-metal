@@ -56,7 +56,28 @@ def create_program_descriptor(
     D_t = D // 32  # tiles along D (head dim)
 
     dtype = query.dtype
-    tile_size = ttnn.tile_size(dtype)  # 2048 for bf16
+    tile_size = ttnn.tile_size(dtype)
+
+    # ========== 1b. COMPUTE CONFIG DEFAULTS ==========
+    # Ensure compute_kernel_config is resolved early.
+    if compute_kernel_config is None:
+        compute_kernel_config = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            math_approx_mode=False,
+        )
+
+    # Intermediate accumulator CBs must be Float32 when fp32_dest_acc_en=True
+    # to preserve precision across phase boundaries (online softmax running
+    # max/sum/output accumulation). When fp32_dest_acc_en=False, intermediates
+    # use Float16_b (bf16) — the best 16-bit format that avoids block-float
+    # shared-exponent precision loss in the running max/sum/output accumulators.
+    fp32_dest_acc_en = getattr(compute_kernel_config, "fp32_dest_acc_en", True)
+    if fp32_dest_acc_en:
+        intermediate_format = ttnn.float32
+    else:
+        intermediate_format = ttnn.bfloat16  # bf16, not block-float
+    intermediate_tile_size = ttnn.tile_size(intermediate_format)
 
     has_mask = attn_mask is not None
     # Mask shape: (B, H_m, S_q, S_kv) where H_m is 1 or H
@@ -145,36 +166,41 @@ def create_program_descriptor(
 
     cbs = []
 
-    def make_cb(cb_id, num_pages):
+    def make_cb(cb_id, num_pages, cb_dtype, cb_tile_size):
         return ttnn.CBDescriptor(
-            total_size=num_pages * tile_size,
+            total_size=num_pages * cb_tile_size,
             core_ranges=core_grid,
-            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb_id, data_format=dtype, page_size=tile_size)],
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=cb_id, data_format=cb_dtype, page_size=cb_tile_size)
+            ],
         )
 
-    cbs.append(make_cb(cb_q_id, q_pages))
-    cbs.append(make_cb(cb_k_id, k_pages))
-    cbs.append(make_cb(cb_v_id, v_pages))
-    cbs.append(make_cb(cb_attn_mask_id, mask_pages))
-    cbs.append(make_cb(cb_scale_id, scale_pages))
-    cbs.append(make_cb(cb_output_id, output_pages))
-    cbs.append(make_cb(cb_scores_id, scores_pages))
-    cbs.append(make_cb(cb_m_id, m_pages))
-    cbs.append(make_cb(cb_l_id, l_pages))
-    cbs.append(make_cb(cb_o_id, o_pages))
-    cbs.append(make_cb(cb_m_new_id, m_new_pages))
-    cbs.append(make_cb(cb_psum_id, psum_pages))
-    cbs.append(make_cb(cb_pv_id, pv_pages))
-    cbs.append(make_cb(cb_pv_out_id, pv_out_pages))
-    cbs.append(make_cb(cb_scaler_id, scaler_pages))
+    # The reduce scaler CB must use Float16_b or Float32 (prepare_reduce_scaler
+    # does not support block-float formats). Use Float32 when fp32_dest_acc_en=True
+    # for best precision, otherwise Float16_b.
+    scaler_format = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+    scaler_tile_size = ttnn.tile_size(scaler_format)
+
+    # Input/output CBs follow the input tensor's dtype
+    cbs.append(make_cb(cb_q_id, q_pages, dtype, tile_size))
+    cbs.append(make_cb(cb_k_id, k_pages, dtype, tile_size))
+    cbs.append(make_cb(cb_v_id, v_pages, dtype, tile_size))
+    cbs.append(make_cb(cb_attn_mask_id, mask_pages, dtype, tile_size))
+    cbs.append(make_cb(cb_scale_id, scale_pages, dtype, tile_size))
+    cbs.append(make_cb(cb_output_id, output_pages, dtype, tile_size))
+    # Intermediate accumulator CBs use Float32 when fp32_dest_acc_en=True
+    cbs.append(make_cb(cb_scores_id, scores_pages, intermediate_format, intermediate_tile_size))
+    cbs.append(make_cb(cb_m_id, m_pages, intermediate_format, intermediate_tile_size))
+    cbs.append(make_cb(cb_l_id, l_pages, intermediate_format, intermediate_tile_size))
+    cbs.append(make_cb(cb_o_id, o_pages, intermediate_format, intermediate_tile_size))
+    cbs.append(make_cb(cb_m_new_id, m_new_pages, intermediate_format, intermediate_tile_size))
+    cbs.append(make_cb(cb_psum_id, psum_pages, intermediate_format, intermediate_tile_size))
+    cbs.append(make_cb(cb_pv_id, pv_pages, intermediate_format, intermediate_tile_size))
+    cbs.append(make_cb(cb_pv_out_id, pv_out_pages, intermediate_format, intermediate_tile_size))
+    cbs.append(make_cb(cb_scaler_id, scaler_pages, scaler_format, scaler_tile_size))
 
     # ========== 4. KERNEL DESCRIPTORS ==========
-    if compute_kernel_config is None:
-        compute_kernel_config = ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=True,
-            math_approx_mode=False,
-        )
+    # (compute_kernel_config already resolved above)
 
     # --- Reader kernel ---
     # CT args: scalar params first, then TensorAccessorArgs for Q, K, V, mask
