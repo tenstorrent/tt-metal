@@ -53,14 +53,14 @@ struct DataMovementGen1Config {
 inline DataMovementGen1Config create_reader_gen1_datamovement_config() noexcept {
     return DataMovementGen1Config{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-        .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(tt::ARCH::WORMHOLE_B0),
+        .noc = tt::tt_metal::NOC::NOC_0,
         .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC};
 }
 
 inline DataMovementGen1Config create_writer_gen1_datamovement_config() noexcept {
     return DataMovementGen1Config{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-        .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(tt::ARCH::WORMHOLE_B0),
+        .noc = tt::tt_metal::NOC::NOC_1,
         .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC};
 }
 
