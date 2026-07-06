@@ -96,13 +96,21 @@ class VibeVoicePreTrainedModel(PreTrainedModel):
         else:
             std = 0.02  # Default value
 
+        # transformers 5.x loads the checkpoint *before* calling `_init_weights` (meta-device
+        # fast init) and relies on the `_is_hf_initialized` flag to avoid re-initialising loaded
+        # params. Its guard only patches `torch.nn.init.*` functions, not the in-place tensor
+        # methods used below, so we must check the flag explicitly or loaded weights get clobbered
+        # (transformers 4.x never sets the flag here, so init still runs as before).
         if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.bias is not None:
+            if not getattr(module.weight, "_is_hf_initialized", False):
+                module.weight.data.normal_(mean=0.0, std=std)
+            if module.bias is not None and not getattr(module.bias, "_is_hf_initialized", False):
                 module.bias.data.zero_()
         elif isinstance(module, nn.LayerNorm):
-            module.weight.data.fill_(1.0)
-            module.bias.data.zero_()
+            if not getattr(module.weight, "_is_hf_initialized", False):
+                module.weight.data.fill_(1.0)
+            if not getattr(module.bias, "_is_hf_initialized", False):
+                module.bias.data.zero_()
 
 
 # @auto_docstring
@@ -237,7 +245,7 @@ class VibeVoiceForConditionalGeneration(VibeVoicePreTrainedModel):
     def get_decoder(self):
         return self.model.language_model
 
-    def tie_weights(self):
+    def tie_weights(self, *args, **kwargs):
         """
         Tie the weights between the input embeddings and the output embeddings.
         """
