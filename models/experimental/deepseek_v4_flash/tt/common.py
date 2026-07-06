@@ -115,6 +115,34 @@ def rectangular_core_grid(num_cores: int, device) -> ttnn.CoreGrid:
     return ttnn.CoreGrid(y=y, x=x)
 
 
+def print_l1_tensors(device):
+    device_info = ttnn._ttnn.reports.get_buffers(device)
+    l1_buffers = [b for b in device_info if b.buffer_type == ttnn.BufferType.L1]
+    if not l1_buffers:
+        print("No L1 buffers found.")
+        return
+
+    headers = ("#", "Address", "Size (bytes)", "Layout")
+    rows = [
+        (str(i), f"{b.address}", f"{b.max_size_per_bank:,}", str(b.buffer_layout)) for i, b in enumerate(l1_buffers)
+    ]
+    total_l1_size = sum(b.max_size_per_bank for b in l1_buffers)
+    rows.append(("", "Total", f"{total_l1_size:,}", ""))
+
+    widths = [max(len(headers[i]), *(len(r[i]) for r in rows)) for i in range(len(headers))]
+
+    def _row(cells):
+        return " | ".join(
+            cells[i].rjust(widths[i]) if i == 2 else cells[i].ljust(widths[i]) for i in range(len(headers))
+        )
+
+    print(_row(headers))
+    print("-+-".join("-" * w for w in widths))
+    for row in rows:
+        print(_row(row))
+    print("\n\n")
+
+
 def rectangular_core_range_set(num_cores: int, device) -> ttnn.CoreRangeSet:
     """``CoreRangeSet`` for :func:`rectangular_core_grid`."""
     core_grid = rectangular_core_grid(num_cores, device)
