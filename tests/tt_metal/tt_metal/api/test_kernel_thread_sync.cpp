@@ -24,8 +24,8 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
-using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 
 constexpr CoreCoord kCore{0, 0};
@@ -94,7 +94,7 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     std::vector<std::string> work_unit_kernel_names;
 
     if (is_quasar) {
-        auto spec = MakeMinimalDMKernel("dm_barrier_kernel", expected_num_threads);
+        auto spec = MakeMinimalGen2DMKernel("dm_barrier_kernel", expected_num_threads);
         spec.source = kKernelPath;
         spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
         kernel_configs.push_back({"dm_barrier_kernel", spec, make_layout(l1_base, kRounds)});
