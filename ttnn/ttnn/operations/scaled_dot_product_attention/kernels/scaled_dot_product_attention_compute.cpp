@@ -35,7 +35,12 @@ constexpr uint32_t cb_pv = 30;
 constexpr uint32_t cb_pv_out = 23;  // PV matmul output (separate from cb_scores)
 constexpr uint32_t cb_scaler = 31;
 
-constexpr uint32_t NEG_INF_BITS = 0xFF800000;
+// Use a large negative finite value instead of -inf for m_i initialization.
+// The SFPU exp() approximation may not handle -inf correctly (producing NaN
+// instead of 0). A large negative value like -1e38 ensures exp(-1e38) ≈ 0
+// while remaining a valid finite float.
+constexpr float NEG_INF_F = -1e38f;
+constexpr uint32_t NEG_INF_BITS = 0xFE967699;  // float bits of -1e38f
 
 // Helper: fill a CB with num_tiles of a constant value (raw LLK init)
 // Uses the correct tile_regs protocol: acquire → fill → commit → wait → pack → release → push
@@ -93,8 +98,8 @@ void kernel_main() {
     ckernel::compute_kernel_hw_startup(cb_q, cb_k, cb_scores);
     mm_block_init(cb_q, cb_k, cb_scores, /*transpose=*/1, /*ct_dim=*/B_kv, /*rt_dim=*/B_q, /*kt_dim=*/D_t);
 
-    // Phase 0: Init persistent state (m_i=-inf, l_i=0, O_i=0)
-    init_cb_constant_bits(cb_m, B_q, NEG_INF_BITS);  // m_i = -inf
+    // Phase 0: Init persistent state (m_i=neg_inf, l_i=0, O_i=0)
+    init_cb_constant_bits(cb_m, B_q, NEG_INF_BITS);  // m_i = neg_inf
     init_cb_constant_f(cb_l, B_q, 0.0f);             // l_i = 0
     init_cb_constant_f(cb_o, B_q * D_t, 0.0f);       // O_i = 0
 
@@ -184,7 +189,7 @@ void kernel_main() {
                     ckl::Dst::D0,
                     ckl::OperandKind::Scalar,
                     ckl::OperandKind::Col>{},
-                ckl::Exp<ckl::Approx::Fast, ckl::Approx::Fast, ckl::Dst::D0>{},
+                ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
                 ckl::PackTile<cb_scores, ckl::OutputLifecycle::Streaming>{});
 
             // Phase 6: Copy P from cb_scores to cb_pv
@@ -208,7 +213,7 @@ void kernel_main() {
                     ckl::CopyTileReconfig::Input,
                     ckl::OperandKind::Block>{},
                 ckl::SubBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
-                ckl::Exp<ckl::Approx::Fast, ckl::Approx::Fast, ckl::Dst::D1>{},
+                ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D1>{},
                 ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
                 ckl::PackTile<cb_l, ckl::OutputLifecycle::Streaming>{});
 
@@ -229,7 +234,7 @@ void kernel_main() {
                     ckl::CopyTileReconfig::Input,
                     ckl::OperandKind::Block>{},
                 ckl::SubBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
-                ckl::Exp<ckl::Approx::Fast, ckl::Approx::Fast, ckl::Dst::D0>{},
+                ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
                 ckl::PackTile<cb_psum, ckl::OutputLifecycle::Streaming>{});
 
             // O_i *= factor (Col broadcast of factor across D_t)
