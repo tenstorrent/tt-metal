@@ -4,7 +4,7 @@ import torch
 import ttnn
 
 from .attention import DeepSeekV4Attention, _LayerKVCache, _StaticLayerCache
-from .common import DeepSeekV4Module, _HIFI4, _profile, _region
+from .common import DeepSeekV4Module, _HIFI4, _profile, _region, print_l1_tensors
 from .hyperconnection import DeepSeekV4HyperConnection
 from .layers import DeepSeekV4RMSNorm
 from .moe import DeepSeekV4SparseMoeBlock
@@ -109,7 +109,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
 
         # mix = matmul(comb.transpose(-1, -2), streams): sum over the FIRST hc axis.
         comb_t = ttnn.transpose(ttnn.reshape(comb, [1, t, hc, hc]), -2, -1)
-        mixed = ttnn.matmul(comb_t, ttnn.reshape(streams, [1, t, hc, d]), compute_kernel_config=_HIFI4)
+        streams = ttnn.reshape(streams, [1, t, hc, d], memory_config=ttnn.L1_MEMORY_CONFIG)
+        mixed = ttnn.matmul(comb_t, streams, compute_kernel_config=_HIFI4)
 
         return ttnn.reshape(ttnn.add(placement, mixed), [b, s, hc, d])
 
@@ -129,10 +130,33 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         Everything outside attention (hyper-connections, norms, MoE / MLP) is
         per-token; attention runs against the running ``kv_cache``.
         """
+        print("Before attn_hc")
+        print_l1_tensors(self.device)
         with _region("ATTN_HC"):
             post, comb, collapsed = self.attn_hc(hidden_streams)
+        print("After attn_hc")
+        print_l1_tensors(self.device)
         with _region("INPUT_NORM"):
             normed = self.input_layernorm(collapsed)
+        print("After input_layernorm")
+        print_l1_tensors(self.device)
+        print(
+            "collapsed shape: ",
+            collapsed.shape,
+            "collapsed memory_config: ",
+            collapsed.memory_config(),
+            "address: ",
+            collapsed.buffer_address(),
+        )
+        collapsed.deallocate()
+        print(
+            "normed shape: ",
+            normed.shape,
+            "normed memory_config: ",
+            normed.memory_config(),
+            "address: ",
+            normed.buffer_address(),
+        )
         with _region("ATTENTION"):
             attn_out = self.self_attn.decode(normed, cos, sin, neg_sin, cos_win, sin_win, kv_cache)
         with _region("ATTN_MIX"):

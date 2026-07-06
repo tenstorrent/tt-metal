@@ -42,7 +42,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (
     resolve_snapshot_dir,
 )
 
-_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash"
+_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark"
 _DEFAULT_TEXT = "Tell me the name of the top 10 songs of all time."
 if int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "1024")) < 10:
     _DEFAULT_TEXT = "Tell"
@@ -163,6 +163,7 @@ def _build_and_prefill(mesh_device, text: str):
         model.reset_caches()
 
     next_id = pad_id
+    real_len = 1
     for pos in range(real_len):
         if traced:
             logits_tt = model.decode_traced(prompt_ids[pos], pos)  # [1, 1, vocab] (lm_head in-trace)

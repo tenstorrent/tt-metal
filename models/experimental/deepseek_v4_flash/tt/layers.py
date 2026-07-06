@@ -2,7 +2,7 @@ from typing import Optional
 
 import ttnn
 
-from .common import DeepSeekV4Module, _HIFI4, rectangular_core_range_set
+from .common import DeepSeekV4Module, _HIFI4, rectangular_core_range_set, width_sharded_l1_config
 from .weight_cache import _load_weight, _materialize
 import torch
 
@@ -116,7 +116,10 @@ class LinearDecode(DeepSeekV4Module):
             w = w.reshape(k_blocks, kc, n).permute(1, 0, 2).reshape(kc, n * k_blocks)
             shard_shape = (kc, nc)
         else:
-            num_inputB_cores = n // 64
+            if n_blocks is None:
+                num_inputB_cores = n // 64
+            else:
+                num_inputB_cores = n_blocks
             shard_shape = (k, n // num_inputB_cores)
 
         b_core_range_set = rectangular_core_range_set(num_inputB_cores, self.device)
@@ -136,6 +139,9 @@ class LinearDecode(DeepSeekV4Module):
             memory_config=b_memory_config,
             cache_file_name=cache_file_name,
         )
+
+    def deallocate(self):
+        self.weight.deallocate()
 
     def get_input_memory_config(self, m: int, k: int) -> ttnn.MemoryConfig:
         a_core_range_set = rectangular_core_range_set(self.num_inputA_cores, self.device)
@@ -183,9 +189,16 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
         self.eps = eps
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        b, s, _, d = x.shape
+        x_mem_config = width_sharded_l1_config(b * s, d, x.device())
+        x = ttnn.to_memory_config(x, x_mem_config)
         return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps)
 
 
 def _rms_norm_unweighted(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
     """Unweighted RMSNorm over the last dim (matches ``DeepseekV4UnweightedRMSNorm``)."""
+    if not x.is_sharded():
+        b, s, t, d = x.shape
+        x_mem_config = width_sharded_l1_config(b * s * t, d, x.device())
+        x = ttnn.to_memory_config(x, x_mem_config)
     return ttnn.rms_norm(x, epsilon=eps)

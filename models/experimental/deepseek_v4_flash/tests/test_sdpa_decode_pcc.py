@@ -26,7 +26,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.deepseek_v4_flash.tt.attention import DeepSeekV4Attention
+from models.experimental.deepseek_v4_flash.tt.attention import DeepSeekV4Attention, _sdpa_decode_program_config
 
 _MASK_NEG = -1.0e9
 PCC_THRESHOLD = 0.99
@@ -46,29 +46,23 @@ def _make_attention(device, num_heads: int, head_dim: int, sinks_torch: torch.Te
     sdpa_sink = attn.sinks_torch.reshape(num_heads, 1) / attn.scaling
     sdpa_sink = torch.nn.functional.pad(sdpa_sink, (0, ttnn.TILE_SIZE - 1), "constant", value=0.0)
     attn.sdpa_sinks_tt = ttnn.from_torch(sdpa_sink, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    attn._sdpa_pcfg = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=0,
-        k_chunk_size=32,
-        exp_approx_mode=False,
-        max_cores_per_head_batch=4,
-    )
+    attn._sdpa_pcfg = _sdpa_decode_program_config(device)
     return attn
 
 
 def _torch_reference(
     q: torch.Tensor, kv: torch.Tensor, mask: torch.Tensor, sinks: torch.Tensor, scaling: float
 ) -> torch.Tensor:
-    """fp32 softmax-with-sink attention. q [1,H,1,Dh], kv [1,1,Skv,Dh],
-    mask [1,1,1,Skv], sinks [1,H,1,1]. Returns [1,H,1,Dh]."""
-    h = q.shape[1]
-    k = kv.expand(1, h, kv.shape[2], kv.shape[3])  # broadcast shared KV head
-    scores = torch.matmul(q, k.transpose(-2, -1)) * scaling + mask  # [1,H,1,Skv]
-    m = torch.maximum(scores.amax(dim=-1, keepdim=True), sinks)
+    """fp32 softmax-with-sink attention. q [1,1,H,Dh], kv [1,1,Skv,Dh],
+    mask [1,1,1,Skv], sinks [1,H,1,1]. Returns [1,1,H,Dh]."""
+    h = q.shape[2]
+    k = kv.unsqueeze(2).expand(1, 1, h, kv.shape[2], kv.shape[3])  # [1,1,H,Skv,Dh]
+    scores = torch.matmul(q.unsqueeze(-2), k.transpose(-1, -2)) * scaling + mask  # [1,1,H,1,Skv]
+    m = torch.maximum(scores.amax(dim=-1, keepdim=True), sinks.reshape(1, 1, h, 1, 1))
     num = torch.exp(scores - m)
-    denom = num.sum(dim=-1, keepdim=True) + torch.exp(sinks - m)
+    denom = num.sum(dim=-1, keepdim=True) + torch.exp(sinks.reshape(1, 1, h, 1, 1) - m)
     probs = num / denom
-    return torch.matmul(probs, k)  # [1,H,1,Dh]
+    return torch.matmul(probs, k).squeeze(-2)  # [1,1,H,Dh]
 
 
 @pytest.mark.parametrize("num_heads,head_dim", [(64, 256)], ids=["64x256"])
@@ -77,7 +71,7 @@ def _torch_reference(
 def test_sdpa_decode_pcc(device, reset_seeds, num_heads: int, head_dim: int, skv: int, masked: bool) -> None:
     torch.manual_seed(1234)
 
-    q = torch.randn(1, num_heads, 1, head_dim) * 0.1
+    q = torch.randn(1, 1, num_heads, head_dim) * 0.1
     kv = torch.randn(1, 1, skv, head_dim) * 0.1
     sinks = torch.randn(num_heads) * 0.5
 
