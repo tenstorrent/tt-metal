@@ -53,7 +53,7 @@ class _LlamaSpec:
 
 
 @dataclass
-class _MoEHyperparam:
+class MoEParams:
     """DeepSeek MoE expert/routing hyperparameters — the YAML ``moe_hyperparam`` block."""
 
     moe_inter_dim: int = 256
@@ -83,7 +83,7 @@ class _DeepSeekSpec:
     # sparse_ep shards across the "tp" axis (full-model TP) or the mesh axis
     # named by device_config.moe_axis; with no such axis it degrades to plain sparse.
     moe_type: Literal["dense", "sparse", "sparse_ep"] = "sparse"
-    moe_hyperparam: _MoEHyperparam = field(default_factory=_MoEHyperparam)
+    moe_hyperparam: MoEParams = field(default_factory=MoEParams)
     # Resolved MoE-parallel mesh axis name, filled from device_config.moe_axis in
     # train.py:main() (not parsed from YAML). None => no MoE-only TP axis.
     moe_axis_name: str | None = None
