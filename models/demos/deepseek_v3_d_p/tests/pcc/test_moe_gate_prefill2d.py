@@ -53,9 +53,11 @@ _MOE_LAYER_IDX = 3
 
 # Relative gate-weight tolerance for the tie-aware top-k recall. A device/reference expert swap at a
 # crowded grouped-gate boundary is credited when the two experts' gate weights agree within this
-# fraction. Boundary swaps observed on the device fp32 gate sit within ~7% (experts clustered inside a
-# ~0.02 weight band at ~0.29); 0.1 covers them with margin while pcc_scores guards the distribution.
-RECALL_WEIGHT_RTOL = 0.1
+# fraction. The boundary swaps observed on the device fp32 gate are near-exact weight ties: an rtol
+# sweep on DEVICE_FP32 mesh-4x2 passes for rtol >= 0.002 and fails below (recall dips under the 0.95
+# gate), so this is set just at that knee to credit the ties while staying as tight as possible.
+# pcc_scores remains the correctness backstop for the selected-weight distribution.
+RECALL_WEIGHT_RTOL = 0.002
 
 _DEFAULT_HF_REPO = "deepseek-ai/DeepSeek-V3"
 _LOCAL_FALLBACKS = (
