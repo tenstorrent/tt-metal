@@ -110,17 +110,18 @@ tt::tt_metal::ProgramDescriptor PixelUnshuffle::MultiCore::create_descriptor(
         desc.cbs.push_back(std::move(cb));
     }
 
-    // Reader compile-time args (9 args before TensorAccessorArgs)
+    // Reader compile-time args (10 args before TensorAccessorArgs)
     std::vector<uint32_t> reader_cta = {
-        stick_nbytes_in,          // 0
-        cb_in0_idx,               // 1
-        aligned_stick_nbytes_in,  // 2
-        r,                        // 3
-        Ho,                       // 4
-        W,                        // 5
-        C,                        // 6
-        H,                        // 7
-        N,                        // 8
+        stick_nbytes_in,                               // 0
+        cb_in0_idx,                                    // 1
+        aligned_stick_nbytes_in,                       // 2
+        r,                                             // 3
+        Ho,                                            // 4
+        W,                                             // 5
+        C,                                             // 6
+        H,                                             // 7
+        N,                                             // 8
+        static_cast<uint32_t>(op_attr.channel_order),  // 9  (0=CHANNEL_MAJOR, 1=SPATIAL_MAJOR)
     };
     TensorAccessorArgs(*src_buffer).append_to(reader_cta);
 
@@ -133,20 +134,21 @@ tt::tt_metal::ProgramDescriptor PixelUnshuffle::MultiCore::create_descriptor(
     reader_desc.compile_time_args = std::move(reader_cta);
     reader_desc.config = ReaderConfigDescriptor{};
 
-    // Writer compile-time args (11 args before TensorAccessorArgs)
+    // Writer compile-time args (12 args before TensorAccessorArgs)
     // datum_nbytes is derived inside the kernel as stick_nbytes_in / W — no extra CTA needed.
     std::vector<uint32_t> writer_cta = {
-        stick_nbytes_in,          // 0
-        cb_in0_idx,               // 1
-        aligned_stick_nbytes_in,  // 2
-        r,                        // 3
-        Ho,                       // 4
-        W,                        // 5
-        C,                        // 6
-        H,                        // 7
-        N,                        // 8
-        stick_nbytes_out,         // 9
-        cb_scratch_idx,           // 10
+        stick_nbytes_in,                               // 0
+        cb_in0_idx,                                    // 1
+        aligned_stick_nbytes_in,                       // 2
+        r,                                             // 3
+        Ho,                                            // 4
+        W,                                             // 5
+        C,                                             // 6
+        H,                                             // 7
+        N,                                             // 8
+        stick_nbytes_out,                              // 9
+        cb_scratch_idx,                                // 10
+        static_cast<uint32_t>(op_attr.channel_order),  // 11 (0=CHANNEL_MAJOR, 1=SPATIAL_MAJOR)
     };
     TensorAccessorArgs(*dst_buffer).append_to(writer_cta);
 

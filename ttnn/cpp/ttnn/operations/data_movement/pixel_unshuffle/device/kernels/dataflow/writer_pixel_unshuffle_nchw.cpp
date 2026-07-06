@@ -5,7 +5,10 @@
 // Writer kernel for pixel_unshuffle on NCHW ROW_MAJOR output.
 //
 // Pops each CB page (a full W-element input row) and scatters every r-th
-// element starting at offset rw = c_out % r into the output stick.
+// element starting at offset rw into the output stick. rw is decoded from
+// c_out according to the channel ordering (CTA[11]):
+//   CHANNEL_MAJOR (0):  rw = c_out % r
+//   SPATIAL_MAJOR (1):  rw = (c_out / C) % r
 // The Wo packed output elements are written contiguously to DRAM.
 
 #include <stdint.h>
@@ -25,7 +28,11 @@ void kernel_main() {
     constexpr uint32_t N = get_compile_time_arg_val(8);                     // batch size
     constexpr uint32_t stick_nbytes_out = get_compile_time_arg_val(9);      // Wo * datum_size
     constexpr uint32_t cb_id_scratch = get_compile_time_arg_val(10);        // scratch CB index (1)
-    constexpr auto dst_args = TensorAccessorArgs<11>();                     // TensorAccessor at CTA[11]
+    constexpr uint32_t channel_order = get_compile_time_arg_val(11);        // 0=CHANNEL_MAJOR, 1=SPATIAL_MAJOR
+    constexpr auto dst_args = TensorAccessorArgs<12>();                     // TensorAccessor at CTA[12]
+
+    constexpr uint32_t CHANNEL_MAJOR = 0;
+    constexpr uint32_t SPATIAL_MAJOR = 1;
     // Derive bytes-per-element from existing CTAs — no extra CTA needed.
     // stick_nbytes_in = W * datum_sz  →  datum_nbytes = stick_nbytes_in / W
     constexpr uint32_t datum_nbytes = stick_nbytes_in / W;
@@ -47,7 +54,12 @@ void kernel_main() {
     // Decode start_idx -> (n, c_out, h_out)
     uint32_t c_out = (start_idx % (C_out * Ho)) / Ho;
     uint32_t h_out = start_idx % Ho;
-    uint32_t rw = c_out % r;
+    uint32_t rw;
+    if constexpr (channel_order == SPATIAL_MAJOR) {
+        rw = (c_out / C) % r;
+    } else {  // CHANNEL_MAJOR
+        rw = c_out % r;
+    }
 
     uint32_t dst_page = start_idx;  // output pages are in order
 
@@ -92,7 +104,11 @@ void kernel_main() {
             if (c_out == C_out) {
                 c_out = 0;
             }
-            rw = c_out % r;
+            if constexpr (channel_order == SPATIAL_MAJOR) {
+                rw = (c_out / C) % r;
+            } else {  // CHANNEL_MAJOR
+                rw = c_out % r;
+            }
         }
     }
 }

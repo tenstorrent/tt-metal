@@ -4,13 +4,14 @@
 //
 // Reader kernel for pixel_unshuffle on NCHW ROW_MAJOR input.
 //
-// For each assigned output stick (n, c_out, h_out):
-//   c_in  = c_out / r²
-//   rh    = (c_out % r²) / r
-//   input_page = n * C * H + c_in * H + h_out * r + rh
+// For each assigned output stick (n, c_out, h_out), decode (c_in, rh) from c_out
+// according to the channel ordering (CTA[9]):
+//   CHANNEL_MAJOR (0):  c_in = c_out / r²      rh = (c_out % r²) / r
+//   SPATIAL_MAJOR (1):  c_in = c_out % C       rh = (c_out / C) / r
+//   input_page = n * C * H + c_in * H + h_out * r + rh   (same formula for both)
 //
-// Reads the full input row (W elements) into CB. The writer will
-// scatter every r-th element starting at rw = c_out % r.
+// Reads the full input row (W elements) into CB. The writer scatters every r-th
+// element starting at rw, which it decodes from c_out with the matching ordering.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -27,7 +28,11 @@ void kernel_main() {
     constexpr uint32_t C = get_compile_time_arg_val(6);                     // input channels
     constexpr uint32_t H = get_compile_time_arg_val(7);                     // input height
     constexpr uint32_t N = get_compile_time_arg_val(8);                     // batch size
-    constexpr auto src_args = TensorAccessorArgs<9>();                      // TensorAccessor starts at CTA[9]
+    constexpr uint32_t channel_order = get_compile_time_arg_val(9);         // 0=CHANNEL_MAJOR, 1=SPATIAL_MAJOR
+    constexpr auto src_args = TensorAccessorArgs<10>();                     // TensorAccessor starts at CTA[10]
+
+    constexpr uint32_t CHANNEL_MAJOR = 0;
+    constexpr uint32_t SPATIAL_MAJOR = 1;
 
     // Runtime args
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -48,9 +53,15 @@ void kernel_main() {
     uint32_t c_out = rem / Ho;
     uint32_t h_out = rem % Ho;
 
-    // Precompute c_in, rh for starting c_out
-    uint32_t c_in = c_out / r2;
-    uint32_t rh = (c_out % r2) / r;
+    // Precompute c_in, rh for starting c_out (branch resolved at compile time)
+    uint32_t c_in, rh;
+    if constexpr (channel_order == SPATIAL_MAJOR) {
+        c_in = c_out % C;
+        rh = (c_out / C) / r;
+    } else {  // CHANNEL_MAJOR
+        c_in = c_out / r2;
+        rh = (c_out % r2) / r;
+    }
 
     for (uint32_t i = 0; i < num_sticks; i++) {
         // input_page = n*C*H + c_in*H + h_out*r + rh
@@ -71,8 +82,13 @@ void kernel_main() {
                 n++;
             }
             // Recompute c_in and rh only when c_out changes
-            c_in = c_out / r2;
-            rh = (c_out % r2) / r;
+            if constexpr (channel_order == SPATIAL_MAJOR) {
+                c_in = c_out % C;
+                rh = (c_out / C) / r;
+            } else {  // CHANNEL_MAJOR
+                c_in = c_out / r2;
+                rh = (c_out % r2) / r;
+            }
         }
     }
 }

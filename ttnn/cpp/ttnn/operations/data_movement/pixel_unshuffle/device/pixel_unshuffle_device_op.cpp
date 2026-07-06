@@ -81,10 +81,13 @@ PixelUnshuffle::tensor_return_value_t PixelUnshuffle::create_output_tensors(
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::PixelUnshuffle::tensor_return_value_t pixel_unshuffle(
-    const ttnn::Tensor& input_tensor, uint32_t downscale_factor, const MemoryConfig& output_mem_config) {
+    const ttnn::Tensor& input_tensor,
+    uint32_t downscale_factor,
+    const MemoryConfig& output_mem_config,
+    ttnn::PixelUnshuffleChannelOrder channel_order) {
     using OpType = ttnn::operations::data_movement::PixelUnshuffle;
-    auto op_attr =
-        OpType::operation_attributes_t{.downscale_factor = downscale_factor, .output_mem_config = output_mem_config};
+    auto op_attr = OpType::operation_attributes_t{
+        .downscale_factor = downscale_factor, .output_mem_config = output_mem_config, .channel_order = channel_order};
     auto tensor_args = OpType::tensor_args_t{.input_tensor = input_tensor};
     return ttnn::device_operation::launch<OpType>(op_attr, tensor_args);
 }

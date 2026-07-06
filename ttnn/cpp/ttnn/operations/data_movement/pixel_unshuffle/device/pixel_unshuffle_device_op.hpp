@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/pixel_unshuffle/pixel_unshuffle.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -17,6 +18,7 @@ struct PixelUnshuffle {
     struct operation_attributes_t {
         uint32_t downscale_factor{};
         MemoryConfig output_mem_config{};
+        ttnn::PixelUnshuffleChannelOrder channel_order{ttnn::PixelUnshuffleChannelOrder::CHANNEL_MAJOR};
     };
 
     struct tensor_args_t {
@@ -46,5 +48,8 @@ struct PixelUnshuffle {
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::PixelUnshuffle::tensor_return_value_t pixel_unshuffle(
-    const ttnn::Tensor& input_tensor, uint32_t downscale_factor, const MemoryConfig& output_mem_config);
+    const ttnn::Tensor& input_tensor,
+    uint32_t downscale_factor,
+    const MemoryConfig& output_mem_config,
+    ttnn::PixelUnshuffleChannelOrder channel_order = ttnn::PixelUnshuffleChannelOrder::CHANNEL_MAJOR);
 }  // namespace ttnn::prim

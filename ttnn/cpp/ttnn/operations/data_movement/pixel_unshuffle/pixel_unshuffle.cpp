@@ -12,7 +12,8 @@ Tensor pixel_unshuffle(
     const Tensor& input_tensor,
     uint32_t downscale_factor,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Layout>& output_layout) {
+    const std::optional<Layout>& output_layout,
+    PixelUnshuffleChannelOrder channel_order) {
     // ── Validation ────────────────────────────────────────────────────────────
 
     TT_FATAL(
@@ -64,7 +65,7 @@ Tensor pixel_unshuffle(
     }
 
     // ── Run kernel ────────────────────────────────────────────────────────────
-    Tensor result = ttnn::prim::pixel_unshuffle(processed, downscale_factor, out_mem_config);
+    Tensor result = ttnn::prim::pixel_unshuffle(processed, downscale_factor, out_mem_config, channel_order);
 
     // ── Optional: tilize output ───────────────────────────────────────────────
     // The kernel always produces ROW_MAJOR.  If the caller requests TILE output,

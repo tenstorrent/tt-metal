@@ -14,8 +14,20 @@
 namespace ttnn::operations::data_movement {
 
 void bind_pixel_unshuffle(nb::module_& mod) {
+    nb::enum_<ttnn::PixelUnshuffleChannelOrder>(mod, "PixelUnshuffleChannelOrder")
+        .value(
+            "CHANNEL_MAJOR",
+            ttnn::PixelUnshuffleChannelOrder::CHANNEL_MAJOR,
+            "Each input channel's r^2 sub-pixels stay contiguous "
+            "(c_out = c_in*r^2 + rh*r + rw). Matches torch.nn.functional.pixel_unshuffle. Default.")
+        .value(
+            "SPATIAL_MAJOR",
+            ttnn::PixelUnshuffleChannelOrder::SPATIAL_MAJOR,
+            "Input channels are interleaved across sub-pixels "
+            "(c_out = rh*(r*C) + rw*C + c_in). Matches ONNX SpaceToDepth channel ordering.");
+
     const auto* doc = R"doc(
-        pixel_unshuffle(input, downscale_factor, *, memory_config=None, output_layout=None) -> ttnn.Tensor
+        pixel_unshuffle(input, downscale_factor, *, memory_config=None, output_layout=None, channel_order=PixelUnshuffleChannelOrder.CHANNEL_MAJOR) -> ttnn.Tensor
 
         Rearranges elements in a tensor of shape ``[N, C, H, W]`` to a tensor of
         shape ``[N, C * r^2, H / r, W / r]`` where ``r = downscale_factor``.
@@ -51,6 +63,10 @@ void bind_pixel_unshuffle(nb::module_& mod) {
             output_layout (ttnn.Layout, optional): Output tensor layout.
                 ``None`` or ``ROW_MAJOR_LAYOUT`` (default) → ROW_MAJOR output.
                 ``TILE_LAYOUT`` → TILE output (kernel output is tilized before returning).
+            channel_order (ttnn.PixelUnshuffleChannelOrder, optional): How input channels are
+                packed into the output channel axis. Only matters when C > 1.
+                ``CHANNEL_MAJOR`` (default) → PyTorch ordering (c_out = c_in*r^2 + rh*r + rw).
+                ``SPATIAL_MAJOR`` → ONNX SpaceToDepth ordering (c_out = rh*(r*C) + rw*C + c_in).
 
         Returns:
             ttnn.Tensor: Output tensor ``[N, C * r^2, H / r, W / r]``.
@@ -82,7 +98,8 @@ void bind_pixel_unshuffle(nb::module_& mod) {
         nb::arg("input"),
         nb::arg("downscale_factor"),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("output_layout") = nb::none());
+        nb::arg("output_layout") = nb::none(),
+        nb::arg("channel_order") = ttnn::PixelUnshuffleChannelOrder::CHANNEL_MAJOR);
 }
 
 }  // namespace ttnn::operations::data_movement
