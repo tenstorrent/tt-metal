@@ -35,8 +35,6 @@ Compare to:
 
 from __future__ import annotations
 
-import torch
-
 import ttnn
 import ttml
 
@@ -67,20 +65,8 @@ class SparseMoEEP(MoE):
         super().__init__(config, moe_axis_name=axis_name)
         self.axis_name = axis_name
         self.cluster_axis = ttml.mesh().axis_index(axis_name)
-
-        # Per-shard leids: same shape on every chip [E_local], but content
-        # differs — shard r gets global IDs [r*E_local, (r+1)*E_local).
-        # A single arange(E) sharded on dim 0 across the EP axis produces
-        # contiguous chunks per shard, which is exactly what we want.
-        device = ttml.autograd.AutoContext.get_instance().get_device()
-        leids_mapper = ttml.mesh().axis_mapper(axis_name, tdim=0)
-        self._leids = ttnn.from_torch(
-            torch.arange(self.num_experts, dtype=torch.int32),
-            dtype=ttnn.uint16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            mesh_mapper=leids_mapper,
-        )
+        # self._leids is built by MoE.__init__, sharded across this EP axis so
+        # shard r holds global IDs [r*E_local, (r+1)*E_local).
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         K = self.n_activated

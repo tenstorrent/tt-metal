@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import math
 import numpy as np
+import torch
 import ttnn
 import ttml
 from ttml.common.memory_utils import memory_snapshot
@@ -274,6 +275,20 @@ class MoE(AbstractModuleBase):
             ttml.autograd.create_tensor(
                 ttnn.zeros(shape, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.Layout.TILE)
             )
+        )
+
+        # Local expert-id vector [E] consumed by moe_group / moe_ungroup. It is
+        # constant across forwards, so build it once here instead of per-step.
+        # EP shards it across the expert axis (each chip sees its local
+        # [r*E_local, (r+1)*E_local) slice); every other layout leaves the
+        # mapper None so it is replicated. Only the sparse variants read it.
+        leids_mapper = ttml.mesh().axis_mapper(moe_axis_name, tdim=0) if ep_sharded else None
+        self._leids = ttnn.from_torch(
+            torch.arange(config.n_routed_experts, dtype=torch.int32),
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            mesh_mapper=leids_mapper,
         )
 
     def _memory_snapshot(self, x: ttml.autograd.Tensor, phase: str) -> ttml.autograd.Tensor:

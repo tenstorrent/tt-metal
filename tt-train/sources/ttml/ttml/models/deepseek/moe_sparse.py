@@ -64,7 +64,6 @@ class SparseMoE(MoE):
     memory_marker_prefix = "SPARSE_MOE"
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        device = ttml.autograd.AutoContext.get_instance().get_device()
         B, _, S, dim = list(x.get_value().shape)
         K = self.n_activated
         E = self.num_experts
@@ -89,7 +88,7 @@ class SparseMoE(MoE):
         # here (in multi-device this same conversion lives just before the
         # CCL boundary).
         metadata = ttnn.to_layout(ttnn.typecast(topk_indices, ttnn.DataType.UINT16), ttnn.ROW_MAJOR_LAYOUT)
-        leids = ttnn.arange(0, E, 1, dtype=ttnn.uint16, device=device)
+        leids = self._leids
 
         x_rm = _to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         scores_for_routing_rm = _to_layout(scores_for_routing, ttnn.ROW_MAJOR_LAYOUT)

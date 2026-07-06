@@ -57,7 +57,6 @@ class SparseMoETP(MoE):
         self.cluster_axis = ttml.mesh().axis_index(self.axis_name)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        device = ttml.autograd.AutoContext.get_instance().get_device()
         K = self.n_activated
         E = self.num_experts
 
@@ -82,7 +81,7 @@ class SparseMoETP(MoE):
 
         # ── 3. moe_group ──
         metadata = ttnn.to_layout(ttnn.typecast(topk_indices, ttnn.DataType.UINT16), ttnn.ROW_MAJOR_LAYOUT)
-        leids = ttnn.arange(0, E, 1, dtype=ttnn.uint16, device=device)
+        leids = self._leids
         x_rm = _to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         scores_for_routing_rm = _to_layout(scores_for_routing, ttnn.ROW_MAJOR_LAYOUT)
         group_out = ttml.ops.moe.moe_group_op(x_rm, metadata, scores_for_routing_rm, leids, int(E), int(K))
