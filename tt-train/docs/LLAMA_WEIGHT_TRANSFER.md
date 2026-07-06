@@ -9,7 +9,7 @@ Reference for two related dict formats:
    produces for transfer to
    [`tt_transformers.tt.model.Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
    This same dict is also the wire format consumed by the cross-rank
-   [`WeightBridge`](../sources/examples/grpo/utils/inference_bridge.py),
+   [`WeightBridge`](../sources/examples/grpo/utils/weight_bridge.py),
    which ships it from a ttml rank to a tt-transformers rank over MPI.
    It is what the GRPO BoolQ example
    ([`tt-train/sources/examples/grpo/boolq/`](../sources/examples/grpo/boolq/))
@@ -247,10 +247,10 @@ meshes; the BoolQ GRPO example uses this path on every step):
 
 ```python
 # ttml rank
-client = TttInferenceClient(peer_rank=TTT_RANK, device=ttml_mesh)
-client.transfer_weights(ttml_model.export_to_hf_dict())
+client = MPIRolloutClient(peer_rank=TTT_RANK, device=ttml_mesh)
+client.send_weights(ttml_model.export_to_hf_dict())
 
-# ttt rank — inside TttInferenceServer.serve_forever, on_weights_received:
+# ttt rank — inside MPIRolloutServer.serve_forever, on_weights_received:
 ttt_model.update_weights(received_hf_dict, hf_rope=False)
 ```
 
@@ -269,4 +269,4 @@ End-to-end smoke tests:
 * tt-transformers dispatcher:
   [`Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
 * Cross-rank transport: `WeightBridge` in
-  [`grpo/utils/inference_bridge.py`](../sources/examples/grpo/utils/inference_bridge.py).
+  [`grpo/utils/weight_bridge.py`](../sources/examples/grpo/utils/weight_bridge.py).
