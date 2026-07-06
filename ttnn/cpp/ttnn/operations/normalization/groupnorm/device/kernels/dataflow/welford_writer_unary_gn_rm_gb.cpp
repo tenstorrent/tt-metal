@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "tt-metalium/constants.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
@@ -11,6 +12,32 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+
+// Load one row-major gamma/beta stick (TILE_WIDTH datums) as the first row of a tile's two faces.
+// Byte offsets scale with the datum size (2B bf16, 4B fp32):
+//   row_bytes  = full tile-width row = TILE_WIDTH datums (read at 64B granularity for Blackhole DRAM reads)
+//   face_bytes = one 16x16 face      = FACE_HW datums (face 1 starts here within the tile)
+//   half_row   = first FACE_WIDTH datums of the row (the face boundary inside the row-major stick)
+// We read the full row into face 0, then rearrange the second half-row into face 0's neighbour (face 1)
+// with an L1->L1 copy (legal at 16B alignment on BH once the data is resident in L1).
+template <typename AccessorType>
+void async_read_row_to_tile(
+    const Noc& noc, const AccessorType& accessor, uint32_t page_id, uint32_t l1_dst_addr, uint32_t element_bytes) {
+    const uint32_t row_bytes = tt::constants::TILE_WIDTH * element_bytes;
+    const uint32_t face_bytes = tt::constants::FACE_HW * element_bytes;
+    const uint32_t half_row_bytes = tt::constants::FACE_WIDTH * element_bytes;
+
+    noc.async_read(accessor, CoreLocalMem<uint32_t>(l1_dst_addr), row_bytes, {.page_id = page_id}, {});
+    noc.async_read_barrier();
+
+    UnicastEndpoint self;
+    noc.async_read(
+        self,
+        CoreLocalMem<uint32_t>(l1_dst_addr + face_bytes),
+        half_row_bytes,
+        {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_dst_addr + half_row_bytes},
+        {});
+}
 
 void kernel_main() {
     constexpr bool is_mcast_sender = get_named_compile_time_arg_val("is_mcast_sender") == 1;
@@ -127,92 +154,32 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         constexpr uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_id);
-        // Datum-aware face byte strides (tile = 32x32 = 1024 datums, face = 16x16 = 256, face row = 16).
-        // bf16 -> element=2, face_w=32, face=512; fp32 -> element=4, face_w=64, face=1024. The literal
-        // 64/512/32 offsets below were bf16-only and corrupted fp32 gamma sticks (-> nan output).
-        constexpr uint32_t gamma_element_bytes = gamma_tile_bytes / 1024;
-        constexpr uint32_t gamma_face_w_bytes = gamma_element_bytes * 16;
-        constexpr uint32_t gamma_face_bytes = gamma_element_bytes * 256;
+        constexpr uint32_t gamma_element_bytes = gamma_tile_bytes / tt::constants::TILE_HW;
         const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
         cb_gamma.reserve_back(num_cols_tile_gamma_beta);
+        uint32_t l1_write_addr_gamma = cb_gamma.get_write_ptr();
 
-        const uint32_t base_l1_write_addr_gamma = cb_gamma.get_write_ptr();
-        uint32_t l1_write_addr_gamma = base_l1_write_addr_gamma;
-
-        // We want this data to appear as the first row of the tile.
-        // This is 32B at the start of the first face, 32B at the start of the second face
-        // However we must read at a 64 byte granularity for Blackhole NOC compatibility on DRAM reads
-        // So instead of two 32B reads to the correct addresses, we read 64 bytes into the first face here
-        // Then later, copy the second set of 32 bytes into the start of the second face
-        // L1-L1 NOC transactions only need 16 byte alignment on BH, so this is legal after data is loaded
-        // to L1
-
-        // Read the first 64 bytes of the tile into the first face
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-            uint32_t tile_id = gamma_tile_start_id + w;
-            noc.async_read(
-                gamma, CoreLocalMem<uint32_t>(l1_write_addr_gamma), gamma_face_w_bytes * 2, {.page_id = tile_id}, {});
+            async_read_row_to_tile(noc, gamma, gamma_tile_start_id + w, l1_write_addr_gamma, gamma_element_bytes);
             l1_write_addr_gamma += gamma_tile_bytes;
         }
-        noc.async_read_barrier();
-
-        // Copy the second face-row's datums into the second face
-        l1_write_addr_gamma = base_l1_write_addr_gamma;
-
-        UnicastEndpoint self_ep_gamma;
-        for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-            noc.async_read(
-                self_ep_gamma,
-                CoreLocalMem<uint32_t>(l1_write_addr_gamma + gamma_face_bytes),
-                gamma_face_w_bytes,
-                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + gamma_face_w_bytes},
-                {});
-            l1_write_addr_gamma += gamma_tile_bytes;
-        }
-
         noc.async_read_barrier();
         cb_gamma.push_back(num_cols_tile_gamma_beta);
     }
 
     if constexpr (fuse_beta) {
-        // Just like gamma, we read at a 64 byte granularity for Blackhole NOC compatibility
-        // Then copy the second set of 32 bytes into the second face
         constexpr uint32_t beta_tile_bytes = get_tile_size(cb_beta_id);
-        // Datum-aware face byte strides (see gamma above): bf16 -> 2/32/512, fp32 -> 4/64/1024.
-        constexpr uint32_t beta_element_bytes = beta_tile_bytes / 1024;
-        constexpr uint32_t beta_face_w_bytes = beta_element_bytes * 16;
-        constexpr uint32_t beta_face_bytes = beta_element_bytes * 256;
+        constexpr uint32_t beta_element_bytes = beta_tile_bytes / tt::constants::TILE_HW;
         const auto beta = TensorAccessor(beta_args, beta_addr);
 
         cb_beta.reserve_back(num_cols_tile_gamma_beta);
+        uint32_t l1_write_addr_beta = cb_beta.get_write_ptr();
 
-        const uint32_t base_l1_write_addr_beta = cb_beta.get_write_ptr();
-        uint32_t l1_write_addr_beta = base_l1_write_addr_beta;
-
-        // Read the first 64 bytes of the tile into the first face
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-            uint32_t tile_id = beta_tile_start_id + w;
-            noc.async_read(
-                beta, CoreLocalMem<uint32_t>(l1_write_addr_beta), beta_face_w_bytes * 2, {.page_id = tile_id}, {});
+            async_read_row_to_tile(noc, beta, beta_tile_start_id + w, l1_write_addr_beta, beta_element_bytes);
             l1_write_addr_beta += beta_tile_bytes;
         }
-        noc.async_read_barrier();
-
-        // Copy the second face-row's datums into the second face
-        l1_write_addr_beta = base_l1_write_addr_beta;
-
-        UnicastEndpoint self_ep_beta;
-        for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-            noc.async_read(
-                self_ep_beta,
-                CoreLocalMem<uint32_t>(l1_write_addr_beta + beta_face_bytes),
-                beta_face_w_bytes,
-                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + beta_face_w_bytes},
-                {});
-            l1_write_addr_beta += beta_tile_bytes;
-        }
-
         noc.async_read_barrier();
         cb_beta.push_back(num_cols_tile_gamma_beta);
     }
