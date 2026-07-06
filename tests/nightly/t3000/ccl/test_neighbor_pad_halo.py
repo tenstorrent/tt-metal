@@ -298,6 +298,91 @@ def test_neighbor_pad_halo_padded_border(mesh_device, device_params, input_shape
     assert all_pass, "repacked padded buffer != full-pad output"
 
 
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("input_shape", [[1, 8, 144, 256, 128]], ids=["s3ish"])
+def test_neighbor_pad_halo_strided_input(mesh_device, device_params, input_shape):
+    """Copy-free primitive: neighbor_pad_halo reading a PADDED input's INTERIOR (input_pad_h/w) must
+    produce the same compact halo as reading the equivalent contiguous input (interior == unpadded).
+    Force non-mux (TT_NP_W_WORKERS=1 TT_NP_H_WORKERS=1). This turn the H reader is done, so compare
+    the H-sections (Htop|Hbot) of the compact; the W reader is a follow-on."""
+    h_dim, w_dim, h_axis, w_axis, pH, pW, num_links = 2, 3, 0, 1, 1, 1, 2
+    mesh_shape = tuple(mesh_device.shape)
+    hf, wf = mesh_shape[h_axis], mesh_shape[w_axis]
+    B, T, Hf, Wf, C = input_shape
+    Hd, Wd = Hf // hf, Wf // wf
+    torch.manual_seed(0)
+    inp = torch.rand(input_shape).bfloat16()
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+    mesh_device.load_sub_device_manager(mgr)
+    sub_id = ttnn.SubDeviceId(0)
+    mesh_device.set_sub_device_stall_group([sub_id])
+    h_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    w_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    dims = [None, None]
+    dims[h_axis], dims[w_axis] = h_dim, w_dim
+
+    h_total = Hd + 2 * pH
+    total_sticks = T * 2 * pH * Wd + T * 2 * pW * h_total
+    h_sec_sticks = T * 2 * pH * Wd  # Htop|Hbot span at the front of the compact buffer
+
+    def run(x_mesh, ipad_h, ipad_w):
+        compact = ttnn.from_torch(
+            torch.zeros(total_sticks, C).bfloat16(), device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+        )
+        ttnn.experimental.neighbor_pad_halo(
+            x_mesh, compact, np_padding_h=pH, np_padding_w=pW, np_cluster_axis=h_axis, np_num_links=num_links,
+            np_topology=ttnn.Topology.Linear, h_neighbor_semaphore=h_sem, barrier_semaphore=barrier_sem,
+            w_neighbor_semaphore=w_sem, np_pad_dim2=w_dim, np_pad2_left=pW, np_pad2_right=pW,
+            np_pad2_cluster_axis=w_axis, np_pad2_num_links=num_links, padding_mode="zeros",
+            input_pad_h=ipad_h, input_pad_w=ipad_w,
+        )
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
+        return ttnn.get_device_tensors(ttnn.from_device(compact))
+
+    # Reference: contiguous input.
+    inp_mesh = ttnn.from_torch(
+        inp, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+    )
+    ref = run(inp_mesh, 0, 0)
+
+    # Padded input: each device's [Hd,Wd] shard padded to [Hd+2,Wd+2] (interior == its shard, border 0),
+    # tiled into a global [.,(Hd+2)*hf,(Wd+2)*wf,.] so the 2D shard hands each device its padded block.
+    xp = torch.zeros(B, T, h_total * hf, (Wd + 2 * pW) * wf, C).bfloat16()
+    for hi in range(hf):
+        for wi in range(wf):
+            dev = inp[:, :, hi * Hd:(hi + 1) * Hd, wi * Wd:(wi + 1) * Wd, :]
+            xp[:, :, hi * h_total + pH:hi * h_total + pH + Hd, wi * (Wd + 2 * pW) + pW:wi * (Wd + 2 * pW) + pW + Wd, :] = dev
+    xp_mesh = ttnn.from_torch(
+        xp, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+    )
+    test = run(xp_mesh, pH, pW)
+
+    all_pass = True
+    for i in range(mesh_shape[0] * mesh_shape[1]):
+        r = ttnn.to_torch(ref[i])[:h_sec_sticks, :]
+        t = ttnn.to_torch(test[i])[:h_sec_sticks, :]
+        eq, _ = comp_equal(r, t)
+        if not eq:
+            all_pass = False
+            _, pcc = comp_pcc(r, t, 0.0)
+            print(f"FAIL dev {i}: H-section pcc={pcc}", flush=True)
+        else:
+            print(f"PASS dev {i}", flush=True)
+    mesh_device.reset_sub_device_stall_group()
+    mesh_device.clear_loaded_sub_device_manager()
+    assert all_pass, "strided-input H-sections != contiguous-input H-sections"
+
+
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)

@@ -74,7 +74,9 @@ void bind_neighbor_pad_halo(nb::module_& mod) {
         nb::arg("np_pad2_num_links"),
         nb::kw_only(),
         nb::arg("padding_mode") = "zeros",
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_pad_h") = 0,
+        nb::arg("input_pad_w") = 0);
 }
 
 void bind_halo_scatter(nb::module_& mod) {

@@ -111,6 +111,18 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     }
     uint32_t input_halo_dim_size = input_tensor_shape[np_dim];  // H_dev
 
+    // Padded-input mode: the input tensor is [.., H+2pH, W+2pW, C], so the values derived from its shape
+    // above are the PADDED W/H. Keep them as the reader's input row-stride / frame-rows (for the strided
+    // interior read), but reduce the halo-geometry dims to the INTERIOR (H_dev, W_dev) — the compact
+    // buffer, writer, and W-section sizing are all about the interior halo, unchanged from contiguous input.
+    const bool padded_input = op.input_pad_h > 0 || op.input_pad_w > 0;
+    const uint32_t reader_row_stride = num_sticks_per_halo_dim;  // padded W (input tensor W)
+    const uint32_t reader_frame_rows = input_halo_dim_size;      // padded H (input tensor H)
+    if (padded_input) {
+        num_sticks_per_halo_dim -= 2 * op.input_pad_w;  // -> interior W_dev
+        input_halo_dim_size -= 2 * op.input_pad_h;      // -> interior H_dev
+    }
+
     // In fabric_only mode output is a compact halo buffer
     uint32_t output_halo_dim_size = op.np_padding_h + op.np_padding_h;  // padding_left + padding_right
 
@@ -557,16 +569,22 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                 link_dims_to_read = (b_end > b_start) ? (b_end - b_start) : 0u;
             }
 
-            // Reader runtime args
+            // Reader runtime args. Padded input: frame base/stride use padded dims (reader_frame_rows *
+            // reader_row_stride), stick_start skips the pH/pW border, row stride is padded W, but the
+            // edge-row count and sticks-to-read stay interior (input_halo_dim_size / num_sticks_per_halo_dim).
+            const uint32_t rd_frame_base =
+                padded_input ? (link_offset_start_id / num_sticks_per_halo_dim) * reader_frame_rows * reader_row_stride
+                             : link_offset_start_id * input_halo_dim_size;
             std::vector<uint32_t> reader_rt_args = {
-                link_offset_start_id * input_halo_dim_size,                          // outer_dim_offset_start_id
-                0,                                                                   // stick_start_id
-                input_halo_dim_size,                                                 // input_halo_dim_size
+                rd_frame_base,                                                       // outer_dim_offset_start_id
+                padded_input ? (op.input_pad_h * reader_row_stride + op.input_pad_w) : 0u,  // stick_start_id
+                input_halo_dim_size,                                                 // input_halo_dim_size (interior)
                 link_dims_to_read,                                                   // outer_dim_size
                 op.np_padding_h,                                                     // padding (symmetric)
-                num_sticks_per_halo_dim,                                             // num_sticks_to_read
-                num_sticks_per_halo_dim,                                             // num_sticks_per_halo_dim
-                corner_sticks_per_row};                                              // num_l1_recv_sticks_per_row
+                num_sticks_per_halo_dim,                                             // num_sticks_to_read (interior)
+                padded_input ? reader_row_stride : num_sticks_per_halo_dim,          // num_sticks_per_halo_dim (stride)
+                corner_sticks_per_row,                                               // num_l1_recv_sticks_per_row
+                padded_input ? reader_frame_rows : input_halo_dim_size};            // input_frame_rows (frame stride)
             reader_rt_args.push_back(direction ? is_last_device : is_first_device);  // is_first_chip
             reader_rt_args.push_back(direction ? is_first_device : is_last_device);  // is_last_chip
             reader_rt_args.push_back(direction);                                     // direction
@@ -759,16 +777,18 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     CoreCoord wc_vc = hmux_worker_virtual[s * num_h_workers + wk];
                     const uint32_t wk_f0 = link_f0 + wk * per_wk + std::min(wk, extra_wk);
                     const uint32_t wk_fc = per_wk + (wk < extra_wk ? 1u : 0u);
-                    // Reader RT args (same layout as the standard H reader).
+                    // Reader RT args (same layout as the standard H reader). wk_f0 is in FRAME units here.
                     std::vector<uint32_t> r_rt = {
-                        wk_f0 * num_sticks_per_halo_dim * input_halo_dim_size,  // outer_dim_offset_start_id
-                        0u,                                                     // stick_start_id
+                        padded_input ? wk_f0 * reader_frame_rows * reader_row_stride
+                                     : wk_f0 * num_sticks_per_halo_dim * input_halo_dim_size,  // outer_dim_offset_start_id
+                        padded_input ? (op.input_pad_h * reader_row_stride + op.input_pad_w) : 0u,  // stick_start_id
                         input_halo_dim_size,
                         wk_fc,  // outer_dim_size (frames this worker owns)
                         op.np_padding_h,
                         num_sticks_per_halo_dim,
-                        num_sticks_per_halo_dim,
-                        corner_sticks_per_row};
+                        padded_input ? reader_row_stride : num_sticks_per_halo_dim,
+                        corner_sticks_per_row,
+                        padded_input ? reader_frame_rows : input_halo_dim_size};  // input_frame_rows
                     r_rt.push_back(dir ? is_last_device : is_first_device);
                     r_rt.push_back(dir ? is_first_device : is_last_device);
                     r_rt.push_back(dir);
