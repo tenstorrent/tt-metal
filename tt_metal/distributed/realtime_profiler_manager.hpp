@@ -64,10 +64,13 @@ public:
     // request per 60s and a no-op when no devices are active.
     void trigger_sync_check();
 
-    // Receiver diagnostics.
+    // RT-profiler diagnostics
     uint32_t peak_fifo_pages() const { return peak_fifo_pages_.load(std::memory_order_relaxed); }
+    uint32_t host_fifo_capacity_pages() const;
     uint64_t num_published_records() const { return num_published_records_.load(std::memory_order_relaxed); }
     uint64_t num_published_batches() const { return num_published_batches_.load(std::memory_order_relaxed); }
+    uint32_t ring_full_wait_count() const;  // reads device L1
+    size_t num_active_devices() const { return devices_.size(); }
 
 private:
     struct DeviceState {

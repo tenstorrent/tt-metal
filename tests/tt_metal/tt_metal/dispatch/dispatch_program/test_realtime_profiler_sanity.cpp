@@ -20,8 +20,8 @@
 
 #include <chrono>
 #include <cstdint>
-#include <mutex>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -47,6 +47,7 @@ namespace {
 using tt::tt_metal::experimental::IsProgramRealtimeProfilerActive;
 using tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle;
 using tt::tt_metal::experimental::ProgramRealtimeRecord;
+using tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
 using tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback;
 using tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback;
 
@@ -137,18 +138,17 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
 
-    std::mutex records_mu;
     std::vector<ProgramRealtimeRecord> records;
+    uint64_t dropped = 0;
 
     ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecord& record) {
-            std::lock_guard<std::mutex> lk(records_mu);
-            records.push_back(record);
+        RegisterProgramRealtimeProfilerCallback([&records, &dropped](const ProgramRealtimeRecordBatch& batch) {
+            dropped += batch.dropped;
+            records.insert(records.end(), batch.records.begin(), batch.records.end());
         });
 
     CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
     CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
-
     for (uint32_t i = 0; i < kNumPrograms; ++i) {
         // Runtime IDs start at 1 so every program emits a record (runtime_id == 0
         // is reserved for infrastructure traffic and filtered host-side).
@@ -164,16 +164,11 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
 
     UnregisterProgramRealtimeProfilerCallback(handle);
 
-    std::vector<ProgramRealtimeRecord> collected;
-    {
-        std::lock_guard<std::mutex> lk(records_mu);
-        collected = std::move(records);
-    }
+    ASSERT_GE(records.size(), kNumPrograms)
+        << "Expected at least " << kNumPrograms << " RT profiler records (one per program), got " << records.size();
+    EXPECT_EQ(dropped, 0u);
 
-    ASSERT_GE(collected.size(), kNumPrograms)
-        << "Expected at least " << kNumPrograms << " RT profiler records (one per program), got " << collected.size();
-
-    for (const auto& rec : collected) {
+    for (const auto& rec : records) {
         EXPECT_GT(rec.end_timestamp, rec.start_timestamp)
             << "RT record end_timestamp must be strictly greater than start_timestamp (runtime_id=" << rec.runtime_id
             << ", chip=" << rec.chip_id << ")";
@@ -192,7 +187,7 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     // Every program embeds "<prefix><runtime_id>" in its source, so we can verify each record carries the correct
     // source.
     std::set<uint32_t> programs_with_correct_sources;
-    for (const auto& rec : collected) {
+    for (const auto& rec : records) {
         if (rec.runtime_id < 1 || rec.runtime_id > kNumPrograms) {
             continue;
         }
@@ -209,8 +204,92 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     }
     EXPECT_EQ(programs_with_correct_sources.size(), kNumPrograms)
         << "Not every program's source was correctly correlated by runtime ID";
+}
 
+TEST(RealtimeProfilerSanity, CloseDrainsRegisteredCallback) {
+    constexpr int kDeviceId = 0;
+
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    std::vector<ProgramRealtimeRecord> records;
+    ProgramRealtimeProfilerCallbackHandle handle =
+        RegisterProgramRealtimeProfilerCallback([&records](const ProgramRealtimeRecordBatch& batch) {
+            records.insert(records.end(), batch.records.begin(), batch.records.end());
+        });
+
+    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
+    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
+    for (uint32_t i = 0; i < kNumPrograms; ++i) {
+        enqueue_sanity_program(mesh_device, i + 1, all_cores);
+    }
+
+    mesh_device->quiesce_devices();
     EXPECT_TRUE(mesh_device->close());
+
+    UnregisterProgramRealtimeProfilerCallback(handle);
+
+    std::set<uint32_t> observed_runtime_ids;
+    for (const auto& rec : records) {
+        if (rec.runtime_id >= 1 && rec.runtime_id <= kNumPrograms) {
+            observed_runtime_ids.insert(rec.runtime_id);
+        }
+    }
+    EXPECT_EQ(observed_runtime_ids.size(), kNumPrograms)
+        << "Mesh close should drain records for callbacks still registered at shutdown";
+}
+
+TEST(RealtimeProfilerSanity, ThrowingCallbackIsIsolated) {
+    constexpr int kDeviceId = 0;
+
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    uint64_t throwing_invocations = 0;
+    std::vector<ProgramRealtimeRecord> records;
+    ProgramRealtimeProfilerCallbackHandle throwing_handle =
+        RegisterProgramRealtimeProfilerCallback([&throwing_invocations](const ProgramRealtimeRecordBatch&) {
+            ++throwing_invocations;
+            throw std::runtime_error("intentional callback failure");
+        });
+    ProgramRealtimeProfilerCallbackHandle good_handle =
+        RegisterProgramRealtimeProfilerCallback([&records](const ProgramRealtimeRecordBatch& batch) {
+            records.insert(records.end(), batch.records.begin(), batch.records.end());
+        });
+
+    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
+    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
+    for (uint32_t i = 0; i < kNumPrograms; ++i) {
+        enqueue_sanity_program(mesh_device, i + 1, all_cores);
+    }
+
+    mesh_device->quiesce_devices();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    UnregisterProgramRealtimeProfilerCallback(throwing_handle);
+    UnregisterProgramRealtimeProfilerCallback(good_handle);
+
+    std::set<uint32_t> observed_runtime_ids;
+    for (const auto& rec : records) {
+        if (rec.runtime_id >= 1 && rec.runtime_id <= kNumPrograms) {
+            observed_runtime_ids.insert(rec.runtime_id);
+        }
+    }
+    EXPECT_GT(throwing_invocations, 0u) << "throwing callback should have been invoked";
+    EXPECT_EQ(observed_runtime_ids.size(), kNumPrograms)
+        << "sibling callback must receive every record despite the other callback throwing";
 }
 
 TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
@@ -276,12 +355,10 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
 
-    std::mutex records_mu;
     std::vector<ProgramRealtimeRecord> records;
     ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecord& record) {
-            std::lock_guard<std::mutex> lk(records_mu);
-            records.push_back(record);
+        RegisterProgramRealtimeProfilerCallback([&records](const ProgramRealtimeRecordBatch& batch) {
+            records.insert(records.end(), batch.records.begin(), batch.records.end());
         });
 
     CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
@@ -323,15 +400,9 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     UnregisterProgramRealtimeProfilerCallback(handle);
     mesh_device->release_mesh_trace(trace_id);
 
-    std::vector<ProgramRealtimeRecord> collected;
-    {
-        std::lock_guard<std::mutex> lk(records_mu);
-        collected = std::move(records);
-    }
-
     const std::string expected_marker = kSourceMarkerPrefix + std::to_string(kTraceRuntimeId);
     uint32_t trace_records = 0;
-    for (const auto& rec : collected) {
+    for (const auto& rec : records) {
         if (rec.runtime_id != kTraceRuntimeId) {
             continue;
         }
