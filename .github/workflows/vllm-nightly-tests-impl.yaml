@@ -294,7 +294,9 @@ jobs:
               "name": "[BH-LB] Llama-3.1-8B-Instruct with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
-              "benchmark-timeout": 10,
+              "benchmark-timeout": 20,
+              "sampling-test-timeout": 20,
+              "benchmark-num-prompts": 256,
               "runner-label": "bh-loudbox",
               "arch": "arch-blackhole",
               "mesh-device": "P150x8",
@@ -675,13 +677,15 @@ jobs:
               ADDITIONAL_BENCHMARK_ARGS=()
             fi
 
+            BENCHMARK_NUM_PROMPTS=${{ matrix.test-group.benchmark-num-prompts || 32 }}
+
             vllm bench serve \
               --backend vllm \
               --model ${{ matrix.test-group.model }} \
               --dataset-name random \
               --random-input-len 100 \
               --random-output-len 100 \
-              --num-prompts 32 \
+              --num-prompts "$BENCHMARK_NUM_PROMPTS" \
               --ignore-eos \
               --percentile-metrics ttft,tpot,itl,e2el \
               --save-result \
@@ -764,10 +768,12 @@ jobs:
               ADDITIONAL_STRUCTURED_OUTPUT_ARGS=()
             fi
 
+            STRUCTURED_NUM_PROMPTS=${{ matrix.test-group.structured-output-num-prompts || 32 }}
+
             python3 vllm/benchmarks/benchmark_serving_structured_output.py \
               --backend vllm \
               --model ${{ matrix.test-group.model }} \
-              --num-prompts 32 \
+              --num-prompts "$STRUCTURED_NUM_PROMPTS" \
               --percentile-metrics ttft,tpot,itl,e2el \
               --dataset json-unique \
               --output-len 1024 \
