@@ -415,8 +415,13 @@ def build_vae_decoder(mesh_device, *, dtype=None):
     from diffusers import AutoencoderOobleck
     from models.experimental.acestep.reference.weight_utils import vae_dir
     from models.experimental.acestep.tt.vae_decoder import OobleckDecoder, OobleckVAEConfig
+    from models.experimental.acestep.tt.vae_conv_config import apply_vae_conv3d_config, vae_default_dtype
 
-    dtype = dtype or _ttnn.float32
+    # VAE runs bf16 by default (no fp32 on the audio path) — external, env-overridable config.
+    dtype = dtype or vae_default_dtype()
+    # Apply the external, tuned Conv3d blockings for (arch, dtype) before building the convs (no-op
+    # when no preset exists -> tt_dit fallback). Non-hardcoded: keyed by arch+dtype, sweep-derived.
+    apply_vae_conv3d_config(mesh_device, dtype)
     vae = AutoencoderOobleck.from_pretrained(vae_dir()).eval()
     cfg = OobleckVAEConfig.from_diffusers(vae.config)
     dec = OobleckDecoder(cfg, mesh_device=mesh_device, dtype=dtype)

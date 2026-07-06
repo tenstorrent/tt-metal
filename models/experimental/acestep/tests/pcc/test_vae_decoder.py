@@ -43,11 +43,17 @@ def test_vae_decoder(device, t_latent):
     with torch.no_grad():
         ref_wav = ref_decoder(latents)  # [B, 2, T*1920]
 
-    dec = OobleckDecoder(cfg, mesh_device=device, dtype=ttnn.float32)
+    # Validate the SAME dtype the pipeline ships (bf16 by default; env-overridable). This gates the
+    # VAE precision choice: a dtype/blocking change must still clear the 0.97 PCC threshold.
+    from models.experimental.acestep.tt.vae_conv_config import apply_vae_conv3d_config, vae_default_dtype
+
+    vae_dtype = vae_default_dtype()
+    apply_vae_conv3d_config(device, vae_dtype)
+    dec = OobleckDecoder(cfg, mesh_device=device, dtype=vae_dtype)
     dec.load_torch_state_dict(_effective_vae_decoder_state(ref_decoder))
 
     lat_btc = latents.transpose(1, 2).contiguous()  # [B, T, 64]
-    lat_tt = ttnn.from_torch(lat_btc, device=device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    lat_tt = ttnn.from_torch(lat_btc, device=device, dtype=vae_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
     out_tt = dec.forward(lat_tt)
     out = ttnn.to_torch(out_tt).float()[..., : cfg.audio_channels]  # [B, T*1920, 2]
     out_bct = out.reshape(1, -1, cfg.audio_channels).transpose(1, 2)  # [B, 2, samples]
