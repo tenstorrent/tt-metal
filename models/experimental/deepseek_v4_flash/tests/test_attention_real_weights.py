@@ -45,7 +45,7 @@ import torch
 
 
 # Cached transformers (the only install with ``deepseek_v4``).
-_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash"
+_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark"
 
 
 # --------------------------------------------------------------------------- #
