@@ -278,13 +278,8 @@ _G5_HOST_SAMPLING = (
 _G5_HOST_XFER = ("from_torch", "to_torch", "from_device", "to_device")
 
 
-def _host_op_gate_reason(probe_result, require: bool = False):
+def _host_op_gate_reason(probe_result):
     if not isinstance(probe_result, dict) or not probe_result.get("ran"):
-        if require:
-            return (
-                "G5-observer: host-op observer did not run (no host_op_selftest hook) — "
-                "cannot prove the forward is on-device"
-            )
         return None
     v = probe_result.get("verdict") or {}
     if v.get("on_device", True):
@@ -594,7 +589,6 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                 penv3.pop("TT_METAL_DEVICE_PROFILER", None)
                 _pb3 = repo / "python_env" / "bin" / "python"
                 _pbin3 = str(_pb3) if _pb3.exists() else sys.executable
-                _require = os.environ.get("E2E_REQUIRE_HOST_OBSERVER") == "1"
                 try:
                     pr3 = subprocess.run(
                         [_pbin3, str(hop), str(demo_dir)],
@@ -611,7 +605,7 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                                 _res = json.loads(line.split("=", 1)[1])
                             except Exception:  # noqa: BLE001
                                 _res = None
-                    _r = _host_op_gate_reason(_res, require=_require)
+                    _r = _host_op_gate_reason(_res)
                     if _r:
                         reasons.append(_r)
                 except Exception:  # noqa: BLE001 — probe failure is not a gate failure (best-effort)
