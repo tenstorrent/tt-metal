@@ -212,8 +212,7 @@ static void log_verbose_dram_work_item(
         job.repeat_index);
 }
 
-[[maybe_unused]]
-static std::vector<DramBankWorkerAssignment> get_optimal_dram_bank_worker_assignments(
+std::vector<DramBankWorkerAssignment> get_optimal_dram_bank_worker_assignments(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, tt_metal::NOC noc) {
     auto* const device = mesh_device->get_devices()[0];
 
