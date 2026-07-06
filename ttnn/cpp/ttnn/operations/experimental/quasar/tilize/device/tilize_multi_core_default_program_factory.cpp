@@ -113,7 +113,15 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_rows", "num_tiles_per_block", "block_width_size", "num_full_blocks_in_row", "start_page_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // QSR: this reader fills MC_INPUT_DFB with many sub-tile (per-row stick) NOC reads — the same
+        // sub-tile pattern that stalls the DFB implicit-sync credit accounting (reader pinned at NRBW /
+        // cb_reserve_back on the very first block; compute idle; writer stuck at NWFW). The transpose
+        // HC-sharded factory hits the identical stall and works around it with disable_dfb_implicit_sync_for_all;
+        // mirror it here. (The TTSIM_QSR_SUBTILE_AUTOPOST_FIX only covers craq-sim, not the emulator/HW path.)
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // -- Writer kernel (spans all_cores) --
@@ -129,7 +137,12 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = MC_OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        // QSR: companion opt-out on the MC_OUTPUT_DFB consumer side (mirrors transpose HC-sharded); keeps the
+        // explicit push_back/pop_front authoritative so the writer's NWFW clears once the pipeline flows.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // -- Compute kernels (preserved multiplicity: per-group CTAs) --
