@@ -22,8 +22,6 @@
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include "impl/context/metal_context.hpp"
-
 // This file contains shortcut helper functions to create minimal valid ProgramSpec
 // objects for unit tests. This cuts boilerplate in a unit testing context.
 //
@@ -78,9 +76,9 @@ inline constexpr const char* MINIMAL_KERNEL_SOURCE = "void kernel_main() {}";
 // Placement is stated on WorkUnitSpec; pass node sets to MakeMinimalWorkUnit instead.
 
 // Helper to create a minimal valid KernelSpec for data movement (Gen2/Quasar)
-inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint32_t num_threads = 1) {
+inline KernelSpec MakeMinimalDMKernel(std::string name, uint32_t num_threads = 1) {
     return KernelSpec{
-        .unique_id = KernelSpecName{name},
+        .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
         .hw_config = DataMovementGen2Config{},
@@ -89,10 +87,9 @@ inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint32_t num_thre
 
 // Helper to create a minimal valid KernelSpec for data movement (Gen1/WH/BH)
 inline KernelSpec MakeMinimalGen1DMKernel(
-    const std::string& name,
-    tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0) {
+    std::string name, tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0) {
     return KernelSpec{
-        .unique_id = KernelSpecName{name},
+        .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
         .hw_config =
@@ -103,54 +100,65 @@ inline KernelSpec MakeMinimalGen1DMKernel(
 }
 
 // Helper to create a minimal valid KernelSpec for data movement whose Gen1 config is built
-// from a reader/writer role via create_{reader,writer}_gen1_datamovement_config (Gen1/WH/BH).
-inline KernelSpec MakeMinimalRoleDMKernel(const std::string& name, const DataMovementGen1Config& gen1) {
+// from the READER role via create_reader_gen1_datamovement_config (Gen1/WH/BH).
+inline KernelSpec MakeMinimalReaderDMKernel(std::string name) {
     return KernelSpec{
-        .unique_id = KernelSpecName{name},
+        .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .hw_config = gen1,
+        .hw_config = create_reader_gen1_datamovement_config(),
     };
 }
 
-// Helper to create a minimal valid KernelSpec for compute
-inline KernelSpec MakeMinimalComputeKernel(const std::string& name, uint32_t num_threads = 1) {
+// Helper to create a minimal valid KernelSpec for data movement whose Gen1 config is built
+// from the WRITER role via create_writer_gen1_datamovement_config (Gen1/WH/BH).
+inline KernelSpec MakeMinimalWriterDMKernel(std::string name) {
     return KernelSpec{
-        .unique_id = KernelSpecName{name},
+        .unique_id = KernelSpecName{std::move(name)},
+        .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
+        .num_threads = 1,
+        .hw_config = create_writer_gen1_datamovement_config(),
+    };
+}
+
+// Helper to create a minimal valid KernelSpec for compute (Gen2/Quasar)
+inline KernelSpec MakeMinimalComputeKernel(std::string name, uint32_t num_threads = 1) {
+    return KernelSpec{
+        .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        // Hold the sub-config matching the current (mock) arch; the mock fixtures set the arch via
-        // configure_mock_mode (ProgramSpecTestQuasar → Gen2, ProgramSpecTestGen1 → Gen1).
-        .hw_config =
-            [] {
-                if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
-                    return ComputeHardwareConfig{ComputeGen2Config{}};
-                }
-                return ComputeHardwareConfig{ComputeGen1Config{}};
-            }(),
+        .hw_config = ComputeHardwareConfig{ComputeGen2Config{}},
+    };
+}
+
+// Helper to create a minimal valid KernelSpec for compute (Gen1/WH/BH)
+inline KernelSpec MakeMinimalGen1ComputeKernel(std::string name, uint32_t num_threads = 1) {
+    return KernelSpec{
+        .unique_id = KernelSpecName{std::move(name)},
+        .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
+        .num_threads = num_threads,
+        .hw_config = ComputeHardwareConfig{ComputeGen1Config{}},
     };
 }
 
 // Helper to create a minimal valid DataflowBufferSpec
-inline DataflowBufferSpec MakeMinimalDFB(
-    const std::string& name, uint32_t entry_size = 1024, uint32_t num_entries = 2) {
+inline DataflowBufferSpec MakeMinimalDFB(std::string name, uint32_t entry_size = 1024, uint32_t num_entries = 2) {
     return DataflowBufferSpec{
-        .unique_id = DFBSpecName{name},
+        .unique_id = DFBSpecName{std::move(name)},
         .entry_size = entry_size,
         .num_entries = num_entries,
     };
 }
 
 // Helper to create a minimal valid WorkUnitSpec
-inline WorkUnitSpec MakeMinimalWorkUnit(
-    const std::string& name, const Nodes& nodes, const std::vector<std::string>& kernels) {
+inline WorkUnitSpec MakeMinimalWorkUnit(std::string name, const Nodes& nodes, const std::vector<std::string>& kernels) {
     std::vector<KernelSpecName> kernel_names;
     kernel_names.reserve(kernels.size());
     for (const auto& kernel : kernels) {
         kernel_names.emplace_back(kernel);
     }
     return WorkUnitSpec{
-        .name = name,
+        .name = std::move(name),
         .kernels = std::move(kernel_names),
         .target_nodes = nodes,
     };
@@ -161,23 +169,23 @@ inline WorkUnitSpec MakeMinimalWorkUnit(
 // works on any mock device (alignment + virtualized cores resolved by MakeProgramFromSpec).
 // buffer_type defaults to DRAM; pass BufferType::L1 for an SRAM-resident parameter.
 inline TensorParameter MakeMinimalTensorParameter(
-    const std::string& name, tt::tt_metal::BufferType buffer_type = tt::tt_metal::BufferType::DRAM) {
+    std::string name, tt::tt_metal::BufferType buffer_type = tt::tt_metal::BufferType::DRAM) {
     auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
     auto memory_config = tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type};
     auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
     auto spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 32}, tensor_layout);
     return TensorParameter{
-        .unique_id = TensorParamName{name},
+        .unique_id = TensorParamName{std::move(name)},
         .spec = std::move(spec),
     };
 }
 
 // Helper to add a TensorBinding to a kernel.
 inline void BindTensorParameterToKernel(
-    KernelSpec& kernel, const std::string& tensor_parameter_name, const std::string& accessor_name) {
+    KernelSpec& kernel, std::string tensor_parameter_name, std::string accessor_name) {
     kernel.tensor_bindings.push_back(TensorBinding{
-        .tensor_parameter_name = TensorParamName{tensor_parameter_name},
-        .accessor_name = accessor_name,
+        .tensor_parameter_name = TensorParamName{std::move(tensor_parameter_name)},
+        .accessor_name = std::move(accessor_name),
     });
 }
 
@@ -188,7 +196,7 @@ inline void BindTensorParameterToKernel(
 // sharded across the first `num_cores` cores of the worker grid with shard shape
 // `shard_shape`. Caller is responsible for choosing a shape that fits the grid.
 inline TensorParameter MakeShardedTensorParameter(
-    const std::string& name,
+    std::string name,
     const tt::tt_metal::Shape& logical_shape,
     const std::array<uint32_t, 2>& shard_shape,
     uint32_t num_cores) {
@@ -200,7 +208,7 @@ inline TensorParameter MakeShardedTensorParameter(
     auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE);
     auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
     return TensorParameter{
-        .unique_id = TensorParamName{name},
+        .unique_id = TensorParamName{std::move(name)},
         .spec = tt::tt_metal::TensorSpec(logical_shape, std::move(tensor_layout)),
     };
 }
@@ -213,7 +221,7 @@ inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
     spec.name = "test_program";
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0);
-    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
+    auto compute_kernel = MakeMinimalGen1ComputeKernel("compute_kernel");
 
     auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;

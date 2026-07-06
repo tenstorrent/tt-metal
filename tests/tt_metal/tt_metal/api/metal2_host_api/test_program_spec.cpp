@@ -57,12 +57,14 @@ using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
+using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
-using test_helpers::MakeMinimalRoleDMKernel;
+using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeMinimalWriterDMKernel;
 using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ScopedSlowDispatchOverride;
 
@@ -1045,7 +1047,7 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithDefaultGen2ConfigSucceeds) {
 }
 
 TEST_F(ProgramSpecTestQuasar, RoleBasedGen1ConfigOnGen2Fails) {
-    // create_reader_gen1_datamovement_config() builds a Gen1 placement (DataMovementGen1Config), which
+    // MakeMinimalReaderDMKernel builds a Gen1 placement (DataMovementGen1Config), which
     // is the wrong generation for Gen2 (Quasar): the platform requires a DataMovementGen2Config, so the
     // mismatch is a hard error rather than a silently-ignored role hint.
     NodeCoord node{0, 0};
@@ -1053,7 +1055,7 @@ TEST_F(ProgramSpecTestQuasar, RoleBasedGen1ConfigOnGen2Fails) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto kernel = MakeMinimalRoleDMKernel("kernel", create_reader_gen1_datamovement_config());
+    auto kernel = MakeMinimalReaderDMKernel("kernel");
 
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
@@ -3121,7 +3123,7 @@ TEST_F(ProgramSpecTestGen1, MultiThreadedComputeKernelFails) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto kernel = MakeMinimalComputeKernel("compute_kernel");
+    auto kernel = MakeMinimalGen1ComputeKernel("compute_kernel");
     kernel.num_threads = 2;
 
     spec.kernels = {kernel};
@@ -3177,8 +3179,8 @@ TEST_F(ProgramSpecTestGen1, ReaderAndWriterRolesOnSameNodeSucceed) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto reader = MakeMinimalRoleDMKernel("reader", create_reader_gen1_datamovement_config());
-    auto writer = MakeMinimalRoleDMKernel("writer", create_writer_gen1_datamovement_config());
+    auto reader = MakeMinimalReaderDMKernel("reader");
+    auto writer = MakeMinimalWriterDMKernel("writer");
 
     spec.kernels = {reader, writer};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"reader", "writer"})};
@@ -3195,8 +3197,8 @@ TEST_F(ProgramSpecTestGen1, TwoReaderRolesOnSameNodeConflict) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto r0 = MakeMinimalRoleDMKernel("r0", create_reader_gen1_datamovement_config());
-    auto r1 = MakeMinimalRoleDMKernel("r1", create_reader_gen1_datamovement_config());
+    auto r0 = MakeMinimalReaderDMKernel("r0");
+    auto r1 = MakeMinimalReaderDMKernel("r1");
 
     spec.kernels = {r0, r1};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"r0", "r1"})};
@@ -3614,7 +3616,7 @@ TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
     constexpr uint32_t entry_size = 1024;
 
     // Compute kernel authored in TT_KERNEL form, producing into a DFB drained by a trivial consumer.
-    auto compute = MakeMinimalComputeKernel("compute");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
     compute.source = KernelSpec::SourceCode{kTtKernelComputeShimSource};
     compute.runtime_arg_schema.runtime_arg_names = {"input_offset"};
     compute.runtime_arg_schema.common_runtime_arg_names = {"num_tiles"};
@@ -3979,7 +3981,7 @@ TEST_F(ProgramSpecTestGen1, CompilerIncludePathsForwardedToKernelConfig) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", DataMovementProcessor::RISCV_0);
     dm_kernel.compiler_options.include_paths = dm_paths;
 
-    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
+    auto compute_kernel = MakeMinimalGen1ComputeKernel("compute_kernel");
     compute_kernel.compiler_options.include_paths = compute_paths;
 
     auto dfb = MakeMinimalDFB("dfb_0");

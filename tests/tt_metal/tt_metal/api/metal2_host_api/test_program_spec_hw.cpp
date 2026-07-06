@@ -37,6 +37,7 @@ namespace {
 using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
+using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::MakeShardedTensorParameter;
@@ -363,7 +364,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
 
     // Compute kernel: produces out_dfb. The kernel under test — exercises every
     // named-arg accessor (RTA / CRTA / two CTAs) plus RTA + CRTA varargs.
-    auto compute = MakeMinimalComputeKernel("compute");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/named_args_loopback_compute.cpp";
     compute.runtime_arg_schema.runtime_arg_names = {"input_offset"};
     compute.runtime_arg_schema.common_runtime_arg_names = {"num_tiles"};
@@ -558,7 +559,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
 
     // Compute kernel authored in TT_KERNEL form. magic/entry_size are template params (CTAs);
     // input_offset (RTA) and num_tiles (CRTA) are function params. No varargs.
-    auto compute = MakeMinimalComputeKernel("compute");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/tt_kernel_named_args_compute.cpp";
     compute.runtime_arg_schema.runtime_arg_names = {"input_offset"};
     compute.runtime_arg_schema.common_runtime_arg_names = {"num_tiles"};
@@ -874,7 +875,7 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     spec.name = "local_tensor_accessor_compute";
 
     // Compute kernel (the kernel under test) — binds the tensor, produces into out_dfb.
-    auto compute = MakeMinimalComputeKernel("compute");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/local_tensor_accessor_compute.cpp";
     compute.compile_time_args = {{"entry_size", entry_size}, {"num_tiles", num_tiles}};
     BindTensorParameterToKernel(compute, "local_t", "local_t");
@@ -946,7 +947,7 @@ TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
 
     auto producer_g1 = MakeMinimalGen1DMKernel("producer_g1", DataMovementProcessor::RISCV_0);
     auto producer_g2 = MakeMinimalGen1DMKernel("producer_g2", DataMovementProcessor::RISCV_1);
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen1ComputeKernel("consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
