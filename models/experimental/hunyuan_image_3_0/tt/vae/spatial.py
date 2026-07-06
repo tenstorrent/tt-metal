@@ -119,7 +119,6 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
 
     out = ttnn.add(ttnn.multiply(xn, norm._raw_gamma), norm._raw_beta)  # per-channel affine
     ttnn.deallocate(xn)
-    out = ttnn.typecast(out, norm.dtype)
     out = ttnn.reshape(out, [B, T, Hl, Wl, C])
     return ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
 
