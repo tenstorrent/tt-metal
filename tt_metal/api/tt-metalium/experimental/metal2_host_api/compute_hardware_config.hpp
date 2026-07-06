@@ -75,13 +75,13 @@ struct ComputeGen1Config {
     // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
     bool math_approx_mode = false;
 
-    // Per-DFB choice of how the unpacker delivers data into the math stage.
-    // (See the ComputeUnpackToDestModes doc comment above.)
-    ComputeUnpackToDestModes unpack_to_dest_mode;
-
     // Pack-side precision tweak for the Bfp8 block-float format.
     // (Affects how exponents are reconciled when converting Dest contents to Bfp8)
     bool bfp8_pack_precise = false;
+
+    // Per-DFB choice of how the unpacker delivers data into the math stage.
+    // (See the ComputeUnpackToDestModes doc comment above.)
+    ComputeUnpackToDestModes unpack_to_dest_mode;
 };
 
 struct ComputeGen2Config {
@@ -99,10 +99,6 @@ struct ComputeGen2Config {
     // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
     bool math_approx_mode = false;
 
-    // Per-DFB choice of how the unpacker delivers data into the math stage.
-    // (See the ComputeUnpackToDestModes doc comment above.)
-    ComputeUnpackToDestModes unpack_to_dest_mode;
-
     // When true, the unpacker packs two values into each source-register
     // slot instead of one, so the math engine reads twice as many elements per
     // pass. Only the matmul family of instructions work with this format — matmul (MVMUL/MVMULDI) and the GAPOOL
@@ -114,6 +110,10 @@ struct ComputeGen2Config {
     // Explicitly route this kernel's unpacked operands into dest
     // running the unpack→math→pack semaphore handshake, independent of operand data format.
     bool unpack_to_dest_en = false;
+
+    // Per-DFB choice of how the unpacker delivers data into the math stage.
+    // (See the ComputeUnpackToDestModes doc comment above.)
+    ComputeUnpackToDestModes unpack_to_dest_mode;
 };
 
 // A compute kernel's hardware config holds exactly one generation's config.
