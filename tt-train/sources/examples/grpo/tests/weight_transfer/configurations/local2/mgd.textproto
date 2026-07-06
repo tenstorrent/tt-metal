@@ -10,7 +10,7 @@
 # route across them.
 #
 # The applications open asymmetric sub-meshes on top of this declared
-# layout -- see rank_bindings.yaml and test_bridge_transfer.py.
+# layout -- see rank_bindings.yaml and test_weight_transfer.py.
 
 mesh_descriptors {
   name: "M0"

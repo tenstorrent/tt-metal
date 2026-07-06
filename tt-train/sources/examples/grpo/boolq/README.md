@@ -29,8 +29,8 @@ to the other every step.
   GRPOTrainer + optimizer           TttGenerationWorker
   mesh: [1, N] (DDP)                mesh: [1, 1]
        │                                ▲
-       │  TttInferenceClient    OP_GENERATE / OP_TRANSFER / OP_SHUTDOWN
-       └──────────────► MPI ───────────► TttInferenceServer
+       │  MPIRolloutClient    OP_GENERATE / OP_TRANSFER / OP_SHUTDOWN
+       └──────────────► MPI ───────────► MPIRolloutServer
        │                                │
        └────── WeightBridge socket ─────┘    (replicated weights every step)
 ```
@@ -48,10 +48,10 @@ specific to this two-rank deployment.
 | Class | Side | Role |
 |-------|------|------|
 | `LlamaGRPOCompleter`  | TTML | Concrete `GRPOCompleter`. Owns the ttml policy. Routes `generate(...)` and `push_weights()` to the peer rank via `inference_client`. |
-| `TttInferenceClient`  | TTML | MPI client + `WeightBridge` owner. Constructed before the completer; its constructor blocks until the peer's server is up. |
-| `TttInferenceServer`  | TTT  | Dispatches `OP_GENERATE` / `OP_TRANSFER` / `OP_SHUTDOWN` to user-supplied callbacks. Blocks in `serve_forever()` until shutdown. |
+| `MPIRolloutClient`  | TTML | MPI client + `WeightBridge` owner. Constructed before the completer; its constructor blocks until the peer's server is up. |
+| `MPIRolloutServer`  | TTT  | Dispatches `OP_GENERATE` / `OP_TRANSFER` / `OP_SHUTDOWN` to user-supplied callbacks. Blocks in `serve_forever()` until shutdown. |
 | `TttGenerationWorker` | TTT  | Hosts the `tt-transformers.Transformer` and a captured decode trace. Exposes `generate` and `update_weights` callbacks. |
-| `WeightBridge`        | both | Replicated-tensor transport over a `MeshSocket`. Wire-format spec: [`LLAMA_WEIGHT_TRANSFER.md`](../../../../docs/LLAMA_WEIGHT_TRANSFER.md). |
+| `WeightBridge`        | both | Replicated-tensor transport (ABC). `HostWeightBridge` moves each weight to host via MPI and re-uploads it to each receiver submesh. Wire-format spec: [`LLAMA_WEIGHT_TRANSFER.md`](../../../../docs/LLAMA_WEIGHT_TRANSFER.md). |
 | `WeightSyncCallback`  | TTML | `TrainerCallback` that calls `completer.push_weights()` every `every` optimizer steps. Opt-in. |
 
 ---
@@ -77,7 +77,7 @@ completer = LlamaGRPOCompleter(
     transformer_config=transformer_config,   # TransformerConfig
     mesh_device=mesh_device,                 # opened ttnn.MeshDevice
     model_source="meta-llama/Llama-3.2-1B-Instruct",
-    inference_client=client,                 # TttInferenceClient
+    inference_client=client,                 # MPIRolloutClient
     enable_ddp=True,
 )
 ```
@@ -88,7 +88,7 @@ completer = LlamaGRPOCompleter(
 | `transformer_config` | `TransformerConfig` | Model architecture config (parsed from the YAML training config). |
 | `mesh_device` | `ttnn.MeshDevice` | Already-opened TTML mesh. The caller owns its lifetime; the completer does not open or close it. |
 | `model_source` | `str` | HuggingFace model ID or path to a local directory containing `model.safetensors`. |
-| `inference_client` | `TttInferenceClient` | RPC client to the TTT rank. The completer routes `generate` and `push_weights` calls through this. |
+| `inference_client` | `MPIRolloutClient` | RPC client to the TTT rank. The completer routes `generate` and `push_weights` calls through this. |
 | `enable_ddp` | `bool` | Enable distributed data parallelism across the TTML mesh. Must agree with the `enable_ddp` in the YAML device config. |
 
 ### Methods used by the user
@@ -108,7 +108,7 @@ optimizer steps.
 ```python
 import os
 from datasets import load_dataset
-from utils.inference_bridge import TttInferenceClient
+from utils.mpi_rollout import MPIRolloutClient
 from utils.llama_grpo_completer import (
     LlamaCompletionCtx, LlamaGRPOCompleter, WeightSyncCallback,
 )
@@ -118,7 +118,7 @@ TTML_RANK, TTT_RANK = 0, 1
 mesh_device = ...                         # opened from YAML config
 
 # Bridge handshake: blocks until rank 1 also constructs its server.
-client = TttInferenceClient(peer_rank=TTT_RANK, device=mesh_device)
+client = MPIRolloutClient(peer_rank=TTT_RANK, device=mesh_device)
 
 dataset = load_dataset("google/boolq", split="train").map(format_example)
 
@@ -160,7 +160,7 @@ finally:
 
 ```python
 import ttnn
-from utils.inference_bridge import TttInferenceServer
+from utils.mpi_rollout import MPIRolloutServer
 from utils.ttt_generation_worker import TttGenerationWorker
 from utils.llama_ttt_presets import (
     bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad,
@@ -186,7 +186,7 @@ worker = TttGenerationWorker(
     temperature=0.7, top_k=0, top_p=1.0, seed=None,
 )
 
-server = TttInferenceServer(
+server = MPIRolloutServer(
     peer_rank=0,
     device=mesh_device,
     generate_fn=worker.generate,

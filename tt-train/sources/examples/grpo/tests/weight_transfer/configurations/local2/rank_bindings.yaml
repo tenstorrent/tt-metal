@@ -9,7 +9,7 @@
 # Both ranks declare a [1, 2] mesh in mgd.textproto so UMD's eth walk has
 # a fabric-node mapping for every ASIC. The applications open
 # asymmetric sub-meshes: TTML opens the full [1, 2], TTT opens only
-# [1, 1] at offset (0, 0). See test_bridge_transfer.py and
+# [1, 1] at offset (0, 0). See test_weight_transfer.py and
 # utils/weight_bridge.py for the bridge's negotiation logic.
 
 rank_bindings:
