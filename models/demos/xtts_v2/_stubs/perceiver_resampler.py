@@ -60,27 +60,31 @@ def build(device, torch_module):
     )
 
     def _w(t):
-        return ttnn.from_torch(
+        return ttnn.as_tensor(
             t.detach().contiguous().float(), dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT, device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _wt(t):
         # nn.Linear weight [out, in] -> [in, out] for x @ W.
-        return ttnn.from_torch(
+        return ttnn.as_tensor(
             t.detach().t().contiguous().float(), dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT, device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _b(t, n):
-        return ttnn.from_torch(
+        return ttnn.as_tensor(
             t.detach().reshape(1, 1, n).contiguous().float(), dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT, device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    latents0 = ttnn.from_torch(
+    latents0 = ttnn.as_tensor(
         m.latents.detach().reshape(1, *m.latents.shape).contiguous().float(),
         dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     layers = []

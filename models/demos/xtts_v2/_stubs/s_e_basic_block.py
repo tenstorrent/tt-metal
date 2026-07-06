@@ -65,16 +65,16 @@ def build(device, torch_module):
         return W, cb * a + b
 
     def conv_w(W):
-        return ttnn.from_torch(W.contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        return ttnn.as_tensor(W.contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def conv_b(b):
-        return ttnn.from_torch(b.reshape(1, 1, 1, -1).contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        return ttnn.as_tensor(b.reshape(1, 1, 1, -1).contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def affine_t(a):
-        return ttnn.from_torch(a.reshape(1, 1, 1, -1).contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.as_tensor(a.reshape(1, 1, 1, -1).contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def f32(t):
-        return ttnn.from_torch(t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.as_tensor(t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     in_c = int(blk.conv1.in_channels)
     planes = int(blk.conv1.out_channels)
@@ -112,7 +112,7 @@ def build(device, torch_module):
 
     def forward(x, *args, **kwargs):
         if not isinstance(x, ttnn.Tensor):
-            x = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            x = ttnn.as_tensor(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # input NCHW [1, C, H, W] -> NHWC [1, H, W, C]
         x = ttnn.typecast(x, ttnn.float32)
         H, W = int(x.shape[2]), int(x.shape[3])

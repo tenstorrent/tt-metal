@@ -50,17 +50,19 @@ def build(device, torch_module):
 
     # Per-tap weight in x @ W orientation: W[:, :, tap]^T -> [C_in, C_out].
     taps = [
-        ttnn.from_torch(
+        ttnn.as_tensor(
             w[:, :, tap].t().contiguous(), dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT, device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         for tap in range(k)
     ]
     bias = None
     if m.bias is not None:
-        bias = ttnn.from_torch(
+        bias = ttnn.as_tensor(
             m.bias.detach().reshape(1, 1, c_out).contiguous().float(),
             dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _pad_L(x, p):

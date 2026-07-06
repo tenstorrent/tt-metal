@@ -55,18 +55,18 @@ _SUB = 5  # reference: mel_logits[:, :-5] ("don't ask me why 😄")
 def _emb_weight(device, w):
     import torch
 
-    return ttnn.from_torch(
+    return ttnn.as_tensor(
         w.detach().contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+        dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
 
 def _tile_weight(device, w):
     import torch
 
-    return ttnn.from_torch(
+    return ttnn.as_tensor(
         w.detach().contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
 
@@ -98,12 +98,15 @@ def build(device, torch_module):
     code_stride_len = int(m.code_stride_len)
 
     def _embed(id_row, tok_w, lpe):
-        # id_row: host torch int tensor [1, L]. Token lookup + absolute pos-prefix.
+        # id_row: host torch int [1, L], OR a device uint32 [1, L] (host-free path).
         L = int(id_row.shape[1])
-        tok_tt = ttnn.from_torch(
-            id_row.to(torch.int32).contiguous(), dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
-        )
+        if isinstance(id_row, ttnn.Tensor):
+            tok_tt = id_row                              # already device uint32 ROW_MAJOR
+        else:
+            tok_tt = ttnn.as_tensor(
+                id_row.to(torch.int32).contiguous(), dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         tok = ttnn.embedding(tok_tt, tok_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         # lpe reads only id_row.shape[1]=L and returns float32 [L, D]; cast to the
         # bf16 token-embedding dtype so ttnn.add operand dtypes match.
@@ -115,44 +118,53 @@ def build(device, torch_module):
     def forward(_primary=None, *args, **kwargs):
         text_inputs = kwargs["text_inputs"]
         text_lengths = kwargs["text_lengths"]
-        audio_codes = kwargs["audio_codes"]
         wav_lengths = kwargs["wav_lengths"]
-        cond_latents = kwargs["cond_latents"]
+        # Host-free path: caller supplies the audio token ids and conditioning
+        # prefix as device tensors (built on-device from the AR decode), so this
+        # forward never round-trips to host for the audio side.
+        audio_ids_tt = kwargs.get("audio_ids_tt")
+        cond_latents_tt = kwargs.get("cond_latents_tt")
 
         # --- host token bookkeeping (mirrors GPT.forward, integer indexing) ---
         import torch.nn.functional as F
 
         max_text_len = int(text_lengths.max())
-        code_lengths = torch.ceil(wav_lengths.float() / code_stride_len).long() + 3
-        max_mel_len = int(code_lengths.max())
 
-        if max_mel_len > audio_codes.shape[-1]:
-            audio_codes = F.pad(audio_codes, (0, max_mel_len - audio_codes.shape[-1]))
-
+        # text side is a fixed host input — bookkeeping is pure integer indexing.
         text_inputs = F.pad(text_inputs[:, :max_text_len], (0, 1), value=stop_text_token)
-        audio_codes = F.pad(audio_codes[:, :max_mel_len], (0, 1), value=stop_audio_token)
-
-        # set_mel_padding(audio_codes, code_lengths - 3)
-        audio_codes = audio_codes.clone()
-        for b in range(code_lengths.shape[0]):
-            actual_end = int(code_lengths[b] - 3)
-            if actual_end < audio_codes.shape[-1]:
-                audio_codes[b, actual_end:] = stop_audio_token
-
-        # set_inputs_and_targets: prepend start token to the model inputs.
         text_ids = F.pad(text_inputs, (1, 0), value=start_text_token)
-        audio_ids = F.pad(audio_codes, (1, 0), value=start_audio_token)
-
-        # --- embeddings (ttnn) ---
         text_emb = _embed(text_ids, text_emb_w, lpe_text)     # [1, Lt, D]
-        mel_emb = _embed(audio_ids, mel_emb_w, lpe_mel)       # [1, Lm, D]
+
+        if audio_ids_tt is not None:
+            mel_emb = _embed(audio_ids_tt, mel_emb_w, lpe_mel)     # device ids -> [1, Lm, D]
+        else:
+            audio_codes = kwargs["audio_codes"]
+            code_lengths = torch.ceil(wav_lengths.float() / code_stride_len).long() + 3
+            max_mel_len = int(code_lengths.max())
+            if max_mel_len > audio_codes.shape[-1]:
+                audio_codes = F.pad(audio_codes, (0, max_mel_len - audio_codes.shape[-1]))
+            audio_codes = F.pad(audio_codes[:, :max_mel_len], (0, 1), value=stop_audio_token)
+            # set_mel_padding(audio_codes, code_lengths - 3)
+            audio_codes = audio_codes.clone()
+            for b in range(code_lengths.shape[0]):
+                actual_end = int(code_lengths[b] - 3)
+                if actual_end < audio_codes.shape[-1]:
+                    audio_codes[b, actual_end:] = stop_audio_token
+            audio_ids = F.pad(audio_codes, (1, 0), value=start_audio_token)
+            mel_emb = _embed(audio_ids, mel_emb_w, lpe_mel)       # [1, Lm, D]
 
         import torch as _torch
 
-        cond_tt = ttnn.from_torch(
-            cond_latents.to(_torch.bfloat16).contiguous(),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-        )
+        if cond_latents_tt is not None:
+            cond_tt = cond_latents_tt
+            if cond_tt.get_dtype() != ttnn.bfloat16:
+                cond_tt = ttnn.typecast(cond_tt, ttnn.bfloat16)
+        else:
+            cond_latents = kwargs["cond_latents"]
+            cond_tt = ttnn.as_tensor(
+                cond_latents.to(_torch.bfloat16).contiguous(),
+                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         offset = int(cond_tt.shape[1])
         Lt = int(text_emb.shape[1])
