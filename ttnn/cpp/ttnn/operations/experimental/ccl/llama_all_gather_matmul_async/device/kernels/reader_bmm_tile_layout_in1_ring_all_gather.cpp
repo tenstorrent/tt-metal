@@ -46,7 +46,6 @@ void do_signaling(Noc& noc, uint32_t& rt_args_idx) {
     const uint32_t pv_core_x = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t pv_core_y = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t pv_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t pv_semaphore = get_semaphore(pv_semaphore_id);
     Semaphore<> pv_sem(pv_semaphore_id);
     const bool is_privilaged = get_arg_val<uint32_t>(rt_args_idx++) == 1;
     if (is_privilaged) {
@@ -56,16 +55,21 @@ void do_signaling(Noc& noc, uint32_t& rt_args_idx) {
         const uint32_t multicast_end_x = get_arg_val<uint32_t>(rt_args_idx++);
         const uint32_t multicast_end_y = get_arg_val<uint32_t>(rt_args_idx++);
         const uint32_t num_signalling_semaphores = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t signalling_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
-        const uint64_t signalling_semaphore_address =
-            get_noc_multicast_addr(multicast_start_x, multicast_start_y, multicast_end_x, multicast_end_y, 0) |
-            signalling_semaphore;
+        Semaphore<> rs_sem(get_arg_val<uint32_t>(rt_args_idx++));
         pv_sem.wait(target_sem_value);
         pv_sem.set(1);
-        noc_semaphore_set_multicast(pv_semaphore, signalling_semaphore_address, num_signalling_semaphores);
+        // Relay pv_sem's value into the (different) rs_sem over the reduce-scatter core range.
+        // noc is the reader's NoC (NOC_0)
+        pv_sem.relay_multicast(
+            noc,
+            rs_sem,
+            multicast_start_x,
+            multicast_start_y,
+            multicast_end_x,
+            multicast_end_y,
+            num_signalling_semaphores);
     } else {
-        const uint64_t sem_addr = get_noc_addr(pv_core_x, pv_core_y, pv_semaphore);
-        noc_semaphore_inc(sem_addr, 1);
+        pv_sem.up(noc, pv_core_x, pv_core_y, 1);
     }
 }
 
