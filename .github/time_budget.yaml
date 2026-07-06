@@ -299,7 +299,7 @@ models:
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
-    wh_llmbox_perf: 64
+    wh_llmbox_perf: 120  # [diag-watcher] temp
     wh_n150: 42
     wh_n300: 15
     bh_p150: 7
