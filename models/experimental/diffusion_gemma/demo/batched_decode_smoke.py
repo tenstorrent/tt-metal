@@ -113,7 +113,6 @@ def run(args) -> dict:
         )
         _log_mesh_dram(mesh_device, "post-build")
 
-        vocab_size = int(getattr(bundle.tt_model, "vocab_size", config.vocab_size) or config.vocab_size)
         prompt_tokens = tokenize_prompt(bundle.tokenizer, args.prompt)
 
         # Prefill the SHARED prompt (batch=1) and build the denoise adapter.
@@ -125,6 +124,9 @@ def run(args) -> dict:
             gumbel_mode="argmax",
             seed=args.seed,
         )
+        # vocab_size is a TEXT-backbone field (TextConfig.vocab_size, not DiffusionConfig); the
+        # session infers the authoritative value from the tokenizer/model, so reuse that.
+        vocab_size = int(session.vocab_size)
         cache_len = session.prefill(prompt_tokens)
         adapter = session._logits_fn
         _log_mesh_dram(mesh_device, "post-prefill")

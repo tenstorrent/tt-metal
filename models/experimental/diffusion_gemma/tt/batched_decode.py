@@ -75,6 +75,16 @@ class BatchedDenoiseLogitsFn:
         self.adapter = adapter
         self.batch = batch
         self._prev: List[Optional[ttnn.Tensor]] = [None] * batch
+        # Per-row self-conditioning is threaded via ``self._prev`` + ``adapter.prev_logits``
+        # (the non-trace ``__call__`` path). The adapter's TRACE-SAFE self-cond path instead
+        # keeps a SINGLE persistent in-place signal buffer (``_signal_read_write_bufs``,
+        # ping_pong=False → read buf IS write buf) that ignores ``prev_logits`` — so running B
+        # canvases through the shared adapter would let row 0's soft-embedding signal leak into
+        # row 1 within the same step (confirmed: identical-input B=2 gave committed[0]!=committed[1]).
+        # Force the per-row prev_logits path so each canvas's self-cond depends only on its own
+        # previous logits (functionally identical; the batched prototype runs eager, not traced).
+        if getattr(adapter, "trace_safe_self_conditioning", False):
+            adapter.trace_safe_self_conditioning = False
 
     @property
     def q_rope_offset(self):
@@ -97,7 +107,18 @@ class BatchedDenoiseLogitsFn:
             self._prev[row] = self.adapter.prev_logits
             self.adapter.prev_logits = None
             row_logits.append(logits_row)
-        combined = ttnn.concat(row_logits, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # The returned stacked logits are FREED by the denoise loop each step
+        # (``owns_logits`` -> False), so they must not share a device buffer with any
+        # retained per-row prev-logits (needed for the next step's ``condition()``;
+        # freeing an aliased buffer -> TT_FATAL is_allocated in self_conditioning
+        # ``_soft_embedding_chunked``). At B=1 ``ttnn.concat`` of a single tensor ALIASES
+        # its input buffer and returns a *distinct Python object* over it, so a
+        # ``combined is prev`` identity check misses the alias — clone the lone row into a
+        # fresh buffer instead. For B>1 ``concat`` already allocates a fresh output.
+        if self.batch == 1:
+            combined = ttnn.clone(row_logits[0], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            combined = ttnn.concat(row_logits, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return combined
 
     def owns_logits(self, logits) -> bool:
