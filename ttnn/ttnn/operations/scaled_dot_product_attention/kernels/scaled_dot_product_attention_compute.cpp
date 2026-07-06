@@ -84,7 +84,11 @@ void kernel_main() {
     CircularBuffer cb_scores_buf(cb_scores);
     CircularBuffer cb_pv_buf(cb_pv);
 
-    // Boot init — mm_block_init as the single boot-time init (first compute op is matmul)
+    // Boot init — compute_kernel_hw_startup (hardware configure) MUST be called
+    // before any compute API. Use Regular src order matching the eltwise/reduce
+    // chains. The matmul helpers' mm_block_init_short handles the matmul-specific
+    // state_configure (srca=in1, srcb=in0).
+    ckernel::compute_kernel_hw_startup(cb_q, cb_k, cb_scores);
     mm_block_init(cb_q, cb_k, cb_scores, /*transpose=*/1, /*ct_dim=*/B_kv, /*rt_dim=*/B_q, /*kt_dim=*/D_t);
 
     // Phase 0: Init persistent state (m_i=-inf, l_i=0, O_i=0)
@@ -105,7 +109,8 @@ void kernel_main() {
 
             // Phase 1: QK^T — S = Q @ K^T
             // Q tiles are re-pushed by reader per KV block, so WaitAndPopPerKBlock is correct.
-            // DataFormatReconfig::NONE — all CBs are bf16, no format change needed.
+            // DataFormatReconfig::INPUT_AND_OUTPUT — reconfig back to matmul mode after the
+            // eltwise/reduce chains that ran in the previous KV block iteration.
             ckl::matmul_block<
                 /*transpose=*/true,
                 /*packer_l1_acc=*/false,
@@ -123,7 +128,7 @@ void kernel_main() {
                 ckl::NoIn1BaseOffset,
                 false,  // caller_owns_pack_target
                 ckl::NoneActivation,
-                ckl::matmul_config::DataFormatReconfig::NONE>(
+                ckl::matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT>(
                 cb_q_buf,
                 cb_k_buf,
                 cb_scores_buf,
@@ -267,6 +272,8 @@ void kernel_main() {
             // Phase 12: PV = P @ V
             // Shape: M=B_q, N=D_t, K=B_kv. Single subblock (1,1) of size (B_q, D_t).
             // DEST constraint: B_q * D_t <= DEST_AUTO_LIMIT (4 with fp32_dest_acc_en).
+            // DataFormatReconfig::INPUT_AND_OUTPUT — reconfig back to matmul mode after
+            // the eltwise/reduce chains in Phases 2-11.
             ckl::matmul_block<
                 /*transpose=*/false,
                 /*packer_l1_acc=*/false,
@@ -284,7 +291,7 @@ void kernel_main() {
                 ckl::NoIn1BaseOffset,
                 false,
                 ckl::NoneActivation,
-                ckl::matmul_config::DataFormatReconfig::NONE>(
+                ckl::matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT>(
                 cb_pv_buf, cb_v_buf, cb_scores_buf, cb_scores_buf, ckl::MatmulBlockShape::of(1, 1, B_q, D_t, B_kv, 1));
 
             // Phase 13: O_i += PV
@@ -298,8 +305,9 @@ void kernel_main() {
             }
         }
 
-        // Pop scaler tiles (pushed once per Q block, reused across all KV blocks)
-        cb_pop_front(cb_scaler, 2);
+        // Scaler tiles are already consumed per KV block (MAX scaler popped
+        // after rowmax at line ~153, SUM scaler popped after rowsum at line ~262).
+        // No extra scaler pop here — the reader pushes exactly 2 per KV block.
 
         // Phase 14: Normalize — O = O_i * recip(l_i)
         // l_i from REDUCE_ROW has values only in col 0. DivBinary (SFPU) doesn't broadcast.
