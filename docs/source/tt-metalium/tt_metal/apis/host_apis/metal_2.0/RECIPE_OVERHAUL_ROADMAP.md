@@ -5,7 +5,7 @@
 > never see it (they read the recipe itself). If this branch is ever productized,
 > exclude this file.
 >
-> **Provenance:** started 2026-07-03 by Claude (Opus 4.8) with Audrey, on branch
+> **Provenance:** started 2026-07-03 (updated through 2026-07-05) by Claude (Opus 4.8) with Audrey, on branch
 > `akertesz/op-porting-recipe`. Recorded mid-session (record-as-we-go); append new
 > items as they are decided.
 
@@ -155,6 +155,23 @@ rest.
   here** — currently GATEs on the ProgramDescriptor concept and assumes
   `MetalV2FactoryConcept` is the sole target), Appendix A, recipe factory framing.
   Forthcoming factory-shape flowchart (Audrey).
+
+## Big change #3 — ComputeHardwareConfig / DataMovementHardwareConfig overhaul (PLACEHOLDER — WIP)
+
+> **PLACEHOLDER — do not act on this yet; the code change is in progress.**
+> Code-change owner: **River.** Expected to settle ~2026-07-06 ("a day or so," per
+> Audrey, as of 2026-07-05). Flesh out into a real change entry once it lands.
+
+- **What:** overhaul of how `ComputeHardwareConfig` and `DataMovementHardwareConfig`
+  work, plus new **TTNN-side helper functions** to populate them more effectively.
+- **Why it matters to us:** the recipe must become aware of the new shape — how a
+  porter populates these configs (and via which TTNN helpers) will change.
+- **Status:** details deliberately deferred until the change stabilizes (discussing
+  before then just churns). When it lands, flesh out: what changed, where it lands in
+  the recipe, porter guidance.
+- **Prior design context:** `development-docs/2026-06 ComputeHardwareConfig Cleanup
+  and TTNN Helper.md` — consult when fleshing out, but expect the WIP to have moved
+  past it.
 
 ## Small fixes (append as decided)
 
@@ -342,6 +359,7 @@ minimal port. Bundling any of these into a port would violate scope discipline.
 |---|---|---|
 | #1 CB handling | `metal2_port_patterns.md`, audit TensorAccessor-handling + SPSC, recipe rule 5 | patterns catalog, audit (2 subjects), recipe rule 5 |
 | #2 factory shapes | audit TTNN-factory-concept-analysis + Appendix A, `port_op_to_metal2_ttnn_factory.md` | audit factory-analysis, Appendix A, recipe factory framing, new CSV |
+| #3 HW-config overhaul (WIP) | TBD — blocked on River's code change; `development-docs/2026-06 ComputeHardwareConfig Cleanup and TTNN Helper.md` for prior design | TBD |
 | Fix #1 LocalTensorAccessor | recipe rule 5, audit TensorAccessor-handling, Dropped-Plumbing Case-2 | same three |
 | Fix #2 3rd-arg triage | `development-docs/2026-06-24 … taxonomy`, audit TensorAccessor-handling | audit TensorAccessor-handling, checked-in taxonomy table, audit classification procedure |
 | Fix #3 self-loop consistency | `metal2_port_patterns.md` (self-loop/sync-free/packer + INTRA sites), audit SPSC single-ended fork | patterns catalog, audit SPSC fork, recipe DFB-spec self-loop mentions; flowchart (Audrey) |
