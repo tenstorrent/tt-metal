@@ -20,10 +20,10 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
     exit 1
 fi
 
-WT_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo_speedup/tests/weight_transfer"
-HOST_FILE="${WT_DIR}/configurations/local2/hosts.txt"
-RANK_BINDINGS_FILE="${WT_DIR}/configurations/local2/rank_bindings.yaml"
-TEST_FILE="${WT_DIR}/test_bridge_transfer.py"
+WT_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo/tests/weight_transfer"
+HOST_FILE="${WT_DIR}/configurations/local8/hosts.txt"
+RANK_BINDINGS_FILE="${WT_DIR}/configurations/local8/rank_bindings.yaml"
+TEST_FILE="${WT_DIR}/test_weight_transfer.py"
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -45,15 +45,15 @@ done
 # against (1) TT_METAL_HOME, (2) the launch directory (cwd at tt-run invocation),
 # and (3) cwd at resolution time -- not against the rank_bindings file's own
 # directory. cd into the weight_transfer dir so
-# "configurations/local2/mgd.textproto" resolves here.
+# "configurations/local8/mgd.textproto" resolves here.
 cd "${WT_DIR}"
 
 # `pytest -s` keeps the rank-tagged prints from the test visible; -p
 # no:cacheprovider avoids a stale .pytest_cache being shared across ranks.
-# `--rootdir` pins pytest's rootdir to the grpo_speedup tests dir so the
+# `--rootdir` pins pytest's rootdir to the grpo tests dir so the
 # parent conftest.py (sys.path setup, fabric config) is picked up exactly
 # the same way pytest would when run from outside tt-run.
-TESTS_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo_speedup/tests"
+TESTS_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo/tests"
 CMD="python3 -m pytest -s -p no:cacheprovider --rootdir=${TESTS_DIR} ${TEST_FILE}"
 
 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \

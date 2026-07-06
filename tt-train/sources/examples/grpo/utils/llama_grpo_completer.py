@@ -6,7 +6,7 @@
 
 The completer is intended to run on the ttml rank of a two-rank
 ttml -> tt-transformers setup. It owns the local ttml ``Llama`` model
-(used for :meth:`compute_nlog_probs`) and a :class:`TttInferenceClient`
+(used for :meth:`compute_nlog_probs`) and a :class:`MPIRolloutClient`
 that proxies :meth:`generate` / :meth:`generate_str` to a remote
 :class:`TttGenerationWorker` on the ttt rank.
 
@@ -15,10 +15,10 @@ The split is:
 * ``compute_nlog_probs`` -- runs locally against the ttml model. This
   is where the gradient flows during GRPO training.
 * ``generate`` / ``generate_str`` -- run remotely on the ttt rank via
-  :meth:`TttInferenceClient.remote_generate`. The ttt worker holds a
+  :meth:`MPIRolloutClient.remote_generate`. The ttt worker holds a
   ``tt-transformers`` ``Transformer`` for fast prefill+decode.
 * :meth:`push_weights` -- exports the ttml model as an HF-keyed weight
-  dict and ships it across in a single ``TttInferenceClient.transfer_weights``
+  dict and ships it across in a single ``MPIRolloutClient.send_weights``
   call. Use this once before :meth:`GRPOTrainer.train` (to overwrite
   the worker's dummy boot weights) and after every optimizer step.
 
@@ -49,7 +49,7 @@ from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_saf
 from ttml.trainers.callback import TrainerCallback
 from ttml.trainers.grpo_trainer import GRPOCompleter
 
-from .inference_bridge import TttInferenceClient
+from .mpi_rollout import MPIRolloutClient
 from .llama_overrides import LlamaCompositeKV
 
 
@@ -186,7 +186,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         model_source: HuggingFace model id (e.g.
             ``meta-llama/Llama-3.2-1B-Instruct``) or a local directory
             containing ``model.safetensors``.
-        inference_client: Already-constructed :class:`TttInferenceClient`
+        inference_client: Already-constructed :class:`MPIRolloutClient`
             connected to the remote worker. The completer does not
             tear this client down.
         top_p: Forwarded to ``inference_client.remote_generate``.
@@ -206,7 +206,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         *,
         mesh_device: Any,
         model_source: str,
-        inference_client: TttInferenceClient,
+        inference_client: MPIRolloutClient,
         top_p: float = 1.0,
         seed: Optional[int] = None,
         enable_ddp: bool = False,
@@ -413,7 +413,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         Exports the local ttml model as an HF-keyed dict (already on
         device, replicated, DRAM-interleaved, TILE, bfloat16 -- the
         contract the :class:`WeightBridge` enforces) and runs a single
-        :meth:`TttInferenceClient.transfer_weights` round-trip.
+        :meth:`MPIRolloutClient.send_weights` round-trip.
 
         Call this:
 
@@ -424,7 +424,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         """
         hf_dict = self._model.export_to_hf_dict()
         try:
-            self._client.transfer_weights(hf_dict)
+            self._client.send_weights(hf_dict)
         finally:
             del hf_dict
             gc.collect()
