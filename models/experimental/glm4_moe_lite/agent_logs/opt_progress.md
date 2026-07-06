@@ -334,3 +334,68 @@ bf8 collectives on 1x8 are the only in-place option and risk PCC (ISL-4096 alrea
 
 STATUS: traced prefill kept as a verified, additive, default-off ~1.25x win. 2x goal blocked
 on the 1x8 mesh architecture; pursuing it means the 2D-mesh MoE re-architecture (path #2).
+
+================================================================================
+DEVICE-COMPUTE LEVERS INVESTIGATED (2026-07-06). Checkpoint: 83c604a1751 / tag
+checkpoint-pre-moe-rearch.
+================================================================================
+Finding recap: traced prefill proved prefill is ~80% DEVICE-compute bound (not host).
+So 2x needs cutting device compute. Stale profile said MoE 38.5% + collectives 34.3%.
+
+(A) PACKED token-gather MoE (GLM4_MOE_LITE_MOE_PACKED_PREFILL=1, existing off-by-default
+    moe_packed_experts_forward_prefill_tt) — TESTED ISL=2048, 1x8:
+      baseline block-sparse prefill_s=6.65   packed prefill_s=53.9 (8x SLOWER) + text diverges.
+    Root cause: host-side routing readback + Python double-loop (per chunk per layer) +
+    per-expert ttnn.gather/scatter. DEAD-END on WH. Reverted (flag only).
+
+(B) Current default MoE is "dense-over-8-local-experts, 32-token-block-sparse-skipped"
+    (~87% dense blocks) => ~16x redundant expert compute vs 4-active-of-64. True per-expert
+    packing is the only real compute cut.
+
+(C) DeepSeek sparse MoE port feasibility (two stacks):
+    * Stack A (deepseek_v3 main): all_to_all_dispatch/combine REQUIRE 2D mesh (dispatch axis0
+      / reduce axis1). On 1x8 a2a DEADLOCKS (single-link same-axis contention). 2x4 needed.
+    * Stack B (deepseek_v3_d_p, ttnn.experimental.deepseek_prefill.*): real per-expert packing,
+      supports 1D/2D, BUT unified_routed_expert_moe + ALL fp8 paths are BLACKHOLE-ONLY. On
+      Wormhole the fallback is a per-expert Python extract->ffn->insert loop (same host-loop
+      shape that made (A) 8x slower). Also moe_grouped_topk is hard-coded to 256-expert/8-group
+      (DeepSeek); GLM 64/top-4 needs a kernel change.
+    => The fused fast sparse MoE (the actual 2x lever) exists only on BLACKHOLE.
+
+(D) 2x4 PCC-0.65 bug is understood + fixable (fused shared+routed reduce drops the DP-row-axis
+    sum on 2D meshes; fix = reduce routed over full mesh, shared over tp_axis only, + fix the
+    size-1-axis crash in _moe_all_reduce_across_mesh). BUT 2x4 does NOT reduce experts/device
+    (still 64/8=8 on any 8-chip mesh) => correctness only, no compute win.
+
+INTERIM CONCLUSION: 2x prefill via MoE compute is BLOCKED on Wormhole T3K (fast fused sparse
+op is Blackhole-gated; WH token-gather fallbacks are host-loop-bound and slower). 2x is real
+on Blackhole. Remaining WH-testable lever: bf8 collectives (risks PCC). Re-profiling with tracy
+to confirm the current device-time breakdown before further changes.
+
+================================================================================
+2x4 MESH ATTEMPT — ABANDONED, STAYING ON 1x8 (2026-07-06). Checkpoint 83c604a1751.
+================================================================================
+Goal was to enable a 2x4 (2D) mesh so DeepSeek-style sparse MoE (dispatch axis0 / reduce
+axis1) becomes viable (the real device-compute lever). Investigated + reverted:
+  * Root-caused the 2x4 PCC-0.65 bug: the shared+routed reduce FUSION (FUSE_MLP_MOE_REDUCE)
+    reduces only over tp_axis; on a 2D mesh the routed experts span BOTH axes (experts are
+    dim-0 flattened across all 8 devices), so the dp-row-axis sum is dropped -> ~half the
+    routed contribution missing -> 0.65. Fix = gate fusion on dp_size==1 (1x8 keeps fused
+    path; 2x4 uses non-fused: shared over tp_axis, routed over full mesh both axes).
+  * ring topology is invalid on 2D T3K axes (4-wide rows are LINES, no wraparound) -> first
+    2x4 run FATAL "no forwarding direction". Fix = force Linear topology on 2D meshes.
+  * Verified in isolation on 2x4: bare all_reduce (both axes), all_gather_async+fast_reduce
+    (both axes), and the full two-axis _moe_all_reduce_across_mesh ALL work + are fast (<1s).
+  * BUT the FULL 2x4 model prefill is pathologically slow: ISL=128 ran 30+ min at 100% CPU
+    (main thread futex_wait, no progress) AFTER compilation finished -> effectively a spin on
+    the full collective sequence (a fabric-resource issue that only appears after hundreds of
+    collectives; not reproduced by short isolation tests). Never produced a PCC number.
+DECISION (user): step back from 2x4, keep 1x8. All 2x4 code reverted; repo back to the clean
+1x8 state at 83c604a1751 + traced prefill. This is exactly why the original bring-up chose 1x8
+(T3K is physically ~a ring of 8; 2D-mesh collective patterns are fragile on it).
+
+NET STANDING OF THE 2x PREFILL GOAL (Wormhole T3K, 1x8):
+  * Traced prefill: ~1.25x, committed, default-off. (device-compute bound ceiling)
+  * Sparse MoE (the real lever): blocked — WH token-gather paths are host-loop-bound/slower
+    (packed=8x slower); DeepSeek fused fast op is Blackhole-only; 2x4 enablement is impractical
+    on T3K. 2x prefill is a Blackhole story, not Wormhole T3K, for this model.
