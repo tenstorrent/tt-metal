@@ -71,11 +71,87 @@ self-contained on the *overhaul decisions* themselves.
   against it. **Leave alone.** Staleness warning added (`1c92b50`, pushed).
 - **grit** installed on the Mac (`~/.zshrc`); works in Audrey's terminal + fresh
   shells. (Not yet in the current tool-shell snapshot; re-source or manual-commit.)
-- **Reorg deferred:** human/AI-facing directory split + flowchart diagrams — do
-  after the big changes settle the content shape.
+- **Reorg:** target structure now specified (see the Reorg section; approved
+  2026-07-05). It is the **first execution step**, not deferred.
 - **Recording cadence:** this roadmap now; append each rapid-fire fix as decided.
 - **Session state:** all-chat, no recipe edits yet. Everything below is *planned*,
   not executed.
+
+## Execution plan (start here to do the work)
+
+Planning is complete (this roadmap). Execution has not started — the recipe files are
+the verbatim baseline. **Cut execution by *locus* (coupled file-regions), NOT by
+roadmap item.** The items were the right *planning* decomposition, but they
+*cross-cut the files* — Big #1, Fix #1, Fix #2, Fix #3 all edit the same regions
+(audit TensorAccessor-handling, patterns catalog, recipe rule 5). Per-item execution
+would re-read the same sections, collide on the same paragraphs, and reintroduce the
+seam inconsistencies this session worked to remove. So:
+
+1. **Reorg first** (structural — see next section). Lands content in final locations.
+2. **One Claude owns the CB/accessor/self-loop cluster** — Big #1 + Fix #1 + Fix #2 +
+   Fix #3 together. They interlock and share sections; one coherent mind keeps them
+   consistent and never self-collides. The correctness-critical core; a fresh
+   1M-context primary, handing off mid-stream via this roadmap if it overruns.
+3. **A separate Claude owns Big #2 (factory shapes)** — independent files
+   (factory-analysis, Appendix A, factory framing, the CSV). Run *after* the cluster
+   on this one branch (simplest — avoids two Claudes in the same files at once), or in
+   parallel via a git worktree for speed.
+4. **Big #3** — its own Claude when River's HW-config change lands (~1 day).
+5. **Phase-2** — entirely separate, later (its own roadmap once it grows).
+
+**Per-change dependency gate:** before executing a change, check whether its code
+dependency is in main; if not, rebase this branch onto the in-flight branch (the
+clean-rebase property the "cheat" birth gave us).
+
+**This roadmap is the execution tracker too:** each execution Claude reads it first,
+and marks items done / notes deviations as it goes, so it stays the living source of
+truth across execution sessions.
+
+## Reorg (execute first) — target directory structure
+
+Approved 2026-07-05. ~10% `git mv`, ~90% rewriting inter-doc relative links (mechanics
+below). Nothing outside this branch references these paths (Audrey confirmed — no
+Sphinx/toctree dependency; the dir is a park spot, only Audrey touches the branch), so
+the move is free.
+
+```
+metal_2.0/
+  README.md                     ← NEW: front-door index (who-reads-what + start-here)
+  metal2_migration_guide.md     ← shared → stays at root
+  human/
+    user_orientation.md
+    cb_flowchart.svg            ← NEW (Audrey)
+    factory_shapes.svg          ← NEW (Audrey, TBD)
+  ai/                           (naming: ai/ vs agents/ — pick at execution)
+    port_op_to_metal2_recipe.md
+    port_op_to_metal2_audit.md
+    port_op_to_metal2_ttnn_factory.md
+    metal2_port_patterns.md
+    metal2_workspace_setup.md
+  analyses/                     (naming: analyses/ vs reference/ — pick at execution)
+    ops_port_readiness.csv                ← NEW (Diego's; vetted+curated+stamped)
+    tensoraccessor_3rd_arg_taxonomy.md    ← NEW (from the 2026-06-24 dev-doc)
+  _meta/
+    RECIPE_OVERHAUL_ROADMAP.md  ← move here (scaffold; "exclude from productization" = drop _meta/)
+```
+
+Decisions baked in:
+- **Migration guide → root** (shared-at-top, audience-specific-in-subdirs; dodges a
+  4th `shared/` dir). The root `README` routes each audience (humans → `human/`; AI
+  porters → `ai/`, start audit→recipe; reference tables → `analyses/`; concepts →
+  migration guide).
+- **`analyses/` is its own dir** — distinct *kind* (data tables, not procedures),
+  *lifecycle* (decaying snapshots + feedback loops), *audience* (auditor-Claudes defer;
+  ops/humans consult). Segregating makes staleness manageable: one dir = "re-verify me."
+- **Flowcharts: SVG-only in `human/`** (scalable, diffable). No checked-in PNG — those
+  were chat-time only; a planning-Claude reads flowchart *logic* from the roadmap /
+  recipe prose, not the SVG.
+
+Mechanics (the real work + error surface):
+- **Rewrite every inter-doc relative link** — recipe→audit / →patterns / →migration
+  guide; audit→recipe / →patterns; etc. all break on the move into subdirs. Grep `](`
+  and `.md#` across the docs; re-path each. This is the bulk of the reorg.
+- Update this roadmap's own links + file-map paths after the move.
 
 ## Big change #1 — Unconventional-CB handling
 
@@ -345,11 +421,11 @@ minimal port. Bundling any of these into a port would violate scope discipline.
 - `[OPEN]` **Compute-vs-DM self-loop "why" mechanism** (Fix #3) — inter-TRISC sync vs
   LLK→LLK streaming-handoff-needs-self-loop. Unresolved; don't assert in the recipe.
   Verify with LLK/Almeet owners, else phrase at confidence level.
-- `[OPEN]` **Reorg execution** — human/AI-facing directory split + flowchart formats
-  (SVG for check-in, PNG for Claude reading). After big changes settle.
+- **Reorg** — design settled (target structure in the Reorg section, approved
+  2026-07-05); pending execution as the first step. No longer an open question.
 - `[OPEN]` **Reference-table mechanics** — Diego's factory CSV *and* the 3rd-arg
-  taxonomy table (Fix #2): vet + curate + stamp + check-in; co-locate the two
-  defer-to tables. Both pair with a procedure/tripwire backstop + feedback loop.
+  taxonomy table: vet + curate + stamp + check-in (location decided: `analyses/`).
+  Both pair with a procedure/tripwire backstop + feedback loop.
 - `[OPEN]` **This doc's fate** — on-branch (chosen, for handoff-locality); exclude
   from any productization.
 
