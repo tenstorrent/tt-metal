@@ -181,7 +181,8 @@
     export PREFILL_MODEL=kimi_k2_6
     export PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/moonshotai/Kimi-K2.6-Cache/CI/ PREFILL_TRACE_DIR=/mnt/MLPerf/kimi-prefill-cache/vllm-kimi-k26-codedebug-56320 MESH_DEVICE=TG
     EXPECT_NUM_TESTS=3 pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py -vvv --tb=short --timeout=2400
-  model: deepseek_prefill
+  test_type: prefill_runner
+  test_group: module
   skus:
     bh_galaxy:
       timeout: 60
