@@ -49,7 +49,7 @@ _VAE_BF16_BLACKHOLE = {
     (1024, 512, (12, 1, 1)): (256, 128, 32, 1, 1),
     (1024, 1024, (1, 1, 1)): (256, 128, 8, 1, 1),
     (1024, 1024, (7, 1, 1)): (512, 64, 32, 1, 1),
-    (2048, 1024, (20, 1, 1)): (32, 32, 1, 1, 1),  # k20 OOMs at big blocks; sweep separately (TODO)
+    (2048, 1024, (20, 1, 1)): (128, 128, 16, 1, 1),  # k20 fits only with C_in<=128; T_out=16 max fitting
 }
 
 _VAE_CONV3D_PRESETS: dict[tuple[str, str], dict[tuple[int, int, tuple[int, int, int]], tuple[int, ...]]] = {
