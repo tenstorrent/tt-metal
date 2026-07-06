@@ -172,14 +172,15 @@ void kernel_main() {
                 if constexpr (CAUSAL_MASK_ENABLED) {
                     if (chunk == diag_chunk) {
                         if (boundary_col > 0) {  // boundary key-tile is split: partial-column mask
-                            apply_partial_mask_lightweight(cb_vmask, 0, cb_qk_im, boundary_tile, KT_stride, qsb);
+                            apply_partial_mask_lightweight(
+                                cb_vmask, 0, cb_qk_im, boundary_tile, KT_stride, qsb, row_base);
                         }
                         // Key-tiles entirely after the boundary are fully future -> stamp -inf.
                         const uint32_t full_neginf =
                             (boundary_col > 0) ? (Skt - boundary_tile - 1) : (Skt - boundary_tile);
                         if (full_neginf > 0) {
                             apply_padded_mask_lightweight_runtime<dst_size>(
-                                cb_neginf, 0, cb_qk_im, full_neginf, KT_stride, qsb);
+                                cb_neginf, 0, cb_qk_im, full_neginf, KT_stride, qsb, row_base);
                         }
                         pack_to_unpack_sync();  // masked writes must be visible to the row-max reduce's UNPACK
                     }
