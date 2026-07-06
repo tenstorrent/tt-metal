@@ -431,6 +431,9 @@ class Prefetcher(LightweightModule):
         the loaded manager. Idempotent — safe to call on every decode step; only acts
         after an interleaved prefill reverted the device to the default manager (#47820).
         """
+        # Restore decode as the prefetcher's current mode so mode-gated consumers
+        # (e.g. lm_head's use_prefetcher, prefetch()) behave correctly again (#47820).
+        self.mode = Mode.DECODE
         if self.init_decode_done and not self._decode_manager_loaded:
             self.prefetcher_sub_device.load()
             self._decode_manager_loaded = True
@@ -443,6 +446,10 @@ class Prefetcher(LightweightModule):
         Note: this does NOT free the prefetcher's global_cb L1 (it persists across the
         revert); the decode manager is restored by load() on the next decode (#47820).
         """
+        # Mark the prefetcher as being in prefill so mode-gated consumers (e.g. lm_head's
+        # use_prefetcher, which pins the worker sub-device that only exists on the decode
+        # manager) do not reference decode-only state during prefill (#47820).
+        self.mode = Mode.PREFILL
         if self.init_decode_done and self._decode_manager_loaded:
             self.mesh_device.clear_loaded_sub_device_manager()
             self.mesh_device.reset_sub_device_stall_group()
