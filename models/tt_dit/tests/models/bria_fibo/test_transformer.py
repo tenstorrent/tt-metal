@@ -216,3 +216,127 @@ def test_fibo_dual_block(*, mesh_device):
     # Assert PCC >= 0.99 on both streams
     assert_quality(ref_spatial_out, tt_spatial_torch, pcc=0.99)
     assert_quality(ref_ctx_out, tt_prompt_torch, pcc=0.99)
+
+
+def _truncate_ref(ref, num_layers: int, num_single_layers: int):
+    """Truncate the reference's block ModuleLists in place for reduced-depth iteration.
+
+    ``caption_projection`` is indexed by a running ``block_id`` spanning both loops, so keep
+    only its first ``num_layers + num_single_layers`` entries.
+    """
+    import torch.nn as nn
+
+    ref.transformer_blocks = nn.ModuleList(list(ref.transformer_blocks)[:num_layers])
+    ref.single_transformer_blocks = nn.ModuleList(list(ref.single_transformer_blocks)[:num_single_layers])
+    ref.caption_projection = nn.ModuleList(list(ref.caption_projection)[: num_layers + num_single_layers])
+    ref.config.num_layers = num_layers
+    ref.config.num_single_layers = num_single_layers
+    return ref
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+def test_fibo_transformer(*, mesh_device):
+    """Full ``BriaFiboTransformer`` at tp=1 vs the HF reference, PCC >= 0.99.
+
+    Reduced depth via ``FIBO_DUAL`` / ``FIBO_SINGLE`` env knobs (default 2/2). Set both to
+    the full config (8/38) to run the whole model.
+    """
+    from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboCheckpoint
+
+    num_dual = int(os.environ.get("FIBO_DUAL", "2"))
+    num_single = int(os.environ.get("FIBO_SINGLE", "2"))
+
+    # --- Reference (truncated to reduced depth) ---
+    ref = _load_ref_transformer()
+    ref = _truncate_ref(ref, num_dual, num_single)
+
+    c = ref.config
+    in_channels = c.in_channels  # 48
+    joint_attention_dim = c.joint_attention_dim  # 4096
+    text_encoder_dim = c.text_encoder_dim  # 2048
+    num_blocks = num_dual + num_single
+
+    batch_size = 1
+    spatial_seq_len = 256
+    prompt_seq_len = 64
+
+    torch.manual_seed(0)
+    spatial = torch.randn([batch_size, spatial_seq_len, in_channels]).to(torch.bfloat16)
+    prompt = torch.randn([batch_size, prompt_seq_len, joint_attention_dim]).to(torch.bfloat16)
+    # 46-entry list (only first num_blocks are indexed); SAME list to ref and tt.
+    text_encoder_layers = [
+        torch.randn([batch_size, prompt_seq_len, text_encoder_dim]).to(torch.bfloat16)
+        for _ in range(c.num_layers + c.num_single_layers)
+    ]
+    timestep = torch.full([batch_size], fill_value=500).to(torch.bfloat16)
+
+    # RoPE ids (txt = zeros, img = random), Flux-style.
+    text_ids = torch.zeros([prompt_seq_len, 3]).to(torch.bfloat16)
+    image_ids = torch.randint(1024 * 1024, [spatial_seq_len, 3]).to(torch.bfloat16)
+    ids = torch.cat((text_ids, image_ids), dim=0).to(torch.bfloat16)
+    rope_cos, rope_sin = ref.pos_embed.forward(ids)
+
+    # --- Reference forward (RAW timestep, no /1000) ---
+    with torch.no_grad():
+        ref_out = ref.forward(
+            hidden_states=spatial,
+            encoder_hidden_states=prompt,
+            text_encoder_layers=text_encoder_layers,
+            timestep=timestep,
+            img_ids=image_ids,
+            txt_ids=text_ids,
+        ).sample
+
+    # --- TT setup (tp=1, sp=1 at mesh (1,1)) ---
+    sp_axis = 0
+    tp_axis = 1
+    sp_factor = 1
+    tp_factor = 1
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=0, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
+
+    checkpoint = BriaFiboCheckpoint(FIBO_PATH)
+    tt_model = checkpoint.build(
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        num_layers=num_dual,
+        num_single_layers=num_single,
+    )
+
+    # --- TT inputs (tp=1 sharding) ---
+    spatial_padded = Attention.pad_spatial_sequence(spatial, sp_factor=sp_factor)
+    spatial_rope_cos_padded = Attention.pad_spatial_sequence(rope_cos[prompt_seq_len:], sp_factor=sp_factor)
+    spatial_rope_sin_padded = Attention.pad_spatial_sequence(rope_sin[prompt_seq_len:], sp_factor=sp_factor)
+
+    tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
+    tt_prompt = bf16_tensor(prompt, device=mesh_device)
+    tt_timestep = bf16_tensor(timestep.unsqueeze(-1), device=mesh_device)
+    tt_text_encoder_layers = [bf16_tensor(t, device=mesh_device) for t in text_encoder_layers[:num_blocks]]
+
+    tt_spatial_rope_cos = bf16_tensor(spatial_rope_cos_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=0)
+    tt_spatial_rope_sin = bf16_tensor(spatial_rope_sin_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=0)
+    tt_prompt_rope_cos = bf16_tensor(rope_cos[:prompt_seq_len], device=mesh_device)
+    tt_prompt_rope_sin = bf16_tensor(rope_sin[:prompt_seq_len], device=mesh_device)
+
+    tt_output = tt_model.forward(
+        spatial=tt_spatial,
+        prompt=tt_prompt,
+        timestep=tt_timestep,
+        text_encoder_layers=tt_text_encoder_layers,
+        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+        spatial_sequence_length=spatial_seq_len,
+        prompt_sequence_length=prompt_seq_len,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    tt_output_torch = tt_tensor.to_torch(tt_output, mesh_axes=[None, sp_axis, tp_axis])
+    tt_output_torch = tt_output_torch[:, :spatial_seq_len]
+
+    assert_quality(ref_out, tt_output_torch, pcc=0.99)
