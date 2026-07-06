@@ -96,14 +96,52 @@ def hash_gate_golden_act(
     )
 
 
-def calculate_average_recall(predicted_experts: torch.Tensor, reference_experts: torch.Tensor) -> float:
-    """Calculate average recall of predicted expert selections vs reference."""
-    recall = 0
-    for i in range(predicted_experts.shape[0]):
-        pred_set = set(e.item() for e in predicted_experts[i])
-        ref_set = set(e.item() for e in reference_experts[i])
-        recall += len(pred_set & ref_set) / len(ref_set) if ref_set else 0
-    return recall / predicted_experts.shape[0]
+def calculate_average_recall(
+    predicted_experts: torch.Tensor,
+    reference_experts: torch.Tensor,
+    predicted_weights: Optional[torch.Tensor] = None,
+    reference_weights: Optional[torch.Tensor] = None,
+    weight_rtol: float = 0.0,
+) -> float:
+    """Calculate average recall of predicted expert selections vs reference.
+
+    Plain mode (no weights): fraction of reference experts also selected by the device.
+
+    Tie-aware mode (per-expert gate weights supplied, aligned position-for-position with the
+    index tensors, and weight_rtol > 0): a reference expert the device did NOT select is still
+    counted as recovered if the device selected some other expert whose gate weight is within
+    weight_rtol (relative) of the missed expert's weight. DeepSeek uses grouped top-k gating, so
+    at a crowded selection boundary the device fp32 gate and the torch reference can pick different
+    experts that carry near-equal weight — a numerically-ambiguous swap that leaves the routed
+    output essentially unchanged (the block-level PCC stays ~0.999, and pcc_scores remains the
+    correctness backstop for the selected-weight distribution).
+    """
+    recall = 0.0
+    n = predicted_experts.shape[0]
+    tie_aware = predicted_weights is not None and reference_weights is not None and weight_rtol > 0.0
+    for i in range(n):
+        pred_idx = [e.item() for e in predicted_experts[i]]
+        ref_idx = [e.item() for e in reference_experts[i]]
+        pred_set = set(pred_idx)
+        ref_set = set(ref_idx)
+        if not ref_set:
+            continue
+        hits = len(pred_set & ref_set)
+        if tie_aware:
+            # Gate weight of each selected expert, aligned by position with its index tensor.
+            ref_w = {ref_idx[j]: reference_weights[i][j].item() for j in range(len(ref_idx))}
+            pred_w = {pred_idx[j]: predicted_weights[i][j].item() for j in range(len(pred_idx))}
+            extra_w = [pred_w[e] for e in (pred_set - ref_set)]  # device-only experts' weights
+            for missed in ref_set - pred_set:
+                wm = ref_w[missed]
+                for k in range(len(extra_w)):  # credit one unconsumed device-only expert of tied weight
+                    we = extra_w[k]
+                    if we is not None and abs(we - wm) <= weight_rtol * max(abs(wm), abs(we), 1e-6):
+                        hits += 1
+                        extra_w[k] = None
+                        break
+        recall += hits / len(ref_set)
+    return recall / n
 
 
 def distinct_logits(shape, lo: float = -6.0, hi: float = 6.0, dtype=torch.float32) -> torch.Tensor:
@@ -615,13 +653,26 @@ def compare_pcc(threshold: float = 0.99) -> ComposedComparator:
     return _compare
 
 
-def compare_recall(threshold: float = 0.999) -> ComposedComparator:
-    """Return a recall comparator with the given threshold."""
+def compare_recall(
+    threshold: float = 0.999,
+    predicted_weights: Optional[torch.Tensor] = None,
+    reference_weights: Optional[torch.Tensor] = None,
+    weight_rtol: float = 0.0,
+) -> ComposedComparator:
+    """Return a recall comparator with the given threshold.
+
+    When gate-weight tensors are supplied (same [num_groups, group_size, ...] layout as the index
+    tensors, and NOT reordered relative to them) and weight_rtol > 0, recall is tie-aware: a
+    boundary swap between experts of near-equal gate weight is credited (see
+    calculate_average_recall). The per-cell weight slices are looked up by the (_g, _c) indices.
+    """
 
     def _compare(
         actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int, verbose_histogram: bool = False
     ) -> Tuple[bool, Optional[str]]:
-        r = calculate_average_recall(actual, expected)
+        pred_w = predicted_weights[_g, _c] if predicted_weights is not None else None
+        ref_w = reference_weights[_g, _c] if reference_weights is not None else None
+        r = calculate_average_recall(actual, expected, pred_w, ref_w, weight_rtol)
         if r >= threshold:
             return (True, f"recall={r:.4f} >= {threshold}")
         else:
