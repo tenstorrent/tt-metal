@@ -72,6 +72,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             input_m_tiles (int, optional): this expert's M in tiles. Defaults to
                 x's allocated M. Supply it when x is a shared buffer wider than
                 one expert's region so the op sizes its work to this expert.
+            read_x_at_offset (bool, optional): when True, x is a shared buffer
+                and the reader offsets x reads by expert_region_offsets[global_id]
+                (fusing ttnn::extract). Requires expert_region_offsets. Default False.
 
         Returns:
             ttnn.Tensor: (M_max, K=emb).
@@ -88,7 +91,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output") = nb::none(),
         nb::arg("expert_region_offsets") = nb::none(),
-        nb::arg("input_m_tiles") = nb::none());
+        nb::arg("input_m_tiles") = nb::none(),
+        nb::arg("read_x_at_offset") = false);
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
         mod,

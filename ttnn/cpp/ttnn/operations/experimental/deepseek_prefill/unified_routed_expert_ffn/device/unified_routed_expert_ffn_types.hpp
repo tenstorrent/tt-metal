@@ -59,15 +59,18 @@ struct UnifiedRoutedExpertFfnParams {
     // counts[global_id]).
     uint32_t local_expert_id = 0;
 
-    // Activation variant (see RoutedExpertActivation). Default Silu = DeepSeek
-    // path, kernel unchanged. SwiGluOai drives the SWIGLU_OAI compile-time define
-    // in the compute kernel.
-    RoutedExpertActivation activation = RoutedExpertActivation::Silu;
+    // When true, x is a shared buffer and the reader offsets its x reads by this
+    // expert's region start (expert_region_offsets[global_id]) — fusing what
+    // ttnn::extract did. Requires expert_region_offsets. False => x is per-expert.
+    bool read_x_at_offset = false;
 
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "m_tiles", "local_expert_id");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, m_tiles, local_expert_id); }
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("chunk_M_tiles", "m_tiles", "local_expert_id", "read_x_at_offset");
+    auto attribute_values() const {
+        return std::forward_as_tuple(chunk_M_tiles, m_tiles, local_expert_id, read_x_at_offset);
+    }
 };
 
 // Tensors fed into the op.
