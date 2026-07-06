@@ -170,9 +170,9 @@
 - name: Qwen3.6 unit tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_attention_tp.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
+    pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
   model: qwen3.6-27b
   skus:
