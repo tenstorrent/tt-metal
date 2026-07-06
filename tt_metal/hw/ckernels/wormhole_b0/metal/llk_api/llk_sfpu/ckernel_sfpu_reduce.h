@@ -885,11 +885,13 @@ inline void perform_reduce_row_sum_avg(std::uint32_t block_ct_dim, std::uint32_t
  * MAX and MIN share the entire compare-and-swap machinery (perform_reduce_row_max_tile,
  * horizontal_reduce_max, max_first_columns_across_tiles); the only difference is the SFPSWAP
  * comparator direction, set once here via SFPCONFIG bit 8 (0 = MAX, 1 = MIN). The data
- * representation seen by SFPSWAP (float, or sign-magnitude for Int32 loaded with INT32_2S_COMP)
- * is identical for MAX and MIN, so flipping bit 8 cleanly inverts the result for every format.
+ * representation seen by SFPSWAP (float, or the non-negative sign-magnitude range for UInt16/UInt32)
+ * is identical for MAX and MIN, so flipping bit 8 cleanly inverts the result for every format that
+ * reaches here. Signed Int32 MAX/MIN does not use this function; it takes the dedicated
+ * two's-complement path (perform_reduce_row_max_min_int32 / calculate_reduce_max_min_int32_col).
  *
  * @tparam pool_type MAX or MIN.
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int extrema)
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or plain INT32 for UInt16/UInt32 extrema)
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
  * @param block_rt_dim Number of tiles along y axis of tensor (row tiles)
  */
@@ -1170,8 +1172,9 @@ inline void init_reduce_max_min_int32_signed() {
  *        and records replay buffers for efficient column-wise maximum/minimum reduction.
  *        For MIN operations, inverts the swap direction by configuring the SFPU control register.
  *
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
- * (FP32, FP16B)
+ * @tparam INSTRUCTION_MODE The instruction mode for the float/unsigned formats that reach here: DEFAULT (FP32,
+ * FP16B), LO16, or plain INT32 (UInt16/UInt32). Signed Int32 MAX/MIN uses init_reduce_max_min_int32_signed
+ * instead, so it does not go through this init.
  * @tparam pool_type The PoolType enum value (MAX or MIN). MIN inverts the swap direction for minimum reduction.
  * @param num_cols The number of columns to process (typically 32 for a single tile, or multiple of 32 for block
  * operations)
@@ -1498,8 +1501,9 @@ inline void calculate_reduce_max_min_int32_col() {
  *
  * @tparam pool_type The PoolType enum value (MAX or MIN). MIN uses inverted swap direction for minimum reduction.
  * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (MAX and MIN).
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32_2S_COMP, LO16, DEFAULT (FP32,
- * FP16B)
+ * @tparam INSTRUCTION_MODE The instruction mode for the float/unsigned formats that reach here: DEFAULT (FP32,
+ * FP16B), LO16, or plain INT32 (UInt16/UInt32). Signed Int32 MAX/MIN uses the dedicated two's-complement path
+ * (calculate_reduce_max_min_int32_col / perform_reduce_row_max_min_int32) instead.
  * @param block_ct_dim Number of tiles along x axis (column tiles, default 1).
  * @param block_rt_dim Number of tiles along y axis (row tiles, default 1).
  */
@@ -1669,16 +1673,14 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
 
     // Int32 DEST representation per reduction: SUM and MAX/MIN are two's-complement; AVG is sign-magnitude.
     // SUM loads with plain INT32 so the word reaches SFPIADD (a two's-complement adder) unchanged;
-    // INT32_2S_COMP applies SignMagToTwosComp on load and would corrupt two's-complement negatives. MAX/MIN
-    // load with INT32_2S_COMP so the word becomes sign-magnitude, which is the order SFPSWAP compares in.
-    // AVG keeps INT32_2S_COMP; its operands sit in DEST as sign-magnitude and its divide-by-32 step assumes
-    // that mode. init_reduce has no reduce_dim, so every Int32 MAX/MIN takes INT32_2S_COMP here; the row-MAX
-    // path re-records its own replay buffer regardless.
+    // INT32_2S_COMP applies SignMagToTwosComp on load and would corrupt two's-complement negatives.
+    // Int32 MAX/MIN dispatch to init_reduce_max_min_int32_signed below (plain INT32 load + a software
+    // signed compare-and-swap, correct over the full range including INT32_MIN), so they do not use
+    // INSTRUCTION_MODE here. AVG keeps INT32_2S_COMP; its operands sit in DEST as sign-magnitude and its
+    // divide-by-32 step assumes that mode.
     constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (format == DataFormat::Int32 &&
-         (pool_type == PoolType::AVG || pool_type == PoolType::MAX || pool_type == PoolType::MIN))
-            ? InstrModLoadStore::INT32_2S_COMP
-        : (format == DataFormat::Float16_b) ? InstrModLoadStore::DEFAULT
+        (format == DataFormat::Int32 && pool_type == PoolType::AVG) ? InstrModLoadStore::INT32_2S_COMP
+        : (format == DataFormat::Float16_b)                         ? InstrModLoadStore::DEFAULT
                                             : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
 
     // Garbage high bits need to be cleared when loading UInt16 data from a 32-bit (fp32) dest word.
@@ -1686,7 +1688,8 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
 
     // Signed Int32 MAX/MIN uses a dedicated two's-complement compare-and-swap path (correct over the
     // full Int32 range, including INT32_MIN) instead of the sign-magnitude INT32_2S_COMP path. The
-    // column reduce consumes the replay buffer recorded here; the row reduce re-records its own buffer.
+    // column reduce consumes the LREG4-7 -> LREG4 replay buffer recorded by init_reduce_max_min_int32_signed
+    // below; the row reduce takes a separate helper whose horizontal reduce is fully inline (no re-record).
     constexpr bool int32_max_min =
         (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
 
@@ -1760,20 +1763,17 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
     // sign-magnitude for AVG.
     //   SUM (two's-complement): plain INT32 so SFPIADD (a two's-complement adder) gets the word unchanged;
     //        INT32_2S_COMP applies SignMagToTwosComp on load and would corrupt negatives.
-    //   MAX/MIN (two's-complement): INT32_2S_COMP so the word becomes sign-magnitude for SFPSWAP, which
-    //        compares in sign-magnitude. This applies to BOTH the column reduce and the row reduce: a
-    //        multi-axis reduce (e.g. ttir.max dim=[1,2]) chains column-then-row over the same DEST, and
-    //        the column path leaves two's-complement there, so the row path must also load/store as
-    //        two's-complement (INT32_2S_COMP) to agree. Using plain INT32 for the row path would read the
-    //        column path's two's-complement output as sign-magnitude and mis-order negatives.
+    //   MAX/MIN (two's-complement): plain INT32 (bits preserved), feeding the software signed
+    //        compare-and-swap path (see int32_max_min below), which is correct over the full Int32 range
+    //        including INT32_MIN. This applies to BOTH the column reduce and the row reduce, so a
+    //        multi-axis reduce (e.g. ttir.max dim=[1,2]) that chains column-then-row over the same DEST
+    //        stays consistent (both axes leave/consume plain two's-complement).
     //   AVG (sign-magnitude): INT32_2S_COMP, which perform_int_average's divide-by-32 step assumes.
     constexpr bool int32_avg = (format == DataFormat::Int32 && pool_type == PoolType::AVG);
     constexpr bool int32_max_min =
         (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
-    // Int32 MAX/MIN (both column and row) now use a dedicated two's-complement compare-and-swap path that
-    // loads with plain INT32 (bits preserved) so it is correct over the full Int32 range, including
-    // INT32_MIN. Both axes use plain INT32, so a chained multi-axis reduce (column-then-row over the same
-    // DEST) stays consistent. Only AVG still uses the sign-magnitude INT32_2S_COMP encoding.
+    // Int32 MAX/MIN (both column and row) use a dedicated two's-complement compare-and-swap path that
+    // loads with plain INT32 (see the per-reduction note above). Only AVG uses INT32_2S_COMP.
     constexpr bool int32_max_min_col = int32_max_min && (reduce_dim == ReduceDim::REDUCE_COL);
     constexpr bool int32_max_min_row = int32_max_min && (reduce_dim == ReduceDim::REDUCE_ROW);
     constexpr InstrModLoadStore INSTRUCTION_MODE = int32_max_min ? InstrModLoadStore::INT32

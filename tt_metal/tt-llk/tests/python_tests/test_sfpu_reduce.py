@@ -37,6 +37,8 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
+from conftest import skip_for_blackhole
+
 max_tiles = 4
 
 # Integer reduction-identity sentinels used to pad sub-tile column reduces
@@ -91,10 +93,11 @@ def use_int32_twos_complement(
 
     This matches how ttnn feeds the device: Int32 reduce operands sit in DEST as two's-complement.
 
-    Both the column and the row MAX/MIN paths load with ``INT32_2S_COMP``. On Blackhole that mode is
-    a no-op, so the paths cast two's-complement -> sign-magnitude explicitly around the
-    sign-magnitude ``SFPSWAP(VEC_MIN_MAX)`` comparator (tt-isa ``SFPSWAP.md``); on Wormhole the
-    mode-12 load does the same conversion in hardware. Either way they expect two's-complement
+    Both the column and the row MAX/MIN paths expect two's-complement operands. On Wormhole they now
+    load with plain ``INT32`` (bits preserved) and correct the ordering in software via a signed
+    compare-and-swap, so INT32_MIN is handled over the full range (see ckernel_sfpu_reduce.h). On
+    Blackhole they still cast two's-complement -> sign-magnitude explicitly around the sign-magnitude
+    ``SFPSWAP(VEC_MIN_MAX)`` comparator (tt-isa ``SFPSWAP.md``). Either way they expect two's-complement
     operands. Row MAX must agree with the column path because a multi-axis reduce chains
     column-then-row over the same DEST (the column path leaves two's-complement there), so the row
     path consumes and produces two's-complement just like the column path.
@@ -486,8 +489,10 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 10
         low=base_range[0], high=base_range[1], size=stimuli_size, dtype=torch_format
     )
 
-    # Inject the extreme value at a handful of scattered positions so every reduced column (for column
-    # reduce) / row (for row reduce) has a chance to hit it. Positions taken on the 32x32 grid.
+    # Inject the extreme value at a handful of scattered positions (6 of the 32x32 grid). These land
+    # in 6 distinct columns and 6 distinct rows, so 6 of the 32 reduced columns (for column reduce) /
+    # rows (for row reduce) actually see the extreme value; the remaining lanes just reduce the random
+    # data. Positions taken on the 32x32 grid.
     grid = src_A.view(TILE_DIM, TILE_DIM)
     inject_positions = [(0, 0), (5, 7), (13, 3), (20, 20), (31, 31), (7, 15)]
     for r, c in inject_positions:
@@ -555,6 +560,10 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 10
     return golden_tensor[:, 0], res_tensor[:, 0]
 
 
+# The #44750 fix is Wormhole-only: the Blackhole calculate_reduce_max_min_int32 path still converts to
+# sign-magnitude around a plain SFPSWAP (INT32_MIN still loads as sign-magnitude "-0"), so this repro
+# would still fail there. Skip until the Blackhole fix lands (tracked by tenstorrent/tt-metal#44750).
+@skip_for_blackhole
 @pytest.mark.parametrize(
     "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
 )
@@ -575,6 +584,9 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     "negative zero", ranked as 0), so the earlier INT32_2S_COMP path dropped it. This injects the extreme
     values into an otherwise moderate Int32 tile and checks the device reduction against a torch golden.
     """
+    if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
+        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
+
     golden_slice, res_slice = _run_int32_reduce(
         mathop, reduce_pool, injected_value, base_range=base_range
     )
