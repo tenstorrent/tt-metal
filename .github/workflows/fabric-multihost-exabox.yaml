@@ -11,6 +11,10 @@ on:
         required: false
         default: ""
 
+permissions:
+  id-token: write
+  contents: read
+
 run-name: Fabric Test on a BH Quad
 jobs:
   check-harbor:
