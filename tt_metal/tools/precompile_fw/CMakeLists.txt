@@ -6,7 +6,6 @@ target_link_libraries(
     PRIVATE
         tt_metal
         Metalium::Metal::Hardware
-        yaml-cpp::yaml-cpp
 )
 
 target_include_directories(precompile_fw PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal)
