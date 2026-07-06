@@ -11,11 +11,14 @@ import torch
 
 import ttnn
 
+from ...layers.embeddings import Embedding
 from ...layers.linear import ColParallelLinear, RowParallelLinear
-from ...layers.module import Module
+from ...layers.module import Module, ModuleList
 from ...layers.normalization import RMSNorm
+from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import tensor
+from ...utils.substate import pop_substate
 
 MAX_CHUNK_SIZE = 128
 
@@ -394,3 +397,102 @@ class SmolLM3DecoderLayer(Module):
         x = self.post_attention_layernorm.forward(x)
         x = self.mlp.forward(x)
         return x + residual
+
+
+class SmolLM3TextEncoder(Module):
+    def __init__(
+        self,
+        config: "SmolLM3Config",
+        *,
+        device: ttnn.MeshDevice,
+        parallel_config: EncoderParallelConfig,
+        ccl_manager: CCLManager | None = None,
+        is_fsdp: bool = False,
+    ) -> None:
+        super().__init__()
+        tp_axis = parallel_config.tensor_parallel.mesh_axis
+        tp_factor = parallel_config.tensor_parallel.factor
+        fsdp_mesh_axis = None
+        if is_fsdp and tp_factor > 1:
+            other = 1 - tp_axis
+            if device.shape[other] > 1:
+                fsdp_mesh_axis = other
+        ctx = SmolLM3Context(
+            device=device,
+            tp_axis=tp_axis if tp_factor > 1 else None,
+            ccl_manager=ccl_manager,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+        )
+        if ctx.tp_axis is not None and ctx.ccl_manager is None:
+            raise ValueError("ccl_manager must be provided if tensor parallelism is used")
+
+        self.embed_tokens = Embedding(config.vocab_size, config.hidden_size, device=device)
+        self.layers = ModuleList(
+            SmolLM3DecoderLayer(
+                hidden_size=config.hidden_size,
+                num_attention_heads=config.num_attention_heads,
+                num_key_value_heads=config.num_key_value_heads,
+                intermediate_size=config.intermediate_size,
+                hidden_act=config.hidden_act,
+                rms_norm_eps=config.rms_norm_eps,
+                use_rope=bool(config.no_rope_layers[i]),
+                ctx=ctx,
+            )
+            for i in range(config.num_hidden_layers)
+        )
+        self.norm = SmolLM3RmsNorm(config.hidden_size, eps=config.rms_norm_eps, ctx=ctx)
+
+        self._config = config
+        self._device = device
+        self._head_dim = config.head_dim
+        self._rope_theta = config.rope_theta
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # HF SmolLM3ForCausalLM prefix is "model."; SmolLM3Model state has no prefix.
+        # Accept either by stripping "model." if present, then drop lm_head.
+        prefix = "model."
+        for k in list(state):
+            if k.startswith(prefix):
+                state[k[len(prefix) :]] = state.pop(k)
+        pop_substate(state, "lm_head")
+        pop_substate(state, "rotary_emb")
+
+    def create_rope_tensors(self, batch_size: int, sequence_length: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return create_rope_tensors(batch_size, sequence_length, self._head_dim, self._rope_theta)
+
+    def forward(
+        self,
+        input_ids: ttnn.Tensor,
+        *,
+        attention_mask: ttnn.Tensor | None = None,
+        pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
+    ) -> list[ttnn.Tensor]:
+        batch_size, seq_len = input_ids.shape
+
+        if attention_mask is not None:
+            padded = (
+                -(-seq_len // 32) * 32 if seq_len < MAX_CHUNK_SIZE else -(-seq_len // MAX_CHUNK_SIZE) * MAX_CHUNK_SIZE
+            )
+            input_ids = ttnn.pad(input_ids, [(0, padded - seq_len)], value=0)
+            pos_embeds = tuple(
+                ttnn.pad(x, [(0, 0), (0, 0), (0, padded - seq_len), (0, 0)], value=0) for x in pos_embeds
+            )
+            attention_mask = ttnn.pad(attention_mask, [(0, padded - seq_len)], value=0)
+            attention_bias = prepare_attention_bias(attention_mask)
+        else:
+            padded = seq_len
+            attention_bias = None
+
+        hidden_states = self.embed_tokens.forward(input_ids)
+
+        # HF output_hidden_states convention: append the INPUT to each layer, then the final norm.
+        all_hidden_states: list[ttnn.Tensor] = []
+        for layer in self.layers:
+            all_hidden_states.append(hidden_states)
+            hidden_states = layer.forward(hidden_states, attention_bias=attention_bias, pos_embeds=pos_embeds)
+        hidden_states = self.norm.forward(hidden_states)
+        all_hidden_states.append(hidden_states)
+
+        if padded != seq_len:
+            all_hidden_states = [x[:, :seq_len, :] for x in all_hidden_states]
+        return all_hidden_states

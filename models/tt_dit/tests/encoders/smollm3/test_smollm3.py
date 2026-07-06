@@ -47,6 +47,9 @@ def test_smollm3_rope_matches_hf():
     torch.testing.assert_close(sin[0, 0], ref_sin, atol=1e-5, rtol=1e-5)
 
 
+import ttnn
+from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor as tt_tensor
 from models.tt_dit.utils.check import assert_quality
 
@@ -201,3 +204,42 @@ def test_smollm3_decoder_layer(*, mesh_device):
         pos_embeds=(tt_cos, tt_sin),
     )
     assert_quality(ref, tt_tensor.to_torch(tt_out), pcc=0.99, relative_rmse=0.2)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
+def test_smollm3_encoder_all_layers(*, mesh_device):
+    from models.tt_dit.encoders.smollm3.config import SmolLM3Config
+    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
+
+    torch.manual_seed(0)
+    n_layers = int(os.environ.get("N_LAYERS", "6"))
+    seq = 128
+    hf = _load_hf_smollm3()
+    hf.model.layers = hf.model.layers[:n_layers]
+    hf.config.num_hidden_layers = n_layers
+
+    tokens = torch.randint(0, hf.config.vocab_size, (1, seq))
+    with torch.no_grad():
+        ref = hf.model(input_ids=tokens, output_hidden_states=True)
+    ref_hs = [h.float() for h in ref.hidden_states]  # length n_layers + 1
+
+    cfg = SmolLM3Config.from_hf_config(hf.config)
+    cfg.num_hidden_layers = n_layers
+    cfg.no_rope_layers = cfg.no_rope_layers[:n_layers]
+
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    pc = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=1, mesh_axis=1))
+    enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
+    enc.load_torch_state_dict(hf.model.state_dict())
+
+    cos, sin = enc.create_rope_tensors(1, seq)
+    tt_ids = tt_tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
+    hs = enc.forward(
+        tt_ids,
+        attention_mask=None,
+        pos_embeds=(tt_tensor.from_torch(cos, device=mesh_device), tt_tensor.from_torch(sin, device=mesh_device)),
+    )
+    assert len(hs) == len(ref_hs), f"got {len(hs)} states, expected {len(ref_hs)}"
+    for i, (r, d) in enumerate(zip(ref_hs, hs)):
+        assert_quality(r, tt_tensor.to_torch(d), pcc=0.99)
