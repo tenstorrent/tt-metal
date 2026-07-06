@@ -83,7 +83,9 @@ ttnn::Tensor all_gather_async(
     bool reverse_order = false,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
-    std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
+    std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
+    const std::optional<GlobalSemaphore>& war_semaphore = std::nullopt,
+    std::optional<uint32_t> war_wait_value = std::nullopt);
 
 // Reversed: overload with sub-core grids
 ttnn::Tensor all_gather_async_reversed(

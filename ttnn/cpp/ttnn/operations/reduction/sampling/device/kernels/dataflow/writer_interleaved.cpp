@@ -7,6 +7,7 @@
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -70,6 +71,14 @@ void kernel_main() {
     // Number of running cores / users. The final-indices CB holds one stick per user (no longer
     // hard-coded to 32), so this kernel waits/pops exactly `num_users` sticks.
     constexpr uint32_t num_users = get_compile_time_arg_val(args_base + 17);
+    // WAR-hazard signal: when enabled, increment `war_sem_addr` on the gather's drain core once at
+    // the very end of the op so the next decode step's SAMPLING_VALUES all-gather can safely reuse
+    // the persistent buffer. Closes a cross-sub-device Write-After-Read race that only shows up under
+    // trace (see models/common/sampling and the llama3_70b_galaxy TT_CCL war_sem).
+    constexpr uint32_t signal_war_sem = get_compile_time_arg_val(args_base + 18);
+    constexpr uint32_t war_sem_addr = get_compile_time_arg_val(args_base + 19);
+    constexpr uint32_t war_drain_noc_x = get_compile_time_arg_val(args_base + 20);
+    constexpr uint32_t war_drain_noc_y = get_compile_time_arg_val(args_base + 21);
     constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
@@ -245,4 +254,15 @@ void kernel_main() {
         {.offset_bytes = core_id * 4},
         {.page_id = 0, .offset_bytes = core_id * 4});
     noc.async_write_barrier();
+
+    // Signal WAR completion: this core is done reading the gathered SAMPLING_VALUES/INDICES for this
+    // step. Increment the war semaphore on the gather's drain core; the next step's SAMPLING_VALUES
+    // all-gather waits until all `num_users` sampling cores have signalled before overwriting the
+    // reused persistent buffer.
+    if constexpr (signal_war_sem != 0) {
+        const uint64_t war_noc_addr =
+            get_noc_addr(war_drain_noc_x, war_drain_noc_y, war_sem_addr, noc.get_noc_id());
+        noc_semaphore_inc(war_noc_addr, 1, noc.get_noc_id());
+        noc.async_atomic_barrier();
+    }
 }

@@ -57,7 +57,9 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_op
     const std::optional<uint32_t>& num_buffers_per_channel,
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    const MeshDevice* optional_mesh_device);
+    const MeshDevice* optional_mesh_device,
+    const std::optional<GlobalSemaphore>& war_semaphore = std::nullopt,
+    const std::optional<uint32_t>& war_wait_value = std::nullopt);
 
 enum class AllGatherAsyncVersion {
     LLAMA_MINIMAL_SHARDED = 0,
@@ -90,6 +92,8 @@ Tensor all_gather_async(
     const std::optional<uint32_t>& num_buffers_per_channel,
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    const MeshDevice* optional_mesh_device);
+    const MeshDevice* optional_mesh_device,
+    const std::optional<GlobalSemaphore>& war_semaphore = std::nullopt,
+    const std::optional<uint32_t>& war_wait_value = std::nullopt);
 
 }  // namespace ttnn::prim
