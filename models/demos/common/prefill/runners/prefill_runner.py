@@ -407,7 +407,9 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
         d2d_in.release_fabric_links()
 
 
-def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d_out) -> float:
+def _compute_and_send(
+    runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d_out, d2h_service=None, record_dev=None
+) -> float:
     """Run one chunk: prefill into the engine-owned kv_cache, forward the output downstream (non-last
     rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
     (NTP-comparable). CHUNK_START is logged BEFORE the forward, with this chunk's metadata, so the
@@ -419,7 +421,13 @@ def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d
         f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     )
     out = runtime.prefill_chunk(
-        inp, kv_cache, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
+        inp,
+        kv_cache,
+        slot_id=meta["slot_id"],
+        actual_start=meta["actual_start"],
+        actual_end=meta["actual_end"],
+        d2h_service=d2h_service,
+        record_dev=record_dev,
     )
     if SYNC_PER_CHUNK:
         # Block on device completion so the delta is this rank's forward alone, not the downstream-start
@@ -447,7 +455,16 @@ def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done:
 
 
 def run_request_loop(
-    runtime, kv_cache, rank: int, num_ranks: int, *, hidden_size: int, h2d_service=None, d2d_in=None, d2d_out=None
+    runtime,
+    kv_cache,
+    rank: int,
+    num_ranks: int,
+    *,
+    hidden_size: int,
+    h2d_service=None,
+    d2d_in=None,
+    d2d_out=None,
+    d2h_service=None,
 ) -> None:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
@@ -479,7 +496,7 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
-        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out)
+        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, record_dev=md)
         if first is None:
             first = t
         c += 1
@@ -535,7 +552,7 @@ def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=
         else:
             inp, meta, md = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
-        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out)
+        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out, record_dev=md)
         if first is None:
             first = t
     # Every rank must finish receiving + forwarding the final chunk before any rank reclaims its
@@ -821,6 +838,7 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         h2d_service=h2d_service,
         d2d_in=d2d_in,
         d2d_out=d2d_out,
+        d2h_service=d2h_service,
     )
 
     # Release services while the mesh + command queues are still alive (their dtors free a command
