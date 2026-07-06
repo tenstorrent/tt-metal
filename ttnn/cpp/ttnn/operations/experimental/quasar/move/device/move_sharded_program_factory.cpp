@@ -89,6 +89,13 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()});
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
 
+    // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit Gen1Config.
+    m2::DataMovementHardwareConfig reader_hw;
+    if (input.device()->arch() == tt::ARCH::QUASAR) {
+        reader_hw = m2::DataMovementGen2Config{};
+    } else {
+        reader_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    }
     m2::KernelSpec reader{
         .unique_id = READER,
         .source =
@@ -99,10 +106,7 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
                 m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
                 m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
             },
-        // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit Gen1Config.
-        .hw_config = ttnn::to_datamovement_hardware_config(
-            input.device()->arch(),
-            m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}),
+        .hw_config = std::move(reader_hw),
     };
 
     reader.runtime_arg_schema.runtime_arg_names = m2::Group<std::string>{"total_size_bytes"};

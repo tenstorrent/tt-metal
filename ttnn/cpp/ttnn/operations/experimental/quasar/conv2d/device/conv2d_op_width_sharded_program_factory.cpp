@@ -618,6 +618,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     // ---- Activation reader kernel ----
     // DFB bindings: produces ACT_ROW_MAJOR + ACT (mcast), consumes ACT_TILIZED (mcast source);
     // self-loops the borrowed ACT_SHARDED (input address source) and READER_INDICES.
+    m2::DataMovementHardwareConfig act_hw;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        act_hw = m2::DataMovementGen2Config{};
+    } else {
+        act_hw = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
+    }
     m2::KernelSpec act_kernel{
         .unique_id = KERNEL_ACT,
         .source = std::filesystem::path("ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
@@ -683,9 +689,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             {
                 .runtime_arg_names = {"this_core_x", "this_core_y", "num_cores_x"},
             },
-        .hw_config = ttnn::to_datamovement_hardware_config(
-            device->arch(),
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc}),
+        .hw_config = std::move(act_hw),
     };
     if (skip_activation_mcast) {
         act_kernel.compiler_options.defines.insert({"SKIP_MCAST", "1"});
@@ -716,6 +720,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         weights_tensor_bindings.push_back(m2::TensorBinding{.tensor_parameter_name = TP_BIAS, .accessor_name = "bias"});
     }
 
+    m2::DataMovementHardwareConfig weights_hw;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        weights_hw = m2::DataMovementGen2Config{};
+    } else {
+        weights_hw =
+            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc};
+    }
     m2::KernelSpec weights_kernel{
         .unique_id = KERNEL_WEIGHTS,
         .source = std::filesystem::path("ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
@@ -741,9 +752,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             {
                 .runtime_arg_names = {"init_weight_start_tile_id", "is_active"},
             },
-        .hw_config = ttnn::to_datamovement_hardware_config(
-            device->arch(),
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc}),
+        .hw_config = std::move(weights_hw),
     };
 
     // FUSE_BIAS preprocessor define gates the conditionally-bound dfb::bias / tensor::bias references
