@@ -40,8 +40,11 @@ namespace tt::tt_metal::experimental {
 // ============================================================================
 
 struct DataMovementGen1Config {
-    tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
-    tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
+    // Defaults for processor and noc are intentionally omitted as they're perf sensitive to their use case.
+    // Please use factory functions `create_reader/write_gen1_datamovement_config` if you would like to create a
+    // default DataMovementGen1Config.
+    tt::tt_metal::DataMovementProcessor processor;
+    tt::tt_metal::NOC noc;
     tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
 };
 
