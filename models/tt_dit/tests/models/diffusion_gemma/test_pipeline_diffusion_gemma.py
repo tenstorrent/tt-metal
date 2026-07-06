@@ -296,7 +296,13 @@ def test_pipeline_diffusion_gemma(
 
     e2e_time = benchmark_profiler.get_duration("e2e_generate")
     logger.info(f"E2E generate time: {e2e_time:.2f}s vs threshold {expected['total']}s")
-    benchmark_data.add_measurement("diffusiongemma_e2e_seconds", e2e_time)
+    benchmark_data.add_measurement(
+        profiler=benchmark_profiler,
+        iteration=0,
+        step_name="e2e_generate",
+        name="diffusiongemma_e2e_seconds",
+        value=e2e_time,
+    )
 
     assert (
         e2e_time <= expected["total"]
