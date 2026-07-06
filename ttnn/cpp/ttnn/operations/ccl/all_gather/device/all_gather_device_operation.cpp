@@ -221,7 +221,8 @@ AllGatherDeviceOperation::create_op_performance_model(
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& /*args*/, const AllGatherInputs& /*tensor_args*/) {
-    // TODO if tensor_size > xxx && !is_fabric_2d -> unicast
+    // TODO if tensor_size > 1MB && FABRIC_1D_RING || NEIGHBOR_EXCHANGE -> unicast
+    // 0.26MB for 0.5byte, 0.81MB for 1byte, 1.035MB for 2byte, 0.685MB for 4byte
     return AllGatherMulticastFactory{};
 }
 
