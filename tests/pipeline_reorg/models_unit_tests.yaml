@@ -424,7 +424,7 @@
 
 - name: Mixtral-8x7B unit tests
   cmd: |
-    export TT_METAL_WATCHER=10  # more frequent watcher polling (was 60)
+    export TT_METAL_WATCHER=120  # less frequent watcher polling to reduce overhead (was 60)
     export HF_MODEL=mistralai/Mixtral-8x7B-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-v0.1
     pytest --timeout 600 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py  # PREFILL-4096 layernorm first-compile can exceed 300s under watcher
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_mlp.py
@@ -483,7 +483,7 @@
 # covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.
 - name: GPT-OSS 20B unit tests
   cmd: |
-    export TT_METAL_WATCHER=10  # more frequent watcher polling (was 60)
+    export TT_METAL_WATCHER=120  # less frequent watcher polling to reduce overhead (was 60)
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
     pytest --timeout 600 models/demos/gpt_oss/tests/unit/
   model: gpt-oss-20b
@@ -504,7 +504,7 @@
 
 - name: GPT-OSS 120B unit tests
   cmd: |
-    export TT_METAL_WATCHER=10  # more frequent watcher polling (was 60)
+    export TT_METAL_WATCHER=120  # less frequent watcher polling to reduce overhead (was 60)
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b TT_MM_THROTTLE_PERF=2
     # Tensor cache is pre-built on the NAS — skip loading model weights by default.
     # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
