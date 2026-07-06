@@ -316,14 +316,14 @@ models:
     wh_galaxy: 45
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 230
-    bh_galaxy: 70
+    bh_quietbox_2: 245  # +15: GPT-OSS-120B bh_quietbox_2 15->30 (watcher slowdown)
+    bh_galaxy: 90  # +20: GPT-OSS-120B bh_galaxy 10->30 (watcher slowdown)
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172
     wh_n150: 55
     bh_p150: 20
-    bh_quietbox_2: 50
+    bh_quietbox_2: 60  # +10: GPT-OSS-20B bh_quietbox_2 5->15 (watcher slowdown)
   unit_tier3:
     wh_llmbox_perf: 58
     wh_n150: 33

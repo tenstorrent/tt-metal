@@ -424,9 +424,9 @@
 
 - name: Mixtral-8x7B unit tests
   cmd: |
-    export TT_METAL_WATCHER=60
+    export TT_METAL_WATCHER=10  # more frequent watcher polling (was 60)
     export HF_MODEL=mistralai/Mixtral-8x7B-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-v0.1
-    pytest --timeout 300 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py  # PREFILL-4096 layernorm first-compile can exceed 120s
+    pytest --timeout 600 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py  # PREFILL-4096 layernorm first-compile can exceed 300s under watcher
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_mlp.py
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_moe.py
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
@@ -483,7 +483,7 @@
 # covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.
 - name: GPT-OSS 20B unit tests
   cmd: |
-    export TT_METAL_WATCHER=60
+    export TT_METAL_WATCHER=10  # more frequent watcher polling (was 60)
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
     pytest --timeout 600 models/demos/gpt_oss/tests/unit/
   model: gpt-oss-20b
@@ -497,14 +497,14 @@
       timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 5
+      timeout: 15  # was 5: watcher slowdown wall-clock-killed the job (tests passing)
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: GPT-OSS 120B unit tests
   cmd: |
-    export TT_METAL_WATCHER=60
+    export TT_METAL_WATCHER=10  # more frequent watcher polling (was 60)
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b TT_MM_THROTTLE_PERF=2
     # Tensor cache is pre-built on the NAS — skip loading model weights by default.
     # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
@@ -524,11 +524,12 @@
     bh_quietbox_2:
       # 10 min was too tight: the suite runs to ~12 min and got wall-clock
       # killed mid-"Full MLP Pipeline" on the prefill_4096 test_decoder while
-      # all components were still passing (PCC 0.96-0.99). Bump to 15.
-      timeout: 15
+      # all components were still passing (PCC 0.96-0.99). Bumped 10->15, then
+      # ->30 under watcher (watcher slowdown wall-clock-killed the job at ~20 min).
+      timeout: 30
       tier: 1
     bh_galaxy:
-      timeout: 10
+      timeout: 30  # was 10: watcher slowdown (ran ~24 min, tests passing, then killed)
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
