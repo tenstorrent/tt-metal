@@ -1,0 +1,446 @@
+{
+  "new_model_id": "meituan-longcat/LongCat-Image",
+  "new_model_type": null,
+  "sibling_hf_id": "CompVis/stable-diffusion-v1-4",
+  "sibling_model_type": null,
+  "backend": {
+    "name": "Stable Diffusion 1.4",
+    "demo_path": "models/demos/vision/generative/stable_diffusion"
+  },
+  "counts": {
+    "REUSE": 9,
+    "ADAPT": 0,
+    "NEW": 25
+  },
+  "common_reuse": [
+    {
+      "purpose": "LayerNorm / RMSNorm",
+      "path": "models/common/rmsnorm.py"
+    },
+    {
+      "purpose": "LightweightModule base",
+      "path": "models/common/lightweightmodule.py"
+    },
+    {
+      "purpose": "Tensor helpers",
+      "path": "models/common/tensor_utils.py"
+    },
+    {
+      "purpose": "Generic utility funcs",
+      "path": "models/common/utility_functions.py"
+    }
+  ],
+  "components": [
+    {
+      "name": "self_attention",
+      "kind": "self_attention",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/attention.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: gqa_attention -> models/tt_transformers/tt/attention.py::Attention (REUSE). derived from compatibility.py BUILDING_BLOCKS 'GQA attention'. Requires num_attention_heads % num_key_value_heads == 0.",
+      "submodule_path": null,
+      "class_name": null
+    },
+    {
+      "name": "mlp",
+      "kind": "mlp",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/mlp.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: swiglu_mlp -> models/tt_transformers/tt/mlp.py::MLP (REUSE). derived from compatibility.py BUILDING_BLOCKS 'SwiGLU MLP'. hidden_act dispatched via activation_map; supports silu/gelu/relu/quick_gelu/gelu_pytorch_tanh.",
+      "submodule_path": null,
+      "class_name": null
+    },
+    {
+      "name": "qwen2_v_l_for_conditional_generation",
+      "kind": "Qwen2_5_VLForConditionalGeneration",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=546 sample_paths=['text_encoder'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "text_encoder",
+      "class_name": "Qwen2_5_VLForConditionalGeneration"
+    },
+    {
+      "name": "qwen2_v_l_model",
+      "kind": "Qwen2_5_VLModel",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=545 sample_paths=['text_encoder.model'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "text_encoder.model",
+      "class_name": "Qwen2_5_VLModel"
+    },
+    {
+      "name": "long_cat_image_transformer2_d_model",
+      "kind": "LongCatImageTransformer2DModel",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=501 sample_paths=['transformer'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "transformer",
+      "class_name": "LongCatImageTransformer2DModel"
+    },
+    {
+      "name": "qwen2_v_l_text_model",
+      "kind": "Qwen2_5_VLTextModel",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=283 sample_paths=['text_encoder.model.language_model'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "text_encoder.model.language_model",
+      "class_name": "Qwen2_5_VLTextModel"
+    },
+    {
+      "name": "qwen2_v_l_decoder_layer",
+      "kind": "Qwen2_5_VLDecoderLayer",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=28 leaves=280 sample_paths=['text_encoder.model.language_model.layers.0', 'text_encoder.model.language_model.layers.1'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "text_encoder.model.language_model.layers.0",
+      "class_name": "Qwen2_5_VLDecoderLayer"
+    },
+    {
+      "name": "long_cat_image_transformer_block",
+      "kind": "LongCatImageTransformerBlock",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=10 leaves=270 sample_paths=['transformer.transformer_blocks.0', 'transformer.transformer_blocks.1'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "transformer.transformer_blocks.0",
+      "class_name": "LongCatImageTransformerBlock"
+    },
+    {
+      "name": "qwen2_vision_transformer_pretrained_model",
+      "kind": "Qwen2_5_VisionTransformerPretrainedModel",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=262 sample_paths=['text_encoder.model.visual'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "text_encoder.model.visual",
+      "class_name": "Qwen2_5_VisionTransformerPretrainedModel"
+    },
+    {
+      "name": "qwen2_v_l_vision_block",
+      "kind": "Qwen2_5_VLVisionBlock",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=32 leaves=256 sample_paths=['text_encoder.model.visual.blocks.0', 'text_encoder.model.visual.blocks.1'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "text_encoder.model.visual.blocks.0",
+      "class_name": "Qwen2_5_VLVisionBlock"
+    },
+    {
+      "name": "long_cat_image_attention",
+      "kind": "LongCatImageAttention",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/attention.py",
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] reuse_registry: gqa_attention -> models/tt_transformers/tt/attention.py::Attention (REUSE). derived from compatibility.py BUILDING_BLOCKS 'GQA attention'. Requires num_attention_heads % num_key_value_heads == 0. | module-tree: occ=30 leaves=230 sample_paths=['transformer.transformer_blocks.0.attn', 'transformer.transformer_blocks.1.attn'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "transformer.transformer_blocks.0.attn",
+      "class_name": "LongCatImageAttention"
+    },
+    {
+      "name": "long_cat_image_single_transformer_block",
+      "kind": "LongCatImageSingleTransformerBlock",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=20 leaves=220 sample_paths=['transformer.single_transformer_blocks.0', 'transformer.single_transformer_blocks.1'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "transformer.single_transformer_blocks.0",
+      "class_name": "LongCatImageSingleTransformerBlock"
+    },
+    {
+      "name": "autoencoder_k_l",
+      "kind": "AutoencoderKL",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=174 sample_paths=['vae'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "vae",
+      "class_name": "AutoencoderKL"
+    },
+    {
+      "name": "resnet_block2_d",
+      "kind": "ResnetBlock2D",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=24 leaves=148 sample_paths=['vae.encoder.down_blocks.0.resnets.0', 'vae.encoder.down_blocks.0.resnets.1'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "vae.encoder.down_blocks.0.resnets.0",
+      "class_name": "ResnetBlock2D"
+    },
+    {
+      "name": "qwen2_v_l_m_l_p",
+      "kind": "Qwen2_5_VLMLP",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/mlp.py",
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] reuse_registry: swiglu_mlp -> models/tt_transformers/tt/mlp.py::MLP (REUSE). derived from compatibility.py BUILDING_BLOCKS 'SwiGLU MLP'. hidden_act dispatched via activation_map; supports silu/gelu/relu/quick_gelu/gelu_pytorch_tanh. | module-tree: occ=32 leaves=128 sample_paths=['text_encoder.model.visual.blocks.0.mlp', 'text_encoder.model.visual.blocks.1.mlp'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "text_encoder.model.visual.blocks.0.mlp",
+      "class_name": "Qwen2_5_VLMLP"
+    },
+    {
+      "name": "qwen2_v_l_r_m_s_norm",
+      "kind": "Qwen2_5_VLRMSNorm",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/common/rmsnorm.py",
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] reuse_registry: rmsnorm_text -> models/common/rmsnorm.py::RMSNorm (REUSE). derived from compatibility.py BUILDING_BLOCKS 'RMSNorm (text)'. ttnn.rms_norm requires TILE layout; distributed RMSNorm handles multi-chip. | module-tree: occ=122 leaves=122 sample_paths=['text_encoder.model.visual.blocks.0.norm1', 'text_encoder.model.visual.blocks.0.norm2'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "text_encoder.model.visual.blocks.0.norm1",
+      "class_name": "Qwen2_5_VLRMSNorm"
+    },
+    {
+      "name": "qwen2_m_l_p",
+      "kind": "Qwen2MLP",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/mlp.py",
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] reuse_registry: swiglu_mlp -> models/tt_transformers/tt/mlp.py::MLP (REUSE). derived from compatibility.py BUILDING_BLOCKS 'SwiGLU MLP'. hidden_act dispatched via activation_map; supports silu/gelu/relu/quick_gelu/gelu_pytorch_tanh. | module-tree: occ=28 leaves=112 sample_paths=['text_encoder.model.language_model.layers.0.mlp', 'text_encoder.model.language_model.layers.1.mlp'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "text_encoder.model.language_model.layers.0.mlp",
+      "class_name": "Qwen2MLP"
+    },
+    {
+      "name": "qwen2_v_l_attention",
+      "kind": "Qwen2_5_VLAttention",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/attention.py",
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] reuse_registry: gqa_attention -> models/tt_transformers/tt/attention.py::Attention (REUSE). derived from compatibility.py BUILDING_BLOCKS 'GQA attention'. Requires num_attention_heads % num_key_value_heads == 0. | module-tree: occ=28 leaves=112 sample_paths=['text_encoder.model.language_model.layers.0.self_attn', 'text_encoder.model.language_model.layers.1.self_attn'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "text_encoder.model.language_model.layers.0.self_attn",
+      "class_name": "Qwen2_5_VLAttention"
+    },
+    {
+      "name": "decoder",
+      "kind": "Decoder",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=99 sample_paths=['vae.decoder'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "vae.decoder",
+      "class_name": "Decoder"
+    },
+    {
+      "name": "up_decoder_block2_d",
+      "kind": "UpDecoderBlock2D",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=4 leaves=77 sample_paths=['vae.decoder.up_blocks.0', 'vae.decoder.up_blocks.1'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "vae.decoder.up_blocks.0",
+      "class_name": "UpDecoderBlock2D"
+    },
+    {
+      "name": "encoder",
+      "kind": "Encoder",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=75 sample_paths=['vae.encoder'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "vae.encoder",
+      "class_name": "Encoder"
+    },
+    {
+      "name": "qwen2_v_l_vision_attention",
+      "kind": "Qwen2_5_VLVisionAttention",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/attention.py",
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] reuse_registry: gqa_attention -> models/tt_transformers/tt/attention.py::Attention (REUSE). derived from compatibility.py BUILDING_BLOCKS 'GQA attention'. Requires num_attention_heads % num_key_value_heads == 0. | module-tree: occ=32 leaves=64 sample_paths=['text_encoder.model.visual.blocks.0.attn', 'text_encoder.model.visual.blocks.1.attn'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "text_encoder.model.visual.blocks.0.attn",
+      "class_name": "Qwen2_5_VLVisionAttention"
+    },
+    {
+      "name": "ada_layer_norm_zero",
+      "kind": "AdaLayerNormZero",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=20 leaves=60 sample_paths=['transformer.transformer_blocks.0.norm1', 'transformer.transformer_blocks.0.norm1_context'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "transformer.transformer_blocks.0.norm1",
+      "class_name": "AdaLayerNormZero"
+    },
+    {
+      "name": "ada_layer_norm_zero_single",
+      "kind": "AdaLayerNormZeroSingle",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=20 leaves=60 sample_paths=['transformer.single_transformer_blocks.0.norm', 'transformer.single_transformer_blocks.1.norm'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "transformer.single_transformer_blocks.0.norm",
+      "class_name": "AdaLayerNormZeroSingle"
+    },
+    {
+      "name": "feed_forward",
+      "kind": "FeedForward",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=20 leaves=60 sample_paths=['transformer.transformer_blocks.0.ff', 'transformer.transformer_blocks.0.ff_context'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "transformer.transformer_blocks.0.ff",
+      "class_name": "FeedForward"
+    },
+    {
+      "name": "down_encoder_block2_d",
+      "kind": "DownEncoderBlock2D",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=4 leaves=53 sample_paths=['vae.encoder.down_blocks.0', 'vae.encoder.down_blocks.1'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "vae.encoder.down_blocks.0",
+      "class_name": "DownEncoderBlock2D"
+    },
+    {
+      "name": "u_net_mid_block2_d",
+      "kind": "UNetMidBlock2D",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=2 leaves=36 sample_paths=['vae.encoder.mid_block', 'vae.decoder.mid_block'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "vae.encoder.mid_block",
+      "class_name": "UNetMidBlock2D"
+    },
+    {
+      "name": "attention",
+      "kind": "Attention",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/attention.py",
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] reuse_registry: gqa_attention -> models/tt_transformers/tt/attention.py::Attention (REUSE). derived from compatibility.py BUILDING_BLOCKS 'GQA attention'. Requires num_attention_heads % num_key_value_heads == 0. | module-tree: occ=2 leaves=12 sample_paths=['vae.encoder.mid_block.attentions.0', 'vae.decoder.mid_block.attentions.0'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "vae.encoder.mid_block.attentions.0",
+      "class_name": "Attention"
+    },
+    {
+      "name": "long_cat_image_timestep_embeddings",
+      "kind": "LongCatImageTimestepEmbeddings",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=4 sample_paths=['transformer.time_embed'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "transformer.time_embed",
+      "class_name": "LongCatImageTimestepEmbeddings"
+    },
+    {
+      "name": "qwen2_v_l_patch_merger",
+      "kind": "Qwen2_5_VLPatchMerger",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=4 sample_paths=['text_encoder.model.visual.merger'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "text_encoder.model.visual.merger",
+      "class_name": "Qwen2_5_VLPatchMerger"
+    },
+    {
+      "name": "ada_layer_norm_continuous",
+      "kind": "AdaLayerNormContinuous",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=3 sample_paths=['transformer.norm_out'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "transformer.norm_out",
+      "class_name": "AdaLayerNormContinuous"
+    },
+    {
+      "name": "downsample2_d",
+      "kind": "Downsample2D",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=3 leaves=3 sample_paths=['vae.encoder.down_blocks.0.downsamplers.0', 'vae.encoder.down_blocks.1.downsamplers.0'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "vae.encoder.down_blocks.0.downsamplers.0",
+      "class_name": "Downsample2D"
+    },
+    {
+      "name": "timestep_embedding",
+      "kind": "TimestepEmbedding",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=3 sample_paths=['transformer.time_embed.timestep_embedder'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "transformer.time_embed.timestep_embedder",
+      "class_name": "TimestepEmbedding"
+    },
+    {
+      "name": "upsample2_d",
+      "kind": "Upsample2D",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=3 leaves=3 sample_paths=['vae.decoder.up_blocks.0.upsamplers.0', 'vae.decoder.up_blocks.1.upsamplers.0'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "vae.decoder.up_blocks.0.upsamplers.0",
+      "class_name": "Upsample2D"
+    }
+  ],
+  "notes": [
+    "Sibling config could not be fetched; classification falls back to NEW for components without a clear file match. Set HF_TOKEN or pre-download `CompVis/stable-diffusion-v1-4` and re-run for a sharper diff."
+  ]
+}
