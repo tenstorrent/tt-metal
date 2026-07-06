@@ -33,6 +33,59 @@ ADDR_VAR = re.compile(r"\b([A-Za-z_]\w*)\s*=\s*[^;]*?address\s*\(\s*\)\s*;")
 OK = "smuggled-rta-ok"
 
 
+def _strip_comments(text):
+    """Blank out // and /* */ comments and string/char literals with spaces of equal
+    length (newlines preserved) so scanning sees only code while byte offsets/line numbers
+    stay valid. Prevents matching address()/emplace_runtime_args inside a comment or string."""
+    out = list(text)
+    n = len(text)
+    i = 0
+    CODE, LINE, BLOCK, STR = 0, 1, 2, 3
+    state, quote = CODE, ""
+    while i < n:
+        c = text[i]
+        pair = text[i : i + 2]
+        if state == CODE:
+            if pair == "//":
+                out[i] = out[i + 1] = " "
+                i += 2
+                state = LINE
+            elif pair == "/*":
+                out[i] = out[i + 1] = " "
+                i += 2
+                state = BLOCK
+            elif c in "\"'":
+                quote = c
+                i += 1
+                state = STR
+            else:
+                i += 1
+        elif state == LINE:
+            if c == "\n":
+                state = CODE
+            else:
+                out[i] = " "
+            i += 1
+        elif state == BLOCK:
+            if pair == "*/":
+                out[i] = out[i + 1] = " "
+                i += 2
+                state = CODE
+            else:
+                if c != "\n":
+                    out[i] = " "
+                i += 1
+        else:  # STR — leave literal text intact but consume it so // inside isn't a comment
+            if c == "\\":
+                i += 2
+            elif c == quote:
+                i += 1
+                state = CODE
+            else:
+                i += 1
+    return "".join(out)
+
+
 def _sink_regions(text):
     """Yield (start_off, end_off) char spans of each runtime-arg construction."""
     for m in SINK_START.finditer(text):
@@ -65,6 +118,7 @@ def check_file(path):
     if not any(mark in text for mark in DESCRIPTOR_MARKERS):
         return []  # not a descriptor factory
 
+    code = _strip_comments(text)  # scan code only; comments/strings blanked (offsets preserved)
     lines = text.splitlines()
     starts = [0]
     for ln in lines:
@@ -76,10 +130,10 @@ def check_file(path):
     def suppressed(lineno):
         return OK in lines[lineno - 1] if 1 <= lineno <= len(lines) else False
 
-    addr_vars = {m.group(1) for m in ADDR_VAR.finditer(text)}
+    addr_vars = {m.group(1) for m in ADDR_VAR.finditer(code)}
     findings = []
-    for s, e in _sink_regions(text):
-        region = text[s:e]
+    for s, e in _sink_regions(code):
+        region = code[s:e]
         # (a) direct raw address inside the runtime-arg construction
         for am in ADDRESS.finditer(region):
             ln = line_of2(s + am.start())
