@@ -78,16 +78,18 @@ def _process_prefill_chunk(
     gate_up_config = _build_sparse_matmul_config(TILE_SIZE, intermediate_size)
     down_config = _build_sparse_matmul_config(TILE_SIZE, hidden_size)
 
-    # HiFi4 + FP32 dest-acc for the expert matmuls. Matmuls default to LoFi; the
-    # gate/up/down accumulate over the hidden/intermediate dim with bf8 weights, so
-    # after #47311 (which removed the reduce's forced-FP32 accumulation) this is the
-    # dominant residual error on the MoE variant (26B). Only the MoE path needs it —
-    # the dense variants (E2B/12B) already pass with the SDPA fp32 fix alone.
+    # HiFi4 for the expert matmuls. Matmuls default to LoFi; the gate/up/down accumulate
+    # over the hidden/intermediate dim with bf8 weights, so after #47311 (which removed
+    # the reduce's forced-FP32 accumulation) this is the dominant residual error on the
+    # MoE variant (26B). NOTE: fp32_dest_acc_en is intentionally OFF here — enabling it
+    # halves the matmul dest (8->4 tiles), which on Blackhole corrupts the expert output
+    # and fails the vLLM coherence guard on BH-QB-2 26B (#49068). HiFi4 alone raises the
+    # multiply fidelity without the dest-halving.
     expert_compute_kernel_config = ttnn.init_device_compute_kernel_config(
         hidden_grouped.device().arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
 
