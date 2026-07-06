@@ -539,13 +539,10 @@ void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control
             << "rank " << mpi_rank << " mesh " << *mesh_id << " local physical mesh shape must match MGD slice";
 
         const auto& local_chip_mapping = topology_mapper.get_local_logical_mesh_chip_id_to_physical_chip_id_mapping();
-        size_t mapped_chips_on_mesh = 0;
-        for (const auto& [fabric_node_id, physical_chip_id] : local_chip_mapping) {
-            (void)physical_chip_id;
-            if (fabric_node_id.mesh_id == mesh_id) {
-                ++mapped_chips_on_mesh;
-            }
-        }
+        size_t mapped_chips_on_mesh = static_cast<size_t>(
+            std::count_if(local_chip_mapping.begin(), local_chip_mapping.end(), [&](const auto& entry) {
+                return entry.first.mesh_id == mesh_id;
+            }));
         EXPECT_EQ(mapped_chips_on_mesh, expected_local_shape.mesh_size())
             << "rank " << mpi_rank << " mesh " << *mesh_id
             << " mapped device count must match MGD per-host chip "
