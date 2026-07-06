@@ -275,10 +275,13 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(clear_value_cb.get_write_ptr());
         volatile tt_l1_ptr uint16_t* ic =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(DataflowBuffer(in_cb_id).get_write_ptr());
-        DPRINT << "[POOL-DBG reader] bf16_init_value=" << HEX() << (uint32_t)bf16_init_value
-               << " clear_value_cb[0]=" << (uint32_t)cv[0] << " in_cb[0]=" << (uint32_t)ic[0]
-               << " (MAX expects 0xFF80=-inf) need_to_initialize_in_cb=" << (uint32_t)need_to_initialize_in_cb
-               << ENDL();
+        DPRINT(
+            "[POOL-DBG reader] bf16_init_value=0x{:x} clear_value_cb[0]=0x{:x} in_cb[0]=0x{:x} (MAX expects "
+            "0xff80=-inf) need_to_initialize_in_cb={}\n",
+            (uint32_t)bf16_init_value,
+            (uint32_t)cv[0],
+            (uint32_t)ic[0],
+            (uint32_t)need_to_initialize_in_cb);
     }
 #endif
 

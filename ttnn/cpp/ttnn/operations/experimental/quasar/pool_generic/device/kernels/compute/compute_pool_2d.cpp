@@ -217,12 +217,12 @@ void kernel_main() {
                 // any padding/tail rows should be -inf (bf16 0xFF80). A phantom value (e.g. ~1.0 = the
                 // scalar, or stale L1) in the reduce input is the bug. Scalar tile should be all 1.0 for MAX.
                 if (n == 0 && c_i == 0 && chunk == 0) {
-                    UNPACK(DPRINT(
+                    DPRINT_UNPACK(
                         "[POOL-DBG] MAX scalar tile (expect 1.0):\n{}\n",
-                        TSLICE(curr_scalar_cb_id, 0, SliceRange::hw0_32_8(), true, true)));
-                    UNPACK(DPRINT(
-                        "[POOL-DBG] reduce-input in_cb tile0 (data should be input, pad/tail should be -inf):\n{}\n",
-                        TSLICE(curr_in_cb_id, 0, SliceRange::hw0_32_8(), true, true)));
+                        TSLICE(curr_scalar_cb_id, 0, SliceRange::hw0_32_8(), true, true));
+                    DPRINT_UNPACK(
+                        "[POOL-DBG] reduce-input in_cb tile0 (data=input, pad/tail should be -inf):\n{}\n",
+                        TSLICE(curr_in_cb_id, 0, SliceRange::hw0_32_8(), true, true));
                 }
 #endif
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
