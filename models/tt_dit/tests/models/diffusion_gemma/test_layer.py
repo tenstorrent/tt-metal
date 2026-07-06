@@ -50,8 +50,8 @@ def _build_tiny_config(num_layers: int = 6, hidden: int = 2816):
 
     return DiffusionGemmaTextConfig(
         hidden_size=hidden,
-        intermediate_size=2816,
-        moe_intermediate_size=2112,
+        intermediate_size=2112,
+        moe_intermediate_size=704,
         num_attention_heads=16,
         num_key_value_heads=8,
         num_global_key_value_heads=2,

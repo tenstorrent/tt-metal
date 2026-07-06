@@ -82,13 +82,6 @@ class DiffusionGemmaPipeline:
         self.hf_model = hf_model
         self.hf_processor = hf_processor
         self.hf_generation_config = hf_generation_config
-        # Diagnostic capture points. When ``_debug_capture_decoder_hidden`` is True, each
-        # ``_run_decoder`` call also snapshots the pre-lm_head decoder hidden state to
-        # ``_last_decoder_hidden_host`` (torch fp32). Off by default so we don't pay the
-        # device→host copy per denoising step in the hot generate() loop.
-        self._debug_capture_decoder_hidden = False
-        self._last_decoder_hidden_host: torch.Tensor | None = None
-        self._last_encoder_hidden = None
 
     # -------------------------------------------------------------------------
     # Construction
@@ -468,7 +461,7 @@ class DiffusionGemmaPipeline:
                 padding_positions = (pixel_position_ids == -1).all(dim=-1)
 
         # Run our TT encoder.
-        hidden, per_layer_kv = self.tt_model.model.encoder(
+        _hidden, per_layer_kv = self.tt_model.model.encoder(
             tt_input_ids,
             position_ids,
             tt_masks,
@@ -477,9 +470,6 @@ class DiffusionGemmaPipeline:
             padding_positions=padding_positions,
             input_ids_host=input_ids,
         )
-        # Stash last encoder hidden state (fp32 host tensor) for diagnostics; None by default so
-        # the extra device→host copy only pays when the caller opts in.
-        self._last_encoder_hidden = hidden
         return per_layer_kv, tt_masks, position_ids
 
     def _run_decoder(
@@ -522,19 +512,14 @@ class DiffusionGemmaPipeline:
             soft_emb = (soft_probs @ embed_w).to(torch.bfloat16) * (text_cfg.hidden_size**0.5)
             tt_self_cond_signal = bf16_tensor(soft_emb.unsqueeze(0), device=mesh_device)
 
-        # Split the on-device decoder + lm_head into two calls so the caller can inspect the
-        # pre-lm_head hidden state for diagnostics. ``_apply_lm_head`` will deallocate
-        # ``decoder_h`` inside itself, so we snapshot to host first if diagnostics are on.
-        decoder_h = self.tt_model.model.decoder(
+        # Single clean decoder step: decoder + lm_head + softcap on-device.
+        out = self.tt_model.decoder_step(
             tt_canvas,
             decoder_position_ids,
             encoder_kv_cache=encoder_kv,
             decoder_attention_masks=tt_decoder_masks,
             self_conditioning_signal=tt_self_cond_signal,
         )
-        if getattr(self, "_debug_capture_decoder_hidden", False):
-            self._last_decoder_hidden_host = local_device_to_torch(decoder_h).to(torch.float32)
-        out = self.tt_model._apply_lm_head(decoder_h)
         # Bring to host as fp32 for the sampler math. local_device_to_torch returns the
         # single-device replica with its on-device shape preserved — typically [B, canvas, vocab].
         # The HF sampler expects exactly that shape; do NOT squeeze (otherwise we lose the

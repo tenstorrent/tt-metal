@@ -169,14 +169,8 @@ def test_pipeline_diffusion_gemma(
     benchmark_profiler.end("setup")
 
     # ------------------------------------------------------------------
-    # 2. Correctness: encoder + decoder + step-by-step diffusion.
+    # 2. Correctness: one decoder forward at a seeded canvas vs HF.
     # ------------------------------------------------------------------
-    # Debug flow (temporary while we chase the ~87-88% end-to-end PCC): each stage prints its
-    # own PCC and (where applicable) decoded text before any assert fires. This lets us see
-    # (a) whether the drift is in the encoder or after it, (b) what the model actually
-    # generates through the full diffusion loop even if intermediate PCC is loose.
-    from ....utils.tensor import local_device_to_torch
-
     messages = [{"role": "user", "content": [{"type": "text", "text": PROMPT}]}]
     proc_inputs = hf_processor.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=True, return_dict=True, return_tensors="pt"
@@ -187,39 +181,10 @@ def test_pipeline_diffusion_gemma(
     canvas_length = hf_model.config.canvas_length
     seed_canvas = torch.randint(0, text_cfg.vocab_size, (1, canvas_length), dtype=torch.long)
 
-    # 2a. Run the TT encoder + one decoder forward. Also cache the encoder hidden state.
     encoder_kv, tt_enc_masks, enc_pos = pipeline._run_encoder(input_ids, None, None)
-    # Pull the last encoder hidden state to host (the pipeline stashed it for us).
-    tt_enc_h_host = local_device_to_torch(pipeline._last_encoder_hidden).to(torch.float32)
-    if tt_enc_h_host.ndim == 4 and tt_enc_h_host.shape[0] == 1:
-        tt_enc_h_host = tt_enc_h_host.squeeze(0)
-
-    # HF reference (piecewise so we can inspect encoder hidden independently).
-    with torch.no_grad():
-        hf_enc_out = hf_model.model.encoder(
-            input_ids=input_ids,
-            attention_mask=None,
-        )
-        hf_enc_h = hf_enc_out.last_hidden_state  # [B, S, H]
-        # Full forward (encoder + decoder + lm_head + softcap).
-        hf_out = hf_model(input_ids=input_ids, decoder_input_ids=seed_canvas)
-        hf_logits = hf_out.logits
-
-    logger.info("=" * 70)
-    logger.info(f"[2a] Encoder hidden state — hf {hf_enc_h.shape}, tt {tt_enc_h_host.shape}")
-    try:
-        assert_quality(hf_enc_h, tt_enc_h_host)  # logs PCC; no threshold, no raise
-    except Exception as e:
-        logger.warning(f"encoder PCC assert (should not fire, no threshold): {e}")
-
-    # 2b. One decoder forward at the seed canvas. We also capture the pre-lm_head hidden
-    # state so we can tell whether drift accumulates in the layer stack or in lm_head+softcap,
-    # AND per-layer hidden states so we can find WHICH layer(s) introduce the drift.
     decoder_position_ids = torch.arange(
         input_ids.shape[1], input_ids.shape[1] + canvas_length, dtype=torch.long
     ).unsqueeze(0)
-    pipeline._debug_capture_decoder_hidden = True
-    pipeline.tt_model.model.decoder._debug_capture_per_layer_hidden = True
     tt_logits = pipeline._run_decoder(
         seed_canvas,
         encoder_kv,
@@ -228,90 +193,17 @@ def test_pipeline_diffusion_gemma(
         encoder_seq_len=input_ids.shape[1],
         self_cond_logits=None,
     )
-    pipeline._debug_capture_decoder_hidden = False
-    pipeline.tt_model.model.decoder._debug_capture_per_layer_hidden = False
-    tt_per_layer_hidden = pipeline.tt_model.model.decoder._last_per_layer_hidden
-    tt_dec_h_host = pipeline._last_decoder_hidden_host
-    if tt_dec_h_host is not None and tt_dec_h_host.ndim == 4 and tt_dec_h_host.shape[0] == 1:
-        tt_dec_h_host = tt_dec_h_host.squeeze(0)
-
-    # HF reference: grab the last decoder hidden state (what lm_head sees). We could ask the
-    # top-level ForBlockDiffusion for output_hidden_states, but its return shape is ambiguous
-    # (encoder or decoder?). Safer: recompute the linear-algebra inverse of lm_head+softcap on
-    # the HF logits — that gives us exactly what the decoder produced.
-    #
-    #   softcap(x) = tanh(x / cap) * cap
-    #   pre_softcap = atanh(hf_logits / cap) * cap
-    #   pre_lm_head = pre_softcap @ pinv(lm_head.weight)     ← too expensive for vocab=262144
-    #
-    # atanh is well-defined for |y| < cap, and hf_logits are all in that range by construction.
-    # But inverting lm_head is a 262144×2816 pinv — not cheap. Instead: just call the HF decoder
-    # directly with output_hidden_states=True and take the last hidden state. That gives us the
-    # exact tensor lm_head consumes with no inversion math.
     with torch.no_grad():
-        hf_full = hf_model(
-            input_ids=input_ids,
-            decoder_input_ids=seed_canvas,
-            output_hidden_states=True,
-        )
-        # `hidden_states` is the tuple of decoder hidden states (input_embeds, layer_1, ..., final_norm)
-        # — the last entry has shape [B, canvas, hidden] and is what lm_head consumes.
-        hf_dec_h = hf_full.hidden_states[-1]
-        assert hf_dec_h.shape == (
-            seed_canvas.shape[0],
-            canvas_length,
-            text_cfg.hidden_size,
-        ), (
-            f"unexpected hf_dec_h shape {hf_dec_h.shape} — expected "
-            f"({seed_canvas.shape[0]}, {canvas_length}, {text_cfg.hidden_size}). If HF's "
-            f"hidden_states is actually the encoder's, we need to grab it a different way."
-        )
+        hf_logits = hf_model(input_ids=input_ids, decoder_input_ids=seed_canvas).logits
 
-    logger.info("=" * 70)
-    logger.info(f"[2b] Decoder hidden (pre-lm_head) — hf {hf_dec_h.shape}, tt {tt_dec_h_host.shape}")
-    try:
-        assert_quality(hf_dec_h, tt_dec_h_host)  # logs PCC; no threshold, no raise
-    except Exception as e:
-        logger.warning(f"pre-lm_head PCC assert (should not fire, no threshold): {e}")
-
-    # [2b-per-layer] Per-layer decoder hidden PCC. HF exposes ``hidden_states`` as the tuple
-    # (input_embeds, layer_1_out, layer_2_out, ..., layer_N_out, final_norm). We compare the
-    # per-layer outputs. This is diagnostic — no thresholds; find WHICH layer(s) introduce drift.
-    tt_layer_types = list(pipeline.tt_model.model.decoder.layer_types)
-    if len(hf_full.hidden_states) >= len(tt_per_layer_hidden) + 1:
-        import math
-
-        logger.info("[2b-per-layer] TT vs HF hidden-state PCC per layer:")
-        prev_pcc = None
-        for i, tt_h in enumerate(tt_per_layer_hidden):
-            hf_h = hf_full.hidden_states[i + 1]
-            a = hf_h.detach().flatten().to(torch.float64)
-            b = tt_h.detach().flatten().to(torch.float64)
-            cov = torch.cov(torch.stack([a, b]))
-            pcc = (cov[0, 1] / (math.sqrt(cov[0, 0].item()) * math.sqrt(cov[1, 1].item()) + 1e-30)).item()
-            delta = f"  Δ={((pcc - prev_pcc) * 100):+.3f}pp" if prev_pcc is not None else ""
-            lt = tt_layer_types[i][:8]
-            logger.info(f"  layer {i:02d} ({lt:>8}): PCC={pcc * 100:7.4f}%{delta}")
-            prev_pcc = pcc
-    else:
-        logger.warning(
-            f"HF hidden_states has {len(hf_full.hidden_states)} entries — expected "
-            f">= {len(tt_per_layer_hidden) + 1}. Per-layer diagnostic skipped."
-        )
-
-    logger.info("=" * 70)
-    logger.info(f"[2c] Decoder logits (post lm_head + softcap) — hf {hf_logits.shape}, tt {tt_logits.shape}")
-    try:
-        assert_quality(hf_logits, tt_logits)  # logs PCC; no threshold, no raise
-    except Exception as e:
-        logger.warning(f"post lm_head PCC assert (should not fire, no threshold): {e}")
+    logger.info(f"hf_logits {hf_logits.shape}, tt_logits {tt_logits.shape}")
 
     # ------------------------------------------------------------------
     # 3. Full diffusion loop with per-step decoded text.
     # ------------------------------------------------------------------
-    # Instead of only comparing the final argmax token match, we run the same diffusion
-    # loop that pipeline.generate() runs, but print the decoded text after every step so
-    # we can eyeball whether the model is converging to a coherent answer.
+    # Runs the same diffusion loop that ``pipeline.generate()`` runs, but prints the decoded
+    # argmax canvas after every step. Useful for spotting convergence problems and for the
+    # visualize_diffusion.py video tool that parses this log format.
     from transformers.models.diffusion_gemma.generation_diffusion_gemma import (
         EntropyBoundSampler,
         EntropyBoundSamplerConfig,
@@ -320,11 +212,10 @@ def test_pipeline_diffusion_gemma(
     )
 
     torch.manual_seed(SEED)
-    vocab_size = text_cfg.vocab_size
     sampler = EntropyBoundSampler(
         EntropyBoundSamplerConfig(entropy_bound=pipeline.config.entropy_bound),
         canvas_length=canvas_length,
-        vocab_size=vocab_size,
+        vocab_size=text_cfg.vocab_size,
         max_denoising_steps=pipeline.config.max_denoising_steps,
     )
     logits_processor = LinearTemperatureScheduleLogitsProcessor(
@@ -341,11 +232,9 @@ def test_pipeline_diffusion_gemma(
     self_cond_logits: torch.Tensor | None = None
     argmax_canvas = current_canvas.clone()
 
-    logger.info("=" * 70)
     logger.info(f"[3] Diffusion loop ({pipeline.config.max_denoising_steps} steps max)")
     logger.info(f"    Prompt: {PROMPT!r}")
 
-    # Time the diffusion loop end-to-end so section 5's perf assertion has a duration to check.
     benchmark_profiler.start("e2e_generate")
     for step in range(pipeline.config.max_denoising_steps):
         logits = pipeline._run_decoder(
@@ -365,62 +254,38 @@ def test_pipeline_diffusion_gemma(
         finished = stopping(argmax_canvas, processed_logits)
         self_cond_logits = processed_logits
 
-        # Decode the current argmax canvas (what the model would emit if it stopped now).
         argmax_text = hf_processor.batch_decode(argmax_canvas, skip_special_tokens=False)[0]
-        accepted_text = hf_processor.batch_decode(accepted, skip_special_tokens=False)[0]
         logger.info(f"[step {step:02d}] argmax : {argmax_text!r}")
-        logger.info(f"[step {step:02d}] accepted: {accepted_text!r}")
         if torch.all(finished):
             logger.info(f"[step {step:02d}] stopping criteria satisfied — halting")
             break
     benchmark_profiler.end("e2e_generate")
 
-    logger.info("=" * 70)
     final_text = hf_processor.batch_decode(argmax_canvas, skip_special_tokens=False)[0]
     logger.info(f"[3] Final TT decoded canvas: {final_text!r}")
 
-    # HF reference generation (kept for reporting; not asserted while we're debugging).
-    torch.manual_seed(SEED)
-    with torch.no_grad():
-        hf_gen = hf_model.generate(
-            input_ids=input_ids,
-            max_new_tokens=MAX_NEW_TOKENS,
-            do_sample=True,
-        )
-    hf_new_tokens = hf_gen.sequences[:, input_ids.shape[1] :]
-    hf_text = hf_processor.batch_decode(hf_new_tokens, skip_special_tokens=False)[0]
-    logger.info(f"[3] HF reference generated: {hf_text!r}")
-
     # ------------------------------------------------------------------
-    # 4. Assertions (all deferred until AFTER the diagnostics have printed).
+    # 4. Correctness assertions.
     # ------------------------------------------------------------------
-    # 4a. Loose PCC smoke test. Chained-bf16 drift + tanh saturation + wide-vocab projection
-    # produces ~88% PCC on softcapped logits even when the argmax token IDs match HF exactly.
-    # See PCC_THRESHOLD's docstring for the outstanding TODO on tightening this.
-    logger.info("=" * 70)
+    # 4a. Loose PCC smoke test on the section-2 seed-canvas logits. See ``PCC_THRESHOLD``'s
+    # comment for why 0.80 is the current bar (chained bf16 across 30 layers + tanh saturation
+    # + 262144-way vocab projection lands at ~0.88 in practice even when argmax is correct).
     logger.info(f"[4a] Loose PCC smoke test (threshold={PCC_THRESHOLD:.2f})")
     assert_quality(hf_logits, tt_logits, pcc=PCC_THRESHOLD)
-    logger.info("[4a] PCC ✓")
 
-    # 4b. Argmax-path token match — the functional correctness signal. We compare TT's
-    # argmax(tt_logits) to HF's argmax(hf_logits) at *identical* inputs (the seed_canvas
-    # decoder input from section 2). Both are DETERMINISTIC given the same input, so unlike
-    # comparing to HF's do_sample=True generate() (which stochastically diverges even at
-    # perfect PCC), this only fails when precision drift is bad enough to flip the argmax
-    # winner — the true correctness bar. Uses tt_logits / hf_logits from section 2b (both
-    # are the first-step decoder forward at the same seeded canvas).
-    tt_first_step_argmax = tt_logits.argmax(dim=-1)[0, :N_TOKEN_MATCH].tolist()
-    hf_first_step_argmax = hf_logits.argmax(dim=-1)[0, :N_TOKEN_MATCH].tolist()
-    logger.info(f"[4b] TT first-step argmax[:{N_TOKEN_MATCH}]: {tt_first_step_argmax}")
-    logger.info(f"[4b] HF first-step argmax[:{N_TOKEN_MATCH}]: {hf_first_step_argmax}")
-    assert tt_first_step_argmax == hf_first_step_argmax, (
+    # 4b. Argmax-path token match on the section-2 logits — the functional correctness bar.
+    # Both TT and HF take argmax of the *same* seeded-canvas decoder forward, so this is
+    # fully deterministic (unlike comparing to a stochastic ``generate(do_sample=True)`` run,
+    # which would diverge even at perfect PCC).
+    tt_argmax = tt_logits.argmax(dim=-1)[0, :N_TOKEN_MATCH].tolist()
+    hf_argmax = hf_logits.argmax(dim=-1)[0, :N_TOKEN_MATCH].tolist()
+    logger.info(f"[4b] TT argmax[:{N_TOKEN_MATCH}]: {tt_argmax}")
+    logger.info(f"[4b] HF argmax[:{N_TOKEN_MATCH}]: {hf_argmax}")
+    assert tt_argmax == hf_argmax, (
         f"First {N_TOKEN_MATCH} argmax tokens differ (deterministic; NOT sample noise).\n"
-        f"  TT: {tt_first_step_argmax} -> "
-        f"{hf_processor.batch_decode(torch.tensor([tt_first_step_argmax]))[0]!r}\n"
-        f"  HF: {hf_first_step_argmax} -> "
-        f"{hf_processor.batch_decode(torch.tensor([hf_first_step_argmax]))[0]!r}"
+        f"  TT: {tt_argmax} -> {hf_processor.batch_decode(torch.tensor([tt_argmax]))[0]!r}\n"
+        f"  HF: {hf_argmax} -> {hf_processor.batch_decode(torch.tensor([hf_argmax]))[0]!r}"
     )
-    logger.info(f"[4b] Argmax token match (first {N_TOKEN_MATCH}) ✓")
 
     # ------------------------------------------------------------------
     # 5. Perf: assert per-component thresholds.

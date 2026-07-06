@@ -63,8 +63,8 @@ def test_encoder_text_model(
     hf_config = DiffusionGemmaTextConfig(
         vocab_size=1024,
         hidden_size=2816,
-        intermediate_size=2816,
-        moe_intermediate_size=2112,
+        intermediate_size=2112,
+        moe_intermediate_size=704,
         num_attention_heads=16,
         num_key_value_heads=8,
         num_global_key_value_heads=2,

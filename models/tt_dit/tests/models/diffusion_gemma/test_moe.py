@@ -48,7 +48,7 @@ def test_diffusion_gemma_moe(
     """TT MoE vs HF Gemma4TextRouter + Gemma4TextExperts.
 
     Config matches the sizes exercised by ``models/demos/gemma4/tests/unit/test_moe.py``:
-    ``hidden_size=2816``, ``moe_intermediate_size=2112``, ``num_experts=8``, ``top_k=4``,
+    ``hidden_size=2816``, ``moe_intermediate_size=704``, ``num_experts=8``, ``top_k=4``,
     ``seq_len=128``. The sparse_matmul + router kernels in demos/gemma4 are tuned for
     those sizes; a much smaller (hidden=256, intermediate=64) config hangs the kernel
     since the compiled binary doesn't fit the tiny shape.
@@ -61,7 +61,7 @@ def test_diffusion_gemma_moe(
     dtype = torch.float32
 
     hidden_size = 2816
-    intermediate_size = 2112
+    intermediate_size = 704
     num_experts = 8
     top_k = 4
     eps = 1e-6

@@ -232,17 +232,6 @@ class DiffusionGemmaDecoderModel(Module):
             layer_type: self.rope.get_cos_sin(layer_type, decoder_position_ids) for layer_type in set(self.layer_types)
         }
 
-        # Optional per-layer diagnostic hook: when the caller sets
-        # ``_debug_capture_per_layer_hidden = True`` on this module before calling forward,
-        # we snapshot every layer's OUTPUT hidden state to host (fp32) and store it in
-        # ``_last_per_layer_hidden`` as a list of torch tensors. Reserved for diagnostics —
-        # off by default so we don't pay the per-layer device→host copy in prod.
-        _capture = getattr(self, "_debug_capture_per_layer_hidden", False)
-        if _capture:
-            from ....utils.tensor import local_device_to_torch  # local import: diagnostic path only
-
-            self._last_per_layer_hidden = []
-
         for i in range(self.num_hidden_layers):
             layer_type = self.layer_types[i]
             cos, sin = cos_sin[layer_type]
@@ -253,10 +242,5 @@ class DiffusionGemmaDecoderModel(Module):
                 attention_mask=decoder_attention_masks.get(layer_type),
                 encoder_kv=encoder_kv_cache[i],
             )
-            if _capture:
-                snap = local_device_to_torch(h).to(torch.float32)
-                if snap.ndim == 4 and snap.shape[0] == 1:
-                    snap = snap.squeeze(0)
-                self._last_per_layer_hidden.append(snap)
 
         return self.norm(h)
