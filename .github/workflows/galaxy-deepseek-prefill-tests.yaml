@@ -13,8 +13,8 @@ on:
           kv_cache_table, prefill_block, prefill_transformer, kimi_mla, kimi_moe,
           kimi_prefill_block, prefill_block_determinism, prefill_transformer_determinism,
           prefill_runner.
-          The "module" group also runs every stage (including prefill_runner); the "sdpa_perf"
-          group runs the ring joint SDPA perf checks (built with the profiler).
+          The "module" group also runs every stage; the "sdpa_perf" group runs the
+          ring joint SDPA perf checks (built with the profiler).
         required: false
         type: string
         default: "all"

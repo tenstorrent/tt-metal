@@ -3,12 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // ---------------------------------------------------------------------------
-// read_dram_umd — device-less, non-starting cross-process KV read.
-//
-// Reads a KV chunk's DRAM bytes over a bare tt::umd::Cluster that NEVER calls start_device()
-// (so it takes no CHIP_IN_USE flock) and reads through on-demand TLB windows. This lets a
-// process that has NOT opened the mesh (an external scheduler / the prefill_h2d producer) read
-// a live server's KV cache CONCURRENTLY with the runner that owns the chips via CreateDevice.
+// Reads a KV chunk's DRAM bytes over a bare tt::umd::Cluster and reads through on-demand TLB windows.
+// This lets a process that has NOT opened the mesh (an external scheduler / the prefill_h2d producer)
+// read a live server's KV cache CONCURRENTLY with the runner that owns the chips via CreateDevice.
 // It is a direct port of the migration worker's device_io.cpp read path
 // (tt-llm-engine disaggregation/migration/src/worker/device_io.cpp). The chip is selected by
 // ASIC unique_id (the caller resolves fabric_node -> unique_id from the runner's device-map
@@ -30,11 +27,6 @@
 #include <unordered_map>
 #include <vector>
 
-// UMD is used directly for the device-less, non-starting cross-process read: a bare
-// tt::umd::Cluster maps chips and reads DRAM through TLB windows WITHOUT start_device()
-// (no CHIP_IN_USE flock), so it coexists with a running server that owns the chips via
-// CreateDevice. UMD internal headers trip -Werror=sign-compare, so localize the suppression
-// to these includes (mirrors tt-llm-engine device_io.cpp).
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsign-compare"
 #include <umd/device/cluster.hpp>
