@@ -252,6 +252,14 @@ static void matmul_tile_block(
         .data_format_metadata = cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
     };
 
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
+    } else {
+        reader_hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
+    }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source = cfg.reader_kernel,
@@ -280,17 +288,17 @@ static void matmul_tile_block(
                   "in1_block_tile_cnt",
                   "in0_block_size_bytes",
                   "in1_block_size_bytes"}},
-        .hw_config =
-            std::invoke([&] {
-                if (mesh_device->arch() == tt::ARCH::QUASAR) {
-                    return experimental::DataMovementHardwareConfig{
-                        experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
-                }
-                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
-            }),
+        .hw_config = reader_hw_config,
     };
 
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
+    } else {
+        writer_hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
+    }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
@@ -299,15 +307,7 @@ static void matmul_tile_block(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .hw_config =
-            std::invoke([&] {
-                if (mesh_device->arch() == tt::ARCH::QUASAR) {
-                    return experimental::DataMovementHardwareConfig{
-                        experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
-                }
-                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
-            }),
+        .hw_config = writer_hw_config,
     };
 
     // matmul_block.cpp uses named CTAs. Map cfg.compute_kernel_args (positional) to the
@@ -335,6 +335,20 @@ static void matmul_tile_block(
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
+    experimental::ComputeHardwareConfig compute_hw_config;
+    if (mesh_device->arch() == ARCH::QUASAR) {
+        compute_hw_config = experimental::ComputeGen2Config{
+            .math_fidelity = cfg.math_fidelity,
+            .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
+            .dst_full_sync_en = cfg.dst_full_sync_en,
+        };
+    } else {
+        compute_hw_config = experimental::ComputeGen1Config{
+            .math_fidelity = cfg.math_fidelity,
+            .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
+            .dst_full_sync_en = cfg.dst_full_sync_en,
+        };
+    }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = cfg.compute_kernel,
@@ -360,24 +374,7 @@ static void matmul_tile_block(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = compute_cta_bindings,
-        .hw_config =
-            std::invoke([&] {
-                experimental::ComputeHardwareConfig hw_cfg;
-                if (mesh_device->arch() == ARCH::QUASAR) {
-                    hw_cfg = experimental::ComputeGen2Config{
-                        .math_fidelity = cfg.math_fidelity,
-                        .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
-                        .dst_full_sync_en = cfg.dst_full_sync_en,
-                    };
-                } else {
-                    hw_cfg = experimental::ComputeGen1Config{
-                        .math_fidelity = cfg.math_fidelity,
-                        .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
-                        .dst_full_sync_en = cfg.dst_full_sync_en,
-                    };
-                }
-                return hw_cfg;
-            }),
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{

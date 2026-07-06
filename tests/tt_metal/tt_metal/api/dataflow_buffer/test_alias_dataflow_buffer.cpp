@@ -112,18 +112,15 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
         *mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b), TensorTopology{});
 
     // DM kernel configs (Gen1 + Gen2 variants so the same spec runs everywhere).
-    const DataMovementHardwareConfig producer_cfg = std::invoke([&] {
-        if (mesh_device->arch() == ARCH::QUASAR) {
-            return DataMovementHardwareConfig{DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
-        }
-        return DataMovementHardwareConfig{DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}};
-    });
-    const DataMovementHardwareConfig consumer_cfg = std::invoke([&] {
-        if (mesh_device->arch() == ARCH::QUASAR) {
-            return DataMovementHardwareConfig{DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
-        }
-        return DataMovementHardwareConfig{DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1}};
-    });
+    DataMovementHardwareConfig producer_cfg;
+    DataMovementHardwareConfig consumer_cfg;
+    if (mesh_device->arch() == ARCH::QUASAR) {
+        producer_cfg = DataMovementHardwareConfig{DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
+        consumer_cfg = DataMovementHardwareConfig{DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
+    } else {
+        producer_cfg = DataMovementHardwareConfig{DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}};
+        consumer_cfg = DataMovementHardwareConfig{DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1}};
+    }
 
     DataflowBufferSpec dfb_a{
         .unique_id = experimental::DFBSpecName{"dfb_a"},
@@ -326,18 +323,15 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     MeshTensor ring  = MeshTensor::allocate_on_device(
         *mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries), TensorTopology{});
 
-    const DataMovementHardwareConfig producer_cfg = std::invoke([&] {
-        if (mesh_device->arch() == ARCH::QUASAR) {
-            return DataMovementHardwareConfig{DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
-        }
-        return DataMovementHardwareConfig{DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}};
-    });
-    const DataMovementHardwareConfig consumer_cfg = std::invoke([&] {
-        if (mesh_device->arch() == ARCH::QUASAR) {
-            return DataMovementHardwareConfig{DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
-        }
-        return DataMovementHardwareConfig{DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1}};
-    });
+    DataMovementHardwareConfig producer_cfg;
+    DataMovementHardwareConfig consumer_cfg;
+    if (mesh_device->arch() == ARCH::QUASAR) {
+        producer_cfg = DataMovementHardwareConfig{DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
+        consumer_cfg = DataMovementHardwareConfig{DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
+    } else {
+        producer_cfg = DataMovementHardwareConfig{DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}};
+        consumer_cfg = DataMovementHardwareConfig{DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1}};
+    }
 
     // dfb_borrowed: backed by ring_tensor (L1)
     DataflowBufferSpec dfb_borrowed{

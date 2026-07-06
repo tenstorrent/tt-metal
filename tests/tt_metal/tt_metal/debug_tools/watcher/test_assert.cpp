@@ -98,6 +98,7 @@ static void RunTest(
                     auto gen1_noc = (gen1_processor == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                         ? tt_metal::NOC::RISCV_1_default
                                         : tt_metal::NOC::RISCV_0_default;
+                    // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
                     if (is_quasar) {
                         // processor.processor_type is the absolute DM index (2..7 for DM2..DM7).
                         // Map to kernel-local thread id (0..5) since the kernel launches on the 6 user DMs.
@@ -105,19 +106,16 @@ static void RunTest(
                         uint32_t target_thread_id = static_cast<uint32_t>(processor.processor_type) - kFirstUserDm;
                         assert_kernel_spec.num_threads = 6;
                         assert_kernel_spec.compile_time_args = {{"target_thread_id", target_thread_id}};
+                        assert_kernel_spec.hw_config =
+                            experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
                     } else {
                         assert_kernel_spec.num_threads = 1;
+                        assert_kernel_spec.hw_config =
+                            experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                                .processor = gen1_processor,
+                                .noc = gen1_noc,
+                            }};
                     }
-                    // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
-                    assert_kernel_spec.hw_config = std::invoke([&] {
-                        if (is_quasar) {
-                            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-                        }
-                        return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
-                            .processor = gen1_processor,
-                            .noc = gen1_noc,
-                        }};
-                    });
                     break;
                 }
                 case HalProcessorClassType::COMPUTE: {

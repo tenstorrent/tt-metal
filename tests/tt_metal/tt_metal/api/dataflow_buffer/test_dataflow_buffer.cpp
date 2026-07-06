@@ -226,20 +226,17 @@ void run_single_dfb_program(
 
     // DM kernel configs supply both Gen1 (BRISC for producer / NCRISC for consumer) and
     // Gen2 (auto-assigned) variants so the same KernelSpec runs on WH/BH and Quasar.
-    const experimental::DataMovementHardwareConfig dm_producer_cfg = std::invoke([&] {
-        if (arch == ARCH::QUASAR) {
-            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-        }
-        return experimental::DataMovementHardwareConfig{
+    experimental::DataMovementHardwareConfig dm_producer_cfg;
+    experimental::DataMovementHardwareConfig dm_consumer_cfg;
+    if (arch == ARCH::QUASAR) {
+        dm_producer_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        dm_consumer_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+    } else {
+        dm_producer_cfg = experimental::DataMovementHardwareConfig{
             experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0}};
-    });
-    const experimental::DataMovementHardwareConfig dm_consumer_cfg = std::invoke([&] {
-        if (arch == ARCH::QUASAR) {
-            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-        }
-        return experimental::DataMovementHardwareConfig{
+        dm_consumer_cfg = experimental::DataMovementHardwareConfig{
             experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1}};
-    });
+    }
 
     experimental::KernelSpec producer_spec;
     if (producer_type == DFBPorCType::DM) {
@@ -1663,20 +1660,17 @@ static void run_dfb_size_override_test(
     MeshTensor in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
     MeshTensor out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
 
-    const experimental::DataMovementHardwareConfig dm_producer_cfg = std::invoke([&] {
-        if (device->arch() == ARCH::QUASAR) {
-            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-        }
-        return experimental::DataMovementHardwareConfig{
+    experimental::DataMovementHardwareConfig dm_producer_cfg;
+    experimental::DataMovementHardwareConfig dm_consumer_cfg;
+    if (device->arch() == ARCH::QUASAR) {
+        dm_producer_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        dm_consumer_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+    } else {
+        dm_producer_cfg = experimental::DataMovementHardwareConfig{
             experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0}};
-    });
-    const experimental::DataMovementHardwareConfig dm_consumer_cfg = std::invoke([&] {
-        if (device->arch() == ARCH::QUASAR) {
-            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-        }
-        return experimental::DataMovementHardwareConfig{
+        dm_consumer_cfg = experimental::DataMovementHardwareConfig{
             experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1}};
-    });
+    }
 
     experimental::KernelSpec producer_spec{
         .unique_id = PRODUCER,

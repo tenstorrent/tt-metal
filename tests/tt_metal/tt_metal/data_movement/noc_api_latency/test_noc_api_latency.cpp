@@ -134,6 +134,13 @@ bool run_noc_api_latency_test(
         default: break;
     }
 
+    DataMovementHardwareConfig noc_kernel_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        noc_kernel_hw_config = DataMovementHardwareConfig{DataMovementGen2Config{}};
+    } else {
+        noc_kernel_hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
+            .processor = riscv, .noc = test_config.noc_id, .noc_mode = NOC_MODE::DM_DEDICATED_NOC}};
+    }
     ProgramSpec spec{
         .name = "noc_api_latency_test",
         .kernels = {KernelSpec{
@@ -141,13 +148,7 @@ bool run_noc_api_latency_test(
             .source = kernel_path,
             .num_threads = 1,
             .compile_time_args = named_compile_args,
-            .hw_config = std::invoke([&] {
-                if (device->arch() == tt::ARCH::QUASAR) {
-                    return DataMovementHardwareConfig{DataMovementGen2Config{}};
-                }
-                return DataMovementHardwareConfig{DataMovementGen1Config{
-                    .processor = riscv, .noc = test_config.noc_id, .noc_mode = NOC_MODE::DM_DEDICATED_NOC}};
-            })}},
+            .hw_config = noc_kernel_hw_config}},
         .work_units = {WorkUnitSpec{
             .name = "noc_work_unit",
             .kernels = {KernelSpecName{"noc_kernel"}},

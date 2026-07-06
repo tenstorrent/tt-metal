@@ -88,22 +88,17 @@ experimental::ProgramSpec build_bmm_program_spec(
     // explicit reserve_back/wait_front/push_back/pop_front; on WH/BH implicit sync is unsupported
     // and must be disabled to match the explicit-sync kernel branch.
     const bool is_quasar = tensors.src0.device().arch() == ARCH::QUASAR;
-    experimental::DataMovementHardwareConfig reader_config = std::invoke([&] {
-        if (is_quasar) {
-            return experimental::DataMovementHardwareConfig{
-                experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync}};
-        }
-        return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}};
-    });
-    experimental::DataMovementHardwareConfig writer_config = std::invoke([&] {
-        if (is_quasar) {
-            return experimental::DataMovementHardwareConfig{
-                experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync}};
-        }
-        return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}};
-    });
+    experimental::DataMovementHardwareConfig reader_config;
+    experimental::DataMovementHardwareConfig writer_config;
+    if (is_quasar) {
+        reader_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
+        writer_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
+    } else {
+        reader_config = experimental::DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default};
+        writer_config = experimental::DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
+    }
 
     experimental::DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,

@@ -239,20 +239,17 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
     // Both gen1 and gen2 configs are populated; the runtime picks the one
     // matching the active arch.
-    experimental::DataMovementHardwareConfig reader_dm_cfg = std::invoke([&] {
-        if (is_quasar) {
-            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-        }
-        return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+    experimental::DataMovementHardwareConfig reader_dm_cfg;
+    experimental::DataMovementHardwareConfig writer_dm_cfg;
+    if (is_quasar) {
+        reader_dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        writer_dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+    } else {
+        reader_dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
-    });
-    experimental::DataMovementHardwareConfig writer_dm_cfg = std::invoke([&] {
-        if (is_quasar) {
-            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-        }
-        return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+        writer_dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
-    });
+    }
 
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -424,20 +421,17 @@ bool reader_datacopy_writer(
 
     // Both gen1 and gen2 configs are populated; the runtime picks the one
     // matching the active arch.
-    experimental::DataMovementHardwareConfig reader_dm_cfg = std::invoke([&] {
-        if (is_quasar) {
-            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-        }
-        return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+    experimental::DataMovementHardwareConfig reader_dm_cfg;
+    experimental::DataMovementHardwareConfig writer_dm_cfg;
+    if (is_quasar) {
+        reader_dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        writer_dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+    } else {
+        reader_dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
-    });
-    experimental::DataMovementHardwareConfig writer_dm_cfg = std::invoke([&] {
-        if (is_quasar) {
-            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-        }
-        return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+        writer_dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
-    });
+    }
 
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -466,6 +460,25 @@ bool reader_datacopy_writer(
     const bool fp32_dest_acc_en = (test_config.l1_input_data_format == tt::DataFormat::Float32) ||
                                   (test_config.l1_input_data_format == tt::DataFormat::Int32) ||
                                   (test_config.l1_input_data_format == tt::DataFormat::UInt32);
+    experimental::ComputeHardwareConfig compute_hw_config;
+    auto unpack_modes =
+        (test_config.l1_input_data_format == tt::DataFormat::Float32)
+            ? experimental::ComputeUnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
+            : experimental::ComputeUnpackToDestModes{};
+    if (is_quasar) {
+        compute_hw_config = experimental::ComputeGen2Config{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_modes,
+            .unpack_to_dest_en = fp32_dest_acc_en,
+        };
+    } else {
+        compute_hw_config = experimental::ComputeGen1Config{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_modes,
+        };
+    }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
@@ -486,30 +499,7 @@ bool reader_datacopy_writer(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_tile_cnt", per_core_tile_cnt}},
-        .hw_config =
-            std::invoke([&] {
-                experimental::ComputeHardwareConfig cfg;
-                auto unpack_modes =
-                    (test_config.l1_input_data_format == tt::DataFormat::Float32)
-                        ? experimental::
-                              ComputeUnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
-                        : experimental::ComputeUnpackToDestModes{};
-                if (is_quasar) {
-                    cfg = experimental::ComputeGen2Config{
-                        .fp32_dest_acc_en = fp32_dest_acc_en,
-                        .dst_full_sync_en = test_config.dst_full_sync_en,
-                        .unpack_to_dest_mode = unpack_modes,
-                        .unpack_to_dest_en = fp32_dest_acc_en,
-                    };
-                } else {
-                    cfg = experimental::ComputeGen1Config{
-                        .fp32_dest_acc_en = fp32_dest_acc_en,
-                        .dst_full_sync_en = test_config.dst_full_sync_en,
-                        .unpack_to_dest_mode = unpack_modes,
-                    };
-                }
-                return cfg;
-            }),
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{
