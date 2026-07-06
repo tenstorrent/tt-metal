@@ -14,11 +14,9 @@ Implements the DeepSeek-V3 architecture:
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from math import lcm
 from typing import Literal, Optional
 
-import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, ColumnParallelLinear, Embedding, LinearLayer, ModuleList
 
@@ -158,16 +156,11 @@ class DeepSeek(AbstractModuleBase):
         # block(input, mask) / memory_efficient_runner call form intact.
         x = self.tok_emb(tokens)
 
-        read_profiler_after_block = os.environ.get("TTML_TRACY_READ_RESULTS_AFTER_BLOCK", "0") == "1"
-        profiler_device = ttml.autograd.AutoContext.get_instance().get_device() if read_profiler_after_block else None
-
         for block in self.blocks:
             if self.config.runner_type == RunnerType.MemoryEfficient:
                 x = memory_efficient_runner(block, x, mask)
             else:
                 x = block(x, mask)
-            if read_profiler_after_block:
-                ttnn.ReadDeviceProfiler(profiler_device)
 
         x = self.norm(x)
         logits = self.head(x)
