@@ -26,6 +26,11 @@ import ttnn
 # Default "dist"; override with HY_GN_MODE for A/B validation.
 _GN_MODE = os.environ.get("HY_GN_MODE", "dist").lower()
 
+# How distributed group_norm computes its two spatial sums (sum(x), sum(x^2)):
+#   "split"  -> two independent reduces over [1,1,n,C] (default; no concat copy).
+#   "concat" -> stack on dim1, one reduce over [1,2,n,C] (fewer dispatches, extra copy).
+_GN_STATS = os.environ.get("HY_GN_STATS", "split").lower()
+
 
 def _all_reduce_sum(ccl, t: ttnn.Tensor, *, mesh_axis: int) -> ttnn.Tensor:
     """Sum a small per-group stat tensor (or several stacked on dim1) across one mesh
@@ -63,20 +68,29 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
     # Reduce over SPATIAL first (dim2), keeping channels as the last dim. Reshaping to
     # per-group [.,G,Cg] with tiny Cg would pad Cg->32 in TILE and explode DRAM, so do
     # the (tiny) in-group channel reduction only after collapsing spatial to [1,1,1,C].
-    # Stack x and x^2 on dim1 before reducing so this (the most expensive op in the
-    # whole graph at full spatial res) dispatches once instead of twice -- same
-    # one-round-trip trick used below for the cross-mesh stat all-reduce.
     # (ttnn.var's Welford reduce was tried here instead of this sum/sum-of-squares
     # approach, to skip materializing x^2 -- measured ~4x SLOWER in practice
     # (WelfordReduceDeviceOperation cost ~49ms/call vs sum's ~1-15us), so don't retry.)
+    #
+    # Two ways to compute the two spatial sums (sum(x), sum(x^2)):
+    #   "concat" -> stack x and x^2 on dim1, ONE sum over [1,2,n,C]. One reduce dispatch,
+    #               but the concat copies 2*n*C elements up front.
+    #   "split"  -> two independent sums over [1,1,n,C]. No concat copy, two reduces.
+    # At full spatial res the concat copy costs more than a second reduce dispatch, so
+    # "split" is the default; HY_GN_STATS=concat restores the fused path for A/B.
     xsq = ttnn.multiply(x, x)
-    x_xsq = ttnn.concat([x, xsq], dim=1)  # [1,2,n_local,C]
-    ttnn.deallocate(xsq)
-    csum_both = ttnn.sum(x_xsq, dim=2, keepdim=True)  # [1,2,1,C]
-    ttnn.deallocate(x_xsq)
-    csum = ttnn.slice(csum_both, [0, 0, 0, 0], [1, 1, 1, C])
-    csumsq = ttnn.slice(csum_both, [0, 1, 0, 0], [1, 2, 1, C])
-    ttnn.deallocate(csum_both)
+    if _GN_STATS == "concat":
+        x_xsq = ttnn.concat([x, xsq], dim=1)  # [1,2,n_local,C]
+        ttnn.deallocate(xsq)
+        csum_both = ttnn.sum(x_xsq, dim=2, keepdim=True)  # [1,2,1,C]
+        ttnn.deallocate(x_xsq)
+        csum = ttnn.slice(csum_both, [0, 0, 0, 0], [1, 1, 1, C])
+        csumsq = ttnn.slice(csum_both, [0, 1, 0, 0], [1, 2, 1, C])
+        ttnn.deallocate(csum_both)
+    else:
+        csum = ttnn.sum(x, dim=2, keepdim=True)  # [1,1,1,C]
+        csumsq = ttnn.sum(xsq, dim=2, keepdim=True)  # [1,1,1,C]
+        ttnn.deallocate(xsq)
 
     def _group_reduce(csum_1c):  # [1,1,1,C] -> per-group [1,1,G,1]
         g = ttnn.reshape(csum_1c, [1, 1, G, Cg])
@@ -114,21 +128,29 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
     ttnn.deallocate(var)
 
     # Expand per-group mean/inv to per-channel [1,1,1,C] (broadcast each group over its
-    # Cg channels), on tiny tensors, then normalize the full local activation.
-    ones_gcg = ttnn.ones([1, 1, G, Cg], dtype=x.dtype, layout=ttnn.TILE_LAYOUT, device=x.device())
+    # Cg channels), on tiny tensors. The [1,1,G,Cg] ones broadcaster is a constant that
+    # only depends on the channel config, so build it once per norm and reuse it.
+    if getattr(norm, "_gn_ones", None) is None:
+        norm._gn_ones = ttnn.ones([1, 1, G, Cg], dtype=x.dtype, layout=ttnn.TILE_LAYOUT, device=x.device())
+    ones_gcg = norm._gn_ones
     mean_c = ttnn.reshape(ttnn.multiply(mean, ones_gcg), [1, 1, 1, C])
     inv_c = ttnn.reshape(ttnn.multiply(inv, ones_gcg), [1, 1, 1, C])
-    ttnn.deallocate(ones_gcg)
     ttnn.deallocate(mean)
     ttnn.deallocate(inv)
 
-    xn = ttnn.multiply(ttnn.subtract(x, mean_c), inv_c)  # broadcast [1,1,1,C] over [1,1,n,C]
-    ttnn.deallocate(x)
+    # Fold the affine into per-channel scale/shift so the full-spatial normalize is a
+    # single mul+add (2 passes over [1,1,n,C]) instead of subtract+mul+mul+add (4):
+    #   out = x*scale + shift,  scale = inv*gamma,  shift = beta - mean*scale.
+    # scale/shift are computed on the tiny [1,1,1,C] tensors, off the hot path.
+    scale_c = ttnn.multiply(inv_c, norm._raw_gamma)  # [1,1,1,C]
+    shift_c = ttnn.subtract(norm._raw_beta, ttnn.multiply(mean_c, scale_c))
     ttnn.deallocate(mean_c)
     ttnn.deallocate(inv_c)
 
-    out = ttnn.add(ttnn.multiply(xn, norm._raw_gamma), norm._raw_beta)  # per-channel affine
-    ttnn.deallocate(xn)
+    out = ttnn.add(ttnn.multiply(x, scale_c), shift_c)  # broadcast [1,1,1,C] over [1,1,n,C]
+    ttnn.deallocate(x)
+    ttnn.deallocate(scale_c)
+    ttnn.deallocate(shift_c)
     out = ttnn.reshape(out, [B, T, Hl, Wl, C])
     return ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
 

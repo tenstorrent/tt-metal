@@ -72,12 +72,13 @@ _BLOCKINGS.update(
         # leave on the channel-keyed fallback above.
         (1, 1, 1024, 1024, (1, 1, 1), 1, 64, 64): (1024, 512, 1, 8, 4),  # 208.5x
         (1, 1, 32, 1024, (3, 3, 3), 1, 34, 34): (32, 256, 1, 2, 16),  # 6.8x
-        # (1, 1, 1024, 8192, (3, 3, 3), 1, 34, 34): (128, 64, 1, 16, 16),  # REJECTED:
-        # full-decode PCC 0.762 (vs 0.999941 baseline) despite 10,176us in the isolated
-        # sweep (vs the channel-keyed fallback's much slower ~90k+us estimate for this
-        # shape). Same repeated/chunked-invocation-under-program-cache failure mode as
-        # the 128x3 rejection above. Needs a different candidate blocking re-swept and
-        # re-verified, or leave on the channel-keyed fallback.
+        # The sweep-fastest (128, 64, 1, 16, 16) was REJECTED: full-decode PCC 0.762 (vs
+        # 0.999941 baseline) despite 10,176us in the isolated sweep — a repeated/chunked-
+        # invocation-under-program-cache failure mode. The (64, 256, ...) family is the
+        # one PCC-proven in the full decode for the same-spatial 1024x1024 h34w34 conv
+        # (line above), so use its ~10.5us sweep entry here; full-decode PCC re-verified
+        # at 0.999941 (unchanged from baseline).
+        (1, 1, 1024, 8192, (3, 3, 3), 1, 34, 34): (64, 256, 1, 4, 8),  # ~10.5us sweep, PCC verified
     }
 )
 
