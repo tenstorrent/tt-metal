@@ -22,25 +22,25 @@ Per-model differences captured here
 
 Tests
 -----
-* ``test_bench``      — traced fused-op timing + table/CSV. Params: wan TP4-line
-                        (BH 2x4), wan TP8-ring (BH 1x8), wan TP4 galaxy, ltx
-                        TP2/TP4 galaxy.
-* ``test_corr_det``   — fused op vs fp32-PyTorch reference, plus 10x determinism
-                        (bit-exact). Galaxy only: wan TP4, ltx TP2/TP4.
+* ``test_corr_det``            — fused RMS op vs fp32-PyTorch reference, plus 10x
+                                 determinism (bit-exact). Galaxy: wan/ltx/flux TP1-8.
+* ``test_layernorm_corr``      — fused Welford-LN op vs fp32-PyTorch + determinism.
+* ``test_rmsnorm_module_corr`` — ``DistributedRMSNorm`` module (static weight) e2e.
+* ``test_layernorm_module_corr``— ``DistributedLayerNorm`` module (adaLN) e2e.
+* ``test_traced_corr``         — traced-replay output == eager (semaphore-reset guard).
+* ``test_layernorm_module_bench``— fused LN vs composite-chain speedup (perf, dev).
 
-Env hooks: ``RMS_BENCH_ONLY=cid[,cid]`` / ``CORR_ONLY=cid[,cid]`` restrict the
-sweep; ``CORR_FRESH_POB=1`` allocates a fresh stats buffer per determinism run
-(surfaces uninitialized-DRAM reads); ``CORR_LOCALIZE=1`` prints which tokens
-diverge; ``WAN_GALAXY_LINKS`` overrides the galaxy fabric link count (default 4).
+Env hooks: ``CORR_ONLY=cid[,cid]`` restricts the sweep; ``CORR_FRESH_POB=1``
+allocates a fresh stats buffer per determinism run (surfaces uninitialized-DRAM
+reads); ``CORR_LOCALIZE=1`` prints which tokens diverge; ``WAN_GALAXY_LINKS``
+overrides the galaxy fabric link count (default 4).
 """
 
 from __future__ import annotations
 
-import csv
 import os as _os
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import pytest
 import torch
@@ -48,11 +48,11 @@ from loguru import logger
 
 import ttnn
 
-from ..layers.normalization import DistributedLayerNorm, DistributedRMSNorm
-from ..parallel.manager import CCLManager
-from ..utils.mochi import get_rot_transformation_mat, stack_cos_sin
-from ..utils.tensor import bf16_tensor, float32_tensor, from_torch
-from ..utils.test import line_params, ring_params
+from ...layers.normalization import DistributedLayerNorm, DistributedRMSNorm
+from ...parallel.manager import CCLManager
+from ...utils.mochi import get_rot_transformation_mat, stack_cos_sin
+from ...utils.tensor import bf16_tensor, float32_tensor, from_torch
+from ...utils.test import line_params, ring_params
 
 WAN = "wan"
 LTX = "ltx"
@@ -68,7 +68,6 @@ NORM_EPS = 1e-6
 # Fabric links used by the op (= forwarder cores on the AG path). Wormhole galaxy = 4;
 # Blackhole galaxy = 2 (torus, 2 links) — set WAN_GALAXY_LINKS=2 when running on BH.
 GALAXY_LINKS = int(_os.getenv("WAN_GALAXY_LINKS", "4"))
-_ITERS = {WAN: 100, LTX: 50, FLUX: 50}  # bench iterations per model
 _PINGPONG = 2  # (pob, AG-sem) sets alternated across traced fused iters (skew absorber)
 
 # Wan2.2 14B: full feature dim 5120, 40 heads, head_dim 128, broadcast RoPE.
@@ -110,13 +109,12 @@ class Cfg:
     full_heads: int  # model NUM_HEADS (per-head RoPE table + reference reshape)
     broadcast_rope: bool  # True => Wan (cos/sin shared across heads); False => LTX per-head
     per_head_norm: bool = False  # FLUX: RMSNorm over head_dim per head (no AG, is_tp_1)
-    # Activation dtypes (model params stay bf16). Default bf16 = current behavior; the
-    # stability sweep varies these to exercise the fp32 input/output codepaths.
+    # Activation dtypes (model params stay bf16). Default bf16 = current behavior;
+    # "fp32" exercises the fp32 input/output codepaths.
     in_dtype: str = "bf16"  # "bf16" | "fp32"
     out_dtype: str = "bf16"  # "bf16" | "fp32"
-    # Affine knobs for the sweep. "auto" = current behavior (qk->weight only,
-    # block->adaLN weight+bias). "none"/"bcast" override for the qk path.
-    # (per-token [N,D] weight/bias not yet built — see test_sweep notes.)
+    # Affine knobs. "auto" = current behavior (qk->weight only, block->adaLN
+    # weight+bias). "none"/"bcast" override for the qk path.
     weight_mode: str = "auto"  # "auto" | "none" | "bcast"
     bias_mode: str = "auto"  # "auto" | "none" | "bcast"
     norm: str = "rms"  # "rms" | "layernorm" (Welford LayerNorm: (x-mean)/sqrt(var+eps))
@@ -505,122 +503,12 @@ def _trace_and_time(submesh, run_ops, *, num_iters: int) -> float:
     return elapsed_us / num_iters
 
 
-def _bench_cfg(submesh, ccl, cfg: Cfg, topology, tp_axis, op_override) -> dict:
-    inp = _build(submesh, cfg, tp_axis)
-    iters = _ITERS[cfg.model]
-    t: dict = {}
-    # A config may exceed L1 (e.g. per-head RoPE at video-self-attn width). Record the
-    # failure and keep sweeping so the table shows what fuses vs. what doesn't.
-    try:
-        links = _fused_links(op_override)
-        pobs = [_make_pob(inp, submesh, cfg, links, tp_axis) for _ in range(_PINGPONG)]
-        sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
-        run_ops = [
-            (lambda p=p, s=s: _run_fused(inp, submesh, s, cfg, topology, tp_axis, p, op_override))
-            for p, s in zip(pobs, sems)
-        ]
-        t["fused"] = _trace_and_time(submesh, run_ops, num_iters=iters)
-    except Exception as e:  # noqa: BLE001
-        t["fused_err"] = type(e).__name__
-        logger.warning(f"{cfg.cid} fused FAILED: {str(e)[:160]}")
-    return t
-
-
-def _print_table(rows: list[dict], title: str) -> None:
-    cid_w = max(len("config_id"), max(len(r["cid"]) for r in rows))
-    header = (
-        f"{'config_id':<{cid_w}}  {'tp':>2} {'rows':>6} {'feat':>5} {'heads':>5} {'hd':>4} "
-        f"{'pattern':<14} {'fused us':>9}"
-    )
-    box = "=" * max(len(header), len(title))
-    print("\n" + box + f"\n{title}\n" + box + f"\n{header}\n" + "-" * len(header))
-    for r in rows:
-        f = r.get("fused")
-        f_s = f"{f:>9.2f}" if f is not None else f"{r.get('fused_err', 'n/a'):>9}"
-        print(
-            f"{r['cid']:<{cid_w}}  {r['tp']:>2} {r['rows']:>6} {r['feat']:>5} {r['heads']:>5} "
-            f"{(r['hd'] or 0):>4} {r['pattern']:<14} {f_s}"
-        )
-    print(box)
-
-
-def _write_csv(rows: list[dict], filename: str) -> None:
-    fields = ["cid", "tp", "rows", "feat", "heads", "hd", "pattern", "fused"]
-    path = Path.cwd() / filename
-    with path.open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
-    logger.info(f"Wrote CSV: {path}")
-
-
 # mesh, device_params, model, tp, topology, op_override(=galaxy links; None on BH), tp_axis, full_mesh
 # full_mesh=True keeps the whole 2D mesh with TP on axis 1 (the 8-wide closed ring) and
 # axis 0 replicated — used for the FLUX TP=8 ring config (tp_axis=1 would otherwise carve
 # a 1x8 LINE submesh).
 _DP_GAL = {**line_params, "trace_region_size": 131072}
 _DP_GAL_RING = {**ring_params, "trace_region_size": 131072}
-_BENCH_PARAMS = [
-    ((2, 4), {**line_params, "trace_region_size": 90112}, WAN, 4, ttnn.Topology.Linear, None, 1, False),
-    ((1, 8), {**ring_params, "trace_region_size": 90112}, WAN, 8, ttnn.Topology.Ring, None, 1, False),
-    ((4, 8), _DP_GAL, WAN, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
-    ((4, 8), _DP_GAL, LTX, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
-    ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
-    # TP=4 RING on the full-mesh 4-axis (replicate axis 1) — the production galaxy config.
-    ((4, 8), _DP_GAL_RING, WAN, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
-    ((4, 8), _DP_GAL_RING, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
-    # FLUX: TP=4 ring on the 4-axis (replicate axis 1); TP=8 ring on the full-mesh 8-axis.
-    ((4, 8), _DP_GAL_RING, FLUX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
-    ((4, 8), _DP_GAL_RING, FLUX, 8, ttnn.Topology.Ring, GALAXY_LINKS, 1, True),
-]
-_BENCH_IDS = [
-    "wan_tp4_line",
-    "wan_tp8_ring",
-    "wan_tp4_galaxy",
-    "ltx_tp2_galaxy",
-    "ltx_tp4_galaxy",
-    "wan_tp4_ring",
-    "ltx_tp4_ring",
-    "flux_tp4_ring",
-    "flux_tp8_ring",
-]
-
-
-@pytest.mark.skip_post_commit  # perf/dev benchmark, not a correctness gate
-@pytest.mark.parametrize(
-    ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis", "full_mesh"),
-    [pytest.param(*p, id=i) for p, i in zip(_BENCH_PARAMS, _BENCH_IDS)],
-    indirect=["mesh_device", "device_params"],
-)
-def test_bench(mesh_device, model, tp, topology, op_override, tp_axis, full_mesh):
-    """Traced fused-op timing for every config of one (model, topology)."""
-    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
-    ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
-    cfgs = _select(_make_cfgs(model, tp), "RMS_BENCH_ONLY")
-    rows: list[dict] = []
-    for cfg in cfgs:
-        logger.info(
-            f"=== [{model}] {cfg.cid} rows={cfg.rows} feat={cfg.feat_local} heads={cfg.heads} hd={cfg.head_dim} ==="
-        )
-        row = {
-            "cid": cfg.cid,
-            "tp": cfg.tp,
-            "rows": cfg.rows,
-            "feat": cfg.feat_local,
-            "heads": cfg.heads,
-            "hd": cfg.head_dim,
-            "pattern": cfg.pattern,
-        }
-        try:  # a per-config crash (e.g. input alloc / device hiccup) must not lose the table
-            row.update(_bench_cfg(submesh, ccl, cfg, topology, tp_axis, op_override))
-        except Exception as e:  # noqa: BLE001
-            row["fused_err"] = type(e).__name__
-            logger.warning(f"{cfg.cid} CONFIG FAILED: {str(e)[:160]}")
-        rows.append(row)
-    topo = "ring" if topology == ttnn.Topology.Ring else "line"
-    _write_csv(rows, f"rms_bench_{model}_tp{tp}_{topo}.csv")
-    _print_table(rows, f"{model.upper()} DistributedRMSNorm: fused timing (TP={tp}, {topo})")
 
 
 # ---------------------------------------------------------------------------
@@ -1140,163 +1028,3 @@ def test_traced_corr(mesh_device, model, tp, topology, op_override, tp_axis, ful
             flagged.append(cfg.cid)
             logger.warning(f"RMSTRACE {cfg.cid:<22} CONFIG FAILED: {type(e).__name__}: {str(e)[:220]}")
     logger.info(f"RMSTRACE [{model} tp{tp}] flagged: {flagged if flagged else 'NONE'}")
-
-
-# ===========================================================================
-# Stability sweep — orthogonal option coverage (fused vs fp32-torch only)
-# ===========================================================================
-# Goal: ~15 min of broad coverage to confirm the op is stable. Sweeps seq / dim /
-# heads×head_dim / weight / bias / rope / per_head_norm / in+out dtype, across
-# tp1/2/4 LINE + tp4/tp8 RING. Each config: PCC(fused:fp32-torch) ≥ 0.999, sane
-# maxabs/worstrow, N-run bit-exact determinism (SWEEP_DET_REPEATS, default 3), and
-# no hang. SWEEP_ONLY=cid,... subsets. The composite baseline is NOT used (the fp32
-# torch ref is the true oracle). KNOWN GAP: per-token [N,D] weight/bias (the compute
-# supports it, but _build doesn't yet synthesize that layout) — broadcast/none only.
-
-_SW_RING = ttnn.Topology.Ring
-_SW_LINE = ttnn.Topology.Linear
-
-
-def _swcfg(
-    tp,
-    cid,
-    rows,
-    feat_local,
-    head_dim,
-    *,
-    rope=False,
-    bcast_rope=True,
-    phn=False,
-    weight="auto",
-    bias="auto",
-    indt="bf16",
-    outdt="bf16",
-):  # noqa: E501
-    dim = feat_local * tp
-    full_heads = (feat_local // head_dim) * tp if head_dim else 1  # total heads across TP
-    return Cfg(
-        f"sw_{cid}_tp{tp}",
-        "SWEEP",
-        tp,
-        rows,
-        dim,
-        head_dim,
-        rope,
-        full_heads,
-        bcast_rope,
-        phn,
-        indt,
-        outdt,
-        weight,
-        bias,
-    )
-
-
-def _sweep_cfgs(tp, topology):
-    """Tiered config list for one (tp, topology). Dims scale as feat_local*tp so every
-    config is valid at any tp (feat_local chosen divisible by head_dim)."""
-    HD = 128
-    is_ring = topology == _SW_RING
-    c = []
-    # ---- Tier 2: topology cross — 8 diverse configs on EVERY (tp, topology) ----
-    c += [
-        _swcfg(tp, "tiny_block", 32, 512, None),  # block adaLN, 1 worker
-        _swcfg(tp, "small_qk", 512, 512, HD),  # qk + weight
-        _swcfg(tp, "mid_rope", 2048, 1024, HD, rope=True),  # qk + broadcast rope
-        _swcfg(tp, "large_qk", 8192, 768, HD),  # large, deep rounds
-        _swcfg(tp, "adaln", 1024, 1024, None),  # block weight+bias
-        _swcfg(tp, "perhead_norm", 512, 512, HD, rope=True, phn=True),  # FLUX per-head norm+rope
-        _swcfg(tp, "perhead_rope", 1024, 512, 64, rope=True, bcast_rope=False),  # LTX per-head rope
-        _swcfg(tp, "fp32_io", 512, 512, HD, indt="fp32", outdt="fp32"),  # fp32 in/out
-    ]
-    # ---- Tier 1: one-axis sweep — only on the base topology (tp4 ring) ----
-    if tp == 4 and is_ring:
-        for r in (32, 128, 512, 1216, 2048, 4096, 8192):  # seq
-            c.append(_swcfg(tp, f"seq{r}", r, 1024, HD, rope=True))
-        for fl in (512, 768, 1024, 1536, 2048):  # per-device width
-            c.append(_swcfg(tp, f"fl{fl}", 2048, fl, HD, rope=True))
-        for h, hd in ((4, 128), (8, 64), (8, 128), (12, 128), (16, 64)):  # heads × head_dim
-            c.append(_swcfg(tp, f"h{h}x{hd}", 2048, h * hd, hd, rope=True))
-        for wm in ("auto", "none"):  # weight × bias
-            for bm in ("none", "bcast"):
-                if wm == "none" and bm == "bcast":
-                    continue  # op requires weight when bias is given (device_op validation)
-                c.append(_swcfg(tp, f"w_{wm}_b_{bm}", 2048, 1024, HD, weight=wm, bias=bm))
-        c += [
-            _swcfg(tp, "rope_none", 2048, 1024, HD, rope=False),  # rope variants
-            _swcfg(tp, "rope_bcast", 2048, 1024, HD, rope=True, bcast_rope=True),
-            _swcfg(tp, "rope_perhead", 2048, 1024, HD, rope=True, bcast_rope=False),
-            _swcfg(tp, "phn", 2048, 1024, HD, rope=True, phn=True),  # per_head_norm
-            _swcfg(tp, "dt_fp32in", 2048, 1024, HD, indt="fp32"),  # dtype axis
-            _swcfg(tp, "dt_fp32io", 2048, 1024, HD, indt="fp32", outdt="fp32"),
-            _swcfg(tp, "dt_fp32out", 2048, 1024, HD, outdt="fp32"),
-        ]
-    # ---- Tier 3: interaction / stress, per (tp, topology) ----
-    if is_ring:
-        c.append(_swcfg(tp, "uneven1216", 1216, 1024, HD, rope=True))  # zero-present-round path
-        c.append(_swcfg(tp, "uneven2368", 2368, 1024, HD, rope=True))
-        if tp == 8:
-            c.append(_swcfg(tp, "huge16384", 16384, 768, HD, rope=True))  # deep rounds, 8-wide ring
-            c.append(_swcfg(tp, "wide_perhead", 2048, 2048, 128, rope=True, bcast_rope=False))  # wide L1
-    c.append(_swcfg(tp, "fp32_large", 4096, 768, HD, rope=True, indt="fp32", outdt="fp32"))  # precision path
-    return c
-
-
-_SWEEP_PARAMS = [
-    ((4, 8), _DP_GAL, 1, _SW_LINE, GALAXY_LINKS, 1, False),
-    ((4, 8), _DP_GAL, 2, _SW_LINE, GALAXY_LINKS, 1, False),
-    ((4, 8), _DP_GAL, 4, _SW_LINE, GALAXY_LINKS, 1, False),
-    ((4, 8), _DP_GAL_RING, 4, _SW_RING, GALAXY_LINKS, 0, False),
-    ((4, 8), _DP_GAL_RING, 8, _SW_RING, GALAXY_LINKS, 1, True),
-]
-_SWEEP_IDS = ["tp1_line", "tp2_line", "tp4_line", "tp4_ring", "tp8_ring"]
-
-
-@pytest.mark.skip_post_commit  # stability sweep, dev-only (not a correctness gate)
-@pytest.mark.parametrize(
-    ("mesh_device", "device_params", "tp", "topology", "op_override", "tp_axis", "full_mesh"),
-    [pytest.param(*p, id=i) for p, i in zip(_SWEEP_PARAMS, _SWEEP_IDS)],
-    indirect=["mesh_device", "device_params"],
-)
-def test_sweep(mesh_device, tp, topology, op_override, tp_axis, full_mesh):
-    """Broad option-space stability sweep, fused vs fp32-torch ref. Run all 5 params
-    for full coverage (~15 min); warm up first to dodge the cold-after-reset flake."""
-    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
-    links = _fused_links(op_override)
-    reps = int(_os.getenv("SWEEP_DET_REPEATS", "3"))
-    topo = "ring" if topology == _SW_RING else "line"
-    flagged = []
-    cfgs = _select(_sweep_cfgs(tp, topology), "SWEEP_ONLY")
-    for cfg in cfgs:
-        try:
-            ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
-            ag = ccl.get_ag_ping_pong_semaphore(tp_axis)
-            inp = _build(submesh, cfg, tp_axis)
-            ref = _torch_ref(cfg)
-            pob = _make_pob(inp, submesh, cfg, links, tp_axis)
-            out0 = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, pob, op_override), tp_axis)
-            ndiff, maxdelta = 0, 0.0
-            for _ in range(max(0, reps - 1)):  # bit-exact determinism across repeated launches
-                oi = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, pob, op_override), tp_axis)
-                d = (oi - out0).abs().max().item()
-                if d > 0.0:
-                    ndiff += 1
-                    maxdelta = max(maxdelta, d)
-                del oi
-            det = ndiff == 0
-            pcc = _pcc(out0, ref)
-            maxabs = (out0 - ref).abs().max().item()
-            worstrow = ((out0 - ref).abs().mean(-1) / ref.abs().mean(-1).clamp_min(1e-6)).max().item()
-            susp = (pcc < 0.999) or (worstrow > 0.10) or (not det)
-            if susp:
-                flagged.append(cfg.cid)
-            logger.info(
-                f"RMSSWEEP {cfg.cid:<26} det={'OK' if det else 'FAIL'} pcc={pcc * 100:.4f}% "
-                f"maxabs={maxabs:.4f} worstrow={worstrow * 100:.2f}% in={cfg.in_dtype} out={cfg.out_dtype} "
-                f"det_ndiff={ndiff}/{max(0, reps - 1)}{'  <-- SUSPICIOUS' if susp else ''}"
-            )
-        except Exception as e:  # noqa: BLE001 — characterize (OOM / hang-timeout) without losing the rest
-            flagged.append(cfg.cid)
-            logger.warning(f"RMSSWEEP {cfg.cid:<26} CONFIG FAILED: {type(e).__name__}: {str(e)[:200]}")
-    logger.info(f"RMSSWEEP [{topo} tp{tp}] {len(cfgs)} cfgs — flagged: {flagged if flagged else 'NONE'}")
-    assert not flagged, f"{len(flagged)} sweep config(s) flagged on {topo} tp{tp}: {flagged}"
