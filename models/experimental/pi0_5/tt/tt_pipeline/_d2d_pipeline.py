@@ -188,12 +188,17 @@ class Pipeline(StatelessTTNNModule):
                 order.append(m)
         return order
 
-    def capture_loop(self, submeshes, body_fn, n_steps):
+    def capture_loop(self, submeshes, body_fn, n_steps, prologue_fn=None):
         meshes = self._distinct_meshes(submeshes)
         tids = []
         with trace_running():
             for m in meshes:
                 tids.append((m, ttnn.begin_trace_capture(m, cq_id=0)))
+            # Optional per-mesh prologue recorded FIRST inside each open trace (e.g. the
+            # KV recv+copy the 16-chip socket path folds into the head of the denoise
+            # trace). Must emit ops only on `meshes`; warmed eagerly by the caller.
+            if prologue_fn is not None:
+                prologue_fn()
             for i in range(n_steps):
                 body_fn(i)
             for m, tid in tids:

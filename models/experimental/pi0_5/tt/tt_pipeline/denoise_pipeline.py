@@ -799,6 +799,15 @@ class TTNNPi05DenoiseStreamedPipeline:
         in-place x_t update). Callable eagerly or inside a caller-owned trace."""
         self._emit_step(i)
 
+    def capture(self, prologue_fn=None):
+        """Capture the N-step loop under per-mesh traces (like stream_euler's capture
+        half), but WITHOUT the warmup/first-replay — assumes build_eager() already
+        warmed sockets + JITed kernels. An optional prologue_fn is recorded first
+        inside each mesh's trace (the 16-chip socket path folds its KV recv+copy here
+        so recv + N denoise steps become ONE trace per chip). Sets _loop_tids."""
+        self._loop_tids = self._pipe.capture_loop(self._meshes, self._emit_step, self._n, prologue_fn=prologue_fn)
+        return self._loop_tids
+
     def reseed_noise(self, x_t_init):
         """Overwrite _x_t with fresh noise (done OUTSIDE the caller's trace, before
         each replay). Mirrors the reseed half of rerun()."""
