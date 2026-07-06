@@ -1,17 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Model-agnostic trace-replay per-token latency measurement for optimize/perf.
+"""Model-agnostic trace-replay latency measurement for optimize/perf.
 
-`measure_adapter(adapter, device, mode="auto")` drives a PerfAdapter (see perf_adapter.py) through
-the standard decode contract, captures ONE steady-state decode step as a device trace, replays it
-under trace (optionally with a second command queue overlapping host<->device I/O with compute),
-and prints the clean, GPU-comparable per-token wall as:
+`measure_adapter(adapter, device, mode="auto")` drives a PipelineStageAdapter (see perf_adapter.py):
+for EACH stage emit-e2e emitted (adapter.stages, from the pipeline's PIPELINE_STAGES) it captures one
+steady-state, host-op-free step as a device trace and replays it under trace — optionally with a
+second command queue overlapping host<->device I/O with compute for stages that stage their inputs
+(`<stage>_write_inputs`). It prints, per stage:
 
-    TRACE_PER_TOKEN_MS=<float>
+    TRACE_STAGE_MS[<stage>]=<float> path=trace+2cq|trace+1cq
+
+plus the headline clean, GPU-comparable wall the harness parses:
+
+    TRACE_PER_TOKEN_MS=<float>     (the AR/decode stage if present, else the whole-pipeline sum)
 
 which the harness (agent/tracy_tool.py + cc_optimize/perf_mcp.py) reads as the `trace` metric source
-(vs the `eager` fallback FORWARD_WALL_MS). This is the missing companion of perf_adapter.py: the
-adapter is the shell (setup/step/write_inputs), this module is the engine (warmup -> capture ->
-timed replay -> emit the number).
+(vs the `eager` fallback FORWARD_WALL_MS). This is the companion of perf_adapter.py: the adapter is
+the shell (setup + per-stage step/write), this module is the engine (warmup -> capture -> timed
+replay -> emit the numbers). A legacy single-step adapter (PipelineDecodeAdapter, no .stages) is
+wrapped as one "decode" stage, so the old path is unchanged.
 
 Modes:
     "auto"  (default) : 2-CQ path IFF the pipeline exposes decode_write_inputs (adapter.write_inputs is
@@ -53,13 +59,13 @@ def _num_command_queues(device) -> int | None:
     return None
 
 
-def _capture_decode_trace(device, adapter):
-    """Warm up, then capture exactly one host-op-free, fixed-shape decode step as a trace on cq0."""
+def _capture_step_trace(device, step):
+    """Warm up, then capture exactly one host-op-free, fixed-shape step as a trace on cq0."""
     for _ in range(_WARMUP_ITERS):
-        adapter.step()
+        step()
     ttnn.synchronize_device(device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
-    adapter.step()
+    step()
     ttnn.end_trace_capture(device, tid, cq_id=0)
     ttnn.synchronize_device(device)
     return tid
@@ -73,14 +79,13 @@ def _replay_1cq(device, tid, iters):
     return (time.perf_counter() - t0) / iters
 
 
-def _replay_2cq(device, tid, adapter, iters):
-    """Overlap the next step's input upload (staged on cq1 by decode_write_inputs) with the traced
-    compute on cq0, synchronized with events — the canonical trace + 2-CQ decode loop."""
-    write = getattr(adapter, "write_inputs", None)
+def _replay_2cq(device, tid, write, iters):
+    """Overlap the next step's input upload (staged on cq1 by <stage>_write_inputs) with the traced
+    compute on cq0, synchronized with events — the canonical trace + 2-CQ loop."""
     t0 = time.perf_counter()
     for _ in range(iters):
         if callable(write):
-            write()  # host->device staged on cq1 (pipeline's decode_write_inputs)
+            write()  # host->device staged on cq1 (pipeline's <stage>_write_inputs)
             ev = ttnn.record_event(device, 1)  # signal once the cq1 write is enqueued
             ttnn.wait_for_event(0, ev)  # cq0 waits for inputs before running the traced step
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
@@ -88,51 +93,88 @@ def _replay_2cq(device, tid, adapter, iters):
     return (time.perf_counter() - t0) / iters
 
 
-def measure_adapter(adapter, device, mode: str = "auto") -> float:
-    """Trace-replay per-token decode latency. Prints TRACE_PER_TOKEN_MS=<ms>; returns ms/token.
-
-    Raises (propagating to the perf test's guard) if the pipeline has no cached decode_step."""
-    # setup() builds the pipeline + prefills; raises AttributeError for repeat-prefill pipelines.
-    adapter.setup(device)
-
-    has_2cq_hook = hasattr(adapter, "write_inputs")
+def _want_2cq(mode, has_write, ncq):
     if mode in ("trace", "1cq"):
-        want_2cq = False
-    elif mode == "2cq":
-        want_2cq = True
-    else:  # auto
-        want_2cq = has_2cq_hook
-    ncq = _num_command_queues(device)
-    if want_2cq and ncq is not None and ncq < 2:
-        want_2cq = False  # device opened single-CQ -> can't overlap; use single-CQ trace
+        return False
+    want = True if mode == "2cq" else bool(has_write)  # auto: 2CQ iff the stage stages inputs
+    if want and ncq is not None and ncq < 2:
+        return False  # device opened single-CQ -> can't overlap
+    return want
 
-    tid = _capture_decode_trace(device, adapter)
+
+def _measure_stage(device, stage, mode, ncq):
+    """Capture stage.step as a trace, replay it (2CQ if it stages inputs), return (ms, path)."""
+    tid = _capture_step_trace(device, stage.step)
     try:
-        if want_2cq:
+        if _want_2cq(mode, stage.write is not None, ncq):
             try:
-                per_token_s = _replay_2cq(device, tid, adapter, _REPLAY_ITERS)
+                per_s = _replay_2cq(device, tid, stage.write, _REPLAY_ITERS)
                 path = "trace+2cq"
             except Exception as exc:  # any 2-CQ / event issue -> degrade, never fail the measurement
-                print("TRACE_2CQ_FALLBACK=%r" % (exc,), flush=True)
-                per_token_s = _replay_1cq(device, tid, _REPLAY_ITERS)
+                print("TRACE_2CQ_FALLBACK[%s]=%r" % (stage.name, exc), flush=True)
+                per_s = _replay_1cq(device, tid, _REPLAY_ITERS)
                 path = "trace+1cq"
         else:
-            per_token_s = _replay_1cq(device, tid, _REPLAY_ITERS)
+            per_s = _replay_1cq(device, tid, _REPLAY_ITERS)
             path = "trace+1cq"
     finally:
         try:
             ttnn.release_trace(device, tid)
         except Exception:
             pass
+    return per_s * 1000.0, path
 
-    per_token_ms = per_token_s * 1000.0
+
+class _LegacyStage:
+    """Wrap a legacy single-step adapter (PipelineDecodeAdapter: .step()/.write_inputs) as a stage."""
+
+    def __init__(self, adapter):
+        self.name = "decode"
+        self.step = adapter.step
+        w = getattr(adapter, "write_inputs", None)
+        self.write = w if callable(w) else None
+
+
+def measure_adapter(adapter, device, mode: str = "auto") -> float:
+    """Trace-replay per-stage latency for WHATEVER the pipeline emitted. Traces (+2CQ) every stage in
+    adapter.stages; prints TRACE_STAGE_MS[<stage>] per stage and TRACE_PER_TOKEN_MS (the AR/decode
+    stage if present, else the whole-pipeline sum). Returns that headline ms.
+
+    Raises (propagating to the perf test's guard) if the pipeline has no traceable step at all."""
+    # setup() builds the pipeline + binds stages; raises AttributeError for repeat-prefill pipelines.
+    adapter.setup(device)
+
+    stages = list(getattr(adapter, "stages", None) or [])
+    if not stages:
+        # Legacy PipelineDecodeAdapter (exposes .step()/.write_inputs, no .stages): one decode stage.
+        if not callable(getattr(adapter, "step", None)):
+            raise AttributeError("adapter exposes neither .stages nor a callable .step()")
+        stages = [_LegacyStage(adapter)]
+
+    ncq = _num_command_queues(device)
+    results = []
+    for st in stages:
+        ms, path = _measure_stage(device, st, mode, ncq)
+        results.append((st.name, ms, path))
+        print("TRACE_STAGE_MS[%s]=%.4f path=%s" % (st.name, ms, path), flush=True)
+
+    pipeline_ms = sum(ms for _, ms, _ in results)
+    decode = next((r for r in results if "decode" in r[0].lower()), None)
+    headline_ms = decode[1] if decode else pipeline_ms
+    headline_path = decode[2] if decode else "trace+pipeline"
     batch = int(getattr(adapter, "batch", 1) or 1)
-    tokens_per_sec = (batch / per_token_s) if per_token_s > 0 else 0.0
+    per_s = headline_ms / 1000.0
+    tokens_per_sec = (batch / per_s) if per_s > 0 else 0.0
     # THE line the harness parses (tracy_tool.py:_PER_TOKEN_RE / perf_mcp.py). Keep the name verbatim.
-    print("TRACE_PER_TOKEN_MS=%.4f" % per_token_ms, flush=True)
+    print("TRACE_PER_TOKEN_MS=%.4f" % headline_ms, flush=True)
     print(
-        "TRACE_REPLAY_PATH=%s TRACE_TOKENS_PER_SEC=%.2f batch=%d warmup=%d iters=%d"
-        % (path, tokens_per_sec, batch, _WARMUP_ITERS, _REPLAY_ITERS),
+        "TRACE_PIPELINE_MS=%.4f TRACE_STAGES=%d%s"
+        % (pipeline_ms, len(results), "" if decode else " (no decode stage: per-token=pipeline sum)"),
         flush=True,
     )
-    return per_token_ms
+    print(
+        "TRACE_REPLAY_PATH=%s TRACE_TOKENS_PER_SEC=%.2f batch=%d warmup=%d iters=%d"
+        % (headline_path, tokens_per_sec, batch, _WARMUP_ITERS, _REPLAY_ITERS),
+        flush=True,
+    )
+    return headline_ms

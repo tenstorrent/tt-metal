@@ -73,12 +73,15 @@ def test_<task>_perf(device_params, device):
     if _PERF_TRACE:
         try:
             from models.experimental.perf_automation.agent.trace_replay import measure_adapter
-            from models.experimental.perf_automation.agent.perf_adapter import PipelineDecodeAdapter
+            from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter
 
             def _build_for_perf(dev):
                 ...
             _prompt_ids = ...
-            _adapter = PipelineDecodeAdapter(_build_for_perf, _prompt_ids, batch=1)
+            # Stage adapter profiles WHATEVER emit-e2e emitted: every PIPELINE_STAGES entry gets
+            # traced (+2CQ where the stage stages its inputs). Falls back to the single decode
+            # contract for pipelines that expose only decode_step.
+            _adapter = PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=1)
             measure_adapter(_adapter, device, mode="auto")
         except Exception as _te:  # noqa: BLE001
             print("TRACE_REPLAY_SKIPPED=%r" % (_te,), flush=True)
@@ -259,13 +262,16 @@ def generate_perf_test(
         "end-to-end check on the profiler capture. Do not remove or rename it.\n"
         "- KEEP the skeleton's trace-replay block VERBATIM in structure: the `_PERF_TRACE`/`_DEV_PARAMS` "
         "device-param gate near the top AND the trailing `if _PERF_TRACE:` measure_adapter block. This is a "
-        "MODEL-AGNOSTIC, GPU-comparable per-token latency (TRACE_PER_TOKEN_MS). Do NOT write a per-model "
-        "adapter class — the tool ships the generic PipelineDecodeAdapter. Your ONLY job in that block is to "
-        "fill `_build_for_perf(dev)` so it builds the pipeline EXACTLY as this test/demo builds it (lift the "
-        "same imports + build args, using `dev`), and set `_prompt_ids` to a SMALL prompt. Leave everything "
-        "else in the block verbatim. The clean number is emitted automatically IFF the built pipeline exposes "
-        "a trace-capturable `decode_step(state)`; if its decode is repeat-prefill (re-runs the growing "
-        "sequence / host argmax), the adapter raises, the guard falls back to FORWARD_WALL_MS, and that is "
+        "MODEL-AGNOSTIC, GPU-comparable latency (TRACE_PER_TOKEN_MS + per-stage TRACE_STAGE_MS). Do NOT "
+        "write a per-model adapter class — the tool ships the generic PipelineStageAdapter, which profiles "
+        "WHATEVER emit-e2e emitted: every `PIPELINE_STAGES` entry is traced (+2CQ where the stage exposes "
+        "`<stage>_write_inputs`), falling back to the single decode contract for decode-only pipelines. Your "
+        "ONLY job in that block is to fill `_build_for_perf(dev)` so it builds the pipeline EXACTLY as this "
+        "test/demo builds it (lift the same imports + build args, using `dev`), and set `_prompt_ids` to a "
+        "SMALL prompt. Leave everything else in the block verbatim. The clean numbers are emitted "
+        "automatically IFF the built pipeline exposes the per-stage trace hooks (or a trace-capturable "
+        "`decode_step(state)`); if its decode is repeat-prefill (re-runs the growing sequence / host argmax) "
+        "and no stage hooks exist, the adapter raises, the guard falls back to FORWARD_WALL_MS, and that is "
         "fine. Never delete the block, never let it fail the test.\n"
         "- TRACE BLOCK + SELF-OPEN: if (per the DEVICE OPEN rule) the test self-opens a mesh, pass the "
         "device the test actually opened to `measure_adapter(...)` (NOT a fixture `device`), and put "
