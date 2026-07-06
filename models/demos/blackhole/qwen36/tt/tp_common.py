@@ -165,6 +165,181 @@ def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloa
     )
 
 
+def all_gather_matmul_prefill(
+    x, weight, tt_ccl, compute_cfg, topology, grid=(7, 9), cluster_axis=1, fused_activation=None
+):
+    """Fused all-gather(dim=3) + column-parallel matmul for prefill (all_gather_minimal_matmul_async).
+
+    x: K-sharded activation [.,S,K/tp]; weight: [K,N] col-sharded (K full). Gathers x to full K and
+    matmuls in one op, replacing a separate all_gather + linear. fused_activation applied per tile
+    before pack (non-parametrized op, e.g. ttnn.UnaryOpType.SILU). Returns [1,1,S,N] per device (DRAM)."""
+    S, K_local = x.shape[-2], x.shape[-1]
+    x4 = ttnn.reshape(x, (1, 1, S, K_local))
+    cfg = ttnn.MinimalMatmulConfig(
+        M_block_size=4,
+        K_block_size=8,
+        N_block_size=4,
+        subblock_h=1,
+        subblock_w=4,
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+    )
+    # in0-sender axis (grid.x with force_transpose) must equal num_links * num_workers_per_link
+    num_links = next(nl for nl in (4, 3, 2, 1) if grid[0] % nl == 0)
+    workers = max(1, min(8 // num_links, grid[0] // num_links))
+    out = ttnn.experimental.all_gather_minimal_matmul_async(
+        input_tensor=x4,
+        weight_tensor=weight,
+        config=cfg,
+        fused_activation=fused_activation,
+        compute_kernel_config=compute_cfg,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+        num_links=num_links,
+        topology=topology,
+        cluster_axis=cluster_axis,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        force_transpose=True,
+        num_workers_per_link=workers,
+        num_buffers_per_channel=8,
+    )[0]
+
+    return out
+
+
+def build_mmrs_decode_state(mesh_device, M, K_local, N, nd, dtype=ttnn.bfloat16):
+    """Build (progcfg, intermediate_buffer, output_buffer) for a decode matmul_reduce_scatter out-proj.
+
+    M = LOGICAL decode batch (max_batch_size) — the op returns the persistent buffer with its logical
+    shape, so an oversized (tile-padded) M leaks into the residual stream. TILE layout pads M<32.
+    dtype MUST match the out-proj input activation (bf16 for MLP/attn; FLOAT32 for GDN, which keeps
+    fp32 for stability) — the op's default output dtype is the input's, and writing it into a
+    mismatched buffer corrupts the output. Matmul on reduced grid (8,6); RS workers at offset (0,6).
+    interm [1,1,M,N], out [1,1,M,N/nd]."""
+    cg = (8, 6)
+    per_core_N = max(1, math.ceil(N / TILE_SIZE / cg[0]))
+    pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=cg,
+        in0_block_w=min(4, max(1, K_local // TILE_SIZE // cg[0])),
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=max(1, math.ceil(M / TILE_SIZE / cg[1])),
+        per_core_N=per_core_N,
+        out_block_w=max(1, per_core_N // 2),
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+    mk = lambda w: ttnn.from_torch(
+        torch.zeros(1, 1, M, w),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    return pc, mk(N), mk(N // nd)
+
+
+def matmul_reduce_scatter_decode(
+    x, weight, tt_ccl, interm_buf, out_buf, progcfg, compute_cfg, topology, rs_offset=(0, 6)
+):
+    """Fused row-parallel matmul + reduce-scatter(dim=3) for decode (matmul_reduce_scatter_async).
+
+    x: K-sharded [.,M,K_local]; weight: [K_local,N] K-sharded. Matmul runs on progcfg's (reduced)
+    grid; RS workers land at rs_offset (disjoint rows) to avoid the collision that deadlocks a
+    full-grid fused CCL. Persistent buffers are caller-owned. Returns [.,M,N/nd] (fractured, DRAM)."""
+    _, rs_out = ttnn.experimental.matmul_reduce_scatter_async(
+        x,
+        weight,
+        persistent_intermediate_buffer=interm_buf,
+        persistent_output_buffer=out_buf,
+        dim=3,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
+        reduce_scatter_core_grid_offset=rs_offset,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        num_links=1,
+        memory_config_rs=ttnn.DRAM_MEMORY_CONFIG,
+        topology=topology,
+        subdevice_id=None,
+        memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+        program_config=progcfg,
+        compute_kernel_config=compute_cfg,
+    )
+    # rs_out IS the persistent output buffer; clone so the caller can deallocate its copy while the
+    # persistent buffer survives for the next token (else layer.py's deallocate frees it -> corruption).
+    return ttnn.clone(rs_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
+    """Lazily allocate (and cache on tt_ccl) shared persistent buffers for the prefill fused out-proj.
+
+    Prefill M (=chunk seq, e.g. 2048) makes per-layer buffers huge (fp32 [1,1,2048,5120]≈42MB × 64
+    layers = infeasible). Prefill runs layers sequentially and each op's output is cloned before the
+    next layer reuses the buffer, so ONE shared set per (M,N,nd,dtype) is safe. Allocated during the
+    pre-capture warmup forward (eager), reused inside the trace. Keyed so variable M/dtype coexist."""
+    cache = getattr(tt_ccl, "_qwen36_mmrs_prefill_bufs", None)
+    if cache is None:
+        cache = {}
+        tt_ccl._qwen36_mmrs_prefill_bufs = cache
+    key = (M, N, nd, str(dtype))
+    if key not in cache:
+        mesh = tt_ccl.mesh_device
+        mk = lambda w: ttnn.from_torch(
+            torch.zeros(1, 1, M, w),
+            device=mesh,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        cache[key] = (mk(N), mk(N // nd))
+    return cache[key]
+
+
+def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8)):
+    """Fused row-parallel out-proj matmul + reduce-scatter for PREFILL (matmul_reduce_scatter_async).
+
+    Unlike decode (M=1, where the 2D matmul collapses to ~8 cores and this loses), at prefill M>>1 the
+    2D matmul fills the grid, so overlapping the RS with the matmul is a WIN (biggest for the fp32
+    GDN-out with its large RS). grid=(8,8): matmul rows 0-7, RS workers rows 8-9. x: K-sharded
+    [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives)."""
+    M, K_local = x.shape[-2], x.shape[-1]
+    N = weight.shape[-1]
+    interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)
+    x4 = ttnn.reshape(x, (1, 1, M, K_local))
+    per_core_N = max(1, math.ceil(N / TILE_SIZE / grid[0]))
+    pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=min(4, max(1, K_local // TILE_SIZE // grid[0])),
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=max(1, math.ceil(M / TILE_SIZE / grid[1])),
+        per_core_N=per_core_N,
+        out_block_w=max(1, per_core_N // 2),
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+    _, rs = ttnn.experimental.matmul_reduce_scatter_async(
+        x4,
+        weight,
+        persistent_intermediate_buffer=interm,
+        persistent_output_buffer=out_buf,
+        dim=3,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
+        reduce_scatter_core_grid_offset=rs_offset,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        num_links=1,
+        memory_config_rs=ttnn.DRAM_MEMORY_CONFIG,
+        topology=topology,
+        subdevice_id=None,
+        memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+        program_config=pc,
+        compute_kernel_config=compute_cfg,
+    )
+    return ttnn.clone(rs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
 def sharded_decode_matmul(x, weight, compute_cfg, decode_progcfg, act_shard_cfg, prefill_progcfg_fn, prefill_k):
     """DRAM-WIDTH_SHARDED weight matmul; branches on M (decode vs prefill).
 

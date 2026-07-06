@@ -165,6 +165,28 @@ class TPGatedDeltaNet:
         # Must match load_gdn_weights_tp gates
         self._dram_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
         self._fuse_ab = self._dram_sharded
+        # Fuse prefill norm-allgather + qkvzab in-proj into all_gather_minimal_matmul_async.
+        # Requires the folded qkvzab weight; norm's post-AG is disabled in layer.py (GDN, prefill).
+        self._fuse_agmm = self._fuse_ab
+        # Fuse decode out-proj + reduce-scatter (matmul_reduce_scatter_async). DEFAULT OFF because
+        # decode MM-RS regresses: the fused op's 2D matmul collapses to ~8 cores at M=1. The fused op
+        # takes the DRAM-interleaved out weight, not the DRAM-width-sharded path).
+        self._fuse_out_mmrs = (
+            not self._out_sharded and args.num_devices > 1 and os.environ.get("QWEN36_FUSE_GDN_OUT_MMRS", "0") == "1"
+        )
+        if self._fuse_out_mmrs:
+            # GDN out-proj input (gated) is FLOAT32 (GDN keeps fp32 for stability) -> fp32 buffers.
+            self._out_mmrs_pc, self._out_mmrs_interm, self._out_mmrs_out = tpc.build_mmrs_decode_state(
+                mesh, args.max_batch_size, self.value_dim_tp, args.dim, args.num_devices, dtype=ttnn.float32
+            )
+        # PREFILL out-proj fusion (matmul_reduce_scatter, (8,8) grid) — default on. Slight TTFT cost at
+        # small ISL (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL
+        # (e.g. 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul. Opt out with =0.
+        self._fuse_out_mmrs_prefill = (
+            not self._out_sharded
+            and args.num_devices > 1
+            and os.environ.get("QWEN36_FUSE_GDN_OUT_MMRS_PREFILL", "1") == "1"
+        )
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         self.conv_states = None
@@ -256,7 +278,14 @@ class TPGatedDeltaNet:
         """Project x → (qkv, z, a, b). Fused path: one [qkv|z|a|b] matmul then slice."""
         Nv, qz, az = self.Nv, self.qkv_dim_tp, self.qkvz_dim_tp
         if self._fuse_ab:
-            qkvzab = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvzab_progcfg)
+            # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + qkvzab matmul.
+            if self._fuse_agmm and S > tpc.TILE_SIZE:
+                qkvzab = tpc.all_gather_matmul_prefill(
+                    x, self.tw["qkvz"], self.tt_ccl, self.cfg, self.args.ccl_topology()
+                )
+                qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
+            else:
+                qkvzab = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvzab_progcfg)
             qkv = ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz))
             z = ttnn.slice(qkvzab, (0, 0, qz), (1, S, az))
             a = ttnn.slice(qkvzab, (0, 0, az), (1, S, az + Nv))
@@ -387,6 +416,14 @@ class TPGatedDeltaNet:
         gated = ttnn.multiply(out_f, ttnn.silu(z, memory_config=_L1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
+        # Prefill: fused out-proj matmul + reduce-scatter (matmul_reduce_scatter_async), flag-gated.
+        if self._fuse_out_mmrs_prefill:
+            x_out = ttnn.reshape(gated, (1, 1, T, gated.shape[-1]))
+            out = tpc.matmul_reduce_scatter_prefill(
+                x_out, tw["out"], self.tt_ccl, self.cfg, self.args.ccl_topology(), self.args.num_devices, ttnn.float32
+            )
+            ttnn.deallocate(gated)
+            return out
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
@@ -472,6 +509,21 @@ class TPGatedDeltaNet:
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
 
+        # Fused out-proj + reduce-scatter (matmul_reduce_scatter_async), flag-gated.
+        if self._fuse_out_mmrs:
+            x_out = ttnn.reshape(gated, (1, 1, B, gated.shape[-1]))
+            out = tpc.matmul_reduce_scatter_decode(
+                x_out,
+                tw["out"],
+                self.tt_ccl,
+                self._out_mmrs_interm,
+                self._out_mmrs_out,
+                self._out_mmrs_pc,
+                self.cfg,
+                self.args.ccl_topology(),
+            )
+            ttnn.deallocate(gated)
+            return out
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
