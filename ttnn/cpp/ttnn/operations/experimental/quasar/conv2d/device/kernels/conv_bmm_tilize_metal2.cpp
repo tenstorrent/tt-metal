@@ -537,7 +537,14 @@ void kernel_main() {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                         if (enable_reload) {
+#ifndef ARCH_QUASAR
                             copy_tile_to_dst_init_short_with_dt(in1_cb_id, matmul_partials_cb);
+#else
+                            // QSR: copy_tile_to_dst_init_short_with_dt is WH/BH-only; expand it into its
+                            // two constituent steps (identical reconfig + copy init) on Quasar.
+                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                            copy_tile_to_dst_init_short(matmul_partials_cb);
+#endif
                             cb_matmul_partials.wait_front(out_subblock_num_tiles);
                             tile_regs_acquire();
 
