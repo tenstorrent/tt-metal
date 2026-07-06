@@ -68,7 +68,6 @@ def test_fibo_timestep_embed(*, mesh_device):
     ref = m.time_embed  # HF BriaFiboTimestepProjEmbeddings
     inner_dim = m.config.num_attention_heads * m.config.attention_head_dim  # 3072
     torch.manual_seed(0)
-    batch_size = 2
     timestep = torch.tensor([500.0, 250.0])
     with torch.no_grad():
         r = ref(timestep, dtype=torch.bfloat16)

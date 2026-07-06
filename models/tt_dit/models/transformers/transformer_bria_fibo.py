@@ -15,7 +15,7 @@ from models.common.utility_functions import is_blackhole  # noqa: F401
 
 from ...blocks.attention import Attention  # noqa: F401
 from ...blocks.transformer_block import TransformerBlock, _chunk_time3d  # noqa: F401
-from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings, TimestepEmbedding, Timesteps  # noqa: F401
+from ...layers.embeddings import TimestepEmbedding, Timesteps
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepare_chunked_linear_output  # noqa: F401
 from ...layers.module import Module, ModuleList  # noqa: F401
 from ...layers.normalization import DistributedLayerNorm  # noqa: F401
