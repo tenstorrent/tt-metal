@@ -251,7 +251,7 @@ static void handle_sigint(int) {
 
     if (!g_stop_message_printed.exchange(true)) {
         const char msg[] = "\nSIGINT received, requesting graceful stop...\n";
-        write(STDERR_FILENO, msg, sizeof msg - 1); /* NOLINT */
+        [[maybe_unused]] ssize_t written = write(STDERR_FILENO, msg, sizeof msg - 1); /* NOLINT */
     }
 }
 
