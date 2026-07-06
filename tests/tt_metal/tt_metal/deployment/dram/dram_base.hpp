@@ -146,6 +146,9 @@ inline std::string format_duration_seconds(uint64_t total_seconds) {
     return oss.str();
 }
 
+std::vector<DramBankWorkerAssignment> get_optimal_dram_bank_worker_assignments(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, tt_metal::NOC noc);
+
 }  // namespace tt::tt_metal
 
 #endif /* _DRAM_BASE_H */
