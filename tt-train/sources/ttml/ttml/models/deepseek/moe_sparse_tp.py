@@ -28,7 +28,6 @@ for the AI/ridge analysis vs the EP path.
 
 from __future__ import annotations
 
-import torch
 
 import ttnn
 import ttml
@@ -83,12 +82,7 @@ class SparseMoETP(MoE):
 
         # ── 3. moe_group ──
         metadata = ttnn.to_layout(ttnn.typecast(topk_indices, ttnn.DataType.UINT16), ttnn.ROW_MAJOR_LAYOUT)
-        leids = ttnn.from_torch(
-            torch.arange(E, dtype=torch.int32),
-            dtype=ttnn.uint16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-        )
+        leids = ttnn.arange(0, E, 1, dtype=ttnn.uint16, device=device)
         x_rm = _to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         scores_for_routing_rm = _to_layout(scores_for_routing, ttnn.ROW_MAJOR_LAYOUT)
         group_out = ttml.ops.moe.moe_group_op(x_rm, metadata, scores_for_routing_rm, leids, int(E), int(K))
