@@ -88,7 +88,7 @@ would re-read the same sections, collide on the same paragraphs, and reintroduce
 seam inconsistencies this session worked to remove.
 
 **⚡ Front-loaded (Borys, 2026-07-06):** the combined **"hunt for ops issues" front-run
-sweep** (see Audit architecture) goes *first*, ahead of everything below — Borys wants
+sweep** (see the **Launch brief** below) goes *first*, ahead of everything below — Borys wants
 the pre-port-issues list now; being handed to a dedicated Claude immediately. It's big
 #1's CB audit core + Device-2.0-holdover check + TensorAccessorArgs, run across the
 corpus → the pre-port-issues list. It can build in the current flat structure and be
@@ -230,6 +230,69 @@ taxonomy) → `analyses/`. No layout rethink.
 
 **Caution:** front-run is *additive* — it does NOT replace the op-centric gate. The
 porter still needs the holistic per-op verdict before porting.
+
+## Launch brief — "hunt for ops issues" front-run sweep (implementer-Claude, start here)
+
+*You're the Claude picking up the front-loaded sweep (Borys, 2026-07-06). Read this, then
+the sources it points to. Assembled by the planning-Claude so nothing was lost in the
+handoff — Audrey shouldn't have to re-tell you any of it.*
+
+**Launch inputs — confirm you have these before starting (ask Audrey if any is missing;
+don't guess):**
+- [ ] **CB→DFB flowchart PNG** — the sweep's CB decision logic (Big #1 has a prose fallback).
+- [ ] **Target op list** — which ops to sweep (Diego's port-ready set / Borys's priorities).
+- [ ] **Deliverable scope** — recipe only, or recipe + a run producing the list? Who runs
+  it (you / a batch army)?
+- [ ] **Output format** — csv or md.
+- [ ] **Environment** — farm checkout with branch `akertesz/op-porting-recipe` + tt-metal +
+  `development-docs` read access.
+- [ ] **Illegal-TensorAccessorArgs scope** — confirm it travels with the CB part (likely).
+
+**What you're building.** One combined factor-centric front-run audit that scans ops in a
+single pass for **pre-port issues — Device-2.0 holdovers + problem-child CBs + troublesome
+TensorAccessorArgs** — producing a consolidated per-op **pre-port-issues list** ops fix
+*before* porting. Front-run mode (see Audit architecture); **additive** — the op-centric
+port-readiness gate stays and still checks everything. Purpose: an objective *pre-port
+definition-of-done*.
+
+**This is a build (synthesis), not an extraction.** Combine three sources:
+1. **CB detection (the core)** — the existing `port_op_to_metal2_audit.md` subjects
+   *TensorAccessor-handling* (causal-link gate, sync-free litmus, Case 1/2) +
+   *DFB-endpoint-legality* (SPSC census, dead CB, hidden writer), **updated per Big #1**:
+   roll back the self-loop / tie-off *interim workarounds* → Scratchpad / LocalTensorAccessor
+   (both landed); **add the access-pattern / pointer-mucking detector** (direct CB
+   read/write-ptr manipulation → "structurally unsound; DFB verdict may be unachievable");
+   flag the un-portable class (the LLK-forced-DFB horror) → ops.
+2. **Device-2.0-holdover check** — the existing audit's Prerequisites Check 2, **with the
+   sanctioned-free-function exclusions** (`get_tile_size(cb_id)`,
+   `get_local_cb_interface(cb_id)` are sanctioned, NOT holdovers — else you false-positive
+   and juniors stop trusting it). Mostly syntactic → grep/checklist-assist works.
+3. **TensorAccessorArgs check** — defer to the 3rd-arg taxonomy
+   (`development-docs/2026-06-24 … TensorAccessor 3rd-arg taxonomy`): divergent 3rd-arg →
+   GATE-to-ops; plus Case-2b DIY-NoC (Fix #1).
+
+**Internal ordering (precondition).** Check **Device 2.0 first** per op; any op still
+carrying holdovers has its CB + args findings **caveated/deferred** (their signals assume
+Device-2.0-clean, else a legacy-idiom pass false-negatives the hidden writer). Few ops now,
+but honor it.
+
+**Output.** One per-op pre-port-issues list → `analyses/pre_port_issues.<csv|md>`,
+as-of-dated. Per finding: op, factor, issue (`file:line` + the construct), recommended fix,
+urgency, owner. Be *specific* — vague findings are useless downstream.
+
+**Scope discipline — this is an audit: find + report, do NOT fix.**
+- You find + report; Borys's crew fixes. A grounded "ops, fix these N" *is* the deliverable
+  (inherit the recipe's capitulation-is-success ethos).
+- **Don't** modify the op-centric audit, do the reorg, or touch Big #1's *porting*-half
+  (the roll-back-hacks in the *port* recipe). Stay scoped to the sweep.
+- Place the sweep recipe in `ai/audits/` (create minimally) or flat-for-now; the reorg
+  relocates it later — don't block on the reorg.
+
+**Read, in order:** this brief → **Audit architecture** (two-mode frame + combined sweep) →
+**Big change #1** (CB detail + flowchart prose) → the existing `port_op_to_metal2_audit.md`
+CB subjects + Device-2.0 gate → the 3rd-arg taxonomy dev-doc → **Fix #1** (Case-2 /
+LocalTensorAccessor) + **Fix #3** (self-loop: DM-never, the silent Quasar trap) in this
+roadmap.
 
 ## Big change #1 — Unconventional-CB handling
 
