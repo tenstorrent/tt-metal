@@ -32,8 +32,11 @@ Env (flat schedule knobs — no preset/mode names; defaults = a plain 1-user, 11
   PREFILL_PRODUCER_P_BURST       per-step probability of a 2-3 chunk burst (default 0.0)
   PREFILL_PRODUCER_GAP_MS        "min,max" idle gap ms (default "200,2000")
   PREFILL_PRODUCER_MID_END_PROB  prob a request ends mid-chunk (default 0.0)
+  PREFILL_PRODUCER_INTERLEAVE    slot-selection policy: "random" (default) | "round_robin"
   PREFILL_PRODUCER_SEED          RNG seed (default 1234)
   PREFILL_PRODUCER_CHECK_PCC     1 to read KV back + PCC vs golden per resident slot (default 0)
+  PREFILL_SEND_SHUTDOWN          1 to close the stream with an all -1 sentinel so the runner exits
+                                 gracefully after the run (sent AFTER the KV read; default 0). See PR #48718.
 Env (transport — must match the runner): PREFILL_SP / PREFILL_TP / PREFILL_CHUNK_SIZE /
   PREFILL_MAX_SEQ_LEN / PREFILL_NUM_LAYERS / PREFILL_H2D_SERVICE_ID / PREFILL_H2D_CONNECT_TIMEOUT.
 
@@ -256,6 +259,7 @@ class ProducerConfig:
     seed: int
     verify: bool  # read KV back + PCC each resident slot vs golden
     pcc_threshold: float
+    interleave: str = "random"  # slot-selection policy: "random" | "round_robin" (fair alternation)
 
 
 def _config_from_env() -> ProducerConfig:
@@ -267,7 +271,11 @@ def _config_from_env() -> ProducerConfig:
     chunks_max = min(chunks_max, max_chunks_cap)
     chunks_min = min(chunks_min, chunks_max)
     gap_lo, gap_hi = (float(x) for x in os.environ.get("PREFILL_PRODUCER_GAP_MS", "200,2000").split(","))
+    interleave = os.environ.get("PREFILL_PRODUCER_INTERLEAVE", "random")
+    if interleave not in ("random", "round_robin"):
+        raise ValueError(f"PREFILL_PRODUCER_INTERLEAVE must be 'random' or 'round_robin', got {interleave!r}")
     return ProducerConfig(
+        interleave=interleave,
         num_users=int(os.environ.get("PREFILL_NUM_USERS", "1")),
         chunks_min=chunks_min,
         chunks_max=chunks_max,
@@ -338,6 +346,7 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
     push_ms: list = []
     completed = 0
     total = 0
+    rr_cursor = -1  # round-robin slot cursor (used only when cfg.interleave == "round_robin")
     t0 = now_fn()
 
     def _do_push(slot: _Slot) -> None:
@@ -365,7 +374,16 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
         if r < cfg.p_gap:
             sleep_fn(rng.uniform(*cfg.gap_ms) / 1000.0)
             continue
-        slot = rng.choice(active)
+        if cfg.interleave == "round_robin":
+            # Advance a persistent cursor to the next non-done slot: fair alternation across users
+            # (active is non-empty here, so this finds one within a single pass over the slots).
+            for _ in range(len(slots)):
+                rr_cursor = (rr_cursor + 1) % len(slots)
+                if not slots[rr_cursor].done:
+                    break
+            slot = slots[rr_cursor]
+        else:
+            slot = rng.choice(active)
         if r < cfg.p_gap + cfg.p_burst:
             for _ in range(rng.randint(2, 3)):
                 if slot.done:
@@ -503,7 +521,21 @@ def main() -> None:
     elif cfg.verify:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
 
-    logger.info("[producer] exiting (the runner keeps its sync-op loop running).")
+    # Optional graceful shutdown (mirrors prefill_h2d_producer.py / PR #48718): close the request stream
+    # with an all -1 PrefillMetadata sentinel so the runner breaks its request loop and tears down
+    # cleanly instead of blocking to SIGKILL. Sent LAST — AFTER the KV read/PCC above — because
+    # read_dram_umd needs the mesh/DRAM still alive; until now the runner is idle (blocked on recv).
+    if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
+        sentinel = struct.pack("<iii", -1, -1, -1)
+        assert len(sentinel) == _METADATA_SIZE_BYTES, f"sentinel {len(sentinel)}B != {_METADATA_SIZE_BYTES}B"
+        dummy = _chunk_to_host_array(pool[:CHUNK_SIZE])  # payload is ignored for a sentinel; size must still match
+        assert dummy.nbytes == expected, f"sentinel payload {dummy.nbytes}B != service-expected {expected}B"
+        logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
+        service.forward_to_tensor_bytes(dummy, metadata=sentinel)
+        service.barrier()  # drain the sentinel before releasing the descriptor
+        logger.info("[producer] exiting; SHUTDOWN sentinel sent — runner will drain and shut down.")
+    else:
+        logger.info("[producer] exiting (the runner keeps its sync-op loop running).")
 
 
 if __name__ == "__main__":
