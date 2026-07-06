@@ -739,10 +739,14 @@ class Generator(WarmupForwardMixin):
             if not work_use_batched_prefill:
                 prefill_kwargs["num_cached_tokens"] = num_cached_tokens_list[request_idx]
 
-            # Save output logits (PCC check / return_logits path)
+            # Save output logits (PCC check / return_logits path). Batched prefill fills
+            # one row per slot (padded_batch rows); non-batched fills a single row.
+            # (Previously always 1 row, which silently dropped all but the last batched
+            # user's logits -> garbage host-sampled tokens/logprobs for the rest.)
             tt_out_logits_saved = None
             if save_logits_to_host:
-                tt_out_logits_saved = torch.zeros(1, self.model.args.padded_vocab_size)
+                num_logit_rows = padded_batch if use_batched_prefill else 1
+                tt_out_logits_saved = torch.zeros(num_logit_rows, self.model.args.padded_vocab_size)
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
             # With prefix caching, trace output has only prefill_seq_len positions (the chunk).
@@ -774,7 +778,12 @@ class Generator(WarmupForwardMixin):
                     output_toks[request_idx] = tt_tok
 
                 if tt_out_logits_all_users is not None and tt_out_logits_saved is not None:
-                    tt_out_logits_all_users[request_idx] = tt_out_logits_saved
+                    if use_batched_prefill:
+                        # tt_out_logits_saved holds one row per slot; pick each request's
+                        # slot row into its output row, mirroring the token scatter above.
+                        tt_out_logits_all_users[:, 0, :] = tt_out_logits_saved[empty_slots]
+                    else:
+                        tt_out_logits_all_users[request_idx] = tt_out_logits_saved
             else:
                 # Process prefill output to get logits (before all-gather) for on-device sampling
                 # Returns list of logits in sharded format (same as decode)
