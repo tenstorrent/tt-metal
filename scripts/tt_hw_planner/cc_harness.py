@@ -24,6 +24,7 @@ from typing import Callable
 
 
 _HB_EVERY_S = 45
+_AGENT_LINE = "[agent] "
 
 
 def _verbose() -> bool:
@@ -51,7 +52,7 @@ def _render_cc_event(line: str):
     render to nothing on a clean screen (framework chatter stays off-screen, exactly like fsm)."""
     line = (line or "").strip()
     if not line or not line.startswith("{"):
-        return (("  · " + line) if (_verbose() and line) else None, 0)
+        return ((_AGENT_LINE + line) if (_verbose() and line) else None, 0)
     try:
         ev = json.loads(line)
     except Exception:
@@ -68,9 +69,9 @@ def _render_cc_event(line: str):
             if not isinstance(b, dict):
                 continue
             if b.get("type") == "text" and b.get("text"):
-                parts.append("  " + b["text"].replace("\n", "\n  "))
+                parts.append(_AGENT_LINE + b["text"].replace("\n", "\n" + _AGENT_LINE))
             elif b.get("type") == "tool_use":
-                parts.append("  → " + _fmt_tool(b.get("name", ""), b.get("input")))
+                parts.append(_AGENT_LINE + "→ " + _fmt_tool(b.get("name", ""), b.get("input")))
                 n += 1
         return ("\n".join(parts) if parts else None, n)
     return (None, 0)
@@ -266,7 +267,7 @@ def run_cc_loop(
                         sys.stdout.write(rendered + "\n")
                         sys.stdout.flush()
                     now = time.monotonic()
-                    if not verbose and (now - hb[0]) >= _HB_EVERY_S:
+                    if (now - hb[0]) >= _HB_EVERY_S:
                         hb[0] = now
                         sys.stdout.write(f"  · round {rnd} working… {int(now - _start)}s, {tc[0]} tool calls\n")
                         sys.stdout.flush()
