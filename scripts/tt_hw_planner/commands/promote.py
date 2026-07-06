@@ -61,6 +61,31 @@ def _latest_worktree_demo(model_id: str):
 
 
 def cmd_promote(args) -> int:
+    from .._cli_helpers.bringup_cc import _emit_stop_summary, _reset_summary
+
+    _reset_summary()
+    model_id = getattr(args, "model_id", "") or ""
+    stop_reason = "promote ended"
+    try:
+        rc = _cmd_promote_impl(args)
+        stop_reason = {
+            0: "promote completed (gate can_stop)",
+            1: "promote incomplete — components still not graduated (budget/attempts capped)",
+            2: "promote setup failed — no scaffolded demo found / model not prepared",
+        }.get(rc, f"ended with rc={rc}")
+        return rc
+    except Exception as exc:
+        stop_reason = f"aborted by exception: {type(exc).__name__}: {exc}"
+        raise
+    finally:
+        if model_id:
+            try:
+                _emit_stop_summary(model_id, stop_reason)
+            except Exception:
+                pass
+
+
+def _cmd_promote_impl(args) -> int:
     from ..cli import (
         _API_KEY_ENV_VAR,
         _PROVIDER_LABEL,

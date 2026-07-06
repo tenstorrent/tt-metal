@@ -16,6 +16,54 @@ import sys
 from pathlib import Path
 from typing import List
 
+_SUMMARY_EMITTED = False
+
+
+def _reset_summary() -> None:
+    global _SUMMARY_EMITTED
+    _SUMMARY_EMITTED = False
+
+
+def _mark_summary_emitted() -> None:
+    global _SUMMARY_EMITTED
+    _SUMMARY_EMITTED = True
+
+
+def _emit_stop_summary(model_id: str, stop_reason: str = "") -> None:
+    global _SUMMARY_EMITTED
+    if _SUMMARY_EMITTED:
+        return
+    try:
+        from ..bringup_loop import find_demo_dir
+
+        demo_dir = find_demo_dir(model_id)
+    except Exception:
+        demo_dir = None
+    if demo_dir is None:
+        try:
+            from ..discovery import BRINGUP_ROOT
+            from ..scaffold_demo_folder import _slug
+
+            cand = BRINGUP_ROOT() / "models" / "demos" / _slug(model_id.split("/")[-1])
+            demo_dir = cand if cand.exists() else None
+        except Exception:
+            demo_dir = None
+    if demo_dir is None:
+        bar = "=" * 78
+        print("\n" + bar)
+        print(f"  BRING-UP SUMMARY — {model_id}")
+        if stop_reason:
+            print(f"  RUN ENDED: {stop_reason}")
+        print("  (stopped before a demo folder was scaffolded — no components enumerated yet)")
+        print(bar)
+        _SUMMARY_EMITTED = True
+        return
+    try:
+        _emit_bringup_summary_table(model_id, demo_dir, final=None, stop_reason=stop_reason)
+    except Exception as exc:
+        print(f"  [summary-table] skipped: {type(exc).__name__}: {exc}")
+    _SUMMARY_EMITTED = True
+
 
 def _restore_orphaned_stale_tests(model_id: str, demo_dir: Path) -> int:
     try:
@@ -218,7 +266,7 @@ def _derive_shard_tp(model_id: str, mesh) -> int:
         return 1
 
 
-def _emit_bringup_summary_table(model_id: str, demo_dir: Path, final: dict) -> None:
+def _emit_bringup_summary_table(model_id: str, demo_dir: Path, final=None, stop_reason: str = "") -> None:
     import json as _json
 
     from .. import cli as _cli
@@ -226,10 +274,10 @@ def _emit_bringup_summary_table(model_id: str, demo_dir: Path, final: dict) -> N
     from ..module_tree import safe_identifier
     from ..overlay_manager import load_persistent_skips
 
+    final = final or {}
     demo_dir = Path(demo_dir)
     graduated = set(final.get("graduated") or [])
     shard = set(final.get("shard_graduated") or [])
-    grad_safe = {safe_identifier(g) for g in graduated}
 
     universe: dict = {}
     try:
@@ -257,6 +305,13 @@ def _emit_bringup_summary_table(model_id: str, demo_dir: Path, final: dict) -> N
     for extra in (graduated, fallback, harness_skipped, set(skips), set(attempts)):
         for name in extra:
             universe.setdefault(name, "NEW")
+    for name in list(universe):
+        try:
+            if (demo_dir / "_stubs" / f"{safe_identifier(name)}.py.last_good_native").is_file():
+                graduated.add(name)
+        except Exception:
+            pass
+    grad_safe = {safe_identifier(g) for g in graduated}
 
     def _test_path(name: str) -> str:
         p = demo_dir / "tests" / "pcc" / f"test_{safe_identifier(name)}.py"
@@ -307,6 +362,14 @@ def _emit_bringup_summary_table(model_id: str, demo_dir: Path, final: dict) -> N
     print()
     print(bar)
     print(f"  BRING-UP SUMMARY — {model_id}")
+    if stop_reason:
+        print(f"  RUN ENDED: {stop_reason}")
+    try:
+        blk = (demo_dir / ".loader_blocker.txt").read_text().strip()
+        if blk:
+            print(f"  BLOCKER: {blk}")
+    except Exception:
+        pass
     print(bar)
     print(f"  GRADUATED ({len(grad_rows)}) — reproduce each PCC check:")
     if grad_rows:
@@ -518,8 +581,14 @@ def run_bringup_cc(
     except Exception:
         pass
     print(sep)
+    _reason = (
+        "bring-up complete — gate can_stop (all components graduated or fell back)"
+        if final.get("can_stop")
+        else "bring-up INCOMPLETE — gate wants more work (attempt/iteration budget capped)"
+    )
     try:
-        _emit_bringup_summary_table(model_id, demo_dir, final)
+        _emit_bringup_summary_table(model_id, demo_dir, final, stop_reason=_reason)
+        _mark_summary_emitted()
     except Exception as _tbl_exc:
         print(f"  [summary-table] skipped: {type(_tbl_exc).__name__}: {_tbl_exc}")
     return 0 if final.get("can_stop") else 1

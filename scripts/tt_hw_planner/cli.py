@@ -8259,6 +8259,31 @@ def _cmd_up_isolated(args) -> int:
 
 
 def _cmd_up_core(args) -> int:
+    from ._cli_helpers.bringup_cc import _emit_stop_summary, _reset_summary
+
+    _reset_summary()
+    model_id = getattr(args, "model_id", "") or ""
+    stop_reason = "bring-up ended"
+    try:
+        rc = _cmd_up_core_impl(args)
+        stop_reason = {
+            0: "bring-up completed (gate can_stop)",
+            1: "bring-up incomplete — components still not graduated (budget/attempts capped)",
+            2: "pre-flight/setup failed — model could not be loaded, scaffolded, or prepared",
+        }.get(rc, f"ended with rc={rc}")
+        return rc
+    except Exception as exc:
+        stop_reason = f"aborted by exception: {type(exc).__name__}: {exc}"
+        raise
+    finally:
+        if model_id:
+            try:
+                _emit_stop_summary(model_id, stop_reason)
+            except Exception:
+                pass
+
+
+def _cmd_up_core_impl(args) -> int:
     MODEL = args.model_id
     BOX = args.box
     sep = "=" * 78

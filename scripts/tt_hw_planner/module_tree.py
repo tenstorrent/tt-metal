@@ -602,22 +602,31 @@ def _load_reference_module(model_id: str):
         try:
             ref = _exec_loader()
         except ModuleNotFoundError as exc:
-            pkg = (getattr(exc, "name", "") or "").split(".")[0]
-            if not pkg:
-                raise
-            import subprocess as _sp
             import sys as _sys
 
-            print(
-                f"  [discovery] reference loader needs '{pkg}' — installing into " f"{_sys.executable} and retrying ..."
+            pkg = (getattr(exc, "name", "") or "").split(".")[0] or "<package>"
+            hint = (
+                f"reference loader for {model_id} needs the Python package '{pkg}', which is not "
+                f"installed in this environment ({_sys.executable}). Install it and re-run — prefer a "
+                f"dedicated venv over python_env if the package would downgrade transformers/ttnn deps:"
+                f"    pip install {pkg}"
             )
-            _sp.run([_sys.executable, "-m", "pip", "install", pkg], check=False)
-            ref = _exec_loader()
+            print(f"  [discovery] {hint}")
+            try:
+                (demo_dir / ".loader_blocker.txt").write_text(hint, encoding="utf-8")
+            except Exception:
+                pass
+            return None
         try:
             ref.eval()
         except Exception:
             pass
         return ref
     except Exception as exc:
-        print(f"  [discovery] reference-loader fallback failed for {model_id}: {type(exc).__name__}: {exc}")
+        msg = f"reference-loader fallback failed for {model_id}: {type(exc).__name__}: {exc}"
+        print(f"  [discovery] {msg}")
+        try:
+            (demo_dir / ".loader_blocker.txt").write_text(msg, encoding="utf-8")
+        except Exception:
+            pass
         return None
