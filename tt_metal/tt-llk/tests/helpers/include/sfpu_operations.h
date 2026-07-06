@@ -63,6 +63,7 @@
 #include "sfpu/ckernel_sfpu_negative.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_silu.h"
+#include "sfpu/ckernel_sfpu_sub_int.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
 
 namespace test_utils
@@ -959,6 +960,21 @@ void call_binary_sfpu_operation(
                 dst_index_out,
                 vector_mode);
         }
+        else if constexpr (BINOP == BinaryOp::SUB && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
+        {
+            // Int32 SUB must use the integer path (_sub_int_); otherwise it would
+            // fall through to calculate_sfpu_binary and subtract the raw integer
+            // bit-patterns as floats. Mirrors the Int32 ADD path above.
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _sub_int_,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false /* SIGN_MAGNITUDE_FORMAT */),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
         else
         {
             SFPU_BINARY_CALL(
@@ -1012,9 +1028,9 @@ void call_binary_sfpu_operation(
     {
         // Use actual format when compiling for ADD_TOP_ROW tests, otherwise use Float32 as safe default for static assert
         constexpr DataFormat add_top_row_format = (BINOP == BinaryOp::ADD_TOP_ROW) ? static_cast<DataFormat>(MATH_FORMAT) : DataFormat::Float32;
-        //Force VectorMode::RC_custom so the params wrapper drives all four faces (4 x 8 = 32 rows) of the tile.
-        // _llk_math_eltwise_binary_sfpu_params_ takes its single-call branch
-        // and does not emit the per-face TTI_SETRWC
+        // Force VectorMode::RC_custom so the params wrapper drives all four faces (4 x 8 = 32 rows) of the tile.
+        //  _llk_math_eltwise_binary_sfpu_params_ takes its single-call branch
+        //  and does not emit the per-face TTI_SETRWC
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -1101,7 +1117,9 @@ void call_ternary_sfpu_operation_init()
     }
     else
     {
-        SFPU_TERNARY_INIT(where);
+        // Fail loudly on an unrecognized op instead of silently initializing it
+        // as `where` (which would mis-compute). Mirrors call_ternary_sfpu_operation().
+        LLK_ASSERT(false, "Unsupported ternary operation init");
     }
 }
 

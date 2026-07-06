@@ -196,6 +196,13 @@ def test_perf_eltwise_unary_sfpu(
 
 # int32 unary ops share the eltwise_unary_sfpu_perf.cpp dispatch but need an
 # Int32 format, so they run through a dedicated MATH_ISOLATE test below.
+#
+# Coverage note: AddInt32/SubInt32 (binop_with_unary.h) currently have perf-only
+# coverage here and no functional golden/assert, because the int32-unary
+# functional sweep is blocked by the fast-tilize gap (tt-llk #495). Their integer
+# core is exercised functionally via the binary path (_add_int_/_sub_int_ in
+# test_sfpu_binary.py, SfpuElwadd), but the unary calculate_add_int32/
+# calculate_sub_int32 wrappers themselves stay perf-only until #495 is resolved.
 _INT32_UNARY_OPS = [
     MathOperation.AddInt32,
     MathOperation.SubInt32,

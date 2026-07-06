@@ -43,6 +43,7 @@ def _run_sfpu_binop_scalar(formats, dest_acc, mathop, input_dimensions=[32, 32])
     scalar_bits = _SCALAR_BITS[mathop]
 
     # Keep inputs small and bounded so the bf16 result stays accurate across all
+    # five scalar ops (add/sub/mul/div/rsub) and both dest-accumulation modes.
     spec_a = StimuliSpec.uniform(low=-1.0, high=1.0)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
