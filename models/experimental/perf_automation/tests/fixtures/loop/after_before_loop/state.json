@@ -1,9 +1,0 @@
-{
-  "run_id": "FIXTURE", "state": "BEFORE_LOOP_DONE", "iteration": 0,
-  "metric": {"name": "device_ms", "unit": "ms", "direction": "min",
-             "baseline": 12.091, "current": 12.091, "target": 11.0},
-  "max_iter": 25, "budget_usd": 5.0, "cost_usd": 0.0,
-  "tokens_in": 0, "tokens_out": 0,
-  "git_sha_clean": null, "candidates": [], "tried": [], "crash_retries": 0,
-  "code_fix_attempts": 0, "pcc_fix_attempts": 0, "current_profile": null, "last_error": null
-}
