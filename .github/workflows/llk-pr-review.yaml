@@ -129,7 +129,17 @@ jobs:
           } > "$out"
           echo "Assembled $(wc -l < "$out") lines into $out"
 
-      # 4. Run the review: the code-review plugin command against the PR, posting
+      # 4. Join the tailnet ephemerally via OIDC so egress routes through the
+      #    on-prem connectors with a stable, allowlistable exit IP. Vars are set
+      #    by IT onboarding; scoped to an exact repo:branch pair.
+      - name: Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ vars.TS_GHA_PUBLIC_INTERNET_CLIENT_ID }}
+          audience: ${{ vars.TS_GHA_PUBLIC_INTERNET_AUDIENCE }}
+          tags: tag:tt-github-actions-public-internet-outbound
+
+      # 5. Run the review: the code-review plugin command against the PR, posting
       #    findings inline via --comment, with the LLK MCP servers and knowledge.
       - name: Run /code-review
         uses: anthropics/claude-code-action@v1
@@ -160,3 +170,8 @@ jobs:
             --max-turns 100
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
+
+      # 6. Remove the ephemeral tailnet node immediately, even on failure.
+      - name: Tailscale cleanup
+        if: always()
+        run: sudo tailscale logout
