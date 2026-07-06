@@ -364,9 +364,11 @@ def _emit_bringup_summary_table(model_id: str, demo_dir: Path, final=None, stop_
     print(f"  BRING-UP SUMMARY — {model_id}")
     if stop_reason:
         print(f"  RUN ENDED: {stop_reason}")
+    blocker_present = False
     try:
         blk = (demo_dir / ".loader_blocker.txt").read_text().strip()
         if blk:
+            blocker_present = True
             print("  " + "-" * 74)
             for ln in blk.splitlines():
                 print(f"  {ln}")
@@ -393,6 +395,20 @@ def _emit_bringup_summary_table(model_id: str, demo_dir: Path, final=None, stop_
     else:
         print("    (none — all components graduated)")
     print(bar)
+    total = len(grad_rows) + len(ungrad_rows)
+    if total == 0 and blocker_present:
+        pass
+    elif ungrad_rows:
+        print("  NEXT STEPS:")
+        print(f"    - {len(ungrad_rows)} component(s) not graduated — resume where it left off")
+        print("      (already-graduated components are kept; only the leftovers are retried):")
+        print(f"        python -m scripts.tt_hw_planner promote {model_id} --box <BOX> --mesh <MESH>")
+    elif grad_rows:
+        print("  NEXT STEPS:")
+        print("    - all components graduated — wire the end-to-end pipeline:")
+        print(f"        python -m scripts.tt_hw_planner emit-e2e {model_id}")
+    if total or blocker_present:
+        print(bar)
 
 
 def run_bringup_cc(
