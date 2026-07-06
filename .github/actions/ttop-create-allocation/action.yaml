@@ -49,7 +49,7 @@ runs:
       shell: bash
       run: |
         echo "Creating allocation..."
-        printf "%s" "${{ env.ALLOCATION_MANIFEST }}" | kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} apply -f -
+        printf "%s" "${ALLOCATION_MANIFEST}" | kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} apply -f -
 
     - name: Wait for allocation
       shell: bash
