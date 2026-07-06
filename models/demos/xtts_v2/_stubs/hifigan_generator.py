@@ -68,11 +68,12 @@ def build(device, torch_module):
         """torch Conv1d weight [out, in, k] -> list of k device tensors [in, out]."""
         out_ch, in_ch, k = w.shape
         return [
-            ttnn.from_torch(
+            ttnn.as_tensor(
                 w[:, :, t].t().contiguous().float(),
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             for t in range(k)
         ]
@@ -80,11 +81,12 @@ def build(device, torch_module):
     def _bias(bias, dtype):
         if bias is None:
             return None
-        return ttnn.from_torch(
+        return ttnn.as_tensor(
             bias.detach().reshape(1, 1, -1).contiguous().float(),
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def prep_conv1d(c, dtype=ttnn.float32):
@@ -196,25 +198,41 @@ def build(device, torch_module):
 
         g = g_torch
         if isinstance(g, ttnn.Tensor):
-            g = ttnn.to_torch(g)
-        # g: [1, cond_channels, 1] -> device TILE [1, L=1, C=cond_channels]
-        g = g.reshape(1, spec["in_ch"], -1)[:, :, :1].permute(0, 2, 1).contiguous().float()
-        gt = ttnn.from_torch(g, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            # Host-free: g is a device [1, cond_channels, 1] (or [1, C, T]); take the
+            # first time step and move channels to the last axis via ttnn ops only.
+            in_ch = spec["in_ch"]
+            gg = ttnn.slice(g, [0, 0, 0], [1, in_ch, 1])          # [1, C, 1]
+            gt = ttnn.permute(gg, (0, 2, 1))                      # [1, 1, C]
+            gt = ttnn.to_layout(gt, ttnn.TILE_LAYOUT)
+            if gt.get_dtype() != ttnn.float32:
+                gt = ttnn.typecast(gt, ttnn.float32)
+        else:
+            # g: [1, cond_channels, 1] -> device TILE [1, L=1, C=cond_channels]
+            g = g.reshape(1, spec["in_ch"], -1)[:, :, :1].permute(0, 2, 1).contiguous().float()
+            gt = ttnn.as_tensor(g, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=DRAM)
         out = do_conv(gt, spec)  # [1, 1, out_ch]
         _free(gt)
         return out
 
     def _to_1LC(x):
-        """Primary input x=[C, T] (or [B, C, T]) on device -> TILE [1, T, C]."""
+        """Primary input x=[C, T] (or [B, C, T]) -> TILE [1, T, C]; host-free for device x."""
         import torch
 
-        if not isinstance(x, ttnn.Tensor):
-            x = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-        t = ttnn.to_torch(x)
+        if isinstance(x, ttnn.Tensor):
+            # channels-first [1, C, T] (or [C, T]) -> [1, T, C] via ttnn permute only.
+            xx = x
+            if len(xx.shape) == 2:
+                xx = ttnn.reshape(xx, (1, int(xx.shape[0]), int(xx.shape[1])))
+            xx = ttnn.permute(xx, (0, 2, 1))            # [1, T, C]
+            xx = ttnn.to_layout(xx, ttnn.TILE_LAYOUT)
+            if xx.get_dtype() != ttnn.float32:
+                xx = ttnn.typecast(xx, ttnn.float32)
+            return xx
+        t = torch.as_tensor(x)
         if t.dim() == 2:
             t = t.unsqueeze(0)                # [1, C, T]
         t = t.reshape(1, t.shape[-2], t.shape[-1]).permute(0, 2, 1).contiguous().float()
-        return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.as_tensor(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=DRAM)
 
     def forward(x, g=None, *args, **kwargs):
         o = _to_1LC(x)                           # [1, T, 1024]

@@ -29,11 +29,12 @@ def build(device, torch_module):
     m = torch_module
     fb = m.fb.detach()                       # [n_freqs, n_mels]
     n_freqs, n_mels = fb.shape
-    fb_t = ttnn.from_torch(
+    fb_t = ttnn.as_tensor(
         fb.t().reshape(1, n_mels, n_freqs).contiguous().float(),
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
         device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -44,7 +45,7 @@ def build(device, torch_module):
 
     def forward(x, *args, **kwargs):
         if not isinstance(x, ttnn.Tensor):
-            x = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            x = ttnn.as_tensor(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if x.get_dtype() != ttnn.float32:
             x = ttnn.typecast(x, ttnn.float32)
         # x: [B, n_freqs, T] -> [B, n_mels, T]

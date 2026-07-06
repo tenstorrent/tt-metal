@@ -27,18 +27,29 @@ def build(device, torch_module):
 
     m = torch_module
 
-    weight = ttnn.from_torch(
+    weight = ttnn.as_tensor(
         m.weight.detach().contiguous().to(torch.bfloat16),  # [nx, nf], no transpose
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     nf = m.weight.shape[-1]
-    bias = ttnn.from_torch(
+    bias = ttnn.as_tensor(
         m.bias.detach().reshape(1, 1, nf).contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # HiFi4 + fp32 accumulation: this projection feeds the 30-layer GPT2 stack whose
+    # accumulated bf16 error otherwise flips near-tie greedy argmaxes in the AR
+    # decoder. Full-fidelity matmul keeps the logits close enough to the fp32
+    # reference that the free-running token sequence tracks HF for the whole horizon.
+    _kernel_cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
     )
 
     def forward(x, *args, **kwargs):
-        y = ttnn.matmul(x, weight)
+        y = ttnn.matmul(x, weight, compute_kernel_config=_kernel_cfg)
         y = ttnn.add(y, bias)
         return y
 

@@ -59,9 +59,10 @@ def build(device, torch_module):
     m = torch_module.float()
 
     def _w(t):
-        return ttnn.from_torch(
+        return ttnn.as_tensor(
             t.contiguous().to(torch.bfloat16),
             dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     # GroupNorm32 handled by the graduated leaf stub (reads groups/eps/affine

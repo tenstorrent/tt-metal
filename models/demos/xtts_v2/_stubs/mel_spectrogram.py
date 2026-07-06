@@ -61,8 +61,8 @@ def build(device, torch_module):
     w_cos = (w_full.unsqueeze(1) * torch.cos(ang)).contiguous()   # window folded into basis
     w_sin = (w_full.unsqueeze(1) * -torch.sin(ang)).contiguous()
 
-    Wcos = ttnn.from_torch(w_cos, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    Wsin = ttnn.from_torch(w_sin, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    Wcos = ttnn.as_tensor(w_cos, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    Wsin = ttnn.as_tensor(w_sin, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # mel filterbank projection: graduated leaf stub (mel_scale)
     mel_scale = _b_mel_scale(device, mspec.mel_scale)
@@ -75,16 +75,42 @@ def build(device, torch_module):
     )
     DRAM = ttnn.DRAM_MEMORY_CONFIG
 
+    # Anti-identity for on-device row reversal (`v @ Jrev` == reverse(v)); used to
+    # build the reflect-pad edges without a host round-trip. reflect pad only.
+    _p_reflect = (n_fft // 2) if (center and pad_mode == "reflect") else 0
+    Jrev = None
+    if _p_reflect > 0:
+        _J = torch.flip(torch.eye(_p_reflect, dtype=torch.float32), dims=[0]).contiguous()
+        Jrev = ttnn.as_tensor(_J, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=DRAM)
+
     def forward(x, *args, **kwargs):
         if not isinstance(x, ttnn.Tensor):
-            x = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-        # Boundary reflect-pad on host (ttnn has no reflect pad); data movement only.
-        xh = ttnn.to_torch(x).float().reshape(1, -1)
-        if extra_pad > 0:
-            xh = torch.nn.functional.pad(xh, (extra_pad, extra_pad))
-        if center:
-            xh = torch.nn.functional.pad(xh, (n_fft // 2, n_fft // 2), mode=pad_mode)
-        xp = ttnn.from_torch(xh.contiguous(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            # Host input: reflect-pad on host (pure data movement) then upload.
+            xh = torch.as_tensor(x).float().reshape(1, -1)
+            if extra_pad > 0:
+                xh = torch.nn.functional.pad(xh, (extra_pad, extra_pad))
+            if center:
+                xh = torch.nn.functional.pad(xh, (n_fft // 2, n_fft // 2), mode=pad_mode)
+            xp = ttnn.as_tensor(xh.contiguous(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=DRAM)
+        else:
+            # Device input (host-free): the boundary pad is pure data movement done
+            # on-device — constant `extra_pad` via a zero concat and the center reflect
+            # pad via slice + anti-identity matmul (row reversal). No host round-trip.
+            work = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (1, -1))
+            if extra_pad > 0:
+                z = ttnn.zeros((1, extra_pad), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+                work = ttnn.concat([z, work, z], dim=1, memory_config=DRAM)
+            if center:
+                if pad_mode != "reflect":
+                    raise RuntimeError(f"on-device center pad supports reflect only (got {pad_mode})")
+                p = n_fft // 2
+                Lw = int(work.shape[1])
+                le = ttnn.to_layout(ttnn.slice(work, [0, 1], [1, p + 1]), ttnn.TILE_LAYOUT)
+                re = ttnn.to_layout(ttnn.slice(work, [0, Lw - p - 1], [1, Lw - 1]), ttnn.TILE_LAYOUT)
+                le = ttnn.to_layout(ttnn.matmul(le, Jrev, compute_kernel_config=compute_config, memory_config=DRAM), ttnn.ROW_MAJOR_LAYOUT)
+                re = ttnn.to_layout(ttnn.matmul(re, Jrev, compute_kernel_config=compute_config, memory_config=DRAM), ttnn.ROW_MAJOR_LAYOUT)
+                work = ttnn.concat([le, work, re], dim=1, memory_config=DRAM)
+            xp = work
 
         L = int(xp.shape[1])
         n_frames = 1 + (L - n_fft) // hop

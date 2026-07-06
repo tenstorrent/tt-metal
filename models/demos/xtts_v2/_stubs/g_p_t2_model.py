@@ -49,13 +49,13 @@ def build(device, torch_module):
 
     block_forwards = [build_gpt2_block(device, blk) for blk in m.h]
 
-    lnf_w = ttnn.from_torch(
+    lnf_w = ttnn.as_tensor(
         m.ln_f.weight.detach().contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    lnf_b = ttnn.from_torch(
+    lnf_b = ttnn.as_tensor(
         m.ln_f.bias.detach().contiguous().to(torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     _mask_cache = {}
@@ -64,9 +64,9 @@ def build(device, torch_module):
         if t not in _mask_cache:
             # [1, 1, T, T] additive bias: 0 on/below diagonal, _MASK_NEG above.
             m_t = torch.triu(torch.full((t, t), _MASK_NEG, dtype=torch.float32), diagonal=1)
-            _mask_cache[t] = ttnn.from_torch(
+            _mask_cache[t] = ttnn.as_tensor(
                 m_t.reshape(1, 1, t, t).to(torch.bfloat16),
-                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         return _mask_cache[t]
 

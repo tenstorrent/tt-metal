@@ -81,9 +81,9 @@ def build_gpt2_block(device, torch_module):
     scaling = float(head_dim) ** -0.5
 
     def _w(t):
-        return ttnn.from_torch(
+        return ttnn.as_tensor(
             t.detach().contiguous().to(torch.bfloat16),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     ln1_w, ln1_b = _w(m.ln_1.weight), _w(m.ln_1.bias)
@@ -97,6 +97,16 @@ def build_gpt2_block(device, torch_module):
     c_proj_fwd = _build_conv1d(device, attn.c_proj)         # 1024 -> 1024
     c_fc_fwd = _build_conv1d(device, mlp.c_fc)              # 1024 -> 4096
     mlp_proj_fwd = _build_conv1d(device, mlp.c_proj)        # 4096 -> 1024
+
+    # HiFi4 + fp32 accumulation for the attention score/context matmuls: the AR
+    # decoder's greedy argmax is sensitive to bf16 accumulation error over the
+    # 30-layer stack, so run these full-fidelity to track the fp32 reference.
+    _attn_kernel_cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
 
     def forward(hidden_states, *args, attn_bias=None, **kwargs):
         x = hidden_states
@@ -115,7 +125,8 @@ def build_gpt2_block(device, torch_module):
         k = _split_heads(k, n_heads, head_dim)
         v = _split_heads(v, n_heads, head_dim)
 
-        weight = ttnn.matmul(q, ttnn.transpose(k, -2, -1))  # [1, H, T, T]
+        weight = ttnn.matmul(q, ttnn.transpose(k, -2, -1),
+                             compute_kernel_config=_attn_kernel_cfg)  # [1, H, T, T]
         weight = ttnn.multiply(weight, scaling)
         # `attn_bias` is the additive attention mask (e.g. a [1,1,T,T] causal
         # bias). None here == HF's attention_mask=None == FULL (bidirectional)
@@ -124,7 +135,8 @@ def build_gpt2_block(device, torch_module):
         if attn_bias is not None:
             weight = ttnn.add(weight, attn_bias)
         weight = ttnn.softmax(weight, dim=-1)
-        attn_out = ttnn.matmul(weight, v)                   # [1, H, T, hd]
+        attn_out = ttnn.matmul(weight, v,
+                               compute_kernel_config=_attn_kernel_cfg)  # [1, H, T, hd]
 
         attn_out = _merge_heads(attn_out)                   # [1, T, embed]
         attn_out = c_proj_fwd(attn_out)

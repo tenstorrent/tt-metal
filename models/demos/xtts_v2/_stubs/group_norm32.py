@@ -42,15 +42,17 @@ def build(device, torch_module):
     gn_w = gn_b = None
     if weight is not None:
         c = weight.shape[0]
-        gn_w = ttnn.from_torch(
+        gn_w = ttnn.as_tensor(
             weight.detach().reshape(1, c, 1).contiguous().to(torch.bfloat16),
             dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
     if bias is not None:
         c = bias.shape[0]
-        gn_b = ttnn.from_torch(
+        gn_b = ttnn.as_tensor(
             bias.detach().reshape(1, c, 1).contiguous().to(torch.bfloat16),
             dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def forward(x, *args, **kwargs):

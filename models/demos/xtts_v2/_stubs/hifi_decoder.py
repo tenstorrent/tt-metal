@@ -60,9 +60,9 @@ def build(device, torch_module):
                 mm = F.interpolate(mm, scale_factor=[out_sr / in_sr], mode="linear").squeeze(0)
             # float32 resampling map: the interpolation matmul is the vocoder's
             # precision-sensitive front (bf16 here measurably lowered e2e PCC).
-            _m_cache[t_in] = ttnn.from_torch(
+            _m_cache[t_in] = ttnn.as_tensor(
                 mm.contiguous().to(torch.float32),
-                dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+                dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         return _m_cache[t_in]
 

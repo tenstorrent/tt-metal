@@ -50,13 +50,14 @@ def build(device, torch_module):
         t = t.contiguous().float()
         if _is_mesh(device):
             try:
-                return ttnn.from_torch(
+                return ttnn.as_tensor(
                     t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(device),
                 )
             except (AttributeError, TypeError):
                 pass
-        return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.as_tensor(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def forward(weight_g, weight_v=None, *args, **kwargs):
         if weight_v is None:

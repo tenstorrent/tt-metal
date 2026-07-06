@@ -47,7 +47,7 @@ def build(device, torch_module):
     )
 
     def f32(t):
-        return ttnn.from_torch(t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.as_tensor(t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     w0 = f32(lin0.weight.detach().t())                         # [c, c//r]
     b0 = f32(lin0.bias.detach().reshape(1, 1, 1, -1))
@@ -56,7 +56,7 @@ def build(device, torch_module):
 
     def forward(x, *args, **kwargs):
         if not isinstance(x, ttnn.Tensor):
-            x = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            x = ttnn.as_tensor(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if x.get_dtype() != ttnn.float32:
             x = ttnn.typecast(x, ttnn.float32)
         c = int(x.shape[1])

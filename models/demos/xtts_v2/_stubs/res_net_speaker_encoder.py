@@ -73,7 +73,7 @@ def build(device, torch_module):
     ACT = ttnn.bfloat16
 
     def f32(t):
-        return ttnn.from_torch(t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.as_tensor(t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # ---- mel front-end: graduated leaf stubs (PreEmphasis -> MelSpectrogram -> InstanceNorm1d) ----
     pre_emph = _b_pre(device, se.torch_spec[0])
@@ -87,13 +87,13 @@ def build(device, torch_module):
         return a, b  # [C]
 
     def conv_w(W):
-        return ttnn.from_torch(W.contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        return ttnn.as_tensor(W.contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def conv_b(b):
-        return ttnn.from_torch(b.reshape(1, 1, 1, -1).contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        return ttnn.as_tensor(b.reshape(1, 1, 1, -1).contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def affine_t(a):
-        return ttnn.from_torch(a.reshape(1, 1, 1, -1).contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.as_tensor(a.reshape(1, 1, 1, -1).contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # ---- conv1 (has bias) -> relu -> bn1 (affine, relu intervenes so NOT folded) ----
     c1_w = conv_w(se.conv1.weight.detach().float())
@@ -113,20 +113,20 @@ def build(device, torch_module):
     a2 = att[2]  # BatchNorm1d(128)
     a3 = att[3]  # Conv1d(128,2048,1)
     att0_w = f32(a0.weight.detach().squeeze(-1).t())      # [2048,128]
-    att0_b = ttnn.from_torch(a0.bias.detach().reshape(1, 1, -1).contiguous().float(),
-                             dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    att0_b = ttnn.as_tensor(a0.bias.detach().reshape(1, 1, -1).contiguous().float(),
+                             dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     att_bn_a, att_bn_b = bn_scale_shift(a2)
-    att_bn_at = ttnn.from_torch(att_bn_a.reshape(1, 1, -1).contiguous().float(),
-                                dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    att_bn_bt = ttnn.from_torch(att_bn_b.reshape(1, 1, -1).contiguous().float(),
-                                dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    att_bn_at = ttnn.as_tensor(att_bn_a.reshape(1, 1, -1).contiguous().float(),
+                                dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    att_bn_bt = ttnn.as_tensor(att_bn_b.reshape(1, 1, -1).contiguous().float(),
+                                dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     att3_w = f32(a3.weight.detach().squeeze(-1).t())      # [128,2048]
-    att3_b = ttnn.from_torch(a3.bias.detach().reshape(1, 1, -1).contiguous().float(),
-                             dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    att3_b = ttnn.as_tensor(a3.bias.detach().reshape(1, 1, -1).contiguous().float(),
+                             dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     fc_w = f32(se.fc.weight.detach().t())                 # [4096,512]
-    fc_b = ttnn.from_torch(se.fc.bias.detach().reshape(1, 1, -1).contiguous().float(),
-                           dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    fc_b = ttnn.as_tensor(se.fc.bias.detach().reshape(1, 1, -1).contiguous().float(),
+                           dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # ---------------- conv helper ----------------
     def run_conv(x_nhwc, spec, H, W):
@@ -165,7 +165,7 @@ def build(device, torch_module):
     # ---------------- forward ----------------
     def forward(x, *args, **kwargs):
         if not isinstance(x, ttnn.Tensor):
-            x = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            x = ttnn.as_tensor(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if x.get_dtype() != ttnn.float32:
             x = ttnn.typecast(x, ttnn.float32)
         # (N,1,T) -> (1,T)
