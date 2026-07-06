@@ -81,7 +81,7 @@ def betas_for_alpha_bar(
         t1 = i / num_diffusion_timesteps
         t2 = (i + 1) / num_diffusion_timesteps
         betas.append(min(1 - alpha_bar_fn(t2) / alpha_bar_fn(t1), max_beta))
-    return torch.tensor(betas, dtype=torch.float32)
+    return torch.tensor(betas, dtype=torch.float32, device="cpu")
 
 
 # Copied from diffusers.schedulers.scheduling_ddim.rescale_zero_terminal_snr
