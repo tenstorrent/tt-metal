@@ -31,7 +31,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight
-from models.common.modules.mlp.mlp_1d import MLP1D
+from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
 from models.experimental.acestep.tt.attention import AceStepAttention, AceStepAttentionConfig
 
@@ -144,7 +144,27 @@ class AceStepDiTLayer(LightweightModule):
                 )
             )
 
-        self.mlp = MLP1D(w1=cfg.w1, w2=cfg.w2, w3=cfg.w3)
+        # HiFi4 + fp32 accumulation for the MLP matmuls: the DiT-loop feed-forward defaults to
+        # HiFi2+bf16-acc, whose per-step error is amplified ~6x by CFG guidance_scale and accumulated
+        # over the denoise steps. Higher fidelity here (external config, no tt_dit edit) preserves e2e
+        # PCC under CFG. Matches the attention/dit_model/dit_output HiFi4 fp32-acc configs.
+        _mlp_ckc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.mlp = MLP1D.from_config(
+            MLP1DConfig(
+                w1=cfg.w1,
+                w2=cfg.w2,
+                w3=cfg.w3,
+                ff1_3_compute_kernel_cfg=_mlp_ckc,
+                ff2_compute_kernel_cfg=_mlp_ckc,
+                decode_ff1_3_compute_kernel_cfg=_mlp_ckc,
+                decode_ff2_compute_kernel_cfg=_mlp_ckc,
+            )
+        )
 
     @classmethod
     def from_config(cls, config: AceStepDiTLayerConfig):
