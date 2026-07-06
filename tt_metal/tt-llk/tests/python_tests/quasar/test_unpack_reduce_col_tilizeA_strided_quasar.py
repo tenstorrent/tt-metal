@@ -227,7 +227,6 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
             tile_count_B=1,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
-            result_int8_negative_zero_as_min=(formats.output_format == DataFormat.Int8),
         ),
         unpack_to_dest=False,
         dest_acc=dest_acc,

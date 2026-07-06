@@ -114,19 +114,6 @@ def saturate_integer(result: torch.Tensor, data_format, torch_format) -> torch.T
     return result.to(torch_format)
 
 
-def pack_integer_output(
-    result: torch.Tensor, data_format, torch_format
-) -> torch.Tensor:
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
-        values = result.to(torch.int64)
-        if data_format == DataFormat.Int8:
-            return ((values + 128) % 256 - 128).to(torch_format)
-        if data_format == DataFormat.UInt8:
-            return (values % 256).to(torch_format)
-
-    return saturate_integer(result, data_format, torch_format)
-
-
 def apply_l1_accumulation(
     partials: list[torch.Tensor],
     data_format: DataFormat,
@@ -1688,7 +1675,7 @@ class DataCopyGolden:
         # Ensure result is in correct format if not already
         if result.dtype != torch_format:
             if data_format.is_integer():
-                result = pack_integer_output(result, data_format, torch_format)
+                result = saturate_integer(result, data_format, torch_format)
             else:
                 result = result.to(torch_format)
 
@@ -1865,7 +1852,7 @@ class PackGolden:
 
         if result.dtype != torch_format:
             if data_format.is_integer():
-                result = pack_integer_output(result, data_format, torch_format)
+                result = saturate_integer(result, data_format, torch_format)
             else:
                 result = result.to(torch_format)
 
