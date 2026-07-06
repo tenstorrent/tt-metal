@@ -201,7 +201,8 @@ def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[Causal
 
 def resolve_warmup_steps(training_cfg: TrainingConfig, total_steps: int) -> int:
     """Absolute warmup length: explicit `warmup_steps` wins, else `warmup_ratio` of the schedule."""
-    return training_cfg.warmup_steps or round(total_steps * training_cfg.warmup_ratio)
+    warmup = training_cfg.warmup_steps or round(total_steps * training_cfg.warmup_ratio)
+    return max(0, min(warmup, total_steps))
 
 
 def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, total_steps: int) -> Callable[[int], float]:
@@ -524,7 +525,9 @@ def run_training(
     if training_cfg.max_steps > 0:
         caps.append(training_cfg.max_steps)
     if training_cfg.num_epochs > 0:
-        caps.append(max(1, int(training_cfg.num_epochs * steps_per_epoch)))
+        # Round up: flooring would stop short of completing the requested epochs
+        # (e.g. 1 epoch at 10.9 steps/epoch needs 11 steps, not 10).
+        caps.append(max(1, math.ceil(training_cfg.num_epochs * steps_per_epoch)))
     if not caps:
         raise ValueError("No stop condition: set max_steps > 0 or num_epochs > 0 in training_config.")
     effective_max_steps = min(caps)

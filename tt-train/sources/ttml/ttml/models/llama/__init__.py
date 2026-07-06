@@ -188,9 +188,10 @@ class Llama(AbstractModuleBase):
         )
 
         # Depth-scaled init for the residual-writing projections (attention out-proj,
-        # MLP down-proj): every block adds into the residual stream, so without scaling
-        # its variance grows ~sqrt(num_layers) with depth. Matches lit-gpt/TinyLlama.
-        residual_proj_init = ttml.init.normal(0.0, 1.0 / (sqrt(config.hidden_size) * config.num_hidden_layers))
+        # MLP down-proj): every block adds into the residual stream, so its variance
+        # grows ~linearly with depth (std ~sqrt(num_layers)). Scale the projection std
+        # by 1/sqrt(num_layers) to keep the residual-stream variance depth-independent.
+        residual_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(config.hidden_size * config.num_hidden_layers))
 
         # Transformer blocks (ModuleList auto-registers all blocks)
         self.blocks = ModuleList(
