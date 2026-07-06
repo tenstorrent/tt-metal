@@ -257,6 +257,16 @@ def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, 
         k_chunk_size=128,
         exp_approx_mode=False,
     )
+    # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed.
+    # Matches the non-chunked prefill SDPA so long-context (>32768) prefill keeps
+    # the same accumulation precision as the short-seq path.
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        tt_q.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
 
     # Page table row for this user: [1, num_pages], int32, ROW_MAJOR.
     num_pages = page_table.shape[-1]
@@ -287,6 +297,7 @@ def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, 
             chunk_start_idx=start,
             scale=scale,
             program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
         )
         q_chunk.deallocate(True)
         if pad:
@@ -334,6 +345,15 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
     # older key is harmless — sliding_window_size masks it out.
     hist = ((sliding_window + 31) // 32) * 32
     stride = PREFILL_SLIDING_CHUNK_SIZE
+    # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed,
+    # matching the non-chunked prefill SDPA on the long-context (>32768) path.
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        tt_q.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
 
     outs = []
     start = 0
@@ -351,6 +371,7 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
             is_causal=True,
             scale=scale,
             sliding_window_size=sliding_window,
+            compute_kernel_config=compute_kernel_config,
         )
         q_slice.deallocate(True)
         k_slice.deallocate(True)
