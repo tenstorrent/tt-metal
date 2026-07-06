@@ -163,10 +163,9 @@ Tensor reduce(
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
 
-    // External-negate fallback for the H step when the fused-negate kernel's
-    // CBs (reduce_h_neg.cpp uses Ht * lcm(Wt_g1, Wt_g2) tiles for both c_4 and
-    // c_5) won't fit in L1.  Computes -reduce(MAX, H, -x) using the regular
-    // reduce kernel.
+    // External-negate fallback for the H step: the fused-negate compute kernel is unported on Quasar
+    // (negative_tile stub) and removed, so MIN H-reduce always takes this path. Computes
+    // -reduce(MAX, H, -x) using the regular reduce kernel.
     auto h_reduce_with_external_negate =
         [&](const Tensor& h_input, float h_scaler, float h_post_mul, tt::tt_metal::DataType h_out_dtype) {
             // Keep neg_input in h_input's memory config (pass std::nullopt) so the
