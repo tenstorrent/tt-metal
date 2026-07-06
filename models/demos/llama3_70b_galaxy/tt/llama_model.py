@@ -614,11 +614,16 @@ class TtTransformer(LightweightModule):
             toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[output_device_idx]).float()[0, 0, 0, :1]
             toks_list.append(toks)
 
-        if tt_out_logits_saved is not None:
-            # make sure tt_out_logits_saved is mutable
-            logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[output_device_idx]).float()[0, 0, :, :]
-
-            tt_out_logits_saved.copy_(logits_saved)
+            # Save each user's logits INSIDE the loop. Previously this was done once
+            # after the loop and captured only the last iteration's tt_logits, so in a
+            # batched prefill every other user's row in the caller's host buffer stayed
+            # zero-initialized. When logprobs are requested the batch is host-sampled
+            # from those rows, so the affected users got a garbage token (argmax over a
+            # uniform vector) and -log(vocab) logprobs. tt_out_logits_saved has one row
+            # per split entry; row i corresponds to x_split[i] (slot i for batched).
+            if tt_out_logits_saved is not None:
+                logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[output_device_idx]).float()[0, 0, :, :]
+                tt_out_logits_saved[i : i + 1].copy_(logits_saved)
 
         return toks_list if isinstance(last_token_idx, list) else toks
 
