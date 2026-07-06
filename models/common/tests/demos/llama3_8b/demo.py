@@ -348,6 +348,7 @@ def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size, ca
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
         )
+        log_generated_text(prompts, result.generated_token_ids, tokenizer)
 
         logger.info(
             f"Performance — TTFT: {result.ttft_ms:.1f}ms, "
@@ -355,7 +356,6 @@ def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size, ca
             f"tok/s: {result.tok_s:.1f}, "
             f"decode latency: {result.decode_latency_mean_ms:.2f}ms"
         )
-        log_generated_text(prompts, result.generated_token_ids, tokenizer)
 
         if expected:
             targets = result.meets_target(expected, PERF_TOLERANCE)
