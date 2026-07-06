@@ -108,7 +108,8 @@ void kernel_main() {
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    constexpr auto dispatch_table_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto dispatch_table_args =
+        TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
 
 #ifdef IS_TILE_LAYOUT
     constexpr uint32_t writer_extra_args_base = dispatch_table_args.next_compile_time_args_offset();

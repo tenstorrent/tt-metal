@@ -20,6 +20,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -40,12 +41,11 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 
-def eltwise_dimensions_dest_sync(dest_acc_modes):
+def _eltwise_dest_acc_sync(dest_acc_modes):
     return [
-        (dest_sync, dims, dest_acc)
+        (dest_sync, dest_acc)
         for dest_sync in (DestSync.Half, DestSync.Full)
         for dest_acc in dest_acc_modes
-        for dims in generate_unary_input_dimensions(dest_acc, dest_sync)
     ]
 
 
@@ -57,13 +57,12 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
 _TILE_SHAPE = construct_tile_shape()
 
 
-def valid_acc_to_dest(dest_sync_dims_dest_acc) -> list:
+def valid_acc_to_dest(input_dimensions) -> list:
     """Pick the acc_to_dest modes worth running for a given input size.
 
     acc_to_dest=True accumulates `get_num_tiles_per_accumulation(True)` result tiles into
     dest, so it only makes sense when the tile count is a non-zero multiple of that.
     """
-    _, input_dimensions, _ = dest_sync_dims_dest_acc
     total_tiles = (
         input_dimensions[0] * input_dimensions[1]
     ) // _TILE_SHAPE.total_tile_size()
@@ -116,10 +115,15 @@ ELTWISE_FORMATS = input_output_formats(
         if not formats.input_format.is_mx_format()
         else [ImpliedMathFormat.Yes]
     ),
-    dest_sync_dims_dest_acc=lambda formats: (
-        eltwise_dimensions_dest_sync((DestAccumulation.Yes,))
+    dest_sync_dest_acc=lambda formats: (
+        _eltwise_dest_acc_sync((DestAccumulation.Yes,))
         if formats.input_format == DataFormat.Int8
-        else eltwise_dimensions_dest_sync((DestAccumulation.No,))
+        else _eltwise_dest_acc_sync((DestAccumulation.No,))
+    ),
+    input_dimensions=runtime(
+        lambda dest_sync_dest_acc: generate_unary_input_dimensions(
+            dest_sync_dest_acc[1], dest_sync_dest_acc[0]
+        )
     ),
     acc_to_dest=valid_acc_to_dest,
     num_faces=[4],
@@ -129,12 +133,13 @@ def test_eltwise_binary(
     mathop,
     math_fidelity,
     implied_math_format,
-    dest_sync_dims_dest_acc,
+    dest_sync_dest_acc,
+    input_dimensions,
     acc_to_dest,
     num_faces,
     boot_mode=BootMode.DEFAULT,
 ):
-    dest_sync_mode, input_dimensions, dest_acc = dest_sync_dims_dest_acc
+    dest_sync_mode, dest_acc = dest_sync_dest_acc
 
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
 

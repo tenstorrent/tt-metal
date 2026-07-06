@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -422,7 +422,42 @@ def pytest_ignore_collect(collection_path, config):
     return None
 
 
+def _collapse_runtime_only_variants(config, items):
+    """Keep only one test per unique compile key, dropping runtime only duplicates.
+
+    Tests decorated with ``@parametrize`` that use ``runtime()`` markers carry a
+    ``compile_key_fn`` on their ``runtime_axes`` pytest mark.  That function extracts
+    the compile time subset of each item's params.  Items that share the same compile
+    key produce identical ELFs, so only the first is kept for the compile-producer pass.
+    """
+    from helpers.param_config import RUNTIME_AXES_MARK
+
+    seen = set()
+    keep = []
+    deselected = []
+    for item in items:
+        marker = item.get_closest_marker(RUNTIME_AXES_MARK)
+        if marker is None:
+            keep.append(item)
+            continue
+        compile_key_fn = marker.kwargs["compile_key_fn"]
+        key = (item.nodeid.split("[")[0], repr(compile_key_fn(item.callspec.params)))
+        if key not in seen:
+            seen.add(key)
+            keep.append(item)
+        else:
+            deselected.append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = keep
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
+        _collapse_runtime_only_variants(config, items)
+
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:

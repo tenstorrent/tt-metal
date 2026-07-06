@@ -351,8 +351,8 @@ inline void cache_exponential_section_sizes_in_gprs(const std::uint32_t num_face
 inline void set_packer_strides(const std::uint32_t pack_src_format)
 {
     std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
-    std::uint32_t y_stride = FACE_R_DIM * x_stride;
-    std::uint32_t z_stride = FACE_C_DIM * y_stride;
+    std::uint32_t y_stride = FACE_C_DIM * x_stride; // Y steps across a row of FACE_C_DIM datums (== FACE_R_DIM for square faces)
+    std::uint32_t z_stride = FACE_R_DIM * y_stride; // Z steps a full face of FACE_R_DIM rows (== FACE_C_DIM for square faces)
     std::uint32_t w_stride = TILE_NUM_FACES * z_stride;
 
     std::uint32_t xy_stride = (x_stride << PCK0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT) | (y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT);
@@ -560,14 +560,18 @@ inline void reconfigure_exp_threshold(const std::uint32_t pack_dst_format)
         }
     }
 
+    static_assert(
+        THCON_SEC0_REG1_Exp_threshold_en_ADDR32 == THCON_SEC0_REG1_Exp_threshold_ADDR32,
+        "THCON_SEC0_REG1_Exp_threshold_en and Exp_threshold must share ADDR32 for combined RMW");
+
     constexpr std::uint32_t THRESHOLD_RMW_MASK = THCON_SEC0_REG1_Exp_threshold_en_MASK | THCON_SEC0_REG1_Exp_threshold_MASK;
 
     std::uint32_t threshold_rmw_data = (threshold << THCON_SEC0_REG1_Exp_threshold_SHAMT) | (enable << THCON_SEC0_REG1_Exp_threshold_en_SHAMT);
 
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 3, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
-    cfg_reg_rmw_tensix<THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 3, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 3, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
-    cfg_reg_rmw_tensix<THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 3, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG1_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG8_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG8_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
 }
 
 // Forward declaration: defined later in this file. Needed here so that the non-dependent call
@@ -809,7 +813,13 @@ inline void program_packer_destination(std::uint32_t addr, bool restore = true)
     TT_SETDMAREG(0, LOWER_HALFWORD(addr), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
     TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
 
-    // TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);
+    // No STALLWAIT is needed before this config write (unlike the BH counterpart):
+    // REG2FLOP executes on ThCon, in program order after the SETDMAREG GPR writes above, so it reads the
+    // freshly written OUTPUT_ADDR without a fence (BH uses WRCFG on the separate Config Unit, hence its
+    // STALL_CFG/THCON guard). No packer-drain (STALL_THCON/PACK) is needed either: the pack thread issues
+    // its instruction stream in order, so each tile's PACR has already started -- and latched L1_Dest_addr,
+    // which is sampled at PACR start -- before the next call's REG2FLOP reprograms it. The Flush PACR below
+    // drains the previous pack's output buffers and arms a fresh start address.
     TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR);
 
     TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 0); // pack flush
@@ -827,6 +837,8 @@ inline void program_packer_untilized_destination(const std::uint32_t addr, const
 
     if constexpr (diagonal)
     {
+        // Diagonal untilize drives only packers 0 and 1; the offset2/offset3 + packer-2/3 (SEC1) lines below are
+        // intentionally disabled and kept as reference for a possible 4-packer extension.
         const std::uint32_t block_size  = SCALE_DATUM_SIZE(pack_dst_format, FACE_C_DIM);
         constexpr std::uint32_t offset0 = 0;
         const std::uint32_t offset1     = (1 * block_size) / 16;

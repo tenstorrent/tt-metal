@@ -76,7 +76,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_CoreSubsetWriteToBuffer_SanityCheck) {
     EXPECT_DEATH(
         experimental::core_subset_write::WriteToBuffer(
             *buffer,
-            tt::stl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(uint32_t)),
+            ttsl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(uint32_t)),
             logical_core_filter),
         ".*Use-After-Free.*core_subset_write.*");
 }

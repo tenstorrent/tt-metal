@@ -156,7 +156,7 @@ TensorSpec::TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_la
 }
 
 TensorSpec TensorSpec::sharded_across_dims(
-    tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
+    ttsl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
     Shape shard_shape = padded_shape();
     for (auto dim : dims) {
         shard_shape[dim] = 1;
@@ -166,7 +166,7 @@ TensorSpec TensorSpec::sharded_across_dims(
 }
 
 TensorSpec TensorSpec::sharded_across_dims_except(
-    tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
+    ttsl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
     const auto& padded_shape = this->padded_shape();
     Shape shard_shape = Shape().to_rank(padded_shape.rank());
     for (auto dim : dims) {
