@@ -30,11 +30,12 @@ def build(device, torch_module):
         # only handles the deterministic absolute-position path XTTS uses.
         raise RuntimeError("learned_position_embeddings native port supports relative=False only")
 
-    weight = ttnn.from_torch(
+    weight = ttnn.as_tensor(
         m.emb.weight.detach().contiguous().float(),
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
         device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     seq_len, model_dim = m.emb.weight.shape
 

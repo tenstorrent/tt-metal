@@ -36,15 +36,19 @@ def build(device, torch_module):
     import torch
 
     m = torch_module
-    if hasattr(m, "parametrizations") and "weight" in m.parametrizations:
+    parametrized = hasattr(m, "parametrizations") and "weight" in m.parametrizations
+    w_dev = None
+    if parametrized:
         # Live weight-norm: reconstruct the conv weight via the parametrization_list
         # leaf instead of reading m.weight. It returns the same [C_in, C_out, k]
-        # weight m.weight would materialize, so this is numerically identical.
+        # weight m.weight would materialize, and stays ON DEVICE (no host round-trip),
+        # so its output genuinely feeds the taps below.
         _pl_fwd = _build_parametrization_list(device, m.parametrizations.weight)
-        w = ttnn.to_torch(_pl_fwd()).detach().float()   # [C_in, C_out, k]
+        w_dev = _pl_fwd()                        # ttnn [C_in, C_out, k]
+        c_in, c_out, k = (int(d) for d in w_dev.shape)
     else:
-        w = m.weight.detach().float()          # [C_in, C_out, k]
-    c_in, c_out, k = w.shape
+        w = m.weight.detach().float()            # [C_in, C_out, k]
+        c_in, c_out, k = w.shape
     stride = int(m.stride[0])
     pad = int(m.padding[0])
     out_pad = int(m.output_padding[0])
@@ -63,20 +67,36 @@ def build(device, torch_module):
         packer_l1_acc=True,
     )
 
-    # Conv1d-equivalent kernel: flip along k, transpose (in,out) -> [out, in, k].
-    w_conv = torch.flip(w, dims=[-1]).permute(1, 0, 2).contiguous()   # [C_out, C_in, k]
-    taps = [
-        ttnn.from_torch(
-            w_conv[:, :, tap].t().contiguous(), dtype=ttnn.float32,   # [C_in, C_out]
-            layout=ttnn.TILE_LAYOUT, device=device,
-        )
-        for tap in range(k)
-    ]
+    # Conv1d-equivalent kernel: the ConvTranspose weight [C_in, C_out, k] flipped
+    # along k with (in,out) transposed means tap `t` is exactly w[:, :, k-1-t]
+    # (a [C_in, C_out] slice — no transpose needed).
+    if parametrized:
+        # Extract taps ON DEVICE from the resident reconstructed weight (host-free):
+        # permute k to the front, then slice one tap at a time.
+        wp = ttnn.permute(w_dev, (2, 0, 1))              # [k, C_in, C_out]
+        taps = []
+        for tap in range(k):
+            idx = k - 1 - tap
+            sl = ttnn.slice(wp, [idx, 0, 0], [idx + 1, c_in, c_out])  # [1, C_in, C_out]
+            sl = ttnn.reshape(sl, [c_in, c_out])
+            taps.append(ttnn.to_layout(sl, ttnn.TILE_LAYOUT))
+        ttnn.deallocate(wp)
+    else:
+        w_conv = torch.flip(w, dims=[-1]).permute(1, 0, 2).contiguous()   # [C_out, C_in, k]
+        taps = [
+            ttnn.as_tensor(
+                w_conv[:, :, tap].t().contiguous(), dtype=ttnn.float32,   # [C_in, C_out]
+                layout=ttnn.TILE_LAYOUT, device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for tap in range(k)
+        ]
     bias = None
     if m.bias is not None:
-        bias = ttnn.from_torch(
+        bias = ttnn.as_tensor(
             m.bias.detach().reshape(1, 1, c_out).contiguous().float(),
             dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _zero_stuff(x):

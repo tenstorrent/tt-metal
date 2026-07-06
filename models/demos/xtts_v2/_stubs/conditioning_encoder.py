@@ -34,14 +34,16 @@ def build(device, torch_module):
     m = torch_module.float()
 
     # 1x1 init conv weight -> [C_in=80, C_out=1024] (transpose of [C_out,C_in,1]).
-    init_w = ttnn.from_torch(
+    init_w = ttnn.as_tensor(
         m.init.weight.detach().squeeze(-1).t().contiguous().to(torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     c_out = m.init.weight.shape[0]
-    init_b = ttnn.from_torch(
+    init_b = ttnn.as_tensor(
         m.init.bias.detach().reshape(1, 1, c_out).contiguous().to(torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     # Reuse the native AttentionBlock port for each block in the Sequential.
