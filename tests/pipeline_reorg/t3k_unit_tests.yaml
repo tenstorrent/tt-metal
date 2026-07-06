@@ -74,7 +74,10 @@
   cmd: run_t3000_tttv2_fast_unit_tests
   skus:
     wh_llmbox:
-      timeout: 25
+      # TEMP (refs #47718): raised 25 -> 75 for a one-off COLD cache-regeneration run.
+      # With the rw mount the mlp failure no longer aborts the rest, so all 6 tttv2
+      # modules now run and each does a full torch->ttnn conversion + NFS write. REVERT to 25.
+      timeout: 75
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
   model-name: tttv2 modules

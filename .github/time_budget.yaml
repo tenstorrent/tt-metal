@@ -306,7 +306,9 @@ models:
     bh_p300: 8
     bh_quietbox_2: 30
   unit:
-    wh_llmbox: 100
+    # TEMP (refs #47718): raised 100 -> 150 to fit the one-off tttv2 cold cache-regen
+    # timeout bump (t3k_tttv2_fast_unit_tests 25 -> 75). REVERT to 100 with the mount/timeout.
+    wh_llmbox: 150
     wh_galaxy_perf: 10
   # Per-tier unit budgets. Consumed by the tiered model pipelines; the plain `unit`
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
