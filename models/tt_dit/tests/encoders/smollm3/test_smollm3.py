@@ -84,3 +84,49 @@ def test_smollm3_mlp(*, mesh_device):
     tt_x = tt_tensor.from_torch(x, device=mesh_device)
     tt_out = mlp.forward(tt_x)
     assert_quality(ref, tt_tensor.to_torch(tt_out), pcc=0.99)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
+@pytest.mark.parametrize("use_rope", [pytest.param(True, id="rope"), pytest.param(False, id="nope")])
+def test_smollm3_attention(*, mesh_device, use_rope):
+    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3Attention, SmolLM3Context, create_rope_tensors
+
+    torch.manual_seed(0)
+    hf = _load_hf_smollm3()
+    cfg = hf.config
+    seq = 128
+
+    # Pick a reference layer whose HF use_rope matches, then force it to be safe.
+    hf_attn = hf.model.layers[0].self_attn
+    hf_attn.use_rope = use_rope
+
+    ctx = SmolLM3Context(device=mesh_device, tp_axis=None, ccl_manager=None)
+    attn = SmolLM3Attention(
+        hidden_size=cfg.hidden_size,
+        num_heads=cfg.num_attention_heads,
+        num_key_value_heads=cfg.num_key_value_heads,
+        use_rope=use_rope,
+        ctx=ctx,
+    )
+    attn.load_torch_state_dict(hf_attn.state_dict())
+
+    head_dim = cfg.hidden_size // cfg.num_attention_heads
+    rope_theta = cfg.rope_parameters["rope_theta"]
+
+    x = torch.randn(1, seq, cfg.hidden_size)
+    cos, sin = create_rope_tensors(1, seq, head_dim, rope_theta)
+
+    # HF reference: pure-causal (all real tokens), so device is_causal path matches.
+    with torch.no_grad():
+        ref, _ = hf_attn(
+            x,
+            position_embeddings=(cos[:, 0], sin[:, 0]),  # HF expects (B, seq, head_dim)
+            attention_mask=None,
+        )
+
+    tt_x = tt_tensor.from_torch(x, device=mesh_device)
+    tt_cos = tt_tensor.from_torch(cos, device=mesh_device)
+    tt_sin = tt_tensor.from_torch(sin, device=mesh_device)
+    tt_out = attn.forward(tt_x, attention_bias=None, pos_embeds=(tt_cos, tt_sin))
+    assert_quality(ref, tt_tensor.to_torch(tt_out), pcc=0.99, relative_rmse=0.2)
