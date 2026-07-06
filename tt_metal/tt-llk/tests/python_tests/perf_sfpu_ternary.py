@@ -26,11 +26,10 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     MathOperation,
-    PerfRunType,
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
@@ -47,14 +46,6 @@ from helpers.test_variant_parameters import (
 
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", 2.0))[0]
 
-_RUN_TYPES = [
-    PerfRunType.L1_TO_L1,
-    PerfRunType.UNPACK_ISOLATE,
-    PerfRunType.MATH_ISOLATE,
-    PerfRunType.PACK_ISOLATE,
-    PerfRunType.L1_CONGESTION,
-]
-
 
 def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
     unpack_to_dest = (
@@ -68,7 +59,7 @@ def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
     configuration = PerfConfig(
         "sources/sfpu_ternary_perf.cpp",
         formats,
-        run_types=_RUN_TYPES,
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             SFPU_TERNARY_OP(mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),

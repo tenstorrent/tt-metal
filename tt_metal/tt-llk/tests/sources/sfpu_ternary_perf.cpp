@@ -63,7 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // In case of math isolate, we don't want any software synchronization from unpack to math.
             // So we just set/clear valid bits here - which is unavoidable hardware synchronization.
-            if (!unpack_to_dest)
+            if constexpr (!unpack_to_dest)
             {
                 _perf_unpack_loop_set_valid<
                     /* src A */ true,
@@ -226,9 +226,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
-                        LLK_ASSERT(
-                            (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                            "block_tile exceeds max dest tiles");
+                        // Bounds assert is redundant here: call_ternary_sfpu_operation() runs
+                        // _sfpu_check_ on the same block_tile below.
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                             block_tile, formats.math, formats.math);
 

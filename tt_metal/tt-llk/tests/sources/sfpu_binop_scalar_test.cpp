@@ -43,7 +43,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(0, 0, FACE_R_DIM, 4, UNPACK_FMT, UNPACK_FMT);
+    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, FACE_R_DIM, 4 /* num_faces */, UNPACK_FMT, UNPACK_FMT);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_A[0]), UNPACK_FMT, UNPACK_FMT);
 }
 
@@ -59,12 +60,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// The macro-based SFPU dispatch and the binop kernel below read these modes.
-// DST_ACCUM_MODE is a real constexpr (not the sfpu_operations.h #define hack),
-// so calculate_binop_with_scalar()'s RSUB branch applies the fp32->bf16 RNE
-// correction only for the 16-bit-dest (dest_acc:No) path, exactly like production.
-static constexpr ckernel::DstSync DST_SYNC_MODE = ckernel::DstSync::SyncHalf;
-static constexpr bool DST_ACCUM_MODE            = is_fp32_dest_acc_en;
+// calculate_binop_with_scalar() below reads DST_ACCUM_MODE: its RSUB branch applies
+// the fp32->bf16 RNE correction only for the 16-bit-dest (dest_acc:No) path, exactly
+// like production. It's a real constexpr, not the sfpu_operations.h #define hack.
+static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
@@ -80,7 +79,8 @@ void run_kernel(RUNTIME_PARAMETERS)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
         4 /* num_faces */, MATH_FMT);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(0, MATH_FMT, MATH_FMT);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+        0 /* dst_index */, MATH_FMT, MATH_FMT);
     // Reset dest addressing before the sfpi-based op so the dest RWC is at the
     // tile-0 base (matches the ternary/binary SFPU tests).
     _llk_math_eltwise_unary_datacopy_uninit_<BroadcastType::NONE, unpack_to_dest>();
@@ -94,7 +94,7 @@ void run_kernel(RUNTIME_PARAMETERS)
         is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
         (APPROX_MODE, SFPU_BINOP_MODE, 8 /* ITERATIONS */),
-        0,
+        0 /* dst_index */,
         VectorMode::RC,
         SFPU_UNARY_SCALAR);
 
@@ -118,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[0]));
+    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[0]));
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 

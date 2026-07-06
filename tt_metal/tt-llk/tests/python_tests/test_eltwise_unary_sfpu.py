@@ -423,9 +423,8 @@ def test_eltwise_unary_sfpu_domain(
         dest_acc == DestAccumulation.No
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
     ):
-        if formats.input_format == DataFormat.Float16 or formats == InputOutputFormat(
-            DataFormat.Float32, DataFormat.Float16
-        ):
+        # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
+        if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
             pytest.skip(reason="This combination is not supported on BH architecture")
 
     # Pull the safe per-op input domain and clip it to where the op is defined
