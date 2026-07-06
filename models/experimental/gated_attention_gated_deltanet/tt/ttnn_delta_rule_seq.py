@@ -354,21 +354,35 @@ def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None, eye_32=None
     batch = BH * NC
     L_flat = ttnn.reshape(L_mat_4d, [batch, C, C], memory_config=_cmc)
 
-    inv_blocks = []
+    diagonal_blocks = []
     for b in range(Ct):
         row_start = b * 32
         col_start = b * 32
         block = ttnn.slice(
             L_flat, [0, row_start, col_start], [batch, row_start + 32, col_start + 32], memory_config=_cmc
         )
-        block_inv = _solve_lower_triangular_ttnn(block, eye_32, mesh_device)
+        diagonal_blocks.append(block)  # [batch, 32, 32]
+
+    # The diagonal 32x32 blocks are independent. Batch them together so the Horner
+    # inverse runs once over [Ct*batch, 32, 32] instead of Ct separate 30-step solves.
+    stacked_blocks = ttnn.concat(diagonal_blocks, dim=0, memory_config=_cmc)
+    for block in diagonal_blocks:
         ttnn.deallocate(block)
+
+    stacked_inv = _solve_lower_triangular_ttnn(stacked_blocks, eye_32, mesh_device)
+    ttnn.deallocate(stacked_blocks)
+
+    inv_blocks = []
+    for b in range(Ct):
+        block_start = b * batch
+        block_inv = ttnn.slice(stacked_inv, [block_start, 0, 0], [block_start + batch, 32, 32], memory_config=_cmc)
         inv_blocks.append(block_inv)  # [batch, 32, 32]
 
     # L_flat is a view of L_mat_4d — do not deallocate.
     L_inv_flat = ttnn.concat(inv_blocks, dim=1, memory_config=_cmc)
     for blk in inv_blocks:
         ttnn.deallocate(blk)
+    ttnn.deallocate(stacked_inv)
 
     # L_inv_flat is a view — do not deallocate.
     L_inv_4d = ttnn.reshape(L_inv_flat, [BH, NC, C, 32], memory_config=_cmc)
@@ -708,6 +722,7 @@ def chunk_gated_delta_rule_seq(
         dl_exp_4d,
         L_inv_4d,
         initial_state=S0_tt,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn.deallocate(L_inv_4d)
 
