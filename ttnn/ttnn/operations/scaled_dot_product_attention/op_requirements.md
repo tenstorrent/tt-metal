@@ -72,7 +72,7 @@ Bullet 3 FAIL: golden responsible cells 10/140 below majority threshold.
 ```
 
 **Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
-### [ ] Refinement 1b — Mask application precision fix
+### [x] Refinement 1b — Mask application precision fix
 
 **Goal**: Fix the `mask_mode=custom` PCC ~0.96 issue that prevents 28 golden cells from passing. The mask `BinaryFpu<Add>` is applied correctly (PCC drops from 0.995 to 0.96 when mask is present) but produces systematic numerical error.
 

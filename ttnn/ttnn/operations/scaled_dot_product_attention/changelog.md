@@ -49,3 +49,14 @@
   - Double-pop of cb_attn_mask (fixed — root cause of both hang and mask precision issue)
   - S=8192 precision near-miss (not fixed — bf16 accumulation limit, PCC=0.9989, rms=0.059 just over 0.05 target). This is a precision near-miss, not a structural gap. Next lever: try `math_fidelity=HiFi4` with `math_approx_mode=True` for the exp, or increase intermediate precision.
 - **Tests added**: test_sdpa_refinement1b_mask_sync.py (19 tests covering mask application across multi-KV-block, multi-head, multi-batch, cross-attention, large-D, per-head mask, explicit-scale+mask, and sequential mask regression test)
+
+## Refinement 1b — Mask application precision fix
+- **Date**: 2026-07-06
+- **What was done**: Verified and hardened the mask application precision fix. The root cause (double-pop of `cb_attn_mask` corrupting CB state on subsequent KV block iterations) was already fixed in the prior Refinement 1b commit. This refinement confirms the fix is complete and adds comprehensive refinement-specific tests.
+  - Confirmed all `mask_mode=custom` golden cells pass at PCC ≥ 0.9999 (was PCC=0.9657 before the fix).
+  - No kernel changes needed — the fix from the prior commit (removing the redundant `cb_pop_front(cb_attn_mask, B_q * B_kv)` after the `BinaryFpu<Add>` eltwise chain that already pops internally) is correct and complete.
+  - Added 40 refinement-specific tests covering: causal mask across multi-KV blocks (up to S=4096), various mask patterns (causal, random, all-zero, all-negative), per-head mask (B,H,S_q,S_kv), mask + explicit scale, mask + auto-scale, cross-attention mask, single-block mask, multi-batch mask, sequential mask (no state leak), and deterministic all-ones input.
+- **Accuracy achieved**: PCC ≥ 0.995 on all mask shapes. PCC ≥ 0.9999 on most shapes. S=8192 has PCC=0.9989 (bf16 accumulation limit, not mask-related — this is a `mask_mode=none` failure, not `mask_mode=custom`).
+- **Golden test progress**: 138/140 SUPPORTED cells pass (same as prior phase — no regression). 2 failures are S=8192 `mask_mode=none` precision near-miss (PCC=0.9989, rms=0.059 vs target 0.05), unrelated to mask application. All 28 `mask_mode=custom` golden cells pass.
+- **Issues encountered**: None. The mask precision issue was fully resolved by the double-pop fix. No further kernel changes were needed.
+- **Tests added**: test_sdpa_refinement1b_mask_precision.py (40 tests covering causal mask precision across all shape variations, mask patterns, per-head mask, mask+scale combinations, single-block edge cases, sequential state-leak regression, and deterministic all-ones input)
