@@ -26,10 +26,6 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // [Quasar bring-up no-op — LLK issue filed] Companion to the bmm_large_block compute no-op (dest/pack
-    // deadlock). The interleaved-in0 matmul variant uses this in0-receiver; early-return so cores signal
-    // done. Remove with the LLK fix.
-    return;
     // in0 mcast args
     const uint32_t in0_mcast_sender_noc_x = get_arg(args::in0_mcast_sender_noc_x);
     const uint32_t in0_mcast_sender_noc_y = get_arg(args::in0_mcast_sender_noc_y);

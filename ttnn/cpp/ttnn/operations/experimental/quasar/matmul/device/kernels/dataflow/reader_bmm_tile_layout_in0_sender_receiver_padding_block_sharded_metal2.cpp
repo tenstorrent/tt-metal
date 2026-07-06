@@ -33,9 +33,6 @@
 #include "api/debug/ring_buffer.h"  // [DEBUG #47797] PREBARRIER counters (DPRINT MMIO path unsupported on craq-sim)
 
 void kernel_main() {
-    // [Quasar bring-up no-op — LLK issue filed] Companion to the bmm_large_block compute no-op (dest/pack
-    // deadlock). All four 2D-mcast matmul kernels early-return so cores signal done. Remove with the LLK fix.
-    return;
     constexpr bool core_has_output_block_work = (bool)get_arg(args::core_has_output_block_work);
     constexpr bool core_in_in0_receiver_mcast_grid = (bool)get_arg(args::core_in_in0_receiver_mcast_grid);
 
