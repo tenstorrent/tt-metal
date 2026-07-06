@@ -333,6 +333,16 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         rm_untilize_CB_size_group_1 = welford_outblk_tiles * in_single_tile_size;
     }
 
+    // Legacy + ROW_MAJOR input: the compute kernel tilizes the whole per-core group once and keeps it
+    // kept in cb_in_tilized (c_17) across all three passes (mean/variance/normalize), avoiding the
+    // per-pass DRAM re-read and re-tilize. Size that CB to the full padded group (matching the reader /
+    // compute num_out_blocks_padded * out_block accounting). c_0/c_29 stay one out-block.
+    uint32_t in_tilized_CB_size_group_1 = 0;
+    if (!use_welford && tilize_in) {
+        in_tilized_CB_size_group_1 =
+            groupnorm_tilized_group_tiles(block_ht_group_1, num_out_blocks, block_wt) * in_single_tile_size;
+    }
+
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
     std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_cols, num_virtual_rows, row_wise);
     std::set<CoreRange> all_cores_group_1_core_ranges;
@@ -812,6 +822,21 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             .page_size = in_single_tile_size,
         }}},
     });
+
+    // Legacy ROW_MAJOR input: tilized-group CB (c_17), holds the whole per-core group so the
+    // three passes reuse it without re-reading DRAM / re-tilizing.
+    if (in_tilized_CB_size_group_1 > 0) {
+        constexpr uint32_t in_tilized_cb_index = tt::CBIndex::c_17;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in_tilized_CB_size_group_1,
+            .core_ranges = all_cores_group_1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in_tilized_cb_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            }}},
+        });
+    }
 
     if (untilize_out) {
         constexpr uint32_t out_cb_index = tt::CBIndex::c_30;

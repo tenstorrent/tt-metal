@@ -9,6 +9,19 @@
 
 namespace ttnn::prim {
 
+uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_blocks, uint32_t block_wt) {
+    // Matches the kernel's num_out_blocks_padded computation (reader_mcast_*_unary_gn.cpp /
+    // compute/groupnorm.cpp): each out-block contributes out_block_h_normal * block_wt tiles, and a
+    // trailing remainder becomes one (or more) extra padded out-blocks of the normal size.
+    const uint32_t out_block_h_normal = block_ht / num_out_blocks;
+    uint32_t num_out_blocks_padded = num_out_blocks;
+    if (block_ht % num_out_blocks != 0) {
+        const uint32_t residual = block_ht - num_out_blocks * out_block_h_normal;
+        num_out_blocks_padded += residual / out_block_h_normal + 1;
+    }
+    return num_out_blocks_padded * out_block_h_normal * block_wt;
+}
+
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     if (n <= max_subblock_w) {
         return n;

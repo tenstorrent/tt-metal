@@ -136,6 +136,12 @@ void kernel_main() {
     // input cbs
     constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
     constexpr uint32_t cb_in_id = tt::CBIndex::c_29;
+#ifdef TILIZE_IN
+    // ROW_MAJOR interleaved input: dedicated CB that holds the whole per-core group tilized once and
+    // kept in L1 across all three GroupNorm passes (mean/variance/normalize). Keeping it separate
+    // from cb_in (c_29) leaves c_29 free for its gamma/beta scratch reuse in the normalization pass.
+    constexpr uint32_t cb_in_tilized_id = tt::CBIndex::c_17;
+#endif
     constexpr uint32_t cb_scaler_id = tt::CBIndex::c_2;
     constexpr uint32_t cb_scaler_global_id = tt::CBIndex::c_4;
     constexpr uint32_t cb_eps_id = tt::CBIndex::c_3;
@@ -225,6 +231,9 @@ void kernel_main() {
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_gamma(cb_gamma_id);
     CircularBuffer cb_in(cb_in_id);
+#ifdef TILIZE_IN
+    CircularBuffer cb_in_tilized(cb_in_tilized_id);
+#endif
     CircularBuffer cb_in0(cb_in0_id);
     CircularBuffer cb_inbeta(cb_inbeta_id);
     CircularBuffer cb_input_mask(cb_input_mask_id);
@@ -238,12 +247,12 @@ void kernel_main() {
     CircularBuffer cb_xmm(cb_xmm_id);
 
 #ifdef TILIZE_IN
-    // ROW_MAJOR interleaved input: the reader deposits row-major rows into cb_in0; each input
-    // block is tilized on-core into cb_in at its point of consumption, mirroring how the sharded
-    // kernel tilizes a ROW_MAJOR shard. The block is re-read (and re-tilized) once per GroupNorm
-    // pass, matching the interleaved reader's 3-pass design.
-    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_id);
-    constexpr uint32_t cb_input_id = cb_in_id;
+    // ROW_MAJOR interleaved input: the reader deposits row-major rows into cb_in0 once per group; the
+    // compute kernel tilizes them on-core into cb_in_tilized during the mean pass and keeps that whole
+    // group tilized in L1 so the variance and normalize passes reuse it without re-reading DRAM or
+    // re-tilizing. This replaces the previous design that re-read and re-tilized the input once per pass.
+    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_tilized_id);
+    constexpr uint32_t cb_input_id = cb_in_tilized_id;
 #else
     binary_op_init_common(cb_in0_id, cb_input_mask_id, cb_x_id);
     constexpr uint32_t cb_input_id = cb_in0_id;
@@ -296,18 +305,22 @@ void kernel_main() {
                     out_block_hw_actual = out_block_hw_normal;
                 }
 #ifdef TILIZE_IN
-                // Mean pass: tilize this out-block (cb_in0 row-major -> cb_in tiled) before the mean reduction.
+                // Mean pass: tilize this out-block (cb_in0 row-major -> cb_in_tilized tiled) once and keep
+                // it in L1. The tilize appends to cb_in_tilized (no pop) so the whole group accumulates
+                // across out-blocks and stays available for the variance and normalize passes below.
                 compute_kernel_lib::tilize<
                     block_w,
                     cb_in0_id,
-                    cb_in_id,
+                    cb_in_tilized_id,
                     compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                     compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
                     out_block_h_normal);
-                cb_in.wait_front(out_block_hw_normal);
+                cb_in_tilized.wait_front((out_block_index + 1) * out_block_hw_normal);
+                uint32_t out_block_base = out_block_index * out_block_hw_normal;
 #else
                 cb_in0.wait_front(out_block_hw_normal);
+                constexpr uint32_t out_block_base = 0;
 #endif
 
                 index_h_offset = 0;
@@ -320,7 +333,7 @@ void kernel_main() {
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                         tile_regs_acquire();
                         for (uint32_t w = 0; w < subblock_w; ++w) {
-                            uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                            uint32_t index = w + index_subblock_w_offset + index_h_offset + out_block_base;
                             uint32_t index_mask = w + index_subblock_w_offset;
                             mul_tiles(cb_input_id, cb_input_mask_id, index, index_mask, w);
                         }
@@ -334,10 +347,7 @@ void kernel_main() {
                     }
                     index_h_offset += block_w;
                 }
-#ifdef TILIZE_IN
-                // Pop must match what the tilize pushed, and the tilize always pushes a full normal block.
-                cb_in.pop_front(out_block_hw_normal);
-#else
+#ifndef TILIZE_IN
                 cb_in0.pop_front(out_block_hw_normal);
 #endif
                 cb_x.push_back(out_block_hw_normal);
@@ -391,16 +401,8 @@ void kernel_main() {
                 }
 
 #ifdef TILIZE_IN
-                // Variance pass: re-tilize this out-block (the reader re-read the input) before the variance calc.
-                compute_kernel_lib::tilize<
-                    block_w,
-                    cb_in0_id,
-                    cb_in_id,
-                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-                    out_block_h_normal);
-                cb_in.wait_front(out_block_hw_normal);
+                // Variance pass: reuse the tilized group in L1 (no re-read, no re-tilize); index into
+                // cb_in_tilized with the absolute offset of this out-block; do not pop (kept for normalize).
 #else
                 cb_in0.wait_front(out_block_hw_normal);
 #endif
@@ -411,10 +413,15 @@ void kernel_main() {
                 cb_ex_global.wait_front(1);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
+#ifdef TILIZE_IN
+                    uint32_t row_base = out_block_index * out_block_hw_normal + i * block_w;
+#else
+                    constexpr uint32_t row_base = 0;
+#endif
                     for (uint32_t j = 0; j < num_subblocks_w; j++) {
                         tile_regs_acquire();
                         for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset;
+                            uint32_t index = w + index_subblock_w_offset + row_base;
                             sub_tiles_bcast_scalar(cb_input_id, cb_ex_global_id, index, 0, w);
                         }
                         tile_regs_commit();
@@ -425,16 +432,12 @@ void kernel_main() {
                         tile_regs_release();
                         index_subblock_w_offset += subblock_w;
                     }
-#ifdef TILIZE_IN
-                    cb_in.pop_front(block_w);
-#else
+#ifndef TILIZE_IN
                     cb_in0.pop_front(block_w);
 #endif
                 }
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-#ifdef TILIZE_IN
-                    cb_in.pop_front(out_block_hw_normal - out_block_hw_last);
-#else
+#ifndef TILIZE_IN
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
 #endif
                 }
@@ -566,16 +569,9 @@ void kernel_main() {
                 }
 
 #ifdef TILIZE_IN
-                // Normalize pass: re-tilize this out-block before the final normalization and gamma/beta affine.
-                compute_kernel_lib::tilize<
-                    block_w,
-                    cb_in0_id,
-                    cb_in_id,
-                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-                    out_block_h_normal);
-                cb_in.wait_front(out_block_hw_normal);
+                // Normalize pass: reuse the tilized group in L1 (no re-read, no re-tilize); index into
+                // cb_in_tilized with the absolute offset of this out-block; the whole group is popped once
+                // after this pass completes.
 #else
                 cb_in0.wait_front(out_block_hw_normal);
 #endif
@@ -585,10 +581,15 @@ void kernel_main() {
                 cb_ex_global.wait_front(1);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
+#ifdef TILIZE_IN
+                    uint32_t row_base = out_block_index * out_block_hw_normal + i * block_w;
+#else
+                    constexpr uint32_t row_base = 0;
+#endif
                     for (uint32_t j = 0; j < num_subblocks_w; j++) {
                         tile_regs_acquire();
                         for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset;
+                            uint32_t index = w + index_subblock_w_offset + row_base;
                             sub_tiles_bcast_scalar(cb_input_id, cb_ex_global_id, index, 0, w);
                         }
                         tile_regs_commit();
@@ -599,16 +600,12 @@ void kernel_main() {
                         tile_regs_release();
                         index_subblock_w_offset += subblock_w;
                     }
-#ifdef TILIZE_IN
-                    cb_in.pop_front(block_w);
-#else
+#ifndef TILIZE_IN
                     cb_in0.pop_front(block_w);
 #endif
                 }
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-#ifdef TILIZE_IN
-                    cb_in.pop_front(out_block_hw_normal - out_block_hw_last);
-#else
+#ifndef TILIZE_IN
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
 #endif
                 }
@@ -829,6 +826,10 @@ void kernel_main() {
 #endif
             }
             // End Final Val Calc
+#ifdef TILIZE_IN
+            // Release the whole tilized group now that all three passes have consumed it.
+            cb_in_tilized.pop_front(num_out_blocks_padded * out_block_hw_normal);
+#endif
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
                 if (row_offset == tile_width) {
                     index_g_offset += block_w;

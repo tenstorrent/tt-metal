@@ -25,4 +25,9 @@ void split_and_form_rectangle_grids(
 
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size, uint32_t tile_width = 32);
 
+// Number of tiles the legacy ROW_MAJOR (TILIZE_IN) compute kernel keeps in L1 for one per-core
+// group. Mirrors the kernel/reader num_out_blocks_padded * out_block_h_normal * block_wt accounting
+// exactly so the c_17 (cb_in_tilized) circular buffer is sized to hold the full group.
+uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_blocks, uint32_t block_wt);
+
 }  // namespace ttnn::prim
