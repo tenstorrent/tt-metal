@@ -45,7 +45,9 @@ void kernel_main() {
         constexpr uint32_t cb_self_copy = get_compile_time_arg_val(2);
         constexpr uint32_t direction = get_compile_time_arg_val(3);  // 0 = forward, 1 = backward
         constexpr uint32_t my_chip_id = get_compile_time_arg_val(4);
-        constexpr uint32_t ring_size = get_compile_time_arg_val(5);
+        // ring_size (slot 5) is part of the uniform CT superset but the reader derives all
+        // block indices from my_chip_id + num_targets_{fwd,bwd}, so it is intentionally unread.
+        [[maybe_unused]] constexpr uint32_t ring_size = get_compile_time_arg_val(5);
         constexpr uint32_t num_targets_fwd = get_compile_time_arg_val(6);
         constexpr uint32_t num_targets_bwd = get_compile_time_arg_val(7);
         constexpr auto input_args = TensorAccessorArgs<8>();

@@ -42,7 +42,9 @@ void kernel_main() {
         constexpr uint32_t cb_relay_pages = get_compile_time_arg_val(1);
         constexpr uint32_t direction = get_compile_time_arg_val(2);  // 0 = forward, 1 = backward
         constexpr uint32_t my_chip_id = get_compile_time_arg_val(3);
-        constexpr uint32_t ring_size = get_compile_time_arg_val(4);
+        // ring_size (slot 4) is part of the uniform CT superset but the writer derives every
+        // relayed block index from my_chip_id + num_relay_blocks, so it is intentionally unread.
+        [[maybe_unused]] constexpr uint32_t ring_size = get_compile_time_arg_val(4);
         constexpr uint32_t num_targets_fwd = get_compile_time_arg_val(5);
         constexpr uint32_t num_targets_bwd = get_compile_time_arg_val(6);
         constexpr uint32_t alignment = get_compile_time_arg_val(7);

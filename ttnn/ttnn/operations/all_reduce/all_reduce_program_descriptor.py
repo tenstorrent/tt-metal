@@ -62,6 +62,14 @@ def _round_up(value: int, mult: int) -> int:
     return ((value + mult - 1) // mult) * mult
 
 
+def _num_line_devices(mesh_device) -> int:
+    """Number of devices on the 1-D line (mesh view is (1, N))."""
+    n = 1
+    for d in tuple(mesh_device.shape):
+        n *= d
+    return n
+
+
 # ===========================================================================
 # Phase A — line store-and-forward gather
 # ===========================================================================
@@ -474,11 +482,3 @@ def create_reduce_mesh_program_descriptor(
         )
         mesh_pd[ttnn.MeshCoordinateRange(coord_i, coord_i)] = program
     return mesh_pd
-
-
-def _num_line_devices(mesh_device) -> int:
-    """Number of devices on the 1-D line (mesh view is (1, N))."""
-    n = 1
-    for d in tuple(mesh_device.shape):
-        n *= d
-    return n
