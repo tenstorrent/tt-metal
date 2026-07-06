@@ -857,6 +857,13 @@ class Transformer(LightweightModule):
             # manager (where the prefill trace is captured), reverting the prefetcher's
             # decode manager if it is currently active. Keeps prefill trace capture and
             # replay on one manager across interleaved repeat batches.
+            #
+            # Also free the persistent global CB L1: on repeat batches the decode global
+            # CB stays resident and clashes with the prefill sharded RMSNorm CBs on core
+            # (0,0). Freeing it here lets prefill use those cores; it is rebuilt on the
+            # next decode run(). Order: tear down the CB while the prefetcher's manager is
+            # still active, then revert to the default manager for prefill.
+            self.prefetcher.teardown_global_cb()
             self.prefetcher.revert_to_default_sub_device_manager()
 
     def forward(

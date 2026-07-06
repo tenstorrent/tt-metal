@@ -448,6 +448,29 @@ class Prefetcher(LightweightModule):
             self.mesh_device.reset_sub_device_stall_group()
             self._decode_manager_loaded = False
 
+    def teardown_global_cb(self) -> None:
+        """
+        Free the persistent global CB L1 so an interleaved prefill can use the cores it
+        occupies — notably core (0,0), where the origin-anchored sharded RMSNorm's CBs
+        otherwise clash with the resident global CB (program.cpp L1 clash, #47820).
+
+        Rebuilt lazily on the next decode run() (global_cb is None -> re-created and the
+        dram_prefetcher op re-run). The prefetched weight tensors and the address tensor
+        are DRAM/L1-resident and kept, so only the global CB is freed and rebuilt (this
+        does mean weights are re-prefetched on the next decode — a perf cost accepted to
+        make repeat batches correct). No-op if the global CB was never created.
+        """
+        if self.global_cb is None:
+            return
+        # decode normally stop()s the prefetcher op before switching to prefill; be
+        # defensive in case a live op output is still around.
+        garbage = getattr(self, "garbage", None)
+        if garbage is not None:
+            ttnn.deallocate(garbage)
+            self.garbage = None
+        self.global_cb.deallocate()
+        self.global_cb = None
+
     def create_address_tensor(self):
         """
         Creates a ttnn tensor which holds the addresses of the tensors to be prefetched
