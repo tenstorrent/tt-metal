@@ -1288,10 +1288,8 @@ class TestConfig:
                     f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
                     f"-DLLK_TRISC_{trisc_define} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
-                    # -lgcc supplies libgcc soft-float/integer helpers (e.g. __mulsf3) that are
-                    # emitted for runtime scalar float math in kernels like selu; -nostdlib drops
-                    # them by default. Only referenced helpers are pulled in, so this is a no-op
-                    # for kernels that do not use them.
+                    # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3) that
+                    # -nostdlib drops; only referenced helpers are linked, so it's a no-op otherwise.
                     f"-x c++ - -lc -lgcc -o {VARIANT_ELF_DIR / name}.elf"
                 )
 

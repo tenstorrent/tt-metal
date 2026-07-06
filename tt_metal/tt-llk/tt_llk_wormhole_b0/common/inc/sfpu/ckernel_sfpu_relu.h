@@ -21,7 +21,6 @@ constexpr bool is_supported_relu_type_v = std::is_same_v<T, float> || std::is_sa
 template <bool APPROXIMATION_MODE>
 inline void _calculate_lrelu_(const int iterations, std::uint32_t slope)
 {
-    // Leaky ReLU: negative inputs are scaled by `slope` (passed as fp32 bits), positives pass through.
     const sfpi::vFloat slope_v = Converter::as_float(slope);
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
