@@ -61,6 +61,7 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "umd/device/chip/sw_emule_chip.hpp"
+#include "umd/device/chip_helpers/sysmem_manager.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>  // fabric route table (multi-chip dst resolve)
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>   // FabricNodeId, MeshId, FabricConfig
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
@@ -285,7 +286,18 @@ static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
 //     that is the true in-bank offset (already includes
 //     `bank_to_dram_offset[bank_index]`). Masking to 2 MB silently aliases
 //     any DRAM access >= 2 MB to an offset within the first 2 MB of the bank.
+// Route addresses that fall in the host sysmem arena (device_io_addr = pcie_base_
+// + offset, assigned by SimulationSysmemManager) to the mapped host buffer. This
+// is how a kernel's PCIe NOC read/write (H2D/D2H sockets, PinnedMemory) reaches
+// the pinned host region — those targets are not cores in the core_map. Checked
+// before the core decode: the sysmem window sits above the L1/DRAM NOC range.
+// Defined below (needs get_sw_emulated_chip, which is defined later in this TU).
+extern "C" uint8_t* __emule_resolve_sysmem_addr(uint64_t device_io_addr, uint32_t size);
+
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
+    if (uint8_t* host = __emule_resolve_sysmem_addr(noc_addr, 1)) {
+        return host;
+    }
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t local_addr = noc_addr & NOC_LOCAL_MASK;  // 36 bits, raw
@@ -1239,6 +1251,19 @@ static tt::umd::SWEmuleChip* get_sw_emulated_chip(ChipId device_id) {
     }
     auto* chip = umd_cluster->get_chip(device_id);
     return dynamic_cast<tt::umd::SWEmuleChip*>(chip);
+}
+
+extern "C" uint8_t* __emule_resolve_sysmem_addr(uint64_t device_io_addr, uint32_t size) {
+    emule_require_self(__func__);
+    auto* chip = get_sw_emulated_chip(__emule_self->chip_id);
+    if (chip == nullptr) {
+        return nullptr;
+    }
+    tt::umd::SysmemManager* sm = chip->get_sysmem_manager();
+    if (sm == nullptr || device_io_addr < sm->get_pcie_base()) {
+        return nullptr;
+    }
+    return sm->resolve_host_ptr(device_io_addr, size);
 }
 
 // ---------------------------------------------------------------------------
