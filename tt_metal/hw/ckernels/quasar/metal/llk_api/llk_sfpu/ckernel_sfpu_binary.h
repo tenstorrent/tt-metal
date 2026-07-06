@@ -78,17 +78,20 @@ inline void calculate_sfpu_binary(
             result = in0 * in1;
         } else if constexpr (BINOP == BinaryOp::DIV) {
             constexpr int reciprocal_iterations = 2;  // Two Newton-Raphson iterations
-            result = in0 * _sfpu_reciprocal_<reciprocal_iterations>(in1);
+            sfpi::vFloat divisor = in1;
 
-            v_if(in1 == 0) {
-                v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-                v_else {
-                    result = std::numeric_limits<float>::infinity();
-                    result = sfpi::copysgn(result, in0);
-                }
-                v_endif;
-            }
-            v_elseif(in0 == in1) { result = 1.0f; }
+            // The reciprocal helper has its own predication, so avoid nesting it
+            // under v_else for zero-denominator lanes.
+            v_if(divisor == 0) { divisor = 1.0f; }
+            v_endif;
+
+            result = in0 * _sfpu_reciprocal_<reciprocal_iterations>(divisor);
+
+            v_if(in1 == 0 && in0 != 0) { result = in0 * std::numeric_limits<float>::infinity(); }
+            v_endif;
+            v_if(in1 == 0 && in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+            v_endif;
+            v_if(in1 != 0 && in0 == in1) { result = 1.0f; }
             v_endif;
 
             if constexpr (!is_fp32_dest_acc_en) {

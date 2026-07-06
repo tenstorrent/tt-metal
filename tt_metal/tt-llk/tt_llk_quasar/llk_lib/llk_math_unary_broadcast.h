@@ -105,8 +105,8 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
     {
         const std::uint32_t num_rows =
             (BROADCAST_TYPE == BroadcastType::SCALAR) ? tensor_shape.total_num_faces() * tensor_shape.face_r_dim : tensor_shape.face_r_dim;
-        const std::uint32_t outer    = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1U : static_cast<std::uint32_t>(tensor_shape.total_num_faces());
-        const std::uint32_t inner    = num_rows >> rows_log2(ELTWISE_MATH_ROWS);
+        const std::uint32_t outer = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1U : static_cast<std::uint32_t>(tensor_shape.total_num_faces());
+        const std::uint32_t inner = num_rows >> rows_log2(ELTWISE_MATH_ROWS);
 
         const std::uint32_t dst_lo     = (BROADCAST_TYPE != BroadcastType::COL) ? 1U : 0U;
         constexpr std::uint32_t bcast0 = (BROADCAST_TYPE == BroadcastType::COL || BROADCAST_TYPE == BroadcastType::SCALAR) ? 1U : 0U;
@@ -207,7 +207,7 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape& tensor_sh
 template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx, [[maybe_unused]] const TensorShape& tensor_shape)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_<ckernel::trisc::DstTileShape::Tile32x32>(tile_idx);
 
     if constexpr (unpack_to_dest)
     {

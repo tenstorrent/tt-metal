@@ -381,7 +381,7 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
  */
 inline void _llk_math_reduce_(const std::uint32_t tile_idx)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_<ckernel::trisc::DstTileShape::Tile32x32>(tile_idx);
     // Run MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 

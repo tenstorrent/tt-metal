@@ -122,32 +122,20 @@ enum class DstSync : std::uint8_t
     SyncFull,
 };
 
-// Tile-shape selector for dest addressing. Enum values match the row shift used by
-// _set_dst_write_addr_ (see ckernel_trisc_common.h / cmath_common.h).
-enum class DstTileShape : std::uint8_t
-{
-    Tile32x1  = 1,
-    Tile32x2  = 2,
-    Tile32x4  = 3,
-    Tile32x8  = 4,
-    Tile32x16 = 5,
-    Tile32x32 = 6,
-};
-
 /**
  * @brief Maximum number of tiles that fit in the math dest region.
  *
  * Mirrors BH/WH get_dest_max_tiles(): capacity shrinks by SyncHalf vs SyncFull
- * and by 32-bit dest accumulation (FP32/Int32) vs 16-bit modes.
+ * and by 32-bit dest accumulation (FP32/Int32) vs 16-bit modes. Quasar SFPU
+ * macro checks currently use standard 32x32 destination tiles only.
  */
-template <DstSync SYNC_MODE, bool ACCUM_MODE, DstTileShape TILE_SHAPE>
+template <DstSync SYNC_MODE, bool ACCUM_MODE>
 constexpr std::uint32_t get_dest_max_tiles()
 {
-    constexpr std::uint32_t dest_register_size = SYNC_MODE == DstSync::SyncHalf
-        ? (ACCUM_MODE ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
-        : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+    constexpr std::uint32_t dest_register_size = SYNC_MODE == DstSync::SyncHalf ? (ACCUM_MODE ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                                                : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
 
-    return dest_register_size >> static_cast<std::uint32_t>(TILE_SHAPE);
+    return dest_register_size >> 6;
 }
 
 enum class MathFidelity : std::uint8_t

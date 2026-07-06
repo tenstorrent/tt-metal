@@ -15,19 +15,10 @@ namespace ckernel {
 
 template <DstSync DST_SYNC, bool DST_ACCUM>
 inline __attribute__((always_inline)) void _sfpu_binary_check_(
-    std::uint32_t dst_index_in0,
-    std::uint32_t dst_index_in1,
-    std::uint32_t dst_index_out,
-    VectorMode vector_mode) {
-    LLK_ASSERT(
-        dst_index_in0 < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>(),
-        "dst_index_in0 exceeds max dest tiles");
-    LLK_ASSERT(
-        dst_index_in1 < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>(),
-        "dst_index_in1 exceeds max dest tiles");
-    LLK_ASSERT(
-        dst_index_out < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>(),
-        "dst_index_out exceeds max dest tiles");
+    std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out, VectorMode vector_mode) {
+    LLK_ASSERT((dst_index_in0 < get_dest_max_tiles<DST_SYNC, DST_ACCUM>()), "dst_index_in0 exceeds max dest tiles");
+    LLK_ASSERT((dst_index_in1 < get_dest_max_tiles<DST_SYNC, DST_ACCUM>()), "dst_index_in1 exceeds max dest tiles");
+    LLK_ASSERT((dst_index_out < get_dest_max_tiles<DST_SYNC, DST_ACCUM>()), "dst_index_out exceeds max dest tiles");
     LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
 }
 

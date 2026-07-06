@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "ckernel_sfpu_binary.h"
-#include "llk_assert.h"
 
 namespace ckernel {
 
@@ -20,7 +20,6 @@ inline void llk_math_eltwise_binary_sfpu_binop_init() {
 template <bool APPROXIMATE, ckernel::BinaryOp BINOP, bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_sfpu_binop_mul(
     std::uint32_t dst_index0, std::uint32_t dst_index1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
-    LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -35,7 +34,6 @@ inline void llk_math_eltwise_binary_sfpu_binop_mul(
 template <bool APPROXIMATE, ckernel::BinaryOp BINOP, bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_sfpu_binop_div(
     std::uint32_t dst_index0, std::uint32_t dst_index1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
-    LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

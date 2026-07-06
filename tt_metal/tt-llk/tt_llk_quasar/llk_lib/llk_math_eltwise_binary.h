@@ -319,7 +319,7 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_sh
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_eltwise_binary_(const std::uint32_t tile_idx, const ckernel::TensorShape& tensor_shape, const bool clear_in_fp32_mode = false)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_<ckernel::trisc::DstTileShape::Tile32x32>(tile_idx);
 
     if constexpr (reuse_dest != EltwiseBinaryReuseDestType::NONE)
     {

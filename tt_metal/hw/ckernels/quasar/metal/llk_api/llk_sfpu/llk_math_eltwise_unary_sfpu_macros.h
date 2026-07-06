@@ -14,11 +14,8 @@
 namespace ckernel {
 
 template <DstSync DST_SYNC, bool DST_ACCUM>
-inline __attribute__((always_inline)) void _sfpu_check_(
-    std::uint32_t dst_index, VectorMode vector_mode) {
-    LLK_ASSERT(
-        dst_index < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>(),
-        "dst_index exceeds max dest tiles");
+inline __attribute__((always_inline)) void _sfpu_check_(std::uint32_t dst_index, VectorMode vector_mode) {
+    LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC, DST_ACCUM>()), "dst_index exceeds max dest tiles");
     LLK_ASSERT(
         vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
             vector_mode == VectorMode::None || vector_mode == VectorMode::RC_custom,
