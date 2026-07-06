@@ -21,11 +21,8 @@ namespace tt::tt_metal::experimental {
 //
 // The DM hardware differs between Gen1 architectures (Wormhole, Blackhole) and
 // Gen2 architectures (Quasar and derivatives). A DM kernel targets exactly one
-// generation, so the config is a variant holding either a DataMovementGen1Config
-// or a DataMovementGen2Config. The alternative MUST match the target architecture:
-// there is no implicit cross-generation substitution, and a mismatch is a hard
-// error (validated at program build), not silently defaulted. Architecture-agnostic
-// host code selects the matching alternative from the device arch at build time.
+// generation, it MUST match the target architecture the program is dispatched onto.
+// This invariant is checked at program build and will result in a hard error if not upheld.
 //
 // Gen1 DM config (i.e., which RISC and NOC a kernel uses) is performance-critical,
 // but the common case is handled for you: build the DataMovementGen1Config with
@@ -48,9 +45,24 @@ struct DataMovementGen1Config {
     tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
 };
 
-// Build the conventional Gen1 placement for a reader / writer DM kernel.
-DataMovementGen1Config create_reader_gen1_datamovement_config();
-DataMovementGen1Config create_writer_gen1_datamovement_config();
+// Build the conventional Gen1 placement for a reader / writer DM kernel, mirroring the legacy
+// Reader/WriterDataMovementConfig convention (see kernel_types.cpp):
+//   reader -> NCRISC (RISCV_1) on NOC_0;  writer -> BRISC (RISCV_0) on NOC_1
+// NOC mode is always DM_DEDICATED_NOC; DM_DYNAMIC_NOC is a power-user knob reached only by
+// constructing a DataMovementGen1Config directly.
+inline DataMovementGen1Config create_reader_gen1_datamovement_config() noexcept {
+    return DataMovementGen1Config{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(tt::ARCH::WORMHOLE_B0),
+        .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC};
+}
+
+inline DataMovementGen1Config create_writer_gen1_datamovement_config() noexcept {
+    return DataMovementGen1Config{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(tt::ARCH::WORMHOLE_B0),
+        .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC};
+}
 
 struct DataMovementGen2Config {
     // Opt-out of DFB implicit sync (on a per-DFB basis)
