@@ -190,7 +190,11 @@ std::vector<CBInfo> get_cb_info(
             if (!conv_config.enable_activation_reuse) {
                 const bool enable_fully_buffered_weights = num_blocks_act_h > 1;
                 if (enable_fully_buffered_weights) {
-                    weight_block_num_tiles *= kernel_size[0];
+                    // 1D depthwise (non-coalesced) streams num_blocks_act_w one-tap weight blocks per
+                    // height block. Buffer all of them so they stay resident and are reused across
+                    // height blocks (the writer reads weights once, on the first block) instead of
+                    // re-reading from DRAM each block. Normal conv buffers kernel_size[0] blocks.
+                    weight_block_num_tiles *= is_1d_depthwise_conv ? num_blocks_act_w : kernel_size[0];
                 } else if (conv_config.enable_weights_double_buffer) {
                     weight_block_num_tiles *= 2;
                 }
@@ -206,14 +210,22 @@ std::vector<CBInfo> get_cb_info(
             .data_format = weights_df});
     }
 
-    // Matmul partials CB. 1D depthwise compute uses dest-reuse accumulation, so the CB is unused
-    // for that path — emit a 0-page entry so allocate_cbs skips the device allocation.
+    // Matmul partials CB. 1D depthwise compute uses dest-reuse accumulation.
+    //  - Single height block: it reuses out_cb directly for the read-back, so no partials CB
+    //    (0-page entry; allocate_cbs skips the device allocation).
+    //  - Multiple height blocks, non-coalesced: out_cb is the persistent sharded output and cannot
+    //    double as the dest-reuse scratch across blocks, so allocate a dedicated scratch CB in the
+    //    output data format.
+    const bool depthwise_dest_reuse_scratch = is_1d_depthwise_conv &&
+                                              sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
+                                              !coalesce_1d_depthwise_kw_reads && num_blocks_act_h > 1;
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::MATMUL_PARTIALS,
-        .num_pages = is_1d_depthwise_conv ? 0 : per_core_out_ntiles,
-        .page_size = partial_tile_size,
+        .num_pages =
+            depthwise_dest_reuse_scratch ? act_block_num_tiles : (is_1d_depthwise_conv ? 0 : per_core_out_ntiles),
+        .page_size = depthwise_dest_reuse_scratch ? output_tile_size : partial_tile_size,
         .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
-        .data_format = partial_df});
+        .data_format = depthwise_dest_reuse_scratch ? output_df : partial_df});
 
     const bool overlap_im2col_cb =
         sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
