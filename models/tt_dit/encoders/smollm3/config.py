@@ -11,6 +11,8 @@ def _read_rope_theta(hf_config) -> float:
     if theta is None:
         params = getattr(hf_config, "rope_parameters", None) or getattr(hf_config, "rope_scaling", None) or {}
         theta = params.get("rope_theta")
+    if theta is None:
+        raise ValueError("SmolLM3 config missing rope_theta (checked top-level and rope_parameters/rope_scaling)")
     return theta
 
 
