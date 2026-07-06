@@ -84,16 +84,13 @@ void kernel_main() {
     CircularBuffer cb_scores_buf(cb_scores);
     CircularBuffer cb_pv_buf(cb_pv);
 
-    // Boot init — eltwise mode for Phase 0 init
-    ckernel::compute_kernel_hw_startup<ckernel::SrcOrder::Regular>(cb_m, cb_l, cb_o);
+    // Boot init — mm_block_init as the single boot-time init (first compute op is matmul)
+    mm_block_init(cb_q, cb_k, cb_scores, /*transpose=*/1, /*ct_dim=*/B_kv, /*rt_dim=*/B_q, /*kt_dim=*/D_t);
 
     // Phase 0: Init persistent state (m_i=-inf, l_i=0, O_i=0)
     init_cb_constant_bits(cb_m, B_q, NEG_INF_BITS);  // m_i = -inf
     init_cb_constant_f(cb_l, B_q, 0.0f);             // l_i = 0
     init_cb_constant_f(cb_o, B_q * D_t, 0.0f);       // O_i = 0
-
-    // Init matmul hardware before first matmul
-    mm_block_init(cb_q, cb_k, cb_scores, /*transpose=*/1, /*ct_dim=*/B_kv, /*rt_dim=*/B_q, /*kt_dim=*/D_t);
 
     // Outer loop: Q blocks
     for (uint32_t qb = 0; qb < num_q_blocks; qb++) {
@@ -108,6 +105,7 @@ void kernel_main() {
 
             // Phase 1: QK^T — S = Q @ K^T
             // Q tiles are re-pushed by reader per KV block, so WaitAndPopPerKBlock is correct.
+            // DataFormatReconfig::NONE — all CBs are bf16, no format change needed.
             ckl::matmul_block<
                 /*transpose=*/true,
                 /*packer_l1_acc=*/false,
@@ -115,7 +113,17 @@ void kernel_main() {
                 ckl::OutputCBLayout::TileRowMajor,
                 ckl::matmul_config::InitMode::Short,
                 ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock>(
+                ckl::InputPolicy::WaitAndPopPerKBlock,
+                ckl::NoPostCompute,
+                ckl::NoPreKBlock,
+                ckl::NoPostKBlock,
+                0,  // untilize_block_ct_dim
+                ckl::NoKBlockInnerDimFn,
+                ckl::NoIn0Source,
+                ckl::NoIn1BaseOffset,
+                false,  // caller_owns_pack_target
+                ckl::NoneActivation,
+                ckl::matmul_config::DataFormatReconfig::NONE>(
                 cb_q_buf,
                 cb_k_buf,
                 cb_scores_buf,
@@ -263,7 +271,17 @@ void kernel_main() {
                 ckl::OutputCBLayout::TileRowMajor,
                 ckl::matmul_config::InitMode::Short,
                 ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock>(
+                ckl::InputPolicy::WaitAndPopPerKBlock,
+                ckl::NoPostCompute,
+                ckl::NoPreKBlock,
+                ckl::NoPostKBlock,
+                0,  // untilize_block_ct_dim
+                ckl::NoKBlockInnerDimFn,
+                ckl::NoIn0Source,
+                ckl::NoIn1BaseOffset,
+                false,
+                ckl::NoneActivation,
+                ckl::matmul_config::DataFormatReconfig::NONE>(
                 cb_pv_buf,
                 cb_v_buf,
                 cb_scores_buf,
@@ -319,7 +337,8 @@ void kernel_main() {
         cb_pop_front(cb_l, B_q);
         cb_pop_front(cb_m, B_q);
 
-        // Re-init for next Q block
+        // Re-init for next Q block (need eltwise mode after matmul phases)
+        ckernel::compute_kernel_hw_startup<ckernel::SrcOrder::Regular>(cb_m, cb_l, cb_o);
         init_cb_constant_bits(cb_m, B_q, NEG_INF_BITS);
         init_cb_constant_f(cb_l, B_q, 0.0f);
         init_cb_constant_f(cb_o, B_q * D_t, 0.0f);

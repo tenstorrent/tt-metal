@@ -19,8 +19,8 @@ import ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 # Block-size parameters (compile-time)
-B_q = 4  # Q block size in tiles along S_q (128 rows)
-B_kv = 4  # KV block size in tiles along S_kv (128 rows)
+B_q = 1  # Q block size in tiles along S_q (process 1 tile at a time)
+B_kv = 1  # KV block size in tiles along S_kv (process 1 tile at a time)
 
 
 def create_program_descriptor(
