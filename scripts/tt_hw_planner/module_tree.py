@@ -557,53 +557,54 @@ def discover_components_from_hf_id(
         del model
 
 
+def _pkg_from_import_error(exc: BaseException) -> str:
+    pkg = getattr(exc, "name", "") or ""
+    if not pkg:
+        _m = re.search(r"[Nn]o module named ['\"]([\w.]+)['\"]", str(exc))
+        pkg = _m.group(1) if _m else ""
+    return pkg.split(".")[0]
+
+
 def _reference_loader_next_steps(model_id: str, exc: BaseException, loader_file) -> str:
     import sys as _sys
 
     err = f"{type(exc).__name__}: {exc}"
     low = str(exc).lower()
-    lines = [
-        f"Could not build a reference model for '{model_id}', so discovery found 0 components "
-        f"and there was nothing to bring up.",
-        f"Cause: the reference loader raised {err}",
-        "",
-        "NEXT STEPS to make it run:",
-    ]
-    if isinstance(exc, ModuleNotFoundError):
-        pkg = getattr(exc, "name", "") or ""
-        if not pkg:
-            _m = re.search(r"No module named ['\"]([\w.]+)['\"]", str(exc))
-            pkg = _m.group(1) if _m else ""
-        pkg = pkg.split(".")[0] or "the model's package"
-        lines += [
-            f"  1. This model's architecture lives in the '{pkg}' package, which is NOT installed",
-            f"     in the Python the tool is using ({_sys.executable}).",
-            f"     Install it:   {_sys.executable} -m pip install {pkg}",
-            "  2. If that package needs a different transformers/numpy than tt-metal, install it in a",
-            "     SEPARATE venv (do NOT downgrade python_env — that breaks ttnn) and run bring-up there.",
-            "  3. Re-run:  python -m scripts.tt_hw_planner auto-up " + model_id + " --box <BOX> --mesh <M>",
-        ]
+    py = _sys.executable
+
+    if isinstance(exc, ModuleNotFoundError) or "no module named" in low:
+        pkg = _pkg_from_import_error(exc) or "<the-model-package>"
+        problem = (
+            f"the model's code needs the Python package '{pkg}', which is not installed in the tool's environment."
+        )
+        solution = f"{py} -m pip install {pkg}"
     elif ("flash_attn" in low) or ("attn_implementation" in low) or ("attention_functions" in low):
-        lines += [
-            "  1. This is a transformers VERSION MISMATCH: the model's package expects a different",
-            "     transformers version than this environment has.",
-            "  2. Make a dedicated venv with the transformers version the model needs (for kokoro that",
-            "     is transformers 4.x) plus ttnn, and run the bring-up from that venv.",
-            f"  3. Or edit the reference loader to force eager attention: {loader_file}",
-        ]
-    elif "no module named" in low or "importerror" in low:
-        lines += [
-            "  1. A Python dependency the reference loader imports is missing.",
-            "     Read the error above, pip-install the named package, and re-run.",
-            "  2. If it conflicts with tt-metal's deps, use a dedicated venv, not python_env.",
-        ]
+        cur = "?"
+        try:
+            import transformers as _tf
+
+            cur = _tf.__version__
+        except Exception:
+            pass
+        problem = (
+            f"the model's package is incompatible with transformers {cur} in this env (it needs transformers < 5)."
+        )
+        solution = f'{py} -m pip install "transformers<5"'
     else:
-        lines += [
-            "  1. This is usually a version/dependency mismatch between the model's package and this env.",
-            "  2. Install the model's package + its required deps in a dedicated venv and re-run.",
-            f"  3. Inspect / fix the reference loader if needed: {loader_file}",
+        problem = f"the reference model could not be built ({err}) — usually a missing package or a dependency version mismatch."
+        solution = f"{py} -m pip install <the-model-package>   # package name is in the error above"
+
+    return "\n".join(
+        [
+            f"Could not build a reference model for '{model_id}' → discovery found 0 components, nothing to bring up.",
+            f"PROBLEM:  {problem}",
+            f"CAUSE:    {err}",
+            "SOLUTION — run this exact command, then re-run the bring-up, and it will work:",
+            f"    {solution}",
+            "(If that package/version would conflict with other tt-metal models in this env, run the",
+            " same command inside a dedicated venv and launch the bring-up from there instead.)",
         ]
-    return "\n".join(lines)
+    )
 
 
 def _write_loader_blocker(demo_dir, message: str) -> None:
