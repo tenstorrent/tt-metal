@@ -63,8 +63,7 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Violation_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program),
-        ".*CB Boundary Violation: Attempted to access CB 0.*reserved.*");
+        detail::LaunchProgram(device, program), ".*CB Boundary Violation: Attempted to access CB 0.*reserved.*");
 }
 
 // Read-side counterpart. The kernel pushes one page (so the consumer side has
@@ -110,8 +109,7 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Violation_Read_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program),
-        ".*CB Boundary Violation: Attempted to access CB 0.*Read window.*");
+        detail::LaunchProgram(device, program), ".*CB Boundary Violation: Attempted to access CB 0.*Read window.*");
 }
 
 // Wraparound positive control. On a 3-page CB we cycle the write/read pointers

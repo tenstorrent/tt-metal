@@ -41,7 +41,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
     // upper slot — Buffer A then sits directly under it with addr_a < addr_b.
     // That arrangement matches the narrative the kernel computes below
     // (overshoot Buffer A upward to stomp Buffer B).
-    uint32_t buf_size = 1024; // 1 KB each
+    uint32_t buf_size = 1024;  // 1 KB each
     auto buffer_b = Buffer::create(device, buf_size, buf_size, BufferType::L1);
     auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
 
@@ -93,8 +93,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
     // 3. The sanitizer should catch that the execution sequence breached pointer provenance bounds
     EXPECT_DEATH(
         detail::LaunchProgram(device, program),
-        ".*Object Intent Violation: Attempted to modify memory belonging to an adjacent object context.*"
-    );
+        ".*Object Intent Violation: Attempted to modify memory belonging to an adjacent object context.*");
 }
 
 // Positive control: when the kernel resolves BOTH buffers via __emule_local_l1_to_ptr
@@ -133,8 +132,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
         program,
         kernel_src,
         logical_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     SetRuntimeArgs(program, kernel, logical_core, {buffer_a->address(), buffer_b->address()});
 
     // Must NOT abort. If the sanitizer is over-eager, LaunchProgram will SIGABRT
@@ -195,14 +193,12 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
         program,
         kernel_src,
         logical_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     SetRuntimeArgs(program, kernel, logical_core, {addr_a, addr_c - addr_a});
 
     EXPECT_DEATH(
         detail::LaunchProgram(device, program),
-        ".*Object Intent Violation: Attempted to modify memory belonging to an adjacent object context.*"
-    );
+        ".*Object Intent Violation: Attempted to modify memory belonging to an adjacent object context.*");
 }
 
 // Positive control for the I/O-tensor exemption. This is the mirror of the
