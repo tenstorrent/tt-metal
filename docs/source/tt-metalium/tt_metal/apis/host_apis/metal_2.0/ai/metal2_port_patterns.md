@@ -211,7 +211,7 @@ The `#ifdef` runs at the preprocessor stage, before the C++ compiler sees the co
 - Bound to the same set of kernels.
 - Borrowed-memory consistency (either all `borrowed_from` matching `TensorParameter`s, or none borrowed).
 
-The validator enforces these as the three legality rules; missing any of them surfaces with a message in the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause). The `DFBAdvancedOptions` header comments are the authoritative source for the field's contract — including the explicit "no clobbering guarantees" note: aliased DFBs share backing memory, and correctness of *which* logical buffer's data is live at any moment is the kernel author's responsibility.
+The validator enforces these as the three legality rules; missing any of them surfaces with a message in the [migration guide's troubleshooting table](../metal2_migration_guide.md#cryptic-error--likely-cause). The `DFBAdvancedOptions` header comments are the authoritative source for the field's contract — including the explicit "no clobbering guarantees" note: aliased DFBs share backing memory, and correctness of *which* logical buffer's data is live at any moment is the kernel author's responsibility.
 
 **Correct port**:
 
@@ -228,7 +228,7 @@ For larger alias groups (three or more), every member names every other member i
 
 **Don't split** the aliased CB into independent, non-aliased DFBs. That changes the L1 footprint and breaks any kernel assumption that the indices shared an address.
 
-**See also**: [migration guide — DataflowBufferSpec: Aliased DFBs](metal2_migration_guide.md#dataflowbufferspec); [audit — Aliased Circular Buffers entry](port_op_to_metal2_audit.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed); [Same-FIFO aliasing](#pattern-same-fifo-aliasing-one-dfb-multiple-kernel-side-names) (the *other* kind of "aliasing" — don't confuse them).
+**See also**: [migration guide — DataflowBufferSpec: Aliased DFBs](../metal2_migration_guide.md#dataflowbufferspec); [audit — Aliased Circular Buffers entry](port_op_to_metal2_audit.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed); [Same-FIFO aliasing](#pattern-same-fifo-aliasing-one-dfb-multiple-kernel-side-names) (the *other* kind of "aliasing" — don't confuse them).
 
 ---
 
