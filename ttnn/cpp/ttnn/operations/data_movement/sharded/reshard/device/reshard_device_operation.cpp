@@ -170,6 +170,11 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         const uint32_t alignment = hal::get_l1_alignment();
 
+        const uint32_t input_shard_width =
+            input_tensor.memory_config().shard_spec().has_value()
+                ? input_tensor.memory_config().shard_spec().value().shape[1]
+                : input_tensor.memory_config().nd_shard_spec().value().shard_shape[-1];
+
         uint32_t input_page_size = input_tensor.buffer()->page_size();
         uint32_t input_aligned_page_size = input_tensor.buffer()->aligned_page_size();
         if (input_page_size != input_aligned_page_size) {
@@ -178,9 +183,7 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
                 fmt::format(
                     "Input row-major shard width {} with data type {} gives page size {} bytes, "
                     "which must be aligned to {} bytes for reshard",
-                    input_tensor.memory_config().shard_spec().has_value()
-                        ? input_tensor.memory_config().shard_spec().value().shape[1]
-                        : 0,
+                    input_shard_width,
                     input_tensor.dtype(),
                     input_page_size,
                     alignment)};
