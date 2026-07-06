@@ -1,0 +1,6 @@
+{"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Study matmul_block helper API","ts":"2026-07-06T09:39:49+00:00"}
+{"event":"test_run","status":"fail","classification":"runtime_error","error":"TypeError: split_work_to_cores() does not accept CoreGrid, expects CoreCoord or CoreRangeSet. Returns tuple(int, CoreRangeSet, CoreRangeSet, CoreRangeSet, int, int)","ts":"2026-07-06T09:44:56+00:00"}
+{"event":"hypothesis","description":"split_work_to_cores returns (num_core_groups, crs1, crs2, crs_all, group1_size, group2_size). Need to use the returned CoreRangeSets for core_grid and iterate over cores using the group structure.","ts":"2026-07-06T09:44:57+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find split_work_to_cores usage","ts":"2026-07-06T09:45:50+00:00"}
+{"event":"test_run","status":"fail","classification":"compile_error","error":"matmul_block expects Buf& (CircularBuffer) not uint32_t CB IDs. Need to get CB objects from IDs.","ts":"2026-07-06T09:47:04+00:00"}
+{"event":"test_run","status":"fail","classification":"hang","error":"Dispatch timeout / device hang on single_tile_32x32 shape. Compile passed, runtime hung.","ts":"2026-07-06T09:54:43+00:00"}
