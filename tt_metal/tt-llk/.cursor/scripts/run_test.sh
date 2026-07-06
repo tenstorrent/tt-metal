@@ -37,6 +37,9 @@
 #   --lock-timeout N  Seconds to wait for the lock (default: 900)
 #   --sim-path PATH   Override TT_UMD_SIMULATOR_PATH
 #                     (default: /proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-<arch>-1x3)
+#   --reuse-simulator-server
+#                     Quasar only. Connect to an existing tt-exalens server on
+#                     --port instead of letting pytest own the simulator.
 #   --no-split        Skip compile-producer step; run pytest --run-simulator without
 #                     --compile-consumer (combined compile+run in one pytest invocation).
 #                     Use for issue-solver tests that don't pre-build ELFs.
@@ -97,6 +100,7 @@ JOBS="15"
 LOCKFILE=""  # set in _validate based on ARCH if not user-overridden
 LOCK_TIMEOUT="900"
 SIM_PATH=""
+REUSE_SIMULATOR_SERVER="false"
 NO_SPLIT="false"
 LOG_DIR=""
 VERBOSE="false"
@@ -115,6 +119,7 @@ while [[ $# -gt 0 ]]; do
     --lock)          LOCKFILE="$2";      shift 2 ;;
     --lock-timeout)  LOCK_TIMEOUT="$2";  shift 2 ;;
     --sim-path)      SIM_PATH="$2";      shift 2 ;;
+    --reuse-simulator-server) REUSE_SIMULATOR_SERVER="true"; shift ;;
     --log-dir)       LOG_DIR="$2";       shift 2 ;;
     --no-split)      NO_SPLIT="true";    shift   ;;
     --verbose|-v)    VERBOSE="true";     shift   ;;
@@ -218,6 +223,11 @@ _validate() {
     blackhole|wormhole)  MODE="hardware"  ;;
     *)                   MODE="simulator" ;;
   esac
+
+  if [[ "$REUSE_SIMULATOR_SERVER" == "true" && "$ARCH" != "quasar" ]]; then
+    echo "ERROR: --reuse-simulator-server is only supported for arch=quasar" >&2
+    exit 4
+  fi
 }
 
 # ── count ─────────────────────────────────────────────────────────────────────
@@ -296,7 +306,9 @@ _do_compile() {
 _do_simulate() {
   _validate
   if [[ "$MODE" == "simulator" ]]; then
-    _vlog "consume: $(_test_label) (arch=${ARCH}, mode=simulator, port=${PORT})"
+    local reuse_note=""
+    [[ "$REUSE_SIMULATOR_SERVER" == "true" ]] && reuse_note=", reuse-server=true"
+    _vlog "consume: $(_test_label) (arch=${ARCH}, mode=simulator, port=${PORT}${reuse_note})"
   else
     _vlog "consume: $(_test_label) (arch=${ARCH}, mode=hardware)"
   fi
@@ -319,6 +331,7 @@ _do_simulate() {
   local pytest_flags="--timeout=${TIMEOUT} -rN"
   if [[ "$MODE" == "simulator" ]]; then
     pytest_flags="${pytest_flags} --run-simulator --port=${PORT}"
+    [[ "$REUSE_SIMULATOR_SERVER" == "true" ]] && pytest_flags="${pytest_flags} --reuse-simulator-server"
   fi
   [[ "$NO_SPLIT" == "false" ]] && pytest_flags="${pytest_flags} --compile-consumer"
   [[ -n "$MAXFAIL" ]] && pytest_flags="${pytest_flags} --maxfail=${MAXFAIL}"
@@ -336,16 +349,16 @@ _do_simulate() {
     pytest_target="$(_quote_args "${TEST_FILES[@]}")"
   fi
 
-  # Write the consumer script. Simulator mode prepends port-cleanup and the
-  # TT_UMD_SIMULATOR_PATH env var; hardware mode skips both since BH/WH run
-  # against silicon directly.
+  # Write the consumer script. Owned simulator mode prepends port cleanup and
+  # all simulator modes set TT_UMD_SIMULATOR_PATH. Hardware mode skips both
+  # since BH/WH run against silicon directly.
   # Single-quotes around variable expansions are intentional: the values are
   # fixed at script-write time and contain no shell-special chars that matter
   # to the inner bash invocation.
   {
     printf '#!/bin/bash\n'
     printf 'set -u\n\n'
-    if [[ "$MODE" == "simulator" ]]; then
+    if [[ "$MODE" == "simulator" && "$REUSE_SIMULATOR_SERVER" != "true" ]]; then
       printf '# Kill any process holding port %s\n' "${PORT}"
       printf 'STALE=$(lsof -ti :%s 2>/dev/null || true)\n' "${PORT}"
       printf 'if [ -n "$STALE" ]; then\n'
