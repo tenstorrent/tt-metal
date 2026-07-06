@@ -257,17 +257,21 @@ graph** rather than a staged sequence of host↔device hops. The TransFuser back
 runs as one consolidated device-native graph by default — stems → [stage →
 fusion] × 4 → FPN chained ttnn→ttnn, eliminating the 8 per-stage host round-trips
 (`DD_CONSOLIDATE=0` to opt out) — and `build_stage4` consolidates the perception
-head + DDIM decoder on-device as well. Stage 7 then captures that consolidated
-backbone loop as a TTNN trace (`compile()` / `execute_compiled()`) and replays it
-as a single command: traced-vs-eager trajectory PCC 1.0, with the backbone loop
-**1.76×** faster and the full forward **1.34×** (same-process A/B, batch=1,
-production resolution; the still-eager FPN/perception/DDIM tail dilutes the loop's
-gain).
+head + DDIM decoder on-device as well. `compile()` / `execute_compiled()` then
+capture **two** TTNN traces — the backbone `[stage→fusion]×4` loop and the
+perception forward — and replay each as a single command: traced-vs-eager
+trajectory PCC 1.0, with the backbone loop **1.76×** faster and the **full forward
+~1.58×** (batch=1, production resolution). Only the DDIM head + FPN/agent-head tail
+still run eager: the DDIM head interleaves host control-flow (`scheduler.step` /
+`gen_sineembed` / `argmax`) between its device ops, so a monolithic trace can't
+cross it — tracing it was measured marginal (~1%) and not adopted.
 
-Absolute forward latency is hardware- and build-dependent, so it isn't pinned
-here — measure it on your own setup with the [Profiling](#profiling) snippet below.
+Pinned latency numbers, the per-lever breakdown (which optimizations helped vs.
+were measured neutral), and the reproduction harness are in
+[`PERFORMANCE.md`](PERFORMANCE.md); measure on your own setup with
+`scripts/profile_forward.py` (or the [Profiling](#profiling) snippet below).
 End-to-end NavSim eval throughput is gated by host-side navsim CPU rather than the
-model forward — see §9.
+model forward, so these forward-latency wins do not change the PDM eval wall — see §9.
 
 ### Accuracy (PCC vs PyTorch reference)
 
@@ -440,6 +444,7 @@ ttnn.close_device(device)
 ```text
 diffusion_drive/
 ├── README.md
+├── PERFORMANCE.md               # forward-latency report + per-lever breakdown
 ├── data/                        # downloaded assets (gitignored)
 │   ├── diffusiondrive_navsim.pth
 │   └── kmeans_navsim_traj_20.npy
@@ -447,6 +452,8 @@ diffusion_drive/
 │   └── model.py                 # PyTorch reference (DiffusionDriveModel)
 ├── scripts/
 │   ├── prepare_assets.py        # download checkpoint + extract anchors
+│   ├── profile_forward.py       # forward-latency profiler (source of PERFORMANCE.md)
+│   ├── visualize_trajectory.py  # BEV trajectory plot (--demo needs no device)
 │   ├── ttnn_pdm_server.py       # TTNN inference server (bridge fallback)
 │   ├── navsim_inproc/           # default PDM-eval agent (in-process, single env)
 │   └── navsim_bridge/           # fallback PDM-eval agent (cross-process socket)
