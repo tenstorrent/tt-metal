@@ -271,7 +271,7 @@ def _config_from_env() -> ProducerConfig:
         mid_chunk_end_prob=float(os.environ.get("PREFILL_PRODUCER_MID_END_PROB", "0.0")),
         seed=int(os.environ.get("PREFILL_PRODUCER_SEED", "1234")),
         verify=os.environ.get("PREFILL_PRODUCER_CHECK_PCC", "0") == "1",
-        pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88")),
+        pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
     )
 
