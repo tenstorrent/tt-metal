@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"  // [debug] DEVICE_PRINT: supports uint64_t/float for the BW summary
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
@@ -154,6 +155,42 @@ void kernel_main() {
         expert_start_idx,
         expert_end_idx,
         linearized_mesh_coord);
+
+    // [debug] BW measurement window: wall clock is captured just before this sender writes the START
+    // marker to its eth core and just after the END marker; bw_total_payload_bytes accumulates every
+    // payload byte injected into fabric in between. Reported as achieved BW at kernel exit (see END
+    // marker block). Declared at function scope so both marker sites can reach them; only populated
+    // under DEST_CHIP_ID.
+    [[maybe_unused]] uint64_t bw_t_start = 0;
+    [[maybe_unused]] uint64_t bw_total_payload_bytes = 0;
+
+    // [debug] Inter-step gap histogram. We snapshot the wall clock at every step of the send pipeline
+    // (before the START signal, before each fabric send, before and after the STOP signal) and bin the
+    // delta since the previous snapshot. Expectation under healthy flow: every gap lands in the two
+    // smallest buckets. Fat tail => the sender is stalling (e.g. spinning in wait_for_empty_write_slot).
+    // Thresholds are in cycles @ 1.35 GHz: 100ns=135, 1us=1350, 10us=13500, 100us=135000, 1ms=1350000,
+    // 10ms=13500000.
+    [[maybe_unused]] uint64_t hist_last_ts = 0;
+    [[maybe_unused]] uint32_t hist_buckets[7] = {0, 0, 0, 0, 0, 0, 0};
+    [[maybe_unused]] auto hist_record = [&hist_last_ts, &hist_buckets](uint64_t now) {
+        const uint64_t d = now - hist_last_ts;
+        hist_last_ts = now;
+        if (d < 135ULL) {
+            hist_buckets[0]++;
+        } else if (d < 1350ULL) {
+            hist_buckets[1]++;
+        } else if (d < 13500ULL) {
+            hist_buckets[2]++;
+        } else if (d < 135000ULL) {
+            hist_buckets[3]++;
+        } else if (d < 1350000ULL) {
+            hist_buckets[4]++;
+        } else if (d < 13500000ULL) {
+            hist_buckets[5]++;
+        } else {
+            hist_buckets[6]++;
+        }
+    };
 
 #if INIT_ZEROS
     // Wait for reader to complete output-zeroing
@@ -314,6 +351,10 @@ void kernel_main() {
                     break;
                 }
             }
+            // [debug] Snapshot the wall clock once per token and bin the gap since the previous
+            // token's send. Placed after the sentinel check so only real tokens are counted.
+            hist_record(get_timestamp());
+
             uint32_t distance = route_info[1];
             uint32_t output_page_idx = route_info[2];
             uint32_t output_data_addr = cb_base + l1_alignment;
@@ -360,6 +401,8 @@ void kernel_main() {
                     (int)aligned_output_page_size,
                     l1_alignment);
                 noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
+
+                bw_total_payload_bytes += aligned_output_page_size;
             }
 #endif
 
@@ -433,4 +476,17 @@ void kernel_main() {
     close_direction_connections(directions, fabric_connections);
 #endif
 #endif
+
+    // [debug] Dump the per-token inter-step gap histogram. Under healthy flow all counts land in the
+    // two smallest buckets; a fat tail means the sender is stalling. Thresholds @ 1.35 GHz (see above).
+    DPRINT(
+        "[combine-hist] sender per-token gap histogram (counts): "
+        "<100ns={} <1us={} <10us={} <100us={} <1ms={} <10ms={} >=10ms={}\n",
+        hist_buckets[0],
+        hist_buckets[1],
+        hist_buckets[2],
+        hist_buckets[3],
+        hist_buckets[4],
+        hist_buckets[5],
+        hist_buckets[6]);
 }
