@@ -24,8 +24,13 @@ import sys
 DESCRIPTOR_MARKERS = ("CoreRuntimeArgs", "emplace_runtime_args", "ProgramDescriptor", "RTArgList")
 # Start of a runtime-arg construction whose contents must not contain a raw address.
 SINK_START = re.compile(
-    r"(runtime_args\.emplace_back|emplace_runtime_args|emplace_common_runtime_args"
-    r"|CoreRuntimeArgs\s*[\{(]|common_runtime_args\s*=)"
+    r"(runtime_args\.emplace_back"
+    r"|emplace_runtime_args|emplace_common_runtime_args"
+    r"|CoreRuntimeArgs"  # bare: let _sink_regions find the following { or ( (do not consume it)
+    r"|common_runtime_args\s*="
+    # a builder container whose name ends in *args (reader_args/writer_runtime_args/…) being appended to
+    r"|[A-Za-z_]\w*args\s*\.\s*(?:push_back|append|emplace_back)"
+    r")"
 )
 ADDRESS = re.compile(r"->\s*address\s*\(\s*\)|\.\s*address\s*\(\s*\)")
 # Local: `<...> foo = <...>address();`  -> foo becomes an "address variable".
