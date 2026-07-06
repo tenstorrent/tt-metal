@@ -298,6 +298,23 @@ RealtimeProfilerManager::DeviceState::DeviceState() = default;
 RealtimeProfilerManager::DeviceState::~DeviceState() = default;
 RealtimeProfilerManager::DeviceState::DeviceState(DeviceState&&) noexcept = default;
 
+uint32_t RealtimeProfilerManager::host_fifo_capacity_pages() const { return RealtimeProfilerRuntimeSizes::fifo_pages; }
+
+uint32_t RealtimeProfilerManager::ring_full_wait_count() const {
+    uint32_t peak = 0;
+    for (const auto& dev_state : devices_) {
+        if (dev_state.core_l1.ring_buffer == 0 || !dev_state.device) {
+            continue;
+        }
+        const uint32_t addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, ring_full_wait_count);
+        std::vector<uint32_t> value(1, 0);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dev_state.device, dev_state.realtime_profiler_core, addr, sizeof(uint32_t), value, CoreType::WORKER);
+        peak = std::max(peak, value[0]);
+    }
+    return peak;
+}
+
 void RealtimeProfilerManager::publish_pages(
     const DeviceState& dev_state,
     const uint32_t* page_buf,
