@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <numeric>
 #include <optional>
-#include <variant>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -344,10 +343,12 @@ void run_update_address_test(
     // Disable implicit sync on the borrowed DFB for both DM endpoints (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config))
-            .disable_dfb_implicit_sync_for_all = true;
-        std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config))
-            .disable_dfb_implicit_sync_for_all = true;
+        DataMovementGen2Config& producer_hw_config =
+            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
+        DataMovementGen2Config& consumer_hw_config =
+            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+        producer_hw_config.disable_dfb_implicit_sync_for_all = true;
+        consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
     }
 
     DataflowBufferSpec dfb_spec{
