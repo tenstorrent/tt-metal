@@ -815,12 +815,15 @@ class ttMLA:
         kv_actual_isl: Optional[int],
         seq_len_local: int,
         return_kv_intermediates: bool,
-        keep_kvpe_bf16: bool,
-    ) -> tuple[ttnn.Tensor | None, ttnn.Tensor, ttnn.Tensor, dict | None]:
+        kvpe_cache: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, dict | None]:
         """Shared KV stem.
 
-        Returns bf16 kvpe only for sparse single-shot, where sparse attention consumes the
-        full latent prefix in bf16. All modes receive the bf8 kvpe written to the cache.
+        Returns tt_kvpe: the kvpe converted to the persistent cache's dtype/layout via
+        _to_cache_format (bf8/TILE for dense, bf16 or fp8/ROW_MAJOR for sparse). This single tensor
+        is BOTH written to the cache and consumed as the attention K input — dense ring SDPA takes it
+        as-is, and sparse_sdpa reads the uncompressed sparse cache format natively, so no separate
+        full-precision copy is needed. Also returns tt_kv_nope (dense V projection) + intermediates.
         """
         # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
         tt_kv = ttnn.linear(
@@ -872,19 +875,19 @@ class ttMLA:
             kv_intermediates["tt_kv_rope"] = ttnn.clone(tt_kv_rope)
 
         # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
-        tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
+        tt_kvpe_raw = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
         ttnn.deallocate(tt_kv_rope)
-        tt_kvpe_b8 = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
+        # Match the persistent cache format: bf8/TILE (dense) OR bf16 or fp8/ROW_MAJOR (sparse). For the
+        # uncompressed sparse cache this is a layout-only change (no dtype typecast), so sparse_sdpa reads
+        # it natively with no bf8->bf16 round-trip.
+        tt_kvpe = self._to_cache_format(tt_kvpe_raw, kvpe_cache)
+        ttnn.deallocate(tt_kvpe_raw)
 
         if return_kv_intermediates:
-            # post-transform concat ([.., 576], bf8) -- what actually gets written to the cache.
-            kv_intermediates["tt_kvpe"] = ttnn.clone(tt_kvpe_b8)
+            # post-transform concat ([.., 576]) in the cache dtype -- what actually gets written.
+            kv_intermediates["tt_kvpe"] = ttnn.clone(tt_kvpe)
 
-        if not keep_kvpe_bf16:
-            ttnn.deallocate(tt_kvpe)
-            tt_kvpe = None
-
-        return tt_kvpe, tt_kvpe_b8, tt_kv_nope, kv_intermediates
+        return tt_kvpe, tt_kv_nope, kv_intermediates
 
     def _apply_wkv_b2(self, t: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         return ttnn.linear(
@@ -894,10 +897,39 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
-    def _write_kvpe(self, kvpe_cache: ttnn.Tensor, tt_kvpe_b8: ttnn.Tensor, cache_layer_idx: int) -> None:
-        """Single-shot cache fill: write this layer's whole kvpe slot (bf8). Chunked modes write
-        through _chunked_attn / update_padded_kv_cache instead."""
-        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe_b8, cache_layer_idx)
+    def _to_cache_format(self, t: ttnn.Tensor, cache: ttnn.Tensor) -> ttnn.Tensor:
+        """Convert the freshly computed kvpe `t` (bf16, TILE) to the persistent cache's dtype+layout
+        for a write. The write ops require input dtype AND layout to match the cache:
+          - bf8/TILE cache (dense): typecast bf16->bfloat8_b, stays TILE.
+          - bf16 or fp8_e4m3 / ROW_MAJOR cache (sparse): retile TILE->ROW_MAJOR, and typecast only for
+            fp8 (bf16 needs none) — so sparse_sdpa reads the prefix natively, no bf8->bf16 round-trip.
+        LAYOUT is converted BEFORE dtype: fp8_e4m3 is ROW_MAJOR-only, so it must be produced by
+        typecasting an already-ROW_MAJOR tensor (never a TILE fp8 intermediate, which is unsupported) —
+        matching how init_kvpe_cache builds the fp8 cache. bf8 (block-float, TILE-only) is the reverse
+        case, but its layout already matches (both TILE) so the layout step is a no-op there.
+        Always returns a fresh tensor (clones if `t` already matches the cache format)."""
+        out = t
+        if out.layout != cache.layout:
+            out = ttnn.to_layout(out, cache.layout)
+        if out.dtype != cache.dtype:
+            relaid = ttnn.typecast(out, cache.dtype)
+            if out is not t:
+                ttnn.deallocate(out)
+            out = relaid
+        return ttnn.clone(t) if out is t else out
+
+    def _write_kvpe(self, kvpe_cache: ttnn.Tensor, tt_kvpe: ttnn.Tensor, cache_layer_idx: int) -> None:
+        """DENSE single-shot cache fill: write this layer's whole kvpe slot (bf8/TILE, already in the
+        cache's dtype/layout via _to_cache_format). Chunked modes (dense + sparse) and sparse single-shot
+        write through update_padded_kv_cache instead; only dense single-shot still uses this TILE-only
+        fill_cache_for_user_ primitive.
+
+        TODO: unify dense single-shot onto update_padded_kv_cache too (one write op model-wide, drop this
+        helper). Blocked on the single-chip case: test_prefill_block_loop[mesh-1x1] runs dense single-shot
+        on a (1,1) mesh, where fill_cache_for_user_ is mesh-agnostic but update_padded_kv_cache's SP
+        cluster_axis / block-cyclic / tile-aligned-kv_actual_global path is not yet validated. Confirm
+        update_padded handles 1x1 (and sp=1), then switch _dense_single_attn like _sparse_single_attn."""
+        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
 
     def _o_proj_epilogue(self, attn_out: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         """Shared nlp_concat_heads -> o_proj -> TP reduce-scatter epilogue."""
@@ -955,6 +987,18 @@ class ttMLA:
         kv_actual_isl = actual_start
         is_chunked = self.is_chunked
 
+        # Sparse attention (sparse_sdpa) reads the KVPE cache natively and only accepts bf16 / fp8_e4m3,
+        # ROW_MAJOR. Require the cache to already be in that op-wanted format so the whole path is a single
+        # kvpe tensor with NO compression round-trip (no bf8 typecast on write, no upcast on read-back).
+        if self._has_indexer:
+            assert kvpe_cache.dtype in (ttnn.bfloat16, ttnn.fp8_e4m3), (
+                f"sparse MLA requires an uncompressed KVPE cache (bf16 or fp8_e4m3) that sparse_sdpa reads "
+                f"natively, got {kvpe_cache.dtype}"
+            )
+            assert (
+                kvpe_cache.layout == ttnn.ROW_MAJOR_LAYOUT
+            ), f"sparse MLA requires a ROW_MAJOR KVPE cache, got {kvpe_cache.layout}"
+
         signpost(header="MLA_START")
 
         # q-norm output uses the tuned activation memory_config in every mode (dense and sparse);
@@ -973,20 +1017,18 @@ class ttMLA:
         indices = self._indexer.forward(hidden_states, qr, seq_len_local, start_pos=kv_actual_isl or 0)
 
         tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local)
-        keep_kvpe_bf16 = self._has_indexer and not is_chunked
-        tt_kvpe, tt_kvpe_b8, tt_kv_nope, kv_intermediates = self._kv_stem(
+        tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(
             hidden_states,
             rope_tensors,
             kv_actual_isl,
             seq_len_local,
             return_kv_intermediates,
-            keep_kvpe_bf16,
+            kvpe_cache,
         )
 
         attn_out = self._attention(
             tt_q=tt_q,
             tt_kvpe=tt_kvpe,
-            tt_kvpe_b8=tt_kvpe_b8,
             tt_kv_nope=tt_kv_nope,
             indices=indices,
             kvpe_cache=kvpe_cache,
@@ -1006,13 +1048,13 @@ class ttMLA:
     # All four share the forward() call signature and ignore the kwargs they don't need (**_), so the
     # bound name can be invoked uniformly. Bodies are the former mode-ladder branches, unchanged.
 
-    def _dense_single_attn(self, *, tt_q, tt_kvpe_b8, tt_kv_nope, kvpe_cache, cache_layer_idx, seq_len_local, **_):
+    def _dense_single_attn(self, *, tt_q, tt_kvpe, tt_kv_nope, kvpe_cache, cache_layer_idx, seq_len_local, **_):
         # Single-shot prefill: materialize V before causal ring SDPA.
-        self._write_kvpe(kvpe_cache, tt_kvpe_b8, cache_layer_idx)
+        self._write_kvpe(kvpe_cache, tt_kvpe, cache_layer_idx)
         tt_v_embedding = self._apply_wkv_b2(tt_kv_nope, seq_len_local)
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
-            tt_kvpe_b8,
+            tt_kvpe,
             tt_v_embedding,
             self.joint_q,
             self.joint_kv,
@@ -1048,7 +1090,7 @@ class ttMLA:
         self,
         *,
         tt_q,
-        tt_kvpe_b8,
+        tt_kvpe,
         kvpe_cache,
         kv_actual_isl,
         cache_layer_idx,
@@ -1059,7 +1101,7 @@ class ttMLA:
         cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
         return self._chunked_attn(
             tt_q=tt_q,
-            tt_kvpe=tt_kvpe_b8,
+            tt_kvpe=tt_kvpe,
             kvpe_cache=kvpe_cache,
             kv_actual_isl=kv_actual_isl,
             cache_batch_idx=cache_batch_idx,
@@ -1069,22 +1111,29 @@ class ttMLA:
         )
 
     def _sparse_single_attn(
-        self, *, tt_q, tt_kvpe, tt_kvpe_b8, indices, kvpe_cache, cache_layer_idx, seq_len_local, **_
+        self, *, tt_q, tt_kvpe, indices, kvpe_cache, kv_actual_isl, cache_layer_idx, cache_user_id, seq_len_local, **_
     ):
         assert indices is not None, "sparse MLA forward requires indexer top-k indices"
-        # Single-shot: the live kvpe IS the whole sequence (natural order, contiguous SP shard).
-        assert tt_kvpe is not None
-        self._write_kvpe(kvpe_cache, tt_kvpe_b8, cache_layer_idx)
-        gathered = self._all_gather(tt_kvpe, dim=2, cluster_axis=self.sp_axis)  # [1,1,T,576] bf16 TILE, repl, natural
-        kvpe_dev = ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT)
-        if self.sp_factor > 1:
-            ttnn.deallocate(gathered)
-        ttnn.deallocate(tt_kvpe_b8)
-        ttnn.deallocate(tt_kvpe)
+        # Single-shot: write the cache via the SAME op as chunked (update_padded_kv_cache), so the sparse
+        # cache is uniformly bf16/fp8 ROW_MAJOR and the TILE-only fill_cache_for_user_ is avoided. The whole
+        # sequence is one chunk (kv_actual_global=0). The live kvpe IS the whole sequence (natural order,
+        # contiguous SP shard), already in the op's format, so attend on it directly — no cache read-back.
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            kvpe_cache,
+            tt_kvpe,
+            slot_idx=cache_user_id,
+            layer_idx=cache_layer_idx,
+            num_layers=self.layer_num,
+            kv_actual_global=kv_actual_isl or 0,
+            cluster_axis=self.sp_axis,
+        )
+        kvpe_dev = self._all_gather(tt_kvpe, dim=2, cluster_axis=self.sp_axis)  # [1,1,T,576] repl, natural
 
         # Sparse attention runs over latent V; project to v_head_dim afterwards.
         attn_out = self._sparse_mla(tt_q, kvpe_dev, indices)
-        ttnn.deallocate(kvpe_dev)
+        if kvpe_dev is not tt_kvpe:  # all_gather made a new buffer (sp>1); else it IS tt_kvpe itself
+            ttnn.deallocate(kvpe_dev)
+        ttnn.deallocate(tt_kvpe)
         ttnn.deallocate(tt_q)
         return self._apply_wkv_b2(attn_out, seq_len_local)
 
@@ -1092,7 +1141,7 @@ class ttMLA:
         self,
         *,
         tt_q,
-        tt_kvpe_b8,
+        tt_kvpe,
         indices,
         kvpe_cache,
         kv_actual_isl,
@@ -1111,7 +1160,7 @@ class ttMLA:
         # The whole multi-user cache is handed over; sparse_sdpa selects this slot via cache_batch_idx.
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             kvpe_cache,
-            tt_kvpe_b8,
+            tt_kvpe,
             slot_idx=cache_user_id,
             layer_idx=cache_layer_idx,
             num_layers=self.layer_num,
@@ -1119,7 +1168,7 @@ class ttMLA:
             cluster_axis=self.sp_axis,
         )
         kvpe_dev = self._gather_kvpe_prefix(kvpe_cache)
-        ttnn.deallocate(tt_kvpe_b8)
+        ttnn.deallocate(tt_kvpe)
 
         # Sparse attention runs over latent V; project to v_head_dim afterwards.
         attn_out = self._sparse_mla(
@@ -1329,11 +1378,13 @@ class ttMLA:
 
     def _gather_kvpe_prefix(self, kvpe_cache):
         """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
-        bf8 / TILE / ND-sharded / block-cyclic across SP; sparse_sdpa consumes it bf16 / ROW_MAJOR /
-        replicated and remaps the natural-position indices to physical block-cyclic pages in-kernel
-        (invP), so the buffer is LEFT in block-cyclic order — no host reorder. Pipeline (all on
-        device): ND→interleaved, SP all-gather to full-T (no-op at sp==1), bf8→bf16, TILE→RM.
-        Returns the WHOLE multi-user cache [B, 1, seq_len_cache, 576] bf16 RM (block-cyclic, B =
+        ND-sharded / block-cyclic across SP, in the op's format (bf16 or fp8_e4m3, ROW_MAJOR — the
+        sparse cache is uncompressed). sparse_sdpa consumes it replicated and remaps the
+        natural-position indices to physical block-cyclic pages in-kernel (invP), so the buffer is
+        LEFT in block-cyclic order — no host reorder. Pipeline (all on device): ND→interleaved, SP
+        all-gather to full-T (no-op at sp==1). The cache is already in the op format, so there is NO
+        read-back dtype/layout conversion — the all-gather moves the native cache format directly.
+        Returns the WHOLE multi-user cache [B, 1, seq_len_cache, 576] (block-cyclic, B =
         num_users*num_layers user-major slots); sparse_sdpa selects this user/layer slot itself via
         cache_batch_idx (no host slot-slice). The unwritten suffix is never addressed since indices
         stay < populated."""
@@ -1343,8 +1394,4 @@ class ttMLA:
         )  # → [B,1,seq_len_cache,576] repl, block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
-        full16 = ttnn.typecast(full, ttnn.bfloat16)
-        ttnn.deallocate(full)
-        full_rm = ttnn.to_layout(full16, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(full16)
-        return full_rm
+        return full

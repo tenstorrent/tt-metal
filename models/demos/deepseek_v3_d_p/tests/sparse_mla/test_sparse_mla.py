@@ -169,6 +169,8 @@ def run_sparse_mla_accuracy_case(
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     logger.info(f"[{variant.name}] sparse MLA accuracy: running TT inference")
@@ -242,6 +244,8 @@ def run_sparse_mla_determinism_case(
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
             num_kvpe_cache_layers=1,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         tt_output, _, _, shard_dims = run_mla_inference(
             config=config,
@@ -308,6 +312,8 @@ def run_sparse_mla_chunked_case(
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     logger.debug(f"[{variant.name}] sparse MLA chunked: constructing TT module and indexed RoPE tensors")
