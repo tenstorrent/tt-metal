@@ -457,15 +457,26 @@ class CCLManager:
         neighbor_sems: list,
         num_links: list,
         padding_mode: str = "zeros",
+        input_pad_h: int = 0,
+        input_pad_w: int = 0,
     ) -> ttnn.Tensor:
         """Fill and return the compact [H-top|H-bot|W-left|W-right] halo buffer via the standalone
         neighbor_pad_halo op. Pair with ttnn.experimental.conv3d(halo_buffer=...) for the two-dispatch
-        halo-aware path (no full-pad interior copy). Mirrors neighbor_pad_conv3d_fused's param derivation."""
+        halo-aware path (no full-pad interior copy). Mirrors neighbor_pad_conv3d_fused's param derivation.
+
+        input_pad_h/w > 0: `tensor` is a padded [.,H+2*ipad_h,W+2*ipad_w,C] buffer; exchange the halo of
+        its INTERIOR (copy-free path). The compact buffer is sized for the interior dims."""
         barrier_sem = self.get_barrier_semaphore(axes[0])
         dim2 = dims[1] if len(dims) > 1 else None
         padding2 = pad_left[1] if dim2 is not None else 0
+        # Compact buffer is sized from the INTERIOR shape (input_pad strips the padded border).
+        halo_shape = list(tensor.shape)
+        if input_pad_h:
+            halo_shape[dims[0]] -= 2 * input_pad_h
+        if input_pad_w and dim2 is not None:
+            halo_shape[dim2] -= 2 * input_pad_w
         halo_buf = self.get_np_halo_buffer(
-            tensor.shape, dims[0], pad_left[0], dtype=tensor.get_dtype(), dim2=dim2, padding2=padding2
+            halo_shape, dims[0], pad_left[0], dtype=tensor.get_dtype(), dim2=dim2, padding2=padding2
         )
         pw = pad_left[1] if dim2 is not None and len(pad_left) > 1 else 0
         w_sem = neighbor_sems[1] if len(neighbor_sems) > 1 else neighbor_sems[0]
@@ -491,6 +502,8 @@ class CCLManager:
             np_pad2_cluster_axis=np_pad2_cluster_axis_val,
             np_pad2_num_links=np_pad2_num_links,
             padding_mode=padding_mode,
+            input_pad_h=input_pad_h,
+            input_pad_w=input_pad_w,
         )
         return halo_buf
 
