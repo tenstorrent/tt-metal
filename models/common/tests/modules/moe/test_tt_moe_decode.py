@@ -20,9 +20,11 @@ import random
 import sys
 import traceback
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
+import yaml
 from loguru import logger
 from ttnn.operations.ccl import MoEActivationFunction
 
@@ -30,6 +32,16 @@ import ttnn
 from models.common.modules.moe.tt_moe_decode import TTMoEDecode
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
 from models.common.utility_functions import is_blackhole
+from models.perf.benchmarking_utils import BenchmarkProfiler
+
+try:
+    from tracy import signpost
+except ImportError:  # tracy is only available in profiling builds; perf signposts are best-effort
+
+    def signpost(*_args, **_kwargs):
+        pass
+
+
 from models.demos.deepseek_v3.tests.fused_op_unit_tests.moe.test_optimized_moe_decode_block import (
     create_torch_dispatch_input_expert_scores_tensor,
     create_torch_dispatch_input_tensor,
@@ -194,6 +206,49 @@ def _create_expert_indices(batch: int, num_experts: int, select_k: int) -> torch
     out = torch.full((batch, 1, 1, select_k), -1, dtype=torch.int32)
     for b in range(batch):
         for k, e in enumerate(random.sample(range(num_experts), select_k)):
+            out[b, 0, 0, k] = e
+    return out
+
+
+def _create_balanced_expert_indices(batch: int, num_experts: int, select_k: int) -> torch.Tensor:
+    """[batch, 1, 1, select_k] — each expert assigned the same token count (random, distinct per token).
+
+    Perf-mode routing: the `batch * select_k` total token→expert assignments are spread as evenly as
+    possible over `num_experts` (each expert gets `batch*select_k // num_experts`, and the remainder
+    experts get one extra — so counts differ by at most 1). This gives a realistic, non-hotspotted
+    load for the fabric/compute perf measurement rather than the arbitrary per-token sampling used for
+    correctness. Assignments are random but each token still gets `select_k` *distinct* experts.
+    """
+    assert 1 <= select_k <= num_experts, f"select_k={select_k} out of range for num_experts={num_experts}"
+    total = batch * select_k
+    base, rem = divmod(total, num_experts)
+    if rem:
+        logger.info(
+            f"Balanced routing not exact: {total} assignments over {num_experts} experts → counts {base}/{base+1}"
+        )
+    # Pool of expert ids with the target per-expert multiplicity, then dealt into tokens.
+    pool = [e for e in range(num_experts) for _ in range(base + (1 if e < rem else 0))]
+    random.shuffle(pool)
+    grid = [pool[i * select_k : (i + 1) * select_k] for i in range(batch)]
+
+    # Repair any token that drew a duplicate expert via count-preserving swaps with another token.
+    for i in range(batch):
+        guard = 0
+        while len(set(grid[i])) != select_k:
+            guard += 1
+            assert guard < 1_000_000, "failed to construct a balanced distinct assignment"
+            dup_pos = next(p for p in range(select_k) if grid[i].count(grid[i][p]) > 1)
+            v = grid[i][dup_pos]
+            j, q = random.randrange(batch), random.randrange(select_k)
+            other = grid[j][q]
+            # Swap is safe iff it removes the dup in row i without creating one in row j.
+            if j == i or other == v or other in grid[i] or v in grid[j]:
+                continue
+            grid[i][dup_pos], grid[j][q] = other, v
+
+    out = torch.full((batch, 1, 1, select_k), -1, dtype=torch.int32)
+    for b in range(batch):
+        for k, e in enumerate(grid[b]):
             out[b, 0, 0, k] = e
     return out
 
@@ -364,83 +419,62 @@ SKIP_LIST = [
 ]
 
 
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        pytest.param((16, 4), id="16x4"),
-        pytest.param(
-            (16, 1),
-            id="16x1",
-            marks=pytest.mark.skipif(
-                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1),
-                reason=f"16x1 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_16x1}",
-            ),
-        ),
-        pytest.param(
-            (8, 4),
-            id="8x4",
-            marks=pytest.mark.skipif(is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1), reason=f"16x1 MGD is set"),
-        ),
-        pytest.param(
-            (8, 1),
-            id="8x1",
-            marks=pytest.mark.skipif(not is_blackhole(), reason=f"8x1 grid is only for BH testing"),
-        ),
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        pytest.param(
-            {
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "trace_region_size": 500_000,
-            },
-            id="fabric_1D_ring",
-        ),
-        pytest.param(
-            {
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "trace_region_size": 500_000,
-            },
-            id="fabric_1D",
-            marks=pytest.mark.skipif(
-                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_BH_LB_8x1),
-                reason="FABRIC_1D only for BH LB 8x1 line topology",
-            ),
-        ),
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("num_iterations", [3])
-@pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=_config_id)
-@pytest.mark.timeout(900)
-@torch.no_grad()
-def test_tt_moe_decode(
+# ---------------------------------------------------------------------------
+# shared setup helpers (used by both the correctness and perf tests)
+# ---------------------------------------------------------------------------
+
+
+def _setup_decode(
     mesh_device: ttnn.MeshDevice,
     device_params: dict,
     config_path: Path,
-    num_iterations: int,
-):
+    divide_k_for_slice: bool = False,
+) -> SimpleNamespace:
+    """Resolve config, build torch weights/biases, and construct the `TTMoEDecode` module.
+
+    Returns a `SimpleNamespace` bundling the module, the resolved config, derived sizes, and
+    everything `_make_dispatch_inputs` / `_make_golden` need. Applies the same skip logic as the
+    correctness test (fabric/mesh compatibility, SKIP_LIST, sliceable mesh, shared-expert+bias).
+    Both `test_tt_moe_decode` and `test_tt_moe_decode_perf` funnel through here so the setup lives
+    in exactly one place.
+
+    `divide_k_for_slice` (perf only): when the config's authored mesh is sliced down to the device
+    mesh along the replicated axis, `select_experts_k` is divided by that slice degree — a token that
+    would route to K experts across the full mesh only reaches K/degree of them on our slice (e.g.
+    (8,4)→(8,1) with K=8 gives K=2). This is applied to the *raw* config data before the config object
+    is built, so every K-derived field (memory configs, effective_experts_k, dispatch layout) derives
+    consistently from the reduced K.
+    """
     torch.manual_seed(2005)
     random.seed(2005)
 
     mesh_shape = tuple(mesh_device.shape)
     fabric_config = device_params["fabric_config"]
-    is_line_fabric = fabric_config == ttnn.FabricConfig.FABRIC_1D
-    if is_line_fabric and mesh_shape != (8, 1):
-        pytest.skip("FABRIC_1D only valid for (8,1) BH LB mesh")
-    if not is_line_fabric and mesh_shape == (8, 1):
-        pytest.skip("(8,1) BH LB requires FABRIC_1D (line topology)")
 
     if str(config_path.name) in SKIP_LIST:
         pytest.skip(f"{config_path} is a known failure")
 
     topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
-    config = TTMoEDecodeConfig.from_yaml(config_path.read_text(), topology=topology)
+    raw_text = config_path.read_text()
+    config = TTMoEDecodeConfig.from_yaml(raw_text, topology=topology)
+
+    if divide_k_for_slice:
+        other = 1 - config.cluster_axis
+        slice_divisor = config.mesh_shape[other] // mesh_shape[other] if mesh_shape[other] else 0
+        if slice_divisor > 1:
+            if config.select_experts_k % slice_divisor != 0:
+                pytest.skip(
+                    f"select_experts_k={config.select_experts_k} not divisible by slice divisor {slice_divisor}"
+                )
+            new_k = config.select_experts_k // slice_divisor
+            logger.info(
+                f"Perf: reducing select_experts_k {config.select_experts_k} -> {new_k} "
+                f"(slice divisor {slice_divisor} along axis {other})"
+            )
+            raw = yaml.safe_load(raw_text)
+            raw["select_experts_k"] = new_k
+            config = TTMoEDecodeConfig.from_yaml(yaml.safe_dump(raw), topology=topology)
+
     if config.mesh_shape != mesh_shape:
         try:
             config = config.with_mesh_shape(mesh_shape)
@@ -527,76 +561,182 @@ def test_tt_moe_decode(
 
     logger.info("Module Setup complete")
 
+    return SimpleNamespace(
+        decode=decode,
+        config=config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        shard_dims=shard_dims,
+        batch=batch,
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+        routed_experts=routed_experts,
+        select_experts_k=select_experts_k,
+        w0_per_expert=w0_per_expert,
+        w1_per_expert=w1_per_expert,
+        w2_per_expert=w2_per_expert,
+        b0_per_expert=b0_per_expert,
+        b1_per_expert=b1_per_expert,
+        b2_per_expert=b2_per_expert,
+        shared_id_to_torch_w0=shared_id_to_torch_w0,
+        shared_id_to_torch_w1=shared_id_to_torch_w1,
+        shared_id_to_torch_w2=shared_id_to_torch_w2,
+    )
+
+
+def _make_dispatch_inputs(ctx: SimpleNamespace, balanced: bool = False):
+    """One iteration of on-device dispatch inputs. Returns `(tokens, indices, scores, tt_x, tt_indices, tt_scores)`.
+
+    `tokens`/`indices`/`scores` are the torch sources (kept for golden computation); the `tt_*`
+    values are the DRAM-resident device tensors fed to `decode.forward`. `balanced=True` (perf) spreads
+    tokens evenly across experts via `_create_balanced_expert_indices`; the default samples per-token.
+    """
+    tokens = create_torch_dispatch_input_tensor(ctx.batch, 1, ctx.hidden_size, ttnn.bfloat16)
+    if balanced:
+        indices = _create_balanced_expert_indices(ctx.batch, ctx.routed_experts, ctx.select_experts_k)
+    else:
+        indices = _create_expert_indices(ctx.batch, ctx.routed_experts, ctx.select_experts_k)
+    scores = create_torch_dispatch_input_expert_scores_tensor(ctx.batch, 1, ctx.select_experts_k, ttnn.bfloat16)
+
+    mesh_mapper = ttnn.ShardTensor2dMesh(ctx.mesh_device, dims=ctx.shard_dims, mesh_shape=ctx.mesh_shape)
+    tt_x = ttnn.from_torch(
+        tokens,
+        device=ctx.mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+    )
+    tt_indices = ttnn.from_torch(
+        indices,
+        device=ctx.mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+    )
+    tt_scores = ttnn.from_torch(
+        scores,
+        device=ctx.mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+    )
+    return tokens, indices, scores, tt_x, tt_indices, tt_scores
+
+
+@torch.no_grad()
+def _make_golden(ctx: SimpleNamespace, tokens: torch.Tensor, indices: torch.Tensor, scores: torch.Tensor):
+    """torch reference output for one dispatch iteration, including shared experts when configured."""
+    golden = _gen_output_golden(
+        tokens,
+        indices,
+        scores,
+        ctx.w0_per_expert,
+        ctx.w1_per_expert,
+        ctx.w2_per_expert,
+        ctx.batch,
+        ctx.hidden_size,
+        ctx.select_experts_k,
+        activation_type=ctx.config.compute.activation_type,
+        b0_per_expert=ctx.b0_per_expert,
+        b1_per_expert=ctx.b1_per_expert,
+        b2_per_expert=ctx.b2_per_expert,
+    )
+    if ctx.shared_id_to_torch_w0 is not None:
+        num_tp = ctx.mesh_shape[1 - ctx.cluster_axis]
+        golden = _add_shared_experts_to_golden_tp(
+            golden,
+            tokens,
+            ctx.batch,
+            ctx.shared_id_to_torch_w0,
+            ctx.shared_id_to_torch_w1,
+            ctx.shared_id_to_torch_w2,
+            shared_expert_scale=ctx.config.reduce.shared_expert_scale,
+            activation_type=ctx.config.compute.activation_type,
+            num_tp=num_tp,
+        )
+    return golden
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((16, 4), id="16x4"),
+        pytest.param(
+            (16, 1),
+            id="16x1",
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1),
+                reason=f"16x1 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_16x1}",
+            ),
+        ),
+        pytest.param(
+            (8, 4),
+            id="8x4",
+            marks=pytest.mark.skipif(is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1), reason=f"16x1 MGD is set"),
+        ),
+        pytest.param(
+            (8, 1),
+            id="8x1",
+            marks=pytest.mark.skipif(not is_blackhole(), reason=f"8x1 grid is only for BH testing"),
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "trace_region_size": 500_000,
+            },
+            id="fabric_1D_ring",
+        ),
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 500_000,
+            },
+            id="fabric_1D",
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_BH_LB_8x1),
+                reason="FABRIC_1D only for BH LB 8x1 line topology",
+            ),
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("num_iterations", [3])
+@pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=_config_id)
+@pytest.mark.timeout(900)
+@torch.no_grad()
+def test_tt_moe_decode(
+    mesh_device: ttnn.MeshDevice,
+    device_params: dict,
+    config_path: Path,
+    num_iterations: int,
+):
+    ctx = _setup_decode(mesh_device, device_params, config_path)
+    decode = ctx.decode
+    mesh_shape = ctx.mesh_shape
+
     # --- per-iteration inputs + goldens ---
     tt_dispatch_inputs = []
     tt_dispatch_indices = []
     tt_dispatch_scores = []
     output_goldens = []
     for _ in range(num_iterations):
-        tokens = create_torch_dispatch_input_tensor(batch, 1, hidden_size, ttnn.bfloat16)
-        indices = _create_expert_indices(batch, routed_experts, select_experts_k)
-        scores = create_torch_dispatch_input_expert_scores_tensor(batch, 1, select_experts_k, ttnn.bfloat16)
-
-        tt_dispatch_inputs.append(
-            ttnn.from_torch(
-                tokens,
-                device=mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
-            )
-        )
-        tt_dispatch_indices.append(
-            ttnn.from_torch(
-                indices,
-                device=mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.uint16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
-            )
-        )
-        tt_dispatch_scores.append(
-            ttnn.from_torch(
-                scores,
-                device=mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
-            )
-        )
-
-        golden = _gen_output_golden(
-            tokens,
-            indices,
-            scores,
-            w0_per_expert,
-            w1_per_expert,
-            w2_per_expert,
-            batch,
-            hidden_size,
-            select_experts_k,
-            activation_type=config.compute.activation_type,
-            b0_per_expert=b0_per_expert,
-            b1_per_expert=b1_per_expert,
-            b2_per_expert=b2_per_expert,
-        )
-        if shared_id_to_torch_w0 is not None:
-            num_tp = mesh_shape[1 - cluster_axis]
-            golden = _add_shared_experts_to_golden_tp(
-                golden,
-                tokens,
-                batch,
-                shared_id_to_torch_w0,
-                shared_id_to_torch_w1,
-                shared_id_to_torch_w2,
-                shared_expert_scale=config.reduce.shared_expert_scale,
-                activation_type=config.compute.activation_type,
-                num_tp=num_tp,
-            )
-        output_goldens.append(golden)
+        tokens, indices, scores, tt_x, tt_indices, tt_scores = _make_dispatch_inputs(ctx)
+        tt_dispatch_inputs.append(tt_x)
+        tt_dispatch_indices.append(tt_indices)
+        tt_dispatch_scores.append(tt_scores)
+        output_goldens.append(_make_golden(ctx, tokens, indices, scores))
 
     logger.info("Goldens computed")
 
@@ -632,3 +772,144 @@ def test_tt_moe_decode(
             all_passed = False
 
     assert all_passed, f"TTMoEDecode output verification failed for {config_path.stem}"
+
+
+# ---------------------------------------------------------------------------
+# perf test
+# ---------------------------------------------------------------------------
+
+
+def _run_forward_with_trace(num_iters: int, op_func, mesh_device: ttnn.MeshDevice, profiler: BenchmarkProfiler):
+    """Trace-capture a SINGLE `forward` and time `num_iters` back-to-back executions of it.
+
+    Capturing one forward and replaying it `num_iters` times (rather than capturing `num_iters`
+    forwards into one trace) is deliberate. `forward` reuses the module's *single* persistent
+    dispatch/combine buffers and global semaphores every call. Executing the one-forward trace
+    repeatedly reproduces steady-state decode exactly — each replay is a complete forward over those
+    persistent buffers, serialized on the command queue. Capturing many forwards into one trace
+    instead pipelines them with no sync between iterations, so a later iteration's dispatch can
+    overwrite a buffer an earlier iteration's combine still reads; the combine then emits a malformed
+    packet and the fabric mux forwards a header with a garbage payload size, tripping the
+    `size_bytes <= buffer_size_bytes` assert in `edm_fabric_worker_adapters.hpp`. The eager
+    correctness test avoids this by `synchronize_device`-ing between iterations.
+    """
+    logger.info("Compiling model")
+    op_func(1)
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info("Capturing single-forward trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    op_func(1)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info("Warming up (executing captured trace, untimed)")
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info(f"Starting trace perf test ({num_iters} iterations)...")
+    signpost("start")
+    profiler.start("tt-moe-decode-trace")
+    for _ in range(num_iters):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    profiler.end("tt-moe-decode-trace")
+    signpost("stop")
+
+    ttnn.release_trace(mesh_device, trace_id)
+
+    return profiler.get_duration("tt-moe-decode-trace") / num_iters * 1e6
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((16, 4), id="16x4"),
+        pytest.param(
+            (16, 1),
+            id="16x1",
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1),
+                reason=f"16x1 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_16x1}",
+            ),
+        ),
+        pytest.param(
+            (8, 4),
+            id="8x4",
+            marks=pytest.mark.skipif(is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1), reason=f"16x1 MGD is set"),
+        ),
+        pytest.param(
+            (8, 1),
+            id="8x1",
+            marks=pytest.mark.skipif(not is_blackhole(), reason=f"8x1 grid is only for BH testing"),
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "trace_region_size": 500_000,
+            },
+            id="fabric_1D_ring",
+        ),
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 500_000,
+            },
+            id="fabric_1D",
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_BH_LB_8x1),
+                reason="FABRIC_1D only for BH LB 8x1 line topology",
+            ),
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("num_iterations", [10])
+@pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=_config_id)
+@pytest.mark.timeout(900)
+@torch.no_grad()
+def test_tt_moe_decode_perf(
+    mesh_device: ttnn.MeshDevice,
+    device_params: dict,
+    config_path: Path,
+    num_iterations: int,
+):
+    """Trace-mode perf measurement for `TTMoEDecode.forward`.
+
+    Shares all setup with `test_tt_moe_decode` via `_setup_decode` / `_make_dispatch_inputs`, then times
+    `num_iterations` executions of a single-forward trace and reports the average per-iteration wall time.
+    Differs from the correctness test in two perf-oriented ways: `select_experts_k` is reduced to reflect
+    the mesh slice (`divide_k_for_slice`), and tokens are balanced evenly across experts (`balanced`).
+    Correctness is not re-checked here (see `test_tt_moe_decode`); a single set of dispatch inputs is
+    reused across all iterations and outputs are not retained.
+    """
+    ctx = _setup_decode(mesh_device, device_params, config_path, divide_k_for_slice=True)
+    decode = ctx.decode
+
+    # A single persistent set of dispatch inputs, reused every iteration. `forward` only ever
+    # deallocates its own internally-formatted copies (see `_format_dispatch_inputs`), never the
+    # caller-owned tensors, so reuse across the trace is safe. Tokens are spread evenly across experts
+    # (balanced routing) so the measurement reflects a realistic, non-hotspotted load.
+    _, _, _, tt_x, tt_indices, tt_scores = _make_dispatch_inputs(ctx, balanced=True)
+
+    def _run_op(n: int):
+        tt_out = None
+        for _ in range(n):
+            tt_out = decode.forward(tt_x=tt_x, tt_scores=tt_scores, tt_indices=tt_indices, layer_id=0)
+        return tt_out
+
+    profiler = BenchmarkProfiler()
+    try:
+        avg_us = _run_forward_with_trace(num_iterations, _run_op, mesh_device, profiler)
+    except Exception as e:
+        _print_exception_and_fail(f"forward trace perf run failed: {type(e).__name__}")
+
+    logger.info(f"[{config_path.stem}] TTMoEDecode.forward avg over {num_iterations} iters: {avg_us:.2f} us")
