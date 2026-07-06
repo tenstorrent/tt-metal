@@ -269,11 +269,9 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
         if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
             forward_descriptor_to_peer(local_endpoint_desc, peer_rank, context);
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(local_endpoint_desc, peer_rank, context);
-            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
         } else {
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(local_endpoint_desc, peer_rank, context);
             forward_descriptor_to_peer(local_endpoint_desc, peer_rank, context);
-            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
         }
         write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
         execute_with_timeout(
@@ -284,18 +282,31 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
             forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(
                 local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
-            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
         } else {
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(
                 local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
             forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
-            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
         }
         write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
 
         std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(config_.sender_mesh_id.value(), rank_translation_table_);
         std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(config_.receiver_mesh_id.value(), rank_translation_table_);
         execute_with_timeout([&]() { barrier_across_send_recv_ranks(sender_ranks, recv_ranks, context); });
+    }
+
+    // Build the [SENDER, RECEIVER] fabric node map from the exchanged descriptors. Works for
+    // submeshes because each endpoint advertised its own resolved nodes (indexed by connection); read
+    // later by the send/recv ops via MeshSocket::get_fabric_node_id.
+    const bool is_sender = socket_endpoint_type_ == SocketEndpoint::SENDER;
+    const SocketPeerDescriptor& sender_desc = is_sender ? local_endpoint_desc : remote_endpoint_desc;
+    const SocketPeerDescriptor& receiver_desc = is_sender ? remote_endpoint_desc : local_endpoint_desc;
+    auto& sender_map = fabric_node_id_map_[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::SENDER)];
+    auto& receiver_map =
+        fabric_node_id_map_[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::RECEIVER)];
+    const auto& connections = config_.socket_connection_config;
+    for (uint32_t i = 0; i < connections.size(); ++i) {
+        sender_map.insert_or_assign(connections[i].sender_core.device_coord, sender_desc.fabric_node_ids.at(i));
+        receiver_map.insert_or_assign(connections[i].receiver_core.device_coord, receiver_desc.fabric_node_ids.at(i));
     }
 }
 
@@ -325,7 +336,19 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     write_socket_configs(
         recv_config_buffer, recv_peer_descriptor, send_peer_descriptor, SocketEndpoint::RECEIVER, sender);
 
-    auto fabric_node_id_map = generate_fabric_node_id_map(config, sender, receiver);
+    // Both endpoints are local; build the [SENDER, RECEIVER] map directly from the sender/receiver
+    // descriptors (each carries one resolved node per connection, indexed by connection).
+    std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> fabric_node_id_map;
+    auto& sender_map = fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::SENDER)];
+    auto& receiver_map =
+        fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::RECEIVER)];
+    const auto& connections = config.socket_connection_config;
+    for (uint32_t i = 0; i < connections.size(); ++i) {
+        sender_map.insert_or_assign(
+            connections[i].sender_core.device_coord, send_peer_descriptor.fabric_node_ids.at(i));
+        receiver_map.insert_or_assign(
+            connections[i].receiver_core.device_coord, recv_peer_descriptor.fabric_node_ids.at(i));
+    }
 
     sender_socket.fabric_node_id_map_ = fabric_node_id_map;
     receiver_socket.fabric_node_id_map_ = fabric_node_id_map;
