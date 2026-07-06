@@ -19,18 +19,18 @@ import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer
 
 from .transformer import RMSNormLayer
-from .autograd_ops import autograd_slice, autograd_concat, autograd_split, split_heads
+from .autograd_ops import autograd_split
 
 
 class MultiHeadLatentAttention(AbstractModuleBase):
     """Multi-head Latent Attention (MLA) layer.
 
     Follows the DeepSeek-V3 naive-mode attention:
-      Q (q_lora_rank > 0): x -> wq_a -> norm -> wq_b -> split_heads
-      Q (q_lora_rank == 0): x -> wq -> split_heads   (direct, no LoRA bottleneck)
-      Both: -> [q_nope, q_pe] -> RoPE(q_pe) -> cat
-      KV: x -> wkv_a -> [kv_latent, k_pe] -> norm(kv_latent) -> wkv_b -> split_heads
-          -> [k_nope, v] + RoPE(k_pe) broadcast -> cat(k_nope, k_pe)
+      Q (q_lora_rank > 0): x -> wq_a -> norm -> wq_b
+      Q (q_lora_rank == 0): x -> wq (direct, no LoRA bottleneck)
+      KV: x -> wkv_a -> split(kv_latent, k_pe) -> norm(kv_latent) -> wkv_b
+          -> RoPE(k_pe) broadcast
+      Q/K/V assembly: qkv_assemble + mla_q_rope on Q
       Attention: fused causal SDPA(Q, K, V) -> fuse_heads -> wo
 
     Causal-only: the fused SDPA generates the causal mask on chip, so this layer
@@ -75,11 +75,9 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         self.wo = LinearLayer(config.n_heads * config.v_head_dim, config.dim, has_bias=False)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        B, _, S, _ = list(x.get_value().shape)
         n_heads = self.n_heads
         qk_nope = self.qk_nope_head_dim
         qk_rope = self.qk_rope_head_dim
-        qk_head = self.qk_head_dim
         v_dim = self.v_head_dim
 
         # ── Q path ──
