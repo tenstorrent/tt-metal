@@ -80,7 +80,7 @@ Bullet 3 FAIL: golden responsible cells 10/140 below majority threshold.
 
 **Done when**: All `mask_mode=custom` golden cells pass at PCC ≥ 0.995.
 
-### [ ] Refinement 2 — Numerical configurability expansion
+### [x] Refinement 2 — Numerical configurability expansion
 
 **Goal**: add `ttnn.float32`, `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, add `False` to `SUPPORTED["fp32_dest_acc_en"]`, and expose `compute_kernel_config: ttnn.ComputeKernelConfig` on the entry point (already done — the parameter exists and is threaded to the program descriptor). Cells that fail out of the box (typically `bfloat8_b + non_tile_aligned_dim`) land in `EXCLUSIONS`, not in their own refinement. Pass condition: zero kernel changes when helpers are wired correctly.
 

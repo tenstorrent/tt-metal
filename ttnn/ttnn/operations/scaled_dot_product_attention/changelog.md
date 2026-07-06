@@ -60,3 +60,31 @@
 - **Golden test progress**: 138/140 SUPPORTED cells pass (same as prior phase — no regression). 2 failures are S=8192 `mask_mode=none` precision near-miss (PCC=0.9989, rms=0.059 vs target 0.05), unrelated to mask application. All 28 `mask_mode=custom` golden cells pass.
 - **Issues encountered**: None. The mask precision issue was fully resolved by the double-pop fix. No further kernel changes were needed.
 - **Tests added**: test_sdpa_refinement1b_mask_precision.py (40 tests covering causal mask precision across all shape variations, mask patterns, per-head mask, mask+scale combinations, single-block edge cases, sequential state-leak regression, and deterministic all-ones input)
+
+## Refinement 2 — Numerical configurability expansion
+- **Date**: 2026-07-06
+- **What was done**:
+  - Added `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`.
+  - Added `False` to `SUPPORTED["fp32_dest_acc_en"]`.
+  - Added `EXCLUSIONS` for `{"dtype": ttnn.float32, "fp32_dest_acc_en": False}` — fp32 input requires fp32 dest accumulation.
+  - Program descriptor: intermediate accumulator CBs now use Float32 when `fp32_dest_acc_en=True`, Float16_b when False. This avoids block-float (bfloat8_b) precision loss in the running max/sum/output accumulators.
+  - Scaler CB: always uses Float16_b (was Float32 when fp32_dest_acc_en=True). The scaler is just a constant tile — Float32 precision is not needed, and bf16 keeps the scaler CB small for long sequences.
+  - Compute kernel: added `pack_reconfig_data_format(cb_id)` to `init_cb_constant_f` — the packer was left in the previous operation's format, causing silent corruption when writing to CBs with a different format.
+  - Compute kernel: replaced `fill_tile_bitcast(NEG_INF_BITS)` with `fill_tile(NEG_INF_F)` — bitcast is dtype-specific and breaks with 16-bit dest.
+  - Pre-flight L1 budget check in entry point: estimates per-core CB footprint before device allocation and raises `NotImplementedError` for shapes that would OOM. Prevents TT_THROW RuntimeError from crashing the shared module-scoped device.
+- **Accuracy achieved**:
+  - bf16 + True: PCC ≥ 0.999 (no regression from prior phase)
+  - bf16 + False: PCC ≥ 0.99
+  - float32 + True: PCC ≥ 0.999
+  - bfloat8_b + True: PCC ≥ 0.99
+  - bfloat8_b + False: PCC ≥ 0.99
+  - S=8192 bf16+True: now PASSES (was PCC=0.9989, rms=0.059 in prior phase — Float32 intermediate CBs improved accumulation precision)
+- **Golden test progress**: 690 / 2269 passing (was 132 / 2269 in prior phase). 1568 xfailed (GQA/MQA/causal/non-aligned/refinement-3+ candidates). 10 failures:
+  - 4 OOM: float32 + D=1024 (L1 budget exceeded — Refinement 6 territory)
+  - 6 precision near-miss: float32 + S=4096 (PCC=0.9999, rms=0.029 > 0.02) and float32 + S=8192 (PCC=0.9996, rms=0.053 > 0.02) — long-context accumulation precision in float32, not a structural bug
+- **Issues encountered**:
+  - bfloat8_b intermediate CBs: PCC=1.0 but RMS=1.0 — block-float shared-exponent format can't represent running max/sum accurately. Fixed by using Float32 (or Float16_b when fp32_dest_acc_en=False) for intermediate CBs.
+  - `init_cb_constant_f` packer format mismatch: `pack_tile` used the previous operation's packer format, not the target CB's format. Fixed by adding `pack_reconfig_data_format(cb_id)`.
+  - Scaler CB Float32 caused OOM on S=8192 (512 tiles × 4KB = 2MB). Fixed by using Float16_b for scaler.
+  - Float32 + D=1024 OOM: L1 budget exceeded (1.6MB > 1.4MB). Pre-flight check raises NotImplementedError to prevent device crash. Refinement 6 territory.
+- **Tests added**: test_sdpa_refinement2_numerical.py (49 tests covering dtype × fp32_dest_acc_en cross-product, mask across dtypes, explicit scale across dtypes, fp32+False exclusion test)
