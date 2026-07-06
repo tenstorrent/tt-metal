@@ -48,6 +48,7 @@ SCENARIOS = [
     ("r32_1tr", 32),  # 1 tile-row -> 56 compute-blocks -> 56 cores (was 1 core under row split)
     ("r96_3tr", 96),  # 3 tile-rows -> 168 compute-blocks -> all 110 cores
     ("r1024_1K", 1024),  # 32 tile-rows -> 1792 compute-blocks (was 32 cores under row split)
+    ("r1280", 1280),  # 40 tile-rows -> 2240 compute-blocks; all 110 cores busy
     ("r4096_10pct", 4096),  # 128 tile-rows; row split already fills the grid here
     ("r10240_10K", 10240),  # 320 tile-rows, the headline number (unchanged by this optimization)
 ]
