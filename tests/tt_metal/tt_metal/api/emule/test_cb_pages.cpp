@@ -28,7 +28,7 @@ TEST_F(MeshDeviceFixture, CB_Reservation_Overflow_SanityCheck) {
     uint32_t num_pages = 2;
     uint32_t page_size = 1024;
     CircularBufferConfig cb_config = CircularBufferConfig(num_pages * page_size, {{cb_id, tt::DataFormat::Float16_b}})
-        .set_page_size(cb_id, page_size);
+                                         .set_page_size(cb_id, page_size);
     CreateCircularBuffer(program, logical_core, cb_config);
 
     std::string kernel_src = R"(
@@ -43,16 +43,9 @@ TEST_F(MeshDeviceFixture, CB_Reservation_Overflow_SanityCheck) {
         program,
         kernel_src,
         logical_core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default
-        }
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_DEATH(
-        detail::LaunchProgram(device, program),
-        ".*\\[ASAN ERROR\\] CB Reservation Overflow:.*"
-    );
+    EXPECT_DEATH(detail::LaunchProgram(device, program), ".*\\[ASAN ERROR\\] CB Reservation Overflow:.*");
 }
 
 // Boundary positive control: reserving EXACTLY the CB's capacity (n ==
