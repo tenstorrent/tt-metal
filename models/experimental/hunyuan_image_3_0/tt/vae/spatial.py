@@ -44,8 +44,8 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
 
     Per-group statistics pool over (channels-in-group x T x H x W). Each device computes
     its local sum / sum-of-squares (in the activation's native dtype, e.g. bf16 — the
-    full-size sum/multiply ops dominate device time, so avoid the fp32 upcast) per group,
-    the (tiny) [1,1,G,1] stat tensors are all-reduced across the h/w mesh axes to global
+    full-size reduce ops dominate device time, so avoid the fp32 upcast) per group, the
+    (tiny) [1,1,G,1] stat tensors are all-reduced across the h/w mesh axes to global
     stats, then the LOCAL shard is normalized and affine-transformed. Per-core work stays
     at the shard size, so L1 never overflows. Requires ``norm._raw_gamma`` / ``norm._raw_beta``
     ([1,1,1,C], stored in the norm's own dtype) attached at weight-load time (the packed
@@ -66,6 +66,9 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
     # Stack x and x^2 on dim1 before reducing so this (the most expensive op in the
     # whole graph at full spatial res) dispatches once instead of twice -- same
     # one-round-trip trick used below for the cross-mesh stat all-reduce.
+    # (ttnn.var's Welford reduce was tried here instead of this sum/sum-of-squares
+    # approach, to skip materializing x^2 -- measured ~4x SLOWER in practice
+    # (WelfordReduceDeviceOperation cost ~49ms/call vs sum's ~1-15us), so don't retry.)
     xsq = ttnn.multiply(x, x)
     x_xsq = ttnn.concat([x, xsq], dim=1)  # [1,2,n_local,C]
     ttnn.deallocate(xsq)
