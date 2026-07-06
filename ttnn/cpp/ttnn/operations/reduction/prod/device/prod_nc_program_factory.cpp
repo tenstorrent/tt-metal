@@ -135,7 +135,9 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
 
-    const bool fp32_dest_acc_en = true;
+    // Enabling fp32 DEST accumulation for bf16 output forces the Wormhole HiFi3
+    // workaround below, which adversly affects the accuracy of the reduction.
+    const bool fp32_dest_acc_en = output.dtype() != tt::tt_metal::DataType::BFLOAT16;
     // On Wormhole B0, HiFi4 must not be combined with fp32_dest_acc_en due to a hardware bug
     // (see tenstorrent/tt-metal#38306); drop to HiFi3 only on that arch. Other architectures keep HiFi4.
     const bool needs_wh_fp32_workaround = fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0;
