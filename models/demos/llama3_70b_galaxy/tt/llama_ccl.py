@@ -81,17 +81,6 @@ class TT_CCL:
             )
         self.weight_cache_path = model_args.weight_cache_path(ttnn.bfloat8_b)
         self.num_cbs = 2
-        # When a persistent output buffer is reused across non-blocking decode
-        # trace replays, line_all_gather normally drops the barrier semaphore
-        # (persistent buffer treated as a substitute for barrier syncing). That
-        # is unsafe for the sampling gathers (SAMPLING_VALUES/SAMPLING_INDICES):
-        # their consumers (ttnn.add offset / ttnn.sampling) run on the sampling
-        # sub-core grid, a different sub-device than the gather worker, so without
-        # a barrier the next step's gather can overwrite the buffer before the
-        # current step finishes reading it -> a few of 32 slots get stale
-        # candidates -> non-deterministic first decode token (flaky for months).
-        # Keep the barrier for these gathers even with a persistent buffer.
-        self._barrier_buffer_keys = {"SAMPLING_VALUES", "SAMPLING_INDICES", "SAMPLING"}
         self.from_remote_semaphore_handles = []
         self.to_remote_semaphore_handles = []
         self.cluster_shape = model_args.cluster_shape
@@ -148,6 +137,27 @@ class TT_CCL:
         self.barrier_semaphore_idx = [0, 0]
         self.persistent_buffers = {}
         self.all_gather_buffers = {}
+        # WAR-hazard semaphore for safe reuse of the persistent SAMPLING_VALUES/INDICES all-gather
+        # buffers under decode trace. After its final read, the downstream sampling op increments this
+        # (once per user core) on the SAMPLING_VALUES gather's drain core; that gather waits on it
+        # before overwriting the buffer, closing the cross-sub-device Write-After-Read race that made
+        # the first decode token non-deterministic under trace. Created on sub_device_crs (a superset
+        # of the CCL worker cores, so the drain core's local copy is allocated).
+        #
+        # war_sem_drain_core is the gather's drain core = choose_worker_cores(worker_sub_device_id)[0]
+        # = first row-wise core of worker_cores_range_set (model_config.get_core_ranges), which is
+        # (1, 0). If that worker-core layout ever changes, update this coordinate to match.
+        self.war_semaphore = None
+        self.war_sem_drain_core = None
+        self.war_sem_wait_value = self.max_batch_size
+        if mode == "decode":
+            self.war_sem_drain_core = ttnn.CoreCoord(1, 0)
+            # Init value == wait value so the very first decode step's gather wait passes immediately
+            # (no prior sampling has signalled yet); each step then rebalances (32 signals -> reset 0).
+            self.war_semaphore = ttnn.create_global_semaphore(
+                self.mesh_device, self.sub_device_crs, self.war_sem_wait_value
+            )
+
         if mode == "decode":
             self.persistent_buffers = self.get_persistent_buffers()
             self.all_gather_buffers = self.get_all_gather_buffers()
@@ -1266,11 +1276,7 @@ class TT_CCL:
             # Wormhole / prefetcher path uses the experimental async all-gather (identical to main).
             # The Blackhole no-prefetcher bring-up uses the stable public all_gather below.
             barrier_semaphore = None
-            if persistent_buffer is None or buffer_key in self._barrier_buffer_keys:
-                # persistent_buffer is None -> normal barrier. buffer_key in the
-                # sampling set -> persistent buffer present but reused cross-step by a
-                # different sub-device consumer, so keep the barrier to enforce
-                # consume-before-overwrite ordering and restore deterministic sampling.
+            if persistent_buffer is None:
                 barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
             semaphores = (
                 self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
@@ -1280,6 +1286,11 @@ class TT_CCL:
                     self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs],
                 ]
             )
+            # Only the SAMPLING_VALUES gather (first sampling gather of the decode step) waits on the WAR
+            # semaphore; being first on the worker sub-device it program-orders the whole sampling section
+            # after the previous step's ttnn.sampling, so the later SAMPLING_INDICES gather is safe too.
+            war_semaphore = self.war_semaphore if buffer_key == "SAMPLING_VALUES" else None
+            war_wait_value = self.war_sem_wait_value if buffer_key == "SAMPLING_VALUES" else None
             ttnn_tensor_out = ttnn.experimental.all_gather_async(
                 input_tensor_mesh,
                 dim,
@@ -1293,6 +1304,8 @@ class TT_CCL:
                 memory_config=memory_config,
                 subdevice_id=self.worker_sub_device_id if use_subdevice else None,
                 use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
+                war_semaphore=war_semaphore,
+                war_wait_value=war_wait_value,
             )
         else:
             # Default to the stable/public all_gather API.

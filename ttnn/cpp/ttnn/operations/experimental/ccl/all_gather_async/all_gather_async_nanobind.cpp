@@ -156,7 +156,9 @@ ttnn::Tensor all_gather_async_wrapper_mesh_device(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<CoreRangeSet>& sub_core_grids,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    [[maybe_unused]] const std::optional<GlobalSemaphore>& war_semaphore = std::nullopt,
+    [[maybe_unused]] std::optional<uint32_t> war_wait_value = std::nullopt) {
     if constexpr (Reversed) {
         return ttnn::experimental::all_gather_async_reversed(
             input_tensor,
@@ -194,7 +196,9 @@ ttnn::Tensor all_gather_async_wrapper_mesh_device(
             false,
             sub_core_grids,
             num_workers_per_link,
-            num_buffers_per_channel);
+            num_buffers_per_channel,
+            war_semaphore,
+            war_wait_value);
     }
 }
 
@@ -296,7 +300,9 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("barrier_semaphore") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none()));
+            nb::arg("num_buffers_per_channel") = nb::none(),
+            nb::arg("war_semaphore") = nb::none(),
+            nb::arg("war_wait_value") = nb::none()));
 
     const auto* all_gather_async_reversed_doc = R"doc(
 

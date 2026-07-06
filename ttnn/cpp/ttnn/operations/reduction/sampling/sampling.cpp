@@ -16,9 +16,20 @@ Tensor sampling(
     const Tensor& temp,
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    const std::optional<Tensor>& output_tensor) {
+    const std::optional<Tensor>& output_tensor,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& war_semaphore,
+    const std::optional<tt::tt_metal::CoreCoord>& war_sem_drain_core) {
     return ttnn::prim::sampling(
-        input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, output_tensor);
+        input_values_tensor,
+        input_indices_tensor,
+        k,
+        p,
+        temp,
+        seed,
+        sub_core_grids,
+        output_tensor,
+        war_semaphore,
+        war_sem_drain_core);
 }
 
 }  // namespace ttnn
