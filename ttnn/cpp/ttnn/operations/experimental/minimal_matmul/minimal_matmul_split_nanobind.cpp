@@ -72,11 +72,12 @@ void bind_minimal_matmul_split(nb::module_& mod) {
             and before writing to output buffers.
 
         fuse_swiglu : bool, default: False
-            If True, applies SwiGLU activation after the matmul (and bias, if provided): each output chunk of width
-            N/chunks is treated as interleaved gate/up pairs, and the result is silu(gate) * up. The output width
-            per chunk is therefore N/chunks/2. The weight (and bias, if present) must be pre-interleaved on the
-            host so that column tile 2p is the gate and 2p+1 is the up projection for each pair p.
-            Mutually exclusive with fused_activation.
+            If True, applies SwiGLU activation fused into the matmul: the weight tensor's N columns are
+            interpreted as a tile-pair-interleaved [gate|up] layout — column tile 2p is the gate and 2p+1 is
+            the up projection for each pair p (``models.tt_dit.utils.tensor.prepare_for_fused_swiglu`` can be used to produce this layout).
+            Each output chunk of width N/chunks has SwiGLU applied, so the output width
+            per chunk is N/chunks/2. The bias (if provided) must use the same column layout. N/chunks must be
+            divisible by 2*32. Mutually exclusive with fused_activation.
 
         config : Optional[MinimalMatmulConfig], default: None
             Execution configuration in tile units. If omitted, reasonable defaults are selected based on tensor

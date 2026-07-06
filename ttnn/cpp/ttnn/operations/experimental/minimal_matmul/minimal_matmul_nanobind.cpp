@@ -56,11 +56,12 @@ void bind_minimal_matmul(nb::module_& mod) {
             after bias (if any) and before the tile is written out.
 
         fuse_swiglu : bool, default: False
-            If True, applies SwiGLU activation after the matmul (and bias, if provided): the output of width N is
-            treated as interleaved gate/up pairs, and the result is silu(gate) * up. The output width is therefore
-            N/2. The weight (and bias, if present) must be pre-interleaved on the host so that column tile 2p is
-            the gate and 2p+1 is the up projection for each pair p. N must be divisible by 2*32 (two tile-aligned
-            halves). Mutually exclusive with fused_activation.
+            If True, applies SwiGLU activation fused into the matmul: the weight tensor's N columns are
+            interpreted as a tile-pair-interleaved [gate|up] layout — column tile 2p is the gate and 2p+1 is
+            the up projection for each pair p (``models.tt_dit.utils.tensor.prepare_for_fused_swiglu``
+            can be used to produce this layout). The op computes silu(gate) * up and the output width is therefore N/2.
+            The bias (if provided) must use the same column layout. N must be divisible by 2*32 (two
+            tile-aligned halves). Mutually exclusive with fused_activation.
 
         config : Optional[MinimalMatmulConfig], default: None
             Execution configuration in tile units. If omitted, reasonable defaults are selected based on tensor
