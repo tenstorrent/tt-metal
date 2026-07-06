@@ -421,10 +421,10 @@ class TtIndexer:
         cache. forward() calls this on every chunk so the key-cache stays complete — else later chunks
         score against missing keys for the early prefix. (Dense v3.1 binds a NullIndexer, so write_k never
         runs there.) Two paths, fixed by self._blockcyclic:
-          - block-cyclic (GLM chunked): rope the PER-CHIP shard at its block-cyclic positions, then write
+          - block-cyclic (GLM/DS chunked): rope the PER-CHIP shard at its block-cyclic positions, then write
             it in place via update_padded_kv_cache (per-user slot, pad-aware kv_actual_global offset) — no
             SP all-gather, no O(n^2) concat; the cache stays SP-sharded.
-          - natural (single-shot / DS chunked): SP all-gather to full-glob + natural rope + concat-grow."""
+          - natural (single-shot, all variants): SP all-gather to full-glob + natural rope + concat-grow."""
         k = ttnn.linear(
             hidden_states,
             self._idx_wk,

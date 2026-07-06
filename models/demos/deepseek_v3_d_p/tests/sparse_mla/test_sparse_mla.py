@@ -502,7 +502,7 @@ def run_sparse_mla_rotated_case(
 def test_sparse_mla_rotated(
     mesh_device, seq_len, iters_isl, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
-    run_sparse_mla_rotated_case(variant, config_only, mesh_device, iters_isl, 5120, ds_layer, ds_checkpoint, ds_repo)
+    run_sparse_mla_rotated_case(variant, config_only, mesh_device, iters_isl, seq_len, ds_layer, ds_checkpoint, ds_repo)
 
 
 # One combined parametrization (variant, mesh_device, seq_len) instead of three independent axes: the
