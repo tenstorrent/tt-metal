@@ -247,7 +247,7 @@ class TtIndexer:
                 sp_axis=self.sp_axis,
                 num_kvpe_cache_layers=1,
                 num_users=slot_num,
-                dtype=ttnn.bfloat16,  # keep indexer keys bf16 (the natural concat path did); avoid bf8 top-k loss
+                dtype=ttnn.bfloat8_b,
             )
         self._upload_weights(idx_host)
         self._build_rope_tables()
@@ -446,6 +446,9 @@ class TtIndexer:
             # write it into this user's slot. update_padded_kv_cache places each chip's rows at the
             # block-cyclic offset (pad-aware) — the same math the query/key rope above uses.
             k = self._bc_rope_pe(k, rope_tensors, start_pos)  # [1, 1, S/sp, D_idx] bf16
+            k_bf8 = ttnn.typecast(k, ttnn.bfloat8_b)  # match the bfp8 index-key cache
+            ttnn.deallocate(k)
+            k = k_bf8
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 self._index_kbuf,
                 k,

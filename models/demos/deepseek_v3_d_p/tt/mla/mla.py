@@ -711,7 +711,7 @@ class ttMLA:
             attn_out,
             self.wkv_b2_weight,
             compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("wkv_b2", seq_len_local),
+            # **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
         return attn_out
 
@@ -726,7 +726,7 @@ class ttMLA:
             hidden_states,
             self.q_a_proj_weight,
             compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("q_a_proj", seq_len_local),
+            # **self._get_mm_kwargs("q_a_proj", seq_len_local),
         )
 
         # All reduce (skip for single-device TP)
@@ -775,7 +775,7 @@ class ttMLA:
             qr,
             self.q_b_proj_weight,
             compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("q_b_proj", seq_len_local),
+            #            **self._get_mm_kwargs("q_b_proj", seq_len_local),
         )
         ttnn.deallocate(qr)
 
@@ -800,7 +800,7 @@ class ttMLA:
             tt_q_nope,
             self.wkv_b1_weight,
             compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("wkv_b1", seq_len_local),
+            # **self._get_mm_kwargs("wkv_b1", seq_len_local),
         )
 
         tt_q_rope = self._apply_rope(tt_q_rope, rope_tensors, kv_actual_isl)
@@ -833,7 +833,7 @@ class ttMLA:
             hidden_states,
             self.kv_a_proj_with_mqa_weight,
             compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("kv_a_proj_with_mqa", seq_len_local),
+            # **self._get_mm_kwargs("kv_a_proj_with_mqa", seq_len_local),
         )
 
         # All reduce (skip for single-device TP)
@@ -897,7 +897,7 @@ class ttMLA:
             t,
             self.wkv_b2_weight,
             compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("wkv_b2", seq_len_local),
+            #            **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
     def _to_cache_format(self, t: ttnn.Tensor, cache: ttnn.Tensor) -> ttnn.Tensor:
@@ -937,7 +937,7 @@ class ttMLA:
             v_out,
             self.o_proj_weight,
             compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("o_proj", seq_len_local),
+            # **self._get_mm_kwargs("o_proj", seq_len_local),
         )
         if self.tp_factor > 1:
             return ttnn.experimental.reduce_scatter_minimal_async(
