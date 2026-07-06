@@ -10,7 +10,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
-from ..utils.tensor import interleave_swiglu_tiles
+from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
@@ -83,12 +83,12 @@ class Linear(Module):
         if "weight" in state:
             weight = state["weight"].transpose(0, 1)
             if self.fuse_swiglu:
-                weight = interleave_swiglu_tiles(weight, ndev=1)
+                weight = prepare_for_fused_swiglu(weight, ndev=1)
             state["weight"] = weight
         if "bias" in state:
             bias = state["bias"].reshape(1, -1)
             if self.fuse_swiglu:
-                bias = interleave_swiglu_tiles(bias, ndev=1)
+                bias = prepare_for_fused_swiglu(bias, ndev=1)
             state["bias"] = bias
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None) -> ttnn.Tensor:
@@ -205,14 +205,14 @@ class ColParallelLinear(Module):
         if weight is not None:
             weight = weight.transpose(0, 1)
             if self.fuse_swiglu:
-                weight = interleave_swiglu_tiles(weight, ndev=self._mesh_axis_size)
+                weight = prepare_for_fused_swiglu(weight, ndev=self._mesh_axis_size)
             elif self.activation_fn == "swiglu":
                 weight = permute_for_swiglu(weight)
             state["weight"] = weight
         if bias is not None:
             bias = bias.reshape(1, -1)
             if self.fuse_swiglu:
-                bias = interleave_swiglu_tiles(bias, ndev=self._mesh_axis_size)
+                bias = prepare_for_fused_swiglu(bias, ndev=self._mesh_axis_size)
             elif self.activation_fn == "swiglu":
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias

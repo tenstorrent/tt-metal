@@ -17,19 +17,26 @@ if TYPE_CHECKING:
     from types import EllipsisType
 
 
-def interleave_swiglu_tiles(tensor: torch.Tensor, ndev: int, tile_width: int = 32) -> torch.Tensor:
+def prepare_for_fused_swiglu(
+    tensor: torch.Tensor, ndev: int, tile_width: int = 32, *, gate_is_first: bool = False
+) -> torch.Tensor:
     """Reorder a packed [.., 2N] SwiGLU weight/bias for the fused matmul kernel.
 
-    Input columns are torch order ``[first (N) | second (N)]`` where the activation is
-    ``first * silu(second)`` (torch ``x, gate = chunk(.,2,-1); x * silu(gate)``), column-
-    parallel sharded into ``ndev`` contiguous blocks. The fused kernel emits
-    ``silu(even_tile) * odd_tile`` per pair, so each device's local block is laid out as
-    tile-pairs ``[second_t0, first_t0, second_t1, first_t1, ...]`` (32-col tiles): the silu'd
-    half (``second``) goes to the even slot, the multiplicand (``first``) to the odd slot.
+    The fused kernel emits ``silu(even_tile) * odd_tile`` per pair, so gate (the silu'd half)
+    must occupy the even tile slot and up (the multiplicand) the odd tile slot within each
+    device block.
 
-    This subsumes the old "[first_d | second_d] contiguous per device" permute: it additionally
-    interleaves the two halves at tile granularity (and orders them silu-half-first) within
-    each device block.
+    ``gate_is_first`` specifies the input column ordering:
+
+    - ``gate_is_first=False`` (default): input is ``[up (N) | gate (N)]``, i.e.
+      ``up, gate = chunk(., 2, -1); up * silu(gate)`` — torch/HuggingFace convention.
+    - ``gate_is_first=True``: input is ``[gate (N) | up (N)]``, i.e.
+      ``gate, up = chunk(., 2, -1); silu(gate) * up``.
+
+    In both cases the output is laid out as ``ndev`` contiguous device blocks, each containing
+    interleaved gate/up tile pairs ``[gate_t0, up_t0, gate_t1, up_t1, ...]`` for that device's shard.
+    Splitting the output evenly across ``ndev`` devices along the last dimension gives each device
+    a correctly interleaved local block.
     """
     rows = tensor.shape[0]
     two_N = tensor.shape[-1]
@@ -41,8 +48,9 @@ def interleave_swiglu_tiles(tensor: torch.Tensor, ndev: int, tile_width: int = 3
     # [rows, half=2, d=ndev, t=tiles_per_dev, c=tile_width] -> [rows, d, t, half, c]
     t = tensor.reshape(rows, 2, ndev, tiles_per_dev, tile_width)
     t = t.permute(0, 2, 3, 1, 4)
-    # flip the half axis so each pair is [second (silu'd), first] -> even slot is silu'd
-    t = t.flip(3)
+
+    if not gate_is_first:
+        t = t.flip(3)
     return t.reshape(rows, two_N)
 
 

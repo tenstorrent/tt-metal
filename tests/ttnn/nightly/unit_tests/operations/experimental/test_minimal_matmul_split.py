@@ -8,7 +8,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc
-from models.tt_dit.utils.tensor import interleave_swiglu_tiles
+from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
@@ -149,12 +149,12 @@ def test_linear_split_swiglu(device, chunks, use_bias):
         golden = first * torch.nn.functional.silu(second)  # [M, out_N]
         golden_chunks = torch.chunk(golden, chunks, dim=-1)
 
-    weight_il = interleave_swiglu_tiles(weight_input, ndev=1)  # weight is already [K, 2N]
+    weight_il = prepare_for_fused_swiglu(weight_input, ndev=1)  # weight is already [K, 2N]
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     tt_weight = ttnn.from_torch(weight_il, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     tt_bias = None
     if use_bias:
-        bias_il = interleave_swiglu_tiles(bias_input, ndev=1)
+        bias_il = prepare_for_fused_swiglu(bias_input, ndev=1)
         tt_bias = ttnn.from_torch(bias_il, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
     compute_config = ttnn.init_device_compute_kernel_config(

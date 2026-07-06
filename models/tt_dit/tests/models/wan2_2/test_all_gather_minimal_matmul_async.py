@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.tt_dit.utils.tensor import interleave_swiglu_tiles
+from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
@@ -448,9 +448,9 @@ def run_test_linear(
     if fuse_swiglu:
         ring_size = device.shape[cluster_axis]
         weight_2d = weight_input.reshape(K, weight_input.shape[-1])
-        weight_to_load = interleave_swiglu_tiles(weight_2d, ndev=ring_size).reshape(weight_input.shape)
+        weight_to_load = prepare_for_fused_swiglu(weight_2d, ndev=ring_size).reshape(weight_input.shape)
         if use_bias:
-            bias_to_load = interleave_swiglu_tiles(bias_input.reshape(1, -1), ndev=ring_size).reshape(bias_input.shape)
+            bias_to_load = prepare_for_fused_swiglu(bias_input.reshape(1, -1), ndev=ring_size).reshape(bias_input.shape)
 
     tt_weight = ttnn.from_torch(weight_to_load, dtype=weight_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
     tt_bias = None
