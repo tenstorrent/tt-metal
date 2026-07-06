@@ -63,7 +63,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
                 .runtime_arg_names = {"address"},
                 .common_runtime_arg_names = {"value"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{

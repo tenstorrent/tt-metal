@@ -95,12 +95,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
 
     DataMovementHardwareConfig reader_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = DataMovementHardwareConfig{DataMovementGen2Config{}};
+        reader_hw_config = DataMovementGen2Config{};
     } else {
-        reader_hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
+        reader_hw_config = DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
-        }};
+        };
     }
     KernelSpec reader_spec{
         .unique_id = KernelSpecName{"reader"},
@@ -118,12 +118,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
 
     DataMovementHardwareConfig writer_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = DataMovementHardwareConfig{DataMovementGen2Config{}};
+        writer_hw_config = DataMovementGen2Config{};
     } else {
-        writer_hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
+        writer_hw_config = DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-        }};
+        };
     }
     KernelSpec writer_spec{
         .unique_id = KernelSpecName{"writer"},

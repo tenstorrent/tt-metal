@@ -84,12 +84,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
 
     DataMovementHardwareConfig requestor_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        requestor_hw_config = DataMovementHardwareConfig{DataMovementGen2Config{}};
+        requestor_hw_config = DataMovementGen2Config{};
     } else {
-        requestor_hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
+        requestor_hw_config = DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = test_config.noc_id,
-        }};
+        };
     }
     KernelSpec requestor_spec{
         .unique_id = KernelSpecName{"requestor"},

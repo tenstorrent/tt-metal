@@ -83,10 +83,7 @@ inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint32_t num_thre
         .unique_id = KernelSpecName{name},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .hw_config =
-            DataMovementHardwareConfig{
-                DataMovementGen2Config{},
-            },
+        .hw_config = DataMovementGen2Config{},
     };
 }
 
@@ -107,11 +104,9 @@ inline KernelSpec MakeMinimalGen1DMKernel(
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
         .hw_config =
-            DataMovementHardwareConfig{
-                DataMovementGen1Config{
-                    .processor = processor,
-                    .noc = noc,
-                },
+            DataMovementGen1Config{
+                .processor = processor,
+                .noc = noc,
             },
     };
 }
@@ -123,10 +118,7 @@ inline KernelSpec MakeMinimalRoleDMKernel(const std::string& name, const DataMov
         .unique_id = KernelSpecName{name},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .hw_config =
-            DataMovementHardwareConfig{
-                gen1,
-            },
+        .hw_config = gen1,
     };
 }
 

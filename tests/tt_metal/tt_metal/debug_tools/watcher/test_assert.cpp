@@ -106,15 +106,13 @@ static void RunTest(
                         uint32_t target_thread_id = static_cast<uint32_t>(processor.processor_type) - kFirstUserDm;
                         assert_kernel_spec.num_threads = 6;
                         assert_kernel_spec.compile_time_args = {{"target_thread_id", target_thread_id}};
-                        assert_kernel_spec.hw_config =
-                            experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+                        assert_kernel_spec.hw_config = experimental::DataMovementGen2Config{};
                     } else {
                         assert_kernel_spec.num_threads = 1;
-                        assert_kernel_spec.hw_config =
-                            experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
-                                .processor = gen1_processor,
-                                .noc = gen1_noc,
-                            }};
+                        assert_kernel_spec.hw_config = experimental::DataMovementGen1Config{
+                            .processor = gen1_processor,
+                            .noc = gen1_noc,
+                        };
                     }
                     break;
                 }

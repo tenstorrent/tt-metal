@@ -75,7 +75,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec dm_transform_spec{
@@ -96,7 +96,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec dm_writer_spec{
@@ -111,7 +111,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -237,7 +237,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec dm_writer_0_spec{
@@ -257,7 +257,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 .runtime_arg_names =
                     {"dram_addr", "l1_addr", "num_elements", "dram_bank_id", "remote_noc_x", "remote_noc_y"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec dm_reader_1_spec{
@@ -276,7 +276,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec dm_transform_1_spec{
@@ -297,7 +297,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec dm_writer_1_spec{
@@ -312,7 +312,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec wu_core_0{

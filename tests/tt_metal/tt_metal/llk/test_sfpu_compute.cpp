@@ -908,8 +908,7 @@ experimental::KernelSpec make_writer_unary_quasar_spec(
             .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
-            .disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 }
 
@@ -1040,8 +1039,7 @@ bool run_sfpu_binary_two_input_buffer(
              }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
-            .disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 
     experimental::KernelSpec compute_spec{
@@ -1218,8 +1216,7 @@ bool run_sfpu_ternary_three_input_buffer(
                       "num_tiles",
                       "src2_addr",
                       "src2_bank_id"}},
-            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
-                .disable_dfb_implicit_sync_for_all = true}},
+            .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
         };
 
         experimental::KernelSpec compute_spec{

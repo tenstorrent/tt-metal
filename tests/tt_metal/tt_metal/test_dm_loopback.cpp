@@ -74,7 +74,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
                 {
                     .runtime_arg_names = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
-            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         };
     };
 
@@ -91,7 +91,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
                 {
                     .runtime_arg_names = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
-            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         };
     };
 
