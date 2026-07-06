@@ -131,6 +131,7 @@ metal_2.0/
   analyses/                     (naming: analyses/ vs reference/ — pick at execution)
     ops_port_readiness.csv                ← NEW (Diego's; vetted+curated+stamped)
     tensoraccessor_3rd_arg_taxonomy.md    ← NEW (from the 2026-06-24 dev-doc)
+    cb_issues.<csv|md>                    ← NEW (malformed-CB front-run sweep output; Borys)
   _meta/
     RECIPE_OVERHAUL_ROADMAP.md  ← move here (scaffold; "exclude from productization" = drop _meta/)
 ```
@@ -152,6 +153,48 @@ Mechanics (the real work + error surface):
   guide; audit→recipe / →patterns; etc. all break on the move into subdirs. Grep `](`
   and `.md#` across the docs; re-path each. This is the bulk of the reorg.
 - Update this roadmap's own links + file-map paths after the move.
+
+## Audit architecture — op-centric gate + factor-centric sweeps (two modes)
+
+Decided 2026-07-06 (Borys requested a front-run malformed-CB audit). The audit has
+**two modes**, not one structure:
+
+- **Op-centric = the port-readiness GATE.** "Is op X ready?" — checks *every*
+  dimension for that one op, produces the go/no-go + porter brief. A porter ports one
+  op, so this holistic per-op verdict **stays and still checks everything.** Unchanged.
+- **Factor-centric = the front-run SWEEP** (new, *additive*). "Which ops have problem
+  Y?" — one factor across the corpus, produces a consolidated list the owning team
+  fixes *ahead* of porting. Already emerging: Diego's factory-readiness CSV, the 3rd-arg
+  taxonomy, and the prereq RED-audits feeding the Device-2.0 / PD teams are all
+  factor-centric sweeps. Borys's request just makes the CB one explicit.
+
+**Factor *selectively*, by front-run consumer — NOT a big-bang split of all subjects.**
+Extract a factor into its own recipe when a team fixes it ahead (malformed-CB → ops;
+3rd-arg → ops; factory-shape → already Diego's CSV). Leave the rest (custom-hash,
+other-signals, out-of-dir) embedded. A factor recipe is invocable **both** ways: "audit
+factor F for op X" (op-centric composition) and "sweep F across ops" (front-run) — same
+recipe, scope is the parameter. The op-centric audit becomes the **composing layer**
+(runs the factor recipes for op X + the leftover subjects + composes the verdict).
+Long-term this *could* become a pure orchestrator (every subject a factor recipe) — not
+a commitment now.
+
+**Preserve cross-factor dependencies when factoring** (the subjects are *mostly* but not
+*fully* orthogonal):
+- **Device-2.0 gate is a precondition for the CB/SPSC factor** — its recognition
+  signals assume Device-2.0 idioms; on a Device-2.0-RED op the SPSC check *defers* (a
+  best-effort pass over legacy idioms false-negatives the hidden writer). The factor
+  recipe must state this precondition explicitly.
+- **Factory-concept runs last** (draws on the others' findings).
+- The CB factor is itself cohesive — the sync-free "floor" (TensorAccessor-handling) +
+  the SPSC "ceiling" (DFB-endpoint-legality) are two halves of one thing → they travel
+  together into the CB factor recipe.
+
+**Directory:** absorbed by the reorg already — factor *recipes* → `ai/` (add an
+`ai/audits/` subdir once they multiply); factor *outputs* (CB-issue list, 3rd-arg
+taxonomy) → `analyses/`. No layout rethink.
+
+**Caution:** front-run is *additive* — it does NOT replace the op-centric gate. The
+porter still needs the holistic per-op verdict before porting.
 
 ## Big change #1 — Unconventional-CB handling
 
@@ -192,10 +235,17 @@ mechanisms; add detection + refusal for CBs that can't port cleanly.
   observed access pattern, why DFB can't express it) so that, in aggregate, they
   answer "is this class rare or common?" and become Audrey's evidence for the
   LLK-consumes-LTA push.
+- **Audit half graduates to a standalone front-run factor recipe (Borys, near-term
+  — see Audit architecture).** Big #1's audit content (CB detection: sync-free floor +
+  SPSC ceiling + the flowchart classification of un-portable CBs) is packaged as a
+  standalone, sweep-capable **malformed-CB factor recipe** (`ai/audits/`), run as a
+  sweep → a consolidated **CB-issue list** (`analyses/`) that ops front-run. This is the
+  **first deliverable of big #1** (Borys's pressure); the porting-recipe half
+  (roll-back-hacks) follows. Carries the **Device-2.0-clean precondition.**
 - **Lands in:** `metal2_port_patterns.md` (the "sync-free / single-ended CB →
   self-loop-DFB interim workaround" pattern — this is the hack being rolled back),
   audit's TensorAccessor-handling + DFB-endpoint-legality (SPSC) subjects, recipe
-  rule 5.
+  rule 5; the new CB factor recipe (`ai/audits/`) + CB-issue list (`analyses/`).
 
 ## Big change #2 — Factory-shape handling under decoupling
 
