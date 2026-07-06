@@ -838,8 +838,9 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllDisablesProducerSide) {
 
         auto dm_kernel = MakeMinimalDMKernel("dm_kernel");
         auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
-        std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(dm_kernel.hw_config))
-            .disable_dfb_implicit_sync_for_all = disable_all;
+        DataMovementGen2Config& dm_hw_config =
+            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(dm_kernel.hw_config));
+        dm_hw_config.disable_dfb_implicit_sync_for_all = disable_all;
 
         auto dfb = MakeMinimalDFB("dfb_0");
         dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -880,8 +881,9 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllDisagreementAcrossProduce
 
     // producer1 hammers implicit sync off; producer2 leaves it on. Both bind the same DFB on
     // the producer side, so the per-side opt-out disagrees and validation must reject.
-    std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer1.hw_config))
-        .disable_dfb_implicit_sync_for_all = true;
+    DataMovementGen2Config& producer1_hw_config =
+        std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer1.hw_config));
+    producer1_hw_config.disable_dfb_implicit_sync_for_all = true;
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -915,10 +917,12 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllAgreesWithExplicitList) {
 
     // producer1 opts out via the per-kernel hammer; producer2 opts the same DFB out by name.
     // Both express the same per-side decision (disable), so they agree and the side lowers off.
-    std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer1.hw_config))
-        .disable_dfb_implicit_sync_for_all = true;
-    std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer2.hw_config))
-        .disable_dfb_implicit_sync_for.push_back(DFBSpecName{"dfb"});
+    DataMovementGen2Config& producer1_hw_config =
+        std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer1.hw_config));
+    DataMovementGen2Config& producer2_hw_config =
+        std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer2.hw_config));
+    producer1_hw_config.disable_dfb_implicit_sync_for_all = true;
+    producer2_hw_config.disable_dfb_implicit_sync_for.push_back(DFBSpecName{"dfb"});
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
