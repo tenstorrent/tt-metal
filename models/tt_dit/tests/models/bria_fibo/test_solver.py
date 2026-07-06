@@ -5,18 +5,11 @@
 import os
 
 import numpy as np
-import pytest
 from diffusers import FlowMatchEulerDiscreteScheduler
-from huggingface_hub import snapshot_download
+
+from models.tt_dit.tests.models.bria_fibo.test_vae import _fibo_local
 
 FIBO_PATH = os.environ.get("FIBO_PATH", "briaai/FIBO")
-
-
-def _fibo_local():
-    try:
-        return snapshot_download(FIBO_PATH, allow_patterns=["scheduler/*", "vae/*"], local_files_only=True)
-    except Exception as e:
-        pytest.skip(f"FIBO not cached: {e}")
 
 
 def _calculate_shift(image_seq_len, scheduler):
@@ -39,8 +32,6 @@ def test_fibo_solver_matches_diffusers():
     sigmas = sched.sigmas.tolist()
     solver = EulerSolver()
     solver.set_schedule(sigmas)
-    # EulerSolver.step is device-side; verify the host-side scalar schedule instead:
-    assert abs((sigmas[1] - sigmas[0]) - (sched.sigmas[1].item() - sched.sigmas[0].item())) < 1e-6
     assert len(sigmas) == n + 1
     # Verify dynamic shifting: mu should equal max_shift for seq_len == max_image_seq_len
     assert abs(mu - sched.config.max_shift) < 1e-9
