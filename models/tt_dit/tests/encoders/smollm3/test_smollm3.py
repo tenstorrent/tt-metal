@@ -7,7 +7,12 @@ import os
 import pytest
 import torch
 
+import ttnn
 from models.tt_dit.encoders.smollm3.config import SmolLM3Config
+from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils import tensor as tt_tensor
+from models.tt_dit.utils.check import assert_quality
 
 
 def test_smollm3_config_defaults():
@@ -46,12 +51,6 @@ def test_smollm3_rope_matches_hf():
     torch.testing.assert_close(cos[0, 0], ref_cos, atol=1e-5, rtol=1e-5)
     torch.testing.assert_close(sin[0, 0], ref_sin, atol=1e-5, rtol=1e-5)
 
-
-import ttnn
-from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
-from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.utils import tensor as tt_tensor
-from models.tt_dit.utils.check import assert_quality
 
 FIBO_PATH = os.environ.get("FIBO_PATH", "briaai/FIBO")
 
