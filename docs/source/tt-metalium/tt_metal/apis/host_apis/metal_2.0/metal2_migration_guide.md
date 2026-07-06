@@ -454,7 +454,7 @@ The common case (matmul reader + compute reading the same input; reshard reader/
 
 #### What's not covered yet
 
-- **Manual `DistributionSpec` reuse** (the "advanced reuse-bank-coords-across-accessors" path from the [TensorAccessor guide](../../../../tech_reports/tensor_accessor/tensor_accessor.md)). Not commonly used in production ops.
+- **Manual `DistributionSpec` reuse** (the "advanced reuse-bank-coords-across-accessors" path from the [TensorAccessor guide](../../../../../../../tech_reports/tensor_accessor/tensor_accessor.md)). Not commonly used in production ops.
 - **Tensor bindings on compute kernels** are out of scope. `TensorAccessor` was never supported for compute kernels (TRISC builds don't compile its NoC-using includes), so migration should not encounter any.
 
 ---
