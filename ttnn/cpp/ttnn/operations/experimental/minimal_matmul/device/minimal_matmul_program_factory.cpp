@@ -8,6 +8,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
 #include <utility>
@@ -423,7 +424,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         fused_op_signaler->init_fused_op(program, device, in0_sender_cores);
         defines["FUSE_AG"] = "1";
         // Consume the middle forward/backward k-blocks 1-backward-1-forward instead of grouped.
-        defines["AG_ALTERNATE_MIDDLE"] = "1";
+        // Env override lets A/B runs disable it (AG_ALTERNATE_MIDDLE=0) without a rebuild-time edit.
+        const char* alt_middle_env = std::getenv("AG_ALTERNATE_MIDDLE");
+        defines["AG_ALTERNATE_MIDDLE"] = (alt_middle_env != nullptr) ? alt_middle_env : "1";
         if (fused_op_signaler->read_local_slice_from_input) {
             in0_injector_defines = defines;
             in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
