@@ -85,9 +85,22 @@ roadmap item.** The items were the right *planning* decomposition, but they
 *cross-cut the files* — Big #1, Fix #1, Fix #2, Fix #3 all edit the same regions
 (audit TensorAccessor-handling, patterns catalog, recipe rule 5). Per-item execution
 would re-read the same sections, collide on the same paragraphs, and reintroduce the
-seam inconsistencies this session worked to remove. So:
+seam inconsistencies this session worked to remove.
 
-1. **Reorg first** (structural — see next section). Lands content in final locations.
+**⚡ Front-loaded (Borys, 2026-07-06):** the combined **"hunt for ops issues" front-run
+sweep** (see Audit architecture) goes *first*, ahead of everything below — Borys wants
+the pre-port-issues list now; being handed to a dedicated Claude immediately. It's big
+#1's CB audit core + Device-2.0-holdover check + TensorAccessorArgs, run across the
+corpus → the pre-port-issues list. It can build in the current flat structure and be
+relocated to `ai/audits/` by the reorg (or create `ai/audits/` minimally first). NOTE
+this is a genuine *build* — synthesizing the existing audit's CB detection
+(TensorAccessor-handling + DFB-endpoint-legality) **with big #1's updates** (roll-back
+of the self-loop/tie-off hacks → Scratchpad/LTA, the access-pattern / pointer-mucking
+detector, the un-portable class) — not a trivial extraction.
+
+Then the fuller sequence:
+
+1. **Reorg** (structural — see next section). Lands content in final locations.
 2. **One Claude owns the CB/accessor/self-loop cluster** — Big #1 + Fix #1 + Fix #2 +
    Fix #3 together. They interlock and share sections; one coherent mind keeps them
    consistent and never self-collides. The correctness-critical core; a fresh
