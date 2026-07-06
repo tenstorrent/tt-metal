@@ -98,6 +98,13 @@ void kernel_main() {
     ckernel::compute_kernel_hw_startup(cb_q, cb_k, cb_scores);
     mm_block_init(cb_q, cb_k, cb_scores, /*transpose=*/1, /*ct_dim=*/B_kv, /*rt_dim=*/B_q, /*kt_dim=*/D_t);
 
+    // PV matmul subblocking: DEST limit is 4 tiles with fp32_dest_acc_en.
+    // out_subblock_h * out_subblock_w must fit. With B_q=1, out_subblock_h=1,
+    // out_subblock_w = min(D_t, 4/B_q). If D_t > 4/B_q, split N into subblocks.
+    constexpr uint32_t PV_MAX_SUBBLOCK_W = (B_q <= 4) ? (4 / B_q) : 1;
+    constexpr uint32_t PV_SUBBLOCK_W = (D_t < PV_MAX_SUBBLOCK_W) ? D_t : PV_MAX_SUBBLOCK_W;
+    constexpr uint32_t PV_NUM_SUBBLOCKS_N = (D_t + PV_SUBBLOCK_W - 1) / PV_SUBBLOCK_W;
+
     // Phase 0: Init persistent state (m_i=neg_inf, l_i=0, O_i=0)
     init_cb_constant_bits(cb_m, B_q, NEG_INF_BITS);  // m_i = neg_inf
     init_cb_constant_f(cb_l, B_q, 0.0f);             // l_i = 0
@@ -298,7 +305,15 @@ void kernel_main() {
                 false,
                 ckl::NoneActivation,
                 ckl::matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT>(
-                cb_pv_buf, cb_v_buf, cb_pv_out_buf, cb_pv_out_buf, ckl::MatmulBlockShape::of(1, 1, B_q, D_t, B_kv, 1));
+                cb_pv_buf,
+                cb_v_buf,
+                cb_pv_out_buf,
+                cb_pv_out_buf,
+                ckl::MatmulBlockShape::of(1, PV_NUM_SUBBLOCKS_N, B_q, PV_SUBBLOCK_W, B_kv, 1));
+            // Note: PV matmul uses subblocking to fit DEST limit (4 tiles with
+            // fp32_dest_acc_en). out_subblock_w = min(D_t, 4/B_q), split N into
+            // multiple subblocks. OutputCBLayout::TileRowMajor ensures tiles are
+            // pushed in row-major order for the downstream add helper.
 
             // Phase 13: O_i += PV
             ckl::add<cb_o, cb_pv_out, cb_o>(ckl::EltwiseShape::grid(B_q, D_t));
