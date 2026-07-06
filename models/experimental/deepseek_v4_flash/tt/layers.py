@@ -68,22 +68,46 @@ class LinearDecode(DeepSeekV4Module):
         cache_file_name: Optional[str] = None,
         dtype: ttnn.DataType = ttnn.bfloat16,
         *,
+        K: int = -1,
+        N: int = -1,
         partial_width_sharded: bool = False,
         num_inputA_cores: int = 32,
         k_blocks: Optional[int] = None,
         n_blocks: Optional[int] = None,
-        N: Optional[int] = None,
     ):
         self.partial_width_sharded = partial_width_sharded
         self.num_inputA_cores = num_inputA_cores
         self.dtype = dtype
         self.device = device
 
+        assert K != -1 and N != -1, "K and N must be set"
+        self.K = K
         self.N = N
         if partial_width_sharded:
             self.n_blocks = n_blocks
             self.k_blocks = k_blocks
 
+        if partial_width_sharded:
+            if k_blocks is None or n_blocks is None:
+                raise ValueError("partial_width_sharded=True requires k_blocks and n_blocks")
+            kc, nc = self.K // k_blocks, self.N // n_blocks
+            num_inputB_cores = k_blocks * n_blocks
+            shard_shape = (kc, nc)
+        else:
+            if n_blocks is None:
+                num_inputB_cores = self.N // 64
+            else:
+                num_inputB_cores = n_blocks
+            shard_shape = (self.K, self.N // num_inputB_cores)
+
+        b_core_range_set = rectangular_core_range_set(num_inputB_cores, self.device)
+        self.weights_memory_config = ttnn.create_sharded_memory_config(
+            shard_shape,
+            core_grid=b_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
         # The decode op wants the weight as [K, N]; torch nn.Linear stores [out=N, in=K].
         w = _materialize(weight, cache_file_name, dtype)
         if w is None:
@@ -103,39 +127,22 @@ class LinearDecode(DeepSeekV4Module):
             return
 
         w = w.t().contiguous()
-        k, n = int(w.shape[0]), int(w.shape[1])
-        self.K, self.N = k, n
-
         if partial_width_sharded:
-            if k_blocks is None or n_blocks is None:
-                raise ValueError("partial_width_sharded=True requires k_blocks and n_blocks")
-            kc, nc = k // k_blocks, n // n_blocks
-            num_inputB_cores = k_blocks * n_blocks
             # Fold the K-blocks into the width so a width-sharded [Kc, Nc] block lands on
             # core c = kb * n_blocks + nb (row-major), matching the op's expected geometry.
-            w = w.reshape(k_blocks, kc, n).permute(1, 0, 2).reshape(kc, n * k_blocks)
-            shard_shape = (kc, nc)
-        else:
-            num_inputB_cores = n // 64
-            shard_shape = (k, n // num_inputB_cores)
-
-        b_core_range_set = rectangular_core_range_set(num_inputB_cores, self.device)
-        b_memory_config = ttnn.create_sharded_memory_config(
-            shard_shape,
-            core_grid=b_core_range_set,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        print("Weight dtype: ", dtype)
+            w = w.reshape(k_blocks, kc, self.N).permute(1, 0, 2).reshape(kc, self.N * k_blocks)
         self.weight = ttnn.as_tensor(
             w,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=b_memory_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_file_name,
         )
+
+    def deallocate(self):
+        pass
+        # self.weight.deallocate()
 
     def get_input_memory_config(self, m: int, k: int) -> ttnn.MemoryConfig:
         a_core_range_set = rectangular_core_range_set(self.num_inputA_cores, self.device)
@@ -149,6 +156,7 @@ class LinearDecode(DeepSeekV4Module):
         return a_memory_config
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         if self.partial_width_sharded:
             # The partial layout reduces the K-partials onto n_blocks output cores, so shard the
             # output WIDTH_SHARDED across a rectangular grid of n_blocks cores (shard
@@ -167,9 +175,11 @@ class LinearDecode(DeepSeekV4Module):
             )
         else:
             output_memory_config = None
-        return ttnn.experimental.matmul_decode(
-            x, self.weight, partial_width_sharded=self.partial_width_sharded, output_mem_config=output_memory_config
+        result = ttnn.experimental.matmul_decode(
+            x, l1_weights, partial_width_sharded=self.partial_width_sharded, output_mem_config=output_memory_config
         )
+        l1_weights.deallocate()
+        return result
 
 
 class DeepSeekV4RMSNorm(DeepSeekV4Module):
@@ -183,9 +193,16 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
         self.eps = eps
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # b, s, t, d = x.shape
+        # x_mem_config = width_sharded_l1_config(b * s * t, d, x.device())
+        # x = ttnn.to_memory_config(x, x_mem_config)
         return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps)
 
 
 def _rms_norm_unweighted(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
     """Unweighted RMSNorm over the last dim (matches ``DeepseekV4UnweightedRMSNorm``)."""
+    # if not x.is_sharded():
+    #     b, s, t, d = x.shape
+    #     x_mem_config = width_sharded_l1_config(b * s * t, d, x.device())
+    #     x = ttnn.to_memory_config(x, x_mem_config)
     return ttnn.rms_norm(x, epsilon=eps)
