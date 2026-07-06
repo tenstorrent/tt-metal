@@ -169,9 +169,9 @@ rest.
 - **Status:** details deliberately deferred until the change stabilizes (discussing
   before then just churns). When it lands, flesh out: what changed, where it lands in
   the recipe, porter guidance.
-- **Prior design context:** `development-docs/2026-06 ComputeHardwareConfig Cleanup
-  and TTNN Helper.md` — consult when fleshing out, but expect the WIP to have moved
-  past it.
+- **Source when fleshing out:** current state from River (code) / Audrey. The
+  `development-docs/2026-06 ComputeHardwareConfig Cleanup and TTNN Helper.md` design
+  doc is **stale** (Audrey, 2026-07-05) — do not rely on it.
 
 ## Small fixes (append as decided)
 
@@ -359,7 +359,7 @@ minimal port. Bundling any of these into a port would violate scope discipline.
 |---|---|---|
 | #1 CB handling | `metal2_port_patterns.md`, audit TensorAccessor-handling + SPSC, recipe rule 5 | patterns catalog, audit (2 subjects), recipe rule 5 |
 | #2 factory shapes | audit TTNN-factory-concept-analysis + Appendix A, `port_op_to_metal2_ttnn_factory.md` | audit factory-analysis, Appendix A, recipe factory framing, new CSV |
-| #3 HW-config overhaul (WIP) | TBD — blocked on River's code change; `development-docs/2026-06 ComputeHardwareConfig Cleanup and TTNN Helper.md` for prior design | TBD |
+| #3 HW-config overhaul (WIP) | TBD — blocked on River's code change; current state from River/Audrey (the 2026-06 design doc is stale) | TBD |
 | Fix #1 LocalTensorAccessor | recipe rule 5, audit TensorAccessor-handling, Dropped-Plumbing Case-2 | same three |
 | Fix #2 3rd-arg triage | `development-docs/2026-06-24 … taxonomy`, audit TensorAccessor-handling | audit TensorAccessor-handling, checked-in taxonomy table, audit classification procedure |
 | Fix #3 self-loop consistency | `metal2_port_patterns.md` (self-loop/sync-free/packer + INTRA sites), audit SPSC single-ended fork | patterns catalog, audit SPSC fork, recipe DFB-spec self-loop mentions; flowchart (Audrey) |
