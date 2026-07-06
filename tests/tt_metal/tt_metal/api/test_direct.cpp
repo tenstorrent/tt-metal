@@ -467,15 +467,19 @@ bool reader_datacopy_writer(
             : experimental::ComputeUnpackToDestModes{};
     if (is_quasar) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .accumulator_width =
+                fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide : experimental::AccumulatorWidth::Standard,
+            .accumulator_buffering = test_config.dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
+                                                                  : experimental::AccumulatorBuffering::Pipelined,
             .unpack_to_dest_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_modes,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .accumulator_width =
+                fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide : experimental::AccumulatorWidth::Standard,
+            .accumulator_buffering = test_config.dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
+                                                                  : experimental::AccumulatorBuffering::Pipelined,
             .unpack_to_dest_mode = unpack_modes,
         };
     }

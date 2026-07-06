@@ -123,7 +123,8 @@ static vector<uint32_t> run_mxint_typecast(
         .hw_config =
             experimental::ComputeHardwareConfig{
                 experimental::ComputeGen2Config{
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .accumulator_width = fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide
+                                                          : experimental::AccumulatorWidth::Standard,
                 },
             },
     };

@@ -50,27 +50,35 @@ namespace tt::tt_metal::experimental {
 // This choice matters only when ALL of the following hold for the DFB binding:
 //   1. The kernel is the consumer endpoint (unpacking data into the kernel)
 //   2. The DFB's data format is Float32.
-//   3. fp32_dest_acc_en is true (Dest must be 32-bit-wide to hold FP32).
+//   3. accumulator_width == Wide (Dest must be 32-bit-wide to hold FP32).
 //
 // You MUST provide an unpack_to_dest_mode entry for the DFB when all three conditions hold;
 // failing to do so will trigger an error. Outside the triple an entry is optional: Default is
 // always accepted, and UnpackToDestFp32 is tolerated where it is inert (non-consumer or
 // non-Float32 — the hardware ignores the mode there, and legacy ops set it unconditionally).
-// UnpackToDestFp32 always requires fp32_dest_acc_en=true, even where inert; otherwise it is
+// UnpackToDestFp32 always requires accumulator_width == Wide, even where inert; otherwise it is
 // rejected as incoherent (Dest is 16-bit and cannot hold full FP32).
 using ComputeUnpackToDestModes = Table<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
+
+// Dest register element width.
+//   Standard — Dest holds 16-bit elements (default)
+//   Wide     — Dest holds 32-bit (FP32) elements
+enum class AccumulatorWidth { Standard, Wide };
+
+// Dest register sync mode.
+//   Pipelined   — Dest is split in half; math and pack overlap (double-buffered)
+//   MaxCapacity — Dest is one buffer; twice the capacity, no math/pack overlap
+enum class AccumulatorBuffering { Pipelined, MaxCapacity };
 
 struct ComputeGen1Config {
     // Number of multiply passes the FPU runs to use more mantissa bits
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
-    // Configure Dest register to hold 32-bit elements (instead of the default 16-bit)
-    bool fp32_dest_acc_en = false;
+    // Dest register element width.
+    AccumulatorWidth accumulator_width = AccumulatorWidth::Standard;
 
-    // Dest register sync mode:
-    //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered)
-    //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap
-    bool dst_full_sync_en = false;
+    // Dest register sync mode.
+    AccumulatorBuffering accumulator_buffering = AccumulatorBuffering::Pipelined;
 
     // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
     bool math_approx_mode = false;
@@ -88,13 +96,11 @@ struct ComputeGen2Config {
     // Number of multiply passes the FPU runs to use more mantissa bits
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
-    // Configure Dest register to hold 32-bit elements (instead of the default 16-bit)
-    bool fp32_dest_acc_en = false;
+    // Dest register element width.
+    AccumulatorWidth accumulator_width = AccumulatorWidth::Standard;
 
-    // Dest register sync mode:
-    //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered)
-    //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap
-    bool dst_full_sync_en = false;
+    // Dest register sync mode.
+    AccumulatorBuffering accumulator_buffering = AccumulatorBuffering::Pipelined;
 
     // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
     bool math_approx_mode = false;
