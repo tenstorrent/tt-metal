@@ -112,6 +112,38 @@ class _EagerDecodePrepState:
     positions_draft_tt: ttnn.Tensor | None = None
 
 
+@dataclass
+class _PrefillTraceState:
+    """Persistent device buffers + captured trace for a single-user chunked prefill.
+
+    Keyed by padded_len. On the first prefill of a given padded_len (the driver's
+    warmup pass) we compile + capture the whole chunk loop into one trace; on the
+    timed pass we copy fresh host inputs into the persistent buffers and
+    execute_trace, collapsing per-op host dispatch (the 53x host-vs-device gap).
+    """
+
+    padded_len: int = 0
+    chunk_size: int = 0
+    trace_id: Any | None = None
+    # Persistent inputs (device-resident, refreshed via copy_host_to_device_tensor).
+    tokens_full_tt: ttnn.Tensor | None = None  # [1, padded_len] uint32 ROW_MAJOR
+    page_table_tt: ttnn.Tensor | None = None  # [1, W] int32 (attention reads full cache)
+    chunk_page_table_tts: list = field(default_factory=list)  # per-chunk KV-fill page slices
+    chunk_token_tts: list = field(default_factory=list)  # per-chunk token id buffers
+    # Persistent output produced inside the trace (lm_head logits on device).
+    logits_tt: ttnn.Tensor | None = None
+    # Chunk geometry (host-side, fixed for this padded_len).
+    chunk_starts: list = field(default_factory=list)
+    chunk_ends: list = field(default_factory=list)
+    last_token_in_chunk: int = 0
+
+
+def _prefill_trace_enabled() -> bool:
+    """Capture-on-warmup / execute-on-timed prefill trace (default off, additive)."""
+    raw = os.environ.get("GLM4_MOE_LITE_PREFILL_TRACE", "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _eager_persistent_decode_prep_enabled() -> bool:
     """Reuse device-side decode prep buffers and host-copy RoPE rows each step."""
     raw = os.environ.get("GLM4_MOE_LITE_EAGER_PERSISTENT_DECODE_PREP", "1").strip().lower()
@@ -309,6 +341,9 @@ class Glm4MoeLiteDenseOnlyTT:
     # giving small batches more cores/seq and lower ITL.
     _decode_trace_states: dict[int, _DecodeTraceSamplingState] = field(init=False, default_factory=dict)
     _eager_decode_prep_states: dict[int, _EagerDecodePrepState] = field(init=False, default_factory=dict)
+    # ---- Prefill trace state (GLM4_MOE_LITE_PREFILL_TRACE=1) ----
+    # One _PrefillTraceState per padded_len bucket; capture-on-warmup/execute-on-timed.
+    _prefill_trace_states: dict[int, _PrefillTraceState] = field(init=False, default_factory=dict)
     # Per-step batch-expansion metadata (set during decode, consumed by trace input copy)
     _batch_expand_num_main: int = 0
 
@@ -794,7 +829,20 @@ class Glm4MoeLiteDenseOnlyTT:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None,
             )
 
-            if use_chunked:
+            if use_chunked and _prefill_trace_enabled() and is_mesh_device and int(batch) == 1:
+                logits_i = self._prefill_chunked_single_user_traced(
+                    input_padded=input_padded,
+                    page_row=page_row,
+                    kv_cache=kv_cache,
+                    prompt_len=prompt_len,
+                    padded_len=padded_len,
+                    chunk_size=chunk_size,
+                    hidden=hidden,
+                    vocab=vocab,
+                    rope_dim=rope_dim,
+                    is_mesh_device=is_mesh_device,
+                )
+            elif use_chunked:
                 logits_i = self._prefill_chunked_single_user(
                     prompt_ids=prompt_ids,
                     input_padded=input_padded,
@@ -1051,6 +1099,266 @@ class Glm4MoeLiteDenseOnlyTT:
             raise RuntimeError("chunked prefill produced no logits")
         return logits_i
 
+    # ------------------------------------------------------------------
+    # Traced chunked prefill (GLM4_MOE_LITE_PREFILL_TRACE=1)
+    #
+    # Prefill is host-dispatch bound (device kernel time is ~53x below wall time).
+    # DeepSeek collapses this by removing per-chunk host round-trips; we go further
+    # and wrap the whole (now allocation-stable) chunk loop in one ttnn trace:
+    # capture during the driver's warmup prefill, execute_trace on the timed pass.
+    # ------------------------------------------------------------------
+    def _prefill_chunked_single_user_traced(
+        self,
+        *,
+        input_padded: torch.Tensor,
+        page_row: torch.Tensor,
+        kv_cache: list[ttnn.Tensor],
+        prompt_len: int,
+        padded_len: int,
+        chunk_size: int,
+        hidden: int,
+        vocab: int,
+        rope_dim: int,
+        is_mesh_device: bool,
+    ) -> torch.Tensor:
+        state = self._prefill_trace_states.get(padded_len)
+        if state is None or state.trace_id is None:
+            # First prefill of this padded_len (warmup pass): build persistent
+            # buffers, compile, and capture the whole chunk loop into one trace.
+            state = self._capture_prefill_trace(
+                input_padded=input_padded,
+                page_row=page_row,
+                kv_cache=kv_cache,
+                prompt_len=prompt_len,
+                padded_len=padded_len,
+                chunk_size=chunk_size,
+                hidden=hidden,
+                rope_dim=rope_dim,
+                is_mesh_device=is_mesh_device,
+            )
+            self._prefill_trace_states[padded_len] = state
+            # The capture pass already ran the ops on device, so state.logits_tt holds
+            # valid logits — read them back (keep the buffer for future executes).
+            return self._prefill_logits_readback(state.logits_tt, vocab, deallocate=False)
+
+        # Subsequent prefill of same padded_len (timed pass): refresh inputs + replay.
+        self._copy_prefill_trace_inputs(state, input_padded=input_padded, page_row=page_row)
+        ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.device)
+        return self._prefill_logits_readback(state.logits_tt, vocab, deallocate=False)
+
+    def _prefill_chunk_geometry(self, padded_len: int, chunk_size: int, kv_cache: list[ttnn.Tensor]):
+        """Chunk boundaries + per-chunk padded length (must match eager path)."""
+        block_size = int(kv_cache[0].shape[2])
+        pad_mult = max(block_size, 32)
+        starts: list[int] = []
+        ends: list[int] = []
+        pos = 0
+        while pos < padded_len:
+            c_end = min(pos + chunk_size, padded_len)
+            starts.append(pos)
+            ends.append(c_end)
+            pos = c_end
+        return starts, ends, pad_mult, block_size
+
+    def _capture_prefill_trace(
+        self,
+        *,
+        input_padded: torch.Tensor,
+        page_row: torch.Tensor,
+        kv_cache: list[ttnn.Tensor],
+        prompt_len: int,
+        padded_len: int,
+        chunk_size: int,
+        hidden: int,
+        rope_dim: int,
+        is_mesh_device: bool,
+    ) -> _PrefillTraceState:
+        starts, ends, pad_mult, block_size = self._prefill_chunk_geometry(padded_len, chunk_size, kv_cache)
+        mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None
+
+        state = _PrefillTraceState(
+            padded_len=int(padded_len),
+            chunk_size=int(chunk_size),
+            chunk_starts=starts,
+            chunk_ends=ends,
+            last_token_in_chunk=int(prompt_len - starts[-1]),
+        )
+        # Persistent full page table (attention reads the whole cache).
+        state.page_table_tt = ttnn.from_torch(
+            page_row.to(torch.int32),
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        # Persistent per-chunk token + KV-fill page-table buffers.
+        state.chunk_page_table_tts = []
+        state.tokens_full_tt = None
+        chunk_token_tts: list[ttnn.Tensor] = []
+        for c_idx, (c_start, c_end) in enumerate(zip(starts, ends)):
+            this_chunk_len = c_end - c_start
+            this_chunk_padded = ((this_chunk_len + pad_mult - 1) // pad_mult) * pad_mult
+            chunk_tokens = torch.zeros((1, this_chunk_padded), dtype=torch.int32)
+            chunk_tokens[0, :this_chunk_len] = input_padded[0, c_start:c_end]
+            chunk_token_tts.append(
+                ttnn.from_torch(
+                    chunk_tokens,
+                    device=self.device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mapper,
+                )
+            )
+            chunk_page_start = c_start // block_size
+            chunk_page_end = (c_start + this_chunk_padded) // block_size
+            chunk_pt = page_row[:, chunk_page_start:chunk_page_end].to(torch.int32)
+            state.chunk_page_table_tts.append(
+                ttnn.from_torch(
+                    chunk_pt,
+                    device=self.device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mapper,
+                )
+            )
+        state.chunk_token_tts = chunk_token_tts  # dynamic attr (device buffers, refreshed per run)
+
+        # Pre-load all layer weights so capture records no host cache-miss loads.
+        for layer_idx in range(self.num_layers_to_run):
+            self._ensure_layer_weights(layer_idx)
+
+        # Compile pass (eager, not captured) — compiles every per-chunk program and
+        # fills the KV cache once, so trace capture only records dispatch.
+        logits_compile = self._run_prefill_chunk_loop_device(
+            state=state, kv_cache=kv_cache, hidden=hidden, rope_dim=rope_dim, prompt_len=prompt_len
+        )
+        ttnn.synchronize_device(self.device)
+        ttnn.deallocate(logits_compile, force=False)
+
+        logger.info(
+            "Prefill trace: capturing padded_len={} chunks={} chunk_size={}",
+            padded_len,
+            len(starts),
+            chunk_size,
+        )
+        trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        logits_tt = self._run_prefill_chunk_loop_device(
+            state=state, kv_cache=kv_cache, hidden=hidden, rope_dim=rope_dim, prompt_len=prompt_len
+        )
+        ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.device)
+        state.trace_id = trace_id
+        state.logits_tt = logits_tt
+        return state
+
+    def _run_prefill_chunk_loop_device(
+        self,
+        *,
+        state: _PrefillTraceState,
+        kv_cache: list[ttnn.Tensor],
+        hidden: int,
+        rope_dim: int,
+        prompt_len: int,
+    ) -> ttnn.Tensor:
+        """Device-only chunk loop (trace-safe): embed on device, run layers, produce logits_tt."""
+        logits_tt = None
+        n = len(state.chunk_starts)
+        for c_idx in range(n):
+            chunk_start = state.chunk_starts[c_idx]
+            chunk_end = state.chunk_ends[c_idx]
+            is_last = c_idx == n - 1
+            chunk_prompt_len = min(prompt_len, chunk_end) - chunk_start
+            if chunk_prompt_len <= 0:
+                break
+
+            tok_tt = state.chunk_token_tts[c_idx]
+            this_chunk_padded = int(tok_tt.shape[-1])
+            embed_mc = prefill_embed_memory_config(seq_tokens=this_chunk_padded, hidden_dim=hidden)
+            x = ttnn.embedding(tok_tt, self.embed_w, layout=ttnn.TILE_LAYOUT, memory_config=embed_mc)
+            if x.layout != ttnn.TILE_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            x = ttnn.reshape(x, (1, 1, this_chunk_padded, hidden))
+
+            cos_matrix = ttnn.slice(
+                self.rope["cos_matrix"], [0, 0, chunk_start, 0], [1, 1, chunk_start + this_chunk_padded, rope_dim]
+            )
+            sin_matrix = ttnn.slice(
+                self.rope["sin_matrix"], [0, 0, chunk_start, 0], [1, 1, chunk_start + this_chunk_padded, rope_dim]
+            )
+
+            for layer_idx in range(self.num_layers_to_run):
+                w = self._ensure_layer_weights(layer_idx)
+                x_next = run_decoder_layer_prefill_update_cache_tt(
+                    device=self.device,
+                    x_embed=x,
+                    page_table_tt=state.page_table_tt,
+                    kvpe_cache=kv_cache[layer_idx],
+                    cos_matrix=cos_matrix,
+                    sin_matrix=sin_matrix,
+                    trans_matrix=self.rope["trans_matrix"],
+                    w=w,
+                    hparams=self.hparams,
+                    prompt_len=chunk_prompt_len,
+                    moe_runtime=self.moe_runtime,
+                    chunk_page_table=state.chunk_page_table_tts[c_idx],
+                    chunk_start_idx=chunk_start,
+                )
+                ttnn.deallocate(x, force=False)
+                x = x_next
+
+            ttnn.deallocate(cos_matrix, force=False)
+            ttnn.deallocate(sin_matrix, force=False)
+
+            if is_last:
+                logits_tt = self._prefill_logits_device(x, state.last_token_in_chunk, hidden)
+            else:
+                ttnn.deallocate(x, force=False)
+
+        if logits_tt is None:
+            raise RuntimeError("traced chunked prefill produced no logits")
+        return logits_tt
+
+    def _copy_prefill_trace_inputs(
+        self, state: _PrefillTraceState, *, input_padded: torch.Tensor, page_row: torch.Tensor
+    ) -> None:
+        """Refresh persistent device inputs before execute_trace (tokens per chunk)."""
+        is_mesh = _is_mesh_device(self.device)
+        mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None
+        for c_idx, (c_start, c_end) in enumerate(zip(state.chunk_starts, state.chunk_ends)):
+            tok_tt = state.chunk_token_tts[c_idx]
+            this_chunk_padded = int(tok_tt.shape[-1])
+            this_chunk_len = c_end - c_start
+            chunk_tokens = torch.zeros((1, this_chunk_padded), dtype=torch.int32)
+            chunk_tokens[0, :this_chunk_len] = input_padded[0, c_start:c_end]
+            host_tokens = ttnn.from_torch(
+                chunk_tokens,
+                device=None,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            ttnn.copy_host_to_device_tensor(host_tokens, tok_tt)
+
+    def _release_prefill_traces(self) -> None:
+        """Release captured prefill traces + their persistent buffers."""
+        if not self._prefill_trace_states:
+            return
+        ttnn.synchronize_device(self.device)
+        for _, state in list(self._prefill_trace_states.items()):
+            if state.trace_id is not None:
+                try:
+                    ttnn.release_trace(self.device, state.trace_id)
+                except Exception:
+                    pass
+                state.trace_id = None
+        self._prefill_trace_states.clear()
+        ttnn.synchronize_device(self.device)
+
     def _lm_head_linear(self, a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
         # Consolidated LM-head helper pins HiFi4+fp32-DST to block the implicit HiFi2→LoFi drop that follows program_config.
         return lm_head_linear(a, b, device=self.device)
@@ -1065,6 +1373,22 @@ class Glm4MoeLiteDenseOnlyTT:
         prefill_profile: dict[str, float],
     ) -> torch.Tensor:
         """Extract logits for the last real token position, apply norm + lm_head."""
+        logits_tt = self._prefill_logits_device(x, last_real_token, hidden, profile_on, prefill_profile)
+        return self._prefill_logits_readback(logits_tt, vocab, deallocate=True)
+
+    def _prefill_logits_device(
+        self,
+        x: ttnn.Tensor,
+        last_real_token: int,
+        hidden: int,
+        profile_on: bool = False,
+        prefill_profile: dict[str, float] | None = None,
+    ) -> ttnn.Tensor:
+        """Device-only half of _extract_logits: slice last token, norm, lm_head.
+
+        Returns the on-device logits tensor (no host readback), so this is safe to
+        run inside a trace capture. `x` is deallocated.
+        """
         x_last = ttnn.slice(x, [0, 0, last_real_token - 1, 0], [1, 1, last_real_token, hidden])
         ttnn.deallocate(x, force=False)
 
@@ -1075,9 +1399,17 @@ class Glm4MoeLiteDenseOnlyTT:
         x_last = self.final_norm(_x_last_l1, mode="decode")
         ttnn.deallocate(_x_last_l1, force=False)
         logits_tt = self._lm_head_linear(x_last, self.lm_head_w)
-        if profile_on:
+        ttnn.deallocate(x_last, force=False)
+        if profile_on and prefill_profile is not None:
             prefill_profile["head_s"] = prefill_profile.get("head_s", 0.0) + (time.perf_counter() - t0)
+        return logits_tt
 
+    def _prefill_logits_readback(self, logits_tt: ttnn.Tensor, vocab: int, deallocate: bool = True) -> torch.Tensor:
+        """Host readback half of _extract_logits: device logits -> [1, vocab] fp32 CPU.
+
+        When `deallocate` is False (trace path), the persistent logits buffer is
+        preserved for reuse by the next execute_trace.
+        """
         if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
             # Read each vocab shard back to CPU and concatenate — avoids an on-device
             # AllGather since the logits go to CPU anyway.
@@ -1085,10 +1417,10 @@ class Glm4MoeLiteDenseOnlyTT:
             if not shards:
                 raise RuntimeError("ttnn.get_device_tensors returned empty list for sharded lm_head")
             logits_torch = torch.cat([ttnn.to_torch(t)[..., : int(t.shape[-1])] for t in shards], dim=-1)[..., :vocab]
-            ttnn.deallocate(logits_tt, force=False)
         else:
             logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
             logits_torch = logits_torch[..., :vocab]
+        if deallocate:
             ttnn.deallocate(logits_tt, force=False)
 
         logits_flat = logits_torch.reshape(-1, vocab)
@@ -1097,9 +1429,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 f"prefill logits shape mismatch: expected 1 row, got {int(logits_flat.shape[0])} "
                 f"(logits_torch.shape={tuple(logits_torch.shape)})"
             )
-        logits_i = logits_flat.to(dtype=torch.float32).cpu()
-        ttnn.deallocate(x_last, force=False)
-        return logits_i
+        return logits_flat.to(dtype=torch.float32).cpu()
 
     def _prefill_compute_inner_batched(
         self,
@@ -3130,6 +3460,9 @@ class Glm4MoeLiteDenseOnlyTT:
     ) -> _DecodeTraceSamplingState:
         batch = int(tokens.shape[0])
         page_table_width = int(page_table.shape[1])
+        # Release any prefill trace first — it reserves trace-region memory that
+        # would conflict with the decode trace capture below.
+        self._release_prefill_traces()
         state = self._get_or_create_trace_state(batch=batch, page_table_width=page_table_width)
 
         # Warm-up compile run (no trace) to keep compilation out of capture.

@@ -264,6 +264,11 @@ def main() -> int:
 
         open_kwargs["trace_region_size"] = 30_000_000 if is_wormhole_b0() else 35_000_000
         open_kwargs["num_command_queues"] = 2
+    # Traced prefill (GLM4_MOE_LITE_PREFILL_TRACE=1) captures the whole chunk loop
+    # (num_chunks x num_layers programs) into one trace — needs a much larger region.
+    if os.environ.get("GLM4_MOE_LITE_PREFILL_TRACE", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        pref_region = int(os.environ.get("GLM4_MOE_LITE_PREFILL_TRACE_REGION", str(600_000_000)))
+        open_kwargs["trace_region_size"] = max(int(open_kwargs.get("trace_region_size", 0)), pref_region)
     if device_ids is not None:
         open_kwargs["physical_device_ids"] = device_ids
     mesh_device = ttnn.open_mesh_device(**open_kwargs)

@@ -296,3 +296,41 @@ Traced-prefill implementation scope (goal path #1, the chosen lever):
     1024 chunks) may not fit -> fall back to eager for lengths beyond a cap (documented).
   * Expected: >2x on prefill time for all lengths that fit the trace (benchmark + typical
     serving). PCC unchanged (same ops, just replayed device-side).
+
+================================================================================
+TRACED PREFILL — IMPLEMENTED & MEASURED (2026-07-06). RESULT: ~1.25x, NOT 2x.
+================================================================================
+Implemented whole-prefill trace behind GLM4_MOE_LITE_PREFILL_TRACE=1 (default off):
+  * model_tt.py: _PrefillTraceState + _prefill_chunked_single_user_traced /
+    _capture_prefill_trace / _run_prefill_chunk_loop_device / _copy_prefill_trace_inputs /
+    _release_prefill_traces. _extract_logits split into _prefill_logits_device (trace-safe)
+    + _prefill_logits_readback (host, post-execute).
+  * Persistent per-chunk device token + page-table buffers (from_torch ONCE, refreshed via
+    copy_host_to_device_tensor) — DeepSeek-style, kills per-chunk host round-trips. Embedding
+    + rope run on-device inside the trace. Capture on driver warmup pass, execute_trace on
+    the timed pass. Decode-trace capture releases prefill traces first (shared trace region).
+  * debug_run_full_tt_greedy.py: reserve large trace region (GLM4_MOE_LITE_PREFILL_TRACE_REGION,
+    default 600MB) when the flag is set.
+
+A/B (WH 1x8, ring, hifi3, bf8 experts, chunk=128):
+  ISL   eager prefill_s   traced prefill_s   speedup
+  512      1.87              1.41             1.31x
+  2048     7.26              5.72             1.27x
+  4096    14.44             11.68             1.24x
+Correctness: eager vs traced greedy generation BYTE-IDENTICAL at ISL=512 (decode trace on).
+Same op sequence replayed -> logits numerically identical -> PCC == eager PCC (0.958@512, passing).
+
+KEY FINDING (invalidates the goal's premise): traced execute at ISL=2048 is still 5.7s, so
+prefill is ~80% DEVICE-COMPUTE bound (FlashMLA + sparse-MoE matmuls + collectives), NOT
+host-dispatch bound. Tracing removes only the ~20-25% host overhead. The earlier standalone
+probe (3.21x) and "53x host-bound" tracy read were MISLEADING: the probe used dense matmuls,
+on-device inputs, and no lm_head readback — none of which reflect real prefill's device cost.
+
+CONSEQUENCE: 2x prefill is NOT reachable by tracing. The only remaining lever is cutting
+DEVICE COMPUTE: MoE (38.5%) + collectives (34.3%). That requires goal path #2 (DeepSeek
+fused prefill MoE micro-ops + bf8 activations), which is built for 2D dispatch-group meshes
+(2x4/8x4) and would reopen the 1x8-vs-2x4 TP decision (2x4 currently fails PCC at 0.65).
+bf8 collectives on 1x8 are the only in-place option and risk PCC (ISL-4096 already at 0.933).
+
+STATUS: traced prefill kept as a verified, additive, default-off ~1.25x win. 2x goal blocked
+on the 1x8 mesh architecture; pursuing it means the 2D-mesh MoE re-architecture (path #2).
