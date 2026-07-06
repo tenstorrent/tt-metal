@@ -146,7 +146,7 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 90
+      timeout: 15
   owner_id: U08RL15T4N8
   team: models
 
@@ -174,6 +174,18 @@
     bh_galaxy:
       timeout: 30
   owner_id: U08RL15T4N8
+  team: models
+
+- name: "(Galaxy) Kimi prefill runner e2e tests"
+  cmd: |
+    export PREFILL_MODEL=kimi_k2_6
+    export PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/moonshotai/Kimi-K2.6-Cache/CI/ PREFILL_TRACE_DIR=/mnt/MLPerf/kimi-prefill-cache/vllm-kimi-k26-codedebug-56320 MESH_DEVICE=TG
+    EXPECT_NUM_TESTS=3 pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py -vvv --tb=short --timeout=2400
+  model: deepseek_prefill
+  skus:
+    bh_galaxy:
+      timeout: 60
+  owner_id: U09L76N1MAT # Nenad Babin
   team: models
 
 # Ring joint SDPA math-utilization perf checks (1 WAN, 1 MLA-100k, 1 Kimi chunked ring_mla).

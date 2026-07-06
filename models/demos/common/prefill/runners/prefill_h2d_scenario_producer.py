@@ -54,6 +54,7 @@ Usage:
 import os
 import random
 import struct
+import sys
 import time
 from dataclasses import dataclass
 
@@ -433,12 +434,13 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     return min_pcc
 
 
-def _verify_resident_slots(kv_table, stats: RunStats, threshold: float) -> None:
-    """PCC-check every slot that holds resident trace-derived KV. Reads the device map lazily."""
+def _verify_resident_slots(kv_table, stats: RunStats, threshold: float) -> bool:
+    """PCC-check every slot that holds resident trace-derived KV. Reads the device map lazily.
+    Returns True only if at least one slot was checked and every slot met the threshold."""
     device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
-        return
+        return False
     trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default))
     overall = 1.0
     checked = 0
@@ -455,8 +457,12 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float) -> None:
     print(f"[producer] kv_cache_pcc_complete slots_checked={checked} min_pcc={overall:.6f}")
     if failures:
         logger.error(f"[producer] KV cache PCC below {threshold} for (slot, real_len, pcc): {failures}")
-    elif checked:
-        logger.success(f"[producer] KV cache PCC PASSED (min {overall:.6f} >= {threshold} across {checked} slots)")
+        return False
+    if not checked:
+        logger.error("[producer] verify requested but no resident slots had data to check.")
+        return False
+    logger.success(f"[producer] KV cache PCC PASSED (min {overall:.6f} >= {threshold} across {checked} slots)")
+    return True
 
 
 def main() -> None:
@@ -513,13 +519,16 @@ def main() -> None:
     _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
 
     # Opt-in: read the generated KV back per resident slot and PCC-check vs the golden trace.
+    verify_ok = True
     if cfg.verify and kv_table is not None:
         try:
-            _verify_resident_slots(kv_table, stats, cfg.pcc_threshold)
+            verify_ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold)
         except Exception as e:
             logger.error(f"[producer] KV read/PCC failed: {type(e).__name__}: {e}")
+            verify_ok = False
     elif cfg.verify:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
+        verify_ok = False
 
     # Optional graceful shutdown (mirrors prefill_h2d_producer.py / PR #48718): close the request stream
     # with an all -1 PrefillMetadata sentinel so the runner breaks its request loop and tears down
@@ -536,6 +545,11 @@ def main() -> None:
         logger.info("[producer] exiting; SHUTDOWN sentinel sent — runner will drain and shut down.")
     else:
         logger.info("[producer] exiting (the runner keeps its sync-op loop running).")
+
+    # Non-zero exit on PCC failure so a CI / scripted run can gate on the exit code. Placed after the
+    # shutdown sentinel so the runner is still told to drain even when verification failed.
+    if cfg.verify and not verify_ok:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
