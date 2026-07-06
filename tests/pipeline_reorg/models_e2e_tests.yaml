@@ -293,13 +293,13 @@
     export HF_MODEL=Qwen/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-32B-Instruct MESH_DEVICE=T3K
     export TT_METAL_WATCHER=60  # 60s poll interval (=1 + DUMP_ALL was the overhead killer); NoC sanitize still asserts immediately
     export TT_METAL_OPERATION_TIMEOUT_SECONDS=0
-    pytest --timeout 1500 -s models/demos/qwen25_vl/demo/demo.py -k "ci-only-bert-score" || true
+    pytest --timeout 5000 -s models/demos/qwen25_vl/demo/demo.py -k "ci-only-bert-score" --max_generated_tokens 12 || true
     echo "================= WATCHER LOG ================="; cat generated/watcher/watcher.log 2>/dev/null | tail -400 || echo "(no watcher log)"
     echo "================= WATCHER WARNINGS/ERRORS ================="; grep -iE "error|race|clobber|sanit|out of|assert|hang|corrupt|semaphore" generated/watcher/watcher.log 2>/dev/null | head -60 || true
   model: qwen2.5-vl-32b
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 90
       tier: 3
     bh_quietbox_2:
       timeout: 15
