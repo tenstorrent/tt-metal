@@ -8,7 +8,7 @@ It behaves like a small inference scheduler: it drives N concurrent user "slots"
 request made of token chunks, and pushes those chunks to the runner over the H2D socket. The order
 and timing of the pushes is described entirely by a flat `ProducerConfig` — the producer has no notion
 of named "scenarios" or "modes". Scenarios (single-user, round-robin, random stress, ...) live in the
-test suite as ProducerConfig data (see tests/test_scenario_producer.py); this engine just runs one.
+test suite as ProducerConfig data (see tests/test_producer_runner_e2e.py); this engine just runs one.
 
 After pushing, it drains the runner's per-layer LayerAcks and, if asked, reads the resulting KV cache
 back and PCC-checks it against the golden trace. The KV read (read_dram_umd over a bare UMD cluster)
@@ -36,14 +36,14 @@ Env — transport (must match the runner): PREFILL_SP / PREFILL_TP / PREFILL_CHU
   PREFILL_MAX_SEQ_LEN / PREFILL_NUM_LAYERS / PREFILL_H2D_SERVICE_ID / PREFILL_H2D_CONNECT_TIMEOUT.
 
 Usage:
-    # 1 user, full depth, with PCC (equivalent to prefill_h2d_producer.py):
+    # 1 user, full depth, with PCC:
     PREFILL_PRODUCER_CHUNKS=11 PREFILL_PRODUCER_CHECK_PCC=1 \
-      python -m models.demos.common.prefill.runners.prefill_h2d_scenario_producer
+      python -m models.demos.common.prefill.runners.prefill_producer
     # 8-user random stress + PCC:
     PREFILL_NUM_USERS=8 PREFILL_PRODUCER_CHUNKS=1,4 PREFILL_PRODUCER_MAX_REQUESTS=200 \
       PREFILL_PRODUCER_P_GAP=0.2 PREFILL_PRODUCER_P_BURST=0.3 PREFILL_PRODUCER_MID_END_PROB=0.33 \
       PREFILL_PRODUCER_CHECK_PCC=1 \
-      python -m models.demos.common.prefill.runners.prefill_h2d_scenario_producer
+      python -m models.demos.common.prefill.runners.prefill_producer
 """
 
 import os
@@ -96,7 +96,8 @@ def _chunk_to_host_array(chunk_token_ids):
 
 # ---------------------------------------------------------------------------
 # Device-less helpers: read the KV table / device map, attach the LayerAck channel, decode bfp8.
-# Copied from prefill_h2d_producer.py so this producer is self-contained (identical logic).
+# All device-less on purpose — none may touch a real ttnn device (that would take the CHIP_IN_USE
+# lock the runner holds and deadlock).
 # ---------------------------------------------------------------------------
 
 
