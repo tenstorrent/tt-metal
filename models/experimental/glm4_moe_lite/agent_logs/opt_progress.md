@@ -256,3 +256,43 @@ Remaining bottlenecks are HW/algorithm-limited:
   - Attention runs head-parallel OFF on 1x8 (20 heads not divisible by tp=8) -> replicated.
     Enabling it needs head-padding 20->24 + new padded weight variants: ~3-5% upside, high
     correctness risk, poor ROI on a hang-prone device. Deferred.
+
+## 2x-prefill goal — diagnostic drill complete, traced-prefill is the lever
+
+Tracy + tt-perf-report on the WH 1x8 batch-1 prefill (ISL=2048):
+  * Prefill wall (~6.8s warm) is ~53x the device-kernel time (~127ms/dev). tt-perf-report
+    Bound column is BLANK on every op with Op-to-Op Gap >> Device Time -> prefill is
+    HOST-DISPATCH bound, not compute bound.
+  * Device-kernel stack (the compute floor): Compute 53.6% (SparseMatmul/MoE 38.5%),
+    DM/collective 34.3% (ReduceScatter 25.7% + AllGather 7.5%), TM 8.4%.
+  * Matmuls all marked SLOW at M=128 (FLOP util 16-51%) — small-M chunks underutilize cores.
+
+Standalone probe (/tmp/trace_probe.py, pure ttnn 1x8, 47-layer matmul+all_reduce stack):
+  EAGER 31.6 ms/pass vs TRACED 9.9 ms/pass = 3.21x. Confirms tracing collapses dispatch
+  and yields >2x on the actual prefill TIME metric. This is THE lever for the goal.
+
+Dead-ends (verified, not committed):
+  * a2a MoE dispatch (GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL=a2a) DEADLOCKS on 1x8
+    (0.5% CPU, blocked at chunked prefill) — same as 2x4. ttnn all_to_all_dispatch not
+    viable on T3K as configured.
+  * DeepSeek prefill MoE micro-ops (ttnn.experimental.deepseek_prefill.{dispatch,combine,
+    unified_routed_expert_moe,post_combine_reduce}, deepseek_moe_reduce_scatter) are the
+    real kernel-time lever (skip-non-local reduce ~75% MoE compute + reduce_scatter-to-
+    sharded), BUT are built for 2D dispatch-group meshes (2x4/8x4/8x1) — deepseek_v3_d_p
+    perf tests don't target 1x8. Adopting them means re-architecting GLM MoE around
+    dispatch/combine AND moving back to a 2D mesh (reopens the 1x8-vs-2x4 TP decision).
+    Deferred (goal path #2).
+
+Traced-prefill implementation scope (goal path #1, the chosen lever):
+  * chunked_flash_mla_prefill takes chunk_start_idx as a per-chunk int -> each chunk is a
+    distinct program, so NOT one shape-stable trace (unlike decode). Viable form is a
+    WHOLE-prefill trace: capture all chunks' programs once (warmup), execute_trace on the
+    timed/subsequent same-length call.
+  * Requires hoisting per-chunk HOST input-prep out of the traced region into persistent
+    device tensors: run_tt_embedding does from_torch internally (host), and each chunk does
+    from_torch for chunk_page_table. Pre-stage tokens + page_tables as persistent device
+    buffers (mirror run_tt_decode_embedding's tokens_tt pattern), trace reads from them.
+  * Trace-region limit: full-prefill trace grows with num_chunks; very long ISL (131072 =
+    1024 chunks) may not fit -> fall back to eager for lengths beyond a cap (documented).
+  * Expected: >2x on prefill time for all lengths that fit the trace (benchmark + typical
+    serving). PCC unchanged (same ops, just replayed device-side).
