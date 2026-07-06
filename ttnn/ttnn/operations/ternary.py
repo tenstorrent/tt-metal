@@ -64,4 +64,54 @@ def _golden_function_where(input_tensor_a, input_tensor_b, input_tensor_c, *args
 ttnn.attach_golden_function(ttnn.where, golden_function=_golden_function_where)
 
 
+# Single-argument overload: ttnn.where(condition) ≡ torch.where(condition) ≡
+# torch.nonzero(condition, as_tuple=True). Returns a tuple of D 1-D int64
+# torch tensors — one per input dim — giving the indices of nonzero elements.
+# The 3-arg elementwise-select overload is unchanged.
+_where_ternary_impl = ttnn.where
+
+
+def _where_single_tensor_indices(condition):
+    import torch
+
+    orig_shape = tuple(condition.shape)
+    n = 1
+    for d in orig_shape:
+        n *= d
+    ndim = len(orig_shape)
+    if n == 0:
+        return tuple(torch.empty(0, dtype=torch.int64) for _ in range(ndim))
+    flat = ttnn.reshape(condition, ttnn.Shape([1, 1, 1, n]))
+    count_t, idx_t = ttnn.nonzero(flat)
+    count = int(ttnn.to_torch(ttnn.from_device(count_t)).flatten()[0].item())
+    if count == 0:
+        return tuple(torch.empty(0, dtype=torch.int64) for _ in range(ndim))
+    # ttnn.nonzero returns a flat buffer of (b, n, h, c) 4-tuples matching
+    # torch.nonzero(x, as_tuple=False) semantics. For our [1,1,1,n] reshape
+    # only the `c` slot varies — take stride-4 offset 3 and slice to `count`.
+    raw = ttnn.to_torch(ttnn.from_device(idx_t)).flatten()
+    linear = raw[: count * 4].reshape(count, 4)[:, 3].to(torch.int64)
+    strides = [0] * ndim
+    s = 1
+    for i in range(ndim - 1, -1, -1):
+        strides[i] = s
+        s *= orig_shape[i]
+    return tuple((linear // strides[i]) % orig_shape[i] for i in range(ndim))
+
+
+def where(*args, **kwargs):
+    if len(args) == 1 and not kwargs:
+        return _where_single_tensor_indices(args[0])
+    return _where_ternary_impl(*args, **kwargs)
+
+
+where.__doc__ = (
+    "ttnn.where(condition) → tuple of int64 index tensors, matching "
+    "torch.where(condition) / torch.nonzero(condition, as_tuple=True).\n"
+    "ttnn.where(condition, x, y) → elementwise select (C++ ternary op)."
+)
+
+ttnn.where = where
+
+
 __all__ = []
