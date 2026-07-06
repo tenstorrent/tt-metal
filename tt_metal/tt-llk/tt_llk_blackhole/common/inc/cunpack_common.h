@@ -797,11 +797,6 @@ inline void configure_unpack_AB(
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
-    // TODO NC: Find out why we need to disable src zero flags for uint16 dst format #960
-    bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<std::uint32_t>(unpA_dst_format) == static_cast<std::uint32_t>(DataFormat::UInt16)) ||
-                                     (static_cast<std::uint32_t>(unpB_dst_format) == static_cast<std::uint32_t>(DataFormat::UInt16));
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
-
     // Set FP8 E4M3 mode, bit is accessible by unpacker/packer
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(((unpA_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);
     cfg_reg_rmw_tensix<THCON_SEC1_REG1_Unp_LF8_4b_exp_RMW>(((unpB_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);
