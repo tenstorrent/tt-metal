@@ -410,6 +410,12 @@ _BLOCKINGS = {
     # ===================================================================
     # LTX-2.3 22B Video VAE decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4), 1080p.
     # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h2w4"
+    # Swept at the 145-frame (6.04s) clip, so the T values below are that clip's per-stage
+    # T (21/39/75/147...). Other clip lengths have different per-stage T (H/W are identical —
+    # they depend only on mesh+resolution) and are served by the T-relaxed lookup in
+    # get_conv3d_config, which reuses these spatial/channel blockings at any T (blocking is
+    # math-invariant; only T_out_block is clamped to <= T_out). Without that, non-145f lengths
+    # collapse to the (Cin,32,1,1,1) H=W=1 fallback and the eager VAE decode is ~9x slower.
     # ===================================================================
     (2, 4, 128, 1024, (3, 3, 3), 21, 17, 15): (64, 256, 1, 2, 16),  # ltx_s0_conv_in — 778us
     (2, 4, 1024, 1024, (3, 3, 3), 21, 17, 15): (128, 64, 5, 2, 16),  # ltx_s0_res — 7956us
@@ -579,6 +585,50 @@ def register_conv3d_configs(configs: dict) -> None:
     _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
 
 
+# Lazily-built index of swept _BLOCKINGS keyed by (h_factor, w_factor, C_in, C_out, kernel, H, W),
+# dropping T -> list of (T, blocking). See _t_relaxed_blocking.
+_BLOCKINGS_BY_SPATIAL: dict | None = None
+
+
+def _t_relaxed_blocking(h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W):
+    """Reuse a swept blocking from the SAME (mesh, channels, kernel, H, W) at a different T.
+
+    Conv3d blocking is a math-invariant tiling of the same convolution (PCC-verified across
+    re-sweeps), and the L1-critical spatial/channel blocking (C_in/C_out/H_out/W_out) depends
+    only on channels and per-device H/W — not on the temporal extent. H/W are set by the mesh
+    and output resolution, so they are IDENTICAL across clip lengths; only T changes with frame
+    count. The swept ``_BLOCKINGS`` table, however, only has entries for the T values of the one
+    production clip length that was swept (e.g. 145-frame/1080p), so every other length misses
+    every exact entry and collapses to the ``(Cin, 32, 1, 1, 1)`` H=W=1 fallback (one output
+    pixel per work-unit — ~9x slower eager decode).
+
+    This reuses the proven spatial/channel blocking for any T at the same resolution/mesh. Only
+    ``T_out_block`` is temporal; we clamp it to the actual output-T (the op requires
+    ``T_out_block <= T_out``; non-divisors are allowed and handled as a remainder). Returns
+    ``None`` when no same-signature swept entry exists (falls through to the channel table).
+    """
+    global _BLOCKINGS_BY_SPATIAL
+    if _BLOCKINGS_BY_SPATIAL is None:
+        idx: dict = {}
+        for (hf, wf, cin, cout, k, t, h, w), blk in _BLOCKINGS.items():
+            idx.setdefault((hf, wf, cin, cout, k, h, w), []).append((t, blk))
+        _BLOCKINGS_BY_SPATIAL = idx
+
+    if not (T and H and W):
+        return None
+    cands = _BLOCKINGS_BY_SPATIAL.get((h_factor, w_factor, in_channels, out_channels, kernel_size, H, W))
+    if not cands:
+        return None
+    # Prefer the swept entry at the largest T <= requested T (closest temporal regime); else the
+    # smallest swept T available. The choice only affects the reused T_out_block (clamped below).
+    le = [c for c in cands if c[0] <= T]
+    src_T, blk = max(le, key=lambda c: c[0]) if le else min(cands, key=lambda c: c[0])
+    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blk
+    T_out = max(1, T - (kernel_size[0] - 1))  # causal/valid conv along T
+    T_out_block = max(1, min(T_out_block, T_out))
+    return C_in_block, C_out_block, T_out_block, H_out_block, W_out_block, src_T
+
+
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
 ):
@@ -618,19 +668,27 @@ def get_conv3d_config(
             f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
         )
     else:
-        fallback = _DEFAULT_BLOCKINGS.get(channel_key)
-        if fallback is not None:
-            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = fallback
-            logger.warning(
-                f"conv3d blocking [fallback] {blocking_key} -> channel_key={channel_key} -> "
+        relaxed = _t_relaxed_blocking(h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
+        if relaxed is not None:
+            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block, src_T = relaxed
+            logger.info(
+                f"conv3d blocking [T-relaxed] {blocking_key} -> reuse swept T={src_T} -> "
                 f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
             )
         else:
-            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
-            logger.warning(
-                f"conv3d blocking [NONE] {blocking_key} -> no match in any table, using hardcoded default: "
-                f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
-            )
+            fallback = _DEFAULT_BLOCKINGS.get(channel_key)
+            if fallback is not None:
+                C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = fallback
+                logger.warning(
+                    f"conv3d blocking [fallback] {blocking_key} -> channel_key={channel_key} -> "
+                    f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
+                )
+            else:
+                C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
+                logger.warning(
+                    f"conv3d blocking [NONE] {blocking_key} -> no match in any table, using hardcoded default: "
+                    f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
+                )
 
     return ttnn.Conv3dConfig(
         weights_dtype=weights_dtype,

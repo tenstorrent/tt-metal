@@ -555,14 +555,20 @@ class LTXDistilledPipeline(LTXPipeline):
         logger.info(f"Encoding ({'cache' if cached else 'device'}): {t_encode:.1f}s")
 
         s1_cond_latent = full_cond_latent = None
-        cond_strength = 1.0
+        cond_strength_s1 = cond_strength_s2 = 1.0
         if images:
             cond_imgs = [img for img in images if img[1] == 0]
             if len(cond_imgs) != len(images):
                 logger.warning("Distilled I2V only supports frame_idx==0 conditioning; ignoring keyframe images")
             if cond_imgs:
                 assert self.vae_encoder is not None, "checkpoint has no VAE encoder; cannot run I2V conditioning"
-                img_path, _, cond_strength = cond_imgs[0]
+                # Conditioning tuple: (path, frame_idx, s1_strength[, s2_strength]). A 3-tuple holds
+                # both stages equally; a 4th element lets the coarse stage run looser (more motion /
+                # prompt freedom) while the refine stage re-locks image identity.
+                img = cond_imgs[0]
+                img_path = img[0]
+                cond_strength_s1 = img[2] if len(img) > 2 else 1.0
+                cond_strength_s2 = img[3] if len(img) > 3 else cond_strength_s1
                 # The conditioning latent depends only on (image, resolution), so encode once and
                 # memoize. This skips re-running the eager VAE encoder on later gens (e.g. the traced
                 # steady-state replay pass, where re-encoding has been observed to hang the device).
@@ -571,9 +577,15 @@ class LTXDistilledPipeline(LTXPipeline):
                 cache = self._i2v_cond_cache
                 if s1_key in cache and full_key in cache:
                     s1_cond_latent, full_cond_latent = cache[s1_key], cache[full_key]
-                    logger.info(f"I2V: reusing cached conditioning latents for {img_path} (strength={cond_strength})")
+                    logger.info(
+                        f"I2V: reusing cached conditioning latents for {img_path} "
+                        f"(strength s1={cond_strength_s1} s2={cond_strength_s2})"
+                    )
                 else:
-                    logger.info(f"I2V: encoding conditioning image {img_path} (strength={cond_strength})")
+                    logger.info(
+                        f"I2V: encoding conditioning image {img_path} "
+                        f"(strength s1={cond_strength_s1} s2={cond_strength_s2})"
+                    )
                     t0 = time.time()
                     img_s1 = self._load_conditioning_image(img_path, s1_height, s1_width)
                     img_full = self._load_conditioning_image(img_path, height, width)
@@ -598,7 +610,7 @@ class LTXDistilledPipeline(LTXPipeline):
             sigma_values=DISTILLED_SIGMA_VALUES,
             seed=seed,
             image_cond_latent=s1_cond_latent,
-            image_cond_strength=cond_strength,
+            image_cond_strength=cond_strength_s1,
             traced=self._traced,
             trace_key="s1",
         )
@@ -631,7 +643,7 @@ class LTXDistilledPipeline(LTXPipeline):
             initial_video_latent=upsampled_flat,
             initial_audio_latent=s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio,
             image_cond_latent=full_cond_latent,
-            image_cond_strength=cond_strength,
+            image_cond_strength=cond_strength_s2,
             traced=self._traced,
             trace_key="s2",
         )
