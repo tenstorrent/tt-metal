@@ -60,19 +60,21 @@ def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
         "sources/sfpu_binop_scalar_perf.cpp",
         formats,
         run_types=ALL_PERF_RUN_TYPES,
+        # SPEED_OF_LIGHT-style: everything is a compile-time template so the measured
+        # kernel has no runtime-parameter reads. These sweep values are single-valued,
+        # so making them templates does not expand the build matrix.
         templates=[
             SFPU_BINOP_MODE(mathop),
             SFPU_UNARY_SCALAR(_SCALAR_BITS),
             APPROX_MODE(ApproximationMode.No),
             ITERATIONS(iterations),
-        ],
-        runtimes=[
             TILE_COUNT(tile_count),
             LOOP_FACTOR(loop_factor),
             NUM_FACES(num_faces=faces_to_generate),
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
         ],
+        runtimes=[],
         variant_stimuli=StimuliConfig(
             None,
             formats.input_format,
@@ -85,6 +87,7 @@ def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
     return configuration
 

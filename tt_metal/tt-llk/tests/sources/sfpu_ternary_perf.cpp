@@ -30,20 +30,8 @@ static constexpr ckernel::BroadcastType BROADCAST_TYPE = ckernel::BroadcastType:
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    const FormatConfig& formats = params.formats;
-#endif
-
-#ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t num_faces   = params.num_faces;
-
-    const std::uint32_t TILE_CNT = params.TILE_CNT;
-
-    const bool UNPACK_TRANSPOSE_FACES       = params.UNPACK_TRANSPOSE_FACES;
-    const bool UNPACK_TRANSPOSE_WITHIN_FACE = params.UNPACK_TRANSPOSE_WITHIN_FACE;
-#endif
-
+    // All parameters (formats, LOOP_FACTOR, TILE_CNT, num_faces, transpose flags)
+    // are compile-time constants emitted into params.h, so nothing is read from params.
     const EltwiseBinaryReuseDestType reuse_dest_type = EltwiseBinaryReuseDestType::NONE;
 
     {
@@ -95,17 +83,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    const FormatConfig& formats = params.formats;
-#endif
-
-#ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t num_faces   = params.num_faces;
-
-    const std::uint32_t TILE_CNT = params.TILE_CNT;
-#endif
-
     const DataCopyType data_copy_type = DataCopyType::A2D;
 
     // Compile-time math format for the ternary SFPU template dispatch. The math
@@ -259,17 +236,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    const FormatConfig& formats = params.formats;
-#endif
-
-#ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t num_faces   = params.num_faces;
-
-    const std::uint32_t TILE_CNT = params.TILE_CNT;
-#endif
-
     {
         START_PERF_MEASURE("INIT")
 
