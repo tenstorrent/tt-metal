@@ -784,25 +784,17 @@ class LTXTransformerModel(Module):
                 )
             mod_pair = ttnn.permute(mod_pair, (2, 0, 1, 3))  # (coeff,1,2,Dloc)
             mod_pin, mod_base = ttnn.chunk(mod_pair, 2, dim=2)  # each (coeff,1,1,Dloc)
-            ttnn.deallocate(mod_pair)
             # video_mod = base + (pin - base) * mask, materialized per token via broadcast-safe ops.
             mod_delta = ttnn.sub(mod_pin, mod_base)
             mod_delta = ttnn.repeat(mod_delta, ttnn.Shape([1, 1, N, 1]))  # (coeff,1,N,Dloc)
             mod_delta = ttnn.mul(mod_delta, video_pin_mask)  # mask broadcasts over coeff/Dloc
             video_mod_CB1D = ttnn.add(mod_base, mod_delta)  # base broadcasts over N
-            ttnn.deallocate(mod_delta)
-            ttnn.deallocate(mod_pin)
-            ttnn.deallocate(mod_base)
             # Embedded timestep (for norm_out), same per-token blend, kept full-D.
             emb_pin, emb_base = ttnn.chunk(emb_pair, 2, dim=2)  # each (1,1,1,D)
-            ttnn.deallocate(emb_pair)
             emb_delta = ttnn.sub(emb_pin, emb_base)
             emb_delta = ttnn.repeat(emb_delta, ttnn.Shape([1, 1, N, 1]))  # (1,1,N,D)
             emb_delta = ttnn.mul(emb_delta, video_pin_mask)
             video_emb_ts = ttnn.add(emb_base, emb_delta)
-            ttnn.deallocate(emb_delta)
-            ttnn.deallocate(emb_pin)
-            ttnn.deallocate(emb_base)
             B = 1
         else:
             # I2V (dense): feed the per-token timestep so each token gets its own AdaLN modulation.

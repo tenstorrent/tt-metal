@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
+from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.video import export_video_audio
@@ -597,8 +598,8 @@ class LTXDistilledPipeline(LTXPipeline):
                 else:
                     logger.info(f"I2V: encoding conditioning image {img_path} (strength={cond_strength})")
                     t0 = time.time()
-                    img_s1 = self._load_conditioning_image(img_path, s1_height, s1_width)
-                    img_full = self._load_conditioning_image(img_path, height, width)
+                    img_s1 = load_conditioning_image(img_path, s1_height, s1_width)
+                    img_full = load_conditioning_image(img_path, height, width)
                     s1_cond_latent = cache[s1_key] = self.encode_image(img_s1)
                     full_cond_latent = cache[full_key] = self.encode_image(img_full)
                     timings.append(("Image encode", time.time() - t0))

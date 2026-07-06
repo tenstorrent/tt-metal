@@ -15,9 +15,7 @@ import hashlib
 import json
 import math
 import os
-import sys
 from dataclasses import dataclass, field
-from io import BytesIO
 from typing import Callable
 
 import torch
@@ -65,10 +63,6 @@ LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safet
 TEMPORAL_COMPRESSION = 8
 SPATIAL_COMPRESSION = 32
 
-# I2V conditioning-image H.264 CRF: round-trip through the codec the VAE/DiT were trained on
-# before encoding (a pristine image gives OOD latents). Mirrors ltx_pipelines DEFAULT_IMAGE_CRF.
-DEFAULT_IMAGE_CRF = 33
-
 # Default negative prompt (inlined from the LTX-2 reference
 # ``ltx_pipelines.utils.constants.DEFAULT_NEGATIVE_PROMPT`` so the pipeline has no
 # runtime dependency on the reference package).
@@ -85,31 +79,6 @@ DEFAULT_NEGATIVE_PROMPT = (
     "pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, "
     "inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts."
 )
-
-
-def _ensure_ltx_reference_on_path() -> None:
-    """Put the LTX-2 reference package (``ltx_core`` / ``ltx_pipelines``) on ``sys.path``.
-
-    Used by the host VAE encoder (I2V device-vs-host parity).
-    Honors ``LTX_REFERENCE_ROOT`` (a directory containing ``ltx_core``); otherwise falls back to
-    ``<repo>/LTX-2/packages/{ltx-core,ltx-pipelines}/src`` — the layout the LTX unit tests assume
-    (``git clone https://github.com/Lightricks/LTX-2`` at the repo root). No-op if already importable.
-    """
-    import importlib.util
-
-    if importlib.util.find_spec("ltx_core") is not None:
-        return
-    repo_root = os.environ.get("TT_METAL_HOME") or os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
-    )
-    candidates = []
-    if os.environ.get("LTX_REFERENCE_ROOT"):
-        candidates.append(os.environ["LTX_REFERENCE_ROOT"])
-    candidates.append(os.path.join(repo_root, "LTX-2", "packages", "ltx-core", "src"))
-    candidates.append(os.path.join(repo_root, "LTX-2", "packages", "ltx-pipelines", "src"))
-    for path in candidates:
-        if path and os.path.isdir(path) and path not in sys.path:
-            sys.path.insert(0, path)
 
 
 def latent_grid(num_frames: int, height: int, width: int) -> tuple[int, int, int]:
@@ -417,8 +386,8 @@ class LTXPipeline:
         self.tt_vocoder_with_bwe = None
 
         # decode_audio only touches the audio decoder + vocoder, so audio_only skips building
-        # AND priming the 22B transformer / video VAE / upsampler — that prime is the bulk of a
-        # cold run (~100s of 22B weight push) and is pure waste for the audio test.
+        # AND priming the 22B transformer / video VAE / upsampler — that transformer prime
+        # dominates a cold run and is pure waste for the audio test.
 
         if self.checkpoint_name is not None:
             self._load_config_from_checkpoint()
@@ -426,15 +395,17 @@ class LTXPipeline:
             self._register_coresident_exclusions()
             self._prime_caches(audio_only=audio_only)
             # Tracing (prep_run=False) requires precompiled kernels + pre-allocated trace I/O,
-            # so warmup is mandatory when traced. audio_only skips the (video) warmup entirely:
-            # decode_audio compiles + captures its own trace lazily on the first call, so the
-            # ~10-min video stage1/upsample/stage2/gemma warmup is pure waste for audio decode.
+            # so warmup is mandatory when traced. audio_only skips warmup_buffers entirely:
+            # warmup_buffers warms the whole video path (stage1/upsample/stage2/gemma) AND audio
+            # decode, but the audio test needs only the latter — and decode_audio compiles +
+            # captures its own trace lazily on its first call, so it self-warms without paying
+            # for the (unused-here) video stages.
             valid_shape = num_frames > 0 and height > 0 and width > 0
             if (run_warmup or traced) and valid_shape and not audio_only:
                 if traced and not run_warmup:
                     logger.info("traced=True: forcing warmup (trace capture requires precompiled kernels)")
                 self.warmup_buffers(num_frames=num_frames, height=height, width=width)
-            elif traced:
+            elif traced and not audio_only:
                 logger.warning(
                     f"traced=True but invalid shape ({num_frames=}, {height=}, {width=}); "
                     "skipping forced warmup — trace capture will likely fail"
@@ -624,12 +595,6 @@ class LTXPipeline:
         self._vae_causal = vae_cfg.get("causal_decoder", False)
         self._vae_base_channels = vae_cfg.get("decoder_base_channels", 128)
         self._vae_patch_size = vae_cfg.get("patch_size", 4)
-        # Extra fields needed to reconstruct the reference (host) VAE encoder for I2V parity checks.
-        self._vae_in_channels = vae_cfg.get("in_channels", 3)
-        self._vae_latent_channels = vae_cfg.get("latent_channels", 128)
-        self._vae_norm_layer = vae_cfg.get("norm_layer", "pixel_norm")
-        self._vae_latent_log_var = vae_cfg.get("latent_log_var", "uniform")
-        self._vae_spatial_padding_mode = vae_cfg.get("spatial_padding_mode", "zeros")
         if self._vae_decoder_blocks:
             logger.info(f"VAE config: {len(self._vae_decoder_blocks)} blocks, causal={self._vae_causal}")
         if self._vae_encoder_blocks:
@@ -793,33 +758,24 @@ class LTXPipeline:
         if not self.dynamic_load:
             return
         models = [s.model for s in self.transformer_states]
+
+        # Each module lists the peers it must evict before loading (None peers are skipped
+        # when wiring below). The upsampler is tiny (~120 MB/chip) and stays resident with the
+        # transformer, so transformer <-> upsampler is intentionally absent from both lists.
         for i, m in enumerate(models):
-            peers = [p for j, p in enumerate(models) if j != i]
-            if peers:
-                m.register_coresident_exclusions(*peers)
-
+            m._coresident_peers = [*models[:i], *models[i + 1 :], self.vae_decoder, self.vae_encoder]
         if self.vae_decoder is not None:
-            for m in models:
-                m.register_coresident_exclusions(self.vae_decoder)
-            self.vae_decoder.register_coresident_exclusions(*models)
-
-        # Upsampler is tiny (~120 MB/chip) and stays resident alongside the transformer.
-        # Only the full-res VAE decode activations need it evicted.
-        if self.upsampler is not None and self.vae_decoder is not None:
-            self.vae_decoder.register_coresident_exclusions(self.upsampler)
-            self.upsampler.register_coresident_exclusions(self.vae_decoder)
-
-        # VAE encoder runs once at the start of generate (before stage 1), then is evicted.
-        # Exclude it against the DiT variants, the decoder, and the upsampler.
+            self.vae_decoder._coresident_peers = [*models, self.upsampler, self.vae_encoder]
+        if self.upsampler is not None:
+            self.upsampler._coresident_peers = [self.vae_decoder, self.vae_encoder]
         if self.vae_encoder is not None:
-            enc_peers = [*models]
-            if self.vae_decoder is not None:
-                enc_peers.append(self.vae_decoder)
-            if self.upsampler is not None:
-                enc_peers.append(self.upsampler)
-            for m in enc_peers:
-                m.register_coresident_exclusions(self.vae_encoder)
-            self.vae_encoder.register_coresident_exclusions(*enc_peers)
+            self.vae_encoder._coresident_peers = [*models, self.vae_decoder, self.upsampler]
+
+        for m in [*models, self.vae_decoder, self.upsampler, self.vae_encoder]:
+            if m is not None:
+                for peer in m._coresident_peers:
+                    if peer is not None:
+                        m.register_coresident_exclusions(peer)
 
         # The on-device Gemma encoder modules are bidirectionally excluded with the DiT
         # variants + VAE; the pair wires the exclusions on each module at its first build.
@@ -957,155 +913,12 @@ class LTXPipeline:
         """Encode a conditioning image/clip ``(B, 3, F, H, W)`` in [-1, 1] to a normalized
         latent ``(B, 128, F', H', W')``. Loads the encoder (evicting coresident peers).
 
-        When ``LTX_VAE_ENCODER_HOST=1`` (off by default), also runs the reference CPU/torch
-        encoder, logs device-vs-host parity (PCC + abs diff), and returns the HOST latent for
-        the run — a self-checking I2V path. Default (``0``) is the device-only fast path.
+        Device-vs-reference parity for this encoder is covered by ``test_ltx_video_encoder_prod``
+        in ``tests/models/ltx/test_vae_ltx.py`` (diffusers reference, sharded like this path).
         """
         assert self.vae_encoder is not None, "VAE encoder not constructed (no encoder_blocks in checkpoint?)"
         self._prepare_vae_encoder()
-        device_latent = self.vae_encoder(image_BCFHW)
-        if os.environ.get("LTX_VAE_ENCODER_HOST", "0") != "1":
-            return device_latent
-        host_latent = self._host_encode_image(image_BCFHW)
-        self._log_encoder_parity(device_latent, host_latent)
-        return host_latent
-
-    def _build_host_vae_encoder(self):
-        """Reference (CPU/torch) LTX-2 VAE encoder from ``ltx_core``, built lazily from the same
-        checkpoint ``vae.encoder.*`` weights + per-channel statistics the device encoder loads.
-        Cached across calls. Raises a clear error if the LTX-2 reference package is unavailable."""
-        if getattr(self, "_host_vae_encoder_mod", None) is not None:
-            return self._host_vae_encoder_mod
-        _ensure_ltx_reference_on_path()
-        try:
-            from ltx_core.model.video_vae.enums import LogVarianceType, NormLayerType, PaddingModeType
-            from ltx_core.model.video_vae.video_vae import VideoEncoder
-        except ImportError as e:
-            raise ImportError(
-                "LTX_VAE_ENCODER_HOST=1 needs the LTX-2 reference package (ltx_core), which was not "
-                "importable. Clone it at the repo root (git clone https://github.com/Lightricks/LTX-2 "
-                "into <repo>/LTX-2) or set LTX_REFERENCE_ROOT to a checkout's "
-                "packages/ltx-core/src directory."
-            ) from e
-
-        encoder = VideoEncoder(
-            in_channels=self._vae_in_channels,
-            out_channels=self._vae_latent_channels,
-            encoder_blocks=self._vae_encoder_blocks,
-            patch_size=self._vae_patch_size,
-            norm_layer=NormLayerType(self._vae_norm_layer),
-            latent_log_var=LogVarianceType(self._vae_latent_log_var),
-            encoder_spatial_padding_mode=PaddingModeType(self._vae_spatial_padding_mode),
-        )
-        # Pull only the encoder + per-channel-stats tensors (not the full 22B checkpoint) via safe_open.
-        state: dict[str, torch.Tensor] = {}
-        with safe_open(self._vae_checkpoint_path, framework="pt") as f:
-            for k in f.keys():
-                if k.startswith("vae.encoder."):
-                    state[k.removeprefix("vae.encoder.")] = f.get_tensor(k)
-                elif k in (
-                    "vae.per_channel_statistics.mean-of-means",
-                    "vae.per_channel_statistics.std-of-means",
-                ):
-                    state[k.removeprefix("vae.")] = f.get_tensor(k)
-        encoder.load_state_dict(state, strict=True)
-        encoder = encoder.to(torch.float32).eval()
-        logger.info(f"Built host VAE encoder (ltx_core reference, {len(self._vae_encoder_blocks)} blocks)")
-        self._host_vae_encoder_mod = encoder
-        return encoder
-
-    def _host_encode_image(self, image_BCFHW: torch.Tensor) -> torch.Tensor:
-        """Encode the conditioning image on the host (reference encoder), matching the device
-        encoder's contract: ``(B, 3, F, H, W)`` in [-1, 1] -> normalized ``(B, 128, F', H', W')``."""
-        encoder = self._build_host_vae_encoder()
-        with torch.no_grad():
-            return encoder(image_BCFHW.detach().float())
-
-    @staticmethod
-    def _log_encoder_parity(device_latent: torch.Tensor, host_latent: torch.Tensor) -> None:
-        """Log device-vs-host conditioning-latent agreement (PCC + abs/rel diff)."""
-        d = device_latent.detach().float()
-        h = host_latent.detach().float()
-        if d.shape != h.shape:
-            logger.warning(
-                f"I2V VAE encoder parity: SHAPE MISMATCH device {tuple(d.shape)} vs host {tuple(h.shape)} "
-                "(using HOST latent for the run)"
-            )
-            return
-        df, hf = d.flatten(), h.flatten()
-        dc, hc = df - df.mean(), hf - hf.mean()
-        denom = float(dc.norm() * hc.norm())
-        pcc = float(torch.dot(dc, hc)) / denom if denom > 0 else float("nan")
-        max_abs = float((df - hf).abs().max())
-        mean_abs = float((df - hf).abs().mean())
-        rel = max_abs / (float(hf.abs().max()) + 1e-8)
-        logger.info(
-            f"I2V VAE encoder parity (device vs host) shape={tuple(d.shape)}: "
-            f"PCC={pcc:.6f}  max|Δ|={max_abs:.6f}  mean|Δ|={mean_abs:.6f}  rel={rel:.4%}  "
-            "(using HOST latent for the run)"
-        )
-
-    @staticmethod
-    def _crf_codec_roundtrip(arr, crf: int):
-        """Encode/decode an RGB ``(H,W,3)`` uint8 image through libx264 at the given CRF, cropped
-        to even dims. Port of ``ltx_pipelines.utils.media_io`` encode/decode_single_frame."""
-        import av  # lazy import (matches utils/video.py); only needed for I2V conditioning
-        import numpy as np
-
-        # libx264 requires even dimensions; crop to a multiple of 2 like the reference.
-        height = arr.shape[0] // 2 * 2
-        width = arr.shape[1] // 2 * 2
-        arr = np.ascontiguousarray(arr[:height, :width])
-
-        with BytesIO() as buf:
-            container = av.open(buf, mode="w", format="mp4")
-            try:
-                stream = container.add_stream("libx264", rate=1, options={"crf": str(crf), "preset": "veryfast"})
-                stream.height = height
-                stream.width = width
-                av_frame = av.VideoFrame.from_ndarray(arr, format="rgb24").reformat(format="yuv420p")
-                container.mux(stream.encode(av_frame))
-                container.mux(stream.encode())
-            finally:
-                container.close()
-            video_bytes = buf.getvalue()
-
-        with BytesIO(video_bytes) as buf:
-            container = av.open(buf)
-            try:
-                vstream = next(s for s in container.streams if s.type == "video")
-                frame = next(container.decode(vstream))
-            finally:
-                container.close()
-        return frame.to_ndarray(format="rgb24")
-
-    @staticmethod
-    def _load_conditioning_image(
-        image_path: str, height: int, width: int, crf: int = DEFAULT_IMAGE_CRF
-    ) -> torch.Tensor:
-        """Decode -> CRF round-trip -> resize+center-crop -> normalize to [-1,1]. Returns
-        ``(1,3,1,H,W)`` float32. Port of ``load_image_and_preprocess``; ``crf=0`` skips the codec."""
-        import numpy as np
-        from PIL import Image
-
-        img = Image.open(image_path).convert("RGB")
-        arr = np.asarray(img)  # (H, W, 3) uint8
-        if crf and crf > 0:
-            arr = LTXPipeline._crf_codec_roundtrip(arr, crf)
-        tensor = torch.from_numpy(np.ascontiguousarray(arr)).float()  # (H, W, 3)
-        tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # (1, 3, H, W)
-
-        _, _, src_h, src_w = tensor.shape
-        scale = max(height / src_h, width / src_w)
-        new_h = math.ceil(src_h * scale)
-        new_w = math.ceil(src_w * scale)
-        tensor = torch.nn.functional.interpolate(tensor, size=(new_h, new_w), mode="bilinear", align_corners=False)
-        crop_top = (new_h - height) // 2
-        crop_left = (new_w - width) // 2
-        tensor = tensor[:, :, crop_top : crop_top + height, crop_left : crop_left + width]
-
-        tensor = tensor.unsqueeze(2)  # (1, 3, 1, H, W)
-        return tensor / 127.5 - 1.0
+        return self.vae_encoder(image_BCFHW)
 
     def decode_latents(
         self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int, *, output_type: str = "float"
