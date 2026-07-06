@@ -50,8 +50,8 @@ namespace {
 // Import shared test helpers
 using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalDFB;
-using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
+using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
@@ -730,8 +730,8 @@ TEST_F(ProgramRunArgsTestQuasar, SetRunArgsSucceeds_MultiNodeKernel) {
     spec.name = "multi_node_program";
 
     // Kernels span both nodes
-    auto producer = MakeMinimalDMKernel("producer");
-    auto consumer = MakeMinimalDMKernel("consumer");
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2DMKernel("consumer");
 
     // Throw in some varargs (the normal kind, not the weird per-node override kind)
     producer.advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 2, .num_common_runtime_varargs = 1};
@@ -781,8 +781,8 @@ TEST_F(ProgramRunArgsTestQuasar, MultiNode_MissingOneNodeFails) {
     ProgramSpec spec;
     spec.name = "multi_node_program";
 
-    auto producer = MakeMinimalDMKernel("producer");
-    auto consumer = MakeMinimalDMKernel("consumer");
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2DMKernel("consumer");
 
     // Throw in some varargs (the normal kind, not the weird per-node override kind)
     producer.advanced_options.num_runtime_varargs = 2;
@@ -953,7 +953,7 @@ TEST_F(ProgramRunArgsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
 
     ProgramSpec spec;
     spec.name = "vararg_differing_counts";
-    auto kernel = MakeMinimalDMKernel("dm_kernel");
+    auto kernel = MakeMinimalGen2DMKernel("dm_kernel");
     kernel.advanced_options.num_runtime_varargs_per_node = NumVarargsPerNode{{node_a, 2}, {node_b, 5}};
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", nodes, {"dm_kernel"})};
@@ -985,7 +985,7 @@ TEST_F(ProgramRunArgsTestQuasar, VarargPerNodeOverrideMixedEntryTypesSucceeds) {
 
     ProgramSpec spec;
     spec.name = "vararg_mixed_entry_types";
-    auto kernel = MakeMinimalDMKernel("dm_kernel");
+    auto kernel = MakeMinimalGen2DMKernel("dm_kernel");
     // Nodes a and b share count 3 (declared via a NodeRangeSet entry).
     // Node c has count 5 (declared via a NodeCoord entry).
     kernel.advanced_options.num_runtime_varargs_per_node = NumVarargsPerNode{{ab, 3}, {node_c, 5}};
@@ -1017,7 +1017,7 @@ TEST_F(ProgramRunArgsTestQuasar, VarargScalarDefaultWithSparseOverrideSucceeds) 
 
     ProgramSpec spec;
     spec.name = "vararg_scalar_with_sparse_override";
-    auto kernel = MakeMinimalDMKernel("dm_kernel");
+    auto kernel = MakeMinimalGen2DMKernel("dm_kernel");
     kernel.advanced_options = KernelAdvancedOptions{
         .num_runtime_varargs = 2,                                        // default for unlisted nodes
         .num_runtime_varargs_per_node = NumVarargsPerNode{{node_c, 5}},  // node_c is the exception
@@ -1053,7 +1053,7 @@ TEST_F(ProgramRunArgsTestQuasar, VarargSparseOverrideZeroErasesScalarDefault) {
 
     ProgramSpec spec;
     spec.name = "vararg_zero_override";
-    auto kernel = MakeMinimalDMKernel("dm_kernel");
+    auto kernel = MakeMinimalGen2DMKernel("dm_kernel");
     kernel.advanced_options = KernelAdvancedOptions{
         .num_runtime_varargs = 3,
         .num_runtime_varargs_per_node = NumVarargsPerNode{{node_b, 0}},  // node_b: no varargs despite scalar default
@@ -1098,7 +1098,7 @@ TEST_F(ProgramRunArgsTestQuasar, VarargOnlyRTAsMissingNodeCoverageFails) {
 
     ProgramSpec spec;
     spec.name = "vararg_missing_node";
-    auto kernel = MakeMinimalDMKernel("dm_kernel");
+    auto kernel = MakeMinimalGen2DMKernel("dm_kernel");
     kernel.advanced_options.num_runtime_varargs = 2;  // uniform across both nodes
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", nodes, {"dm_kernel"})};
@@ -1218,8 +1218,8 @@ inline ProgramSpec MakeBorrowedDFBProgramSpecForRunArgs(
     ProgramSpec spec;
     spec.name = "borrowed_dfb_test_program";
 
-    auto producer = MakeMinimalDMKernel("producer");
-    auto consumer = MakeMinimalDMKernel("consumer");
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2DMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb", dfb_entry_size, dfb_num_entries);
     dfb.borrowed_from = TensorParamName{tensor_param_name};
 
@@ -1237,7 +1237,7 @@ inline ProgramSpec MakeBorrowedDFBProgramSpecForRunArgs(
 }
 
 // Helper: build minimal ProgramRunArgs for the borrowed-DFB spec above. Both kernels are
-// MakeMinimalDMKernel (no per-node or common args required), so kernel_run_args entries
+// MakeMinimalGen2DMKernel (no per-node or common args required), so kernel_run_args entries
 // are empty schemas. Caller supplies the tensor_args entry separately.
 inline ProgramRunArgs MakeBorrowedDFBRunArgs() {
     NodeCoord node{0, 0};
