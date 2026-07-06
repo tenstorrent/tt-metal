@@ -97,8 +97,8 @@ experimental::ProgramSpec build_bmm_program_spec(
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}};
     if (!use_implicit_sync) {
-        reader_config.gen2_config->disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB};
-        writer_config.gen2_config->disable_implicit_sync_for = {DST_DFB};
+        reader_config.gen2_config->disable_dfb_implicit_sync_for_all = true;
+        writer_config.gen2_config->disable_dfb_implicit_sync_for_all = true;
     }
 
     experimental::DataflowBufferSpec src0_dfb_spec{

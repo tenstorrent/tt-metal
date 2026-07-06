@@ -26,7 +26,7 @@ void kernel_main() {
     // ublocks size defined in pages
     constexpr uint32_t ublock_size_pages = 1;
 
-    uint32_t num_pages_per_block[num_tensors];
+    [[maybe_unused]] uint32_t num_pages_per_block[num_tensors];
     uint32_t page_id_per_tensor[num_tensors];
     constexpr uint32_t src_addr_base_idx = 3;
     constexpr uint32_t num_pages_per_block_base_offset = num_tensors;

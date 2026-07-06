@@ -209,7 +209,7 @@ static vector<uint32_t> create_random_vector_of_mxint(
         v = dist(rng) + offset;
     }
 
-    vector<uint32_t> packed = pack_as_mx_tiles(fmt, tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true);
+    vector<uint32_t> packed = pack_as_mx_tiles(fmt, ttsl::make_const_span(fp32_vec), /*row_major_input=*/true);
     TT_FATAL(
         packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
         "MxInt packed size {} bytes does not match expected {} bytes",
@@ -272,7 +272,7 @@ static void run_narrowing_test(
         mesh_device, tt::DataFormat::Float16_b, output_fmt, src_vec, kDefaultNumTiles, fp32_dest_acc_en);
 
     auto src_floats = bf16_to_floats(src_vec);  // storage (tile-major) order
-    auto ref_packed = pack_as_mx_tiles(output_fmt, tt::stl::make_const_span(src_floats), /*row_major_input=*/false);
+    auto ref_packed = pack_as_mx_tiles(output_fmt, ttsl::make_const_span(src_floats), /*row_major_input=*/false);
 
     auto ref_floats = mx_to_floats(output_fmt, ref_packed);
     auto hw_floats = mx_to_floats(output_fmt, result_vec);

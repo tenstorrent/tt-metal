@@ -522,6 +522,19 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         }
     };
 
+    // Append a kernel's scratchpad CRTA section to `out`, in binding order: one word per scratchpad
+    // binding, holding the scratchpad's allocated L1 base address. The address is 0 here on the first
+    // SetProgramRunArgs (the scratchpad is allocated later, at program-compile time, and the slot is
+    // then patched in place — see ProgramImpl::allocate_scratchpads); on any later re-assembly the
+    // handle already carries the allocated address, so it is filled directly. The section is always
+    // present (sized by the kernel's scratchpad bindings), so the buffer's word count is stable across
+    // re-set calls (install_crtas asserts that).
+    auto append_scratchpad_crtas = [](const auto& scratchpad_handles, std::vector<uint32_t>& out) {
+        for (const auto& handle : scratchpad_handles) {
+            out.push_back(handle.allocated_address);
+        }
+    };
+
     // Install a kernel's assembled CRTA buffer. set_common_runtime_args allocates storage but fatals
     // if called twice, so it can only be used the first time; on subsequent SetProgramRunArgs calls
     // (e.g. re-enqueue with new args) the already-allocated buffer is patched in place. Shared by the
@@ -551,10 +564,12 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     //
     // Layout:
     //   RTA per-node:  [named_rta_0 ... named_rta_N-1, vararg_0 ... vararg_M-1]
-    //   CRTA:          [named_crta_0 ... named_crta_K-1, ta_addr_0 ... ta_addr_B-1, vararg_0 ... vararg_L-1]
+    //   CRTA:          [named_crta_0 ... named_crta_K-1, ta_addr_0 ... ta_addr_B-1, scratch_addr_0 ...
+    //   scratch_addr_S-1,
+    //                   vararg_0 ... vararg_L-1]
     //
     // RTA layout has two sections: named RTAs and RTA varargs.
-    // CRTA layout has three sections: named CRTAs, TensorBinding addresses, and CRTA varargs.
+    // CRTA layout has four sections: named CRTAs, TensorBinding addresses, Scratchpad addresses, and CRTA varargs.
     //
     // TensorBinding address section is used by headergen to emit the `tensor::` namespace tokens.
     // The device-side get_vararg / get_common_vararg helpers invisibly add the combined named-arg + binding
@@ -668,13 +683,15 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             }
         }
 
-        // Assemble the kernel's per-enqueue CRTA buffer in three structurally-separate sections:
+        // Assemble the kernel's per-enqueue CRTA buffer in four structurally-separate sections:
         //   1. User-named CRTAs, in schema order, sourced from common_runtime_arg_values.
         //   2. TensorBinding section, in binding-handle order, sourced from TensorArgument via the
         //      tensor_by_param lookup. Each binding occupies (1 + num_runtime_field_crta_words)
         //      words: [address, optional shape...]. The handle's addr_crta_offset lines up with
         //      the address slot position chosen here.
-        //   3. Common runtime varargs, in caller-supplied order.
+        //   3. Scratchpad section, in binding order, one word each (the allocated L1 base address,
+        //      0 here until allocate_scratchpads patches it at program-compile time).
+        //   4. Common runtime varargs, in caller-supplied order.
         const auto& binding_handles = kernel->tensor_binding_handles();
         std::size_t binding_section_words = 0;
         for (const auto& handle : binding_handles) {
@@ -683,7 +700,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         std::vector<uint32_t> combined_crtas;
         combined_crtas.reserve(
             schema->common_runtime_arg_names.size() + binding_section_words +
-            kernel_common_runtime_varargs(kernel_params).size());
+            kernel->scratchpad_binding_handles().size() + kernel_common_runtime_varargs(kernel_params).size());
         for (const auto& name : schema->common_runtime_arg_names) {
             auto v_it = kernel_params.common_runtime_arg_values.find(name);
             TT_FATAL(
@@ -694,6 +711,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             combined_crtas.push_back(v_it->second);
         }
         append_binding_crtas(binding_handles, combined_crtas);
+        append_scratchpad_crtas(kernel->scratchpad_binding_handles(), combined_crtas);
         combined_crtas.insert(
             combined_crtas.end(),
             kernel_common_runtime_varargs(kernel_params).begin(),
@@ -702,13 +720,12 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         install_crtas(kernel, combined_crtas, kernel_name.get());
     }
 
-    // Second pass: kernels that bind tensors but were omitted from kernel_run_args.
-    // A kernel whose only per-enqueue state is TensorBinding addresses (no named RTAs/CRTAs and no
-    // varargs) is allowed to be absent from kernel_run_args (see ValidateProgramRunArgs). The loop
-    // above only visits kernels present in kernel_run_args, so such a kernel's binding CRTA section
-    // would never be written. Fill it here. This mirrors the fast path UpdateTensorArgs, which
-    // likewise fills bindings for every binding-bearing kernel independent of kernel_run_args.
-    // Kernels without tensor bindings need no CRTA buffer, so this allocates nothing extra for them.
+    // Second pass: kernels that bind tensors and/or a scratchpad but were omitted from kernel_run_args.
+    // A kernel whose only per-enqueue state is TensorBinding addresses and/or a scratchpad (no named
+    // RTAs/CRTAs and no varargs — a scratchpad's address is framework-supplied, not user-supplied) is
+    // allowed to be absent from kernel_run_args (see ValidateProgramRunArgs). The loop above only visits
+    // kernels present in kernel_run_args, so such a kernel's binding + scratchpad CRTA sections would
+    // never be written. Fill them here. Kernels with neither need no CRTA buffer.
     std::unordered_set<std::string> kernels_in_run_args;
     kernels_in_run_args.reserve(params.kernel_run_args.size());
     for (const auto& kernel_params : params.kernel_run_args) {
@@ -720,15 +737,17 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         }
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
         const auto& binding_handles = kernel->tensor_binding_handles();
-        if (binding_handles.empty()) {
+        const auto& scratchpad_handles = kernel->scratchpad_binding_handles();
+        if (binding_handles.empty() && scratchpad_handles.empty()) {
             continue;  // No bindings => nothing to supply; no CRTA dispatch buffer needed.
         }
-        // Binding-only kernel: its CRTA buffer is exactly the binding section (it has no named CRTAs
-        // or varargs, else validation would have required a kernel_run_args entry). install_crtas
-        // allocates the buffer on the first SetProgramRunArgs call and patches it in place on later
-        // ones (e.g. re-enqueue with a new tensor), mirroring the main loop.
+        // Binding-only kernel: its CRTA buffer is exactly the TensorBinding + scratchpad sections (it has
+        // no named CRTAs or varargs, else validation would have required a kernel_run_args entry).
+        // install_crtas allocates the buffer on the first SetProgramRunArgs call and patches it in place
+        // on later ones (e.g. re-enqueue with a new tensor), mirroring the main loop.
         std::vector<uint32_t> combined_crtas;
         append_binding_crtas(binding_handles, combined_crtas);
+        append_scratchpad_crtas(scratchpad_handles, combined_crtas);
         install_crtas(kernel, combined_crtas, kernel_name);
     }
 
@@ -1204,13 +1223,16 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 }
             }
             if (!cvarargs.empty()) {
-                // Common varargs live after the named CRTAs and the tensor-binding address section.
+                // Common varargs live after the named CRTAs, the tensor-binding address section, and the
+                // scratchpad address section.
                 const auto& binding_handles = kernel->tensor_binding_handles();
                 size_t binding_section_words = 0;
                 for (const auto& h : binding_handles) {
                     binding_section_words += 1u + h.num_runtime_field_crta_words;
                 }
-                const size_t crta_vararg_base = schema->common_runtime_arg_names.size() + binding_section_words;
+                const size_t scratchpad_section_words = kernel->scratchpad_binding_handles().size();
+                const size_t crta_vararg_base =
+                    schema->common_runtime_arg_names.size() + binding_section_words + scratchpad_section_words;
                 for (size_t j = 0; j < cvarargs.size(); ++j) {
                     crta.data()[crta_vararg_base + j] = cvarargs[j];
                 }

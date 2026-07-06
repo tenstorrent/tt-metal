@@ -521,8 +521,8 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     EXPECT_THAT(add_dst_vec, Each(Bfloat16Eq(workload_0_src0_val + workload_0_src1_val)));
 
     std::size_t sub_or_mul_size = mul_sub_dst_vec.size() / 2;
-    tt::stl::Span<bfloat16> mul_dst_span(mul_sub_dst_vec.data(), sub_or_mul_size);
-    tt::stl::Span<bfloat16> sub_dst_span(mul_sub_dst_vec.data() + sub_or_mul_size, sub_or_mul_size);
+    ttsl::Span<bfloat16> mul_dst_span(mul_sub_dst_vec.data(), sub_or_mul_size);
+    ttsl::Span<bfloat16> sub_dst_span(mul_sub_dst_vec.data() + sub_or_mul_size, sub_or_mul_size);
 
     EXPECT_THAT(mul_dst_span, Each(Bfloat16Eq(workload_1_src0_val * workload_1_src1_val)));
     EXPECT_THAT(sub_dst_span, Each(Bfloat16Eq(workload_1_src0_val - workload_1_src1_val)));

@@ -264,7 +264,7 @@ jobs:
           echo "should-run=${{ github.event_name == 'push' || inputs.run-ops-unit-tests }}" >> "$GITHUB_OUTPUT"
       - id: set-ttsim-tests
         run: |
-          echo "should-run=${{ github.event_name != 'push' && inputs.run-ttsim-tests }}" >> "$GITHUB_OUTPUT"
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttsim-tests }}" >> "$GITHUB_OUTPUT"
 
   # TTNN sanity tests
   ttnn-sanity-tests:
@@ -286,18 +286,19 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
-    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
-    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
+    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
+    needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
-    uses: ./.github/workflows/t3000-fast-tests-impl.yaml
+    uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      enabled-skus: "wh_llmbox"
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      timeout: ${{ inputs.enable-watcher && 80 || 20 }}
+      timeout-minutes-override: ${{ inputs.enable-watcher && 80 || 0 }}
       ref: ${{ inputs.ref || github.sha }}
 
   ops-sanity-tests:
@@ -323,6 +324,7 @@ jobs:
     with:
       basic-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
       package-artifact-name: ${{ needs.resolve-artifacts.outputs.packages-artifact-name }}
+      ref: ${{ inputs.ref || github.sha }}
 
   runtime-sim-sanity-tests:
     needs: [resolve-artifacts, tests-to-run]
@@ -335,3 +337,4 @@ jobs:
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enabled-skus: "sim_wormhole_b0,sim_blackhole,sim_wormhole_b0_galaxy,sim_blackhole_galaxy"
+      ref: ${{ inputs.ref || github.sha }}
