@@ -117,7 +117,13 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks", "num_tiles_per_block", "block_width_size", "num_full_blocks_in_row", "start_stick_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // QSR: this reader fills SC_INPUT_DFB with many sub-tile (per-row stick) NOC reads — the same
+        // sub-tile pattern that stalls the DFB implicit-sync credit accounting (reader pinned at NRBW /
+        // cb_reserve_back; compute idle; writer stuck at NWFW). Mirror the tilize default factory's opt-out.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // -- Writer kernel --
@@ -133,7 +139,12 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = SC_OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        // QSR: companion opt-out on the SC_OUTPUT_DFB consumer side (mirrors tilize default); keeps the
+        // explicit push_back/pop_front authoritative so the writer's NWFW clears once the pipeline flows.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // -- Compute kernel --

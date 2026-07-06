@@ -408,10 +408,18 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         KernelSpec reader{
             .unique_id = name,
             .source = std::filesystem::path(kReaderKernelPath),
+            // QSR: this reader fills/drains DFBs with many sub-tile (per-row stick) NOC reads/writes
+            // (gather scatter-writes sticks sourced from dfb::untilize_out; pad_fill/pad_read replicate a
+            // single stick; DRAM config scratch is a partial-page NOC read) — the same sub-tile pattern that
+            // stalls the DFB implicit-sync credit accounting (reader pinned at NRBW; compute idle; peer stuck
+            // at NWFW). The tilize default and transpose HC-sharded factories hit the identical stall and work
+            // around it with disable_dfb_implicit_sync_for_all; mirror it here so explicit push_back/pop_front
+            // stays authoritative. (The craq-sim subtile-autopost fix does not cover the emulator/HW path.)
             .hw_config =
                 DataMovementHardwareConfig{
                     .role = DataMovementRoleHint::UNSPECIFIED,
                     .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = processor, .noc = noc},
+                    .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
                 },
         };
 

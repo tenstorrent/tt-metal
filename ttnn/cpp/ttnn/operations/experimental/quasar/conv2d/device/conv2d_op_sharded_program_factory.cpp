@@ -1119,11 +1119,21 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .dfb_bindings = std::move(reader_dfb_bindings),
         .semaphore_bindings = std::move(reader_sem_bindings),
         .tensor_bindings = std::move(reader_tensor_bindings),
+        // QSR: this conv activation reader (all 3 variants: height-sharded / 2D-mcast / depthwise) fills the
+        // ACT (and ACT_ROW_MAJOR) DFB via per-window "stick" NOC reads — read_sticks() in conv_reader_common.hpp
+        // issues many sub-tile (conv_act_c_read_bytes each) async reads per act block, then reserve_back/push_back.
+        // That sub-tile stick fill is exactly the pattern that stalls the DFB implicit-sync credit accounting
+        // (reader pinned at NRBW/cb_reserve_back, compute idle, writer at NWFW). Mirror the tilize/transpose
+        // HC-sharded workaround: opt out of implicit sync so explicit reserve/push credits stay authoritative.
+        // (The writer/weights kernels do full-tile page reads into WEIGHTS/BIAS only — no opt-out needed; and
+        // the reader is the only DM kernel on the ACT/ACT_RM producer + ACT_TILIZED consumer sides, so the
+        // cross-kernel agreement rule is satisfied.)
         .hw_config =
             m2::DataMovementHardwareConfig{
                 .gen1_config =
                     m2::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc},
+                .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
             },
     };
 

@@ -195,7 +195,13 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
              {"total_tiles_per_row", total_tiles_per_row}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // QSR: companion opt-out on the input-DFB producer side (mirrors tilize default reader+writer).
+        // This reader does full-page tile reads, but reverting its DFB to explicit reserve_back/push_back
+        // keeps credits authoritative so it clears NRBW once the sub-tile writer drains the pipeline.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     KernelSpec writer{
@@ -220,7 +226,15 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
                   "single_block_size_col_arg",
                   "sub_block_width_size",
                   "single_sub_block_size_row_arg"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        // QSR: this writer DRAINS the output DFB with per-row (stick) sub-tile NOC writes
+        // (cb_out0.get_read_ptr() + partial noc_async_write per row into row-major output pages) — the
+        // sub-tile DFB-transfer pattern that deadlocks implicit-sync credit accounting (writer pinned at
+        // NWFW / NRBW). Mirror tilize default + transpose HC-sharded: opt out of DFB implicit sync so the
+        // kernel's explicit wait_front/pop_front stay authoritative (correctness-safe).
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     uint32_t single_sub_block_size_wh = single_block_size * single_block_size / single_sub_block_size;

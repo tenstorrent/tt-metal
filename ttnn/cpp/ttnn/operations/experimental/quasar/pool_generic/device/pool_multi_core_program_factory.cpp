@@ -1038,7 +1038,15 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         .tensor_bindings = make_reader_tensor_bindings(false),
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // QSR: this reader fills the input DFB(s) with many sub-tile per-row "stick" NOC reads
+        // (noc.async_read of read_bytes*w_multiple per stick, MAX_BYTES_PER_REDUCTION per c-block) —
+        // exactly the sub-tile pattern that stalls the DFB implicit-sync credit accounting (reader
+        // pinned at NRBW/cb_reserve_back, compute idle). Mirror the tilize/transpose HC-sharded
+        // workaround and opt out of implicit sync so explicit reserve/push credits stay authoritative.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     std::optional<KernelSpec> reader1;
@@ -1051,7 +1059,13 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             .tensor_bindings = make_reader_tensor_bindings(true),
             .compile_time_args = reader1_cta,
             .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+            // QSR: companion opt-out on the split/second reader (writer-face). Same sub-tile stick
+            // DFB transfers as reader0; keep explicit reserve/push credits authoritative to avoid the
+            // implicit-sync NWFW/NRBW stall (mirrors tilize/transpose HC-sharded).
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .role = DataMovementRoleHint::WRITER,
+                    .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         };
     }
 
