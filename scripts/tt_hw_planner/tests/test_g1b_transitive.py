@@ -87,3 +87,72 @@ class M:
 """
     hits = _check_hf_fallback(src)
     assert hits == [], f"_helper is not HOT and no HOT caller — should not seed; got: {hits}"
+
+
+def test_ttnn_to_torch_in_hot_is_flagged():
+    src = """
+import ttnn
+class M:
+    def __call__(self, x_ttnn):
+        y = ttnn.to_torch(x_ttnn)
+        return y
+"""
+    hits = _check_hf_fallback(src)
+    assert hits, "expected fingerprint check to flag ttnn.to_torch in HOT __call__"
+    joined = " | ".join(hits)
+    assert "to_torch" in joined
+    assert "fingerprint" in joined
+
+
+def test_ttnn_to_torch_in_helper_transitively_flagged():
+    src = """
+import ttnn
+class M:
+    def __call__(self, x):
+        return self._attn(x)
+
+    def _attn(self, x_ttnn):
+        qkv = ttnn.linear(x_ttnn, self.w)
+        qkv_t = ttnn.to_torch(qkv)
+        return qkv_t
+"""
+    hits = _check_hf_fallback(src)
+    assert hits, "expected fingerprint to catch ttnn.to_torch in helper reached from __call__"
+    joined = " | ".join(hits)
+    assert "to_torch" in joined
+    assert "fingerprint" in joined
+    assert "via __call__" in joined or "[via " in joined
+
+
+def test_ttnn_to_torch_in_setup_named_is_waived():
+    src = """
+import ttnn
+class M:
+    def __call__(self, x):
+        return self.encode_trace_setup(x)
+
+    def encode_trace_setup(self, x_ttnn):
+        return ttnn.to_torch(x_ttnn)
+"""
+    hits = _check_hf_fallback(src)
+    assert hits == [], (
+        f"SETUP-named helpers may legitimately do ttnn.to_torch for reference "
+        f"tensor computation; should not be flagged. got: {hits}"
+    )
+
+
+def test_fingerprint_catches_when_blocklist_would_miss():
+    src = """
+import ttnn
+class M:
+    def __call__(self, x_ttnn):
+        y = ttnn.to_torch(x_ttnn)
+        z = y.frobnicate()
+        return z
+"""
+    hits = _check_hf_fallback(src)
+    assert hits, (
+        "even for a torch op not on the 40-op blocklist (.frobnicate is fictional), "
+        "the fingerprint check must fire because the tensor left the device"
+    )
+    assert "to_torch" in " | ".join(hits)
