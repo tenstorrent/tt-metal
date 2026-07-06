@@ -103,8 +103,7 @@ TEST_F(MeshDeviceFixture, Dirty_CB_WaitWithoutPop) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program),
-        ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
+        detail::LaunchProgram(device, program), ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
 }
 
 // Lookahead / double-buffer producer: reserves more pages than it pushes on

@@ -61,9 +61,7 @@ TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_Clash_SanityCheck) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_DEATH(
-        detail::LaunchProgram(device, program),
-        ".*\\[ASAN ERROR\\] Metadata Overflow.*");
+    EXPECT_DEATH(detail::LaunchProgram(device, program), ".*\\[ASAN ERROR\\] Metadata Overflow.*");
 }
 
 // Positive control: a small CB that comfortably fits below the lowest occupied

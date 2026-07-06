@@ -1182,7 +1182,7 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 820.0
+              prefill_time_to_first_token: 514.0
               decode_t/s: 18.2
               decode_t/s/u: 18.2
               tolerance: 0.2

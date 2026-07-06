@@ -496,12 +496,15 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear_h(
         initialize_write_cmd(write_cmd_dst);
     }
 
-    if constexpr (flush_prefetch && inline_data) {
-        TT_ASSERT(data != nullptr);
-        this->add_data(data, data_sizeB, data_sizeB);
-    }
-
-    if constexpr (!flush_prefetch) {
+    if constexpr (flush_prefetch) {
+        if constexpr (inline_data) {
+            TT_ASSERT(data != nullptr);
+            this->add_data(data, data_sizeB, data_sizeB);
+            // Align so the next command is written to a correctly aligned location. Mirrors
+            // DeviceCommandCalculator::add_dispatch_write_linear_h and add_dispatch_write_linear.
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+        }
+    } else {
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 }
@@ -547,6 +550,26 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         this->memcpy(mcast_cmd_dst, &mcast_cmd, sizeof(CQDispatchCmd));
     } else {
         initialize_mcast_cmd(mcast_cmd_dst);
+    }
+    this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+}
+
+template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_dispatch_rt_profiler_flush(uint32_t wait_count, uint32_t wait_stream) {
+    this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), DispatcherSelect::DISPATCH_SUBORDINATE);
+    auto initialize_flush_cmd = [&](CQDispatchCmd* flush_cmd) {
+        *flush_cmd = {};
+        flush_cmd->base.cmd_id = CQ_DISPATCH_CMD_RT_PROFILER_FLUSH;
+        flush_cmd->rt_profiler_flush.wait_count = wait_count;
+        flush_cmd->rt_profiler_flush.wait_stream = wait_stream;
+    };
+    CQDispatchCmd* flush_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQDispatchCmd flush_cmd{};
+        initialize_flush_cmd(&flush_cmd);
+        this->memcpy(flush_cmd_dst, &flush_cmd, sizeof(CQDispatchCmd));
+    } else {
+        initialize_flush_cmd(flush_cmd_dst);
     }
     this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }

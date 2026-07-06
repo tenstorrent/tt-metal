@@ -799,7 +799,7 @@ class TestMatmulFusion:
             epsilon=1e-5,
         )
 
-        with expect_error((ValueError, RuntimeError)):
+        with expect_error((ValueError, RuntimeError), "fp32_dest_acc_en mismatch"):
             Sequential(mm, ln).build(device)
 
 
