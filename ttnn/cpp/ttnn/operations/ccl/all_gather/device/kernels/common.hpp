@@ -16,13 +16,22 @@
 namespace fabric_api = tt::tt_fabric::linear::experimental;
 
 // ── data_valid semaphore protocol ────────────────────────────────────────────────────────────────
-// data_valid counts the chunks the upstream neighbor has delivered into our output, cumulative over the op and
-// reset at completion. A delivered chunk sits at position (delivery_index) * slice_count + within-slice offset.
-// The writer maintains the count: atomic-inc by chunks delivered, fine-grained (every data_valid_granularity CB
-// pages) for stripes the downstream relays, and one coalesced inc for a stripe it only receives. The reader
-// consumes it: noc_semaphore_wait_min on the position of the last chunk of the batch it is about to read. So
-// data_valid_granularity is a writer-only knob -- the reader waits on absolute positions and auto-paces to
-// whatever cadence the writer emits.
+// data_valid counts the chunks the upstream neighbor has delivered into our output -- cumulative over the op,
+// reset at completion. A relayed chunk's absolute position is base_chunk + within-slice offset, where
+// base_chunk = (iter-1)*slice_count. The writer maintains the count (atomic-inc by chunks delivered); the reader
+// consumes it with noc_semaphore_wait_min on the position of the last chunk of the batch it is about to read,
+// then a final wait for total_chunks (relayed + received-only) before reset.
+//
+// Waiting on an absolute position -- not a signal/granule count -- is what lets one reader path cover every case
+// with no alignment or per-topology special-casing:
+//   - a full relay, and the even-ring split's prefix half (offset 0) and suffix half (offset = half): identical
+//     per-batch wait, differing only in base_chunk/count;
+//   - a received-only stripe (a line endpoint's incoming stripes, or a ring antipode): no relay wait at all --
+//     it is covered solely by the final total_chunks wait;
+//   - a sink direction (num_iters == 0): only the total_chunks wait runs.
+// Because alignment never enters in, data_valid_granularity is a pure writer-side perf knob: the reader
+// auto-paces to whatever cadence the writer emits (fine-grained for stripes the downstream relays, one coalesced
+// inc for a received-only stripe).
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 // Walks the output-tensor chunks of one stripe. Templated on the geometry so the per-stripe starts are
