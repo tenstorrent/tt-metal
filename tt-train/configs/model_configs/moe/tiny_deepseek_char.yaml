@@ -15,7 +15,7 @@ transformer_config:
   theta: 10000.0
   n_dense_layers: 2
   inter_dim: 4096
-  # DeepSeek MoE FFN variant: dense | sparse | sparse_tp | sparse_ep
+  # DeepSeek MoE FFN variant: dense | sparse | sparse_ep
   moe_type: "sparse"
   moe_hyperparam:
     moe_inter_dim: 768

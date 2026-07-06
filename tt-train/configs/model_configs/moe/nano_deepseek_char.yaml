@@ -15,10 +15,10 @@ transformer_config:
   n_dense_layers: 2
   inter_dim: 1536
   # DeepSeek MoE FFN variant:
-  #   dense | sparse | sparse_tp | sparse_ep
-  # sparse_tp / sparse_ep shard experts across the device_config.moe_axis mesh axis
+  #   dense | sparse | sparse_ep
+  # sparse_ep partitions experts across the device_config.moe_axis mesh axis
   # (or "tp" under full-model TP); with no such axis they fall back to single-chip sparse.
-  moe_type: "sparse_tp"
+  moe_type: "sparse_ep"
   moe_hyperparam:
     moe_inter_dim: 256
     n_routed_experts: 8

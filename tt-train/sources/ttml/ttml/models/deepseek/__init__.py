@@ -52,11 +52,10 @@ class DeepSeekConfig:
     # MoE FFN variant:
     #   dense     — on-device masked experts (no token grouping)
     #   sparse    — moe_group/ungroup, single-chip (no MoE parallelism)
-    #   sparse_tp — sparse + tensor-parallel experts (shard the intermediate dim)
     #   sparse_ep — sparse + expert-parallel (partition the expert list)
-    # sparse_tp/sparse_ep shard across the "tp" axis (use_tp) or moe_axis_name;
-    # with no such axis they fall back to plain sparse.
-    moe_type: Literal["dense", "sparse", "sparse_tp", "sparse_ep"] = "sparse"
+    # sparse_ep shards across the "tp" axis (use_tp) or moe_axis_name;
+    # with no such axis it falls back to plain sparse.
+    moe_type: Literal["dense", "sparse", "sparse_ep"] = "sparse"
     # MLA (q_lora_rank=0 means direct Q projection without LoRA bottleneck)
     q_lora_rank: int = 256
     kv_lora_rank: int = 128
@@ -68,14 +67,13 @@ class DeepSeekConfig:
     rope_theta: float = 10000.0
     # Execution
     runner_type: RunnerType = RunnerType.Default
-    # MoE tensor parallelism. If set and the active mesh has an axis
-    # with this name (size > 1), MoE blocks use SparseMoETP — every
-    # chip in that axis holds all routed experts with each expert's
-    # intermediate dim sharded across the axis. Set to None to disable.
+    # MoE axis. If set and the active mesh has an axis with this name
+    # (size > 1), sparse_ep MoE blocks use SparseMoEEP — the routed expert
+    # list is partitioned across that axis. Set to None to disable.
     moe_axis_name: str | None = None
     # Full-model TP on the named mesh axis ``"tp"`` (attention, dense MLP,
-    # LM head, and sparse MoE). When True, ``SparseMoETP`` uses ``"tp"``
-    # directly; ``moe_axis_name`` is only for MoE-only TP experiments
+    # LM head, and sparse MoE). When True, ``SparseMoEEP`` uses ``"tp"``
+    # directly; ``moe_axis_name`` is only for MoE-only EP experiments
     # when this flag is False.
     use_tp: bool = False
 

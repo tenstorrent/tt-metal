@@ -159,17 +159,15 @@ class MoE(AbstractModuleBase):
         # Router gate
         self.gate = LinearLayer(config.dim, config.n_routed_experts, has_bias=False)
 
-        # Routed experts: dense ``Expert`` modules, or TP-sharded gate/up/down
-        # parameters (``SparseMoETP``) created directly with a mesh mapper — no
+        # Routed experts: dense ``Expert`` modules, or EP-sharded gate/up/down
+        # parameters (``SparseMoEEP``) created directly with a mesh mapper — no
         # dense-on-device weights and no host readback from a duplicate LinearLayer.
         H, I = config.dim, config.moe_inter_dim
         # moe_type decides how routed experts are sharded across moe_axis_name:
-        #   sparse_ep — partition the expert list; sparse_tp — shard each expert's
-        #   intermediate dim. Otherwise (dense / plain sparse / no axis) build
-        #   replicated dense Expert modules.
+        #   sparse_ep — partition the expert list across the axis. Otherwise
+        #   (dense / plain sparse / no axis) build replicated dense Expert modules.
         moe_type = str(getattr(config, "moe_type", "sparse")).lower()
         ep_sharded = moe_axis_name is not None and moe_type == "sparse_ep"
-        tp_sharded = moe_axis_name is not None and moe_type == "sparse_tp"
 
         if ep_sharded:
             mesh = ttml.maybe_mesh()
@@ -206,36 +204,6 @@ class MoE(AbstractModuleBase):
                 self.w_up.append(up)
                 self.w_down.append(down)
             self.experts = ModuleList([])
-        elif tp_sharded:
-            mesh = ttml.maybe_mesh()
-            if mesh is None or not mesh.has_axis(moe_axis_name):
-                raise ValueError(f"MoE: moe_axis_name={moe_axis_name!r} requires an open mesh with that axis")
-            D = mesh.axis_size(moe_axis_name)
-            if I % D != 0:
-                raise ValueError(
-                    f"MoE: moe_inter_dim={I} must be divisible by axis {moe_axis_name!r} size ({D}) "
-                    "for TP-sharded routed experts"
-                )
-            mapper_gate = ttml.mesh().axis_mapper(moe_axis_name, tdim=2)
-            mapper_down = ttml.mesh().axis_mapper(moe_axis_name, tdim=3)
-            k_in = math.sqrt(1.0 / H)
-            init_gate = ttml.init.uniform(-k_in, k_in)
-            k_mid = math.sqrt(1.0 / I)
-            init_down = ttml.init.uniform(-k_mid, k_mid)
-            self.w_gate = []
-            self.w_up = []
-            self.w_down = []
-            for e in range(config.n_routed_experts):
-                gate = Parameter(init_gate((1, 1, I, H), mapper_gate))
-                up = Parameter(init_gate((1, 1, I, H), mapper_gate))
-                down = Parameter(init_down((1, 1, H, I), mapper_down))
-                setattr(self, f"w_gate_{e}", gate)
-                setattr(self, f"w_up_{e}", up)
-                setattr(self, f"w_down_{e}", down)
-                self.w_gate.append(gate)
-                self.w_up.append(up)
-                self.w_down.append(down)
-            self.experts = ModuleList([])
         else:
             self.w_gate = []
             self.w_up = []
@@ -244,13 +212,10 @@ class MoE(AbstractModuleBase):
                 [Expert(config.dim, config.moe_inter_dim) for _ in range(config.n_routed_experts)]
             )
 
-        # Shared expert(s). If MoE is running with a TP / EP axis (i.e. the
-        # routed experts are TP- or EP-sharded), shard the shared MLP across
-        # the same axis so it stops being a fully-replicated FFN duplicating
-        # weights, optimizer state, and compute on every chip in the TP row.
-        # Uses whichever MoE axis is active — works for full-model TP
-        # (axis="tp"), MoE-only TP (axis="moe_tp" or similar), and EP.
-        shared_axis = moe_axis_name if (ep_sharded or tp_sharded) else None
+        # Shared expert(s). If MoE is running EP-sharded, shard the shared MLP
+        # across the same axis so it stops being a fully-replicated FFN
+        # duplicating weights, optimizer state, and compute on every chip.
+        shared_axis = moe_axis_name if ep_sharded else None
         if config.n_shared_experts > 0:
             self.shared_experts = DeepSeekMLP(
                 config.dim,

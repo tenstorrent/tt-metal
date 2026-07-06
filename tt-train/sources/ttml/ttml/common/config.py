@@ -29,11 +29,10 @@ class DeviceConfig:
         self.device_ids = device_config.get("device_ids", None)
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
-        # MoE tensor-parallel axis index in `mesh_shape`. -1 (default)
-        # disables MoE-only TP; 0/1/... selects which mesh axis to shard the
-        # MoE experts on. The axis is registered on the mesh under the name
-        # "moe_tp". Whether that axis is used as tensor- or expert-parallel is
-        # chosen by the model's moe_type (sparse_tp vs sparse_ep), not here.
+        # MoE expert-parallel axis index in `mesh_shape`. -1 (default)
+        # disables MoE-only EP; 0/1/... selects which mesh axis to partition the
+        # MoE experts across. The axis is registered on the mesh under the name
+        # "moe_ep" and is used by sparse_ep (SparseMoEEP).
         self.moe_axis = int(device_config.get("moe_axis", -1))
         self.enable_fsdp = device_config.get("enable_fsdp", False)
         # Defaults to True: build as deferred metadata -> fully_shard -> materialize already-sharded,

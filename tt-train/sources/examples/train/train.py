@@ -793,9 +793,9 @@ def main() -> None:
 
     mesh = build_mesh(device_cfg)
 
-    # Optional MoE-only tensor-parallel axis (DeepSeek). device_cfg.moe_axis is an index
-    # into mesh_shape; rename that mesh axis to "moe_tp" (unless it already carries a
-    # parallelism name) and record it on the DeepSeek spec so SparseMoETP/EP shards experts
+    # Optional MoE-only expert-parallel axis (DeepSeek). device_cfg.moe_axis is an index
+    # into mesh_shape; rename that mesh axis to "moe_ep" (unless it already carries a
+    # parallelism name) and record it on the DeepSeek spec so SparseMoEEP partitions experts
     # across it. When enable_tp is true, MoE uses the "tp" axis and this is ignored.
     moe_ax = device_cfg.moe_axis
     resolved_moe_axis: str | None = None
@@ -806,14 +806,14 @@ def main() -> None:
         names = list(mesh.axis_names)
         logical = names[moe_ax]
         if logical.startswith("_"):
-            names[moe_ax] = "moe_tp"
+            names[moe_ax] = "moe_ep"
             mesh = ttml.Mesh(mesh.shape, tuple(names))
-            resolved_moe_axis = "moe_tp"
+            resolved_moe_axis = "moe_ep"
         else:
             resolved_moe_axis = logical
 
-    # Record the resolved MoE axis on the DeepSeek spec so sparse_tp/sparse_ep shard experts
-    # across it (tp-vs-ep comes from the spec's moe_type). No-op for non-DeepSeek models.
+    # Record the resolved MoE axis on the DeepSeek spec so sparse_ep partitions experts
+    # across it. No-op for non-DeepSeek models.
     if model_cfg.model_type == "deepseek":
         model_cfg.spec.moe_axis_name = resolved_moe_axis
 

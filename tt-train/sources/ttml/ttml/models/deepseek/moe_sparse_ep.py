@@ -22,15 +22,11 @@ Each chip in the EP cluster stores and runs ``E / D_ep`` experts. Per chip:
 Compare to:
 
     SparseMoE     — all experts on every device, no collectives.
-    SparseMoETP   — all experts on every device, each expert's intermediate
-                    dim sharded across TP axis; broadcast(grouped) + final
-                    all_reduce. Replicated routing/grouping; per-chip
-                    divergence is inside the FFN.
     SparseMoEEP   — disjoint expert subsets per device; replicated input/
                     routing/scores; per-chip divergence starts at moe_group
                     via ``leids``. Saves expert-weight memory linearly in
                     D_ep (each chip allocates 1/D_ep of the routed-expert
-                    weights vs. the SparseMoE/TP layouts which replicate).
+                    weights vs. the SparseMoE layout which replicates).
 """
 
 from __future__ import annotations
@@ -57,8 +53,8 @@ class SparseMoEEP(MoE):
     def __init__(self, config, *, axis_name: str | None = None) -> None:
         # The EP axis can be passed explicitly (the transformer dispatcher does
         # this so EP can reuse the existing "tp" axis without introducing a new
-        # axis name). Fall back to "tp" — if you have full-model TP enabled,
-        # the same axis carries EP-sharded experts instead of TP-sharded ones.
+        # axis name). Fall back to "tp" — with full-model TP enabled, that same
+        # axis carries the EP-sharded experts.
         # (DP + EP on the same axis would need an extra routing CCL, not used here.)
         if axis_name is None:
             axis_name = getattr(config, "moe_axis_name", None) or "tp"

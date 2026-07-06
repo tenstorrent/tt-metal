@@ -79,11 +79,10 @@ class _DeepSeekSpec:
     # MoE FFN variant (applies to layers >= n_dense_layers):
     #   dense     — on-device masked experts (no token grouping)
     #   sparse    — moe_group/ungroup, single-chip (no MoE parallelism)
-    #   sparse_tp — sparse + tensor-parallel experts (shard the intermediate dim)
     #   sparse_ep — sparse + expert-parallel (partition the expert list)
-    # sparse_tp / sparse_ep shard across the "tp" axis (full-model TP) or the mesh axis
-    # named by device_config.moe_axis; with no such axis they degrade to plain sparse.
-    moe_type: Literal["dense", "sparse", "sparse_tp", "sparse_ep"] = "sparse"
+    # sparse_ep shards across the "tp" axis (full-model TP) or the mesh axis
+    # named by device_config.moe_axis; with no such axis it degrades to plain sparse.
+    moe_type: Literal["dense", "sparse", "sparse_ep"] = "sparse"
     moe_hyperparam: _MoEHyperparam = field(default_factory=_MoEHyperparam)
     # Resolved MoE-parallel mesh axis name, filled from device_config.moe_axis in
     # train.py:main() (not parsed from YAML). None => no MoE-only TP axis.
@@ -238,23 +237,23 @@ def _parse_deepseek(tc: dict) -> _DeepSeekSpec:
     return spec
 
 
-_MOE_TYPES = ("dense", "sparse", "sparse_tp", "sparse_ep")
+_MOE_TYPES = ("dense", "sparse", "sparse_ep")
 
 
 def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
     # DeepSeek integrates with the named-mesh TP path (MLA, dense MLP, LM head, and — under
     # full-model TP — sparse MoE all shard across the "tp" axis). moe_type selects the MoE FFN
-    # variant; sparse_tp/sparse_ep additionally shard experts across a mesh axis.
+    # variant; sparse_ep additionally partitions experts across a mesh axis.
     assert isinstance(cfg.spec, _DeepSeekSpec)
     spec = cfg.spec
     if spec.moe_type not in _MOE_TYPES:
         raise ValueError(f"Unknown moe_type={spec.moe_type!r}; expected one of {list(_MOE_TYPES)}")
 
-    # Resolve the expert-sharding axis for sparse_tp/sparse_ep: "tp" under full-model TP, else
+    # Resolve the expert-sharding axis for sparse_ep: "tp" under full-model TP, else
     # the axis resolved from device_config.moe_axis (set on the spec in main()). With no usable
     # axis the library falls back to single-chip SparseMoE, so a missing axis is not an error.
     moe_axis_name = None
-    if spec.moe_type in ("sparse_tp", "sparse_ep"):
+    if spec.moe_type == "sparse_ep":
         moe_axis_name = "tp" if use_tp else spec.moe_axis_name
 
     h = spec.moe_hyperparam
