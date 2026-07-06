@@ -74,7 +74,6 @@ jobs:
       PRTE_MCA_prte_fwd_environment: "true"
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
-      HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
       LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       TT_METAL_HOME: /home/user/tt-metal
