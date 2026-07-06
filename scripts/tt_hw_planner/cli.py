@@ -5746,6 +5746,17 @@ def _stub_uses_torch_wrapper(stub_path: Path) -> bool:
                 continue
             if _body_calls_torch_fallback(node):
                 return True
+
+    try:
+        from .commands.emit_e2e import _check_hf_fallback as _g1b_check
+    except Exception:  # noqa: BLE001
+        _g1b_check = None
+    if _g1b_check is not None:
+        try:
+            if _g1b_check(text):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
     return False
 
 
