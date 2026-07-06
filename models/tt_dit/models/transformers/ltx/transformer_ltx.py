@@ -21,6 +21,52 @@ from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
 
 
+def build_audio_masks(
+    audio_N: int, audio_N_real: int, *, mesh_device: ttnn.MeshDevice, sp_axis: int
+) -> tuple[ttnn.Tensor | None, ttnn.Tensor | None, ttnn.Tensor | None]:
+    """SDPA attn mask + padding masks for SP-sharded vs gathered audio tokens.
+
+    Returns ``(attn_mask, pad_mask_sp, pad_mask_full)`` — ``pad_mask_sp`` is sharded on the
+    sequence dim for multiply with local audio activations; ``pad_mask_full`` is replicated
+    for multiply after the all_gather on A→V keys. All ``None`` when no padding is needed.
+    """
+    if audio_N <= audio_N_real:
+        return None, None, None
+
+    # Column mask only: real/padded queries are barred from attending TO padded keys.
+    # Do NOT mask padded-query rows to -inf — that makes all attention scores in those
+    # rows -inf → softmax NaN → NaN propagates via padded-token outputs (which we then
+    # multiply by 0; IEEE 0*NaN = NaN, not 0). The pad mask already zeros the padded-query
+    # outputs after attention, so column-only masking is sufficient and numerically safer
+    # at high σ where activations have largest magnitude.
+    mask = torch.zeros(1, 1, audio_N, audio_N)
+    mask[:, :, :, audio_N_real:] = float("-inf")
+    tt_attn_mask = bf16_tensor(mask.to(torch.bfloat16), device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+
+    pad_mask = torch.ones(1, 1, audio_N, 1, dtype=torch.bfloat16)
+    pad_mask[:, :, audio_N_real:, :] = 0.0
+    tt_pad_mask_sp = bf16_tensor(pad_mask, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+    tt_pad_mask_full = bf16_tensor(pad_mask, device=mesh_device)
+    return tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full
+
+
+def build_video_pad_mask(
+    video_N: int, video_N_real: int, *, mesh_device: ttnn.MeshDevice, sp_axis: int
+) -> ttnn.Tensor | None:
+    """SP-sharded video padding mask ``(1, 1, video_N, 1)``; ``None`` when no padding is needed.
+
+    Multiply the local (sharded) video activations by this to zero padded slots before they
+    propagate downstream (self-attn residual / cross-attn K / FF). No SDPA attn_mask is needed
+    (unlike audio) — video self-attention uses ring SDPA, which masks padded keys via its
+    ``logical_n=video_N_real`` arg.
+    """
+    if video_N <= video_N_real:
+        return None
+    pad_mask = torch.ones(1, 1, video_N, 1, dtype=torch.bfloat16)
+    pad_mask[:, :, video_N_real:, :] = 0.0
+    return bf16_tensor(pad_mask, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+
+
 class LTXTransformerBlock(Module):
     def __init__(
         self,

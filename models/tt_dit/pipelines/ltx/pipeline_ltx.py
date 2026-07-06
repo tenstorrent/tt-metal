@@ -27,10 +27,10 @@ from safetensors.torch import load_file
 import ttnn
 
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
-from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis, reshape_interleaved_to_bhnd
-from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
+from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
+from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
-from ...models.vae.vae_ltx import LTXVideoDecoder, LTXVideoEncoder
+from ...models.vae.vae_ltx import LTXVideoDecoder, LTXVideoEncoder, read_vae_per_channel_stats, upsample_latent
 from ...parallel.config import (
     AudioTCParallelConfig,
     DiTParallelConfig,
@@ -42,30 +42,15 @@ from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.fuse_loras import LoraSpec, fuse_loras_into
+from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.mochi import get_rot_transformation_mat
-from ...utils.patchifiers import (
-    AudioLatentShape,
-    VideoLatentShape,
-    VideoPixelShape,
-    audio_get_patch_grid_bounds,
-    get_pixel_coords,
-    video_get_patch_grid_bounds,
-)
-from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
+from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor
 from ...utils.video import Audio
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
-# LTX-2 VAE compression ratios (pixel -> latent). Used throughout to map pixel
-# dims to the latent token grid. NOTE: the TILE size used for SP padding (also 32)
-# is a separate concept — do NOT replace `32 * sp_factor` padding math with these.
-TEMPORAL_COMPRESSION = 8
-SPATIAL_COMPRESSION = 32
-
-# Default negative prompt (inlined from the LTX-2 reference
-# ``ltx_pipelines.utils.constants.DEFAULT_NEGATIVE_PROMPT`` so the pipeline has no
-# runtime dependency on the reference package).
 DEFAULT_NEGATIVE_PROMPT = (
     "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, "
     "grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, "
@@ -79,34 +64,6 @@ DEFAULT_NEGATIVE_PROMPT = (
     "pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, "
     "inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts."
 )
-
-
-def latent_grid(num_frames: int, height: int, width: int) -> tuple[int, int, int]:
-    """Map pixel dims to the LTX latent token grid ``(latent_frames, latent_h, latent_w)``."""
-    latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
-    return latent_frames, height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
-
-
-def ceil_to(x: int, multiple: int) -> int:
-    """Smallest multiple of ``multiple`` that is >= ``x``."""
-    return -(-x // multiple) * multiple
-
-
-def pad_hw_replicate(x_BCFHW: torch.Tensor, h_mult: int, w_mult: int) -> tuple[torch.Tensor, int, int]:
-    """Replicate-pad a ``(B, C, F, H, W)`` tensor's H/W up to multiples of ``h_mult``/``w_mult``.
-
-    The sharded VAE convs seam the latent at the 2x4 mesh boundaries when H/W don't divide
-    evenly across the mesh (the uneven-dim halo runs a crop-masking path); padding to even
-    shards avoids it. Returns ``(padded, H, W)`` — the original H/W so the caller can crop the
-    replicated margin back off after the op.
-    """
-    B, C, frames, H, W = x_BCFHW.shape
-    pad_h, pad_w = (-H) % h_mult, (-W) % w_mult
-    if pad_h or pad_w:
-        x_BCFHW = torch.nn.functional.pad(
-            x_BCFHW.reshape(B * C, frames, H, W), (0, pad_w, 0, pad_h), mode="replicate"
-        ).reshape(B, C, frames, H + pad_h, W + pad_w)
-    return x_BCFHW, H, W
 
 
 @dataclass
@@ -133,9 +90,6 @@ class LTXTransformerState:
         self._tt_video_timestep = StateTensor()
         self._tt_video_ts_pair = StateTensor()
         self._tt_video_pin_mask = StateTensor()
-        # I2V frame-0 pin buffers: held across every denoise step and read by the (eager) pin, so
-        # they MUST be pre-allocated before trace capture — otherwise they land in the trace's
-        # activation region and get clobbered on replay, pinning garbage (intermittent static).
         self._tt_i2v_mask = StateTensor()
         self._tt_i2v_clean = StateTensor()
         self._tt_video_pad_mask = StateTensor()
@@ -276,28 +230,16 @@ class LTXPipeline:
         width: int = 0,
         run_warmup: bool = False,
         traced: bool = False,
-        audio_only: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
     ):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
-        # Text-encoder TP spans the full width of mesh axis 1 (T5 encoder pattern):
-        # TP=1 on 1x1, 4 on 2x4, 8 on 4x8. Shared by the Gemma encoder and the
-        # embeddings connectors so both shard identically.
         self.encoder_parallel_config = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=self.mesh_device.shape[1], mesh_axis=1),
         )
-        # Capture the DiT forward as a ttnn trace on the first step, replay after. The Tracers
-        # (one per fixed shape "s1"/"s2") live in the @traced_function cache on
-        # LTXTransformerModel.inner_step, keyed per (transformer, trace_key); release_traces frees them.
         self._traced = traced
-        # Per-stage (s1/s2) persistent trace I/O. A ttnn trace bakes absolute tensor addresses,
-        # so static inputs are bound once and the latent/timestep buffers refreshed in place.
         self._trace_state: dict[str, LTXTransformerState] = {}
-        # Prompt buffers shared by both stages (the embedding is identical), built on the first
-        # traced step — before s1's capture — so they sit below both traces' activations and
-        # neither replay overwrites them.
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
         if ccl_manager.topology == ttnn.Topology.Linear:
@@ -307,25 +249,6 @@ class LTXPipeline:
                 mesh_device, num_links=ccl_manager.num_links, topology=ttnn.Topology.Linear
             )
 
-        # Audio decode is torch-in/torch-out and self-contained on its own modules, so it can
-        # run on a SUBMESH of the full device while the video pipeline keeps the whole mesh.
-        # Fewer T-shards = fewer cross-chip causal-halo barriers (the audio vocoder's dominant
-        # device-side cost): T-shard=4 on a 1x4/2x4 slice beats T-shard=8 on the full 4x8.
-        # Defaults to the full mesh; LTX_AUDIO_SUBMESH=RxC slices an RxC submesh for audio.
-        self.audio_mesh_device = mesh_device
-        self.audio_ccl_manager = self.vae_ccl_manager
-        self._owned_audio_submesh = None
-        _audio_submesh = os.environ.get("LTX_AUDIO_SUBMESH")
-        if _audio_submesh:
-            r, c = (int(v) for v in _audio_submesh.lower().split("x"))
-            full = tuple(mesh_device.shape)
-            if r <= full[0] and c <= full[1] and (r, c) != full:
-                self.audio_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(r, c))
-                self._owned_audio_submesh = self.audio_mesh_device
-                self.audio_ccl_manager = CCLManager(
-                    self.audio_mesh_device, num_links=ccl_manager.num_links, topology=ttnn.Topology.Linear
-                )
-                logger.info(f"Audio decode routed onto {r}x{c} submesh of {full[0]}x{full[1]}")
         if vae_parallel_config is None:
             vae_parallel_config = VaeHWParallelConfig(
                 height_parallel=parallel_config.tensor_parallel,
@@ -353,9 +276,6 @@ class LTXPipeline:
         self.checkpoint_name: str | None = (
             LTXPipeline._resolve_checkpoint_file(checkpoint_name) if checkpoint_name else None
         )
-        # On-device Gemma text encoder + embeddings connectors. The encoder resolves its own
-        # reference and owns its cache name (T5 pattern); reuse its resolved dir for the host
-        # reference path. Lazy: no modules are built until the first ensure_loaded().
         self.gemma_encoder_pair = GemmaTokenizerEncoderPair(
             gemma_path,
             mesh_device=self.mesh_device,
@@ -367,45 +287,26 @@ class LTXPipeline:
         )
         self.gemma_path: str | None = self.gemma_encoder_pair.gemma_path
 
-        # ``self.transformer`` always points at the active variant, set via
-        # ``_prepare_transformer(idx)``.
         self.transformer: LTXTransformerModel | None = None
         self.transformer_states: list[TransformerState] = []
         self.vae_decoder = None
         self.vae_encoder = None
-        # Memoized I2V conditioning latents, keyed by (image_path, height, width). The VAE
-        # encoder is eager (not part of the denoise trace), so re-running it per generation is
-        # wasteful and — under a traced replay pass — has hung the device; the encode is
-        # deterministic in (path, resolution), so cache the host result and reuse it.
         self._i2v_cond_cache: dict[tuple[str, int, int], torch.Tensor] = {}
         self.upsampler: LTXLatentUpsampler | None = None
-        # On-device audio decode chain (Stage A mel-VAE + Stage B/C vocoder+BWE).
-        # Shells are built at `_instantiate_modules`; weights are loaded via
-        # `_prepare_audio_decoder` (disk-cached, fast on warm hits).
         self.tt_audio_decoder = None
         self.tt_vocoder_with_bwe = None
 
-        # decode_audio only touches the audio decoder + vocoder, so audio_only skips building
-        # AND priming the 22B transformer / video VAE / upsampler — that transformer prime
-        # dominates a cold run and is pure waste for the audio test.
-
         if self.checkpoint_name is not None:
             self._load_config_from_checkpoint()
-            self._instantiate_modules(extra_transformer_variants or [], audio_only=audio_only)
+            self._instantiate_modules(extra_transformer_variants or [])
             self._register_coresident_exclusions()
-            self._prime_caches(audio_only=audio_only)
-            # Tracing (prep_run=False) requires precompiled kernels + pre-allocated trace I/O,
-            # so warmup is mandatory when traced. audio_only skips warmup_buffers entirely:
-            # warmup_buffers warms the whole video path (stage1/upsample/stage2/gemma) AND audio
-            # decode, but the audio test needs only the latter — and decode_audio compiles +
-            # captures its own trace lazily on its first call, so it self-warms without paying
-            # for the (unused-here) video stages.
+            self._prime_caches()
             valid_shape = num_frames > 0 and height > 0 and width > 0
-            if (run_warmup or traced) and valid_shape and not audio_only:
+            if (run_warmup or traced) and valid_shape:
                 if traced and not run_warmup:
                     logger.info("traced=True: forcing warmup (trace capture requires precompiled kernels)")
                 self.warmup_buffers(num_frames=num_frames, height=height, width=width)
-            elif traced and not audio_only:
+            elif traced:
                 logger.warning(
                     f"traced=True but invalid shape ({num_frames=}, {height=}, {width=}); "
                     "skipping forced warmup — trace capture will likely fail"
@@ -423,23 +324,6 @@ class LTXPipeline:
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
-
-    def release_audio_submesh(self) -> None:
-        """Drop the pipeline's references to the audio decode submesh (LTX_AUDIO_SUBMESH).
-
-        The submesh shares the parent mesh's command queue. ttnn forbids closing a
-        cq-sharing child while the parent is alive (close hangs) and forbids closing
-        the parent while the child is alive ("cq in use by child submesh"), so the
-        submesh's lifetime is bound to the parent: it is reclaimed when the parent mesh
-        closes at process teardown. This only frees the audio device tensors. No-op when
-        audio runs on the full mesh.
-        """
-        if self._owned_audio_submesh is not None:
-            ttnn.synchronize_device(self._owned_audio_submesh)
-            self.tt_audio_decoder = None
-            self.tt_vocoder_with_bwe = None
-            self.audio_ccl_manager = self.vae_ccl_manager
-            self.audio_mesh_device = self.mesh_device
 
     @staticmethod
     def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:
@@ -640,8 +524,6 @@ class LTXPipeline:
             image_conditioning=(
                 self.SUPPORTS_IMAGE_CONDITIONING
                 and bool(getattr(self, "_vae_encoder_blocks", []))
-                # RUN_I2V=0 forces the fast scalar-AdaLN path (no per-token video timesteps).
-                # Opting out here also disables passing images= to generate(); the transformer asserts on it.
                 and os.environ.get("RUN_I2V", "1") != "0"
             ),
         )
@@ -667,10 +549,6 @@ class LTXPipeline:
         with safe_open(self._upsampler_path, framework="pt") as f:
             cfg = json.loads(f.metadata()["config"])
         latent_frames = (self._init_num_frames - 1) // TEMPORAL_COMPRESSION + 1
-        # Round the s1 input H/W up to the mesh factors so the upsampler's pinned GroupNorm
-        # and conv dims are built for even shards; _upsample_latent replicate-pads runtime
-        # input to match and crops the output. Even shards skip the halo crop-masking that
-        # seams uneven dims (e.g. 17x30) at the 2x4 boundaries.
         hf = self.vae_parallel_config.height_parallel.factor
         wf = self.vae_parallel_config.width_parallel.factor
         input_hw = (
@@ -692,17 +570,9 @@ class LTXPipeline:
             num_frames=latent_frames,
         )
 
-    def _instantiate_modules(
-        self, extra_variants: list[tuple[str, list[LoraSpec]]], *, audio_only: bool = False
-    ) -> None:
+    def _instantiate_modules(self, extra_variants: list[tuple[str, list[LoraSpec]]]) -> None:
         """Build every TT Module the pipeline will use. No DRAM weights yet —
-        ``_prime_caches`` (next) attaches them. ``audio_only`` builds just the
-        audio decoder shell; the transformer/VAE/upsampler are never used by
-        ``decode_audio``."""
-        if audio_only:
-            if self.checkpoint_name is not None:
-                self._new_audio_decoder()
-            return
+        ``_prime_caches`` (next) attaches them."""
         self.transformer = self._new_transformer()
         self.transformer_states.append(
             TransformerState(
@@ -737,8 +607,6 @@ class LTXPipeline:
             )
 
         if self._vae_encoder_blocks and self._init_height > 0 and self._init_width > 0:
-            # Single-frame image conditioning; blocking falls back to channel-keyed entries so the
-            # one module can encode at both stage resolutions (conv3d adapts to the runtime shape).
             self.vae_encoder = self._new_vae_encoder(num_frames=1, height=self._init_height, width=self._init_width)
 
         if self.HAS_UPSAMPLER:
@@ -759,9 +627,6 @@ class LTXPipeline:
             return
         models = [s.model for s in self.transformer_states]
 
-        # Each module lists the peers it must evict before loading (None peers are skipped
-        # when wiring below). The upsampler is tiny (~120 MB/chip) and stays resident with the
-        # transformer, so transformer <-> upsampler is intentionally absent from both lists.
         for i, m in enumerate(models):
             m._coresident_peers = [*models[:i], *models[i + 1 :], self.vae_decoder, self.vae_encoder]
         if self.vae_decoder is not None:
@@ -777,27 +642,14 @@ class LTXPipeline:
                     if peer is not None:
                         m.register_coresident_exclusions(peer)
 
-        # The on-device Gemma encoder modules are bidirectionally excluded with the DiT
-        # variants + VAE; the pair wires the exclusions on each module at its first build.
         encoder_peers = [*models] + ([self.vae_decoder] if self.vae_decoder is not None else [])
         self.gemma_encoder_pair.register_coresident_peers(encoder_peers)
 
-        # Audio decoder/vocoder are intentionally NOT excluded against the VAE:
-        # measured coresident on BH-LB 2x4 (the tightest BH config) with no OOM,
-        # even with the fp32 vocoder's conv3d activations live. Excluding them only
-        # forces a redundant audio reload at decode (~6s warm) for no memory gain.
-
-    def _prime_caches(self, *, audio_only: bool = False) -> None:
+    def _prime_caches(self) -> None:
         """Load every module in reverse use order so variant 0 is resident in
-        DRAM after ``__init__`` (matches Wan's reverse-use-order priming).
-        ``audio_only`` primes just the audio decoder — the 22B transformer push
-        dominates a cold run and decode_audio never touches it."""
-        if audio_only:
-            self._prepare_audio_decoder()
-            return
+        DRAM after ``__init__`` (matches Wan's reverse-use-order priming)."""
         for idx in range(len(self.transformer_states) - 1, 0, -1):
             self._prepare_transformer(idx)
-        # Each _prepare_* no-ops when its module isn't present (None), so no call-site guards.
         self._prepare_vae()
         self._prepare_upsampler()
         self._prepare_audio_decoder()
@@ -952,10 +804,7 @@ class LTXPipeline:
         """Cached ``(mean-of-means, std-of-means)`` reshaped for ``(B, C, F, H, W)``
         broadcast — the un_normalize/normalize bookends matching ``ltx_core.upsample_video``."""
         if getattr(self, "_pcs_cache", None) is None:
-            with safe_open(self.checkpoint_name, framework="pt") as f:
-                mean = f.get_tensor("vae.per_channel_statistics.mean-of-means").float()
-                std = f.get_tensor("vae.per_channel_statistics.std-of-means").float()
-            self._pcs_cache = (mean.view(1, -1, 1, 1, 1), std.view(1, -1, 1, 1, 1))
+            self._pcs_cache = read_vae_per_channel_stats(self.checkpoint_name)
         return self._pcs_cache
 
     def _prepare_upsampler(self) -> None:
@@ -980,23 +829,6 @@ class LTXPipeline:
         )
         logger.info("Loaded TTNN latent upsampler")
 
-    def _upsample_latent(self, video_latent: torch.Tensor) -> torch.Tensor:
-        """Spatial-2x latent upsample. Mirrors ``ltx_core.upsample_video``: un_normalize
-        → bare upsampler → re_normalize. ``(B, C, F, H, W)`` host in/out."""
-        assert self.upsampler is not None, "upsampler not constructed (HAS_UPSAMPLER=False?)"
-        self._prepare_upsampler()
-        mean, std = self._vae_per_channel_stats()
-        x = video_latent.float() * std + mean
-        # Pad to even mesh shards so the upsampler's sharded convs skip the uneven-dim halo
-        # crop-masking that seams the 2x4 boundaries (s1 17x30); crop the 2x-upsampled margin
-        # off to preserve the field of view. _new_upsampler builds the upsampler at these
-        # rounded dims so its pinned GroupNorm/conv shapes match.
-        pc = self.upsampler.parallel_config
-        x, H, W = pad_hw_replicate(x, pc.height_parallel.factor, pc.width_parallel.factor)
-        x = self.upsampler(x)
-        x = x[:, :, :, : H * 2, : W * 2]
-        return (x.float() - mean) / std
-
     def _warmup_upsample(self, num_frames: int, height: int, width: int) -> None:
         """JIT-compile the upsampler at the stage-1 half-res shape."""
         if self.upsampler is None:
@@ -1004,7 +836,8 @@ class LTXPipeline:
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_lh, s1_lw = height // (SPATIAL_COMPRESSION * 2), width // (SPATIAL_COMPRESSION * 2)
         dummy = torch.zeros(1, self.in_channels, latent_frames, s1_lh, s1_lw)
-        self._upsample_latent(dummy)
+        self._prepare_upsampler()
+        upsample_latent(self.upsampler, dummy, *self._vae_per_channel_stats())
 
     def _warmup_encode(self, height: int, width: int) -> None:
         """Load the VAE encoder + JIT-compile encode kernels with a zero single-frame image
@@ -1028,42 +861,6 @@ class LTXPipeline:
         self._prepare_vae()
         self.decode_latents(dummy, latent_frames, latent_h, latent_w)
 
-    def _prepare_rope(
-        self, num_frames: int, latent_height: int, latent_width: int, fps: float = 24.0
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Compute video RoPE in INTERLEAVED layout for ttnn.experimental.rotary_embedding_llama."""
-        v_shape = VideoLatentShape(batch=1, channels=128, frames=num_frames, height=latent_height, width=latent_width)
-        v_coords = video_get_patch_grid_bounds(v_shape)
-        v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
-        v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps
-
-        # Positions MUST stay fp32 — bf16 introduced catastrophic phase error in
-        # high-frequency RoPE channels (1700x worse than fp32, randomizing the top
-        # half of head_dim).
-        cos_freq, sin_freq = precompute_freqs_cis(
-            v_positions,
-            dim=self.inner_dim,
-            out_dtype=torch.float32,
-            theta=self.positional_embedding_theta,
-            max_pos=self.positional_embedding_max_pos,
-            use_middle_indices_grid=True,
-            num_attention_heads=self.num_attention_heads,
-            rope_type=LTXRopeType.INTERLEAVED,
-        )  # (1, N, dim)
-
-        cos_freq = reshape_interleaved_to_bhnd(cos_freq, self.num_attention_heads)
-        sin_freq = reshape_interleaved_to_bhnd(sin_freq, self.num_attention_heads)
-
-        # Pad seq dim to ttnn.TILE_SIZE * sp_factor; padded slots use cos=1, sin=0
-        # (identity rotation) — SDPA still masks them via logical_n.
-        cos_freq, sin_freq = self._pad_video_rope_sp(cos_freq, sin_freq)
-
-        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        tt_cos = bf16_tensor_2dshard(cos_freq, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-        tt_sin = bf16_tensor_2dshard(sin_freq, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-        return tt_cos, tt_sin
-
     def _prepare_trans_mat(self) -> ttnn.Tensor:
         """Cached per-tile rotation matrix for rotary_embedding_llama (shared builder)."""
         if getattr(self, "_cached_trans_mat", None) is None:
@@ -1080,118 +877,6 @@ class LTXPipeline:
             prompt = prompt[..., : self.cross_attention_dim]
         return bf16_tensor(prompt, device=self.mesh_device)
 
-    def _prepare_audio_rope(self, audio_N: int, audio_N_real: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Compute audio RoPE in INTERLEAVED layout for ttnn.experimental.rotary_embedding_llama."""
-        a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
-        a_positions = audio_get_patch_grid_bounds(a_shape).float()  # (1, 1, N, 2)
-
-        # Positions MUST stay fp32 — bf16 randomizes the top half of head_dim.
-        a_cos, a_sin = precompute_freqs_cis(
-            a_positions,
-            dim=2048,
-            out_dtype=torch.float32,
-            theta=self.positional_embedding_theta,
-            max_pos=[20],
-            use_middle_indices_grid=True,
-            num_attention_heads=32,
-            rope_type=LTXRopeType.INTERLEAVED,
-        )  # (1, N, 2048)
-        a_cos = reshape_interleaved_to_bhnd(a_cos, num_heads=32)  # (1, 32, N, 64)
-        a_sin = reshape_interleaved_to_bhnd(a_sin, num_heads=32)
-
-        if audio_N > audio_N_real:
-            head_dim = a_cos.shape[-1]
-            a_cos_padded = torch.ones(1, 32, audio_N, head_dim)
-            a_cos_padded[:, :, :audio_N_real, :] = a_cos
-            a_sin_padded = torch.zeros(1, 32, audio_N, head_dim)
-            a_sin_padded[:, :, :audio_N_real, :] = a_sin
-            a_cos, a_sin = a_cos_padded, a_sin_padded
-
-        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        return (
-            bf16_tensor_2dshard(a_cos, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
-            bf16_tensor_2dshard(a_sin, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
-        )
-
-    def _prepare_av_cross_pe(
-        self,
-        latent_frames: int,
-        latent_height: int,
-        latent_width: int,
-        audio_N: int,
-        audio_N_real: int,
-        fps: float = 24.0,
-        cross_pe_max_pos: int = 20,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """Compute temporal-only cross positional embeddings for A↔V cross-attention.
-
-        Reference: ``MultiModalTransformerArgsPreprocessor.prepare`` builds ``cross_pe`` from
-        the temporal slice ``modality.positions[:, 0:1, :]`` at ``dim=audio_cross_attention_dim``
-        with ``max_pos=[cross_pe_max_pos]``. Video and audio share the scheme so a video token
-        and an audio token at the same time get the same rotary phase (AV temporal sync).
-
-        Returns 6 device tensors used by inner_step:
-            (v_q_cos, v_q_sin)         — video Q in A→V cross-attn (SP×TP sharded). Also reused as
-                                         the video K rope in V→A (ring SDPA gathers the SP-sharded K).
-            (a_q_cos, a_q_sin)         — audio Q in V→A cross-attn (SP×TP sharded).
-            (a_k_cos, a_k_sin)         — audio K in A→V cross-attn (TP-only; K side after AllGather).
-        """
-        v_shape = VideoLatentShape(
-            batch=1, channels=128, frames=latent_frames, height=latent_height, width=latent_width
-        )
-        v_coords = video_get_patch_grid_bounds(v_shape)
-        v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
-        v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps  # temporal axis → seconds
-        v_temporal = v_positions[:, 0:1, :]  # (1, 1, video_N, 2)
-
-        a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
-        a_positions = audio_get_patch_grid_bounds(a_shape).float()  # (1, 1, audio_N_real, 2)
-
-        rope_kwargs = dict(
-            dim=2048,  # audio_cross_attention_dim — both sides share this
-            out_dtype=torch.float32,
-            theta=self.positional_embedding_theta,
-            max_pos=[cross_pe_max_pos],
-            use_middle_indices_grid=True,
-            num_attention_heads=32,
-            rope_type=LTXRopeType.INTERLEAVED,
-        )
-
-        # Positions MUST stay fp32 — bf16 randomizes the top half of head_dim.
-        v_cos, v_sin = precompute_freqs_cis(v_temporal, **rope_kwargs)  # (1, video_N, 2048)
-        a_cos, a_sin = precompute_freqs_cis(a_positions, **rope_kwargs)  # (1, audio_N_real, 2048)
-        v_cos = reshape_interleaved_to_bhnd(v_cos, num_heads=32)  # (1, 32, video_N, 64)
-        v_sin = reshape_interleaved_to_bhnd(v_sin, num_heads=32)
-        a_cos = reshape_interleaved_to_bhnd(a_cos, num_heads=32)
-        a_sin = reshape_interleaved_to_bhnd(a_sin, num_heads=32)
-
-        v_cos, v_sin = self._pad_video_rope_sp(v_cos, v_sin)
-
-        if audio_N > audio_N_real:
-            head_dim = a_cos.shape[-1]
-            a_cos_padded = torch.ones(1, 32, audio_N, head_dim)
-            a_cos_padded[:, :, :audio_N_real, :] = a_cos
-            a_sin_padded = torch.zeros(1, 32, audio_N, head_dim)
-            a_sin_padded[:, :, :audio_N_real, :] = a_sin
-            a_cos, a_sin = a_cos_padded, a_sin_padded
-
-        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-
-        # Q-side: SP×TP sharded (matches the Q tensor layout post-attention QKV split).
-        v_q_cos = bf16_tensor_2dshard(v_cos, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-        v_q_sin = bf16_tensor_2dshard(v_sin, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-        a_q_cos = bf16_tensor_2dshard(a_cos, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-        a_q_sin = bf16_tensor_2dshard(a_sin, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-
-        # K-side: TP-only on heads (sequence is replicated after AllGather on K). Only the audio
-        # K rope is needed (A→V gathers audio K); video K in V→A reuses the SP-sharded v_q rope.
-        a_k_cos = bf16_tensor(a_cos, device=self.mesh_device, mesh_axis=tp_axis, shard_dim=1)
-        a_k_sin = bf16_tensor(a_sin, device=self.mesh_device, mesh_axis=tp_axis, shard_dim=1)
-
-        return (v_q_cos, v_q_sin, a_q_cos, a_q_sin, a_k_cos, a_k_sin)
-
     @staticmethod
     def _zero_sp_padding(t: torch.Tensor, n_real: int) -> torch.Tensor:
         """Zero SP-padded token slots (video or audio) so they do not affect guidance or GE."""
@@ -1207,25 +892,6 @@ class LTXPipeline:
         sp_factor = self.parallel_config.sequence_parallel.factor
         divisor = ttnn.TILE_SIZE * sp_factor
         return ((n_real + divisor - 1) // divisor) * divisor
-
-    def _pad_video_rope_sp(self, cos_freq: torch.Tensor, sin_freq: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Right-pad video RoPE cos/sin on dim=2 to the SP boundary.
-
-        Padded slots use cos=1, sin=0 (identity rotation). Same convention as the audio
-        RoPE padding in ``_prepare_audio_rope`` / ``_prepare_av_cross_pe``.
-        """
-        video_N_real = cos_freq.shape[2]
-        video_N = self._sp_pad_len(video_N_real)
-        if video_N == video_N_real:
-            return cos_freq, sin_freq
-        pad = video_N - video_N_real
-        H = cos_freq.shape[1]
-        d_half = cos_freq.shape[-1]
-        cos_pad = torch.ones(1, H, pad, d_half, dtype=cos_freq.dtype)
-        sin_pad = torch.zeros(1, H, pad, d_half, dtype=sin_freq.dtype)
-        cos_freq = torch.cat([cos_freq, cos_pad], dim=2)
-        sin_freq = torch.cat([sin_freq, sin_pad], dim=2)
-        return cos_freq, sin_freq
 
     @staticmethod
     def _apply_modal_guidance(
@@ -1268,67 +934,6 @@ class LTXPipeline:
             out[:, :real_token_count, :] = pred.bfloat16()
             return out
         return pred.bfloat16()
-
-    def _prepare_audio_masks(self, audio_N: int, audio_N_real: int) -> tuple:
-        """Create SDPA attn mask and padding masks for SP-sharded vs gathered audio.
-
-        Returns (attn_mask, pad_mask_sp, pad_mask_full). pad_mask_sp is sharded on the
-        sequence dimension for multiply with local audio activations; pad_mask_full is
-        replicated for multiply after all_gather on A-to-V keys.
-        """
-        if audio_N <= audio_N_real:
-            return None, None, None
-
-        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-        # Column mask only: real/padded queries are barred from attending TO padded keys.
-        # Do NOT mask padded-query rows to -inf — that makes all attention scores in those
-        # rows -inf → softmax NaN → NaN propagates via padded-token outputs (which we then
-        # multiply by 0; IEEE 0*NaN = NaN, not 0). audio_padding_mask already zeros the
-        # padded-query outputs after attention, so column-only masking is sufficient and
-        # numerically safer at high σ where activations have largest magnitude.
-        mask = torch.zeros(1, 1, audio_N, audio_N)
-        mask[:, :, :, audio_N_real:] = float("-inf")
-        mask = mask.to(torch.bfloat16)
-        tt_attn_mask = bf16_tensor(
-            mask,
-            device=self.mesh_device,
-            mesh_axis=sp_axis,
-            shard_dim=2,
-        )
-
-        pad_mask = torch.ones(1, 1, audio_N, 1, dtype=torch.bfloat16)
-        pad_mask[:, :, audio_N_real:, :] = 0.0
-        tt_pad_mask_sp = bf16_tensor(
-            pad_mask,
-            device=self.mesh_device,
-            mesh_axis=sp_axis,
-            shard_dim=2,
-        )
-        tt_pad_mask_full = bf16_tensor(pad_mask, device=self.mesh_device)
-        return tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full
-
-    def _prepare_video_masks(self, video_N: int, video_N_real: int) -> ttnn.Tensor | None:
-        """Create the SP-sharded video padding mask, shape (1, 1, video_N, 1).
-
-        Multiply the local (sharded) video activations by this to zero padded slots
-        before they propagate downstream (self-attn residual / cross-attn K / FF).
-        Returns ``None`` when no padding is needed.
-
-        No SDPA attn_mask is returned (unlike audio) — video self-attention uses
-        ring SDPA which masks padded keys via the ``logical_n=video_N_real`` arg.
-        """
-        if video_N <= video_N_real:
-            return None
-
-        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-        pad_mask = torch.ones(1, 1, video_N, 1, dtype=torch.bfloat16)
-        pad_mask[:, :, video_N_real:, :] = 0.0
-        return bf16_tensor(
-            pad_mask,
-            device=self.mesh_device,
-            mesh_axis=sp_axis,
-            shard_dim=2,
-        )
 
     @torch.no_grad()
     def call_av(
@@ -1407,11 +1012,24 @@ class LTXPipeline:
             f"vN={video_N}(real={video_N_real}), aN={audio_N}(real={audio_N_real})"
         )
 
-        v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
-        a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
-        # Cross-modal positional embeddings for A↔V cross-attention: without them audio queries
-        # attend to video keys with uniform phase, destroying temporal sync. Reference:
-        # MultiModalTransformerArgsPreprocessor (temporal-only column, dim=audio_cross_attention_dim).
+        v_cos, v_sin = prepare_video_rope(
+            latent_frames,
+            latent_h,
+            latent_w,
+            inner_dim=self.inner_dim,
+            num_attention_heads=self.num_attention_heads,
+            theta=self.positional_embedding_theta,
+            max_pos=self.positional_embedding_max_pos,
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
+        a_cos, a_sin = prepare_audio_rope(
+            audio_N,
+            audio_N_real,
+            theta=self.positional_embedding_theta,
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
         (
             v_xpe_cos,
             v_xpe_sin,
@@ -1419,10 +1037,22 @@ class LTXPipeline:
             a_xpe_sin,
             a_xpe_cos_full,
             a_xpe_sin_full,
-        ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
+        ) = prepare_av_cross_pe(
+            latent_frames,
+            latent_h,
+            latent_w,
+            audio_N,
+            audio_N_real,
+            theta=self.positional_embedding_theta,
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
         trans_mat = self._prepare_trans_mat()
-        tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
-        tt_v_pad_mask_sp = self._prepare_video_masks(video_N, video_N_real)
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = build_audio_masks(
+            audio_N, audio_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis
+        )
+        tt_v_pad_mask_sp = build_video_pad_mask(video_N, video_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis)
 
         tt_vp = self._prepare_prompt(video_prompt_embeds)
         tt_ap = bf16_tensor(audio_prompt_embeds.unsqueeze(0), device=self.mesh_device)
@@ -1434,9 +1064,6 @@ class LTXPipeline:
         )
 
         if sigmas is None:
-            # Match the LTX-2 reference: the scheduler shift uses the fixed
-            # MAX_SHIFT_ANCHOR (default num_tokens), not the real token count
-            # (ltx_pipelines.ti2vid_two_stages / ti2vid_one_stage).
             sigmas = compute_sigmas(steps=num_inference_steps)
         else:
             assert (
@@ -1444,7 +1071,6 @@ class LTXPipeline:
             ), f"sigmas length {len(sigmas)} must equal num_inference_steps+1 ({num_inference_steps+1})"
 
         if image_cond:
-            # GaussianNoiser on a conditioned init: frame-0 = clean latent, noise scaled by mask * ns.
             ns = noise_scale if initial_video_latent is not None else sigmas[0].item()
             if seed is not None:
                 torch.manual_seed(seed)
@@ -1515,9 +1141,6 @@ class LTXPipeline:
                 video_ts[:, :video_N_real] = denoise_mask[:, :, 0] * sigma
 
             def _run(vp, ap, skip_ca=False, skip_sa_blocks=None, video_ts=video_ts):
-                # video_N / audio_N here are LOGICAL (unpadded) — passed as ``logical_n``
-                # to ring SDPA so padded K positions get masked. Tensor shapes themselves
-                # carry the padded counts.
                 v, a = self.transformer.forward(
                     video_1BNI_torch=video_lat.unsqueeze(0),
                     video_prompt_1BLP=vp,
@@ -1610,8 +1233,6 @@ class LTXPipeline:
                 v_den[:, :video_N_real, :] = blended.to(v_den.dtype)
 
             # Gradient estimation: correct velocity using previous step's velocity.
-            # GE math operates on real (unpadded) slices only — padded slots are noise-free
-            # placeholders, and including them here would leak garbage into the GE state.
             if ge_gamma != 0.0 and sigma_next != 0.0:
                 v_lat_real = video_lat[:, :video_N_real, :]
                 v_den_real = v_den[:, :video_N_real, :]
@@ -1624,8 +1245,6 @@ class LTXPipeline:
                     a_total = ge_gamma * (a_velocity - prev_a_vel) + prev_a_vel
                     v_den_real = (v_lat_real.float() - v_total * sigma).bfloat16()
                     a_den_real = (a_lat_real.float() - a_total * sigma).bfloat16()
-                    # v_den/a_den came pre-zeroed at padded slots from `_run` — only
-                    # the real slice needs updating.
                     v_den[:, :video_N_real, :] = v_den_real
                     a_den[:, :audio_N_real, :] = a_den_real
                 prev_v_vel, prev_a_vel = v_velocity, a_velocity
@@ -1675,14 +1294,11 @@ class LTXPipeline:
         voc_cfg = config["vocoder"]["vocoder"]
         bwe_cfg = config["vocoder"]["bwe"]
 
-        mesh_shape = tuple(self.audio_mesh_device.shape)
+        mesh_shape = tuple(self.mesh_device.shape)
         t_axis = 0 if mesh_shape[0] >= mesh_shape[1] else 1
         t_factor = mesh_shape[t_axis]
         c_axis = 1 - t_axis
         c_factor = mesh_shape[c_axis]
-        # Opt-in channel-TP: T-halo on the larger axis + channel tensor-parallel on
-        # the other (sound — channels have no sequence boundary). Off by default
-        # (single-axis is the production path); enable with LTX_AUDIO_CHANNEL_TP=1.
         channel_tp_on = os.environ.get("LTX_AUDIO_CHANNEL_TP", "0") == "1"
         if t_factor > 1 and c_factor > 1 and channel_tp_on:
             audio_parallel_config = AudioTCParallelConfig(
@@ -1693,7 +1309,7 @@ class LTXPipeline:
             audio_parallel_config = ParallelFactor(factor=t_factor, mesh_axis=t_axis)
         else:
             audio_parallel_config = None
-        audio_ccl = self.audio_ccl_manager if audio_parallel_config is not None else None
+        audio_ccl = self.vae_ccl_manager if audio_parallel_config is not None else None
 
         self.tt_audio_decoder = AudioDecoder(
             ch=ddconfig.get("ch", 128),
@@ -1708,12 +1324,10 @@ class LTXPipeline:
             mel_hop_length=stft_cfg.get("hop_length", 160),
             is_causal=stft_cfg.get("causal", True),
             mel_bins=mel_bins,
-            mesh_device=self.audio_mesh_device,
+            mesh_device=self.mesh_device,
             dtype=ttnn.bfloat16,
         )
 
-        # Architecture params come from the checkpoint config; Vocoder owns the
-        # defaults for anything it omits (its defaults are the LTX-2 main-vocoder values).
         voc_keys = (
             "resblock_kernel_sizes",
             "upsample_rates",
@@ -1730,17 +1344,12 @@ class LTXPipeline:
             return Vocoder(
                 **{k: cfg[k] for k in voc_keys if k in cfg},
                 apply_final_activation=apply_final_activation,
-                mesh_device=self.audio_mesh_device,
+                mesh_device=self.mesh_device,
                 dtype=ttnn.float32,
                 parallel_config=parallel_config,
                 ccl_manager=audio_ccl,
             )
 
-        # Channel-TP the compute-bound BWE generator on meshes whose channel axis is wide enough
-        # to pay for the per-conv all-gather: at channel factor 2 (2x4) the gather tax loses
-        # (+135ms), so stay single-axis there; factor >= 4 (Galaxy 4x8/4x32) is the intended win.
-        # Bit-identical to single-axis on real weights. LTX_BWE_CHANNEL_TP overrides (0/1) for the
-        # Galaxy validation that confirms the factor-4 crossover (#46423).
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             override = os.environ.get("LTX_BWE_CHANNEL_TP")
             use_bwe_ctp = override == "1" if override is not None else audio_parallel_config.channel_parallel.factor > 2
@@ -1754,7 +1363,7 @@ class LTXPipeline:
             hop_length=bwe_cfg["hop_length"],
             win_length=bwe_cfg["n_fft"],
             n_mel_channels=bwe_cfg["num_mels"],
-            mesh_device=self.audio_mesh_device,
+            mesh_device=self.mesh_device,
             dtype=ttnn.float32,
         )
         self.tt_vocoder_with_bwe = VocoderWithBWE(
@@ -1764,21 +1373,11 @@ class LTXPipeline:
             input_sampling_rate=bwe_cfg["input_sampling_rate"],
             output_sampling_rate=bwe_cfg["output_sampling_rate"],
             hop_length=bwe_cfg["hop_length"],
-            mesh_device=self.audio_mesh_device,
+            mesh_device=self.mesh_device,
             dtype=ttnn.float32,
         )
-        # Main vocoder trace: warm caches on a prior eager decode, then capture with prep_run=False
-        # so capture and every replay share the post-mel-VAE free-list — a ttnn trace bakes absolute
-        # buffer addresses, so a prep_run alloc/free would desync them. Gated by the
-        # test_audio_decode_girl conv1d-vs-torch oracle, which runs under trace.
-        # Defaults ON: net win on small/host-bound meshes; on large CCL-bound meshes the T-shard
-        # AllGather/halo dominates and audio decode doesn't scale with chips, so set LTX_VOC_TRACE=0.
         self.tt_vocoder_with_bwe.use_trace = self._traced and os.environ.get("LTX_VOC_TRACE", "1") != "0"
-        # BWE trace follows the master LTX_TRACED gate (no separate opt-in); replay is net-positive
-        # on the traced steady-state path and captures at warmup alongside the vocoder.
         self.tt_vocoder_with_bwe.use_trace_bwe = self._traced
-        # mel-VAE audio-decoder trace stays OFF behind its own flag (LTX_VAE_TRACE=1): the
-        # captured replay is broken, so it is opt-in only and never tied to LTX_TRACED.
         self.tt_audio_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", "0") == "1"
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
@@ -1833,20 +1432,17 @@ class LTXPipeline:
                 model_name=model_name,
                 subfolder=dec_subfolder,
                 parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.audio_mesh_device.shape),
+                mesh_shape=tuple(self.mesh_device.shape),
                 get_torch_state_dict=self._audio_decoder_state_provider,
             )
 
         if not self.tt_vocoder_with_bwe.is_loaded():
-            # The resampler's Hann filter is a non-persistent reference buffer, so
-            # it is held as a plain device tensor (not a Parameter) and recomputed
-            # at init — the strict state-dict load neither expects nor receives it.
             cache_module.load_model(
                 self.tt_vocoder_with_bwe,
                 model_name=model_name,
                 subfolder=voc_subfolder,
                 parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.audio_mesh_device.shape),
+                mesh_shape=tuple(self.mesh_device.shape),
                 get_torch_state_dict=self._vocoder_state_provider,
             )
 
@@ -1880,11 +1476,6 @@ class LTXPipeline:
             torch.save(audio_latent.cpu(), _dump)
             logger.info(f"dumped audio latent {tuple(audio_latent.shape)} -> {_dump}")
 
-        # No explicit VAE free: dynamic_load evicts it via coresident exclusions; static load keeps
-        # it resident (the _prepare_vae is_loaded guard then skips the reload).
-
-        # Shells are built by `_new_audio_decoder` at instantiation time; this
-        # method only loads weights into them.
         assert self.tt_audio_decoder is not None and self.tt_vocoder_with_bwe is not None, (
             "audio decoder shells not built — _new_audio_decoder() must run first "
             "(it does, via _instantiate_modules, when checkpoint_name is set at construction)"
@@ -1897,20 +1488,17 @@ class LTXPipeline:
         z = self.tt_audio_decoder.z_channels
         audio_spatial = audio_latent.reshape(1, audio_N, z, audio_latent.shape[2] // z).permute(0, 2, 1, 3).float()
 
-        # Optional stage-wall split (LTX_TIME_STAGES=1): mel-VAE vs vocoder+BWE, to find
-        # the dominant decode stage. Syncs are host-wall, so this is a coarse stage timer,
-        # not a per-op device profile.
         _time_stages = os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True")
         if _time_stages:
             import time as _t
 
-            ttnn.synchronize_device(self.audio_mesh_device)
+            ttnn.synchronize_device(self.mesh_device)
             _t0 = _t.perf_counter()
             mel = self._decode_mel(audio_spatial)
-            ttnn.synchronize_device(self.audio_mesh_device)
+            ttnn.synchronize_device(self.mesh_device)
             _t_vae = _t.perf_counter()
             waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
-            ttnn.synchronize_device(self.audio_mesh_device)
+            ttnn.synchronize_device(self.mesh_device)
             _t_voc = _t.perf_counter()
             logger.info(
                 f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms " f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"

@@ -15,7 +15,9 @@ from loguru import logger
 
 import ttnn
 
-from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
+from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
+from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
+from ...models.vae.vae_ltx import upsample_latent
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
@@ -219,8 +221,24 @@ class LTXDistilledPipeline(LTXPipeline):
         """Build a stage's static per-shape inputs once (rope/cross-PE/masks/trans_mat)."""
         if state.tt_video_rope_cos is not None:
             return
-        v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
-        a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
+        v_cos, v_sin = prepare_video_rope(
+            latent_frames,
+            latent_h,
+            latent_w,
+            inner_dim=self.inner_dim,
+            num_attention_heads=self.num_attention_heads,
+            theta=self.positional_embedding_theta,
+            max_pos=self.positional_embedding_max_pos,
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
+        a_cos, a_sin = prepare_audio_rope(
+            audio_N,
+            audio_N_real,
+            theta=self.positional_embedding_theta,
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
         # Cross-PE required: without it A↔V cross-attention loses positional info and lip sync breaks.
         (
             v_xpe_cos,
@@ -229,8 +247,19 @@ class LTXDistilledPipeline(LTXPipeline):
             a_xpe_sin,
             a_xpe_cos_full,
             a_xpe_sin_full,
-        ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
-        tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
+        ) = prepare_av_cross_pe(
+            latent_frames,
+            latent_h,
+            latent_w,
+            audio_N,
+            audio_N_real,
+            theta=self.positional_embedding_theta,
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
+        tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = build_audio_masks(
+            audio_N, audio_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis
+        )
         state._tt_video_rope_cos.update(v_cos, False)
         state._tt_video_rope_sin.update(v_sin, False)
         state._tt_audio_rope_cos.update(a_cos, False)
@@ -245,7 +274,9 @@ class LTXDistilledPipeline(LTXPipeline):
         state._tt_audio_attn_mask.update(tt_attn_mask, False)
         state._tt_audio_padding_mask.update(tt_pad_mask_sp, False)
         state._tt_audio_padding_mask_full.update(tt_pad_mask_full, False)
-        state._tt_video_padding_mask.update(self._prepare_video_masks(video_N, video_N_real), False)
+        state._tt_video_padding_mask.update(
+            build_video_pad_mask(video_N, video_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis), False
+        )
         v_mask = torch.ones(1, 1, video_N, self.in_channels)
         v_mask[:, :, video_N_real:, :] = 0.0
         a_mask = torch.ones(1, 1, audio_N, self.in_channels)
@@ -633,7 +664,8 @@ class LTXDistilledPipeline(LTXPipeline):
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
-        upsampled = self._upsample_latent(s1_spatial)
+        self._prepare_upsampler()
+        upsampled = upsample_latent(self.upsampler, s1_spatial, *self._vae_per_channel_stats())
         t_upsample = time.time() - t0
         timings.append(("Latent upsample", t_upsample))
         logger.info(f"Latent upsample: {t_upsample:.1f}s")

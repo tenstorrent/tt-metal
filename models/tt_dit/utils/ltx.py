@@ -11,6 +11,12 @@ import torch
 # before encoding (a pristine image gives OOD latents). Mirrors ltx_pipelines DEFAULT_IMAGE_CRF.
 DEFAULT_IMAGE_CRF = 33
 
+# LTX-2 VAE compression ratios (pixel -> latent). Used throughout to map pixel
+# dims to the latent token grid. NOTE: the TILE size used for SP padding (also 32)
+# is a separate concept — do NOT replace `32 * sp_factor` padding math with these.
+TEMPORAL_COMPRESSION = 8
+SPATIAL_COMPRESSION = 32
+
 DEFAULT_LTX_PROMPT = (
     "A young woman with shoulder-length wavy brown hair sits on a wooden stool, "
     "cradling an acoustic guitar. The camera holds a steady medium close-up, "
@@ -22,6 +28,34 @@ DEFAULT_LTX_PROMPT = (
     "chord progression underlies her melodic voice. Shot with 50mm lens at f/2.0, "
     "shallow depth of field, warm color grade emphasizing skin tones."
 )
+
+
+def ceil_to(x: int, multiple: int) -> int:
+    """Smallest multiple of ``multiple`` that is >= ``x``."""
+    return -(-x // multiple) * multiple
+
+
+def latent_grid(num_frames: int, height: int, width: int) -> tuple[int, int, int]:
+    """Map pixel dims to the LTX latent token grid ``(latent_frames, latent_h, latent_w)``."""
+    latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
+    return latent_frames, height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
+
+
+def pad_hw_replicate(x_BCFHW: torch.Tensor, h_mult: int, w_mult: int) -> tuple[torch.Tensor, int, int]:
+    """Replicate-pad a ``(B, C, F, H, W)`` tensor's H/W up to multiples of ``h_mult``/``w_mult``.
+
+    The sharded VAE convs seam the latent at the 2x4 mesh boundaries when H/W don't divide
+    evenly across the mesh (the uneven-dim halo runs a crop-masking path); padding to even
+    shards avoids it. Returns ``(padded, H, W)`` — the original H/W so the caller can crop the
+    replicated margin back off after the op.
+    """
+    B, C, frames, H, W = x_BCFHW.shape
+    pad_h, pad_w = (-H) % h_mult, (-W) % w_mult
+    if pad_h or pad_w:
+        x_BCFHW = torch.nn.functional.pad(
+            x_BCFHW.reshape(B * C, frames, H, W), (0, pad_w, 0, pad_h), mode="replicate"
+        ).reshape(B, C, frames, H + pad_h, W + pad_w)
+    return x_BCFHW, H, W
 
 
 def default_ltx_checkpoint(filename: str) -> str:

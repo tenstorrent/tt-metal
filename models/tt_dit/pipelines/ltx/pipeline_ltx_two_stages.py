@@ -16,6 +16,7 @@ import time
 import torch
 from loguru import logger
 
+from ...models.vae.vae_ltx import upsample_latent
 from ...utils.fuse_loras import LoraSpec
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
@@ -283,7 +284,8 @@ class LTXTwoStagesPipeline(LTXPipeline):
         s1_lh, s1_lw = s1_h // SPATIAL_COMPRESSION, s1_w // SPATIAL_COMPRESSION
         s1_spatial = s1_video.reshape(1, latent_frames, s1_lh, s1_lw, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
-        upsampled = self._upsample_latent(s1_spatial)
+        self._prepare_upsampler()
+        upsampled = upsample_latent(self.upsampler, s1_spatial, *self._vae_per_channel_stats())
         t_upsample = time.time() - t0
         timings.append(("Latent upsample", t_upsample))
         logger.info(f"Upsample: {t_upsample:.1f}s")
