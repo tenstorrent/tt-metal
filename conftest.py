@@ -140,6 +140,11 @@ class CIv2ModelDownloadUtils_:
                     # the target hostname; without --no-proxy, wget sends the request through the
                     # restricted egress proxy, which returns 503 for internal hosts.
                     "--no-proxy",
+                    # LFC occasionally refuses direct connections; wget does not retry connection
+                    # refusals by default, so opt in and back off a few times before giving up.
+                    "--tries=5",
+                    "--retry-connrefused",
+                    "--waitretry=10",
                     "-r",
                     "-nH",
                     "-x",
