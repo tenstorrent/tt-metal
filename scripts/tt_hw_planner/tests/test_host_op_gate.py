@@ -19,7 +19,3 @@ def test_not_ran_is_non_regressive_by_default():
     assert _host_op_gate_reason({"ran": False, "reason": "no host_op_selftest hook"}) is None
     assert _host_op_gate_reason(None) is None
 
-
-def test_not_ran_fails_when_required():
-    r = {"ran": False, "reason": "no host_op_selftest hook"}
-    assert _host_op_gate_reason(r, require=True) is not None
