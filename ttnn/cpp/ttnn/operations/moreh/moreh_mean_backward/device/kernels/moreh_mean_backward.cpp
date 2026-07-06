@@ -9,6 +9,11 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     // compile-time args
@@ -21,7 +26,6 @@ void kernel_main() {
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     CircularBuffer cb_in1_obj(cb_in1);  // zero tile
     constexpr auto cb_scalar = tt::CBIndex::c_2;
-    CircularBuffer cb_scalar_obj(cb_scalar);
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     CircularBuffer cb_out0_obj(cb_out0);
     constexpr auto cb_intermed0 = tt::CBIndex::c_24;
@@ -31,48 +35,29 @@ void kernel_main() {
 
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     cb_in1_obj.wait_front(onetile);
+
+    constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
+    constexpr auto bcast_dim = (ht_need_bcast && wt_need_bcast) ? ckl::BroadcastDim::Scalar
+                               : ht_need_bcast                  ? ckl::BroadcastDim::Row
+                               : wt_need_bcast                  ? ckl::BroadcastDim::Col
+                                                                : ckl::BroadcastDim::None;
+
     for (uint32_t i = 0; i < num_output_tiles; i++) {
-        tile_regs_acquire();
-        cb_in0_obj.wait_front(onetile);
-        if (ht_need_bcast && wt_need_bcast) {
-            add_bcast_scalar_init_short_with_dt(cb_in1_obj, cb_in0_obj);
-            add_tiles_bcast_scalar(cb_in1, cb_in0, 0, 0, dst0);
-        } else if (ht_need_bcast) {
-            add_bcast_rows_init_short_with_dt(cb_in1_obj, cb_in0_obj);
-            add_tiles_bcast_rows(cb_in1, cb_in0, 0, 0, dst0);
-        } else if (wt_need_bcast) {
-            add_bcast_cols_init_short_with_dt(cb_in1_obj, cb_in0_obj);
-            add_tiles_bcast_cols(cb_in1, cb_in0, 0, 0, dst0);
-        } else {
-            copy_tile_init_with_dt(cb_in0_obj);
-            copy_tile(cb_in0, 0, dst0);
-        }
-        tile_regs_commit();
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::OptionalChainElement<
+                has_bcast,
+                ckl::BinaryFpu<cb_in1, cb_in0, ckl::BinaryFpuOp::Add, bcast_dim, ckl::InputLifecycle::CallerManaged>>{},
+            ckl::OptionalChainElement<!has_bcast, ckl::CopyTile<cb_in0>>{},
+            ckl::PackTile<cb_intermed0>{});
 
-        cb_intermed0_obj.reserve_back(onetile);
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_intermed0_obj);
-        tile_regs_release();
-
-        cb_intermed0_obj.push_back(onetile);
-        cb_in0_obj.pop_front(onetile);
-
-        // output * (1 / number_of_elements)
-        tile_regs_acquire();
-        cb_intermed0_obj.wait_front(onetile);
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0_obj, cb_scalar_obj);
-        mul_tiles_bcast<BroadcastType::SCALAR>(cb_intermed0, cb_scalar, 0, 0, 0);
-        tile_regs_commit();
-
-        cb_out0_obj.reserve_back(onetile);
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_out0_obj);
-        tile_regs_release();
-
-        cb_out0_obj.push_back(onetile);
-        cb_intermed0_obj.pop_front(onetile);
+        ckl::mul<
+            cb_intermed0,
+            cb_scalar,
+            cb_out0,
+            ckl::BroadcastDim::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
     }
     cb_in1_obj.pop_front(onetile);
 }

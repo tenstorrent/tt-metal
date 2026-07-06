@@ -4,77 +4,64 @@
 
 #include <cstdint>
 
-#include "api/compute/eltwise_unary/where.h"
-#include "api/compute/eltwise_unary/fill.h"
-#include "eltwise_utils_common.hpp"
-#include "eltwise_utils_sfpu.hpp"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_special.hpp"   // Where
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"      // FillBitcast / FillInt
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
+#include "api/dataflow/circular_buffer.h"
+
+namespace ckl = compute_kernel_lib;
+
+#ifdef FILL_WITH_VALUE_INT
+constexpr bool kIsInt = true;
+#else
+constexpr bool kIsInt = false;
+#endif
+constexpr bool kIsFloat = !kIsInt;
+
+constexpr DataFormat kWhereDF = DataFormat::WHERE_DATA_FORMAT;
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t scalar_value = get_arg_val<uint32_t>(3);
-    const auto scalar_val = reinterpret_cast<const float*>(&scalar_value);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
-    CircularBuffer cb_in0(tt::CBIndex::c_0);
-    CircularBuffer cb_in1(tt::CBIndex::c_1);
-    CircularBuffer cb_out(tt::CBIndex::c_2);
+    constexpr auto cb_cond = tt::CBIndex::c_0;
+    constexpr auto cb_tensor = tt::CBIndex::c_1;
+    constexpr auto cb_out = tt::CBIndex::c_2;
 
-    unary_op_init_common(cb_in0.get_cb_id(), cb_out.get_cb_id());
-    BINARY_SFPU_INIT
-
-    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        cb_in0.wait_front(num_tiles_per_cycle);
-        cb_in1.wait_front(num_tiles_per_cycle);
-        cb_out.reserve_back(num_tiles_per_cycle);
-
-        tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_in0.get_cb_id());
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_in0.get_cb_id(), i, i * 3);
-        }
-        copy_tile_to_dst_init_short(cb_in1.get_cb_id());
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            // TTS: tensor is true value, goes to dst_reg 1
 #if WHERE_TTS
-            copy_tile(cb_in1.get_cb_id(), i, i * 3 + 1);  // Copy true tensor to dst_reg 1
-            fill_tile_init();
-            // TTS: scalar is false value, goes to dst_reg 2
-#ifdef FILL_WITH_VALUE_FLOAT
-            FILL_LLK(i * 3 + 2, *scalar_val);
-#endif
-#ifdef FILL_WITH_VALUE_INT
-            FILL_LLK(i * 3 + 2, scalar_value);
-#endif
+    constexpr auto kTensorSlot = ckl::Dst::D1;
+    constexpr auto kFillSlot = ckl::Dst::D2;
+#else
+    constexpr auto kTensorSlot = ckl::Dst::D2;
+    constexpr auto kFillSlot = ckl::Dst::D1;
 #endif
 
-// TST: tensor is false value, goes to dst_reg 2
-#if WHERE_TST
-            copy_tile(cb_in1.get_cb_id(), i, i * 3 + 2);  // Copy false tensor to dst_reg 2
-            fill_tile_init();
-            // TST: scalar is true value, goes to dst_reg 1
-#ifdef FILL_WITH_VALUE_FLOAT
-            FILL_LLK(i * 3 + 1, *scalar_val);
-#endif
-#ifdef FILL_WITH_VALUE_INT
-            FILL_LLK(i * 3 + 1, scalar_value);
-#endif
-#endif
+    init_sfpu(cb_cond, cb_out);
 
-            BINARY_SFPU_OP(i * 3, i * 3 + 1, i * 3 + 2, i * 3);
-        }
-
-        tile_regs_commit();
-
-        tile_regs_wait();
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            pack_tile(i * 3, cb_out.get_cb_id());
-        }
-        tile_regs_release();
-
-        cb_out.push_back(num_tiles_per_cycle);
-        cb_in0.pop_front(num_tiles_per_cycle);
-        cb_in1.pop_front(num_tiles_per_cycle);
-    }
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),
+        // cond -> D0 (block read, init_short for cb_cond).
+        ckl::CopyTile<
+            cb_cond,
+            ckl::Dst::D0,
+            ckl::InputLifecycle::Chunked,
+            ckl::CopyTileReconfig::Input,
+            ckl::OperandKind::Block>{},
+        // tensor -> D1 (TTS) / D2 (TST) (block read, init_short for cb_tensor).
+        ckl::CopyTile<
+            cb_tensor,
+            kTensorSlot,
+            ckl::InputLifecycle::Chunked,
+            ckl::CopyTileReconfig::Input,
+            ckl::OperandKind::Block>{},
+        // scalar fill -> the other slot. Inactive flavor folds to a no-op.
+        ckl::OptionalChainElement<kIsInt, ckl::FillInt<kWhereDF, kFillSlot>>{scalar_value},
+        ckl::OptionalChainElement<kIsFloat, ckl::FillBitcast<kFillSlot>>{scalar_value},
+        // where(D0, D1, D2) -> D0.
+        ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
+        ckl::PackTile<cb_out, ckl::OutputLifecycle::Chunked, ckl::PackTileReconfig::None>{});
 }

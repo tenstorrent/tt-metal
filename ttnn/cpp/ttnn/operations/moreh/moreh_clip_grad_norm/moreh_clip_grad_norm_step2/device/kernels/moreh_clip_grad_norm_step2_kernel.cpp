@@ -2,8 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // PowerIterative, Recip, Log, Exp
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     int i{0};
@@ -11,26 +16,16 @@ void kernel_main() {
     const auto p = get_arg_val<uint32_t>(i++);
     const bool p_is_negative = get_arg_val<uint32_t>(i++) == 1;
 
-    std::uint8_t input_id{0};
-    const auto cb_input = input_id++;
-    CircularBuffer cb_input_obj(cb_input);  // input(==tmp_pow_sum)
-    const auto cb_decimal = input_id++;
-    CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
+    constexpr uint32_t cb_input = 0;
+    constexpr uint32_t cb_decimal = 1;
 
-    std::uint8_t output_id{16};
     // x^p * exp(log(x) * decimal)
-    const auto cb_y = output_id++;  // output(==total_norm)
-    CircularBuffer cb_y_obj(cb_y);
+    constexpr uint32_t cb_y = 16;
 
-    std::uint8_t intermed_id{24};
-    const auto cb_x = intermed_id++;
-    CircularBuffer cb_x_obj(cb_x);           // Sum[tmp_pow_sum](==x)
-    const auto cb_xpow = intermed_id++;      // x^p
-    CircularBuffer cb_xpow_obj(cb_xpow);
-    const auto cb_logx = intermed_id++;      // log(x)
-    CircularBuffer cb_logx_obj(cb_logx);
-    const auto cb_exp_lxmd = intermed_id++;  // exp(log(x) * decimal)
-    CircularBuffer cb_exp_lxmd_obj(cb_exp_lxmd);
+    constexpr uint32_t cb_x = 24;
+    constexpr uint32_t cb_xpow = 25;
+    constexpr uint32_t cb_logx = 26;
+    constexpr uint32_t cb_exp_lxmd = 27;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
@@ -41,42 +36,60 @@ void kernel_main() {
         binary_op_init_common(cb_logx, cb_decimal, cb_y);
     }
 
-    cb_decimal_obj.wait_front(onetile);  // comes from the reader
+    cb_wait_front(cb_decimal, onetile);
 
     // Compute cb_x
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         if (tile_idx == 0) {
-            tile_regs_acquire();
-            cb_input_obj.wait_front(onetile);  // comes from the reader
-            cb_x_obj.reserve_back(onetile);
-
-            copy_tile_init(cb_input);
-            copy_tile(cb_input, 0, dst0);
-            cb_input_obj.pop_front(onetile);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(dst0, cb_x);
-            cb_x_obj.push_back(onetile);
-            tile_regs_release();
+            ckl::copy<
+                cb_input,
+                cb_x,
+                ckl::InputLifecycle::Streaming,
+                ckl::OutputLifecycle::Streaming,
+                ckl::CopyTileReconfig::Input,
+                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(onetile));
         } else {
-            tile_regs_acquire();
-            cb_input_obj.wait_front(onetile);  // comes from the reader
-            cb_x_obj.wait_front(onetile);
-            cb_x_obj.reserve_back(onetile);
-
-            add_tiles_init(cb_input, cb_x);
-            add_tiles(cb_input, cb_x, 0, 0, dst0);
-            cb_x_obj.pop_front(onetile);
-            cb_input_obj.pop_front(onetile);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(dst0, cb_x);
-            cb_x_obj.push_back(onetile);
-            tile_regs_release();
+            ckl::add<
+                cb_input,
+                cb_x,
+                cb_x,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::Streaming,
+                ckl::OutputLifecycle::Streaming,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(onetile));
         }
     }
-    // x^p
-    power_tile_to_cb(cb_x_obj, cb_xpow_obj, cb_logx_obj, cb_decimal_obj, cb_exp_lxmd_obj, cb_y_obj, p, p_is_negative);
+    if (p_is_negative) {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::CopyTile<cb_x, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
+            ckl::PowerIterative<ckl::Dst::D0>{p},
+            ckl::Recip<ckl::Dst::D0>{},
+            ckl::PackTile<cb_xpow>{});
+    } else {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::CopyTile<cb_x, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
+            ckl::PowerIterative<ckl::Dst::D0>{p},
+            ckl::PackTile<cb_xpow>{});
+    }
+
+    ckl::unary<ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>, cb_x, cb_logx, ckl::InputLifecycle::NoWaitPop>(
+        ckl::EltwiseShape::tiles(onetile));
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(onetile),
+        ckl::BinaryFpu<
+            cb_logx,
+            cb_decimal,
+            ckl::BinaryFpuOp::Mul,
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::CallerManaged>{},
+        ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+        ckl::PackTile<cb_exp_lxmd>{});
+
+    ckl::mul<cb_xpow, cb_exp_lxmd, cb_y>(ckl::EltwiseShape::tiles(onetile));
 }

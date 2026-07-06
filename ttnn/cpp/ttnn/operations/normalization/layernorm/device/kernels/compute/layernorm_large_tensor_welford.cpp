@@ -19,6 +19,11 @@
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 namespace generic = norm::kernel_util::generic;
 
@@ -87,29 +92,19 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     }
 
     for (auto block : generic::blocks(Wt, blk)) {
-        // Fused pre-add
-        reconfig_data_format(cb_in, cb_inb);
-        add_tiles_init(cb_in, cb_inb);
-        cb_in_obj.wait_front(block.full_block_size());
-        cb_inb_obj.wait_front(block.full_block_size());
-        tile_regs_acquire();
-        for (auto i : block.local()) {
-            add_tiles(cb_in, cb_inb, i, i, i);
-        }
-        tile_regs_commit();
-        cb_in_obj.pop_front(block.full_block_size());
-        cb_inb_obj.pop_front(block.full_block_size());
-
-        // Pack to intermediate CB (needed
-        // to workaround transpose_dest bug)
-        pack_reconfig_data_format(cb_interm_pre_add);
-        cb_interm_pre_add_obj.reserve_back(block.full_block_size());
-        tile_regs_wait();
-        for (auto i : block.local()) {
-            pack_tile(i, cb_interm_pre_add);
-        }
-        tile_regs_release();
-        cb_interm_pre_add_obj.push_back(block.full_block_size());
+        // Fused pre-add (migrated to eltwise_chain; Bulk/Bulk mirrors main's wait_front+add+pop
+        // on both operands, produces the intermediate CB that works around the transpose_dest bug).
+        ckl::add<
+            cb_in,
+            cb_inb,
+            cb_interm_pre_add,
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::Bulk,
+            ckl::InputLifecycle::Bulk,
+            ckl::OutputLifecycle::Bulk,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::Output,
+            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
 
         // Now run Welfords in these blk number of tiles
         cb_interm_pre_add_obj.wait_front(block.full_block_size());
@@ -466,37 +461,19 @@ void kernel_main() {
         // =====================================
         // Calculate 1/(√(Var(X) + ε))
         // =====================================
-        reconfig_data_format(cb_ex2, cb_eps);
-        add_tiles_init(cb_ex2, cb_eps);
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::BinaryFpu<
+                cb_ex2,
+                cb_eps,
+                ckl::BinaryFpuOp::Add,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged>{},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::PackTile<cb_ex2pe, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 
-        cb_ex2_obj.wait_front(onetile);
-        tile_regs_acquire();
-        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
-        tile_regs_commit();
-        cb_ex2_obj.pop_front(onetile);
-
-        cb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
-
-        // broadcasts the tile since cb_ex2pe is a column vector that contains the important data
-        cb_ex2pe_obj.wait_front(onetile);
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_ex2pe);
-        unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
-        unary_bcast<BroadcastType::COL>(cb_ex2pe, 0, dst0);
-        cb_ex2pe_obj.pop_front(onetile);
-        tile_regs_commit();
-
-        cb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
+        ckl::unary_bcast<ckl::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(ckl::EltwiseShape::tiles(onetile));
 
         // =====================================
         // Second pass over the input.

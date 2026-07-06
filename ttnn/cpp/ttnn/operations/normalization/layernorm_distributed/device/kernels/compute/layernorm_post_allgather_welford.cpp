@@ -21,6 +21,10 @@
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "chain_llk.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
 constexpr uint32_t cb_stats_id = tt::CBIndex::c_1;
@@ -31,7 +35,7 @@ constexpr uint32_t cb_out = tt::CBIndex::c_14;
 
 constexpr uint32_t cb_stats_reduced_id = tt::CBIndex::c_6;    // [E(x**2), E(x)]
 constexpr uint32_t cb_recip_sqrt_var_id = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
-constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;        // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
+constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;
 
 // Layernorm-specific CBs
 constexpr uint32_t cb_x_minus_mean = tt::CBIndex::c_11;  // x - E(x)
@@ -134,21 +138,22 @@ void kernel_main() {
          * 1/sqrt(var + eps)
          */
 
-        cb_stats_reduced.wait_front(2);
-        cb_recip_sqrt_var.reserve_back(1);
-        reconfig_data_format(cb_stats_reduced_id, cb_eps_id);
-        pack_reconfig_data_format(cb_recip_sqrt_var_id);
-
-        add_tiles_init(cb_stats_reduced_id, cb_eps_id);
-        tile_regs_acquire();
-        tile_regs_wait();
-        add_tiles(cb_stats_reduced_id, cb_eps_id, 1, 0, 0);
-        rsqrt_tile_init<true>();
-        rsqrt_tile<true>(0);
-        pack_tile(0, cb_recip_sqrt_var_id);
-        tile_regs_commit();
-        tile_regs_release();
-        cb_recip_sqrt_var.push_back(1);
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::BinaryFpu<
+                cb_stats_reduced_id,
+                cb_eps_id,
+                ckl::BinaryFpuOp::Add,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::HeldBulk,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::Dst::D0,
+                ckl::OperandKind::Scalar,
+                ckl::OperandKind::Scalar,
+                ckl::TileOffset::Set>{1, 0u},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+            ckl::PackTile<cb_recip_sqrt_var_id>{});
 
         if constexpr (do_gamma && do_beta) {
             /*

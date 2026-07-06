@@ -21,6 +21,20 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "chain_llk.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+
+namespace ckl = compute_kernel_lib;
+
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
 
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
 constexpr uint32_t cb_stats = tt::CBIndex::c_1;
@@ -137,97 +151,87 @@ void kernel_main() {
          */
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_stats, cb_reduce, cb_stats_reduced);
         cb_wait_front(cb_stats, stats_tiles_cols);
+        cb_reserve_back(cb_stats_reduced, stats_tile_stride);
 
-        tile_regs_acquire();
+        ACQ();
         // Reduce sum(x**2) first
         for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tile_stride) {
             reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_stats, cb_reduce, i, 0, 0);
         }
+        pack_tile(0, cb_stats_reduced);
+
         // Reduce sum(x) next
         for (uint32_t i = 1; i < stats_tiles_cols; i += stats_tile_stride) {
             reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_stats, cb_reduce, i, 0, 1);
         }
-        tile_regs_commit();
-
-        cb_pop_front(cb_stats, stats_tiles_cols);
-
-        cb_reserve_back(cb_stats_reduced, stats_tile_stride);
-
-        tile_regs_wait();
-        pack_tile(0, cb_stats_reduced);
         pack_tile(1, cb_stats_reduced);
-        tile_regs_release();
 
+        REL();
         cb_push_back(cb_stats_reduced, stats_tile_stride);
+        cb_pop_front(cb_stats, stats_tiles_cols);
 
         reduce_uninit();
 
         /*
-         * E[x]**2
+         * E[x]**2  — same-CB Mul at index 1.
+         * cb_stats_reduced: pre-waited for stats_tile_stride at line 171, held
+         *   (popped at line 229). InputLifecycle::HeldBulk + Scalar + ckl::TileOffset::Set.
+         * Same-CB constraint: AIndex==BIndex (both Scalar + same TileBase).
+         * Reconfig audit: explicit reconfig_data_format(cb_stats_reduced, cb_stats_reduced)
+         *   + mul_tiles_init reconfigs (idempotent) -> Input. Explicit
+         *   pack_reconfig_data_format(cb_mean_squared) -> Output.
          */
-        reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
-        pack_reconfig_data_format(cb_mean_squared);
-        mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
-
-        tile_regs_acquire();
-        mul_tiles(cb_stats_reduced, cb_stats_reduced, 1, 1, 0);
-        tile_regs_commit();
-
-        cb_reserve_back(cb_mean_squared, onetile);
-
-        tile_regs_wait();
-        pack_tile(0, cb_mean_squared);
-        tile_regs_release();
-
-        cb_push_back(cb_mean_squared, 1);
-
-        /*
-         * E[x**2] - E[x]**2
-         */
-        reconfig_data_format(cb_stats_reduced, cb_mean_squared);
-        pack_reconfig_data_format(cb_var);
-        sub_tiles_init(cb_stats_reduced, cb_mean_squared);
-
-        cb_wait_front(cb_mean_squared, 1);
-
-        tile_regs_acquire();
-        sub_tiles(cb_stats_reduced, cb_mean_squared, 0, 0, 0);
-        tile_regs_commit();
-
-        cb_pop_front(cb_mean_squared, 1);
-
-        cb_reserve_back(cb_var, onetile);
-
-        tile_regs_wait();
-        pack_tile(0, cb_var);
-        tile_regs_release();
-
-        cb_push_back(cb_var, 1);
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::BinaryFpu<
+                cb_stats_reduced,
+                cb_stats_reduced,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::HeldBulk,
+                ckl::InputLifecycle::HeldBulk,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::Dst::D0,
+                ckl::OperandKind::Scalar,
+                ckl::OperandKind::Scalar,
+                ckl::TileOffset::Set,
+                ckl::TileOffset::Set>{1, 1},
+            ckl::PackTile<cb_mean_squared, ckl::OutputLifecycle::Bulk>{});
 
         /*
-         * 1/sqrt(var + eps)
+         * E[x**2] - E[x]**2  — sub at index 0.
+         * cb_stats_reduced: InputLifecycle::HeldBulk + Scalar (no TileBase, reads index 0).
+         * cb_mean_squared: InputLifecycle::Bulk + Scalar (wait at 187 / pop at 193 in original — chain owns).
+         * cb_var: OutputLifecycle::Bulk + Scalar (reserve + push 1).
+         * Reconfig: explicit reconfig + sub_tiles_init -> Input. Explicit pack_reconfig -> Output.
          */
-        cb_wait_front(cb_var, 1);
-        reconfig_data_format(cb_var, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
-        add_tiles_init(cb_var, cb_eps);
+        ckl::sub<
+            cb_stats_reduced,
+            cb_mean_squared,
+            cb_var,
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::HeldBulk,
+            ckl::InputLifecycle::Bulk,
+            ckl::OutputLifecycle::Bulk>(ckl::EltwiseShape::single());
 
-        tile_regs_acquire();
-        add_tiles(cb_var, cb_eps, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
-        tile_regs_commit();
-
-        cb_pop_front(cb_var, 1);
-
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-
-        tile_regs_wait();
-        pack_tile(0, cb_recip_sqrt_var);
-        tile_regs_release();
-
-        cb_push_back(cb_recip_sqrt_var, 1);
+        /*
+         * 1/sqrt(var + eps)  — same shape as layernorm.cpp Var+eps prologue.
+         * cb_var InputLifecycle::Streaming, cb_eps InputLifecycle::CallerManaged, cb_recip_sqrt_var
+         * OutputLifecycle::Streaming. Reconfig: explicit reconfig + add_tiles_init -> Input. Explicit pack_reconfig ->
+         * Output.
+         */
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::BinaryFpu<
+                cb_var,
+                cb_eps,
+                ckl::BinaryFpuOp::Add,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged>{},
+            ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::PackTile<cb_recip_sqrt_var>{});
 
         if constexpr (do_gamma && do_beta) {
             /*

@@ -3,48 +3,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    uint32_t w = 0;
-    constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_a_id = tt::CBIndex::c_0;
-    constexpr uint32_t cb_b_id = tt::CBIndex::c_1;
-    constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
-
-    CircularBuffer cb_a(cb_a_id);
-    CircularBuffer cb_b(cb_b_id);
-    CircularBuffer cb_out(cb_out_id);
-
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
 
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_a_id, cb_b_id, cb_out_id);
+    constexpr auto cb_lhs = tt::CBIndex::c_0;
+    constexpr auto cb_rhs = tt::CBIndex::c_1;
+    constexpr auto cb_out = tt::CBIndex::c_16;
 
-    for (uint32_t b = 0; b < B; b++) {
-        for (uint32_t h = 0; h < Ht; h++) {
-            cb_b.wait_front(onetile);
-            for (uint32_t w = 0; w < Wt; w++) {
-                cb_a.wait_front(onetile);
+    compute_kernel_hw_startup(cb_lhs, cb_rhs, cb_out);
 
-                tile_regs_acquire();
-                BCAST_OP<BroadcastType::COL>(cb_a_id, cb_b_id, 0, 0, 0);
-                tile_regs_commit();
-
-                cb_a.pop_front(onetile);
-
-                cb_out.reserve_back(onetile);
-
-                tile_regs_wait();
-                pack_tile(0, cb_out_id);
-                tile_regs_release();
-
-                cb_out.push_back(onetile);
-            }
-            cb_b.pop_front(onetile);
-        }
-    }
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::grid(B * Ht, Wt),
+        ckl::BinaryFpu<
+            cb_lhs,
+            cb_rhs,
+            CHAIN_BCAST_OP,
+            CHAIN_BCAST_DIM,
+            ckl::InputLifecycle::Streaming,    // cb_lhs: one tile per (row,col)
+            ckl::InputLifecycle::OuterStream,  // cb_rhs: streamed broadcast, one per row
+            ckl::BinaryDataFormatReconfig::None,
+            ckl::Dst::D0,
+            ckl::OperandKind::Scalar,     // cb_lhs reads the front
+            ckl::OperandKind::Scalar>{},  // cb_rhs reads the front (advances per row)
+        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

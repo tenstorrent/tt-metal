@@ -4,9 +4,11 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
-#include "api/compute/eltwise_binary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "api/dataflow/circular_buffer.h"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     uint32_t arg_index = 0;
@@ -25,8 +27,6 @@ void kernel_main() {
 
     constexpr auto cb_id_src = get_compile_time_arg_val(0);
     constexpr auto cb_id_dst = get_compile_time_arg_val(1);
-    CircularBuffer cb_src(cb_id_src);
-    CircularBuffer cb_dst(cb_id_dst);
     unary_bcast_init<BroadcastType::ROW>(cb_id_src, cb_id_dst);
 
     uint32_t HtWt = Ht * Wt;
@@ -35,18 +35,14 @@ void kernel_main() {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_read < num_tiles; ++tw) {
-                    cb_src.wait_front(1);
-                    tile_regs_acquire();
-                    unary_bcast<BroadcastType::ROW>(cb_id_src, 0, 0);
-                    tile_regs_commit();
-
-                    cb_src.pop_front(1);
-                    cb_dst.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(0, cb_id_dst);
-
-                    cb_dst.push_back(1);
-                    tile_regs_release();
+                    ckl::eltwise_chain<ckl::SetupOwner::Caller>(
+                        ckl::EltwiseShape::single(),
+                        ckl::UnaryBcast<
+                            ckl::BroadcastDim::Row,
+                            cb_id_src,
+                            ckl::InputLifecycle::Streaming,
+                            ckl::UnaryBcastReconfig::None>{},  // Caller owns setup -> no chain reconfig
+                        ckl::PackTile<cb_id_dst, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
                     ++num_tiles_read;
                 }
             }

@@ -9,6 +9,10 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     const auto num_input_tiles = get_arg_val<uint32_t>(0);
@@ -37,45 +41,27 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         bool enable_reload = false;
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
-            bool last_out = (j == num_input_tiles - 1);
-
-            tile_regs_acquire();
-            cb_in0_obj.wait_front(onetile);
             if (enable_reload) {
-                cb_intermed0_obj.wait_front(onetile);
+                ckl::add<cb_in0, cb_intermed0, cb_intermed0>(ckl::EltwiseShape::tiles(onetile));
+            } else {
+                ckl::add<
+                    cb_in0,
+                    cb_in1,
+                    cb_intermed0,
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
             }
-
-            uint32_t cb_add = (enable_reload) ? (cb_intermed0) : (cb_in1);
-            add_tiles_init_with_dt(cb_in0_obj, CircularBuffer(cb_add));
-            add_tiles(cb_in0, cb_add, first_tile, first_tile, dst0);
-
-            cb_in0_obj.pop_front(onetile);
-            if (enable_reload) {
-                cb_intermed0_obj.pop_front(onetile);
-            }
-            tile_regs_commit();
-
-            cb_intermed0_obj.reserve_back(onetile);
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_intermed0_obj);
-            tile_regs_release();
-            cb_intermed0_obj.push_back(onetile);
 
             enable_reload = true;
         }
 
-        // output * (1 / number_of_elements)
-        tile_regs_acquire();
-        cb_intermed0_obj.wait_front(onetile);
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0_obj, cb_scalar_obj);
-        mul_tiles_bcast<BroadcastType::SCALAR>(cb_intermed0, cb_scalar, 0, 0, 0);
-        tile_regs_commit();
-
-        cb_out0_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_out0_obj);
-        tile_regs_release();
-        cb_out0_obj.push_back(onetile);
-        cb_intermed0_obj.pop_front(onetile);
+        ckl::mul<
+            cb_intermed0,
+            cb_scalar,
+            cb_out0,
+            ckl::BroadcastDim::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
     }
 }

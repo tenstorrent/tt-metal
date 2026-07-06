@@ -2,59 +2,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel for tanh backward using sech²(x) = 4·exp(-2|x|) / (1 + exp(-2|x|))²
 // Avoids catastrophic cancellation in the naive 1 - tanh²(x) formula.
 
 #include <cstdint>
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/common.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/tanh_derivative.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/compute_kernel_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // TanhDerivative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // MulBinary
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
+    uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
     constexpr auto cb_grad_out = tt::CBIndex::c_0;
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
-    CircularBuffer exp_cb_grad_out(cb_grad_out);
-    CircularBuffer exp_cb_input(cb_input);
-    CircularBuffer exp_cb_grad_in(cb_grad_in);
-
     unary_op_init_common(cb_grad_out, cb_grad_in);
-    tanh_derivative_tile_init<false>();
-    mul_binary_tile_init();
 
-    for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        exp_cb_grad_in.reserve_back(per_core_block_size);
-        exp_cb_grad_out.wait_front(per_core_block_size);
-        exp_cb_input.wait_front(per_core_block_size);
+    const auto shape = ckl::EltwiseShape::tiles(per_core_tile_cnt, per_core_block_size);
 
-        for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            tile_regs_acquire();
-
-            copy_tile(cb_grad_out, i, 0);    // dest[0] = grad_out
-            copy_tile(cb_input, i, 1);       // dest[1] = input
-            tanh_derivative_tile<false>(1);  // dest[1] = sech²(input)
-            mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * sech²(input)
-
-            tile_regs_commit();
-            tile_regs_wait();
-
-            pack_tile(0, cb_grad_in);
-
-            tile_regs_release();
-        }
-
-        exp_cb_grad_out.pop_front(per_core_block_size);
-        exp_cb_input.pop_front(per_core_block_size);
-        exp_cb_grad_in.push_back(per_core_block_size);
-    }
+    ckl::eltwise_chain(
+        shape,
+        ckl::CopyTile<
+            cb_grad_out,
+            ckl::Dst::D0,
+            ckl::InputLifecycle::Chunked,
+            ckl::CopyTileReconfig::None,
+            ckl::OperandKind::Block>{},
+        ckl::CopyTile<
+            cb_input,
+            ckl::Dst::D1,
+            ckl::InputLifecycle::Chunked,
+            ckl::CopyTileReconfig::None,
+            ckl::OperandKind::Block>{},
+        ckl::TanhDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},
+        ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+        ckl::PackTile<cb_grad_in, ckl::OutputLifecycle::Chunked, ckl::PackTileReconfig::None>{});
 }

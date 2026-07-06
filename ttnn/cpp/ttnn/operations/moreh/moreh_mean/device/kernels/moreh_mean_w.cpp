@@ -11,6 +11,8 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -66,32 +68,21 @@ void kernel_main() {
 
                 cb_accum_dst_obj.reserve_back(onetile);
                 tile_regs_wait();
-                pack_tile_with_dt(reduce_dst_idx, cb_accum_dst_obj);
+                pack_tile_with_dt(reduce_dst_idx, cb_accum_dst);
                 tile_regs_release();
                 cb_accum_dst_obj.push_back(onetile);
             }
 
             if (do_mask_w) {
-                tile_regs_acquire();
-                CircularBuffer(cb_input).wait_front(onetile);
-
-                copy_tile_init_with_dt(CircularBuffer(cb_input));
-                copy_tile(cb_input, 0, reduce_dst_idx);
-
-                copy_tile_init_with_dt(cb_mask_w_obj);
-                copy_tile(cb_mask_w, 0, mask_dst_idx);
-
-                mask_tile_init();
-                mask_tile(reduce_dst_idx, mask_dst_idx);
-                tile_regs_commit();
-
-                cb_masked_input_obj.reserve_back(onetile);
-                tile_regs_wait();
-                pack_tile_with_dt(reduce_dst_idx, cb_masked_input_obj);
-                tile_regs_release();
-                cb_masked_input_obj.push_back(onetile);
-
-                CircularBuffer(cb_input).pop_front(onetile);
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
+                    compute_kernel_lib::CopyTile<tt::CBIndex::c_0>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_mask_w,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::InputLifecycle::CallerManaged>{},
+                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<cb_masked_input>{});
                 cb_input = cb_masked_input;
             }
 
@@ -100,7 +91,7 @@ void kernel_main() {
             if (!is_w_single_tile) {
                 cb_accum_dst_obj.wait_front(onetile);
 
-                copy_tile_init_with_dt(cb_accum_dst_obj);
+                copy_tile_init_with_dt(cb_accum_dst);
                 copy_tile(cb_accum_dst, 0, reduce_dst_idx);
             }
 
@@ -113,7 +104,7 @@ void kernel_main() {
 
             cb_out_obj.reserve_back(onetile);
             tile_regs_wait();
-            pack_tile_with_dt(reduce_dst_idx, cb_out_obj);
+            pack_tile_with_dt(reduce_dst_idx, cb_out);
             tile_regs_release();
             cb_out_obj.push_back(onetile);
 

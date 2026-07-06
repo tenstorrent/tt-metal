@@ -117,6 +117,10 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
         "typecast_tile<{0}u, {1}u>",
         static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
         static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+    unary_defines["CHAIN_TYPECAST_IN_DF"] =
+        fmt::format("{}u", static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)));
+    unary_defines["CHAIN_TYPECAST_OUT_DF"] =
+        fmt::format("{}u", static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
     const char* const path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
@@ -300,6 +304,10 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
         "typecast_tile<{0}u, {1}u>",
         static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
         static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+    unary_defines["CHAIN_TYPECAST_IN_DF"] =
+        fmt::format("{}u", static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)));
+    unary_defines["CHAIN_TYPECAST_OUT_DF"] =
+        fmt::format("{}u", static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
     const auto* path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 

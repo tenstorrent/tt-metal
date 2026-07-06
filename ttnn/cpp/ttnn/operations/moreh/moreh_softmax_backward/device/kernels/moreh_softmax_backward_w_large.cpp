@@ -5,30 +5,29 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr auto cb_y = tt::CBIndex::c_0;
-    CircularBuffer cb_y_obj(cb_y);
     constexpr auto cb_dy = tt::CBIndex::c_1;
-    CircularBuffer cb_dy_obj(cb_dy);
     constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
     constexpr auto cb_mask = tt::CBIndex::c_3;
-    CircularBuffer cb_mask_obj(cb_mask);
     constexpr auto cb_dx = tt::CBIndex::c_16;
-    CircularBuffer cb_dx_obj(cb_dx);
 
     constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
-    CircularBuffer cb_ydy_obj(cb_ydy);
     constexpr auto cb_sum = tt::CBIndex::c_25;
     CircularBuffer cb_sum_obj(cb_sum);
     constexpr auto cb_inter2 = tt::CBIndex::c_26;
-    CircularBuffer cb_inter2_obj(cb_inter2);
     constexpr auto cb_add = tt::CBIndex::c_27;
-    CircularBuffer cb_add_obj(cb_add);
 
     binary_op_init_common(cb_y, cb_bcast_scaler, cb_dx);
 
@@ -37,77 +36,91 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
-        // sum(dy)
         for (uint32_t w = 0; w < Wt; ++w) {
             if (w == Wt - 1) {
                 if (w == 0) {
-                    mask_tile_to_cb(
-                        cb_dy_obj, cb_mask_obj, cb_add_obj, /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::tiles(onetile),
+                        ckl::CopyTile<cb_dy>{},
+                        ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::HeldStream>{},
+                        ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+                        ckl::PackTile<cb_add>{});
                 } else {
                     constexpr auto cb_inter0 = tt::CBIndex::c_24;
-                    CircularBuffer cb_inter0_obj(cb_inter0);
-                    mask_tile_to_cb(
-                        cb_dy_obj, cb_mask_obj, cb_inter0_obj, /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
-
-                    add_tiles_to_cb(cb_add_obj, cb_inter0_obj, cb_add_obj);
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::tiles(onetile),
+                        ckl::CopyTile<cb_dy>{},
+                        ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::HeldStream>{},
+                        ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+                        ckl::PackTile<cb_inter0>{});
+                    ckl::add<cb_add, cb_inter0, cb_add>(ckl::EltwiseShape::tiles(onetile));
                 }
             } else {
                 if (w == 0) {
-                    copy_tile_to_cb(cb_dy_obj, cb_add_obj);
+                    ckl::copy<cb_dy, cb_add>(ckl::EltwiseShape::tiles(onetile));
                 } else {
-                    add_tiles_to_cb(cb_add_obj, cb_dy_obj, cb_add_obj);
+                    ckl::add<cb_add, cb_dy, cb_add>(ckl::EltwiseShape::tiles(onetile));
                 }
             }
         }
 
-        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_add, cb_bcast_scaler, cb_sum>(
-            compute_kernel_lib::ReduceInputBlockShape::single());
+        ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_add, cb_bcast_scaler, cb_sum>(
+            ckl::ReduceInputBlockShape::single());
 
         for (uint32_t w = 0; w < Wt; w += onetile) {
-            // exp(y)
             constexpr auto cb_exp = tt::CBIndex::c_24;
-            CircularBuffer cb_exp_obj(cb_exp);
-            exp_tile_to_cb(cb_y_obj, cb_exp_obj, 0);
-            // sum * exp(y)
-            mul_tiles_bcast_cols_to_cb(cb_exp_obj, cb_sum_obj, cb_inter2_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
-            // dy - sum * exp(y)
-            sub_tiles_to_cb(cb_dy_obj, cb_inter2_obj, cb_dx_obj);
+            ckl::unary<ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>, cb_y, cb_exp>(
+                ckl::EltwiseShape::tiles(onetile));
+            ckl::mul<
+                cb_exp,
+                cb_sum,
+                cb_inter2,
+                ckl::BroadcastDim::Col,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+            ckl::sub<cb_dy, cb_inter2, cb_dx>(ckl::EltwiseShape::tiles(onetile));
         }
 
         cb_sum_obj.pop_front(onetile);
 #else
-        // step 1, compute y * dy
         for (uint32_t w = 0; w < Wt; ++w) {
             if (w == Wt - 1) {
-                mul_tiles_and_mask_tile_to_cb(
-                    cb_y_obj, cb_dy_obj, cb_mask_obj, cb_ydy_obj, 0, 0, 0, /*pop0=*/1, /*pop1=*/1, /*popm=*/0);
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(onetile),
+                    ckl::BinaryFpu<cb_y, cb_dy, ckl::BinaryFpuOp::Mul>{},
+                    ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::HeldStream>{},
+                    ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+                    ckl::PackTile<cb_ydy>{});
             } else {
-                mul_tiles_to_cb(cb_y_obj, cb_dy_obj, cb_ydy_obj);
+                ckl::mul<cb_y, cb_dy, cb_ydy>(ckl::EltwiseShape::tiles(onetile));
             }
 
             if (w == 0) {
-                copy_tile_to_cb(cb_ydy_obj, cb_add_obj);
+                ckl::copy<cb_ydy, cb_add>(ckl::EltwiseShape::tiles(onetile));
             } else {
-                add_tiles_to_cb(cb_add_obj, cb_ydy_obj, cb_add_obj);
+                ckl::add<cb_add, cb_ydy, cb_add>(ckl::EltwiseShape::tiles(onetile));
             }
         }
 
-        // step 2, compute sum(y * dy)
-        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_add, cb_bcast_scaler, cb_sum>(
-            compute_kernel_lib::ReduceInputBlockShape::single());
+        ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_add, cb_bcast_scaler, cb_sum>(
+            ckl::ReduceInputBlockShape::single());
 
-        // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {
-            // dy - sum
-            sub_tiles_bcast_cols_to_cb(cb_dy_obj, cb_sum_obj, cb_inter2_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
+            ckl::sub<
+                cb_dy,
+                cb_sum,
+                cb_inter2,
+                ckl::BroadcastDim::Col,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
 #ifdef SOFTMAX
-            // (dy - sum) * y
-            mul_tiles_to_cb(cb_y_obj, cb_inter2_obj, cb_dx_obj);
+            ckl::mul<cb_y, cb_inter2, cb_dx>(ckl::EltwiseShape::tiles(onetile));
 #else
-            // -(dy - sum) * y
-            mul_tiles_and_negative_to_cb(cb_y_obj, cb_inter2_obj, cb_dx_obj);
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::BinaryFpu<cb_y, cb_inter2, ckl::BinaryFpuOp::Mul>{},
+                ckl::Negative<ckl::Dst::D0>{},
+                ckl::PackTile<cb_dx>{});
 #endif
         }
 

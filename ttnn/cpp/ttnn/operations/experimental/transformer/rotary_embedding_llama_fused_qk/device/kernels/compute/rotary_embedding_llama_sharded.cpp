@@ -9,6 +9,8 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "api/dataflow/circular_buffer.h"
 
 ALWI void ACQ() {
@@ -93,14 +95,17 @@ void kernel_main() {
         rotated_in_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.wait_front(Wt);
 
-        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // sin_interim = rotated * sin
-            mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
-            pack_tile(j, sin_interm_cb, j);
-        }
-        REL();
+        compute_kernel_lib::mul<
+            rotated_in_interm_cb,
+            sin_cb,
+            sin_interm_cb,
+            compute_kernel_lib::BroadcastDim::Row,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::OutputLifecycle::CallerManaged,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
         sin_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.pop_front(Wt);
 

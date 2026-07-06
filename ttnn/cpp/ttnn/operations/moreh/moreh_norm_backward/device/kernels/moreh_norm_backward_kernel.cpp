@@ -2,14 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // unary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // PowerIterative, Recip, Log, Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Abs, Sign
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     // compile-time args
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
     constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
     constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
+
+    constexpr auto kBcast = (ht_need_bcast && wt_need_bcast) ? ckl::BroadcastDim::Scalar
+                            : ht_need_bcast                  ? ckl::BroadcastDim::Row
+                            : wt_need_bcast                  ? ckl::BroadcastDim::Col
+                                                             : ckl::BroadcastDim::None;
 
     // runtime args
     int i{0};
@@ -19,160 +30,123 @@ void kernel_main() {
     const auto p_minus_one = get_arg_val<uint32_t>(i++);
     const bool p_minus_one_is_negative = get_arg_val<uint32_t>(i++) == 1;
 
-    std::uint8_t input_id{tt::CBIndex::c_0};
-    const auto cb_x = input_id++;
-    CircularBuffer cb_x_obj(cb_x);  // input(==x)
-    const auto cb_y = input_id++;
-    CircularBuffer cb_y_obj(cb_y);  // output(==y)
-    const auto cb_dy = input_id++;
-    CircularBuffer cb_dy_obj(cb_dy);  // output_grad(==dy)
-    const auto cb_decimal = input_id++;
-    CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
+    constexpr uint32_t cb_x = tt::CBIndex::c_0;
+    constexpr uint32_t cb_y = tt::CBIndex::c_1;
+    constexpr uint32_t cb_dy = tt::CBIndex::c_2;
+    constexpr uint32_t cb_decimal = tt::CBIndex::c_3;
+    CircularBuffer cb_x_obj(cb_x);
+    CircularBuffer cb_y_obj(cb_y);
+    CircularBuffer cb_dy_obj(cb_dy);
+    CircularBuffer cb_decimal_obj(cb_decimal);
 
-    std::uint8_t output_id{tt::CBIndex::c_16};
-    const auto cb_dx = output_id++;  // input_grad(==dx)
-    CircularBuffer cb_dx_obj(cb_dx);
+    constexpr uint32_t cb_dx = tt::CBIndex::c_16;
 
-    std::uint8_t intermed_id{tt::CBIndex::c_24};
-    const auto cb_tmp0 = intermed_id++;
-    const auto cb_tmp1 = intermed_id++;
-    const auto cb_tmp2 = intermed_id++;
-    const auto cb_tmp3 = intermed_id++;
-    const auto cb_tmp4 = intermed_id++;
-    CircularBuffer cb_tmp4_obj(cb_tmp4);
-    const auto cb_tmp5 = intermed_id++;
-    CircularBuffer cb_tmp5_obj(cb_tmp5);
-    const auto cb_tmp6 = intermed_id++;
-    const auto cb_tmp7 = intermed_id++;
-
-    const auto cb_xpow = cb_tmp0;
-    CircularBuffer cb_xpow_obj(cb_xpow);
-    const auto cb_logx = cb_tmp1;
-    CircularBuffer cb_logx_obj(cb_logx);
-    const auto cb_exp_lxmd = cb_tmp2;
-    CircularBuffer cb_exp_lxmd_obj(cb_exp_lxmd);
-    const auto cb_correct_xpow = cb_tmp3;
-    CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);
-    const auto cb_recip_ypow = cb_tmp6;
-    CircularBuffer cb_recip_ypow_obj(cb_recip_ypow);
-    const auto cb_sign = cb_tmp7;
-    CircularBuffer cb_sign_obj(cb_sign);
+    constexpr uint32_t cb_xpow = tt::CBIndex::c_24;
+    constexpr uint32_t cb_logx = tt::CBIndex::c_25;
+    constexpr uint32_t cb_exp_lxmd = tt::CBIndex::c_26;
+    constexpr uint32_t cb_correct_xpow = tt::CBIndex::c_27;
+    constexpr uint32_t cb_tmp4 = tt::CBIndex::c_28;
+    constexpr uint32_t cb_tmp5 = tt::CBIndex::c_29;
+    constexpr uint32_t cb_recip_ypow = tt::CBIndex::c_30;
+    constexpr uint32_t cb_sign = tt::CBIndex::c_31;
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
 
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
     cb_decimal_obj.wait_front(onetile);  // comes from the reader
 
     for (uint32_t idx = 0; idx < num_input_tiles_per_core; ++idx) {
-        cb_x_obj.wait_front(onetile);   // comes from the reader
-        cb_y_obj.wait_front(onetile);   // comes from the reader
-        cb_dy_obj.wait_front(onetile);  // comes from the reader
+        cb_x_obj.wait_front(onetile);
+        cb_y_obj.wait_front(onetile);
+        cb_dy_obj.wait_front(onetile);
 
-        sign_tile_to_cb(cb_x_obj, cb_sign_obj, 0, /*pop=*/0);
+        ckl::unary<ckl::Sign<ckl::Dst::D0>, cb_x, cb_sign, ckl::InputLifecycle::HeldStream>(
+            ckl::EltwiseShape::tiles(onetile));
 
-        // x^(p - 1)
-        power_tile_with_abs_x_to_cb(
-            cb_x_obj,
-            cb_xpow_obj,
-            cb_logx_obj,
-            cb_decimal_obj,
-            cb_exp_lxmd_obj,
-            cb_correct_xpow_obj,
-            p_minus_one,
-            p_minus_one_is_negative);
-
-        // x^(p - 1) * y -> cb_tmp4
-        cb_correct_xpow_obj.wait_front(onetile);
-        cb_tmp4_obj.reserve_back(onetile);
-
-        tile_regs_acquire();
-        if (ht_need_bcast && wt_need_bcast) {
-            mul_tiles_bcast_scalar_init_short_with_dt(cb_correct_xpow_obj, cb_y_obj);
-            mul_tiles_bcast_scalar(cb_correct_xpow, cb_y, 0, 0, dst0);
-        } else if (ht_need_bcast) {
-            mul_bcast_rows_init_short_with_dt(cb_correct_xpow_obj, cb_y_obj);
-            mul_tiles_bcast_rows(cb_correct_xpow, cb_y, 0, 0, dst0);
-        } else if (wt_need_bcast) {
-            mul_bcast_cols_init_short_with_dt(cb_correct_xpow_obj, cb_y_obj);
-            mul_tiles_bcast_cols(cb_correct_xpow, cb_y, 0, 0, dst0);
+        if (p_minus_one_is_negative) {
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<cb_x, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
+                ckl::Abs<ckl::Dst::D0>{},
+                ckl::PowerIterative<ckl::Dst::D0>{p_minus_one},
+                ckl::Recip<ckl::Dst::D0>{},
+                ckl::PackTile<cb_xpow>{});
         } else {
-            mul_tiles_init_with_dt(cb_correct_xpow_obj, cb_y_obj);
-            mul_tiles(cb_correct_xpow, cb_y, 0, 0, dst0);
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<cb_x, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
+                ckl::Abs<ckl::Dst::D0>{},
+                ckl::PowerIterative<ckl::Dst::D0>{p_minus_one},
+                ckl::PackTile<cb_xpow>{});
         }
-        tile_regs_commit();
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::CopyTile<cb_x, ckl::Dst::D0, ckl::InputLifecycle::NoWaitPop>{},
+            ckl::Abs<ckl::Dst::D0>{},
+            ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>{},
+            ckl::PackTile<cb_logx>{});
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::BinaryFpu<
+                cb_logx,
+                cb_decimal,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged>{},
+            ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+            ckl::PackTile<cb_exp_lxmd>{});
+        ckl::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(ckl::EltwiseShape::tiles(onetile));
 
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp4_obj);
-        tile_regs_release();
+        ckl::mul<
+            cb_correct_xpow,
+            cb_y,
+            cb_tmp4,
+            kBcast,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
 
-        cb_correct_xpow_obj.pop_front(onetile);
-        cb_tmp4_obj.push_back(onetile);
+        ckl::mul<cb_tmp4, cb_dy, cb_tmp5, kBcast, ckl::InputLifecycle::Streaming, ckl::InputLifecycle::CallerManaged>(
+            ckl::EltwiseShape::tiles(onetile));
 
-        // x^(p - 1) * y * dy -> cb_tmp5
-        cb_tmp4_obj.wait_front(onetile);
-        cb_tmp5_obj.reserve_back(onetile);
-
-        tile_regs_acquire();
-        if (ht_need_bcast && wt_need_bcast) {
-            mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp4_obj, cb_dy_obj);
-            mul_tiles_bcast_scalar(cb_tmp4, cb_dy, 0, 0, dst0);
-        } else if (ht_need_bcast) {
-            mul_bcast_rows_init_short_with_dt(cb_tmp4_obj, cb_dy_obj);
-            mul_tiles_bcast_rows(cb_tmp4, cb_dy, 0, 0, dst0);
-        } else if (wt_need_bcast) {
-            mul_bcast_cols_init_short_with_dt(cb_tmp4_obj, cb_dy_obj);
-            mul_tiles_bcast_cols(cb_tmp4, cb_dy, 0, 0, dst0);
+        if (p_is_negative) {
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<cb_y, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
+                ckl::PowerIterative<ckl::Dst::D0>{p},
+                ckl::Recip<ckl::Dst::D0>{},
+                ckl::PackTile<cb_xpow>{});
         } else {
-            mul_tiles_init_with_dt(cb_tmp4_obj, cb_dy_obj);
-            mul_tiles(cb_tmp4, cb_dy, 0, 0, dst0);
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<cb_y, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
+                ckl::PowerIterative<ckl::Dst::D0>{p},
+                ckl::PackTile<cb_xpow>{});
         }
-        tile_regs_commit();
+        ckl::unary<ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>, cb_y, cb_logx, ckl::InputLifecycle::NoWaitPop>(
+            ckl::EltwiseShape::tiles(onetile));
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::BinaryFpu<
+                cb_logx,
+                cb_decimal,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged>{},
+            ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+            ckl::PackTile<cb_exp_lxmd>{});
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::BinaryFpu<cb_xpow, cb_exp_lxmd, ckl::BinaryFpuOp::Mul>{},
+            ckl::Recip<ckl::Dst::D0>{},
+            ckl::PackTile<cb_recip_ypow>{});
 
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp5_obj);
-        tile_regs_release();
-
-        cb_tmp4_obj.pop_front(onetile);
-        cb_tmp5_obj.push_back(onetile);
-
-        // 1 / y^p
-        power_and_recip_tile_to_cb(
-            cb_y_obj, cb_xpow_obj, cb_logx_obj, cb_decimal_obj, cb_exp_lxmd_obj, cb_recip_ypow_obj, p, p_is_negative);
-
-        // (x^(p - 1) * y * dy) / y^p -> cb_dx
-        cb_tmp5_obj.wait_front(onetile);
-        cb_recip_ypow_obj.wait_front(onetile);
-        cb_tmp4_obj.reserve_back(onetile);
-
-        tile_regs_acquire();
-        if (ht_need_bcast && wt_need_bcast) {
-            mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp5_obj, cb_recip_ypow_obj);
-            mul_tiles_bcast_scalar(cb_tmp5, cb_recip_ypow, 0, 0, dst0);
-        } else if (ht_need_bcast) {
-            mul_bcast_rows_init_short_with_dt(cb_tmp5_obj, cb_recip_ypow_obj);
-            mul_tiles_bcast_rows(cb_tmp5, cb_recip_ypow, 0, 0, dst0);
-        } else if (wt_need_bcast) {
-            mul_bcast_cols_init_short_with_dt(cb_tmp5_obj, cb_recip_ypow_obj);
-            mul_tiles_bcast_cols(cb_tmp5, cb_recip_ypow, 0, 0, dst0);
-        } else {
-            mul_tiles_init_with_dt(cb_tmp5_obj, cb_recip_ypow_obj);
-            mul_tiles(cb_tmp5, cb_recip_ypow, 0, 0, dst0);
-        }
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp4_obj);
-        tile_regs_release();
-
-        cb_tmp5_obj.pop_front(onetile);
-        cb_recip_ypow_obj.pop_front(onetile);
-        cb_tmp4_obj.push_back(onetile);
+        ckl::mul<cb_tmp5, cb_recip_ypow, cb_tmp4, kBcast>(ckl::EltwiseShape::tiles(onetile));
 
         cb_dy_obj.pop_front(onetile);
 
-        // multiply abs sign
-        mul_tiles_to_cb(cb_sign_obj, cb_tmp4_obj, cb_dx_obj, 0, 0);
+        ckl::mul<cb_sign, cb_tmp4, cb_dx>(ckl::EltwiseShape::tiles(onetile));
     }
 
     cb_decimal_obj.pop_front(onetile);

@@ -19,6 +19,11 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
@@ -123,22 +128,22 @@ void kernel_main() {
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm_id = cb_repack_id;
-    compute_kernel_lib::tilize<
+    ckl::tilize<
         per_core_N,
         cb_in_rm_id,
         cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::tilize_config::InitUninitMode::InitAndUninit,
+        ckl::tilize_config::WaitMode::WaitBlock,
+        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t cb_in_rm_id = cb_in0_id;
-    compute_kernel_lib::tilize<
+    ckl::tilize<
         per_core_N,
         cb_in_rm_id,
         cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::tilize_config::InitUninitMode::InitAndUninit,
+        ckl::tilize_config::WaitMode::NoWait,
+        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
     cb_in.wait_front(per_core_MN);
     if constexpr (welford_fp32_alias) {
@@ -437,57 +442,55 @@ void kernel_main() {
                 ++tile_id;
 
                 if constexpr (do_gamma) {
-                    reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
-                    mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
-
-                    cb_x.wait_front(1);
-                    tile_regs_acquire();
-                    mul_tiles_bcast_rows(cb_x_id, cb_gamma_id, 0, nt, dst0);
-                    tile_regs_commit();
-                    cb_x.pop_front(1);
-                    cb_x.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, cb_x_id);
-                    tile_regs_release();
-                    cb_x.push_back(1);
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::single(),
+                        ckl::BinaryFpu<
+                            cb_x_id,
+                            cb_gamma_id,
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::Row,
+                            ckl::InputLifecycle::Streaming,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Scalar,
+                            ckl::OperandKind::Scalar,
+                            ckl::TileOffset::Unset,
+                            ckl::TileOffset::Set>{0u, nt},
+                        ckl::PackTile<cb_x_id, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
                 }
 
                 if constexpr (do_beta) {
-                    reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
-                    add_bcast_rows_init_short(cb_x_id, cb_beta_id);
-
-                    cb_x.wait_front(1);
-                    tile_regs_acquire();
-                    add_tiles_bcast_rows(cb_x_id, cb_beta_id, 0, nt, dst0);
-                    tile_regs_commit();
-                    cb_x.pop_front(1);
-                    cb_x.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, cb_x_id);
-                    tile_regs_release();
-                    cb_x.push_back(1);
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::single(),
+                        ckl::BinaryFpu<
+                            cb_x_id,
+                            cb_beta_id,
+                            ckl::BinaryFpuOp::Add,
+                            ckl::BroadcastDim::Row,
+                            ckl::InputLifecycle::Streaming,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Scalar,
+                            ckl::OperandKind::Scalar,
+                            ckl::TileOffset::Unset,
+                            ckl::TileOffset::Set>{0u, nt},
+                        ckl::PackTile<cb_x_id, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
                 }
 
-                // Write out the final output
-                reconfig_data_format_srcb(do_beta ? cb_beta_id : cb_xmm_id, cb_x_id);
-                copy_tile_init(cb_x_id);
-
-                cb_x.wait_front(1);
-                tile_regs_acquire();
-                copy_tile(cb_x_id, 0, dst0);
-                tile_regs_commit();
-                cb_x.pop_front(1);
 #ifdef UNTILIZE_OUT
-                auto write_cb_id = cb_untilize_in_id;
+                constexpr auto write_cb_id = cb_untilize_in_id;
 #else
-                auto write_cb_id = cb_out0_id;
+                constexpr auto write_cb_id = cb_out0_id;
 #endif
-                CircularBuffer write_cb(write_cb_id);
-                write_cb.reserve_back(1);
-                tile_regs_wait();
-                pack_tile(dst0, write_cb_id);
-                tile_regs_release();
-                write_cb.push_back(1);
+                ckl::copy<
+                    cb_x_id,
+                    write_cb_id,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::CopyTileReconfig::Input,
+                    ckl::PackTileReconfig::None>(ckl::EltwiseShape::single());
             }
         }
 
@@ -508,12 +511,12 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
     // untilize - DEST capacity auto-detected
-    compute_kernel_lib::untilize<
+    ckl::untilize<
         per_core_N,
         cb_untilize_in_id,
         cb_untilize_out_id,
-        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::untilize_config::InitUninitMode::InitAndUninit,
+        ckl::untilize_config::WaitMode::WaitUpfront,
+        ckl::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
 }

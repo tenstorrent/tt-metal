@@ -2,16 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/clamp.h"
-#include "api/compute/eltwise_unary/rsub.h"
-#include "api/compute/compute_kernel_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Log
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"       // Clamp, RsubUnary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // DivBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
+
+namespace ckl = compute_kernel_lib;
 
 // Formula: logit(x) = log(x/(1-x)) -- calls clamp, rsub, div, and log tiles.
 
@@ -21,59 +20,28 @@ void kernel_main() {
     const uint32_t packed_scalar2 = get_arg_val<uint32_t>(2);
 
     constexpr auto cb_input = tt::CBIndex::c_0;
-    constexpr auto cb_output = tt::CBIndex::c_2;
     constexpr auto cb_tmp0 = tt::CBIndex::c_1;
-
-    CircularBuffer cb_in(cb_input);
-    CircularBuffer cb_out(cb_output);
-    CircularBuffer cb_tmp(cb_tmp0);
+    constexpr auto cb_output = tt::CBIndex::c_2;
 
     init_sfpu(cb_input, cb_output);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-        cb_tmp.reserve_back(1);
 
-        tile_regs_acquire();
-
-        copy_tile_init(cb_input);
-        copy_tile(cb_input, 0, 0);
 #ifdef CLAMP
-        clamp_tile_init();
-        clamp_tile(0, packed_scalar1, packed_scalar2);
+    constexpr bool do_clamp = true;
+#else
+    constexpr bool do_clamp = false;
 #endif
-        tile_regs_commit();
-        tile_regs_wait();
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::OptionalChainElement<do_clamp, ckl::Clamp<ckl::Dst::D0>>{packed_scalar1, packed_scalar2},
+        ckl::PackTile<cb_tmp0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 
-        pack_tile(0, cb_tmp0);
-        tile_regs_release();
-
-        cb_tmp.push_back(1);
-        cb_tmp.wait_front(1);
-
-        tile_regs_acquire();
-
-        copy_tile_init(cb_tmp0);
-        copy_tile(cb_tmp0, 0, 0);
-        copy_tile(cb_tmp0, 0, 1);
-
-        rsub_tile_init();
-        rsub_tile(0, 0x3F800000u);  // 1.0 - x
-
-        div_binary_tile_init();
-        div_binary_tile(1, 0, 0);
-
-        log_tile_init();
-        log_tile(0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-        tile_regs_release();
-
-        cb_tmp.pop_front(1);
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
-    }
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::CopyTile<cb_tmp0, ckl::Dst::D0, ckl::InputLifecycle::HeldStream, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_tmp0, ckl::Dst::D1, ckl::InputLifecycle::NoWaitPop, ckl::CopyTileReconfig::None>{},
+        ckl::RsubUnary<ckl::Dst::D0>{0x3F800000u},  // 1.0 - x
+        ckl::DivBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D0>{},
+        ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>{},
+        ckl::PackTile<cb_output, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

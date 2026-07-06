@@ -178,6 +178,10 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
         "typecast_tile<{0}u, {1}u>",
         static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
         static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+    unary_defines["CHAIN_TYPECAST_IN_DF"] =
+        fmt::format("{}u", static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)));
+    unary_defines["CHAIN_TYPECAST_OUT_DF"] =
+        fmt::format("{}u", static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
     tt::tt_metal::KernelDescriptor compute_desc;
     compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";

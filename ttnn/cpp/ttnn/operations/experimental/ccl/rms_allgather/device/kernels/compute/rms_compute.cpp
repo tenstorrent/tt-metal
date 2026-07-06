@@ -11,6 +11,11 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -75,28 +80,18 @@ void kernel_main() {
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in0, cb_in1, cb_in);
-    reconfig_data_format(cb_in0, cb_in1);
-    pack_reconfig_data_format(cb_in);
-    reconfig_data_format(cb_in0, cb_in1);
-    add_tiles_init(cb_in0, cb_in1);
-    cb_reserve_back(cb_in, num_tiles_per_block);
-    index_subblock_w_offset = 0;
-    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            index = w + index_subblock_w_offset + index_h_offset;
-            add_tiles(cb_in0, cb_in1, index, index, w);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_w; i++) {
-            pack_tile(i, cb_in);
-        }
-        tile_regs_release();
-        index_subblock_w_offset += subblock_w;
-    }
+    ckl::add<
+        cb_in0,
+        cb_in1,
+        cb_in,
+        ckl::BroadcastDim::None,
+        ckl::InputLifecycle::CallerManaged,
+        ckl::InputLifecycle::CallerManaged,
+        ckl::OutputLifecycle::Bulk,
+        ckl::BinaryDataFormatReconfig::Input,
+        ckl::PackTileReconfig::Output,
+        ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
     index_h_offset += block_w;
-    cb_push_back(cb_in, num_tiles_per_block);
     cb_wait_front(cb_in, num_tiles_per_block);
     pack_reconfig_data_format(cb_in, cb_x2);
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
@@ -104,27 +99,14 @@ void kernel_main() {
     binary_op_init_common(cb_in, cb_in, cb_x2);
 #endif
 
-    // X^2
-    mul_tiles_init(cb_in, cb_in);
-    index_h_offset = 0;
-    cb_reserve_back(cb_x2, num_tiles_per_block);
-    index_subblock_w_offset = 0;
-    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            index = w + index_subblock_w_offset + index_h_offset;
-            mul_tiles(cb_in, cb_in, index, index, w);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_w; i++) {
-            pack_tile(i, cb_x2);
-        }
-        tile_regs_release();
-        index_subblock_w_offset += subblock_w;
-    }
-    index_h_offset += block_w;
-    cb_push_back(cb_x2, num_tiles_per_block);
+    ckl::square<
+        cb_in,
+        cb_x2,
+        ckl::InputLifecycle::CallerManaged,
+        ckl::OutputLifecycle::Bulk,
+        ckl::BinaryDataFormatReconfig::Input,
+        ckl::PackTileReconfig::None,
+        ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 
     // E(x^2)
     reconfig_data_format(cb_scaler, cb_x2);
@@ -159,27 +141,26 @@ void kernel_main() {
         const bool is_second_stage_reader = get_arg_val<uint32_t>(3) == 1;
         uint32_t num_blocks_reduce;
         num_blocks_reduce = (is_second_stage_reader) ? num_blocks_second_stage_reduction : num_blocks_first_stage;
-        const auto reduce_block =
-            compute_kernel_lib::ReduceInputBlockShape::of(num_tiles_per_allgather_worker, num_blocks_reduce);
+        const auto reduce_block = ckl::ReduceInputBlockShape::of(num_tiles_per_allgather_worker, num_blocks_reduce);
 
         if (!use_two_stage_reduce || is_second_stage_reader) {
-            compute_kernel_lib::reduce<
+            ckl::reduce<
                 PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
                 cb_ex_external2,
                 cb_scaler_global,
                 cb_to_allgather_writer,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
         } else {
-            compute_kernel_lib::reduce<
+            ckl::reduce<
                 PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
                 cb_ex_external2,
                 cb_scaler_global,
                 cb_ex2,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
         }
     }
 
@@ -199,92 +180,45 @@ void kernel_main() {
         if (enable_sqrt) {
             uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
 
-            compute_kernel_lib::reduce<
+            ckl::reduce<
                 PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
                 cb_stats,
                 post_cb_scaler_global,
                 cb_var,
-                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-                compute_kernel_lib::ReduceInputBlockShape::row(num_distributed_blocks));
+                ckl::ReduceInputPolicy::NoWaitNoPop,
+                ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(num_distributed_blocks));
             cb_pop_front(cb_stats, num_distributed_blocks);
 
-            // 1/[sqrt(Var + eps)],
-            reconfig_data_format(cb_var, cb_eps);  // cb_var is cb_stats in case of RMS norm
-            pack_reconfig_data_format(cb_stats_reduced);
-            cb_wait_front(cb_var, 1);
-            cb_wait_front(cb_eps, 1);
-
-            add_tiles_init(cb_var, cb_eps);
-            tile_regs_acquire();
-            add_tiles(cb_var, cb_eps, 0, 0, post_dst0);
-            tile_regs_wait();
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(post_dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            cb_reserve_back(cb_stats_reduced, 1);
-            pack_tile(post_dst0, cb_stats_reduced);
-            tile_regs_release();
-            cb_pop_front(cb_var, 1);
-            cb_pop_front(cb_eps, 1);
-            cb_push_back(cb_stats_reduced, 1);
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::BinaryFpu<cb_var, cb_eps>{},
+                ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+                ckl::PackTile<cb_stats_reduced>{});
         }
     }
-    pack_reconfig_data_format(cb_im);
-    // (x - Ex) * 1/[sqrt(Var + eps)]
-    reconfig_data_format(cb_xmm, cb_ex_global);
-    mul_bcast_cols_init_short(cb_xmm, cb_ex_global);
-    index_h_offset = 0;
-    cb_reserve_back(cb_im, num_tiles_per_block);
-    index_subblock_w_offset = 0;
-    cb_wait_front(cb_ex_global, 1);
-    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            index = w + index_subblock_w_offset + index_h_offset;
-            mul_tiles_bcast_cols(cb_xmm, cb_ex_global, index, 0, w);
-        }
-        tile_regs_commit();
+    ckl::mul<
+        cb_xmm,
+        cb_ex_global,
+        cb_im,
+        ckl::BroadcastDim::Col,
+        ckl::InputLifecycle::Bulk,
+        ckl::InputLifecycle::Bulk,
+        ckl::OutputLifecycle::Bulk,
+        ckl::BinaryDataFormatReconfig::Input,
+        ckl::PackTileReconfig::Output,
+        ckl::OperandKind::Block,
+        ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_w; i++) {
-            pack_tile(i, cb_im);
-        }
-        tile_regs_release();
-
-        index_subblock_w_offset += subblock_w;
-    }
-    index_h_offset += block_w;
-    cb_pop_front(cb_ex_global, 1);
-    cb_push_back(cb_im, num_tiles_per_block);
-
-    cb_pop_front(cb_xmm, num_tiles_per_block);
-    cb_wait_front(cb_im, num_tiles_per_block);
-
-    reconfig_data_format(cb_im, cb_gamma);
-    pack_reconfig_data_format(cb_out);
-    mul_bcast_rows_init_short(cb_im, cb_gamma);
-    cb_wait_front(cb_gamma, block_w);
-    index_h_offset = 0;
-    cb_reserve_back(cb_outgamma, num_tiles_per_block);
-    index_subblock_w_offset = 0;
-    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            index = w + index_subblock_w_offset;
-            mul_tiles_bcast_rows(cb_im, cb_gamma, index + index_h_offset, index, w);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_w; i++) {
-            pack_tile(i, cb_outgamma);
-        }
-        tile_regs_release();
-        index_subblock_w_offset += subblock_w;
-        cb_push_back(cb_outgamma, subblock_w);
-    }
-    index_h_offset += block_w;
-    cb_pop_front(cb_im, num_tiles_per_block);
+    ckl::mul<
+        cb_im,
+        cb_gamma,
+        cb_outgamma,
+        ckl::BroadcastDim::Row,
+        ckl::InputLifecycle::Bulk,
+        ckl::InputLifecycle::HeldBulk,
+        ckl::OutputLifecycle::BulkReservePerChunk,
+        ckl::BinaryDataFormatReconfig::Input,
+        ckl::PackTileReconfig::Output,
+        ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 }

@@ -3,8 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -46,48 +50,43 @@ void kernel_main() {
 
             // Phase 1: Reduce Ht-1 tiles into accumulator (if Ht > 1)
             if (!is_h_single_tile) {
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_accum_dst>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+                ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_accum_dst>(
+                    ckl::ReduceInputBlockShape::col(Ht - 1));
             }
 
-            // Optional masking of last H tile
+            // Optional masking of last H tile.
             if constexpr (do_mask_h) {
-                tile_regs_acquire();
-                cb_input_obj.wait_front(onetile);
-#if defined FP32_DEST_ACC_EN
-                reconfig_data_format_srca(cb_input);
-#endif
-                copy_tile_to_dst_init_short(cb_input);
-                copy_tile(cb_input, 0, reduce_dst_idx);
-                copy_tile(cb_mask_h, 0, mask_dst_idx);
-                mask_tile_init();
-                mask_tile(reduce_dst_idx, mask_dst_idx);
-                tile_regs_commit();
-
-                cb_masked_input_obj.reserve_back(onetile);
-                tile_regs_wait();
-#if defined FP32_DEST_ACC_EN
-                pack_reconfig_data_format(cb_masked_input);
-#endif
-                pack_tile(reduce_dst_idx, cb_masked_input);
-                tile_regs_release();
-                cb_masked_input_obj.push_back(onetile);
-
-                cb_input_obj.pop_front(onetile);
+                // CopyTile<cb_input> + CopyTile<cb_mask_h, D1> + Mask + PackTile.
+                // Reconfig: original uses `copy_tile_to_dst_init_short` (no _with_dt)
+                // and plain pack_tile, with a single FP32_DEST_ACC_EN-guarded
+                // reconfig_data_format_srca(cb_input) on entry. The chain's
+                // per-element fold emits reconfig per CopyTile (Input mode) which
+                // matches the FP32 path and is a no-op transition for bf16.
+                // pack_reconfig is also FP32-only in original; PackTileReconfig::Output
+                // emits unconditional pack reconfig — same effective behavior since
+                // chain's prev-CB elision handles the no-op case at compile time.
+                // cb_input InputLifecycle::Streaming; cb_mask_h InputLifecycle::CallerManaged + Scalar (held outside);
+                // cb_masked_input OutputLifecycle::Streaming.
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(onetile),
+                    ckl::CopyTile<cb_input>{},
+                    ckl::CopyTile<cb_mask_h, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged>{},
+                    ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+                    ckl::PackTile<cb_masked_input>{});
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_masked_input, cb_scaler, cb_out>(
-                    compute_kernel_lib::ReduceInputBlockShape::single(),
-                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
+                ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_masked_input, cb_scaler, cb_out>(
+                    ckl::ReduceInputBlockShape::single(),
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
             } else {
                 // Phase 2 without masking: Reduce final tile with accumulation
                 // - If Ht == 1 (single tile): iteration=0, no accumulator reload
                 // - If Ht > 1 (multi-tile): iteration=1, reload accumulator from cb_accum_dst
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_out>(
-                    compute_kernel_lib::ReduceInputBlockShape::single(),
-                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
+                ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_out>(
+                    ckl::ReduceInputBlockShape::single(),
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
             }
         }
     }
