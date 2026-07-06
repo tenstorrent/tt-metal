@@ -147,10 +147,10 @@ train:
     bh_p100: 90
     bh_p150b_civ2: 90
   perf:
-    wh_n150_civ2: 90
-    wh_n300_civ2: 90
-    bh_p100: 90
-    bh_p150b_civ2: 240
+    wh_n150_civ2: 160
+    wh_n300_civ2: 160
+    bh_p100: 160
+    bh_p150b_civ2: 400
 
 ttsim:
   unit:
