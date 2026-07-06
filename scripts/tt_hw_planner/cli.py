@@ -326,6 +326,20 @@ def _print_gated_or_auth_guidance(model_id: str, kind: str) -> None:
     print(f"  {sep}")
 
 
+def _loader_resolver_available(model_id: str) -> bool:
+    try:
+        from . import reference_loader_resolver as _rlr
+    except Exception:
+        return False
+    try:
+        if _rlr.is_enabled():
+            return True
+        dd = _find_demo_dir_safe(model_id)
+        return bool(dd and _rlr.has_loader(dd))
+    except Exception:
+        return False
+
+
 def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
     ok, msg = _can_load_with_transformers(model_id)
     if ok:
@@ -372,6 +386,15 @@ def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
             "  torchvision`). Upgrading transformers will not help."
         )
         return False
+    if _loader_resolver_available(model_id):
+        print(
+            "  Non-transformers / config-less repo: this model does not load via\n"
+            "  AutoModel/AutoConfig, but a reference-loader path is available\n"
+            "  (TT_HW_PLANNER_LOADER_RESOLVER=1 or an existing tests/pcc/_reference_loader.py).\n"
+            "  Proceeding — the reference loader is synthesized before capture and\n"
+            "  every per-component PCC test imports it. Correctness stays PCC-gated."
+        )
+        return True
     if kind == "unknown":
         print(
             "  Could not classify this load failure. Likely causes:\n"
