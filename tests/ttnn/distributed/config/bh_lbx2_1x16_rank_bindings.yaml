@@ -1,0 +1,12 @@
+# Rank binding for the multi-host TTNN graph-report test: one 1x16 mesh (mesh_id 0)
+# spanning 2 hosts, one MPI rank per host.
+# Used by tests/ttnn/distributed/test_multihost_graph_report.py via tt-run.
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 1
+
+mesh_graph_desc_path: "tests/ttnn/distributed/config/bh_lbx2_1x16_mesh_graph_descriptor.textproto"

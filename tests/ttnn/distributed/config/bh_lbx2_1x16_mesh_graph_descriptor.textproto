@@ -1,0 +1,17 @@
+# --- Meshes ---------------------------------------------------------------
+# One 1x16 mesh spanning 2 hosts (host 0 and host 1 share mesh_id 0).
+# Used by the multi-host TTNN graph-report test
+# (tests/ttnn/distributed/test_multihost_graph_report.py).
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 16 ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
