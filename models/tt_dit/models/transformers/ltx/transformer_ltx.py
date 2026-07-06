@@ -40,6 +40,7 @@ class LTXTransformerBlock(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 

@@ -29,11 +29,14 @@ be pre-transformed identically or the merged delta lands in the wrong
 layout. ``to_out``/``ff1``/``ff2`` are untouched by ``_prepare_torch_state``,
 so their adapters need no transform (the mixin copies W's own sharding).
 
-Scope matches the Wan loader: self-attn ``to_qkv``, cross-attn ``to_q`` +
-``to_kv``, ``to_out``, and ``ffn`` (ff1/ff2) — the standard diffusers LoRA
-target set. Audio / cross-modal (a2v/v2a) modules and ``.diff``/``.diff_b``
-direct deltas are out of scope; unmapped keys are surfaced loudly, never
-silently dropped.
+Scope: every LoRA-adaptable Linear in the transformer — video/audio/cross-modal
+attention (``to_qkv``/``to_q``/``to_kv``/``to_out``/``to_gate_logits``), both FFNs
+(ff1/ff2), and the globals (``patchify_proj``, ``proj_out``, and the
+``adaln_single`` / timestep-embedder linears). ``promote_to_lora`` makes the plain
+globals bindable; attention/FFN are already LoRA via ``lora_enabled``. Only
+attention q/k/v/q-of-cross carry the rotary permute + head-interleave transform;
+everything else registers directly. ``.diff``/``.diff_b`` direct deltas remain
+unsupported; unmapped keys are surfaced loudly, never silently dropped.
 """
 from __future__ import annotations
 
@@ -46,6 +49,7 @@ from loguru import logger
 from safetensors.torch import load_file
 
 from ...layers.lora import LoRAMixin
+from .promote import promote_to_lora
 
 _STRIP_PREFIXES = ("model.diffusion_model.", "diffusion_model.", "transformer.", "model.")
 _LOW_RANK_RE = re.compile(r"^(?P<base>.*)\.lora_(?P<slot>A|B|down|up)(?:\.[^.]+)?\.weight$")
@@ -54,6 +58,13 @@ _SLOT_MAP = {"A": "A", "down": "A", "B": "B", "up": "B"}
 # Diffusers LTX checkpoints name blocks "transformer_blocks.<i>"; some exports
 # use the shorter "blocks.<i>". Accept both.
 _BLOCK_RE = r"(?:transformer_blocks|blocks)\.(\d+)"
+
+# All LTXAttention instances on a block share the same to_q/k/v/out/gate_logits
+# structure and fusion rules (self -> to_qkv, cross -> to_q + to_kv), so the loader
+# handles them uniformly, reading is_self/heads off each resolved module.
+_ATTN_NAMES = ("attn1", "attn2", "audio_attn1", "audio_attn2", "audio_to_video_attn", "video_to_audio_attn")
+# Diffusers FFN container name -> tt-dit attribute (ff.net.0.proj/net.2 -> ffX).
+_FF_NAME_TO_ATTR = {"ff": "ffn", "audio_ff": "audio_ff"}
 
 
 @dataclass(frozen=True)
@@ -89,58 +100,79 @@ def load_ltx_adapter_into(
             f"{path}: {len(unrecognized)} key(s) matched no known LoRA pattern and were dropped: {sample}{more}"
         )
 
-    # Group Q/K/V that fold into a fused projection vs 1:1 singletons.
+    # Promote every plain Linear (adaln/proj/patchify/gate globals) to a LoRA
+    # variant so it can be bound; attn/ffn are already LoRA via lora_enabled.
+    promote_to_lora(transformer)
+
+    # Q/K/V fold into a fused projection; the rest are 1:1 block singletons or
+    # direct globals (patchify/proj_out/adaln/timestep-embedder).
     fused: dict[tuple[int, str], dict[str, dict[str, torch.Tensor]]] = {}
-    singletons: list[tuple[int, str, str, dict[str, torch.Tensor]]] = []  # (block, attn, sub, ab)
-    unmapped = 0
+    singletons: list[tuple[int, str, str, dict[str, torch.Tensor]]] = []  # (block, container, sub, ab)
+    globals_: list[tuple[str, dict[str, torch.Tensor]]] = []
 
     for base, ab in pairs.items():
         parsed = _parse_target(base)
         if parsed is None:
-            unmapped += 1
+            globals_.append((base, ab))
             continue
-        block_idx, attn_name, sub = parsed
+        block_idx, container, sub = parsed
         if sub in ("to_q", "to_k", "to_v"):
-            is_self = attn_name == "attn1"
+            attn = _get_attn(transformer, block_idx, container)
+            is_self = attn.is_self if attn is not None else container in ("attn1", "audio_attn1")
             qkv = sub[-1]
             # self-attn: q/k/v all fold into to_qkv. cross-attn: k/v fold into to_kv, q is a singleton.
             if is_self or qkv in ("k", "v"):
-                fused.setdefault((block_idx, attn_name), {})[qkv] = ab
+                fused.setdefault((block_idx, container), {})[qkv] = ab
                 continue
-        singletons.append((block_idx, attn_name, sub, ab))
-
-    if unmapped:
-        logger.warning(f"{path}: {unmapped} pair(s) targeted a module absent from the LTX name map — dropped.")
+        singletons.append((block_idx, container, sub, ab))
 
     target_indices: dict[str, int] = {}
 
-    for (block_idx, attn_name), qkvs in fused.items():
-        attn = _get_attn(transformer, block_idx, attn_name)
+    for (block_idx, container), qkvs in fused.items():
+        attn = _get_attn(transformer, block_idx, container)
         if attn is None:
-            logger.warning(f"{path}: no attention module {attn_name} in block {block_idx} — skipping fused group.")
+            logger.warning(f"{path}: no attention module {container} in block {block_idx} — skipping fused group.")
             continue
-        idx = _register_fused(attn, qkvs, alphas, scale, name, block_idx, attn_name)
+        idx = _register_fused(attn, qkvs, alphas, scale, name, block_idx, container)
         if idx is None:
             continue
-        canonical = f"transformer_blocks.{block_idx}.{attn_name}.{'to_qkv' if attn.is_self else 'to_kv'}"
+        canonical = f"transformer_blocks.{block_idx}.{container}.{'to_qkv' if attn.is_self else 'to_kv'}"
         target_indices[canonical] = idx
 
-    for block_idx, attn_name, sub, ab in singletons:
+    for block_idx, container, sub, ab in singletons:
         if "A" not in ab or "B" not in ab:
-            logger.warning(f"{path}: {attn_name}.{sub} in block {block_idx} missing one of A/B — skipping.")
+            logger.warning(f"{path}: {container}.{sub} in block {block_idx} missing one of A/B — skipping.")
             continue
-        target, canonical, permute_dims = _resolve_singleton(transformer, block_idx, attn_name, sub)
+        target, canonical, permute_dims = _resolve_singleton(transformer, block_idx, container, sub)
         if target is None:
-            logger.warning(f"{path}: unmapped singleton {attn_name}.{sub} in block {block_idx} — skipping.")
+            logger.warning(f"{path}: unmapped {container}.{sub} in block {block_idx} — skipping.")
             continue
         A = ab["A"]
         B = ab["B"]
         if permute_dims is not None:
             B = _permute_qk_rows(B, *permute_dims)
         rank = A.shape[0]
-        alpha = alphas.get(_alpha_key(block_idx, attn_name, sub), float(rank))
+        alpha = alphas.get(_alpha_key(block_idx, container, sub), float(rank))
         idx = target.register_lora(A, B, scale=scale * (alpha / rank), name=name)
         target_indices[canonical] = idx
+
+    unmapped_global = 0
+    for base, ab in globals_:
+        if "A" not in ab or "B" not in ab:
+            continue
+        target = _resolve_global(transformer, base)
+        if not isinstance(target, LoRAMixin):
+            unmapped_global += 1
+            continue
+        A = ab["A"]
+        B = ab["B"]
+        rank = A.shape[0]
+        alpha = alphas.get(base, float(rank))
+        idx = target.register_lora(A, B, scale=scale * (alpha / rank), name=name)
+        target_indices[base] = idx
+
+    if unmapped_global:
+        logger.warning(f"{path}: {unmapped_global} global key(s) matched no LTX module — dropped.")
 
     if not target_indices:
         raise RuntimeError(f"{path}: no LoRA targets registered — check the adapter's key naming against LTX modules.")
@@ -189,20 +221,24 @@ def _collect_pairs(raw: dict[str, torch.Tensor]):
 
 
 def _parse_target(base: str) -> tuple[int, str, str] | None:
-    """Parse a stripped LoRA base path into (block_idx, attn_or_ff, sub).
+    """Parse a stripped per-block LoRA base path into (block_idx, container, sub).
 
-    Returns None for paths outside the LoRA-adaptable set (patchify/proj_out/adaln)."""
-    m = re.match(rf"^{_BLOCK_RE}\.(attn1|attn2)\.to_([qkv]|out)(?:\.0)?$", base)
+    Covers every block attention family (video/audio/cross-modal) and both FFN
+    containers. Returns None for non-block paths (globals: patchify/proj_out/adaln),
+    which ``_resolve_global`` handles by direct path lookup."""
+    attn_alt = "|".join(_ATTN_NAMES)
+    m = re.match(rf"^{_BLOCK_RE}\.({attn_alt})\.to_(q|k|v|out|gate_logits)(?:\.0)?$", base)
     if m:
-        sub = m.group(3)
-        return int(m.group(1)), m.group(2), ("to_out" if sub == "out" else f"to_{sub}")
-    # FFN: diffusers "ff.net.0.proj" -> ff1, "ff.net.2" -> ff2.
-    m = re.match(rf"^{_BLOCK_RE}\.ff\.net\.0\.proj$", base)
+        raw = m.group(3)
+        sub = {"out": "to_out", "gate_logits": "to_gate_logits"}.get(raw, f"to_{raw}")
+        return int(m.group(1)), m.group(2), sub
+    ff_alt = "|".join(_FF_NAME_TO_ATTR)
+    m = re.match(rf"^{_BLOCK_RE}\.({ff_alt})\.net\.0\.proj$", base)
     if m:
-        return int(m.group(1)), "ff", "ff1"
-    m = re.match(rf"^{_BLOCK_RE}\.ff\.net\.2$", base)
+        return int(m.group(1)), m.group(2), "ff1"
+    m = re.match(rf"^{_BLOCK_RE}\.({ff_alt})\.net\.2$", base)
     if m:
-        return int(m.group(1)), "ff", "ff2"
+        return int(m.group(1)), m.group(2), "ff2"
     return None
 
 
@@ -218,28 +254,41 @@ def _get_attn(transformer, block_idx: int, attn_name: str):
     return getattr(block, attn_name, None)
 
 
-def _resolve_singleton(transformer, block_idx: int, attn_name: str, sub: str):
+def _resolve_singleton(transformer, block_idx: int, container: str, sub: str):
     """Return (module, canonical_path, permute_dims) where permute_dims is
     (num_heads, head_dim) if the base weight is _permute_qk'd, else None.
     (None, None, None) when the target does not exist."""
     block = transformer.transformer_blocks[block_idx]
-    if sub in ("to_q", "to_out"):
-        attn = getattr(block, attn_name, None)
+    if sub in ("to_q", "to_out", "to_gate_logits"):
+        attn = getattr(block, container, None)
         if attn is None:
             return None, None, None
         target = getattr(attn, sub, None)
         if target is None:
             return None, None, None
-        # cross-attn to_q is _permute_qk'd by _prepare_torch_state; to_out is not.
+        # Only cross-attn to_q is _permute_qk'd; to_out/to_gate_logits are not.
         permute_dims = (attn.num_heads, attn.head_dim) if (sub == "to_q" and not attn.is_self) else None
-        return target, f"transformer_blocks.{block_idx}.{attn_name}.{sub}", permute_dims
+        return target, f"transformer_blocks.{block_idx}.{container}.{sub}", permute_dims
     if sub in ("ff1", "ff2"):
-        ff = getattr(block, "ffn", None)
+        ff_attr = _FF_NAME_TO_ATTR.get(container, "ffn")
+        ff = getattr(block, ff_attr, None)
         if ff is None:
             return None, None, None
         target = getattr(ff, sub, None)
-        return target, f"transformer_blocks.{block_idx}.ffn.{sub}", None
+        return target, f"transformer_blocks.{block_idx}.{ff_attr}.{sub}", None
     return None, None, None
+
+
+def _resolve_global(transformer, base: str):
+    """Resolve a non-block LoRA key (patchify_proj, proj_out, adaln_single.*, ...)
+    to the module at that dotted path on the transformer root, or None if absent.
+    These are plain replicated/parallel Linears with no rotary layout transform."""
+    mod = transformer
+    for part in base.split("."):
+        mod = getattr(mod, part, None)
+        if mod is None:
+            return None
+    return mod
 
 
 # --------------------------------------------------------------------
@@ -281,7 +330,9 @@ def _register_fused(attn, qkvs, alphas, scale, name, block_idx, attn_name) -> in
 
     alpha = alphas.get(_alpha_key(block_idx, attn_name, f"to_{required[0]}"), float(r))
     eff_scale = scale * (alpha / r)
-    return attn.register_lora(A_fused, B_fused, scale=eff_scale, name=name)
+    # register_lora lives on the fused projection Linear (LoRAMixin), not the attention wrapper.
+    fused_linear = attn.to_qkv if attn.is_self else attn.to_kv
+    return fused_linear.register_lora(A_fused, B_fused, scale=eff_scale, name=name)
 
 
 def _permute_qk_rows(t: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:

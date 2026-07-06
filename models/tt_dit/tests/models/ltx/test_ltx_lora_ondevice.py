@@ -71,8 +71,9 @@ def _first_qkv_lora_module(transformer):
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
     ],
-    ids=["2x2sp0tp1"],
+    ids=["2x2sp0tp1", "bh_4x8sp1tp0"],
     indirect=["mesh_device", "device_params"],
 )
 def test_ondevice_lora_bind_matches_host_delta(

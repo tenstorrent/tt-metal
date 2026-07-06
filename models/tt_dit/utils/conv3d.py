@@ -470,6 +470,10 @@ _DEFAULT_BLOCKINGS = {
     # full-Cin default OOMs at these widths).
     (1024, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s0_up
     (512, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s1_up
+    # Same-channel 3x3x3 resnet convs: full-Cin default weight-CB (Cin*32*27*2)
+    # overflows L1 at 1024/512 in; cap Cin_block=256 to fit (442KB weight CB).
+    (1024, 1024, (3, 3, 3)): (256, 32, 1, 1, 1),  # s0_res
+    (512, 512, (3, 3, 3)): (256, 32, 1, 1, 1),  # s2_res
     (256, 512, (3, 3, 3)): (256, 32, 1, 4, 4),  # s3_chg
     (128, 128, (3, 3, 3)): (128, 32, 1, 8, 8),  # s4_res
     (128, 48, (3, 3, 3)): (128, 32, 1, 8, 8),  # s4_out
