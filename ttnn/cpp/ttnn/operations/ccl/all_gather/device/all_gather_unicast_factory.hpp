@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::ccl {
 
-struct AllGatherFactory {
+struct AllGatherUnicastFactory {
     struct shared_variables_t {
         std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
         tt::tt_metal::KernelHandle worker_sender_reader_kernel_id{};

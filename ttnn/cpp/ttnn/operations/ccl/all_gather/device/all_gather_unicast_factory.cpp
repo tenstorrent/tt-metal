@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "all_gather_factory.hpp"
+#include "all_gather_unicast_factory.hpp"
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
@@ -13,7 +13,7 @@ namespace ttnn::operations::ccl {
 
 using namespace ::ttnn::ccl;
 
-AllGatherFactory::cached_mesh_workload_t AllGatherFactory::create_mesh_workload(
+AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_mesh_workload(
     const AllGatherParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const AllGatherInputs& tensor_args,
@@ -56,7 +56,7 @@ AllGatherFactory::cached_mesh_workload_t AllGatherFactory::create_mesh_workload(
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
-AllGatherFactory::cached_program_t AllGatherFactory::create_at(
+AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const AllGatherParams& operation_attributes,
     const ttnn::MeshCoordinate& sender_device_coord,
     const AllGatherInputs& tensor_args,
@@ -226,18 +226,18 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     // input_pages_per_stripe = num input pages along [gather_dim .. rank-1] this
     // device contributes per stripe. For RM gather_dim=-1 this is the *page* count,
     // which handles sharded RM input (> 1 input page per row).
-    auto tile = (input_tensor.layout() == Layout::TILE) ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    auto tile_spec = input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     uint32_t input_pages_per_stripe = 1;
     for (int32_t i = gather_dim; i < rank; i++) {
         uint32_t extent;
         if (i == rank - 1) {
             if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-                extent = input_shape[i] / tile.get_width();
+                extent = input_shape[i] / tile_spec.get_width();
             } else {
                 extent = (input_shape[i] * input_tensor.element_size()) / input_page_size;
             }
         } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == rank - 2) {
-            extent = input_shape[i] / tile.get_height();
+            extent = input_shape[i] / tile_spec.get_height();
         } else {
             extent = input_shape[i];
         }
@@ -311,14 +311,14 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
 
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/reader.cpp",
+        "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_reader.cpp",
         sender_worker_core_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
     // Writer
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/writer.cpp",
+        "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_writer.cpp",
         sender_worker_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
@@ -459,7 +459,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     return {std::move(program), std::move(shared_variables)};
 }
 
-void AllGatherFactory::override_runtime_arguments(
+void AllGatherUnicastFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const AllGatherParams& /*operation_attributes*/,
     const AllGatherInputs& tensor_args,

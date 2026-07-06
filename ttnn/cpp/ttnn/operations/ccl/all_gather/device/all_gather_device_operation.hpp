@@ -10,7 +10,8 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "all_gather_device_operation_types.hpp"
-#include "all_gather_factory.hpp"
+#include "all_gather_multicast_factory.hpp"
+#include "all_gather_unicast_factory.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -20,7 +21,7 @@ struct AllGatherDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
-    using program_factory_t = std::variant<AllGatherFactory>;
+    using program_factory_t = std::variant<AllGatherMulticastFactory, AllGatherUnicastFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -30,6 +31,8 @@ struct AllGatherDeviceOperation {
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::ccl

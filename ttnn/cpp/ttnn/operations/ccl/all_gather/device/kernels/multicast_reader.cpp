@@ -16,7 +16,7 @@
 #include <array>
 #include <utility>
 
-#include "common.hpp"
+#include "multicast_common.hpp"
 
 using address_t = uint32_t;
 
@@ -188,7 +188,7 @@ void kernel_main() {
 
     // "iterator" for output_tensor:
     //   byte_offset++ within an output page -> chunk++ -> stripe+=jump
-    // (see the "Page indexing" glossary in all_gather_factory.cpp)
+    // (see the "Page indexing" glossary in all_gather_multicast_factory.cpp)
     // Returns {output_page_id, byte_offset} for the current chunk, then advances.
     // Supports any gather dim, any N-D shape, any shard spec.
     uint32_t output_page_id = output_page_id_start;

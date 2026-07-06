@@ -219,6 +219,12 @@ AllGatherDeviceOperation::create_op_performance_model(
     return result;
 }
 
+AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
+    const AllGatherParams& /*args*/, const AllGatherInputs& /*tensor_args*/) {
+    // TODO if tensor_size > xxx && !is_fabric_2d -> unicast
+    return AllGatherMulticastFactory{};
+}
+
 std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     const Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
