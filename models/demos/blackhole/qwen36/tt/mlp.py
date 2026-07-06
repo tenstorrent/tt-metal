@@ -130,6 +130,25 @@ class Qwen36MLP:
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
+        # Experimental: fuse decode w2 down-proj + reduce-scatter into matmul_reduce_scatter_async.
+        # Off by default (perf-critical decode path); QWEN36_FUSE_MLP_W2_MMRS=1 to A/B.
+        self._fuse_w2_mmrs = self._dram_sharded and os.environ.get("QWEN36_FUSE_MLP_W2_MMRS", "0") == "1"
+        if self._fuse_w2_mmrs:
+            self._init_w2_mmrs(mesh_device, args)
+        # PREFILL w2 out-proj fusion (matmul_reduce_scatter, (8,8) grid) — DEFAULT OFF: measured a
+        # small TTFT regression at both short and long ISL (bf16 RS too small to overlap-win; fixed
+        # warmup/compile cost dominates, unlike the fp32 GDN-out). Opt in with =1.
+        self._fuse_w2_mmrs_prefill = (
+            self._dram_sharded and os.environ.get("QWEN36_FUSE_MLP_W2_MMRS_PREFILL", "0") == "1"
+        )
+
+    def _init_w2_mmrs(self, mesh_device, args):
+        """Persistent buffers + reduced-grid matmul progcfg for the fused decode w2 (M<=TILE)."""
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        self._w2_mmrs_pc, self._w2_mmrs_interm, self._w2_mmrs_out = tpc.build_mmrs_decode_state(
+            mesh_device, args.max_batch_size, args.hidden_dim // self.num_devices, args.dim, self.num_devices
+        )
 
     def forward(self, x):
         if self.num_devices > 1:
@@ -193,6 +212,9 @@ class Qwen36MLP:
                 w1_out = ttnn.to_memory_config(w1_out, ttnn.L1_MEMORY_CONFIG)
                 w3_out = ttnn.to_memory_config(w3_out, ttnn.L1_MEMORY_CONFIG)
             else:
+                # NOT fused via all_gather_minimal_matmul_async: w1+w3 are two consumers of the gathered
+                # norm output, and the op can't return the gathered activation, so fusing = 2 gathers
+                # (regressed TTFT). The ff_norm's single all-gather here is already the one-gather optimum.
                 # Fused SILU in progcfg; sharded/2D kernel rejects activation= kwarg with progcfg.
                 pc_gate = tpc.create_prefill_matmul_program_config(
                     seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU
@@ -220,6 +242,27 @@ class Qwen36MLP:
             hidden = ttnn.mul(w1_act, w3_out, memory_config=mc_out)
             ttnn.deallocate(w1_act)
         ttnn.deallocate(w3_out)
+        # Decode (M<=TILE): fused down-proj + reduce-scatter (matmul_reduce_scatter_async), flag-gated.
+        if self._fuse_w2_mmrs and hidden.shape[-2] <= ttnn.TILE_SIZE:
+            out = tpc.matmul_reduce_scatter_decode(
+                hidden,
+                w.w2,
+                self.tt_ccl,
+                self._w2_mmrs_interm,
+                self._w2_mmrs_out,
+                self._w2_mmrs_pc,
+                ckc,
+                args.ccl_topology(),
+            )
+            ttnn.deallocate(hidden)
+            return out
+        # Prefill (M>TILE): fused down-proj + reduce-scatter (matmul_reduce_scatter, (8,8) grid).
+        if self._fuse_w2_mmrs_prefill and hidden.shape[-2] > ttnn.TILE_SIZE:
+            out = tpc.matmul_reduce_scatter_prefill(
+                hidden, w.w2, self.tt_ccl, ckc, args.ccl_topology(), self.num_devices, ttnn.bfloat16
+            )
+            ttnn.deallocate(hidden)
+            return out
         # Prefill w2 (down-proj): explicit 2D prefill progcfg (same 80-core (8,10) grid as w1/w3,
         # cols 0-7 = L1-safe) beats ttnn-auto (~3% TTFT, PCC-neutral). Weight stays DRAM-interleaved;
         # feeds reduce-scatter->norm. M=hidden.shape[-2] (x.shape[1] is Z=1 in TP), K=intermediate_tp,

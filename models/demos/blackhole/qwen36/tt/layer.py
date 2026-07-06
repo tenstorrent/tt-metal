@@ -42,9 +42,26 @@ class Qwen36DecoderLayer:
         # which all-gathers (PREFILL: distributed rmsnorm + gather; DECODE:
         # gather-then-norm) to hand the modules a replicated full-dim input —
         # exactly as models/demos/qwen35_27b does via the framework decoder.
-        self.attention_norm = self._make_norm(
-            mesh_device, args, state_dict, layer_num, "input_layernorm", tensor_cache_path, tt_ccl, "attention_norm"
+        # Prefill fuses the norm all-gather into the in-proj matmul (all_gather_minimal_matmul_async):
+        # GDN qkvzab and full-attn QKV. attention_norm then skips its post-norm AG (prefill only;
+        # decode gathers pre-norm). Gates must match the module-side _fuse_agmm gates.
+        self._fuse_norm_agmm = self.num_devices > 1 and (
+            (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
+            or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
         )
+        self.attention_norm = self._make_norm(
+            mesh_device,
+            args,
+            state_dict,
+            layer_num,
+            "input_layernorm",
+            tensor_cache_path,
+            tt_ccl,
+            "attention_norm",
+            enable_all_gather=not self._fuse_norm_agmm,
+        )
+        # MLP is NOT AG-fused: w1+w3 both consume the ff_norm output, so fusing needs 2 gathers
+        # (regressed TTFT) — ff_norm keeps its single all-gather (the one-gather optimum).
         self.ffn_norm = self._make_norm(
             mesh_device, args, state_dict, layer_num, "post_attention_layernorm", tensor_cache_path, tt_ccl, "ff_norm"
         )
@@ -81,7 +98,18 @@ class Qwen36DecoderLayer:
         mlp_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
         self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
 
-    def _make_norm(self, mesh_device, args, state_dict, layer_num, weight_key, tensor_cache_path, tt_ccl, ag_key):
+    def _make_norm(
+        self,
+        mesh_device,
+        args,
+        state_dict,
+        layer_num,
+        weight_key,
+        tensor_cache_path,
+        tt_ccl,
+        ag_key,
+        enable_all_gather=True,
+    ):
         """Build the per-layer RMSNorm; wrap in DistributedNorm when TP>1.
 
         On a single device this returns the same plain RMSNorm the validated 9B
@@ -107,7 +135,9 @@ class Qwen36DecoderLayer:
         if self.num_devices > 1:
             from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
-            return DistributedNorm(norm, args, tt_ccl=tt_ccl, TG=args.is_galaxy, ag_config_key=ag_key)
+            return DistributedNorm(
+                norm, args, tt_ccl=tt_ccl, TG=args.is_galaxy, ag_config_key=ag_key, enable_all_gather=enable_all_gather
+            )
         return norm
 
     def forward(

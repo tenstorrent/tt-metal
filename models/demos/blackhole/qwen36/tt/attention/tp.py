@@ -127,6 +127,27 @@ class TPAttention:
         self._wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
         self._fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
         self._qg_deint = self._fused_qkv
+        # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
+        # Norm's prefill post-AG disabled in layer.py; decode path unchanged.
+        self._fuse_agmm = self._fused_qkv
+        # Fuse decode wo out-proj + reduce-scatter (matmul_reduce_scatter_async). DEFAULT OFF because
+        # decode MM-RS regresses: the fused op's 2D matmul collapses to ~8 cores at M=1. The fused op
+        # takes the DRAM-interleaved wo weight, not the DRAM-width-sharded path).
+        self._fuse_wo_mmrs = (
+            not self._wo_sharded and args.num_devices > 1 and os.environ.get("QWEN36_FUSE_ATTN_WO_MMRS", "0") == "1"
+        )
+        if self._fuse_wo_mmrs:
+            self._wo_mmrs_pc, self._wo_mmrs_interm, self._wo_mmrs_out = tpc.build_mmrs_decode_state(
+                mesh, args.max_batch_size, args.attn_out_dim_tp, args.dim, args.num_devices
+            )
+        # PREFILL wo out-proj fusion (matmul_reduce_scatter, (8,8) grid) — DEFAULT OFF: measured a
+        # small TTFT regression at both short and long ISL (bf16 RS is too small to overlap-win the
+        # way the fp32 GDN-out does, so the fixed warmup/compile cost dominates).
+        self._fuse_wo_mmrs_prefill = (
+            not self._wo_sharded
+            and args.num_devices > 1
+            and os.environ.get("QWEN36_FUSE_ATTN_WO_MMRS_PREFILL", "0") == "1"
+        )
         # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
         # QWEN36_NLP_DECODE_HEADS=0 falls back to the plain reshape/slice path.
         self._use_nlp_decode_heads = os.environ.get("QWEN36_NLP_DECODE_HEADS", "1") == "1"
@@ -152,7 +173,13 @@ class TPAttention:
                 self._col_proj(x, tw["wk"], self.args.attn_k_progcfg),
                 self._col_proj(x, tw["wv"], self.args.attn_v_progcfg),
             )
-        qkv = self._col_proj(x, tw["wqkv_fused"], self.args.attn_qkv_fused_progcfg)
+        # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + QKV matmul.
+        if self._fuse_agmm and x.shape[-2] > tpc.TILE_SIZE:
+            qkv = tpc.all_gather_matmul_prefill(
+                x, tw["wqkv_fused"], self.tt_ccl, self.compute_cfg, self.args.ccl_topology()
+            )
+        else:
+            qkv = self._col_proj(x, tw["wqkv_fused"], self.args.attn_qkv_fused_progcfg)
         qg_dim = self.NH * self.HD * 2
         kv_dim = self.NKV * self.HD
         sh = list(qkv.shape)
@@ -386,6 +413,18 @@ class TPAttention:
         gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat))
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
+        if self._fuse_wo_mmrs_prefill:
+            out = tpc.matmul_reduce_scatter_prefill(
+                gated,
+                tw["wo"],
+                self.tt_ccl,
+                self.compute_cfg,
+                self.args.ccl_topology(),
+                self.args.num_devices,
+                ttnn.bfloat16,
+            )
+            ttnn.deallocate(gated)
+            return out
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
         return tt_all_reduce(
@@ -522,6 +561,21 @@ class TPAttention:
         else:
             gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
             ttnn.deallocate(gated)
+        # Fused wo out-proj + reduce-scatter (matmul_reduce_scatter_async), flag-gated.
+        if self._fuse_wo_mmrs:
+            x_wo = ttnn.reshape(gated_flat, (1, 1, B, gated_flat.shape[-1]))
+            out = tpc.matmul_reduce_scatter_decode(
+                x_wo,
+                tw["wo"],
+                self.tt_ccl,
+                self._wo_mmrs_interm,
+                self._wo_mmrs_out,
+                self._wo_mmrs_pc,
+                self.compute_cfg,
+                self.args.ccl_topology(),
+            )
+            ttnn.deallocate(gated_flat)
+            return out
         wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
@@ -650,6 +704,18 @@ class TPAttention:
         gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat))
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
+        if self._fuse_wo_mmrs_prefill:
+            out = tpc.matmul_reduce_scatter_prefill(
+                gated,
+                tw["wo"],
+                self.tt_ccl,
+                self.compute_cfg,
+                self.args.ccl_topology(),
+                self.args.num_devices,
+                ttnn.bfloat16,
+            )
+            ttnn.deallocate(gated)
+            return out
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
         return tt_all_reduce(
