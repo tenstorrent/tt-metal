@@ -120,4 +120,10 @@ void kernel_main() {
             }
         }
     }
+    // event_target counts up monotonically and each wait gates on it, so the per-worker sems must
+    // start every invocation at 0. Zero them here (all increments for this run have been observed by
+    // the final wait_min) so a trace replay begins clean instead of inheriting the prior run's value.
+    for (uint32_t w = 0; w < num_ag_workers; w++) {
+        noc_semaphore_set(per_worker_sem_ptrs[w], 0);
+    }
 }
