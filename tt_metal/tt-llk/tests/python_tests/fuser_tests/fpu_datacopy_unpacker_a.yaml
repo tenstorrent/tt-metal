@@ -1,13 +1,12 @@
 # Basic datacopy test that reads from source A only.
 
-# dest_acc: true
+dest_acc: true
 
 
 operands:
   - name: "input_A"
     dims: [256, 256]
     format: "Float16_b"
-    # const_value: 1.0
   - name: "input_B"
     dims: [256, 256]
     format: "Float16_b"
