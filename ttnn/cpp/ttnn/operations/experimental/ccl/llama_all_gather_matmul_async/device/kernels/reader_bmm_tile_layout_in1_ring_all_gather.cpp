@@ -87,14 +87,15 @@ void kernel_main() {
     constexpr uint32_t in1_block_width_num_pages = get_compile_time_arg_val(9);
     constexpr uint32_t in1_shard_width_in_dram = get_compile_time_arg_val(10);
 
+    Noc noc_obj;
+
     uint32_t rt_args_idx = 0;
     constexpr bool needs_signaler = get_compile_time_arg_val(15) == 1;
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         if constexpr (needs_signaler) {
-            Noc noc_obj_early;
-            do_signaling(noc_obj_early, rt_args_idx);
-            noc_obj_early.async_write_barrier();
+            do_signaling(noc_obj, rt_args_idx);
+            noc_obj.async_write_barrier();
         }
         return;
     }
@@ -115,7 +116,6 @@ void kernel_main() {
     constexpr uint32_t sync_cb2 = get_compile_time_arg_val(13);
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(14);
 
-    Noc noc_obj;
     CircularBuffer cb_in1(cb_id_in1);
     CircularBuffer cb_sync(sync_cb);
     CircularBuffer cb_sync2(sync_cb2);
