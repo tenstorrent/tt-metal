@@ -1,0 +1,10 @@
+# Bring-up working artifacts — not source. Regenerable by tt_hw_planner.
+_captured/            # real HF reference tensors (hundreds of MB); re-capture via `capture-inputs`
+generated/            # ttnn watcher/inspector reports
+_diag_*.py            # per-component debug scratch scripts from the iterate loop
+*.best_native         # tool rollback snapshots — redundant with the live _stubs/*.py
+*.last_good_native
+*.preiter_native
+__pycache__/
+.pytest_cache/
+*.pyc
