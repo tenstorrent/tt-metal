@@ -170,6 +170,26 @@ def test_no_emit_parent_pending_even_when_all_children_graduated(tmp_path, monke
     assert ready == ["parent"]
 
 
+def test_parent_ready_to_recompose_with_reuse_child(tmp_path, monkeypatch) -> None:
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_raw_components(
+        demo,
+        [
+            {"name": "parent", "status": "NEW", "submodule_path": "blk"},
+            {"name": "child_a", "status": "NEW", "submodule_path": "blk.a"},
+            {"name": "child_b", "status": "REUSE", "submodule_path": "blk.b"},
+        ],
+        plan=[{"parent_name": "parent", "children": [{"submodule_path": "blk.a"}, {"submodule_path": "blk.b"}]}],
+    )
+    om.persist_no_emit_test("test/m", "parent", reason="decomposition consumer split parent into children")
+
+    ready = fc.parents_ready_to_recompose(model_id="test/m", demo_dir=demo, graduated_set={"child_a"})
+    assert ready == ["parent"], f"expected REUSE child to count as on-device; got {ready!r}"
+
+
 def test_parent_not_ready_to_recompose_when_a_child_pending(tmp_path, monkeypatch) -> None:
     fc = _fc()
     om = _om()
