@@ -247,3 +247,27 @@
       timeout: 15
   owner_id: U08RL15T4N8
   team: models
+
+- name: "(Galaxy) DeepSeek Prefill - Chunked Kimi (longbook_qa 25k)"
+  # 25k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 5 chunks x 5120 = 25600 tokens,
+  # 10 iterations, no H2D service (nosvc). No-PCC: it drives the real chunked-prefill path end to end
+  # (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
+  #
+  # Paths (CI mounts /mnt/MLPerf:ro):
+  #   KIMI_K2_6_HF_MODEL  -> dequantized Kimi HF checkpoint (config.json + safetensors.index.json)
+  #   TT_KIMI_PREFILL_TTNN_CACHE is intentionally NOT set; the conftest falls back to the
+  #     shared cache path under KIMI_K2_6_HF_MODEL/tensor_cache_bh_32dev/8x4.
+  #   PREFILL_TRACE_DIR   -> longbook_qa_eng golden trace; metadata.json token_ids feed the prefill.
+  cmd: |
+    export MESH_DEVICE=TG
+    export KIMI_K2_6_HF_MODEL=/mnt/MLPerf/huggingface/hub/Kimi-K2.6-dequantized
+    export PREFILL_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache/golden/structured_traces/kimi_longbook_55k_vllm
+    pytest "models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_no_pcc[blackhole-kimi-mesh-8x4-L61-chunks5-ten_iters-nosvc-margin5pct]" -xvs
+  test_type: kimi_chunked
+  test_group: module
+  skus:
+    bh_galaxy:
+      # Green run took ~19 min; 40 leaves ~2x headroom for build/Galaxy variance.
+      timeout: 40
+  owner_id: U08RL15T4N8
+  team: models
