@@ -532,23 +532,75 @@ def discover_components_from_hf_id(
     if install_cpu_compat is not None:
         install_cpu_compat()
     model = None
-    _orig_exc: Optional[BaseException] = None
+    build_exc: Optional[BaseException] = None
     try:
         model = _build()
-    except ImportError as _e:
-        _orig_exc = _e
+    except ImportError as exc:
+        build_exc = exc
         if install_cpu_compat is not None and install_cpu_compat():
             try:
                 model = _build()
-            except Exception as _e2:
-                _orig_exc = _e2
-    except Exception as _e:
-        _orig_exc = _e
+                build_exc = None
+            except Exception as exc2:
+                build_exc = exc2
+    except Exception as exc:
+        build_exc = exc
     if model is None:
-        model = _load_via_reference_loader(model_id, demo_dir)
-        if model is None:
-            raise _orig_exc
+        model = _load_reference_module(model_id)
+    if model is None:
+        if build_exc is not None:
+            raise build_exc
+        raise RuntimeError(f"could not construct {model_id} for component discovery")
     try:
         return discover_components(model)
     finally:
         del model
+
+
+def _load_reference_module(model_id: str):
+    try:
+        from . import reference_loader_resolver as _rlr
+    except Exception:
+        return None
+    try:
+        from .bringup_loop import find_demo_dir
+
+        demo_dir = find_demo_dir(model_id)
+    except Exception:
+        demo_dir = None
+    if demo_dir is None:
+        try:
+            from .discovery import BRINGUP_ROOT
+            from .scaffold_demo_folder import _slug
+
+            demo_dir = BRINGUP_ROOT() / "models" / "demos" / _slug(model_id.split("/")[-1])
+        except Exception:
+            return None
+    try:
+        if not _rlr.has_loader(demo_dir) and _rlr.is_enabled():
+            print(
+                f"  [discovery] {model_id} does not load via AutoModel/AutoConfig — synthesizing a "
+                f"reference loader to enumerate its module tree ..."
+            )
+            _rlr.resolve(
+                model_id=model_id,
+                demo_dir=demo_dir,
+                failure_text="discovery: model does not load via AutoModel/AutoConfig (config-less repo)",
+            )
+        if not _rlr.has_loader(demo_dir):
+            return None
+        import importlib.util as _ilu
+
+        loader_file = _rlr.loader_path(demo_dir)
+        spec = _ilu.spec_from_file_location("_tt_hw_planner_reference_loader", str(loader_file))
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        ref = mod.load_reference_model(model_id)
+        try:
+            ref.eval()
+        except Exception:
+            pass
+        return ref
+    except Exception as exc:
+        print(f"  [discovery] reference-loader fallback failed for {model_id}: {type(exc).__name__}: {exc}")
+        return None
