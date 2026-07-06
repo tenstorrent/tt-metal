@@ -141,7 +141,7 @@ def _run_model(checkpoint: Optional[str], anchors_path: Optional[str], out_path:
 
     traj = out["trajectory"][0].detach().cpu().numpy()  # (8, 3)
     scores = out["scores"][0].detach().cpu().numpy()  # (20,)
-    anc = ref_model.trajectory_head.plan_anchor.detach().cpu().numpy() if anchors_path else None
+    anc = ref_model._trajectory_head.plan_anchor.detach().cpu().numpy() if anchors_path else None
     return plot_bev(traj, scores, anc, out_path)
 
 
