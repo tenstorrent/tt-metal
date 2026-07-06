@@ -369,6 +369,23 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // of mul_tiles_bcast_rows.
     const bool per_token_weight = has_weight && (weight->logical_shape()[-2] > 1);
     const bool per_token_bias = has_bias && (bias->logical_shape()[-2] > 1);
+    // Per-batch (adaLN) weight/bias: shape [batch, 1, H] — broadcast over seq (logical[-2]==1,
+    // so NOT per-token) but distinct per batch. Detected by the affine tensor spanning `batch`
+    // padded tile-rows (broadcast [1,1,H] spans exactly 1). All batches' rows stay resident in
+    // weight_cb (batch * num_tile_cols tiles); compute offsets the tile index by
+    // wbatch * num_tile_cols (wbatch = global_tile_row / rows_per_batch_tiles). batch>1 is only
+    // reachable with num_heads_per_device==1 (validated in the device op).
+    const uint32_t batch = input_tensor.logical_shape()[1];
+    const uint32_t rows_per_batch_tiles = (batch > 0) ? (num_tile_rows / batch) : num_tile_rows;
+    auto affine_tile_rows = [](const Tensor& t) -> uint32_t {
+        return (t.physical_volume() / t.padded_shape()[-1]) / TILE_HEIGHT;  // padded tile-rows spanned
+    };
+    const bool per_batch_weight =
+        has_weight && !per_token_weight && batch > 1 && affine_tile_rows(*weight) == batch;
+    const bool per_batch_bias = has_bias && !per_token_bias && batch > 1 && affine_tile_rows(*bias) == batch;
+    // Broadcast reader read count: 1 row for true-broadcast, `batch` rows for per-batch adaLN.
+    const uint32_t weight_bcast_tiles = per_batch_weight ? batch * num_tile_cols : num_tile_cols;
+    const uint32_t bias_bcast_tiles = per_batch_bias ? batch * num_tile_cols : num_tile_cols;
     const bool fuse_rope = trans_mat.has_value() && rope_cos.has_value() && rope_sin.has_value();
 
     // Per-head RoPE: cos/sin shape[1] == num_heads_per_device gives each head
@@ -546,6 +563,12 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const bool is_layernorm = (args.norm_type == DitFusedNormType::LAYERNORM);
     const bool use_recip_lut = is_layernorm && reciprocals.has_value();
     const uint32_t recip_lut_bytes = num_tile_cols * 128u;
+    // Per-batch adaLN's tile-offset indexing is only wired into the LayerNorm compute kernel
+    // (the RMS kernel ignores CT 41/42/43 and would silently apply batch-0's weight to all
+    // batches). Reject a per-batch affine tensor on the RMS path up front.
+    TT_FATAL(
+        !(per_batch_weight || per_batch_bias) || is_layernorm,
+        "Per-batch (adaLN) weight/bias ([batch,1,H]) is only supported on the LayerNorm path");
 
     // weight/bias CB formats follow the tensor dtype (bf16 or fp32). Computed here (before the
     // L1 decisions) so the resident-budget estimates count the true CB byte size for fp32 affine.
@@ -816,10 +839,19 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // CB tile size, the compute reconfigs the FPU operand format, so no kernel change needed.
     // (weight_format / bias_format / weight_tile_sz / bias_tile_sz computed earlier, by the
     // L1-decision block, so the resident estimates see the true fp32 sizes.)
+    // Per-batch adaLN keeps ALL batches' broadcast rows resident (batch * num_tile_cols),
+    // so compute can index by wbatch * num_tile_cols without a per-row re-push.
     const uint32_t weight_cb_tiles =
-        has_weight ? (per_token_weight ? chunk_size_rows * num_tile_cols : num_tile_cols) : 1;
+        has_weight ? (per_token_weight ? chunk_size_rows * num_tile_cols
+                      : per_batch_weight ? batch * num_tile_cols
+                                         : num_tile_cols)
+                   : 1;
     create_cb(weight_cb_id, program, worker_core_set, weight_tile_sz, weight_cb_tiles, weight_format);
-    const uint32_t bias_cb_tiles = has_bias ? (per_token_bias ? chunk_size_rows * num_tile_cols : num_tile_cols) : 1;
+    const uint32_t bias_cb_tiles =
+        has_bias ? (per_token_bias ? chunk_size_rows * num_tile_cols
+                    : per_batch_bias ? batch * num_tile_cols
+                                     : num_tile_cols)
+                 : 1;
     create_cb(bias_cb_id, program, worker_core_set, bias_tile_sz, bias_cb_tiles, bias_format);
     // Recip LUT CB: one contiguous page of reduce_width fp32 (== recip_lut_bytes). A 4 B
     // stub when unused (the reader/compute gate on use_recip and never touch it).
@@ -990,6 +1022,10 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // reads the CB as the Welford reciprocal_lut. recip accessor is appended last.
         static_cast<uint32_t>(use_recip_lut),
         recip_lut_cb_id,
+        // CT 19/20: broadcast affine read counts. num_tile_cols for true-broadcast [1,1,H];
+        // batch*num_tile_cols for per-batch adaLN [batch,1,H] (all batches read once, resident).
+        weight_bcast_tiles,
+        bias_bcast_tiles,
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
@@ -1207,6 +1243,12 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(use_recip_lut),
         // CT 40: zeroed welford-state CB (LayerNorm warm-row accumulator reset).
         welford_zero_cb_id,
+        // CT 41/42/43: per-batch adaLN. per_batch_weight/bias select the resident-offset path
+        // (mul_bcast_rows at wbatch*num_tile_cols, wbatch = (tile_row_start + row) /
+        // rows_per_batch_tiles); rows_per_batch_tiles is the per-batch tile-row span.
+        static_cast<uint32_t>(per_batch_weight),
+        static_cast<uint32_t>(per_batch_bias),
+        rows_per_batch_tiles,
     };
 
     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
@@ -1310,7 +1352,9 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         }
         SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
 
-        std::vector<uint32_t> compute_rt_args = {this_core_rows};
+        // RT arg 1 (tile_row_start): the worker's first GLOBAL tile-row, so LN compute can map
+        // each local row to its batch (global_row / rows_per_batch_tiles) for per-batch adaLN.
+        std::vector<uint32_t> compute_rt_args = {this_core_rows, tile_row_start};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_rt_args);
     }
 

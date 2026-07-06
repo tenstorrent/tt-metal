@@ -84,6 +84,14 @@ void kernel_main() {
     // Zeroed welford-state CB (2 tiles: mean=0, M2=0). Captured once below while the SFPU is clean,
     // reloaded per row to reset the welford accumulator; see the cold-start capture.
     constexpr uint32_t welford_zero_cb = get_compile_time_arg_val(40);
+    // Per-batch adaLN (CT 41/42/43): weight/bias is [batch,1,H] — broadcast over seq (so the
+    // bcast_rows path applies) but distinct per batch. All batches' rows are resident in
+    // weight_cb / bias_cb (batch * num_tile_cols tiles); we offset the tile index by
+    // wbatch * num_tile_cols, wbatch = (tile_row_start + row) / rows_per_batch_tiles. For a
+    // true-broadcast weight per_batch_* is 0 and the offset collapses to 0 (unchanged).
+    constexpr uint32_t per_batch_weight = get_compile_time_arg_val(41);
+    constexpr uint32_t per_batch_bias = get_compile_time_arg_val(42);
+    constexpr uint32_t rows_per_batch_tiles = get_compile_time_arg_val(43);
 
     // Welford reduces over the local shard: num_tile_cols * TILE_WIDTH features.
     constexpr uint32_t tile_width = 32u;
@@ -126,6 +134,9 @@ void kernel_main() {
     constexpr uint32_t weight_result_cb = (has_bias != 0) ? intermediate_cb : output_cb;
 
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+    // Worker's first GLOBAL tile-row (RT arg 1): maps each local row to its batch for per-batch
+    // adaLN. Only consumed when per_batch_weight/bias; harmless otherwise.
+    const uint32_t tile_row_start = get_arg_val<uint32_t>(1);
 
     binary_op_init_common(input_cb, input_cb, input_cb);
 
@@ -149,6 +160,14 @@ void kernel_main() {
     cb_wait_front(welford_zero_cb, 2);  // resident for the whole kernel (never popped)
 
     for (uint32_t row = 0; row < num_tile_rows; row++) {
+        // Per-batch adaLN tile offsets: weight/bias for this row's batch live at
+        // wbatch * num_tile_cols in the resident weight_cb / bias_cb. For a true-broadcast or
+        // no-affine weight per_batch_* is 0 -> offset 0 (front of the CB, unchanged behavior).
+        const uint32_t wbatch = (per_batch_weight != 0) ? ((tile_row_start + row) / rows_per_batch_tiles) : 0u;
+        const uint32_t bbatch = (per_batch_bias != 0) ? ((tile_row_start + row) / rows_per_batch_tiles) : 0u;
+        const uint32_t w_off = wbatch * num_tile_cols;
+        const uint32_t b_off = bbatch * num_tile_cols;
+
         // Resident layout: whole row stays in L1 (Welford PRE + POST re-read).
         // Streaming layout (wide shards): each pass waits/pops per block instead.
         if constexpr (streaming_low_l1 == 0) {
@@ -394,7 +413,7 @@ void kernel_main() {
 
                 // * weight
                 if constexpr (has_weight != 0) {
-                    cb_wait_front(weight_cb, col_tile + block_size);
+                    cb_wait_front(weight_cb, w_off + col_tile + block_size);
                     cb_wait_front(norm_result_cb, block_size);
                     reconfig_data_format(norm_result_cb, weight_cb);
                     pack_reconfig_data_format(weight_result_cb);
@@ -407,9 +426,9 @@ void kernel_main() {
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size; i++) {
                         if constexpr (per_token_weight != 0) {
-                            mul_tiles(norm_result_cb, weight_cb, i, col_tile + i, i);
+                            mul_tiles(norm_result_cb, weight_cb, i, w_off + col_tile + i, i);
                         } else {
-                            mul_tiles_bcast_rows(norm_result_cb, weight_cb, i, col_tile + i, i);
+                            mul_tiles_bcast_rows(norm_result_cb, weight_cb, i, w_off + col_tile + i, i);
                         }
                     }
                     tile_regs_commit();
@@ -424,7 +443,7 @@ void kernel_main() {
 
                 // + bias
                 if constexpr (has_bias != 0) {
-                    cb_wait_front(bias_cb, col_tile + block_size);
+                    cb_wait_front(bias_cb, b_off + col_tile + block_size);
                     cb_wait_front(weight_result_cb, block_size);
                     reconfig_data_format(weight_result_cb, bias_cb);
                     pack_reconfig_data_format(output_cb);
@@ -437,9 +456,9 @@ void kernel_main() {
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size; i++) {
                         if constexpr (per_token_bias != 0) {
-                            add_tiles(weight_result_cb, bias_cb, i, col_tile + i, i);
+                            add_tiles(weight_result_cb, bias_cb, i, b_off + col_tile + i, i);
                         } else {
-                            add_tiles_bcast_rows(weight_result_cb, bias_cb, i, col_tile + i, i);
+                            add_tiles_bcast_rows(weight_result_cb, bias_cb, i, b_off + col_tile + i, i);
                         }
                     }
                     tile_regs_commit();
@@ -518,14 +537,16 @@ void kernel_main() {
                 }
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
-                    cb_wait_front(weight_cb, col + n);  // whole-row weight: cumulative, holds num_tile_cols
+                    // whole-row weight: cumulative wait; per-batch offsets into this batch's
+                    // resident num_tile_cols slice (w_off==0 for broadcast/per-token).
+                    cb_wait_front(weight_cb, w_off + col + n);
                     cb_wait_front(norm_result_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < n; i++) {
                         if constexpr (per_token_weight != 0) {
-                            mul_tiles(norm_result_cb, weight_cb, i, col + i, i);
+                            mul_tiles(norm_result_cb, weight_cb, i, w_off + col + i, i);
                         } else {
-                            mul_tiles_bcast_rows(norm_result_cb, weight_cb, i, col + i, i);
+                            mul_tiles_bcast_rows(norm_result_cb, weight_cb, i, w_off + col + i, i);
                         }
                     }
                     tile_regs_commit();
@@ -551,14 +572,15 @@ void kernel_main() {
                 }
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
-                    cb_wait_front(bias_cb, col + n);  // whole-row bias: cumulative, holds num_tile_cols
+                    // whole-row bias: cumulative wait; per-batch offsets into this batch's slice.
+                    cb_wait_front(bias_cb, b_off + col + n);
                     cb_wait_front(weight_result_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < n; i++) {
                         if constexpr (per_token_bias != 0) {
-                            add_tiles(weight_result_cb, bias_cb, i, col + i, i);
+                            add_tiles(weight_result_cb, bias_cb, i, b_off + col + i, i);
                         } else {
-                            add_tiles_bcast_rows(weight_result_cb, bias_cb, i, col + i, i);
+                            add_tiles_bcast_rows(weight_result_cb, bias_cb, i, b_off + col + i, i);
                         }
                     }
                     tile_regs_commit();

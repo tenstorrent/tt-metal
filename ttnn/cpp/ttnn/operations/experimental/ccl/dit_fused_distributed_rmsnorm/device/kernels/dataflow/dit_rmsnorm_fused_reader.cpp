@@ -74,9 +74,16 @@ void kernel_main() {
     // last TensorAccessorArgs; recip DRAM addr is reader RT arg 7.
     constexpr uint32_t use_recip_lut = get_compile_time_arg_val(17);
     constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(18);
+    // Broadcast affine read counts (CT 19/20): num_tile_cols for a true-broadcast [1,1,H]
+    // weight/bias; batch*num_tile_cols for per-batch adaLN [batch,1,H], where all batches'
+    // broadcast rows are read once and kept resident (compute offsets by wbatch*num_tile_cols).
+    // The per-batch weight/bias is still face-row sparse (one real row per batch), so the same
+    // face-row read applies; only the loop bound (and thus the resident tile count) grows.
+    constexpr uint32_t weight_bcast_tiles = get_compile_time_arg_val(19);
+    constexpr uint32_t bias_bcast_tiles = get_compile_time_arg_val(20);
     // The WRITER always populates the reduce_scalar_* / epsilon / trans_mat CBs,
     // so the reader's first NoC op is the input read (starts streaming ASAP).
-    constexpr auto input_args = TensorAccessorArgs<19>();
+    constexpr auto input_args = TensorAccessorArgs<21>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
@@ -237,9 +244,9 @@ void kernel_main() {
         const bool should_issue_side_inputs = first_chunk_done || last_row;
         if constexpr (per_token_weight == 0) {
             if (!weight_pushed && should_issue_side_inputs) {
-                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                for (uint32_t col_tile = 0; col_tile < weight_bcast_tiles; col_tile += block_size) {
                     const uint32_t tiles_in_block =
-                        ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                        ((weight_bcast_tiles - col_tile) >= block_size) ? block_size : (weight_bcast_tiles - col_tile);
                     cb_reserve_back(weight_cb, tiles_in_block);
                     uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
                     for (uint32_t i = 0; i < tiles_in_block; i++) {
@@ -259,9 +266,9 @@ void kernel_main() {
         }
         if constexpr (per_token_bias == 0) {
             if (!bias_pushed && should_issue_side_inputs) {
-                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                for (uint32_t col_tile = 0; col_tile < bias_bcast_tiles; col_tile += block_size) {
                     const uint32_t tiles_in_block =
-                        ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                        ((bias_bcast_tiles - col_tile) >= block_size) ? block_size : (bias_bcast_tiles - col_tile);
                     cb_reserve_back(bias_cb, tiles_in_block);
                     uint32_t bias_wr_ptr = get_write_ptr(bias_cb);
                     for (uint32_t i = 0; i < tiles_in_block; i++) {

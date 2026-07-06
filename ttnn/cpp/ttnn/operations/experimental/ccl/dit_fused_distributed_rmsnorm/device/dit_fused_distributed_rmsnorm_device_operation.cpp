@@ -68,7 +68,22 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
 
     const auto& shape = input.logical_shape();
     TT_FATAL(shape.rank() == 4, "Input rank must be 4, got {}", shape.rank());
-    TT_FATAL(shape[0] == 1 && shape[1] == 1, "Input must have batch=1, channel=1 (shape [1,1,N,H])");
+    // dim0 must be 1; dim1 is the batch dim (folded into the row count via
+    // physical_volume/W, so each batch contributes N_pad/TILE_HEIGHT tile-rows).
+    // batch>1 output preserves batch at dim1 ([1, batch, N, H]), which collides
+    // with the head-split output layout (heads at dim1) — so batching requires
+    // num_heads_per_device==1 and no per_head_norm.
+    TT_FATAL(shape[0] == 1, "Input dim0 must be 1 (shape [1, batch, N, H]); got {}", shape[0]);
+    const uint32_t batch = shape[1];
+    if (batch > 1) {
+        TT_FATAL(
+            args.num_heads_per_device == 1,
+            "Batched input (dim1={}) requires num_heads_per_device==1 (head-split output puts heads at "
+            "dim1, which collides with the preserved batch dim); got num_heads_per_device={}",
+            batch,
+            args.num_heads_per_device);
+        TT_FATAL(!args.per_head_norm, "Batched input (dim1={}) does not support per_head_norm", batch);
+    }
     TT_FATAL(args.num_heads_per_device >= 1, "num_heads_per_device must be >= 1");
     TT_FATAL(
         shape[3] % args.num_heads_per_device == 0,
@@ -219,7 +234,14 @@ DitFusedDistributedRmsnormDeviceOperation::compute_output_specs(
     specs.reserve(2);
 
     // Post-allgather output reshapes to [1, num_heads_per_device, N, H/num_heads_per_device].
-    ttnn::Shape output_shape({1u, args.num_heads_per_device, logical[2], logical[3] / args.num_heads_per_device});
+    // For batched input ([1, batch, N, H] with num_heads_per_device==1) we preserve batch
+    // at dim1 instead: the writer lays out all folded tile-rows flat as
+    // (b*rows_per_batch + r)*num_tile_cols + c, which is exactly the tile ordering of a
+    // [1, batch, N, H] TILE tensor — so the flat writer index lands each tile correctly and
+    // the caller's squeeze(0) recovers [batch, N, H]. batch>1 with head-split (nh>1) is
+    // rejected in validate (heads and batch both want dim1).
+    const uint32_t out_dim1 = (args.num_heads_per_device == 1) ? logical[1] : args.num_heads_per_device;
+    ttnn::Shape output_shape({1u, out_dim1, logical[2], logical[3] / args.num_heads_per_device});
     const auto out_dtype = args.dtype.value_or(input.dtype());
     specs.emplace_back(output_shape, TensorLayout(out_dtype, PageConfig(Layout::TILE), args.output_mem_config));
 
