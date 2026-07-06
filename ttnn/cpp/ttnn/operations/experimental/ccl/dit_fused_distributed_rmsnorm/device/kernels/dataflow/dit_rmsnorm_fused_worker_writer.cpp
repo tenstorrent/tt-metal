@@ -57,6 +57,7 @@ constexpr uint32_t kFace01Off = 1024u;
 // LayerNorm (mean, variance). The physical stick is num_stats * 128 B; each stat is
 // one 128 B packed row-0 stick (two 64 B face-rows). num_stats==1 -> RMS layout.
 constexpr uint32_t kStatBytes = 128u;
+static_assert(stick_bytes % kStatBytes == 0, "stick_bytes must be a whole multiple of the 128 B packed stat stick");
 constexpr uint32_t num_stats = stick_bytes / kStatBytes;
 
 // Scalar/eps/trans_mat population args (after the output + dram accessors).

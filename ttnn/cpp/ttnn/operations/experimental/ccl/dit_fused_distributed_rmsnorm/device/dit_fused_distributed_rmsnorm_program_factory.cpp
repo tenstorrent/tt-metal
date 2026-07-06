@@ -652,6 +652,17 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         "({})",
         num_tile_cols,
         block_size);
+    // The LayerNorm compute POST consumes input/intermediate CBs in bare block_size
+    // chunks with NO tail clamp (unlike the RMS kernel, which clamps tiles_in_block on
+    // the last block). A non-divisible tail would leave cb_wait_front(block_size) waiting
+    // on tiles never pushed -> device hang. Fail fast at host instead. All current model
+    // shapes are divisible; this guards arbitrary shapes.
+    TT_FATAL(
+        !is_layernorm || (num_tile_cols % block_size == 0),
+        "dit_fused_distributed LayerNorm requires num_tile_cols ({}) divisible by block_size ({}) "
+        "(the resident POST path has no tail handling)",
+        num_tile_cols,
+        block_size);
 
     // ------------------------------------------------------------------------
     // Persistent DRAM stats scratch (all-gather path only).
@@ -1372,7 +1383,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_mesh_workload(
 
 void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const DitFusedDistributedRmsnormParams& /*operation_attributes*/,
+    const DitFusedDistributedRmsnormParams& operation_attributes,
     const DitFusedDistributedRmsnormInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     const uint32_t input_addr = tensor_args.input.buffer()->address();
@@ -1420,11 +1431,22 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
                 writer_args[shared.stats_dram_addr_writer_arg_idx.value()] = stats_dram_addr;
             }
         }
-        // Forwarders read the stats DRAM scratch base at rt[0].
+        // Forwarders read the stats DRAM scratch base at rt[0] and the out_ready
+        // GlobalSemaphore address at rt[1]. BOTH must be refreshed on cache hits:
+        // the caller ping-pongs a distinct semaphore per launch and the semaphore
+        // is NOT part of compute_program_hash, so a cache hit that skipped this
+        // refresh would silently keep using the semaphore baked at first compile —
+        // defeating the ping-pong isolation and racing the in-kernel sem reset
+        // against peers' in-flight fabric atomic-incs (AG desync / hang). Mirrors
+        // rms_allgather_program_factory's runtime_args[7] = semaphore.address().
+        const uint32_t out_ready_sem_addr = operation_attributes.multi_device_global_semaphore.empty()
+                                                ? 0u
+                                                : operation_attributes.multi_device_global_semaphore.at(0).address();
         for (size_t f = 0; f < shared.forwarder_kernel_ids.size(); f++) {
             auto& fwd_args_by_core = GetRuntimeArgs(program, shared.forwarder_kernel_ids[f]);
             const auto& fc = shared.forwarder_cores[f];
             fwd_args_by_core.at(fc.x).at(fc.y)[0] = stats_dram_addr;
+            fwd_args_by_core.at(fc.x).at(fc.y)[1] = out_ready_sem_addr;
         }
     }
 }

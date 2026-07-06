@@ -220,7 +220,12 @@ class DistributedRMSNorm(Module):
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
             topology=self.ccl_manager.topology,
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
-                ("rms", tuple(x.shape), num_heads_per_device, rope_cos is not None),
+                # Key includes everything that changes the stats-buffer geometry:
+                # shape, heads-per-device, RoPE presence, and weight presence (weight is
+                # forwarded to create_stats_buffer and affects its sizing). Guards against
+                # a shared-cache collision between two same-shape modules differing only
+                # in affine geometry.
+                ("rms", tuple(x.shape), num_heads_per_device, rope_cos is not None, self.weight is not None),
                 lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
@@ -321,9 +326,9 @@ class DistributedLayerNorm(Module):
     def _ensure_fused_ln_recip(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Lazy-allocate the row-major fp32 reciprocal LUT the fused op consumes.
 
-        The fused op's reader NoC-reads (HEIGHT_SHARDED L1 was the composite Welford op's
-        layout): the fused op's reader NoC-reads a ROW_MAJOR [1,1,1,width_per_device]
-        DRAM tensor [1/1..1/width] (replicated per device). Cached per device+width.
+        The fused op's reader NoC-reads a ROW_MAJOR [1,1,1,width_per_device] DRAM tensor
+        holding [1/1..1/width] (replicated per device) — unlike the composite Welford op,
+        which used a HEIGHT_SHARDED L1 layout. Cached per (device, width).
         """
         width = self.embedding_dim // self.mesh_width
         key = (self.mesh_device.id(), width)
