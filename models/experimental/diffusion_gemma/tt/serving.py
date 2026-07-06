@@ -42,6 +42,7 @@ from numbers import Integral
 from typing import NamedTuple
 
 import torch
+from loguru import logger
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.tt import sampling as TS
@@ -256,7 +257,14 @@ class BlockDiffusionServingSession:
         else:
             if plan is not None:
                 self.prefix_cache.note_miss(plan)
-                if plan.partial_prefix:
+                if plan.shorter_prefix:
+                    logger.info(
+                        f"[prefix_cache] shorter-prefix miss: incoming aligned prompt is a byte-identical "
+                        f"proper prefix ({plan.cache_len} of resident {self.prefix_cache.resident_cache_len}), "
+                        f"but bf16 SDPA reduction-length makes it non-bit-exact → full prefill "
+                        f"(reuse only with allow_shorter_prefix, approximate tier)"
+                    )
+                elif plan.partial_prefix:
                     logger.info(
                         f"[prefix_cache] partial-prefix miss: matched {plan.matched_len} aligned "
                         f"tokens, suffix differs/extends → full prefill (needs chunked prefill / #47488)"

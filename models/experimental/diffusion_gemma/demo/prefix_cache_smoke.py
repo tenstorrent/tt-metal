@@ -168,7 +168,10 @@ def _run_case(bundle, config, args, case: str) -> dict:
 
     # 2) warm: real prefill of A → resident := A (flag on so it records).
     os.environ["DG_PREFIX_CACHE"] = "1"
-    on_cache = PrefixKVCache()
+    # exact match is bit-exact-reusable by default; the proper-prefix case is only
+    # reusable in the approximate tier (allow_shorter_prefix) — we MEASURE its
+    # bit-exactness rather than assert it (bf16 SDPA reduction-length, see README).
+    on_cache = PrefixKVCache(allow_shorter_prefix=(case == "prefix"))
     _o_a, reused_a, t_a, cache_len_a = _run_request(
         tt_model, state_dict, tokenizer, prompt_A, prefix_cache=on_cache, **{**common, "num_blocks": 0}
     )
@@ -181,8 +184,14 @@ def _run_case(bundle, config, args, case: str) -> dict:
     os.environ.pop("DG_PREFIX_CACHE", None)
 
     bit_exact = bool(o_off.shape == o_on.shape and torch.equal(o_off, o_on))
+    mismatches = int((o_off != o_on).sum().item()) if o_off.shape == o_on.shape else -1
+    # exact match must be bit-exact (the shipped bit-exact reuse); the proper-prefix
+    # (approximate) tier only needs to *reuse* — its bit-exactness is measured/reported.
+    require_bit_exact = case == "exact"
     result = {
         "case": case,
+        "approximate_tier": on_cache.allow_shorter_prefix,
+        "require_bit_exact": require_bit_exact,
         "prompt_A_len": int(prompt_A.shape[1]),
         "prompt_B_len": int(prompt_B.shape[1]),
         "cache_len_B_off": cache_len_off,
@@ -192,6 +201,7 @@ def _run_case(bundle, config, args, case: str) -> dict:
         "reused_on": reused_on,
         "committed_tokens": int(o_off.shape[1]),
         "bit_exact_committed_argmax": bit_exact,
+        "committed_token_mismatches": mismatches,
         "prefill_time_off_s": t_off,
         "prefill_time_warm_A_s": t_a,
         "prefill_time_on_s": t_on,
@@ -201,7 +211,7 @@ def _run_case(bundle, config, args, case: str) -> dict:
     logger.info(f"[prefix_cache_smoke:{case}] result:\n" + json.dumps(result, indent=2))
     if not reused_on:
         raise RuntimeError(f"[{case}] ON run did NOT reuse — prefix reuse path not exercised")
-    if not bit_exact:
+    if require_bit_exact and not bit_exact:
         raise RuntimeError(f"[{case}] committed argmax DIFFERS ON vs OFF — reuse is not bit-exact")
     return result
 
@@ -233,7 +243,8 @@ def run(args) -> dict:
             "max_denoising_steps": args.max_denoising_steps,
             "gumbel_mode": args.gumbel_mode,
             "cases": results,
-            "all_bit_exact": all(r["bit_exact_committed_argmax"] for r in results),
+            # Gate: every case that REQUIRES bit-exactness (exact match) is bit-exact.
+            "required_bit_exact_pass": all(r["bit_exact_committed_argmax"] for r in results if r["require_bit_exact"]),
             "all_reused": all(r["reused_on"] for r in results),
         }
         if args.metrics_json:
@@ -249,11 +260,13 @@ def _success_marker(metrics: dict) -> str:
     for r in metrics["cases"]:
         parts.append(
             f"{r['case']}:bit_exact={r['bit_exact_committed_argmax']}"
+            f",mismatch={r['committed_token_mismatches']}"
             f",reused={r['reused_on']},saved_s={r['prefill_time_saved_s']:.3f}"
         )
     return (
         "DG_PREFIX_CACHE_SMOKE_SUCCESS "
-        f"all_bit_exact={metrics['all_bit_exact']} all_reused={metrics['all_reused']} " + " ".join(parts)
+        f"required_bit_exact_pass={metrics['required_bit_exact_pass']} "
+        f"all_reused={metrics['all_reused']} " + " ".join(parts)
     )
 
 

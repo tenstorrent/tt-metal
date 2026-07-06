@@ -55,8 +55,18 @@ class ReusePlan(NamedTuple):
     matched_len: int  # longest common aligned-prefix length vs the resident record
     prompt_len: int  # logical prompt length of the incoming request
     cache_len: int  # 32-aligned span the incoming request occupies
-    # A shared prefix that could NOT be reused bit-exactly here (suffix differs /
-    # extends); a paged / chunked-prefill path (#47488) could reuse ``matched_len``.
+    # The incoming aligned prompt is a byte-identical *proper* prefix of the resident
+    # (shorter, fully matched). Mathematically (fp32) this span is reusable, but on
+    # device in bf16 it is NOT bit-exact: the resident wrote it inside a longer prefill,
+    # and the SDPA reduction over the longer (masked) key span rounds differently than a
+    # standalone shorter prefill — a difference #48291 shows can flip a diffusion argmax
+    # decision. Reused only when ``allow_shorter_prefix`` is set (approximate tier).
+    shorter_prefix: bool
+    # A shared prefix (>= one 32-tile) where the incoming prompt *extends / differs* in
+    # the suffix. Not reusable at the DG serving layer at all — the suffix must
+    # cross-attend to the cached prefix during prefill = chunked / prefix prefill, which
+    # the Gemma4 backbone lacks; the vLLM paged-cache ownership change (#47488) is the
+    # home for it. ``matched_len`` is what a paged path could have reused.
     partial_prefix: bool
 
 
@@ -77,7 +87,11 @@ class PrefixKVCache:
     works request-to-request.
     """
 
-    def __init__(self):
+    def __init__(self, *, allow_shorter_prefix: bool = False):
+        # allow_shorter_prefix opts into the APPROXIMATE tier: reuse a byte-identical
+        # *proper* prefix of the resident cache. Not bit-exact in bf16 (see
+        # ReusePlan.shorter_prefix) — off by default so the shipped path is bit-exact.
+        self.allow_shorter_prefix = allow_shorter_prefix
         self._resident_aligned: tuple[int, ...] | None = None
         self._resident_prompt_len: int | None = None
         self._resident_cache_len: int | None = None
@@ -85,6 +99,7 @@ class PrefixKVCache:
         self.hits = 0
         self.misses = 0
         self.partial_prefix_misses = 0
+        self.shorter_prefix_misses = 0  # byte-identical proper prefix not reused (bf16, tier off)
         self.tokens_reused = 0
         self.prefill_time_saved_s = 0.0
         # Rolling average of observed real prefill wall-times, used to attribute a
@@ -132,19 +147,19 @@ class PrefixKVCache:
         self._validate_span(prompt_len, cache_len)
 
         if self._resident_aligned is None:
-            return ReusePlan(False, 0, prompt_len, cache_len, partial_prefix=False)
+            return ReusePlan(False, 0, prompt_len, cache_len, shorter_prefix=False, partial_prefix=False)
 
         matched = _common_prefix_len(aligned, self._resident_aligned)
-        reuse = (
-            cache_len <= self._resident_cache_len
-            and matched == cache_len
-            and self._resident_aligned[:cache_len] == aligned
-        )
-        # A "partial prefix" is a genuine shared prefix (>= one full 32-tile) that we
-        # cannot reuse bit-exactly: the incoming prompt extends or differs past the
-        # shared span. That is the #47488 / chunked-prefill case.
-        partial = (not reuse) and matched >= 32
-        return ReusePlan(reuse, matched, prompt_len, cache_len, partial_prefix=partial)
+        # Exact byte-identical full match: bit-exact, always reusable.
+        exact = matched == cache_len == self._resident_cache_len
+        # Byte-identical proper prefix (shorter than resident): fp32-reusable, but NOT
+        # bit-exact in bf16 — reused only in the approximate tier.
+        shorter = (not exact) and matched == cache_len and cache_len < self._resident_cache_len
+        # Genuine shared prefix that diverges within the span (extending/differing suffix):
+        # the #47488 / chunked-prefill case, never reusable here.
+        partial = (not exact) and (not shorter) and matched >= 32
+        reuse = exact or (shorter and self.allow_shorter_prefix)
+        return ReusePlan(reuse, matched, prompt_len, cache_len, shorter_prefix=shorter, partial_prefix=partial)
 
     def record(self, aligned_tokens, prompt_len: int, cache_len: int) -> None:
         """Set the resident state to the current request's own prompt prefix.
@@ -171,6 +186,8 @@ class PrefixKVCache:
         self.misses += 1
         if plan.partial_prefix:
             self.partial_prefix_misses += 1
+        if plan.shorter_prefix:
+            self.shorter_prefix_misses += 1
 
     def invalidate(self) -> None:
         """Forget the resident state (e.g. the contiguous cache was reallocated)."""
@@ -183,7 +200,9 @@ class PrefixKVCache:
             "hits": self.hits,
             "misses": self.misses,
             "partial_prefix_misses": self.partial_prefix_misses,
+            "shorter_prefix_misses": self.shorter_prefix_misses,
             "tokens_reused": self.tokens_reused,
             "prefill_time_saved_s": self.prefill_time_saved_s,
             "resident_cache_len": self._resident_cache_len,
+            "allow_shorter_prefix": self.allow_shorter_prefix,
         }

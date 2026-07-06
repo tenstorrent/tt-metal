@@ -22,7 +22,7 @@ def _aligned(real_tokens, cache_len):
 def test_empty_resident_never_reuses():
     c = PrefixKVCache()
     plan = c.plan(_aligned([1, 2, 3], 32), prompt_len=3, cache_len=32)
-    assert not plan.reuse and not plan.partial_prefix and plan.matched_len == 0
+    assert not plan.reuse and not plan.partial_prefix and not plan.shorter_prefix and plan.matched_len == 0
 
 
 def test_exact_full_match_reuses():
@@ -30,19 +30,28 @@ def test_exact_full_match_reuses():
     a = _aligned([5, 6, 7, 8], 32)
     c.record(a, prompt_len=4, cache_len=32)
     plan = c.plan(a, prompt_len=4, cache_len=32)
-    assert plan.reuse and plan.matched_len == 32 and not plan.partial_prefix
+    assert plan.reuse and plan.matched_len == 32 and not plan.partial_prefix and not plan.shorter_prefix
 
 
-def test_aligned_proper_prefix_reuses():
+def test_aligned_proper_prefix_is_shorter_prefix_not_bit_exact_by_default():
     # Resident A holds 64 aligned tokens (48 real, 16 pad). B is A's first 32 real
-    # tokens (32-aligned, no pad) → B_aligned == A_aligned[:32] → bit-exact reuse.
+    # tokens (32-aligned, no pad) → B_aligned == A_aligned[:32]. Mathematically (fp32)
+    # reusable, but NOT bit-exact in bf16 (SDPA reduction-length) → NOT reused by default.
     c = PrefixKVCache()
-    real_a = list(range(1, 49))  # 48 real tokens
-    a = _aligned(real_a, 64)
+    a = _aligned(list(range(1, 49)), 64)
     c.record(a, prompt_len=48, cache_len=64)
-    b = list(range(1, 33))  # first 32 real tokens, already 32-aligned
+    b = list(range(1, 33))
     plan = c.plan(b, prompt_len=32, cache_len=32)
-    assert plan.reuse and plan.cache_len == 32 and not plan.partial_prefix
+    assert plan.shorter_prefix and not plan.reuse and not plan.partial_prefix
+
+
+def test_aligned_proper_prefix_reuses_only_in_approximate_tier():
+    c = PrefixKVCache(allow_shorter_prefix=True)
+    a = _aligned(list(range(1, 49)), 64)
+    c.record(a, prompt_len=48, cache_len=64)
+    b = list(range(1, 33))
+    plan = c.plan(b, prompt_len=32, cache_len=32)
+    assert plan.shorter_prefix and plan.reuse and plan.cache_len == 32
 
 
 def test_nonaligned_proper_prefix_does_not_reuse():
@@ -78,16 +87,16 @@ def test_longer_than_resident_never_reuses():
 
 
 def test_record_reanchors_to_current_prompt():
-    c = PrefixKVCache()
+    c = PrefixKVCache(allow_shorter_prefix=True)
     a = _aligned(list(range(1, 49)), 64)
     c.record(a, prompt_len=48, cache_len=64)
-    # After reusing B (a prefix), the resident re-anchors to B.
+    # After reusing B (a shorter prefix, approximate tier), the resident re-anchors to B.
     b = list(range(1, 33))
     plan = c.plan(b, prompt_len=32, cache_len=32)
     assert plan.reuse
     c.record(b, prompt_len=32, cache_len=32)
     assert c.resident_cache_len == 32
-    # A no longer reuses (resident is now the shorter B, differs past 32).
+    # A no longer reuses (resident is now the shorter B; A is longer than resident).
     plan2 = c.plan(a, prompt_len=48, cache_len=64)
     assert not plan2.reuse
 
