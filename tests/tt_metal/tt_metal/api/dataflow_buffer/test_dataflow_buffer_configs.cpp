@@ -122,8 +122,17 @@ void validate_dfb_tile_counters(
         }
     }
 
-    // For ALL mode, validate remapper pair indices
-    if (config.cap == dfb::AccessPattern::ALL) {
+    // ALL mode engages the remapper ONLY when a Tensix endpoint is involved. Pure DM->DM ALL
+    // broadcasts via broadcast_tc, so remapper_pair_index / consumer_tcs are intentionally left
+    // at 0 (in dataflow_buffer.cpp they are populated only inside `if (use_remapper)`, and
+    // use_remapper == ALL && !dm_dm_all). Tensix RISCs occupy mask bits 0x0F00.
+    const bool dm_dm_all = config.cap == dfb::AccessPattern::ALL &&
+                           (config.producer_risc_mask & 0x0F00) == 0 &&
+                           (config.consumer_risc_mask & 0x0F00) == 0;
+    const bool uses_remapper = config.cap == dfb::AccessPattern::ALL && !dm_dm_all;
+
+    // For remapper-based ALL, validate remapper pair indices are unique per producer.
+    if (uses_remapper) {
         std::set<uint8_t> seen_remapper_indices;
         for (const auto& [risc_id, rc] : producer_configs) {
             uint8_t remapper_idx = rc->config.remapper_pair_index;
@@ -207,7 +216,7 @@ void validate_dfb_tile_counters(
             }
         }
 
-        if (config.cap == dfb::AccessPattern::ALL) {
+        if (uses_remapper) {
             uint32_t actual_consumer_tcs = producer_rc->config.consumer_tcs;
             ASSERT_EQ(actual_consumer_tcs, expected_consumer_tcs)
                 << "ALL: Producer " << (int)producer_risc_id << " consumer_tcs mismatch. "
@@ -219,6 +228,15 @@ void validate_dfb_tile_counters(
                 "ALL: Producer {} consumer_tcs validated: 0x{:x}",
                 producer_risc_id,
                 actual_consumer_tcs);
+        } else if (dm_dm_all) {
+            // DM->DM ALL broadcasts via broadcast_tc; the remapper-only fields must stay unset.
+            EXPECT_EQ(producer_rc->config.consumer_tcs, 0u)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id
+                << " must not populate consumer_tcs (broadcast_tc path, remapper unused)";
+            EXPECT_TRUE(producer_rc->config.broadcast_tc)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id << " must have broadcast_tc set";
+            EXPECT_EQ(producer_rc->config.remapper_pair_index, 0)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id << " must not allocate a remapper pair index";
         }
     }
 }

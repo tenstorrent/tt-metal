@@ -1364,6 +1364,16 @@ void run_in_dfb_out_dfb_program(
 
 #define DFB_NO_EXTRA_SKIP ((void)0)
 
+// A DM->DM config consumes (num_p + num_c) DM cores; Quasar exposes only 6 usable DM cores per
+// node (QUASAR_USER_DM_CORES_PER_NODE), so any DM->DM config needing more can never be launched
+// there and ValidateProgramSpec would FATAL. Skip it explicitly. (DM<->Tensix configs are exempt:
+// the Tensix endpoint is not a DM core.)
+#define DFB_SKIP_DM_DM_OVER_QUASAR_BUDGET(num_p, num_c)                                             \
+    if (devices_.at(0)->arch() == ARCH::QUASAR && ((num_p) + (num_c)) > 6) {                        \
+        GTEST_SKIP() << "DM->DM config needs " << ((num_p) + (num_c))                               \
+                     << " DM cores, exceeds the Quasar per-node budget of 6";                       \
+    }
+
 constexpr uint32_t dfb_default_num_entries(uint32_t num_p, uint32_t num_c) {
     const uint32_t m = (num_p / std::gcd(num_p, num_c)) * num_c;
     return ((16u + m - 1u) / m) * m;
@@ -1511,7 +1521,7 @@ DFB_TEST    (DM,       4Sx1S, DM,     DM,     4, STRIDED, 1, STRIDED, DFB_NO_EXT
 DFB_TEST    (DMTensix, 4Sx1S, DM,     TENSIX, 4, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP)
 DFB_TEST    (TensixDM, 4Sx1S, TENSIX, DM,     4, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP)
 
-DFB_TEST_BUF(DM,       4Sx4S, DM,     DM,     4, STRIDED, 4, STRIDED, DFB_NO_EXTRA_SKIP, 29)
+DFB_TEST_BUF(DM,       4Sx4S, DM,     DM,     4, STRIDED, 4, STRIDED, DFB_SKIP_DM_DM_OVER_QUASAR_BUDGET(4, 4), 29)
 DFB_TEST    (DMTensix, 4Sx4S, DM,     TENSIX, 4, STRIDED, 4, STRIDED, DFB_NO_EXTRA_SKIP)
 DFB_TEST    (TensixDM, 4Sx4S, TENSIX, DM,     4, STRIDED, 4, STRIDED, DFB_NO_EXTRA_SKIP)
 
@@ -1558,7 +1568,7 @@ DFB_TEST    (TensixDM, 2Sx1S, TENSIX, DM,     2, STRIDED, 1, STRIDED, DFB_NO_EXT
 DFB_TEST    (TensixDM, 1Sx2S, TENSIX, DM,     1, STRIDED, 2, STRIDED, DFB_NO_EXTRA_SKIP)
 // 3-DM consumer
 DFB_TEST    (TensixDM, 1Sx3S, TENSIX, DM,     1, STRIDED, 3, STRIDED, DFB_NO_EXTRA_SKIP)
-DFB_TEST    (TensixDM, 2Sx3S, TENSIX, DM,     2, STRIDED, 3, STRIDED, DFB_NO_EXTRA_SKIP)
+// DFB_TEST    (TensixDM, 2Sx3S, TENSIX, DM,     2, STRIDED, 3, STRIDED, DFB_NO_EXTRA_SKIP) // non-integer C/P ratio (3 % 2 != 0); a strided producer requires num_consumers % num_producers == 0 (use ALL/BLOCKED for 2->3), mirrors the commented-out DM->DM 2Sx3S above
 // DFB_TEST    (TensixDM, 4Sx3S, TENSIX, DM,     4, STRIDED, 3, STRIDED, DFB_NO_EXTRA_SKIP) // needs BLOCKED access pattern
 // 6-DM consumer
 DFB_TEST    (TensixDM, 1Sx6S, TENSIX, DM,     1, STRIDED, 6, STRIDED, DFB_NO_EXTRA_SKIP)
@@ -1577,7 +1587,7 @@ DFB_TEST    (DM,       4Sx1A, DM,     DM,     4, STRIDED, 1, ALL, DFB_SKIP_DM_DM
 DFB_TEST    (DMTensix, 4Sx1A, DM,     TENSIX, 4, STRIDED, 1, ALL, DFB_NO_EXTRA_SKIP)
 DFB_TEST    (TensixDM, 4Sx1A, TENSIX, DM,     4, STRIDED, 1, ALL, DFB_NO_EXTRA_SKIP)
 
-DFB_TEST    (DM,       4Sx4A, DM,     DM,     4, STRIDED, 4, ALL, DFB_SKIP_DM_DM_ALL_IMPLICIT_SYNC)
+DFB_TEST    (DM,       4Sx4A, DM,     DM,     4, STRIDED, 4, ALL, DFB_SKIP_DM_DM_OVER_QUASAR_BUDGET(4, 4))
 DFB_TEST    (DMTensix, 4Sx4A, DM,     TENSIX, 4, STRIDED, 4, ALL, DFB_NO_EXTRA_SKIP)
 DFB_TEST    (TensixDM, 4Sx4A, TENSIX, DM,     4, STRIDED, 4, ALL, DFB_NO_EXTRA_SKIP)
 
