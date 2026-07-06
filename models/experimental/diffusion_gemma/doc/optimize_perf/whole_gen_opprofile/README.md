@@ -15,20 +15,49 @@ Over the model-faithful whole generation (30 layers, canvas 256, **48 denoise st
 | op-code | whole-gen % | what it is |
 |---|---:|---|
 | `SparseMatmulDeviceOperation` | **47.2%** | routed top-8 MoE gate/up/down (`tt/sparse_moe.py`) |
-| `PermuteDeviceOperation` [6-D `{0;3;2;1;4;5}`] | **42.1%** | sparse-MoE token-gather / expert-group reshape |
+| `PermuteDeviceOperation` [6-D `{0;3;2;1;4;5}`] | **42.1%** | `cumsum(dim=2)` in `build_capacity_dispatch` — **FW-overlap artifact, ~1% real** (see CORRECTION) |
 | `PermuteDeviceOperation` [4-D `{0;3;2;1}`] | 3.0% | attention head-layout permute |
 | `TransposeDeviceOperation` | 2.0% | commit-decode path (`commit_decode.py`) |
 | `BinaryNgDeviceOperation` | 0.9% | residual/RoPE/entropy elementwise |
 | everything else (each) | <0.9% | CCLs, LayerNorm, Slice, ArgMax, SDPA, TopK, … |
 
-**The whole generation is now MoE-dominated: SparseMatmul (47%) + its 6-D token-gather Permute
-(42%) ≈ 89% of device-FW.** This is the fundamental shift vs the original dense-128 profile, where
-a single attention Permute (Ktᵀ) was ~97% of the per-layer device-fw. That Permute is gone (fused
-into `matmul(transpose_b=True)`); the true-sparse MoE replaced dense-128 expert matmul with a sparse
-matmul **plus** an expensive 6-D gather/scatter reshape that is now nearly as costly as the matmul.
+**The whole generation is MoE-dominated by the expert matmuls (`SparseMatmul` 47%).** The 42%
+`PermuteDeviceOperation` line above is a **sum-of-device-FW attribution artifact, NOT a real cost** —
+see the CORRECTION below. The genuine bottleneck is the batched expert matmul: E=128 experts each
+doing a skinny M=32 (1-tile) `[32,2816]@[2816,176]` matmul, weight-traffic-bound (all 128 experts
+active at canvas 256), the shared-gemma4-MoE compute ceiling.
 
 Phase split (device-FW): **DENOISE 94.02%**, COMMIT 5.74%, PREFILL 0.24%. The 48× denoise loop
 utterly dominates, so the whole-generation op mix ≈ the denoise-step op mix.
+
+## CORRECTION (2026-07-06, no-trace eager microbench — supersedes the 42% permute reading)
+
+The 42.1% `PermuteDeviceOperation [6-D {0;3;2;1;4;5}]` was **mis-attributed and mis-weighted**.
+Established by `ttnn.graph` op-capture (fast-runtime-mode OFF) + eager per-op timing at real shapes
+(E=128, C=32, EC=4096, H=2816, S=256, TP=4 `(1,4)` mesh); probes in `~/dg-agent-runs/`
+(`moe_graph_probe.py`, `dispatch_graph_probe.py`, `cumsum_microbench.py`).
+
+1. **Wrong op.** It is NOT the "expert-group reshape". The `ttnn.reshape` `[1,1,EC,H]↔[1,E,C,H]`
+   (sparse_moe.py L372/L378) is a **zero-copy metadata view** — graph capture shows *no* device op,
+   eager time 0.006 / 0.003 ms. The 6-D permute is emitted by **`ttnn.cumsum(mask, dim=2)`**
+   (L107, the exclusive-slot count in `build_capacity_dispatch`): cumsum along a non-last dim
+   tilizes as `permute → cumsum → permute` = 4× `PermuteDeviceOperation` per call.
+
+2. **Not 42% of real time.** Eager per-op: `cumsum(dim=2)` = **0.178 ms**, vs the full dispatch
+   0.809 ms and **one** expert matmul 4.17 ms (3 big matmuls/layer). So the permute is **~1% of the
+   MoE layer**, not 42%. The 42% is a **sum-of-device-FW overlap artifact** (the README's own caveat:
+   FW windows overlap ~1.5–1.74×); the permute runs on data-movement cores and overlaps the matmul
+   compute — **exactly the same trap as the old Ktᵀ "97%" permute that gave 0% when optimized.**
+
+3. **A fix exists but is ~0.1% e2e.** Replacing `cumsum(dim=2)` with a lower-triangular matmul
+   `L[S,S] @ mask[S,E]` (inclusive cumsum, **0 permutes**) is **0.0149 ms (92% faster), PCC 0.999995**
+   (bit-exact — counts ≤256 are exact in bf16). But it saves ~0.16 ms/layer → ~0.24 s/block out of
+   ~200 s = **~0.1% end-to-end** (and ~0% under traced overlap). Not landed: negligible win, and the
+   dispatch feeds integer routing-column indices where a dtype slip is a correctness bug, not a perf
+   bug. Kept here as a validated micro-lever if the dispatch is ever refactored.
+
+**Bottom line:** no 42% permute win exists; it was a profiling artifact. The real lever remains the
+weight-traffic-bound skinny-M expert matmul (`SparseMatmul`) — the shared-MoE ceiling.
 
 ## Method — reduced-layer 2-point fit (why not a single 30-layer capture)
 
