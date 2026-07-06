@@ -26,4 +26,4 @@ transformer_config:
     n_limited_groups: 2
     score_func: "sigmoid"
     route_scale: 2.5
-  runner_type: "default"
+  runner_type: "memory_efficient"

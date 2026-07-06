@@ -1,7 +1,7 @@
 training_config:
   project_name: "tt_train_tiny_deepseek_single_sparse"
   seed: 5489
-  batch_size: 2
+  batch_size: 8
   num_epochs: 1
   max_steps: 20
   use_clip_grad_norm: false

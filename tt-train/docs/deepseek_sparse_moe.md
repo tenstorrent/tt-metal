@@ -30,17 +30,17 @@ one bf16 ULP. SparseMoE-vs-dense forward+backward parity: **12/12 tests pass**.
 
 | Mode | Model / vocab | Mesh | seq × bs | runner | MFU avg (min–max) |
 |---|---|---|---|---|---|
-| sparse | tiny, char vocab | 1×1 | 4096 × 8 | memory_efficient | **7.39%** (7.14–7.66) |
-| sparse | tiny, full vocab | 1×1 | 2048 × 2 | default | 3.72% (3.14–5.07) |
+| sparse | tiny, full vocab | 1×1 | 2048 × 8 | memory_efficient | **8.28%** (7.25–8.93) |
+| sparse | tiny, char vocab | 1×1 | 4096 × 8 | memory_efficient | 7.39% (7.14–7.66) |
 | dense  | tiny, full vocab | 1×1 | 2048 × 2 | memory_efficient | 0.91% (0.80–1.03) |
 | sparse_ep | 16B, full vocab | 1×8 | 4096 × 2 | memory_efficient | 2.37% (1.59–2.99) |
 
-`seq × bs` are the largest that fit at each setting. Single-device **full vocab
-is logits-bound** — the `[bs, seq, 102400]` logits tensor caps `seq×bs`, which is
-why char vocab (negligible logits) reaches ~7.4% at 4096×8 while full vocab tops
-out at 2048×2 (and is noisy at that tiny, ~3 s-per-step size). On 8 chips the LM
-head is ColumnParallel, so logits shard across the axis and full vocab + longer
-seq coexist.
+`seq × bs` are the largest that fit at each setting. The **memory_efficient
+runner** (block-activation recompute) is what unlocks the big full-vocab batch:
+it frees the activation memory the `[bs, seq, 102400]` logits tensor needs, so
+single-device full vocab fits `2048 × 8` (best single-device MFU) rather than
+being capped at a tiny batch. On 8 chips the LM head is ColumnParallel, so logits
+shard across the axis as well.
 
 ## Notes
 - SP (sequence parallelism) and the MoE **tensor-parallel** variant are intentionally
