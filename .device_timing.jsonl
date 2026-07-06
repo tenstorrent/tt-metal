@@ -189,3 +189,4 @@
 {"source":"run_safe_pytest","pid":3230470,"started_at_ms":1783372177179,"wait_ms":2,"run_ms":19369,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_sdpa_refinement1_multiblock.py","exit_code":0}
 {"source":"run_safe_pytest","pid":3231135,"started_at_ms":1783372202000,"wait_ms":2,"run_ms":10470,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_sdpa_multiblock_debug.py","exit_code":0}
 {"source":"run_safe_pytest","pid":3231676,"started_at_ms":1783372234561,"wait_ms":2,"run_ms":45739,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_sdpa_refinement1b_mask_sync.py","exit_code":0}
+{"source":"run_safe_pytest","pid":3233583,"started_at_ms":1783372339332,"wait_ms":2,"run_ms":133645,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":1}
