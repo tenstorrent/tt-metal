@@ -96,7 +96,10 @@ class ModelConfig:
     # ------------------------------------------------------------------
     # TTNN execution options
     # ------------------------------------------------------------------
-    # Set TTNN_WEIGHT_BF8=1 to store linear weights as bfloat8_b (opt-in, ~5-7% gain)
+    # NOTE: currently unused in DiffusionDrive (the conv path is hardcoded bf16). bf8
+    # weights were measured to give NO latency gain here — the model is per-op-overhead-
+    # bound, not bandwidth-bound (see PERFORMANCE.md §5c) — so TTNN_WEIGHT_BF8=1 has no
+    # effect. Kept for API compatibility; the "~5-7% gain" was the sibling TTM model, not this.
     use_bf8_weights: bool = field(default_factory=lambda: os.environ.get("TTNN_WEIGHT_BF8", "0") == "1")
 
     @property
