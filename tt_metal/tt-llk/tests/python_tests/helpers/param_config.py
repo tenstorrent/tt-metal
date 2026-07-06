@@ -19,6 +19,27 @@ from .format_config import (
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import BlocksCalculationAlgorithm, DestAccumulation, DestSync
 
+RUNTIME_AXES_MARK = "runtime_axes"
+
+
+class _RuntimeMarker:
+    """Wrapper that tags a parameter value as runtime only."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+
+def runtime(value):
+    """Mark a parametrize value as runtime only so compile producer can deduplicate it.
+
+    Wrapped values are excluded from the compile key: test variants that differ only in
+    ``runtime()`` parameters share an ELF and are collapsed to a single compilation.
+    """
+    return _RuntimeMarker(value)
+
+
 checked_formats_and_dest_acc = {}
 
 DEST_SYNC_TILE_LIMITS = {
@@ -291,9 +312,51 @@ def _params_solve_dependencies(**kwargs: any) -> List[Tuple]:
 
 
 def parametrize(**kwargs: any):
-    parameters = tuple(kwargs.keys())
+    compile_key_fn = None
+    _rt_names = set()
+    _combo_rt_indices = {}
+    unwrapped = {}
+    for name, value in kwargs.items():
+        if isinstance(value, _RuntimeMarker):
+            _rt_names.add(name)
+            unwrapped[name] = value.value
+        elif (
+            isinstance(value, list)
+            and value
+            and all(isinstance(v, tuple) for v in value)
+            and any(isinstance(el, _RuntimeMarker) for combo in value for el in combo)
+        ):
+            _combo_rt_indices[name] = frozenset(
+                i
+                for combo in value
+                for i, el in enumerate(combo)
+                if isinstance(el, _RuntimeMarker)
+            )
+            unwrapped[name] = [
+                tuple(v.value if isinstance(v, _RuntimeMarker) else v for v in combo)
+                for combo in value
+            ]
+        else:
+            unwrapped[name] = value
+
+    if _rt_names or _combo_rt_indices:
+
+        def compile_key_fn(params):
+            parts = []
+            for k, v in sorted(params.items()):
+                if k in _rt_names:
+                    continue
+                if k in _combo_rt_indices:
+                    if len(v) == 1 and isinstance(v[0], tuple):
+                        v = v[0]
+                    rt_indices = _combo_rt_indices[k]
+                    v = tuple(el for i, el in enumerate(v) if i not in rt_indices)
+                parts.append((k, v))
+            return tuple(parts)
+
+    parameters = tuple(unwrapped.keys())
     parameters_string = ",".join(parameters)
-    parameter_values = _params_solve_dependencies(**kwargs)
+    parameter_values = _params_solve_dependencies(**unwrapped)
 
     def generate_id(value_tuple):
         """Generate readable test IDs from parameter values."""
@@ -313,6 +376,10 @@ def parametrize(**kwargs: any):
     ids = [generate_id(values) for values in parameter_values]
 
     def decorator(test_function):
+        if compile_key_fn is not None:
+            test_function = getattr(pytest.mark, RUNTIME_AXES_MARK)(
+                compile_key_fn=compile_key_fn
+            )(test_function)
         return pytest.mark.parametrize(parameters_string, parameter_values, ids=ids)(
             test_function
         )

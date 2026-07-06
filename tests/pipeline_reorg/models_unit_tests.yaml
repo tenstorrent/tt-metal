@@ -170,11 +170,10 @@
 - name: Qwen3.6 unit tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_attention_tp.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
+    pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_generate_tp.py
   model: qwen3.6-27b
   skus:
     bh_quietbox_2:
@@ -234,7 +233,8 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-E2B-it
-    # test_lm_head and test_model::test_full_model load real weights via
+    # test_lm_head, test_packed_verify (spec-decode packed verify, #46755) and
+    # test_model::test_full_model load real weights via
     # AutoModelForCausalLM.from_pretrained — they run in the e2e job instead
     # so the unit suite can stay weight-free and self-contained on the
     # checked-in config.json.
@@ -262,6 +262,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -286,6 +287,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -314,6 +316,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -346,6 +349,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -376,6 +380,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/

@@ -10,6 +10,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_device.hpp>  // q.device()->get_view().shape() for block-cyclic sp derivation
 
 #include "kernels/indexer_score_work_split.hpp"  // banded grid mapping (banded_core_count)
 #include "ttnn/operations/ccl/ccl_common.hpp"    // get_linearized_index_from_physical_coord
@@ -123,6 +124,36 @@ void validate_chunk_start(const operation_attributes_t& attrs, const tensor_args
             Sq);
     }
 }
+// Block-cyclic layout (sp derived from block_cyclic_sp_axis, global chunk = sp*block_cyclic_chunk_local):
+// sp/chunk_local are hashed and bake invP's divisors into the reader, so the per-shard chunk must be
+// tile-aligned and tile the cache evenly -- miss-only (a hit can't differ). Sq <= chunk_local bounds a
+// device's queries to at most one cache-slab crossing (one straddle).
+void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (!attrs.block_cyclic.has_value()) {
+        return;
+    }
+    const uint32_t sp = attrs.block_cyclic->sp;
+    const uint32_t chunk_local = attrs.block_cyclic->chunk_local;
+    const uint32_t chunk_global = sp * chunk_local;
+    const uint32_t T = t.k.logical_shape()[2];
+    const uint32_t Sq = t.q.logical_shape()[2];
+    TT_FATAL(sp >= 1, "block-cyclic sp must be >= 1 (got {})", sp);
+    TT_FATAL(
+        chunk_local > 0 && chunk_local % tt::constants::TILE_WIDTH == 0,
+        "block_cyclic_chunk_local ({}) must be > 0 and tile-aligned",
+        chunk_local);
+    TT_FATAL(
+        T % chunk_global == 0,
+        "global chunk {} (= sp*chunk_local) must divide T {} (the cache must be a whole number of global chunks)",
+        chunk_global,
+        T);
+    TT_FATAL(
+        Sq <= chunk_local,
+        "Sq ({}) must be <= block_cyclic_chunk_local ({}); a device's queries may cross at most one cache-slab "
+        "boundary (one straddle). A coarser indexer SP (Sq > chunk_local) is not yet supported.",
+        Sq,
+        chunk_local);
+}
 }  // namespace
 
 IndexerScoreDeviceOperation::program_factory_t IndexerScoreDeviceOperation::select_program_factory(
@@ -148,6 +179,11 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.cluster_axis.value_or(0u),
         attrs.has_indexed_kv_cache(),
         attrs.has_runtime_kv_len(),
+        // The block-cyclic layout bakes invP divisors into the reader as compile-time defines, so sp/chunk_local
+        // must be hashed (a contiguous vs block-cyclic read, or a different layout shape, is a different binary).
+        attrs.has_block_cyclic(),
+        attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
+        attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         tensor_args);
 }
 
@@ -186,6 +222,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     // slot/kv_len runtime values are re-checked every dispatch.
     validate_static(attrs, tensor_args);
     validate_runtime_values(attrs, tensor_args);
+    validate_block_cyclic(attrs, tensor_args);
 
     // Shapes: q [B, Hi, Sq, D], k [B, 1, T, D] (single shared head), weights [B, Hi, Sq, 1].
     TT_FATAL(q_shape.rank() == 4 && k_shape.rank() == 4, "q, k must be rank 4");
@@ -393,7 +430,8 @@ IndexerScoreDeviceOperation::invoke(
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<BlockCyclicLayout> block_cyclic) {
     return {
         operation_attributes_t{
             .chunk_start_idx = chunk_start_idx,
@@ -406,7 +444,8 @@ IndexerScoreDeviceOperation::invoke(
             .program_config = program_config,
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
-            .kv_len = kv_len},
+            .kv_len = kv_len,
+            .block_cyclic = block_cyclic},
         tensor_args_t{.q = q, .k = k, .weights = weights}};
 }
 
@@ -432,31 +471,100 @@ ttnn::Tensor launch_indexer_score(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> block_cyclic_sp_axis,
+    std::optional<uint32_t> block_cyclic_chunk_local) {
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
+    using ttnn::operations::experimental::indexer_score::BlockCyclicLayout;
 
-    // base = rank 0's absolute chunk_start. Omit it on a mesh -> deduce base = T - sp_ring*Sq (assumes K is
-    // history + the full SP-gathered chunk). Caveats: the deduced window ends at T (incompatible with a
-    // growing kv_len < T -- pass chunk_start_idx there); omitting on one chip now gives base = T - Sq, not 0.
+    const uint32_t Sq = q.logical_shape()[2];
+
+    // Block-cyclic (per-SP-shard) K layout -- interface matches ttnn.transformer.sparse_sdpa: the caller
+    // names the MESH AXIS the cache was striped over (block_cyclic_sp_axis) and passes the per-shard chunk
+    // length (block_cyclic_chunk_local); `sp` is DERIVED from the mesh shape on that axis, so a caller cannot
+    // pass an sp that disagrees with the device. Both set together or neither. sp == 1 (single chip / size-1
+    // axis) is the identity permutation, represented as no block-cyclic layout.
+    TT_FATAL(
+        block_cyclic_sp_axis.has_value() == block_cyclic_chunk_local.has_value(),
+        "indexer_score: block_cyclic_sp_axis and block_cyclic_chunk_local must both be set or both unset "
+        "(got sp_axis={}, chunk_local={})",
+        block_cyclic_sp_axis.has_value(),
+        block_cyclic_chunk_local.has_value());
+    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
+    if (block_cyclic_sp_axis.has_value()) {
+        const auto mesh_shape = q.device()->get_view().shape();
+        const uint32_t sp_axis = *block_cyclic_sp_axis;
+        TT_FATAL(
+            sp_axis < mesh_shape.dims(),
+            "indexer_score: block_cyclic_sp_axis ({}) out of range for mesh rank {}",
+            sp_axis,
+            mesh_shape.dims());
+        const uint32_t sp = mesh_shape[sp_axis];
+        const uint32_t tp = static_cast<uint32_t>(mesh_shape.mesh_size()) / sp;  // remaining (TP) device count
+        const uint32_t chunk_local = *block_cyclic_chunk_local;
+        // chunk_local is one of exactly two legal values (the cross-check sparse_sdpa also applies): q's
+        // per-chip seq length (seq sharded only on the SP axis) or tp*q_isl (seq also sliced across the TP
+        // axis, post-reshard). Anything else is a producer bug.
+        TT_FATAL(
+            chunk_local == Sq || chunk_local == Sq * tp,
+            "indexer_score: block_cyclic_chunk_local ({}) must be q_isl ({}) or tp*q_isl ({})",
+            chunk_local,
+            Sq,
+            Sq * tp);
+        // Seq sharded across BOTH axes (chunk_local == tp*q_isl, tp > 1) is allowed ONLY with cluster_axis
+        // unset: then chunk_start ranks device (a,b) by its row-major position in the full device list
+        // (a*B+b), giving each its true position -- i.e. the flat linearization IS a row-major nested 2D seq
+        // shard, and the per-device offset/straddle come out correct. With a NAMED cluster_axis the rank is
+        // only that axis's coord, so it misses the other axis's seq offset and chunk_start would be wrong --
+        // reject that.
+        TT_FATAL(
+            !(chunk_local == Sq * tp && tp > 1 && cluster_axis.has_value()),
+            "indexer_score: block_cyclic_chunk_local == tp*q_isl (tp={} > 1) with a NAMED cluster_axis is not "
+            "supported -- chunk_start would miss the second axis's seq offset. To seq-shard across both axes, "
+            "use cluster_axis=None (flat row-major linearization over all devices).",
+            tp);
+        // Store {sp, chunk_local} (matching sparse_sdpa's BlockCyclicLayout); the factory derives the global
+        // chunk (sp*chunk_local) and the invP tile divisors from these.
+        if (sp > 1) {
+            block_cyclic = BlockCyclicLayout{.sp = sp, .chunk_local = chunk_local};
+        }
+    }
+
+    // base = the absolute chunk_start of this op's rank 0. Omit it -> deduce the start of the gathered chunk:
+    //   * block-cyclic: the gathered chunk IS the global chunk (sp*chunk_local) -> base = T - chunk.
+    //   * contiguous: the gathered chunk is sp_ring*Sq (each SP device contributes Sq) -> base = T - sp_ring*Sq,
+    //     the same deduction as before this feature (single chip: sp_ring = 1 -> base = T - Sq).
+    // The deduced window ends at T (incompatible with a growing kv_len < T -- pass chunk_start_idx there).
     uint32_t base = 0;
     if (chunk_start_idx.has_value()) {
         base = *chunk_start_idx;
     } else {
-        const uint32_t Sq = q.logical_shape()[2];
         const uint32_t T = k.logical_shape()[2];
-        // sp_ring = max_rank + 1 (get_linearized_index returns coord-min; get_topological_dimension would
-        // over-count on a nonzero-offset sub-mesh). max_linearized_rank is shared with the validated window.
-        const uint32_t sp_ring =
-            ttnn::operations::experimental::indexer_score::max_linearized_rank(q, cluster_axis) + 1;
-        TT_FATAL(
-            T >= sp_ring * Sq,
-            "indexer_score: cannot deduce chunk_start_idx -- T={} < sp_ring({})*Sq({}). Pass chunk_start_idx "
-            "explicitly if K does not equal history + the SP-gathered chunk.",
-            T,
-            sp_ring,
-            Sq);
-        base = T - sp_ring * Sq;
+        if (block_cyclic.has_value()) {
+            const uint32_t chunk = block_cyclic->sp * block_cyclic->chunk_local;
+            TT_FATAL(
+                T >= chunk,
+                "indexer_score: cannot deduce chunk_start_idx -- T={} < global chunk={}. Pass chunk_start_idx "
+                "explicitly if K does not equal history + the gathered chunk.",
+                T,
+                chunk);
+            base = T - chunk;
+        } else {
+            // sp_ring = max_rank + 1 (get_linearized_index returns coord-min; get_topological_dimension would
+            // over-count on a nonzero-offset sub-mesh). max_linearized_rank is shared with the validated window.
+            const uint32_t sp_ring =
+                ttnn::operations::experimental::indexer_score::max_linearized_rank(q, cluster_axis) + 1;
+            TT_FATAL(
+                T >= sp_ring * Sq,
+                "indexer_score: cannot deduce chunk_start_idx -- T={} < sp_ring({})*Sq({}). Pass chunk_start_idx "
+                "explicitly if K does not equal history + the SP-gathered chunk.",
+                T,
+                sp_ring,
+                Sq);
+            base = T - sp_ring * Sq;
+        }
     }
+
     // Default math_fidelity follows the matmul-input dtypes (both bfp8 -> LoFi, else HiFi2); a caller config
     // overrides per field. fp32-dest acc / full-sync default off (the only modes the custom LLK is validated for).
     const bool both_bfp8 = q.dtype() == DataType::BFLOAT8_B && k.dtype() == DataType::BFLOAT8_B;
@@ -482,7 +590,8 @@ ttnn::Tensor launch_indexer_score(
         resolved,
         cache_batch_idx,
         kv_len,
-        cluster_axis);
+        cluster_axis,
+        block_cyclic);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
@@ -497,7 +606,9 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> block_cyclic_sp_axis,
+    std::optional<uint32_t> block_cyclic_chunk_local) {
     // DSA/GLM: relu, learned per-head gates, one head-summed plane, no pooling. Reads its real weights tensor.
     return launch_indexer_score(
         q,
@@ -513,7 +624,9 @@ ttnn::Tensor indexer_score_dsa(
         compute_kernel_config,
         cache_batch_idx,
         kv_len,
-        cluster_axis);
+        cluster_axis,
+        block_cyclic_sp_axis,
+        block_cyclic_chunk_local);
 }
 
 ttnn::Tensor indexer_score_msa(
@@ -525,7 +638,9 @@ ttnn::Tensor indexer_score_msa(
     uint32_t block_size,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> block_cyclic_sp_axis,
+    std::optional<uint32_t> block_cyclic_chunk_local) {
     // M3 has no learned gates, only a 1/sqrt(d) scale. Rather than materialize a constant [B,Hi,Sq,1] gate
     // tensor (an extra fill op dispatched every call), the reader fills cb_w with `scale` in L1 in-kernel
     // (synthesize_gate); q is passed as the unused weights placeholder so the op infra still has a valid
@@ -544,7 +659,9 @@ ttnn::Tensor indexer_score_msa(
         compute_kernel_config,
         /*cache_batch_idx=*/std::nullopt,
         /*kv_len=*/std::nullopt,
-        cluster_axis);
+        cluster_axis,
+        block_cyclic_sp_axis,
+        block_cyclic_chunk_local);
 }
 
 }  // namespace ttnn::experimental
