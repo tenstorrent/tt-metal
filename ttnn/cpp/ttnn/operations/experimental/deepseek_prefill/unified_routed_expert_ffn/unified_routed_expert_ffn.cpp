@@ -23,7 +23,7 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output,
     const std::optional<ttnn::Tensor>& expert_region_offsets,
-    RoutedExpertActivation activation) {
+    const std::optional<uint32_t>& input_m_tiles) {
     // Single-op fused per-expert FFN. One device Program runs gate matmul,
     // up matmul, silu, multiply, down matmul as four phases inside the same
     // kernel. The kernel reads counts[global_expert_idx_table[local_expert_id]]
@@ -46,7 +46,9 @@ ttnn::Tensor unified_routed_expert_ffn(
     constexpr uint32_t kGridY = 8;
     constexpr uint32_t kMinChunkMTiles = 16;  // per_core_M >= 2
     constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M <= 8 (L1 cap)
-    const uint32_t M_tiles_full = x.padded_shape()[-2] / 32;
+    // This expert's M in tiles. Defaults to x's allocated M; a caller passing a
+    // shared x buffer (wider than one region) supplies the per-expert value.
+    const uint32_t M_tiles_full = input_m_tiles.value_or(x.padded_shape()[-2] / 32);
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t best_num_chunks = (M_tiles_full + kMinChunkMTiles - 1) / kMinChunkMTiles + 1;
     uint32_t best_waste = kMaxChunkMTiles + 1;
@@ -71,6 +73,7 @@ ttnn::Tensor unified_routed_expert_ffn(
         global_expert_idx_table,
         local_expert_id,
         chunk_M_tiles,
+        M_tiles_full,
         compute_kernel_config.has_value() ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
                                           : std::nullopt,
         output,

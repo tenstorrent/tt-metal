@@ -61,6 +61,12 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
     TT_FATAL(op.chunk_M_tiles > 0, "chunk_M_tiles must be > 0");
+    // m_tiles is this expert's M (grid/chunk/CB sizing). x may be a shared
+    // buffer spanning many experts, so its allocated M only bounds m_tiles from
+    // above — the reader/writer index into x at the region offset.
+    TT_FATAL(op.m_tiles > 0, "m_tiles must be > 0");
+    TT_FATAL(
+        op.m_tiles <= x_shape[-2] / TILE, "m_tiles ({}) must be <= x M in tiles ({})", op.m_tiles, x_shape[-2] / TILE);
 
     // Weight tensors share x's storage / layout / memory contract — fail
     // host-side if the caller forgot to upload one, picked the wrong layout,
@@ -229,6 +235,7 @@ ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& global_expert_idx_table,
     uint32_t local_expert_id,
     uint32_t chunk_M_tiles,
+    uint32_t m_tiles,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
     const std::optional<ttnn::Tensor>& expert_region_offsets,
@@ -238,6 +245,7 @@ ttnn::Tensor unified_routed_expert_ffn(
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .chunk_M_tiles = chunk_M_tiles,
+            .m_tiles = m_tiles,
             .local_expert_id = local_expert_id,
             .activation = activation,
             .compute_kernel_config = compute_kernel_config},

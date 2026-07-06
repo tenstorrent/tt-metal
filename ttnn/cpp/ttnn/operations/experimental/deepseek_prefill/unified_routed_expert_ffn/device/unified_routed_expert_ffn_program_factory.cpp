@@ -62,7 +62,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const auto& gate_shape = t.gate_proj.padded_shape();
     const auto& down_shape = t.down_proj.padded_shape();
 
-    const uint32_t M_tiles_full = x_shape[-2] / TILE;
+    // This expert's M (not x's allocated M): x may be a shared buffer wider
+    // than one expert's region. K still comes from x's last dim (emb).
+    const uint32_t M_tiles_full = op.m_tiles;
     const uint32_t K_gate_tiles = x_shape[-1] / TILE;            // = N_gate K = emb / TILE
     const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;    // = hidden / TILE
     const uint32_t K_down_tiles = down_shape[-2] / TILE;         // = hidden / TILE

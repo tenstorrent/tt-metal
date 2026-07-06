@@ -47,6 +47,13 @@ struct UnifiedRoutedExpertFfnParams {
     // keeps DeepSeek V3 routed-expert dims inside Blackhole L1.
     uint32_t chunk_M_tiles = 64;
 
+    // This expert's M dimension in tiles — the row count the matmul grid,
+    // chunk loop, and CB sizes are built for. Decoupled from x's shape so x
+    // may be a shared buffer larger than one expert's region: the reader/writer
+    // index into it at the region offset while the op still sizes its work to a
+    // single expert. When x IS the per-expert tensor this equals x_padded[-2]/TILE.
+    uint32_t m_tiles = 0;
+
     // Local expert id used to index `global_expert_idx_table` at runtime
     // (kernel reads global_id = idx_table[local_expert_id], then count =
     // counts[global_id]).
@@ -59,8 +66,8 @@ struct UnifiedRoutedExpertFfnParams {
 
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "activation");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id, activation); }
+    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "m_tiles", "local_expert_id");
+    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, m_tiles, local_expert_id); }
 };
 
 // Tensors fed into the op.
