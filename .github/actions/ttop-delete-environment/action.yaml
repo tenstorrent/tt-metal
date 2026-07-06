@@ -18,6 +18,7 @@ runs:
       id: token
       run: |
         IDTOKEN=$(curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" $ACTIONS_ID_TOKEN_REQUEST_URL -H "Accept: application/json; api-version=2.0" -H "Content-Type: application/json" -d "{}" | jq -r '.value')
+        echo "::add-mask::${IDTOKEN}"        
         echo "idToken=${IDTOKEN}" >> $GITHUB_OUTPUT
 
     - name: Delete Environment
