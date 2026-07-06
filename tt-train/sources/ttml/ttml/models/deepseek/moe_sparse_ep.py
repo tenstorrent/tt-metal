@@ -35,7 +35,7 @@ import ttnn
 import ttml
 
 from .moe import MoE
-from .moe_sparse import _to_layout
+from .autograd_ops import to_layout
 
 
 class SparseMoEEP(MoE):
@@ -100,8 +100,8 @@ class SparseMoEEP(MoE):
         # grouped/plan/offsets/grouped_scores are per-chip distinct: they
         # reference experts [0, E_local) in the chip's local indexing.
         metadata = ttnn.to_layout(ttnn.typecast(topk_indices, ttnn.DataType.UINT16), ttnn.ROW_MAJOR_LAYOUT)
-        x_rm = _to_layout(x_bc, ttnn.ROW_MAJOR_LAYOUT)
-        scores_for_routing_rm = _to_layout(scores_for_routing_bc, ttnn.ROW_MAJOR_LAYOUT)
+        x_rm = to_layout(x_bc, ttnn.ROW_MAJOR_LAYOUT)
+        scores_for_routing_rm = to_layout(scores_for_routing_bc, ttnn.ROW_MAJOR_LAYOUT)
         group_out = ttml.ops.moe.moe_group_op(
             x_rm, metadata, scores_for_routing_rm, self._leids, int(self.e_local), int(K)
         )
@@ -132,7 +132,7 @@ class SparseMoEEP(MoE):
             1,
             int(S),
         )
-        output = _to_layout(output_rm, ttnn.TILE_LAYOUT)
+        output = to_layout(output_rm, ttnn.TILE_LAYOUT)
         output = self._memory_snapshot(output, "AFTER_UNGROUP")
 
         # ── all_reduce across EP axis to combine partial sums ──

@@ -77,40 +77,6 @@ class DeepSeekConfig:
     # when this flag is False.
     use_tp: bool = False
 
-    def __post_init__(self) -> None:
-        if not self.use_tp:
-            return
-        mesh = ttml.maybe_mesh()
-        if mesh is None or not mesh.has_axis("tp"):
-            raise ValueError("DeepSeekConfig.use_tp=True requires an active mesh with a 'tp' axis")
-        tp_size = mesh.axis_size("tp")
-        if self.n_heads % tp_size != 0:
-            raise ValueError(
-                "DeepSeek TP: n_heads must be divisible by TP size. " f"n_heads={self.n_heads}, tp_size={tp_size}"
-            )
-        if self.inter_dim % tp_size != 0:
-            raise ValueError(
-                "DeepSeek TP: inter_dim must be divisible by TP size. " f"inter_dim={self.inter_dim}, tp_size={tp_size}"
-            )
-        if self.moe_inter_dim % tp_size != 0:
-            raise ValueError(
-                "DeepSeek TP: moe_inter_dim must be divisible by TP size. "
-                f"moe_inter_dim={self.moe_inter_dim}, tp_size={tp_size}"
-            )
-        qk_out = self.n_heads * (self.qk_nope_head_dim + self.qk_rope_head_dim)
-        kv_up_out = self.n_heads * (self.qk_nope_head_dim + self.v_head_dim)
-        attn_out = self.n_heads * self.v_head_dim
-        for name, width in (
-            ("n_heads * qk_head_dim", qk_out),
-            ("n_heads * (qk_nope_head_dim + v_head_dim)", kv_up_out),
-            ("n_heads * v_head_dim", attn_out),
-        ):
-            if width % tp_size != 0:
-                raise ValueError(
-                    f"DeepSeek TP: {name}={width} must be divisible by TP size ({tp_size}) "
-                    "(MLA parallel linears shard the head-merged feature dim)."
-                )
-
 
 class DeepSeek(AbstractModuleBase):
     """Nano DeepSeek-V3 transformer model.
@@ -125,6 +91,7 @@ class DeepSeek(AbstractModuleBase):
 
         if config.use_tp:
             tp_size = ttml.mesh().axis_size("tp")
+            self._validate_tp(config, tp_size)
             align = lcm(32, tp_size)
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
             self.head = ColumnParallelLinear(
@@ -145,6 +112,29 @@ class DeepSeek(AbstractModuleBase):
         self.blocks = ModuleList([DeepSeekBlock(layer_id, config, rope_params) for layer_id in range(config.n_layers)])
 
         self.norm = RMSNormLayer(config.dim)
+
+    @staticmethod
+    def _validate_tp(config: DeepSeekConfig, tp_size: int) -> None:
+        """Fail fast if the full-model TP size can't evenly shard the model.
+
+        Runs at model build (mesh in scope), not in the config dataclass.
+        The MoE routed-expert count is validated in MoE.__init__ where the
+        experts are actually EP-sharded.
+        """
+        # Attention shards heads; dense MLP shards its intermediate dim.
+        if config.n_heads % tp_size != 0:
+            raise ValueError(f"DeepSeek TP: n_heads ({config.n_heads}) must be divisible by TP size ({tp_size})")
+        if config.inter_dim % tp_size != 0:
+            raise ValueError(f"DeepSeek TP: inter_dim ({config.inter_dim}) must be divisible by TP size ({tp_size})")
+        # MLA parallel linears shard the head-merged feature dims.
+        widths = {
+            "n_heads * qk_head_dim": config.n_heads * (config.qk_nope_head_dim + config.qk_rope_head_dim),
+            "n_heads * (qk_nope_head_dim + v_head_dim)": config.n_heads * (config.qk_nope_head_dim + config.v_head_dim),
+            "n_heads * v_head_dim": config.n_heads * config.v_head_dim,
+        }
+        for name, width in widths.items():
+            if width % tp_size != 0:
+                raise ValueError(f"DeepSeek TP: {name}={width} must be divisible by TP size ({tp_size})")
 
     def forward(
         self,

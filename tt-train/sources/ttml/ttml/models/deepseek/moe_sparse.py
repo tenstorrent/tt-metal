@@ -25,30 +25,8 @@ import ttnn
 import ttml
 
 from .moe import MoE
+from .autograd_ops import to_layout
 from ttml.common.profiler_utils import profiler_marker_start, profiler_marker_end
-
-
-# ---------------------------------------------------------------------------
-# Sparse-MoE-local autograd helpers. _ToLayout is a general-purpose wrapper we
-# don't want to add to the routing module for sparse-only layout conversion.
-# ---------------------------------------------------------------------------
-
-
-class _ToLayout(ttml.autograd.Function):
-    """ttnn.to_layout with the inverse layout-convert as backward."""
-
-    @staticmethod
-    def forward(ctx, input, target_layout):
-        ctx.source_layout = input.get_value().layout
-        return ttnn.to_layout(input.get_value(), target_layout)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        return ttnn.to_layout(grad_output, ctx.source_layout)
-
-
-def _to_layout(tensor, target_layout):
-    return _ToLayout.apply(tensor, target_layout)
 
 
 class SparseMoE(MoE):
@@ -90,8 +68,8 @@ class SparseMoE(MoE):
         metadata = ttnn.to_layout(ttnn.typecast(topk_indices, ttnn.DataType.UINT16), ttnn.ROW_MAJOR_LAYOUT)
         leids = self._leids
 
-        x_rm = _to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        scores_for_routing_rm = _to_layout(scores_for_routing, ttnn.ROW_MAJOR_LAYOUT)
+        x_rm = to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        scores_for_routing_rm = to_layout(scores_for_routing, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = profiler_marker_start(x_rm, "MoE.group_op")
         group_out = ttml.ops.moe.moe_group_op(x_rm, metadata, scores_for_routing_rm, leids, int(E), int(K))
         # MoEGroupOutputs fields are read-only; thread the marker through a
@@ -132,7 +110,7 @@ class SparseMoE(MoE):
             int(S),  # S
         )
         output_rm = profiler_marker_end(output_rm, "MoE.ungroup_op")
-        output = _to_layout(output_rm, ttnn.TILE_LAYOUT)
+        output = to_layout(output_rm, ttnn.TILE_LAYOUT)
         output = self._memory_snapshot(output, "AFTER_UNGROUP")
 
         # Shared experts.
