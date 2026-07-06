@@ -21,6 +21,7 @@ from ...layers.normalization import DistributedLayerNorm
 from ...utils import cache
 from ...utils.padding import PaddingConfig
 from ...utils.substate import rename_substate
+from ...utils.tensor import bf16_tensor
 from .transformer_flux1 import Flux1SingleTransformerBlock
 
 if TYPE_CHECKING:
@@ -57,32 +58,102 @@ class BriaFiboTextProjection(Module):
         return self.linear(x)
 
 
-def inject_text(encoder_hidden_states: ttnn.Tensor, projected: ttnn.Tensor) -> ttnn.Tensor:
-    """Concat-halves injection for FIBO dual blocks (tp=1).
+class _InjectionMask:
+    """Precomputed per-device masks for the tp>1 concat-halves injection.
 
-    Replaces the upper half of the context (prompt) features with the per-block
-    projected text embedding:
+    On the mesh, ``prompt`` (after ``context_embedder``) is feature-sharded on ``tp_axis``:
+    each device holds a contiguous ``inner_dim / tp`` slice of the feature dim. The concat-halves
+    keeps the first ``inner_dim / 2`` features (the original context) and replaces the last
+    ``inner_dim / 2`` with the per-block ``projected`` text.
+
+    When the half-boundary ``inner_dim / 2`` coincides with a shard boundary (``tp`` even), this is
+    a purely *local* per-device select: the first ``tp / 2`` devices keep their prompt shard, the
+    remaining ``tp / 2`` devices take the projected text. We realize it with two sharded weight
+    tensors ``keep`` (1 where the prompt half lives, else 0) and ``take`` (its complement), so the
+    injection is a gather-free ``enc_local * keep + projected * take`` -- staying feature-sharded,
+    with no all-gather.
+
+    ``projected`` comes from ``BriaFiboTextProjection`` (a *replicated* ``Linear``), so it is the
+    full ``inner_dim / 2`` on every device; multiplying by the per-device ``take`` mask keeps only
+    the slice this device owns.
+    """
+
+    def __init__(
+        self,
+        *,
+        inner_dim: int,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: DiTParallelConfig,
+    ) -> None:
+        tp_factor = parallel_config.tensor_parallel.factor
+        tp_axis = parallel_config.tensor_parallel.mesh_axis
+
+        half = inner_dim // 2
+        shard = inner_dim // tp_factor
+        assert (
+            half % shard == 0
+        ), f"inject_text (tp>1): concat-halves boundary {half} must align to feature-shard width {shard} (tp={tp_factor})"
+
+        # Full-width [1, 1, inner_dim] mask: 1 on the first `half` features (the kept prompt),
+        # 0 on the last `half` (replaced by projected). Sharded on tp_axis so each device gets a
+        # [1, 1, shard] slice that is either all-ones (keep) or all-zeros (take).
+        keep = torch.zeros(1, 1, inner_dim, dtype=torch.float32)
+        keep[..., :half] = 1.0
+        take = 1.0 - keep
+
+        self.keep = bf16_tensor(keep, device=mesh_device, mesh_axis=tp_axis, shard_dim=2)
+        self.take = bf16_tensor(take, device=mesh_device, mesh_axis=tp_axis, shard_dim=2)
+
+
+def inject_text(
+    encoder_hidden_states: ttnn.Tensor,
+    projected: ttnn.Tensor,
+    *,
+    mask: _InjectionMask | None = None,
+) -> ttnn.Tensor:
+    """Concat-halves injection for FIBO blocks.
+
+    Replaces the upper half of the context (prompt) features with the per-block projected text
+    embedding::
 
         out[..., :half] = encoder_hidden_states[..., :half]
         out[..., half:] = projected
 
     where ``half = inner_dim // 2 = 1536``.
 
+    Two paths:
+
+    * **tp=1** (``mask=None``): plain feature-dim concat of the kept first half with ``projected``.
+    * **tp>1** (``mask`` given): the feature dim is sharded on ``tp_axis`` and the ``half`` boundary
+      equals a shard boundary, so the injection is a gather-free per-device select via the
+      precomputed :class:`_InjectionMask`. ``encoder_hidden_states`` is the *local* feature shard
+      (width ``inner_dim / tp``) and ``projected`` is the full ``inner_dim / 2`` replicated on every
+      device; the result stays feature-sharded (width ``inner_dim / tp``), exactly what the block
+      expects.
+
     Args:
-        encoder_hidden_states: Context tensor of shape ``[batch, P, inner_dim]``
-            (inner_dim = 3072 for FIBO).
-        projected: Per-block text projection of shape ``[batch, P, inner_dim // 2]``
-            (i.e. ``[batch, P, 1536]``).
+        encoder_hidden_states: Context tensor. tp=1: ``[batch, P, inner_dim]``. tp>1: the local
+            feature shard ``[batch, P, inner_dim / tp]``.
+        projected: Per-block text projection ``[batch, P, inner_dim // 2]`` (replicated on tp).
+        mask: Precomputed :class:`_InjectionMask` for the tp>1 path, or ``None`` for tp=1.
 
     Returns:
-        Concatenated tensor of shape ``[batch, P, inner_dim]``.
+        Injected context, same feature layout as ``encoder_hidden_states``.
     """
-    half = projected.shape[-1]
-    assert (
-        encoder_hidden_states.shape[-1] == 2 * half
-    ), f"inject_text: expected encoder_hidden_states last dim {2 * half}, got {encoder_hidden_states.shape[-1]}"
-    first_half = encoder_hidden_states[:, :, :half]
-    return ttnn.concat([first_half, projected], dim=-1)
+    if mask is None:
+        half = projected.shape[-1]
+        assert (
+            encoder_hidden_states.shape[-1] == 2 * half
+        ), f"inject_text: expected encoder_hidden_states last dim {2 * half}, got {encoder_hidden_states.shape[-1]}"
+        first_half = encoder_hidden_states[:, :, :half]
+        return ttnn.concat([first_half, projected], dim=-1)
+
+    # tp>1 shard-aligned select: keep this device's prompt shard where the kept half lives,
+    # otherwise take the (replicated) projected text. Broadcasting the [1, 1, shard] masks over
+    # [batch, P, shard] keeps everything on the local feature shard -- no CCL.
+    kept = ttnn.mul(encoder_hidden_states, mask.keep)
+    taken = ttnn.mul(projected, mask.take)
+    return ttnn.add(kept, taken)
 
 
 class BriaFiboTimestepEmbed(Module):
@@ -223,6 +294,14 @@ class BriaFiboTransformer(Module):
             for _ in range(num_layers + num_single_layers)
         )
 
+        # tp>1: precompute the shard-aligned injection mask once (reused for every block).
+        # At tp=1 the injection is a plain concat and needs no mask.
+        self._injection_mask = (
+            _InjectionMask(inner_dim=inner_dim, mesh_device=mesh_device, parallel_config=parallel_config)
+            if parallel_config.tensor_parallel.factor > 1
+            else None
+        )
+
         self.transformer_blocks = ModuleList(
             TransformerBlock(
                 dim=inner_dim,
@@ -317,7 +396,7 @@ class BriaFiboTransformer(Module):
 
         for block in self.transformer_blocks:
             projected = self.caption_projection[block_id](text_encoder_layers[block_id])
-            prompt = inject_text(prompt, projected)
+            prompt = inject_text(prompt, projected, mask=self._injection_mask)
             spatial, prompt = block.forward(
                 spatial=spatial,
                 prompt=prompt,
@@ -333,7 +412,7 @@ class BriaFiboTransformer(Module):
 
         for block in self.single_transformer_blocks:
             projected = self.caption_projection[block_id](text_encoder_layers[block_id])
-            prompt = inject_text(prompt, projected)
+            prompt = inject_text(prompt, projected, mask=self._injection_mask)
             spatial, prompt = block.forward(
                 spatial=spatial,
                 prompt=prompt,
