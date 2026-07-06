@@ -25,7 +25,7 @@
       timeout: 300
     bh_p150b_civ2:
       timeout: 300
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: eltwise.unary
 
@@ -38,7 +38,7 @@
       timeout: 130
     bh_p150b_civ2:
       timeout: 130
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: eltwise.unary_backward
 
@@ -51,7 +51,7 @@
       timeout: 110
     bh_p150b_civ2:
       timeout: 110
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: eltwise.binary
 
@@ -64,7 +64,7 @@
       timeout: 30
     bh_p150b_civ2:
       timeout: 30
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: eltwise.binary_backward
 
@@ -77,7 +77,7 @@
       timeout: 25
     bh_p150b_civ2:
       timeout: 25
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: eltwise.composite
 
@@ -90,7 +90,7 @@
       timeout: 18
     bh_p150b_civ2:
       timeout: 18
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: eltwise.unary_complex
 
@@ -103,7 +103,7 @@
       timeout: 14
     bh_p150b_civ2:
       timeout: 14
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: eltwise.ternary
 
@@ -116,7 +116,7 @@
       timeout: 8
     bh_p150b_civ2:
       timeout: 8
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: eltwise.binary_complex
 
@@ -129,7 +129,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: eltwise.ternary_backward
 
@@ -143,7 +143,7 @@
       timeout: 55
     bh_p150b_civ2:
       timeout: 55
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: data_movement
 
@@ -156,7 +156,7 @@
       timeout: 30
     bh_p150b_civ2:
       timeout: 30
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: reduction
 
@@ -169,7 +169,7 @@
       timeout: 27
     bh_p150b_civ2:
       timeout: 27
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: matmul
 
@@ -182,7 +182,7 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: transformer
 
@@ -195,7 +195,7 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: pool2d
 
@@ -208,7 +208,7 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: normalization
 
@@ -221,7 +221,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: creation
 
@@ -234,7 +234,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: losses
 
@@ -247,7 +247,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: fused
 
@@ -260,7 +260,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: conv2d
 
@@ -273,7 +273,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: composite
 
@@ -286,7 +286,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: embedding
 
@@ -299,7 +299,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: embedding_bw
 
@@ -312,7 +312,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: conv_transpose2d
 
@@ -326,7 +326,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: add
 
@@ -339,7 +339,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: tilize
 
@@ -352,7 +352,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: tilize_with_val_padding
 
@@ -365,7 +365,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: untilize
 
@@ -378,7 +378,7 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: untilize_with_unpadding
 
@@ -390,6 +390,6 @@
       timeout: 90
     bh_loudbox:
       timeout: 90
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   team: ttnn
   category: ccl

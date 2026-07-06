@@ -19,7 +19,7 @@
     wh_n150:
       timeout: 120
   team: ttnn
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   category: lead-models-single-chip
 
 - name: ttnn sweeps lead-models galaxy
@@ -28,5 +28,5 @@
     wh_galaxy:
       timeout: 200
   team: ttnn
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   category: lead-models-galaxy

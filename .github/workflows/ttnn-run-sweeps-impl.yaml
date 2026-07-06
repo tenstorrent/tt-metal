@@ -50,6 +50,10 @@ on:
         type: string
         default: "true"
         description: "Upload homogenized run results to SFTP."
+      arch:
+        type: string
+        default: "wormhole_b0"
+        description: "Arch label for run-result metadata (summary/DB). The run job derives ARCH_NAME per SKU; generation is pinned to its wormhole runner."
 
 permissions:
   contents: read
@@ -116,7 +120,7 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: wormhole_b0
+        ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         TRACY_NO_INVARIANT_CHECK: 1
@@ -249,7 +253,7 @@ jobs:
           print("matrix=" + json.dumps(out))
           ' >> "$GITHUB_OUTPUT"
 
-  ttnn-run-sweeps-parallel:
+  ttnn-run-sweeps:
     needs: [prepare-sweep-vectors, load-test-matrix]
     name: ${{ matrix.test-group.name }}
     strategy:
@@ -269,13 +273,14 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         TRACY_NO_INVARIANT_CHECK: 1
+        TT_SMI_RESET_COMMAND: ${{ contains(matrix.test-group.sku, 'galaxy') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
         # The universal `category` field is wired to its runtime function here.
         # A lane name (mesh: '*-sweeps', lead-models: 'lead-models-*') selects that
         # test group's capability filter in vector_source; an op-category (e.g.
         # 'matmul', 'eltwise.unary') is just batch identity and sets no group.
         # lead-models lanes additionally flip run-type detection.
         TEST_GROUP_NAME: ${{ (endsWith(matrix.test-group.category, '-sweeps') || startsWith(matrix.test-group.category, 'lead-models')) && matrix.test-group.category || '' }}
-        LEAD_MODELS_RUN: ${{ startsWith(matrix.test-group.category, 'lead-models') && '1' || '' }}
+        LEAD_MODELS_RUN: ${{ startsWith(matrix.test-group.category, 'lead-models') && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -354,11 +359,11 @@ jobs:
   # batch's results, homogenize, publish summary/DB, then SFTP-upload.
   homogenize-run-result:
     name: Homogenize run result
-    needs: [ttnn-run-sweeps-parallel]
+    needs: [ttnn-run-sweeps]
     if: |
       always() &&
       !cancelled() &&
-      (needs.ttnn-run-sweeps-parallel.result == 'success' || needs.ttnn-run-sweeps-parallel.result == 'failure')
+      (needs.ttnn-run-sweeps.result == 'success' || needs.ttnn-run-sweeps.result == 'failure')
     container:
       image: ${{ inputs.dev-docker-image }}
       env:
@@ -417,7 +422,7 @@ jobs:
         continue-on-error: true
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
-          ARCH_NAME: wormhole_b0
+          ARCH_NAME: ${{ inputs.arch }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
@@ -438,7 +443,7 @@ jobs:
         env:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
           GITHUB_RUN_ID: ${{ github.run_id }}
-          ARCH_NAME: wormhole_b0
+          ARCH_NAME: ${{ inputs.arch }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |

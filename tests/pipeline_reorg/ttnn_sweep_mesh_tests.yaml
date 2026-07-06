@@ -23,7 +23,7 @@
     wh_n150:
       timeout: 60
   team: ttnn
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   category: wormhole-n150-sweeps
 
 - name: ttnn sweeps mesh wormhole-n300
@@ -32,7 +32,7 @@
     wh_n300:
       timeout: 60
   team: ttnn
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   category: wormhole-n300-sweeps
 
 - name: ttnn sweeps mesh wormhole-t3k
@@ -41,7 +41,7 @@
     wh_llmbox:
       timeout: 120
   team: ttnn
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   category: wormhole-t3k-sweeps
 
 - name: ttnn sweeps mesh wormhole-galaxy
@@ -50,5 +50,5 @@
     wh_galaxy:
       timeout: 200
   team: ttnn
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U08T3JQEB36 # Steven Lee
   category: wormhole-galaxy-sweeps

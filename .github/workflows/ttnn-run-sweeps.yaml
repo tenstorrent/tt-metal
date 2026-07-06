@@ -831,3 +831,4 @@ jobs:
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
       fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       upload-results: ${{ needs.resolve-inputs.outputs.upload-results }}
+      arch: ${{ needs.resolve-inputs.outputs.arch }}
