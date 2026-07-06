@@ -3301,8 +3301,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                                 }
                                 volatile CombineChannelDebug* c = &d->per_ch[ch];
                                 DEVICE_PRINT(
-                                    "[cmb] ch={} att={} enq={} starved={} rxfull={} txqbusy={} other={} tight={} "
-                                    "bytes={} payload={}\n",
+                                    "[cmb] ch={} att={} enq={} starved={} rxfull={} txqbusy={} other={}\n",
                                     ch,
                                     c->att_total,
                                     c->att_enqueued,
