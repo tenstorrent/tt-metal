@@ -367,7 +367,10 @@ def _emit_bringup_summary_table(model_id: str, demo_dir: Path, final=None, stop_
     try:
         blk = (demo_dir / ".loader_blocker.txt").read_text().strip()
         if blk:
-            print(f"  BLOCKER: {blk}")
+            print("  " + "-" * 74)
+            for ln in blk.splitlines():
+                print(f"  {ln}")
+            print("  " + "-" * 74)
     except Exception:
         pass
     print(bar)

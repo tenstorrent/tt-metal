@@ -557,6 +557,64 @@ def discover_components_from_hf_id(
         del model
 
 
+def _reference_loader_next_steps(model_id: str, exc: BaseException, loader_file) -> str:
+    import sys as _sys
+
+    err = f"{type(exc).__name__}: {exc}"
+    low = str(exc).lower()
+    lines = [
+        f"Could not build a reference model for '{model_id}', so discovery found 0 components "
+        f"and there was nothing to bring up.",
+        f"Cause: the reference loader raised {err}",
+        "",
+        "NEXT STEPS to make it run:",
+    ]
+    if isinstance(exc, ModuleNotFoundError):
+        pkg = getattr(exc, "name", "") or ""
+        if not pkg:
+            _m = re.search(r"No module named ['\"]([\w.]+)['\"]", str(exc))
+            pkg = _m.group(1) if _m else ""
+        pkg = pkg.split(".")[0] or "the model's package"
+        lines += [
+            f"  1. This model's architecture lives in the '{pkg}' package, which is NOT installed",
+            f"     in the Python the tool is using ({_sys.executable}).",
+            f"     Install it:   {_sys.executable} -m pip install {pkg}",
+            "  2. If that package needs a different transformers/numpy than tt-metal, install it in a",
+            "     SEPARATE venv (do NOT downgrade python_env — that breaks ttnn) and run bring-up there.",
+            "  3. Re-run:  python -m scripts.tt_hw_planner auto-up " + model_id + " --box <BOX> --mesh <M>",
+        ]
+    elif ("flash_attn" in low) or ("attn_implementation" in low) or ("attention_functions" in low):
+        lines += [
+            "  1. This is a transformers VERSION MISMATCH: the model's package expects a different",
+            "     transformers version than this environment has.",
+            "  2. Make a dedicated venv with the transformers version the model needs (for kokoro that",
+            "     is transformers 4.x) plus ttnn, and run the bring-up from that venv.",
+            f"  3. Or edit the reference loader to force eager attention: {loader_file}",
+        ]
+    elif "no module named" in low or "importerror" in low:
+        lines += [
+            "  1. A Python dependency the reference loader imports is missing.",
+            "     Read the error above, pip-install the named package, and re-run.",
+            "  2. If it conflicts with tt-metal's deps, use a dedicated venv, not python_env.",
+        ]
+    else:
+        lines += [
+            "  1. This is usually a version/dependency mismatch between the model's package and this env.",
+            "  2. Install the model's package + its required deps in a dedicated venv and re-run.",
+            f"  3. Inspect / fix the reference loader if needed: {loader_file}",
+        ]
+    return "\n".join(lines)
+
+
+def _write_loader_blocker(demo_dir, message: str) -> None:
+    for ln in message.splitlines():
+        print(f"  [discovery] {ln}")
+    try:
+        (demo_dir / ".loader_blocker.txt").write_text(message, encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _load_reference_module(model_id: str):
     try:
         from . import reference_loader_resolver as _rlr
@@ -601,21 +659,8 @@ def _load_reference_module(model_id: str):
 
         try:
             ref = _exec_loader()
-        except ModuleNotFoundError as exc:
-            import sys as _sys
-
-            pkg = (getattr(exc, "name", "") or "").split(".")[0] or "<package>"
-            hint = (
-                f"reference loader for {model_id} needs the Python package '{pkg}', which is not "
-                f"installed in this environment ({_sys.executable}). Install it and re-run — prefer a "
-                f"dedicated venv over python_env if the package would downgrade transformers/ttnn deps:"
-                f"    pip install {pkg}"
-            )
-            print(f"  [discovery] {hint}")
-            try:
-                (demo_dir / ".loader_blocker.txt").write_text(hint, encoding="utf-8")
-            except Exception:
-                pass
+        except Exception as exc:
+            _write_loader_blocker(demo_dir, _reference_loader_next_steps(model_id, exc, loader_file))
             return None
         try:
             ref.eval()
@@ -623,10 +668,8 @@ def _load_reference_module(model_id: str):
             pass
         return ref
     except Exception as exc:
-        msg = f"reference-loader fallback failed for {model_id}: {type(exc).__name__}: {exc}"
-        print(f"  [discovery] {msg}")
-        try:
-            (demo_dir / ".loader_blocker.txt").write_text(msg, encoding="utf-8")
-        except Exception:
-            pass
+        _write_loader_blocker(
+            demo_dir,
+            _reference_loader_next_steps(model_id, exc, locals().get("loader_file", "tests/pcc/_reference_loader.py")),
+        )
         return None
