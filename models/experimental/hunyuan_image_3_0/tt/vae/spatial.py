@@ -48,8 +48,8 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
     the (tiny) [1,1,G,1] stat tensors are all-reduced across the h/w mesh axes to global
     stats, then the LOCAL shard is normalized and affine-transformed. Per-core work stays
     at the shard size, so L1 never overflows. Requires ``norm._raw_gamma`` / ``norm._raw_beta``
-    ([1,1,1,C] fp32) attached at weight-load time (the packed ttnn.group_norm weights
-    can't be reused here)."""
+    ([1,1,1,C], stored in the norm's own dtype) attached at weight-load time (the packed
+    ttnn.group_norm weights can't be reused here)."""
     G = norm.num_groups
     C = norm.num_channels
     Cg = C // G
@@ -63,10 +63,17 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
     # Reduce over SPATIAL first (dim2), keeping channels as the last dim. Reshaping to
     # per-group [.,G,Cg] with tiny Cg would pad Cg->32 in TILE and explode DRAM, so do
     # the (tiny) in-group channel reduction only after collapsing spatial to [1,1,1,C].
-    csum = ttnn.sum(x, dim=2, keepdim=True)  # [1,1,1,C]
+    # Stack x and x^2 on dim1 before reducing so this (the most expensive op in the
+    # whole graph at full spatial res) dispatches once instead of twice -- same
+    # one-round-trip trick used below for the cross-mesh stat all-reduce.
     xsq = ttnn.multiply(x, x)
-    csumsq = ttnn.sum(xsq, dim=2, keepdim=True)  # [1,1,1,C]
+    x_xsq = ttnn.concat([x, xsq], dim=1)  # [1,2,n_local,C]
     ttnn.deallocate(xsq)
+    csum_both = ttnn.sum(x_xsq, dim=2, keepdim=True)  # [1,2,1,C]
+    ttnn.deallocate(x_xsq)
+    csum = ttnn.slice(csum_both, [0, 0, 0, 0], [1, 1, 1, C])
+    csumsq = ttnn.slice(csum_both, [0, 1, 0, 0], [1, 2, 1, C])
+    ttnn.deallocate(csum_both)
 
     def _group_reduce(csum_1c):  # [1,1,1,C] -> per-group [1,1,G,1]
         g = ttnn.reshape(csum_1c, [1, 1, G, Cg])
