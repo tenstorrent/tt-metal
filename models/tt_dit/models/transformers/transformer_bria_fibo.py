@@ -59,19 +59,20 @@ class BriaFiboTextProjection(Module):
 
 
 class _InjectionMask:
-    """Precomputed per-device masks for the tp>1 concat-halves injection.
+    """Precomputed per-device masks for the tp==2 concat-halves injection.
 
     On the mesh, ``prompt`` (after ``context_embedder``) is feature-sharded on ``tp_axis``:
     each device holds a contiguous ``inner_dim / tp`` slice of the feature dim. The concat-halves
     keeps the first ``inner_dim / 2`` features (the original context) and replaces the last
     ``inner_dim / 2`` with the per-block ``projected`` text.
 
-    When the half-boundary ``inner_dim / 2`` coincides with a shard boundary (``tp`` even), this is
+    When the half-boundary ``inner_dim / 2`` coincides with a shard boundary (``tp==2`` only), this is
     a purely *local* per-device select: the first ``tp / 2`` devices keep their prompt shard, the
     remaining ``tp / 2`` devices take the projected text. We realize it with two sharded weight
     tensors ``keep`` (1 where the prompt half lives, else 0) and ``take`` (its complement), so the
     injection is a gather-free ``enc_local * keep + projected * take`` -- staying feature-sharded,
-    with no all-gather.
+    with no all-gather. This is only correct when the per-device feature-shard width equals half
+    the inner dimension, which holds exactly at tp==2.
 
     ``projected`` comes from ``BriaFiboTextProjection`` (a *replicated* ``Linear``), so it is the
     full ``inner_dim / 2`` on every device; multiplying by the per-device ``take`` mask keeps only
@@ -91,8 +92,8 @@ class _InjectionMask:
         half = inner_dim // 2
         shard = inner_dim // tp_factor
         assert (
-            half % shard == 0
-        ), f"inject_text (tp>1): concat-halves boundary {half} must align to feature-shard width {shard} (tp={tp_factor})"
+            shard == half
+        ), f"inject_text tp>1 mask only supports tp==2 (feature shard {shard} must equal half {half}); tp>2 unsupported"
 
         # Full-width [1, 1, inner_dim] mask: 1 on the first `half` features (the kept prompt),
         # 0 on the last `half` (replaced by projected). Sharded on tp_axis so each device gets a
@@ -124,12 +125,12 @@ def inject_text(
     Two paths:
 
     * **tp=1** (``mask=None``): plain feature-dim concat of the kept first half with ``projected``.
-    * **tp>1** (``mask`` given): the feature dim is sharded on ``tp_axis`` and the ``half`` boundary
+    * **tp==2** (``mask`` given): the feature dim is sharded on ``tp_axis`` and the ``half`` boundary
       equals a shard boundary, so the injection is a gather-free per-device select via the
       precomputed :class:`_InjectionMask`. ``encoder_hidden_states`` is the *local* feature shard
       (width ``inner_dim / tp``) and ``projected`` is the full ``inner_dim / 2`` replicated on every
       device; the result stays feature-sharded (width ``inner_dim / tp``), exactly what the block
-      expects.
+      expects. Only tp==2 is supported.
 
     Args:
         encoder_hidden_states: Context tensor. tp=1: ``[batch, P, inner_dim]``. tp>1: the local
