@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -635,17 +636,49 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
             tenv = dict(os.environ)
             tenv["TT_METAL_HOME"] = str(demo_repo_root)
             tenv["PYTHONPATH"] = str(demo_repo_root) + os.pathsep + tenv.get("PYTHONPATH", "")
+            g6_hang = min(int(hang_timeout), int(os.environ.get("E2E_G6_HANG_TIMEOUT", "600")))
+            proc = subprocess.Popen(
+                [py, str(probe_py), str(demo_dir)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(demo_repo_root),
+                env=tenv,
+                start_new_session=True,
+            )
+            stdout, stderr = "", ""
+            timed_out = False
             try:
-                tp = subprocess.run(
-                    [py, str(probe_py), str(demo_dir)],
-                    capture_output=True,
-                    text=True,
-                    timeout=hang_timeout,
-                    cwd=str(demo_repo_root),
-                    env=tenv,
+                stdout, stderr = proc.communicate(timeout=g6_hang)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                try:
+                    pgid = os.getpgid(proc.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    for _ in range(10):
+                        if proc.poll() is not None:
+                            break
+                        time.sleep(0.5)
+                    if proc.poll() is None:
+                        os.killpg(pgid, signal.SIGKILL)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    proc.wait(timeout=10)
+                except Exception:  # noqa: BLE001
+                    pass
+            except Exception:  # noqa: BLE001
+                pass
+
+            if timed_out:
+                _rst = _reset_device()
+                reasons.append(
+                    f"G6 trace+2CQ: trace-capture probe hung >{g6_hang}s "
+                    f"(subprocess group killed, {_rst}); fix-loop should treat as failure and iterate"
                 )
+            else:
                 tr = None
-                for line in ((tp.stdout or "") + "\n" + (tp.stderr or "")).splitlines():
+                for line in ((stdout or "") + "\n" + (stderr or "")).splitlines():
                     if line.startswith("TRACE_PROBE="):
                         try:
                             tr = json.loads(line.split("=", 1)[1])
@@ -661,13 +694,6 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                         + (_b or _cap or "capture failed")
                         + " (set E2E_ALLOW_NO_TRACE=1 to waive for a genuinely non-traceable model)"
                     )
-            except subprocess.TimeoutExpired:
-                _rst = _reset_device()
-                reasons.append(
-                    f"G6 trace+2CQ: trace-capture probe exceeded {hang_timeout}s (likely device hang) — {_rst}"
-                )
-            except Exception:  # noqa: BLE001
-                pass
 
     return (len(reasons) == 0), reasons
 
