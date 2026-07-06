@@ -33,6 +33,7 @@ file(
     permute/device/kernels/*
     reshape_on_device/device/kernels/*
     repeat/device/kernels/*
+    repeat_codegen/device/kernels/*
     roll/device/kernels/*
     reshape_view/device/device/*
     scatter/device/kernels/*
@@ -176,6 +177,10 @@ target_sources(
             repeat/device/repeat_program_factory_common.hpp
             repeat/device/repeat_program_factory_higher_dim.hpp
             repeat/device/repeat_program_factory_last_dim.hpp
+            # repeat_codegen/
+            repeat_codegen/repeat_codegen_nanobind.hpp
+            repeat_codegen/device/repeat_codegen_device_operation.hpp
+            repeat_codegen/device/repeat_codegen_program_factory.hpp
             # repeat_interleave/
             repeat_interleave/repeat_interleave.hpp
             repeat_interleave/repeat_interleave_nanobind.hpp
