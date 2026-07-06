@@ -218,6 +218,117 @@ def _derive_shard_tp(model_id: str, mesh) -> int:
         return 1
 
 
+def _emit_bringup_summary_table(model_id: str, demo_dir: Path, final: dict) -> None:
+    import json as _json
+
+    from .. import cli as _cli
+    from ..failure_classifier import classify_failure
+    from ..module_tree import safe_identifier
+    from ..overlay_manager import load_persistent_skips
+
+    demo_dir = Path(demo_dir)
+    graduated = set(final.get("graduated") or [])
+    shard = set(final.get("shard_graduated") or [])
+    grad_safe = {safe_identifier(g) for g in graduated}
+
+    universe: dict = {}
+    try:
+        _counts, rows = _cli._summarize_bringup_status(model_id)
+        for name, status in rows:
+            universe[name] = status
+    except Exception:
+        rows = []
+
+    st: dict = {}
+    try:
+        st = _json.loads((demo_dir / ".bringup_cc_state.json").read_text())
+    except Exception:
+        st = {}
+    fallback = set(st.get("fallback") or [])
+    harness_skipped = set(st.get("harness_skipped") or [])
+    harness_reason = st.get("harness_skip_reason", {}) or {}
+    attempts = st.get("attempts", {}) or {}
+    last_text = st.get("last_failure_text", {}) or {}
+    last_class = st.get("last_failure_class", {}) or {}
+    try:
+        skips = load_persistent_skips(model_id)
+    except Exception:
+        skips = {}
+    for extra in (graduated, fallback, harness_skipped, set(skips), set(attempts)):
+        for name in extra:
+            universe.setdefault(name, "NEW")
+
+    def _test_path(name: str) -> str:
+        p = demo_dir / "tests" / "pcc" / f"test_{safe_identifier(name)}.py"
+        try:
+            from ..discovery import BRINGUP_ROOT
+
+            return str(p.relative_to(BRINGUP_ROOT()))
+        except Exception:
+            return str(p)
+
+    def _is_grad(name: str) -> bool:
+        return name in graduated or safe_identifier(name) in grad_safe
+
+    grad_rows = []
+    ungrad_rows = []
+    for name in sorted(universe):
+        status = universe.get(name, "NEW")
+        if status == "REUSE" and not _is_grad(name):
+            continue
+        if _is_grad(name):
+            tag = name + (
+                " (+shard)" if name in shard or safe_identifier(name) in {safe_identifier(s) for s in shard} else ""
+            )
+            grad_rows.append((tag, _test_path(name)))
+            continue
+        if name in skips:
+            cat, reason = "KERNEL_MISSING", (skips[name].get("reason") or "verified missing TTNN op")
+        elif name in harness_skipped:
+            cat, reason = "HARNESS_SKIP", (harness_reason.get(name) or "test harness could not build valid inputs")
+        elif name in fallback:
+            cat, reason = "CPU_FALLBACK", (last_text.get(name) or "attempt cap reached — retired to CPU")
+        else:
+            cls = last_class.get(name)
+            if not cls:
+                try:
+                    cls = classify_failure(
+                        reason=last_text.get(name, ""), failure_text=last_text.get(name, "")
+                    ).class_name
+                except Exception:
+                    cls = "NEEDS_ITERATION"
+            cat = cls or "NEEDS_ITERATION"
+            reason = last_text.get(name) or "not attempted / iteration budget not reached"
+        n_try = attempts.get(name, 0)
+        reason = " ".join(str(reason).split())[:70]
+        ungrad_rows.append((name, cat, n_try, reason, _test_path(name)))
+
+    bar = "=" * 78
+    print()
+    print(bar)
+    print(f"  BRING-UP SUMMARY — {model_id}")
+    print(bar)
+    print(f"  GRADUATED ({len(grad_rows)}) — reproduce each PCC check:")
+    if grad_rows:
+        print(f"    {'component':<34}  pytest")
+        print(f"    {'-'*34}  {'-'*40}")
+        for tag, tpath in grad_rows:
+            print(f"    {tag:<34}  pytest {tpath} -svv")
+    else:
+        print("    (none)")
+    print()
+    print(f"  NOT GRADUATED ({len(ungrad_rows)}) — why, and the test to reproduce/iterate:")
+    if ungrad_rows:
+        print(f"    {'component':<26}  {'category':<18}  {'try':>3}  {'reason':<40}")
+        print(f"    {'-'*26}  {'-'*18}  {'-'*3}  {'-'*40}")
+        for name, cat, n_try, reason, tpath in ungrad_rows:
+            print(f"    {name[:26]:<26}  {cat[:18]:<18}  {n_try:>3}  {reason[:40]:<40}")
+            print(f"        ↳ pytest {tpath} -svv")
+    else:
+        print("    (none — all components graduated)")
+    print(bar)
+
+
 def run_bringup_cc(
     *,
     model_id: str,
@@ -407,4 +518,8 @@ def run_bringup_cc(
     except Exception:
         pass
     print(sep)
+    try:
+        _emit_bringup_summary_table(model_id, demo_dir, final)
+    except Exception as _tbl_exc:
+        print(f"  [summary-table] skipped: {type(_tbl_exc).__name__}: {_tbl_exc}")
     return 0 if final.get("can_stop") else 1
