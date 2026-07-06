@@ -10,7 +10,7 @@
 #include "experimental/kernel_args.h"
 #include <ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/pool_kernels_common.hpp>
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1  // DEBUG max_pool2d value-inflation repro; set back to 0 when done
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
@@ -264,6 +264,23 @@ void kernel_main() {
             clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_cb);
         }
     }
+
+#if ENABLE_DEBUG_PRINT == 1
+    // DEBUG max_pool2d value-inflation: after the (conditional) init clear, is the -inf pool identity
+    // actually in L1? For MAX, bf16_init_value / clear_value_cb[0] / in_cb[0] should all be 0xFF80 (-inf).
+    // If need_to_initialize_in_cb is 0, the in_cb was NOT pre-cleared (relies on per-block tail-fill only)
+    // -- that itself may be the leak.
+    if constexpr (reader_id == 0) {
+        volatile tt_l1_ptr uint16_t* cv =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(clear_value_cb.get_write_ptr());
+        volatile tt_l1_ptr uint16_t* ic =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(DataflowBuffer(in_cb_id).get_write_ptr());
+        DPRINT << "[POOL-DBG reader] bf16_init_value=" << HEX() << (uint32_t)bf16_init_value
+               << " clear_value_cb[0]=" << (uint32_t)cv[0] << " in_cb[0]=" << (uint32_t)ic[0]
+               << " (MAX expects 0xFF80=-inf) need_to_initialize_in_cb=" << (uint32_t)need_to_initialize_in_cb
+               << ENDL();
+    }
+#endif
 
     // initialize the scalar CB
     if constexpr (reader_id == 0 && one_scalar_per_core) {
