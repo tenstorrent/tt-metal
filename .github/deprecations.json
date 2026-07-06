@@ -24,6 +24,14 @@
       "introduced_by_pr": 23835,
       "grace": "30d",
       "owners": ["ncvetkovicTT"]
+    },
+    {
+      "id": "pack-tile-block-rename",
+      "description": "pack_tile_block in tt_metal/hw/inc/api/compute/pack.h renamed to pack_block for a uniform op_block Compute API surface (tt-metal#47477). The pack_tile_block forwarding shim is retained only for backwards compatibility; delete it once all call sites are migrated to pack_block.",
+      "files": ["tt_metal/hw/inc/api/compute/pack.h"],
+      "introduced_by_pr": 49070,
+      "grace": "30d",
+      "owners": ["ncvetkovicTT"]
     }
   ]
 }
