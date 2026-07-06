@@ -953,14 +953,6 @@ class HOST_IS_STREAM_CONSUMER(RuntimeParameter):
 
 
 @dataclass
-class FILL_INT_FORMAT(TemplateParameter):
-    data_format: DataFormat = DataFormat.Int32
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr auto FILL_INT_FORMAT = DataFormat::{self.data_format.name};"
-
-
-@dataclass
 class TYPECAST_FORMATS(TemplateParameter):
     """Compile-time config for the SFPU typecast test kernel.
 

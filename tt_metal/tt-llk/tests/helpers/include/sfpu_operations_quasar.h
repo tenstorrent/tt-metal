@@ -17,6 +17,7 @@
 //    if the op needs an init step).
 #include "experimental/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_fill.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
@@ -54,7 +55,7 @@ using namespace ckernel::sfpu;
 /**
  * @brief Whether OPERATION is one of the six comparison-to-zero modes.
  *
- * The comp family needs a runtime format switch (@ref call_zero_comp_operation_quasar)
+ * The comp family needs a runtime format switch (@ref call_runtime_format_unary_operation_quasar)
  * to pick the integer-vs-float compare path, unlike the float-only unary ops, so the
  * dispatcher special-cases it.
  *
@@ -94,54 +95,123 @@ void init_unary_sfpu_operation_quasar()
 }
 
 /**
- * @brief Apply a comparison-to-zero SFPU op in-place on one Dest tile.
+ * @brief Apply a comparison-to-zero or fill SFPU op in-place on one Dest tile.
  *
- * Unlike the float-only unary ops, comp needs the SFPU math format at runtime to
- * pick the integer load/store width and the integer-vs-float compare path (see
- * `ckernel_sfpu_comp.h`). Int32/Int16/Int8/UInt16/UInt8 select their explicit
- * sfpmem width; all float widths share the width-agnostic `Float32` instantiation,
- * whose sfpi compare path resolves the actual width from the HW format config.
+ * Unlike the float-only unary ops, comp and fill need the SFPU math format at runtime
+ * to pick the integer load/store width (see `ckernel_sfpu_comp.h` / `ckernel_sfpu_fill.h`).
+ * For comp, Int32/Int16/Int8/UInt16/UInt8 select their explicit sfpmem width, and all float
+ * widths share the width-agnostic `Float32` instantiation, whose sfpi compare path resolves
+ * the actual width from the HW format config. Fill has no UInt16 path, so that case stays
+ * comp-only.
  *
- * @tparam OPERATION The comparison-to-zero `SfpuType` (compile-time constant).
+ * @tparam OPERATION The comparison-to-zero `SfpuType`, or `SfpuType::fill` (compile-time constant).
  * @tparam ITERATIONS Number of SFPU loop iterations.
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param sfpu_format SFPU math format selecting the sfpmem mode / result encoding.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <SfpuType OPERATION, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
-void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format)
+void call_runtime_format_unary_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format)
 {
-    static_assert(is_zero_comp_op(OPERATION), "call_zero_comp_operation_quasar: OPERATION must be a comparison-to-zero SfpuType");
+    static_assert(
+        is_zero_comp_op(OPERATION) || OPERATION == SfpuType::fill,
+        "call_runtime_format_unary_operation_quasar: OPERATION must be a comparison-to-zero SfpuType or SfpuType::fill");
 
     switch (sfpu_format)
     {
         case DataFormat::Int32:
-            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Int32, OPERATION, ITERATIONS>, dst_index);
+            if constexpr (is_zero_comp_op(OPERATION))
+            {
+                _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Int32, OPERATION, ITERATIONS>, dst_index);
+            }
+            else if constexpr (OPERATION == SfpuType::fill)
+            {
+                constexpr std::uint32_t FILL_INT_VALUE = 5;
+                _llk_math_eltwise_unary_sfpu_params_(calculate_fill<DataFormat::Int32, ITERATIONS>, dst_index, VectorMode::RC, FILL_INT_VALUE);
+            }
             break;
         case DataFormat::Int16:
-            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Int16, OPERATION, ITERATIONS>, dst_index);
+            if constexpr (is_zero_comp_op(OPERATION))
+            {
+                _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Int16, OPERATION, ITERATIONS>, dst_index);
+            }
+            else if constexpr (OPERATION == SfpuType::fill)
+            {
+                constexpr std::uint32_t FILL_INT_VALUE = 5;
+                _llk_math_eltwise_unary_sfpu_params_(calculate_fill<DataFormat::Int16, ITERATIONS>, dst_index, VectorMode::RC, FILL_INT_VALUE);
+            }
             break;
         case DataFormat::Int8:
         {
             constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::Int8;
-            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, sfpu_fmt, OPERATION, ITERATIONS>, dst_index);
+            if constexpr (is_zero_comp_op(OPERATION))
+            {
+                _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, sfpu_fmt, OPERATION, ITERATIONS>, dst_index);
+            }
+            else if constexpr (OPERATION == SfpuType::fill)
+            {
+                constexpr std::uint32_t FILL_INT_VALUE = 5;
+                _llk_math_eltwise_unary_sfpu_params_(calculate_fill<sfpu_fmt, ITERATIONS>, dst_index, VectorMode::RC, FILL_INT_VALUE);
+            }
             break;
         }
         case DataFormat::UInt16:
-            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::UInt16, OPERATION, ITERATIONS>, dst_index);
+            // Fill has no UInt16 path (_calculate_fill_int_/_is_int_format_ only cover
+            // Int32/Int16/Int8/UInt8, and Fill's format sweep never generates UInt16), so this
+            // case stays comp-only.
+            if constexpr (is_zero_comp_op(OPERATION))
+            {
+                _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::UInt16, OPERATION, ITERATIONS>, dst_index);
+            }
             break;
         case DataFormat::UInt8:
         {
             constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::UInt8;
-            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, sfpu_fmt, OPERATION, ITERATIONS>, dst_index);
+            if constexpr (is_zero_comp_op(OPERATION))
+            {
+                _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, sfpu_fmt, OPERATION, ITERATIONS>, dst_index);
+            }
+            else if constexpr (OPERATION == SfpuType::fill)
+            {
+                constexpr std::uint32_t FILL_INT_VALUE = 5;
+                _llk_math_eltwise_unary_sfpu_params_(calculate_fill<sfpu_fmt, ITERATIONS>, dst_index, VectorMode::RC, FILL_INT_VALUE);
+            }
             break;
         }
+        // Float widths share the width-agnostic Float32 path: its sfpmem::DEFAULT access mode
+        // resolves the actual width from ALU_FORMAT_SPEC_REG / ACC_CTRL.
         case DataFormat::Float16:
+            if constexpr (is_zero_comp_op(OPERATION))
+            {
+                _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Float16, OPERATION, ITERATIONS>, dst_index);
+            }
+            else if constexpr (OPERATION == SfpuType::fill)
+            {
+                constexpr float FILL_CONST = 5.0f;
+                _llk_math_eltwise_unary_sfpu_params_(calculate_fill<DataFormat::Float32, ITERATIONS>, dst_index, VectorMode::RC, FILL_CONST);
+            }
+            break;
         case DataFormat::Float16_b:
+            if constexpr (is_zero_comp_op(OPERATION))
+            {
+                _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Float16_b, OPERATION, ITERATIONS>, dst_index);
+            }
+            else if constexpr (OPERATION == SfpuType::fill)
+            {
+                constexpr float FILL_CONST = 5.0f;
+                _llk_math_eltwise_unary_sfpu_params_(calculate_fill<DataFormat::Float32, ITERATIONS>, dst_index, VectorMode::RC, FILL_CONST);
+            }
+            break;
         case DataFormat::Float32:
-            // Float widths share the width-agnostic Float32 path: its sfpmem::DEFAULT access mode
-            // resolves the actual width from ALU_FORMAT_SPEC_REG / ACC_CTRL.
-            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Float32, OPERATION, ITERATIONS>, dst_index);
+            if constexpr (is_zero_comp_op(OPERATION))
+            {
+                _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Float32, OPERATION, ITERATIONS>, dst_index);
+            }
+            else if constexpr (OPERATION == SfpuType::fill)
+            {
+                constexpr float FILL_CONST = 5.0f;
+                _llk_math_eltwise_unary_sfpu_params_(calculate_fill<DataFormat::Float32, ITERATIONS>, dst_index, VectorMode::RC, FILL_CONST);
+            }
             break;
         default:
             LLK_ASSERT(false, "Unsupported Quasar comp-to-zero SFPU format");
@@ -155,8 +225,8 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
  * @tparam ITERATIONS Number of SFPU loop iterations.
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
- * @param sfpu_format SFPU math format; only the comp family reads it (see
- *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.
+ * @param sfpu_format SFPU math format; only comp and fill read it (see
+ *        @ref call_runtime_format_unary_operation_quasar), other ops ignore it.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <SfpuType OPERATION, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
@@ -206,9 +276,9 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     {
         _llk_math_eltwise_unary_sfpu_params_(calculate_square<ITERATIONS>, dst_index);
     }
-    else if constexpr (is_zero_comp_op(OPERATION))
+    else if constexpr (is_zero_comp_op(OPERATION) || OPERATION == SfpuType::fill)
     {
-        call_zero_comp_operation_quasar<OPERATION, is_fp32_dest_acc_en, ITERATIONS>(dst_index, sfpu_format);
+        call_runtime_format_unary_operation_quasar<OPERATION, is_fp32_dest_acc_en, ITERATIONS>(dst_index, sfpu_format);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
