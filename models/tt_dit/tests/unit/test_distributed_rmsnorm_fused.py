@@ -822,6 +822,62 @@ def test_layernorm_module_corr(mesh_device, model, tp, topology, tp_axis, full_m
     assert fused_pcc >= 0.999, f"fused pcc too low: {fused_pcc}"
 
 
+_LNBATCH_PARAMS = [
+    ((4, 8), _DP_GAL, 4, ttnn.Topology.Linear, 1, False),  # 1x4 line submesh, TP=4 -> 15 tile-cols (non-div)
+    ((4, 8), _DP_GAL_RING, 4, ttnn.Topology.Ring, 0, False),  # 4x8 ring, TP on the 4-axis
+]
+_LNBATCH_IDS = ["tp4_line", "tp4_ring"]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "tp", "topology", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_LNBATCH_PARAMS, _LNBATCH_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_layernorm_nondiv_corr(mesh_device, tp, topology, tp_axis, full_mesh):
+    """adaLN LayerNorm at a width NOT divisible by the compute block_size (dim 1920 -> 15
+    tile-cols at TP4), which the resident POST + block_size-draining writer must handle via
+    padded blocks. SD3.5 (dim 2432 -> 38/19 tile-cols) hits this. Runs batch=1 by default;
+    LNBATCH_B>1 exercises the (WIP) dim-1 batch path."""
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    dim = 1920  # 1920/4 = 480 -> 15 tile-cols (15 % 4 != 0), and 1920 % (32*4) == 0 (tile-aligned)
+    batch = int(_os.getenv("LNBATCH_B", "1"))
+    rows = 256
+    torch.manual_seed(0)
+    x_t = (torch.randn(1, batch, rows, dim, dtype=torch.bfloat16) * 2 + 4).float()
+    scale_t = torch.randn(batch, 1, dim, dtype=torch.bfloat16).float()  # per-batch (broadcast over N)
+    shift_t = torch.randn(batch, 1, dim, dtype=torch.bfloat16).float()
+
+    # fp32 reference: per-batch adaLN. LN over the last dim for each (batch, token) row.
+    mean = x_t.mean(-1, keepdim=True)
+    var = x_t.var(-1, unbiased=False, keepdim=True)
+    ref = ((x_t - mean) / torch.sqrt(var + NORM_EPS)) * (1.0 + scale_t).unsqueeze(0) + shift_t.unsqueeze(0)
+    ref = ref.reshape(batch * rows, dim)
+
+    x = bf16_tensor(x_t.to(torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+    dyn_w = float32_tensor(1.0 + scale_t, device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+    dyn_b = float32_tensor(shift_t, device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+
+    ccl = CCLManager(mesh_device=submesh, num_links=GALAXY_LINKS, topology=topology)
+    mod = DistributedLayerNorm(
+        embedding_dim=dim,
+        norm_elementwise_affine=False,
+        bias=False,
+        mesh_axis=tp_axis,
+        mesh_device=submesh,
+        ccl_manager=ccl,
+    )
+    n_launch = int(_os.getenv("LNMOD_LAUNCHES", "3"))
+    outs = [mod.forward(x, dynamic_weight=dyn_w, dynamic_bias=dyn_b) for _ in range(n_launch)]
+    gathered = [_gather(o, tp_axis) for o in outs]
+    det = all(torch.equal(gathered[0], g) for g in gathered[1:])
+    out0 = gathered[0].reshape(batch * rows, dim)
+    pcc = _pcc(out0, ref)
+    logger.info(f"LNBATCH tp{tp}_{topology.name} batch={batch} dim={dim} (15 tile-cols) pcc={pcc * 100:.4f}% det={det}")
+    assert det, "batched LayerNorm not deterministic across launches"
+    assert pcc >= 0.999, f"batched LayerNorm pcc too low: {pcc}"
+
+
 @pytest.mark.parametrize(
     ("mesh_device", "device_params", "model", "tp", "topology", "tp_axis", "full_mesh"),
     [pytest.param(*p, id=i) for p, i in zip(_LNMOD_PARAMS, _LNMOD_IDS)],

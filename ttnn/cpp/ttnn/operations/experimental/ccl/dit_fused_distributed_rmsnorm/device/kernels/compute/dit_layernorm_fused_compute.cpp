@@ -454,6 +454,13 @@ void kernel_main() {
             }
         } else {
             // ===== Resident POST (shard fits L1) =====
+            // The intermediate CBs (xmm / norm_result / weight_result / output) are pushed
+            // and consumed in whole block_size blocks — the last block is padded when
+            // num_tile_cols % block_size != 0 (only the n valid tiles are computed; the pad
+            // slot is stale and dropped by the writer, which also drains in block_size units).
+            // This keeps the resident POST + the worker writer divisibility-agnostic. The
+            // whole-row weight_cb / bias_cb instead hold exactly num_tile_cols and use a
+            // cumulative (col + n) wait. CBs are sized div_up(num_tile_cols, block_size).
             // Sub-phase A: x - mean (broadcast mean over feature cols) -> xmm_cb.
             {
                 reconfig_data_format(input_cb, mean_cb);
@@ -461,7 +468,7 @@ void kernel_main() {
                 sub_bcast_cols_init_short(input_cb, mean_cb);
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
-                    cb_reserve_back(xmm_cb, n);
+                    cb_reserve_back(xmm_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < n; i++) {
                         sub_tiles_bcast_cols(input_cb, mean_cb, col + i, 0, i);
@@ -472,7 +479,7 @@ void kernel_main() {
                         pack_tile(i, xmm_cb);
                     }
                     tile_regs_release();
-                    cb_push_back(xmm_cb, n);
+                    cb_push_back(xmm_cb, block_size);
                 }
             }
 
@@ -484,7 +491,7 @@ void kernel_main() {
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
                     cb_wait_front(xmm_cb, block_size);
-                    cb_reserve_back(norm_result_cb, n);
+                    cb_reserve_back(norm_result_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < n; i++) {
                         mul_tiles_bcast_cols(xmm_cb, invstd_cb, i, 0, i);
@@ -495,7 +502,7 @@ void kernel_main() {
                         pack_tile(i, norm_result_cb);
                     }
                     tile_regs_release();
-                    cb_push_back(norm_result_cb, n);
+                    cb_push_back(norm_result_cb, block_size);
                     cb_pop_front(xmm_cb, block_size);
                 }
             }
@@ -511,7 +518,7 @@ void kernel_main() {
                 }
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
-                    cb_wait_front(weight_cb, col + n);
+                    cb_wait_front(weight_cb, col + n);  // whole-row weight: cumulative, holds num_tile_cols
                     cb_wait_front(norm_result_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < n; i++) {
@@ -523,13 +530,13 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     cb_pop_front(norm_result_cb, block_size);
-                    cb_reserve_back(weight_result_cb, n);
+                    cb_reserve_back(weight_result_cb, block_size);
                     tile_regs_wait();
                     for (uint32_t i = 0; i < n; i++) {
                         pack_tile(i, weight_result_cb);
                     }
                     tile_regs_release();
-                    cb_push_back(weight_result_cb, n);
+                    cb_push_back(weight_result_cb, block_size);
                 }
             }
 
@@ -544,7 +551,7 @@ void kernel_main() {
                 }
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
-                    cb_wait_front(bias_cb, col + n);
+                    cb_wait_front(bias_cb, col + n);  // whole-row bias: cumulative, holds num_tile_cols
                     cb_wait_front(weight_result_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < n; i++) {
@@ -556,13 +563,13 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     cb_pop_front(weight_result_cb, block_size);
-                    cb_reserve_back(output_cb, n);
+                    cb_reserve_back(output_cb, block_size);
                     tile_regs_wait();
                     for (uint32_t i = 0; i < n; i++) {
                         pack_tile(i, output_cb);
                     }
                     tile_regs_release();
-                    cb_push_back(output_cb, n);
+                    cb_push_back(output_cb, block_size);
                 }
             }
         }  // end resident POST (else of block_major_post)

@@ -652,15 +652,18 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         "({})",
         num_tile_cols,
         block_size);
-    // The LayerNorm compute POST consumes input/intermediate CBs in bare block_size
-    // chunks with NO tail clamp (unlike the RMS kernel, which clamps tiles_in_block on
-    // the last block). A non-divisible tail would leave cb_wait_front(block_size) waiting
-    // on tiles never pushed -> device hang. Fail fast at host instead. All current model
-    // shapes are divisible; this guards arbitrary shapes.
+    // The resident LayerNorm POST now clamps its sub-phases to the per-block tail count,
+    // so non-divisible num_tile_cols is supported there (e.g. SD3.5: dim 2432 -> 38/19
+    // tile-cols at TP2/TP4). The block-major LayerNorm POST, however, streams input and
+    // its PRE waits cb_wait_front(input_cb, block_size) per block — the shared reader
+    // pushes only the tail count on the last block, so a non-divisible width would hang
+    // that path. block-major LN needs num_tile_cols wide enough to stream (>=56) and is
+    // only reached by divisible shapes today; keep a fail-fast guard for it until it gets
+    // tail handling too.
     TT_FATAL(
-        !is_layernorm || (num_tile_cols % block_size == 0),
-        "dit_fused_distributed LayerNorm requires num_tile_cols ({}) divisible by block_size ({}) "
-        "(the resident POST path has no tail handling)",
+        !(is_layernorm && block_major_post) || (num_tile_cols % block_size == 0),
+        "dit_fused_distributed block-major LayerNorm requires num_tile_cols ({}) divisible by block_size ({}) "
+        "(the block-major streaming POST path has no tail handling yet)",
         num_tile_cols,
         block_size);
 
