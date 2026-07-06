@@ -59,6 +59,38 @@ Established by `ttnn.graph` op-capture (fast-runtime-mode OFF) + eager per-op ti
 **Bottom line:** no 42% permute win exists; it was a profiling artifact. The real lever remains the
 weight-traffic-bound skinny-M expert matmul (`SparseMatmul`) — the shared-MoE ceiling.
 
+## CORRECTION 2 (2026-07-06, later) — the profile was UNTUNED; expert matmul is already roofline-optimal
+
+The whole-gen op-mix above (`SparseMatmul` 47%, etc.) was captured by `prof_denoise_step.py`, which
+does **NOT** set `DG_SPARSE_MOE_TUNED` — so it profiled the **auto-config matmul path**, where the
+gate/up expert matmul is **13× slower** than the tuned config that production actually uses
+(`sweep_serving.py` TRACED / vLLM all set `DG_SPARSE_MOE_TUNED=1`). No-trace eager microbench
+(`~/dg-agent-runs/{expert_matmul,tuned_opmix}_microbench.py`) + real-weights verify
+(`verify_opt004_fullmoe.py`), real (1,4)/TP=4 shapes E=128 C=32 H=2816 I=192:
+
+| gate matmul `[E,32,2816]@[2816,192]` | ms | eff. weight-BW |
+|---|---:|---|
+| auto-config (what the profile measured) | 4.17 | ~17 GB/s |
+| OPT-004 tuned (`in0_block_w`=11/22) | **0.318** | **~235 GB/s ≈ 92% of 256 GB/s roofline** |
+
+Real-weights full MoE forward (`verify_opt004_fullmoe.py`, 2L): **untuned 10.06 ms → tuned 2.90 ms/layer,
+3.47× , PCC(tuned,untuned)=0.99967**. So in production:
+
+* **The expert matmul is already ~92% of the weight-traffic roofline — it is NOT the lever.** gate+up
+  fusion (`[H,2I]` one matmul) gives **0×** extra (0.62 fused ≈ 2×0.31 separate); larger `in0_block_w`
+  (11→22→44) is a wash. The batched matmul is weight-bound at M=32 (1 tile/expert) and the OPT-004
+  geometry already saturates DRAM.
+* **Tuned MoE = 2.90 ms/layer × 30 = ~87 ms/step = ~34% of the 257.93 ms traced step** (untuned MoE
+  alone would be ~302 ms > the whole step, which is how we know the 257.93 ms step already runs tuned).
+  The remaining **~66% is NON-MoE**: attention (SDPA/QKV/o_proj), norms, RoPE, TP all-reduce/CCL, the
+  terminal argmax/sample chain (~43 ms fixed/step), and dispatch overhead. **That 66% — not the expert
+  matmul — is where further denoise-perf work must go.**
+
+**So both #47465 profile headliners were untuned/artifact:** the 42% permute is an FW-overlap artifact
+(cumsum, ~1% real) and the 47% SparseMatmul is the *untuned* matmul (production tuned = ~13% of step).
+Actionable: consider making `DG_SPARSE_MOE_TUNED=1` the default (3.47× MoE, PCC 0.99967, trace-safe) so
+runs that forget the flag don't silently take the 13×-slower path.
+
 ## Method — reduced-layer 2-point fit (why not a single 30-layer capture)
 
 The on-device profiler op buffer (`PROGRAM_SUPPORT_COUNT`, default 1000 → ~3.3k ops captured)
