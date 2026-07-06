@@ -1461,6 +1461,17 @@ AND its trace output matches the reference (PCC). Size trace_region_size from th
 (pinned C x layers); if a capture overflows the region, shrink C or degrade that stage to
 single-CQ and PRINT the fallback (never silently drop). This recipe is identical for every model
 — derive the specifics from the config; do NOT hardcode a per-model map.
+
+Also expose host_op_selftest() — the AUTHORITATIVE fully-on-device check. Run the model's forward
+under scripts.tt_hw_planner.host_op_observer.observe_host_ops(), with input-ENCODING (tokenize,
+feature extraction / mel / FFT) and one-time weight build done OUTSIDE the observed region, and the
+model math (encoded-inputs -> output, every stage incl. the prefix embedding) INSIDE it. Return
+host_op_observer.verdict(ops). ttnn ops do not dispatch through torch, so a truly on-device forward
+fires ZERO host aten ops; any aten op inside is host compute the ttnn-crossing checks cannot see
+(e.g. a host-built prefix uploaded via ttnn.as_tensor / compute_embeddings on host). This is the
+check that decides fully-on-device — do NOT leave host math (embedding, HF submodule forwards,
+sampling) in the observed region. Multi-task: observe EACH task head's forward; fail if ANY fires
+host aten ops.
 """
 
 
