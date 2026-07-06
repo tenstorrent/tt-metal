@@ -241,7 +241,14 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                       "single_block_size_col_arg",
                       "sub_block_width_size",
                       "single_sub_block_size_row_arg"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+            // QSR: this reader fills the c_0 (in) DFB with many sub-tile (per-row stick) NOC reads — the same
+            // sub-tile pattern that stalls the DFB implicit-sync credit accounting (reader pinned at NRBW /
+            // cb_reserve_back; compute idle; writer stuck at NWFW). Mirror the tilize default factory's opt-out.
+            // (Kernel-wide, so it also covers the c_1 (stage) self-loop scratchpad binding.)
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .role = DataMovementRoleHint::READER,
+                    .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
 
         // Writer: consumes c_16 (out); writes output tensor.
@@ -257,7 +264,12 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                  {"total_tiles_per_row", total_tiles_per_row}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+            // QSR: companion opt-out on the c_16 (out) DFB consumer side (mirrors tilize default); keeps the
+            // explicit push_back/pop_front authoritative so the writer's NWFW clears once the pipeline flows.
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .role = DataMovementRoleHint::WRITER,
+                    .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
 
         // Compute: consumes c_0 (in), produces c_16 (out).

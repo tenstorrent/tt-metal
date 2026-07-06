@@ -687,11 +687,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             {
                 .runtime_arg_names = {"this_core_x", "this_core_y", "num_cores_x"},
             },
+        // QSR: this width-sharded activation reader fills the ACT_ROW_MAJOR (and ACT mcast) DFB via per-window
+        // "stick" NOC reads — read_with_state()/read of conv_act_c_read_bytes each, many per act block, then
+        // reserve_back/push_back. That sub-tile stick fill stalls the DFB implicit-sync credit accounting
+        // (reader pinned at NRBW/cb_reserve_back, compute idle). Mirror the tilize/transpose HC-sharded
+        // workaround: opt out of implicit sync so explicit reserve/push credits stay authoritative. (The
+        // weights reader does full-tile page reads into WEIGHTS/BIAS only — no opt-out needed; and this act
+        // reader is the only DM kernel on its ACT/ACT_RM/ACT_TILIZED/ACT_SHARDED/READER_INDICES sides, so the
+        // cross-kernel agreement rule is satisfied.)
         .hw_config =
             m2::DataMovementHardwareConfig{
                 .gen1_config =
                     m2::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc},
+                .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
             },
     };
     if (skip_activation_mcast) {

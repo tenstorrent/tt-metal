@@ -116,7 +116,13 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
              {"third_dim", third_dim},
              {"number_blocks_per_core", nblocks_per_core}},
         .runtime_arg_schema = {.runtime_arg_names = {"core_number", "tiles_per_row", "num_blocks"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // QSR: companion opt-out on the input-DFB producer side (mirrors tilize default reader+writer).
+        // This reader does full-page tile reads, but reverting its DFB to explicit reserve_back/push_back
+        // keeps credits authoritative so it clears NRBW once the sub-tile writer drains the pipeline.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // ---- Writer kernel ----
@@ -136,7 +142,15 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
              {"unpadded_X_size", unpadded_row_size_bytes}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"core_number", "size_per_row_per_block", "blocks_per_core", "width_size"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        // QSR: this writer DRAINS the output DFB with per-row (stick) sub-tile NOC writes
+        // (cb_out0.get_read_ptr() + partial noc_async_write per row into row-major output pages) — the
+        // sub-tile DFB-transfer pattern that deadlocks implicit-sync credit accounting (writer pinned at
+        // NWFW / NRBW). Mirror tilize default + transpose HC-sharded: opt out of DFB implicit sync so the
+        // kernel's explicit wait_front/pop_front stay authoritative (correctness-safe).
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // ---- Compute kernel (full + cliff) ----

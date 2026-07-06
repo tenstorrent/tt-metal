@@ -140,7 +140,13 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
              {"element_size", datum_size(out_cb_data_format)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_block_id", "num_blocks", "patch_height_offset", "output_offset"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        // QSR: this writer drains SRC1 with many sub-tile (per-stick) NOC writes — the same sub-tile
+        // pattern that stalls the DFB implicit-sync credit accounting (writer pinned at NWFW / cb_wait_front,
+        // compute idle). Mirror the tilize / transpose HC-sharded workaround with disable_dfb_implicit_sync_for_all.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // ---- Compute kernels (untilize SRC0 -> SRC1) ----
@@ -354,7 +360,14 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .compile_time_args = std::move(reader_cta),
         .runtime_arg_schema = {.runtime_arg_names = {"src_index", "curr_src_row_index"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // QSR: this reader fills SRC0 with many sub-tile (per-stick) NOC reads — the same sub-tile
+        // pattern that stalls the DFB implicit-sync credit accounting (reader pinned at NRBW / cb_reserve_back
+        // on the first block). Mirror the tilize / transpose HC-sharded workaround with
+        // disable_dfb_implicit_sync_for_all.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // ---- Writer kernel (SRC0 [+ SRC1 scratch] -> DRAM) ----
@@ -366,7 +379,13 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = std::move(writer_cta),
         .runtime_arg_schema = {.runtime_arg_names = {"dst_index"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        // QSR: this writer drains SRC0 (and the SRC1 scratch) with many sub-tile (per-stick) NOC writes — the
+        // same sub-tile pattern that stalls the DFB implicit-sync credit accounting (writer pinned at NWFW /
+        // cb_wait_front). Mirror the tilize / transpose HC-sharded workaround with disable_dfb_implicit_sync_for_all.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
     // SRC0 is consumed by the writer.
     writer.dfb_bindings.push_back(
