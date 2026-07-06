@@ -278,6 +278,26 @@ _G5_HOST_SAMPLING = (
 _G5_HOST_XFER = ("from_torch", "to_torch", "from_device", "to_device")
 
 
+def _host_op_gate_reason(probe_result, require: bool = False):
+    if not isinstance(probe_result, dict) or not probe_result.get("ran"):
+        if require:
+            return (
+                "G5-observer: host-op observer did not run (no host_op_selftest hook) — "
+                "cannot prove the forward is on-device"
+            )
+        return None
+    v = probe_result.get("verdict") or {}
+    if v.get("on_device", True):
+        return None
+    ops = v.get("host_ops") or []
+    return (
+        "G5-observer: the forward executes host tensor ops (aten) on the compute path: "
+        + ", ".join(ops[:8])
+        + " — not fully on-device (observed via TorchDispatchMode; port those on-device, "
+        "or waive with E2E_ALLOW_HOST_DECODE=1)"
+    )
+
+
 _G1B_HOT_FN_NAME = re.compile(
     r"^(run_[a-z0-9]+|__call__|forward|_forward|_apply_[a-z0-9_]+|decode_step|decode_prefill)$" r"|_trace_step$|_step$"
 )
@@ -563,6 +583,37 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                             "reached mid-forward; keep the whole forward resident + sample on-device, or "
                             "set E2E_ALLOW_HOST_DECODE=1 to waive for a genuinely host-bound model)"
                         )
+                except Exception:  # noqa: BLE001 — probe failure is not a gate failure (best-effort)
+                    pass
+
+            hop = repo / "scripts" / "tt_hw_planner" / "_host_op_probe.py"
+            if hop.is_file():
+                penv3 = dict(os.environ)
+                penv3["TT_METAL_HOME"] = str(repo)
+                penv3["PYTHONPATH"] = str(repo) + os.pathsep + penv3.get("PYTHONPATH", "")
+                penv3.pop("TT_METAL_DEVICE_PROFILER", None)
+                _pb3 = repo / "python_env" / "bin" / "python"
+                _pbin3 = str(_pb3) if _pb3.exists() else sys.executable
+                _require = os.environ.get("E2E_REQUIRE_HOST_OBSERVER") == "1"
+                try:
+                    pr3 = subprocess.run(
+                        [_pbin3, str(hop), str(demo_dir)],
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_s,
+                        cwd=str(repo),
+                        env=penv3,
+                    )
+                    _res = None
+                    for line in ((pr3.stdout or "") + "\n" + (pr3.stderr or "")).splitlines():
+                        if line.startswith("HOST_OP_PROBE="):
+                            try:
+                                _res = json.loads(line.split("=", 1)[1])
+                            except Exception:  # noqa: BLE001
+                                _res = None
+                    _r = _host_op_gate_reason(_res, require=_require)
+                    if _r:
+                        reasons.append(_r)
                 except Exception:  # noqa: BLE001 — probe failure is not a gate failure (best-effort)
                     pass
 
