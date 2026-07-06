@@ -890,3 +890,20 @@ def trace_capture_selftest(device=None):
     finally:
         if close:
             ttnn.close_device(device)
+
+
+def host_op_selftest():
+    import torch as _torch
+
+    from scripts.tt_hw_planner.host_op_observer import observe_host_ops, verdict
+
+    model = _load_reference_model()
+    gpt = model.gpt
+    ins = make_reference_inputs(
+        model, "hello world.", "en", default_reference_wav(), model.mel_stats.detach().cpu().float()
+    )
+    with observe_host_ops() as ops:
+        with _torch.no_grad():
+            cond_seed = _hf_cond_latent(model, ins["mel_chunk"]).to(_torch.float32)
+            gpt.compute_embeddings(cond_seed, ins["text_tokens"])
+    return verdict(list(ops))
