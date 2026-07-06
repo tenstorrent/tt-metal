@@ -45,7 +45,7 @@ on:
           - wan22
           - single_galaxy_deepseek
           - sp1_deepseek
-          # - sp4_deepseek
+          - sp4_deepseek
 
   schedule:
     # Run daily at 5 AM UTC
@@ -136,17 +136,17 @@ jobs:
       job-prefix: "[Wan2.2] "
 
   # todo)) disabled until we get more machines with SP4 SKUs
-  # deepseek-sp4-tests:
-  #   name: "SP4 DeepSeek Tests"
-  #   needs: [build-artifact]
-  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp4_deepseek' || github.event_name == 'schedule' }}
-  #   secrets: inherit
-  #   uses: ./.github/workflows/demo-sp-multihost-impl.yaml
-  #   with:
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     sp-config: sp4
+  deepseek-sp4-tests:
+    name: "SP4 DeepSeek Tests"
+    needs: [build-artifact]
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp4_deepseek' || github.event_name == 'schedule' }}
+    secrets: inherit
+    uses: ./.github/workflows/demo-sp-multihost-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      sp-config: sp4
 
   deepseek-sp1-tests:
     name: "SP1 DeepSeek Tests"
