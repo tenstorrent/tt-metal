@@ -15,6 +15,16 @@
 // immediate neighbor.
 namespace fabric_api = tt::tt_fabric::linear::experimental;
 
+// ── data_valid semaphore protocol ────────────────────────────────────────────────────────────────
+// data_valid counts the chunks the upstream neighbor has delivered into our output, cumulative over the op and
+// reset at completion. A delivered chunk sits at position (delivery_index) * slice_count + within-slice offset.
+// The writer maintains the count: atomic-inc by chunks delivered, fine-grained (every data_valid_granularity CB
+// pages) for stripes the downstream relays, and one coalesced inc for a stripe it only receives. The reader
+// consumes it: noc_semaphore_wait_min on the position of the last chunk of the batch it is about to read. So
+// data_valid_granularity is a writer-only knob -- the reader waits on absolute positions and auto-paces to
+// whatever cadence the writer emits.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
 // Walks the output-tensor chunks of one stripe. Templated on the geometry so the per-stripe starts are
 // computed here and the matched/split fast path (output_chunks_per_page == 1) folds away. Re-pointed to an
 // arbitrary stripe each relay iteration via init(); the src stripe address on this device equals the dst

@@ -15,9 +15,9 @@
 
 using address_t = uint32_t;
 
-// Store-and-forward reader: CB producer, no fabric. It owns every semaphore wait. Each relay iteration fills
-// the CB with the stripe the writer will send one hop: iteration 0 reads this device's own input slice; later
-// iterations read the stripe the upstream neighbor deposited into our output.
+// Store-and-forward reader: CB producer, no fabric. It owns every data_valid wait (see the protocol note in
+// common.hpp). Iteration 0 fills the CB from this device's own input slice; later iterations relay the stripe
+// the upstream neighbor delivered into our output, gated on data_valid.
 void kernel_main() {
     constexpr uint32_t input_page_size = get_compile_time_arg_val(0);
     constexpr uint32_t output_chunk_size = get_compile_time_arg_val(1);
@@ -27,8 +27,7 @@ void kernel_main() {
     constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(6);
     constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
-    constexpr uint32_t data_valid_granularity = 320;  // get_compile_time_arg_val(8);
-    constexpr auto input_tensor_args = TensorAccessorArgs<9>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<8>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
@@ -40,7 +39,7 @@ void kernel_main() {
     const uint32_t initial_stripe = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stripe_step = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_iters = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_recv = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t total_chunks = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t slice_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t slice_count = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t final_start = get_arg_val<uint32_t>(arg_idx++);
@@ -59,22 +58,20 @@ void kernel_main() {
 
     OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
 
-    // A relayed stripe is signalled once per data_valid_granularity CB pages; a stripe we only receive (the
-    // antipode) arrives as a single inc. incs tracks how many we've consumed so the completion wait is exact.
-    const uint32_t packets_per_stripe = (slice_count + outputs_per_cb_page - 1) / outputs_per_cb_page;
-    const uint32_t incs_per_stripe = (packets_per_stripe + data_valid_granularity - 1) / data_valid_granularity;
-    uint32_t incs = 0;
+    // One-time gate: don't relay into the downstream (and thus don't let our writer send) until it is up. A sink
+    // direction (num_iters == 0) has no upstream here and is never signalled, so it must not wait.
+    if constexpr (do_init_barrier) {
+        if (num_iters > 0) {
+            auto* ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_sem);
+            noc_semaphore_wait_min(ready_ptr, 1);
+            noc_semaphore_set(ready_ptr, 0);
+        }
+    }
 
     uint32_t stripe = initial_stripe;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         if (iter == 0) {
-            // Gate the first CB fill (and thus the writer's first remote write) until the downstream is up.
-            if constexpr (do_init_barrier) {
-                auto* ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_sem);
-                noc_semaphore_wait_min(ready_ptr, 1);
-                noc_semaphore_set(ready_ptr, 0);
-            }
-            // Own shard: contiguous input pages. Byte count matches the writer's output-chunk slice.
+            // Own shard: contiguous input pages, no wait (our own data).
             uint32_t page = input_page_id_start;
             while (page < input_page_id_end) {
                 cb.reserve_back(1);
@@ -94,30 +91,20 @@ void kernel_main() {
                 cb.push_back(1);
             }
         } else {
-            // Relay: the upstream neighbor must have delivered this stripe into our output first.
+            // Relay: read the stripe the upstream delivered into our output, waiting per CB-page batch for the
+            // chunks to have arrived. base_chunk is where this read begins in the delivered-chunk stream: 0 for a full
+            // stripe or an even-ring prefix half, `half` for an even-ring suffix half.
             const bool last = (iter == num_iters - 1);
-            // An even-ring last relay reads a sub-slice of a stripe the upstream sent as one granular stripe,
-            // so its granule boundaries don't line up -- wait for the whole stripe, then read.
-            const bool coarse_wait = last && (final_count != slice_count);
-            it.init(stripe, last ? final_start : slice_start, last ? final_count : slice_count);
-            if (coarse_wait) {
-                incs += incs_per_stripe;
-                noc_semaphore_wait_min(data_valid_ptr, incs);
-            }
-            uint32_t packets_since_wait = 0;
-            while (it.valid()) {
-                if (!coarse_wait && packets_since_wait == 0) {
-                    {
-                        DeviceZoneScopedN("relay_wait_sem");
-                        noc_semaphore_wait_min(data_valid_ptr, ++incs);
-                    }
-                }
-                {
-                    DeviceZoneScopedN("relay_wait_cb");
-                    cb.reserve_back(1);
-                }
+            const uint32_t start = last ? final_start : slice_start;
+            const uint32_t count = last ? final_count : slice_count;
+            const uint32_t base_chunk = (iter - 1) * slice_count + (start - slice_start);
+            it.init(stripe, start, count);
+            for (uint32_t r = 0; r < count;) {
+                const uint32_t batch = std::min(outputs_per_cb_page, count - r);
+                noc_semaphore_wait_min(data_valid_ptr, base_chunk + r + batch);
+                cb.reserve_back(1);
                 uint32_t l1_write_addr = cb.get_write_ptr();
-                for (uint32_t i = 0; i < outputs_per_cb_page && it.valid(); ++i) {
+                for (uint32_t i = 0; i < batch; ++i) {
                     auto [page_id, byte_off] = it.next();
                     noc.async_read(
                         output_tensor_accessor,
@@ -128,22 +115,15 @@ void kernel_main() {
                         {});
                     l1_write_addr += output_chunk_size;
                 }
-                {
-                    DeviceZoneScopedN("relay_wait_read");
-                    noc.async_read_barrier();
-                }
+                noc.async_read_barrier();
                 cb.push_back(1);
-                packets_since_wait = (packets_since_wait + 1 == data_valid_granularity) ? 0 : packets_since_wait + 1;
+                r += batch;
             }
         }
         stripe = (stripe + stripe_step) % num_devices;
     }
 
-    // Completion: wait for every inc we're owed, then reset for cached reuse. We forward (num_iters - 1)
-    // stripes -- each incs_per_stripe increments -- and receive but never forward the rest (num_recv beyond
-    // that), each arriving as a single inc.
-    const uint32_t relayed = (num_iters > 0) ? (num_iters - 1) : 0;
-    const uint32_t total_incs = relayed * incs_per_stripe + (num_recv - relayed);
-    noc_semaphore_wait_min(data_valid_ptr, total_incs);
+    // Completion: wait for every chunk the upstream delivers (relayed + received-only), then reset for reuse.
+    noc_semaphore_wait_min(data_valid_ptr, total_chunks);
     noc_semaphore_set(data_valid_ptr, 0);
 }

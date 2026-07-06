@@ -26,7 +26,7 @@ using namespace ::ttnn::ccl;
 // connection (no mux). When > 1, each direction's workers share a fabric mux core that owns the single
 // fabric connection and multiplexes their traffic onto the link.
 // ─────────────────────────────────────────────────────────────────────────────
-constexpr uint32_t NUM_WORKERS_PER_LINK = 4;
+constexpr uint32_t NUM_WORKERS_PER_LINK = 2;
 constexpr uint32_t MUX_NUM_BUFFERS = 2;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -320,7 +320,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
 
     // data_valid is signalled once per this many CB pages so a downstream can start relaying a stripe before
     // the whole stripe has arrived. Tunable: larger = fewer syncs, smaller = finer pipelining.
-    constexpr uint32_t data_valid_granularity = 4;
+    const uint32_t data_valid_granularity = std::max(1u, num_input_pages / 8);
 
     std::vector<uint32_t> reader_ct = {
         input_page_size,
@@ -331,7 +331,6 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         cb0_id,
         cb_page_size,
         do_init_barrier ? 1u : 0u,
-        data_valid_granularity,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_ct);
@@ -411,15 +410,15 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
             const uint32_t num_worker_output_chunks = local_output_end - local_output_start;
             const uint32_t half = num_worker_output_chunks / 2;
 
-            // Configure one conveyor (dir: 0 = forward, 1 = backward). own_vc is this core's coords, reused as
-            // the data_valid target on the neighbor's mirror core; partner_vc is the opposite-direction worker
-            // (same index w), the ready target.
+            // Configure one conveyor (dir: 0 = forward, 1 = backward). mirror_core is this core's coords, reused
+            // as the data_valid target on the neighbor's mirror core; partner_core is the opposite-direction
+            // worker (same index w), the ready target.
             auto set_conveyor = [&](uint32_t dir) {
                 const bool is_forward = (dir == 0);
                 const CoreCoord core = worker_core(link, dir, w);
                 const CoreCoord partner = worker_core(link, 1 - dir, w);
-                const CoreCoord own_vc = mesh_device->worker_core_from_logical_core(core);
-                const CoreCoord partner_vc = mesh_device->worker_core_from_logical_core(partner);
+                const CoreCoord mirror_core = mesh_device->worker_core_from_logical_core(core);
+                const CoreCoord partner_core = mesh_device->worker_core_from_logical_core(partner);
                 const auto neighbor = dir_neighbor(dir);
 
                 const uint32_t stripe_step = is_forward ? num_devices - 1 : 1;
@@ -445,13 +444,18 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
                     final_count = is_forward ? half : (num_worker_output_chunks - half);
                 }
 
+                // Chunks the upstream delivers into our output (relayed full stripes + received-only). The
+                // even-ring antipode arrives as a half, so it contributes final_count instead of a full stripe.
+                const uint32_t total_chunks = num_recv * num_worker_output_chunks -
+                                              (ring_even_split ? (num_worker_output_chunks - final_count) : 0);
+
                 std::vector<uint32_t> reader_rt = {
                     input_addr,
                     output_addr,
                     device_idx,
                     stripe_step,
                     num_iters,
-                    num_recv,
+                    total_chunks,
                     local_output_start,
                     num_worker_output_chunks,
                     final_start,
@@ -475,13 +479,14 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
                     do_local_write ? 1u : 0u,
                     data_valid_sem.address(),
                     ready_sem.address(),
-                    (uint32_t)own_vc.x,
-                    (uint32_t)own_vc.y,
-                    (uint32_t)partner_vc.x,
-                    (uint32_t)partner_vc.y,
+                    (uint32_t)mirror_core.x,
+                    (uint32_t)mirror_core.y,
+                    (uint32_t)partner_core.x,
+                    (uint32_t)partner_core.y,
                     num_granular,
                 };
-                if (num_iters > 0 && neighbor.has_value()) {
+                TT_FATAL(num_iters == 0 || neighbor.has_value(), "an active conveyor direction must have a neighbor");
+                if (num_iters > 0) {
                     if (use_mux) {
                         // Connect this worker to its channel (== worker index w) on the direction's mux.
                         const CoreCoord mux_vc = mesh_device->worker_core_from_logical_core(mux_core(link, dir));

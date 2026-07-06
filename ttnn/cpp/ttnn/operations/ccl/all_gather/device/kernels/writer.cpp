@@ -20,9 +20,10 @@
 using address_t = uint32_t;
 
 // Store-and-forward writer: CB consumer, owns all fabric. It only ever sends (never waits on a semaphore --
-// its sole backpressure is wait_front). Each relay iteration drains the CB and unicasts the stripe one hop to
-// the neighbor's output (same address); iteration 0 also materializes this device's own slice into local
-// output. Signals downstream via data_valid after each stripe; sends its one-shot "alive" ready inc up front.
+// its sole backpressure is wait_front). Each iteration drains the CB and unicasts the stripe one hop to the
+// neighbor's output (same address); iteration 0 also materializes this device's own slice into local output.
+// Maintains the downstream reader's data_valid (= chunks delivered; see the protocol note in common.hpp), and
+// sends its one-shot "alive" ready inc up front.
 void kernel_main() {
     constexpr uint32_t output_chunk_size = get_compile_time_arg_val(0);
     constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(1);
@@ -32,7 +33,7 @@ void kernel_main() {
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
     constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
-    constexpr uint32_t data_valid_granularity = 320;  // get_compile_time_arg_val(8);
+    constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(8);
     constexpr auto output_tensor_args = TensorAccessorArgs<9>();
 
 #ifdef USE_WORKER_MUX
@@ -59,10 +60,10 @@ void kernel_main() {
     const uint32_t do_local_write = get_arg_val<uint32_t>(arg_idx++);
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] const address_t ready_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
-    const uint8_t own_noc_x = get_arg_val<uint32_t>(arg_idx++);  // data_valid target: neighbor's mirror core
-    const uint8_t own_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const uint8_t paired_noc_x = get_arg_val<uint32_t>(arg_idx++);  // ready target (init only)
-    [[maybe_unused]] const uint8_t paired_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t data_valid_noc_x = get_arg_val<uint32_t>(arg_idx++);  // neighbor's mirror core (data_valid target)
+    const uint8_t data_valid_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const uint8_t ready_noc_x = get_arg_val<uint32_t>(arg_idx++);  // neighbor's opposite-dir core
+    [[maybe_unused]] const uint8_t ready_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_granular_sends = get_arg_val<uint32_t>(arg_idx++);  // leading sends the downstream relays
     [[maybe_unused]] size_t arg_for_fab = arg_idx;  // fabric connection args start here (non-mux path)
 
@@ -130,46 +131,45 @@ void kernel_main() {
 
     FabricWriter<output_chunk_size, packet_size, SenderT> fabric(noc, sender);
 
-    // One 1-hop atomic-inc header reused for both the "alive" ready inc and the per-stripe data_valid signal.
+    // One 1-hop atomic-inc header for both the "alive" ready inc and the data_valid signals; destination and
+    // value (chunks) are set per send. Flush keeps a data_valid inc ordered after the payload it announces.
     auto sem_hdr = PacketHeaderPool::allocate_header(1);
     fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         sem_hdr, /*num_hops=*/1, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
+    auto atomic_inc = [&](uint64_t addr, uint32_t val) {
+        fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
+            UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
+            sender, sem_hdr, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{addr, val});
+    };
 
     // Init handshake (send only): tell the neighbor's opposite-direction reader we're alive, so it lets its
     // paired writer start writing into our output. Our own reader does the matching wait.
     if constexpr (do_init_barrier) {
-        uint64_t paired_ready_addr = safe_get_noc_addr(paired_noc_x, paired_noc_y, ready_sem, 0);
-        fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            sender, sem_hdr, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{paired_ready_addr, 0});
+        atomic_inc(safe_get_noc_addr(ready_noc_x, ready_noc_y, ready_sem, 0), 1);
     }
 
-    const uint64_t downstream_data_valid_addr = safe_get_noc_addr(own_noc_x, own_noc_y, data_valid_sem, 0);
-
-    // Increment the downstream reader's data_valid. Ordered after the data on this connection, so the reader
-    // can safely read once it observes the increment.
-    auto signal_data_valid = [&]() {
-        fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            sender, sem_hdr, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{downstream_data_valid_addr, 0});
-    };
+    const uint64_t downstream_data_valid_addr =
+        safe_get_noc_addr(data_valid_noc_x, data_valid_noc_y, data_valid_sem, 0);
+    auto signal = [&](uint32_t chunks) { atomic_inc(downstream_data_valid_addr, chunks); };
 
     OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
 
     uint32_t stripe = initial_stripe;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         const bool last = (iter == num_iters - 1);
-        it.init(stripe, last ? final_start : slice_start, last ? final_count : slice_count);
+        const uint32_t start = last ? final_start : slice_start;
+        const uint32_t count = last ? final_count : slice_count;
+        const bool granular = (iter < num_granular_sends);  // downstream relays this send -> signal fine-grained
         const bool local_copy = (iter == 0) && (do_local_write != 0);
+        it.init(stripe, start, count);
 
-        // Stripes the downstream relays are signalled once per data_valid_granularity CB pages so it can start
-        // forwarding early; the rest (its antipode) get a single inc that also serves as the completion signal.
-        const bool signal_granular = (iter < num_granular_sends);
-        uint32_t packets_since_inc = 0;
-
-        while (it.valid()) {
+        uint32_t pending_chunks = 0, pending_pages = 0;
+        for (uint32_t r = 0; r < count;) {
+            const uint32_t batch = std::min(outputs_per_cb_page, count - r);
             cb.wait_front(1);
             uint32_t l1_read_addr = cb.get_read_ptr();
-            for (uint32_t i = 0; i < outputs_per_cb_page && it.valid(); ++i) {
+            for (uint32_t i = 0; i < batch; ++i) {
                 auto [page_id, byte_off] = it.next();
                 uint64_t neighbor_addr =
                     tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, byte_off);
@@ -193,23 +193,37 @@ void kernel_main() {
             fabric.async_writes_flushed();
             cb.pop_front(1);
 
-            if (signal_granular) {
-                packets_since_inc = (packets_since_inc + 1 == data_valid_granularity) ? 0 : packets_since_inc + 1;
-                if (packets_since_inc == 0) {
-                    signal_data_valid();
-                }
+            pending_chunks += batch;
+            if (granular && ++pending_pages == data_valid_granularity) {
+                signal(pending_chunks);
+                pending_chunks = 0;
+                pending_pages = 0;
             }
+            r += batch;
         }
-
-        // A single inc for a non-granular stripe, or the trailing partial granule of a granular one.
-        if (!signal_granular || packets_since_inc != 0) {
-            signal_data_valid();
+        // Trailing chunks of a relayed stripe, or the whole of a received-only stripe (granular == false).
+        if (pending_chunks > 0) {
+            signal(pending_chunks);
         }
-
         stripe = (stripe + stripe_step) % num_devices;
     }
 
+    // Commit our own NOC writes (the iter-0 local copy, plus the packet writes into the mux buffer) before
+    // teardown.
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+
 #ifdef USE_WORKER_MUX
+    // The mux forwards our buffered packets to the fabric asynchronously, and close()/graceful-termination do
+    // NOT wait for in-flight packets to drain. Each worker's last fabric op is a data_valid inc with nothing
+    // behind it to push it out, so without this it can still be sitting in the mux buffer when the mux
+    // terminates -- it gets dropped and the downstream reader hangs on its completion count. Spin until the mux
+    // has forwarded everything (all channel slots freed / credits returned). This runs before the termination
+    // handshake below, so the mux is never told to terminate while any worker still has data in flight.
+    // get_num_free_write_slots() invalidates the L1 cache internally. (See tt-metal PR #47264.)
+    while (mux_connection.get_num_free_write_slots() != fabric_mux_num_buffers_per_channel) {
+    }
+
     // Disconnect from the mux. Worker 0 (termination master) waits for every peer to disconnect, then tells
     // the mux to gracefully terminate (drain, then exit); the rest just signal the master.
     tt::tt_fabric::fabric_client_disconnect(mux_connection);
