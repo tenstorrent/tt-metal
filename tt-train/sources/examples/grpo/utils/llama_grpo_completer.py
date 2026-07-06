@@ -271,7 +271,15 @@ class LlamaGRPOCompleter(GRPOCompleter):
         )
         if local_safetensors:
             logging.info("Loading model from local safetensors: %s", model_source)
-            _load_checkpoint(tt_model, model_source, dp_mapper=self._dp_mapper)
+            # Load weights REPLICATED across the mesh (dp_mapper=None), not
+            # sharded. DDP replicates module weights and only shards the input
+            # batch (self._dp_mapper is used for data tensors below); passing the
+            # data shard mapper here would upload every weight as
+            # PlacementShard(0), which breaks DDP all-reduce and violates the
+            # replicated-weights contract that export_to_hf_dict / WeightBridge
+            # rely on. Matches the HF-download path (load_from_safetensors loads
+            # non-TP weights replicated).
+            _load_checkpoint(tt_model, model_source)
         else:
             logging.info("Downloading model from HuggingFace: %s", model_source)
             model_repo_path = snapshot_download(
