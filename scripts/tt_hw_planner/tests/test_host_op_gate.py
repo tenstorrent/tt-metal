@@ -15,7 +15,7 @@ def test_host_ops_verdict_fails_and_names_them():
     assert "aten.embedding.default" in msg
 
 
-def test_not_ran_is_non_regressive_by_default():
-    assert _host_op_gate_reason({"ran": False, "reason": "no host_op_selftest hook"}) is None
-    assert _host_op_gate_reason(None) is None
+def test_not_ran_fails_mandatory():
+    assert _host_op_gate_reason({"ran": False, "reason": "no host_op_selftest hook"}) is not None
+    assert _host_op_gate_reason(None) is not None
 

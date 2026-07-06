@@ -280,7 +280,11 @@ _G5_HOST_XFER = ("from_torch", "to_torch", "from_device", "to_device")
 
 def _host_op_gate_reason(probe_result):
     if not isinstance(probe_result, dict) or not probe_result.get("ran"):
-        return None
+        return (
+            "on-device: fully-on-device NOT proven — the pipeline exposes no runnable "
+            "host_op_selftest hook (emit it per COMMAND 3 so the observer can verify). "
+            "Set E2E_ALLOW_HOST_DECODE=1 to waive for a genuinely host-bound model."
+        )
     v = probe_result.get("verdict") or {}
     if v.get("on_device", True):
         return None
@@ -474,142 +478,41 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                     f"(one demo/demo_<task>.py per HF-registered head required — do not collapse)"
                 )
 
-    stub_dir = demo_dir / "_stubs"
-    nonnative = []
-    for p in sorted(stub_dir.glob("*.py")) if stub_dir.is_dir() else []:
-        if p.name.startswith("_"):
-            continue
-        try:
-            src = p.read_text(errors="ignore")
-        except Exception:
-            continue
-        if any(re.search(pat, src) for pat in _G1_TORCH_DELEGATION):
-            nonnative.append(p.stem)
-    if nonnative:
-        reasons.append("G1: stub(s) delegate to the torch reference (not native ttnn): " + ", ".join(nonnative[:8]))
-
-    tt_dir = demo_dir / "tt"
-    hf_hits = []
-    scan_targets = []
-    if tt_dir.is_dir():
-        scan_targets.extend(sorted(tt_dir.glob("*.py")))
-    if stub_dir.is_dir():
-        scan_targets.extend([p for p in sorted(stub_dir.glob("*.py")) if not p.name.startswith("_")])
-    for p in scan_targets:
-        try:
-            src = p.read_text(errors="ignore")
-        except Exception:
-            continue
-        rel = p.relative_to(demo_dir)
-        for h in _check_hf_fallback(src)[:6]:
-            hf_hits.append(f"{rel}: {h}")
-    if hf_hits:
-        reasons.append(
-            "G1b: tt/*.py HOT-path function(s) call HF submodules as computation — "
-            "pipeline is not a real TT forward path: "
-            + "; ".join(hf_hits[:8])
-            + " (chain the graduated TTNN stub instead; HF is allowed in *_trace_setup "
-            "and reference helpers for fixed-input injection, not in *_trace_step / "
-            "decode_step / run_* / __call__)"
-        )
-
     if os.environ.get("E2E_REQUIRE_ON_DEVICE", "1") != "0" and os.environ.get("E2E_ALLOW_HOST_DECODE") != "1":
-        tt_dir = demo_dir / "tt"
-        host_hits = []
-        for p in sorted(tt_dir.glob("*.py")) if tt_dir.is_dir() else []:
+        repo = demo_dir
+        for parent in demo_dir.parents:
+            if (parent / "models").is_dir():
+                repo = parent
+                break
+        hop = repo / "scripts" / "tt_hw_planner" / "_host_op_probe.py"
+        if hop.is_file():
+            penv3 = dict(os.environ)
+            penv3["TT_METAL_HOME"] = str(repo)
+            penv3["PYTHONPATH"] = str(repo) + os.pathsep + penv3.get("PYTHONPATH", "")
+            penv3.pop("TT_METAL_DEVICE_PROFILER", None)
+            _pb3 = repo / "python_env" / "bin" / "python"
+            _pbin3 = str(_pb3) if _pb3.exists() else sys.executable
             try:
-                src = p.read_text(errors="ignore")
-            except Exception:  # noqa: BLE001
-                continue
-            if any(re.search(pat, src) for pat in _G5_HOST_SAMPLING):
-                host_hits.append(p.stem)
-        if host_hits:
-            reasons.append(
-                "G5 on-device: pipeline samples on the HOST (torch.argmax/topk/multinomial) — decode is not "
-                "fully on-device, so trace + 2CQ is blocked: " + ", ".join(host_hits[:8]) + " (move sampling "
-                "on-device with ttnn; set E2E_ALLOW_HOST_DECODE=1 to waive for a genuinely host-bound model)"
-            )
-        else:
-            repo = demo_dir
-            for parent in demo_dir.parents:
-                if (parent / "models").is_dir():
-                    repo = parent
-                    break
-            probe = repo / "models" / "experimental" / "perf_automation" / "cc_optimize" / "_op_sig_probe.py"
-            if probe.is_file() and test_files:
-                penv = dict(os.environ)
-                penv["TT_METAL_HOME"] = str(repo)
-                penv["PYTHONPATH"] = str(repo) + os.pathsep + penv.get("PYTHONPATH", "")
-                penv["TT_PERF_MAX_NEW_TOKENS"] = "2"
-                penv.pop("TT_METAL_DEVICE_PROFILER", None)
-                _pb = repo / "python_env" / "bin" / "python"
-                _pbin = str(_pb) if _pb.exists() else sys.executable
-                try:
-                    pr = subprocess.run(
-                        [_pbin, str(probe), str(test_files[0].relative_to(repo))],
-                        capture_output=True,
-                        text=True,
-                        timeout=timeout_s,
-                        cwd=str(repo),
-                        env=penv,
-                    )
-                    # _parse_facts rule (same as cc_optimize's scorecard, but ENFORCED
-                    # here as a gate): a ttnn.Tensor lives on-device and torch can't touch
-                    # it, so ANY host-transfer op appearing in the REAL forward's op stream
-                    # means the pipeline crosses to host mid-compute — host glue, trace+2CQ
-                    # blocked. Model-agnostic: reads the actual op stream (whatever the model
-                    # runs — encoder / decoder / prefill+decode / diffusion / …), not a
-                    # per-model map or a named step. Presence, not op-type variety.
-                    host_ops = []
-                    for line in ((pr.stdout or "") + "\n" + (pr.stderr or "")).splitlines():
-                        if line.startswith("PERF_OP_SIGS="):
-                            import json as _json
-
-                            try:
-                                sigs = _json.loads(line.split("=", 1)[1])
-                            except Exception:  # noqa: BLE001
-                                sigs = []
-                            host_ops = sorted({s.split("(")[0] for s in sigs if any(h in s for h in _G5_HOST_XFER)})
-                    if host_ops:
-                        reasons.append(
-                            "G5 on-device: the real forward round-trips to host via "
-                            + ", ".join(host_ops[:8])
-                            + " — not fully on-device, so trace+2CQ is blocked (host/torch compute is "
-                            "reached mid-forward; keep the whole forward resident + sample on-device, or "
-                            "set E2E_ALLOW_HOST_DECODE=1 to waive for a genuinely host-bound model)"
-                        )
-                except Exception:  # noqa: BLE001 — probe failure is not a gate failure (best-effort)
-                    pass
-
-            hop = repo / "scripts" / "tt_hw_planner" / "_host_op_probe.py"
-            if hop.is_file():
-                penv3 = dict(os.environ)
-                penv3["TT_METAL_HOME"] = str(repo)
-                penv3["PYTHONPATH"] = str(repo) + os.pathsep + penv3.get("PYTHONPATH", "")
-                penv3.pop("TT_METAL_DEVICE_PROFILER", None)
-                _pb3 = repo / "python_env" / "bin" / "python"
-                _pbin3 = str(_pb3) if _pb3.exists() else sys.executable
-                try:
-                    pr3 = subprocess.run(
-                        [_pbin3, str(hop), str(demo_dir)],
-                        capture_output=True,
-                        text=True,
-                        timeout=timeout_s,
-                        cwd=str(repo),
-                        env=penv3,
-                    )
-                    _res = None
-                    for line in ((pr3.stdout or "") + "\n" + (pr3.stderr or "")).splitlines():
-                        if line.startswith("HOST_OP_PROBE="):
-                            try:
-                                _res = json.loads(line.split("=", 1)[1])
-                            except Exception:  # noqa: BLE001
-                                _res = None
-                    _r = _host_op_gate_reason(_res)
-                    if _r:
-                        reasons.append(_r)
-                except Exception:  # noqa: BLE001 — probe failure is not a gate failure (best-effort)
-                    pass
+                pr3 = subprocess.run(
+                    [_pbin3, str(hop), str(demo_dir)],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_s,
+                    cwd=str(repo),
+                    env=penv3,
+                )
+                _res = None
+                for line in ((pr3.stdout or "") + "\n" + (pr3.stderr or "")).splitlines():
+                    if line.startswith("HOST_OP_PROBE="):
+                        try:
+                            _res = json.loads(line.split("=", 1)[1])
+                        except Exception:  # noqa: BLE001
+                            _res = None
+                _r = _host_op_gate_reason(_res)
+                if _r:
+                    reasons.append(_r)
+            except Exception as _e:  # noqa: BLE001
+                reasons.append("on-device: host-op observer probe could not run (%s) — cannot prove on-device" % _e)
 
     py = sys.executable
     for parent in [Path.cwd(), *demo_dir.parents]:
