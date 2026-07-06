@@ -483,7 +483,6 @@ class TtIndexer:
         start_pos: int = 0,
         rope_tensors: dict = None,
         cache_user_id: int = 0,
-        actual_end: int = None,
     ) -> ttnn.Tensor:
         """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
         on the query axis (each chip scores its own S/sp rows; no Q/W all-gather). Fully on-device:
@@ -495,9 +494,10 @@ class TtIndexer:
         (write_k) and the per-head weights (weights_proj). (write_k is called internally here; ttMLA.forward
         only ever calls self._indexer.forward — it never calls write_k directly.)
 
-        Block-cyclic path (GLM chunked): ``rope_tensors`` (the MLA's block-cyclic indexed cos/sin/trans),
-        ``cache_user_id`` (per-user slot), and ``actual_end`` (valid global length → kv_len pad mask) drive
-        the per-user block-cyclic key cache + block-cyclic scoring. Natural path ignores them."""
+        Block-cyclic path (GLM/DS chunked): ``rope_tensors`` (the MLA's block-cyclic indexed cos/sin/trans)
+        and ``cache_user_id`` (per-user slot) drive the per-user block-cyclic key cache + block-cyclic
+        scoring. Scoring currently spans the full preallocated cache width (see the kv_len TODO below).
+        Natural path ignores rope_tensors/cache_user_id."""
         a = self.index_args
         glob = seq_len * self.sp_factor  # global query/key count this chunk
         end_pos = start_pos + glob
@@ -552,8 +552,19 @@ class TtIndexer:
         if self._blockcyclic:
             # Gather the per-user block-cyclic key cache to replicated full-T; the op reads it back in
             # logical order via invP, selects this user's slot via cache_batch_idx, and applies the
-            # straddle for a non-slab-aligned start_pos (padded chunk). kv_len masks pad keys within the
-            # valid range (None → causal alone masks the unwritten future suffix).
+            # straddle for a non-slab-aligned start_pos (padded chunk). Scores the FULL preallocated width T:
+            # positions past each query are causally -inf, and top-k below drops those (-inf -> sentinel).
+            #
+            # TODO(perf, indexer kv_len): on an over-allocated cache (T >> written extent, e.g. a 55k slot
+            # with a 5k chunk written) this scores the whole T. The op supports bounding the scored logical
+            # prefix via kv_len (the tightest legal value is end_pos = start_pos + chunk_global; it cannot go
+            # lower because the pad query rows push the fullest-device causal window to end_pos, and the op
+            # TT_FATALs on kv_len < that). Wiring kv_len=end_pos here is NOT correct on its own: kv_len only
+            # writes logits[:, :, :, :end_pos] and leaves the tail [end_pos, T) STALE (not -inf), so the
+            # downstream top-k over full-T then picks garbage columns (observed: rotated-prefill PCC -> 0.0).
+            # It also needs the logits sliced to [0, end_pos) before top-k (that path validated correct at the
+            # OP level, but is deferred). Investigate: slice-vs-stale-tail interaction + whether the extra
+            # slice/copy is cheaper than the saved score/top-k work before turning this on.
             k_full = self._gather_index_kbuf()  # [num_users, 1, T, D_idx] bf16 TILE, block-cyclic
             logits = ttnn.experimental.indexer_score_dsa(
                 q_dev,
@@ -565,7 +576,6 @@ class TtIndexer:
                 cache_batch_idx=cache_user_id,
                 block_cyclic_sp_axis=self.sp_axis,
                 block_cyclic_chunk_local=seq_len,  # per-chip chunk == chunk_size_global / sp
-                kv_len=actual_end,
             )
             ttnn.deallocate(k_full)
         else:
