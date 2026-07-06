@@ -1065,6 +1065,9 @@ void expect_galaxy_4x4_split_host_mesh_checks(const ControlPlane& control_plane)
             } else if (rank_group_shape_is(rank_shape, 2, 2)) {
                 expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 2);
                 expect_galaxy_rank_group_2x2_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 2, 4)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 4);
+                expect_galaxy_rank_group_2x4_check(control_plane, mesh_id, host_rank);
             } else if (rank_group_shape_is(rank_shape, 4, 4)) {
                 expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 4);
                 if (!ran_4x4split_check) {
@@ -1073,7 +1076,8 @@ void expect_galaxy_4x4_split_host_mesh_checks(const ControlPlane& control_plane)
                 }
             } else {
                 ADD_FAILURE() << "mesh " << *mesh_id << " host_rank " << *host_rank
-                              << " split-host 4x4 layout rank shape must be 1x1, 1x2, 2x2, or 4x4, got " << rank_shape;
+                              << " split-host 4x4 layout rank shape must be 1x1, 1x2, 2x2, 2x4, or 4x4, got "
+                              << rank_shape;
             }
         }
     }
