@@ -475,6 +475,11 @@ class Prefetcher(LightweightModule):
         if garbage is not None:
             ttnn.deallocate(garbage)
             self.garbage = None
+        # Drain all in-flight device work (the async dram_prefetcher op and any decode
+        # ops) before freeing the global CB's L1. Without this the buffer can be freed
+        # while the device still references it, corrupting NOC state and hanging the next
+        # op (observed as a device timeout in the following prefill) (#47820).
+        ttnn.synchronize_device(self.mesh_device)
         self.global_cb.deallocate()
         self.global_cb = None
 
