@@ -81,14 +81,14 @@ log "Generated SSH configuration:"
 echo "$ssh_config"
 
 # Ensure SSH directory exists
-mkdir -p ~/.ssh
+mkdir -p /home/runner/.ssh
 
 # Write SSH config to file
-echo "$ssh_config" > ~/.ssh/config
+echo "$ssh_config" > /home/runner/.ssh/config
 
 # Set appropriate permissions
-chmod 600 ~/.ssh/config
-chmod 700 ~/.ssh
+chmod 600 /home/runner/.ssh/config
+chmod 700 /home/runner/.ssh
 
-log "SSH configuration written to ~/.ssh/config"
+log "SSH configuration written to /home/runner/.ssh/config"
 log "SSH configuration setup completed!"
