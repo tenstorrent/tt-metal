@@ -116,4 +116,4 @@ runs:
       shell: bash
       run: |
         echo "Connecting to environment..."
-        kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} get configmap ${{ inputs.environmentName }}-connection -o jsonpath='{.data.podNodeMapping}' 2>/dev/null | .github/scripts/environment-ssh-setup.sh
+        kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} get configmap ${{ inputs.environmentName }}-connection -o jsonpath='{.data.podNodeMapping}' 2>/dev/null | "${{ github.action_path }}/../../scripts/environment-ssh-setup.sh"
