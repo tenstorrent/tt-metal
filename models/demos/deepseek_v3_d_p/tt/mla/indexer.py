@@ -458,7 +458,18 @@ class TtIndexer:
             ttnn.deallocate(k)
             return
 
-        # Natural path (single-shot / DS chunked): full/replicated, grown by concat (O(n^2)).
+        # Natural path (single-shot, all variants): SP all-gather to a full/replicated cache. write_k runs
+        # once here (start_pos==0), so the concat-grow below is dead for current configs -- it only fired in
+        # the retired non-block-cyclic chunked mode. The live cost is the all-gather + full replication
+        # (glob keys/chip vs glob/sp block-cyclic).
+        #
+        # TODO(refactor, drop natural path -- pavlepopovic review): fold single-shot onto the block-cyclic
+        # path (treat it as one full-seq chunk at start_pos=0): SP-sharded cache + in-place
+        # update_padded_kv_cache, no all-gather / no replication / no concat -- then delete this branch,
+        # _device_rope_pe's natural use, and _sp_all_gather. Dependency: single-shot must supply the
+        # block-cyclic INDEXED rope tables (mla.py builds natural-order tables via _apply_rope_one_shot in
+        # single-shot; _bc_rope_pe needs get_rope_tensors_indexed). Verify block-cyclic alignment holds for
+        # single-shot seq lengths and that test_sparse_mla_vs_trace.py (is_chunked=False) passes unified.
         glob = seq_len * self.sp_factor
         k = self._sp_all_gather(k, dim=2)  # [1, 1, glob, D_idx] full, replicated, natural order
         k = self._device_rope_pe(k, glob, start_pos)  # on-device rope
