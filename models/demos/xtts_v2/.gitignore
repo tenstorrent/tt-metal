@@ -1,0 +1,7 @@
+# Regenerable PCC capture fixtures (large binaries) — recreated by capture_inputs.
+_captured/
+# Transient profiler / tracy output.
+generated/
+# Python bytecode.
+__pycache__/
+*.pyc
