@@ -71,4 +71,6 @@ void kernel_main() {
         reduce_sem.wait(K_blocks);
         reduce_cb.push_back(K_blocks * block_num_tiles);
     }
+    noc.async_write_barrier();
+    noc.async_read_barrier();
 }
