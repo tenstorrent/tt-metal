@@ -5,6 +5,15 @@
 from __future__ import annotations
 
 
+def _read_rope_theta(hf_config) -> float:
+    """rope_theta may be a top-level attr or nested under rope_parameters/rope_scaling (transformers 5.x)."""
+    theta = getattr(hf_config, "rope_theta", None)
+    if theta is None:
+        params = getattr(hf_config, "rope_parameters", None) or getattr(hf_config, "rope_scaling", None) or {}
+        theta = params.get("rope_theta")
+    return theta
+
+
 class SmolLM3Config:
     """Configuration for the SmolLM3-3B text encoder (used by Bria FIBO)."""
 
@@ -56,7 +65,7 @@ class SmolLM3Config:
             num_key_value_heads=hf_config.num_key_value_heads,
             head_dim=getattr(hf_config, "head_dim", None),
             rms_norm_eps=hf_config.rms_norm_eps,
-            rope_theta=hf_config.rope_theta,
+            rope_theta=_read_rope_theta(hf_config),
             max_position_embeddings=hf_config.max_position_embeddings,
             hidden_act=hf_config.hidden_act,
             attention_bias=getattr(hf_config, "attention_bias", False),

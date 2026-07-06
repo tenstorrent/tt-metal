@@ -2,6 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+import pytest
 import torch
 
 from models.tt_dit.encoders.smollm3.config import SmolLM3Config
@@ -43,10 +46,6 @@ def test_smollm3_rope_matches_hf():
     torch.testing.assert_close(cos[0, 0], ref_cos, atol=1e-5, rtol=1e-5)
     torch.testing.assert_close(sin[0, 0], ref_sin, atol=1e-5, rtol=1e-5)
 
-
-import os
-
-import pytest
 
 from models.tt_dit.utils import tensor as tt_tensor
 from models.tt_dit.utils.check import assert_quality
@@ -130,3 +129,20 @@ def test_smollm3_attention(*, mesh_device, use_rope):
     tt_sin = tt_tensor.from_torch(sin, device=mesh_device)
     tt_out = attn.forward(tt_x, attention_bias=None, pos_embeds=(tt_cos, tt_sin))
     assert_quality(ref, tt_tensor.to_torch(tt_out), pcc=0.99, relative_rmse=0.2)
+
+
+def test_smollm3_config_from_hf():
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    from transformers import AutoConfig
+
+    try:
+        hf = AutoConfig.from_pretrained(os.environ.get("FIBO_PATH", "briaai/FIBO"), subfolder="text_encoder")
+    except Exception as e:
+        pytest.skip(f"FIBO config unavailable: {e}")
+    cfg = SmolLM3Config.from_hf_config(hf)
+    assert cfg.rope_theta == 5000000.0
+    assert cfg.head_dim == 128
+    assert cfg.num_hidden_layers == 36
+    assert cfg.hidden_size == 2048
+    assert len(cfg.no_rope_layers) == 36 and sum(cfg.no_rope_layers) == 27
+    assert cfg.attention_bias is False
