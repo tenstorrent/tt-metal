@@ -57,12 +57,36 @@ This is exactly what gemma4 discards; the fix re-honors it in DG-local code.
 
 ## Device evidence
 
-- CPU structural: `pytest tests/test_chunked_prefill_math.py` → **5 passed** (2026-07-06, device-free).
-- gemma4 isolation gate: `git diff main -- models/demos/gemma4/` still shows only the
-  pre-existing branch commits (spec-decode/LM-head/RoPE), **none from this feature** — my increment
+- **Device correctness (2×256 vs 1×512): PCC = 1.0 — PASS** (2026-07-06, QB2 `P150x4`, `(1,4)` mesh,
+  TP=4). `DG_RUN_DEVICE=1 MESH_DEVICE=P150x4 pytest tests/test_device_chunked_prefill.py` →
+  **1 passed** in 15.48s. Log line: `[chunked-prefill] last-token logits PCC (2x256 vs 1x512): 1.0`.
+  A 512-token prompt prefilled as two 256-token chunks over a paged KV cache reproduces the stock
+  single 1×512 prefill's last-token logits **exactly** (PCC 1.0 ≥ 0.999 bar). This is only possible
+  when BOTH the per-chunk RoPE offset (`chunk_start_idx`) and cross-chunk attention
+  (`chunk_page_table` fill + full-`page_table` `chunked_scaled_dot_product_attention`) are correct:
+  chunk-1's queries (positions 256–511) attend chunk-0's KV read straight from the paged cache, and
+  are RoPE-rotated to their true absolute positions.
+- CPU structural: `pytest tests/test_chunked_prefill_math.py` → **5 passed** (device-free).
+- gemma4 isolation gate: `git diff main -- models/demos/gemma4/` still shows only the pre-existing
+  branch commits (24 files, spec-decode/LM-head/RoPE), **none from this feature** — my increment
   adds zero gemma4 edits (all new files under `models/experimental/diffusion_gemma/`).
-- Device correctness (2×256 vs 1×512, PCC ≥ 0.999): **PENDING** — device run under the shared QB2
-  lock. See "Device run" below once captured.
+
+### Exact device invocation
+
+```bash
+source /home/zni/venvs/tt-diffusion-gemma/bin/activate
+export TT_METAL_HOME=/home/zni/tt-metal TT_METAL_RUNTIME_ROOT=/home/zni/tt-metal \
+       ARCH_NAME=blackhole PYTHONPATH=/home/zni/tt-metal-chunk \
+       DG_RUN_DEVICE=1 MESH_DEVICE=P150x4 TT_LOGGER_LEVEL=ERROR
+flock /tmp/dg-mesh.lock timeout 900 \
+  python -m pytest models/experimental/diffusion_gemma/tests/test_device_chunked_prefill.py -v -s
+```
+
+> Env note: this is a `git worktree` at `/home/zni/tt-metal-chunk`, but the compiled runtime
+> firmware + editable `ttnn` live in the built tree `/home/zni/tt-metal`. So `TT_METAL_HOME`
+> **must** point at `/home/zni/tt-metal` (else the brisc linker script `firmware_brisc.ld` is
+> missing and every kernel build fails), while `PYTHONPATH=/home/zni/tt-metal-chunk` keeps `models`
+> resolving to this worktree's code. `ttnn` resolves from the editable install regardless.
 
 ## Memory bound achieved
 
