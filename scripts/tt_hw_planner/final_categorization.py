@@ -199,6 +199,7 @@ def parents_ready_to_recompose(
         for c in components_list
         if c.get("name") and c.get("submodule_path")
     }
+    reuse_set = {c.get("name") for c in components_list if c.get("status") == "REUSE" and c.get("name")}
     no_emit = set(load_no_emit_tests(model_id).keys())
     skipped = load_persistent_skips(model_id)
     graduated_set = set(graduated_set or set()) | set(_infer_graduated_from_disk(demo_dir, new_components))
@@ -228,6 +229,8 @@ def parents_ready_to_recompose(
         if comp is None:
             return False
         if comp in graduated_set:
+            return True
+        if comp in reuse_set:
             return True
         if comp in no_emit:
             return _covered(comp, stack)
