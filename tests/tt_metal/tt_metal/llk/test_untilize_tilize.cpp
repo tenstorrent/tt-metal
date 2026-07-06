@@ -330,13 +330,17 @@ void run_single_core_tilize_program(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .accumulator_width = test_config.fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide
+                                                              : experimental::AccumulatorWidth::Standard,
+            .accumulator_buffering = test_config.dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
+                                                                  : experimental::AccumulatorBuffering::Pipelined,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .accumulator_width = test_config.fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide
+                                                              : experimental::AccumulatorWidth::Standard,
+            .accumulator_buffering = test_config.dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
+                                                                  : experimental::AccumulatorBuffering::Pipelined,
         };
     }
     experimental::KernelSpec compute_spec{
@@ -654,13 +658,17 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .accumulator_width = test_config.fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide
+                                                              : experimental::AccumulatorWidth::Standard,
+            .accumulator_buffering = test_config.dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
+                                                                  : experimental::AccumulatorBuffering::Pipelined,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .accumulator_width = test_config.fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide
+                                                              : experimental::AccumulatorWidth::Standard,
+            .accumulator_buffering = test_config.dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
+                                                                  : experimental::AccumulatorBuffering::Pipelined,
         };
     }
     experimental::KernelSpec compute_spec{
@@ -1008,13 +1016,17 @@ static void run_quasar_tilize_untilize_test(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
+            .accumulator_width =
+                fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide : experimental::AccumulatorWidth::Standard,
+            .accumulator_buffering = dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
+                                                      : experimental::AccumulatorBuffering::Pipelined,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
+            .accumulator_width =
+                fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide : experimental::AccumulatorWidth::Standard,
+            .accumulator_buffering = dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
+                                                      : experimental::AccumulatorBuffering::Pipelined,
         };
     }
     experimental::KernelSpec compute_spec{

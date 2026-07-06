@@ -112,15 +112,20 @@ tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     if (arch == tt::ARCH::QUASAR) {
         return tt::tt_metal::experimental::ComputeGen2Config{
             .math_fidelity = config.math_fidelity,
-            .fp32_dest_acc_en = config.fp32_dest_acc_en,
-            .dst_full_sync_en = config.dst_full_sync_en,
+            .accumulator_width = config.fp32_dest_acc_en ? tt::tt_metal::experimental::AccumulatorWidth::Wide
+                                                         : tt::tt_metal::experimental::AccumulatorWidth::Standard,
+            .accumulator_buffering = config.dst_full_sync_en
+                                         ? tt::tt_metal::experimental::AccumulatorBuffering::MaxCapacity
+                                         : tt::tt_metal::experimental::AccumulatorBuffering::Pipelined,
             .math_approx_mode = config.math_approx_mode,
         };
     }
     return tt::tt_metal::experimental::ComputeGen1Config{
         .math_fidelity = config.math_fidelity,
-        .fp32_dest_acc_en = config.fp32_dest_acc_en,
-        .dst_full_sync_en = config.dst_full_sync_en,
+        .accumulator_width = config.fp32_dest_acc_en ? tt::tt_metal::experimental::AccumulatorWidth::Wide
+                                                     : tt::tt_metal::experimental::AccumulatorWidth::Standard,
+        .accumulator_buffering = config.dst_full_sync_en ? tt::tt_metal::experimental::AccumulatorBuffering::MaxCapacity
+                                                         : tt::tt_metal::experimental::AccumulatorBuffering::Pipelined,
         .math_approx_mode = config.math_approx_mode,
     };
 }
