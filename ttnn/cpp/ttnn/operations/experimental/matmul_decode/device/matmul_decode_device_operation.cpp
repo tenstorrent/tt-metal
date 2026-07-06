@@ -147,7 +147,7 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Full width-sharded B: each shard holds the full K dimension for its N-slice.
-    if (input_tensor_a.logical_shape().rank() > 2) {
+    if (input_tensor_a.logical_shape().rank() > 2 && input_tensor_b.logical_shape().rank() > 2) {
         for (int i = 0; i < input_tensor_a.logical_shape().rank() - 2; i++) {
             TT_FATAL(
                 input_tensor_a.logical_shape()[i] == input_tensor_b.logical_shape()[i],
