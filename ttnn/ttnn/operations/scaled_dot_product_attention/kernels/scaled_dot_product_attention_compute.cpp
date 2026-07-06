@@ -104,8 +104,7 @@ void kernel_main() {
             cb_wait_front(cb_scaler, 2);
 
             // Phase 1: QK^T — S = Q @ K^T
-            // Q tiles are re-pushed by reader per KV block, so WaitAndPopPerKBlock is correct.
-            // DataFormatReconfig::NONE — all CBs are bf16, no format change needed.
+            // Use default DataFormatReconfig (INPUT_AND_OUTPUT) to handle eltwise→matmul transition
             ckl::matmul_block<
                 /*transpose=*/true,
                 /*packer_l1_acc=*/false,
@@ -113,17 +112,7 @@ void kernel_main() {
                 ckl::OutputCBLayout::TileRowMajor,
                 ckl::matmul_config::InitMode::Short,
                 ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::NoPostCompute,
-                ckl::NoPreKBlock,
-                ckl::NoPostKBlock,
-                0,  // untilize_block_ct_dim
-                ckl::NoKBlockInnerDimFn,
-                ckl::NoIn0Source,
-                ckl::NoIn1BaseOffset,
-                false,  // caller_owns_pack_target
-                ckl::NoneActivation,
-                ckl::matmul_config::DataFormatReconfig::NONE>(
+                ckl::InputPolicy::WaitAndPopPerKBlock>(
                 cb_q_buf,
                 cb_k_buf,
                 cb_scores_buf,
@@ -266,7 +255,6 @@ void kernel_main() {
 
             // Phase 12: PV = P @ V
             // Shape: M=B_q, N=D_t, K=B_kv. Single subblock (1,1) of size (B_q, D_t).
-            // DEST constraint: B_q * D_t <= DEST_AUTO_LIMIT (4 with fp32_dest_acc_en).
             ckl::matmul_block<
                 /*transpose=*/false,
                 /*packer_l1_acc=*/false,
@@ -274,17 +262,7 @@ void kernel_main() {
                 ckl::OutputCBLayout::TileRowMajor,
                 ckl::matmul_config::InitMode::Short,
                 ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::NoPostCompute,
-                ckl::NoPreKBlock,
-                ckl::NoPostKBlock,
-                0,  // untilize_block_ct_dim
-                ckl::NoKBlockInnerDimFn,
-                ckl::NoIn0Source,
-                ckl::NoIn1BaseOffset,
-                false,
-                ckl::NoneActivation,
-                ckl::matmul_config::DataFormatReconfig::NONE>(
+                ckl::InputPolicy::WaitAndPopPerKBlock>(
                 cb_pv_buf, cb_v_buf, cb_scores_buf, cb_scores_buf, ckl::MatmulBlockShape::of(1, 1, B_q, D_t, B_kv, 1));
 
             // Phase 13: O_i += PV
