@@ -176,9 +176,11 @@ def create_program_descriptor(
         )
 
     # The reduce scaler CB must use Float16_b or Float32 (prepare_reduce_scaler
-    # does not support block-float formats). Use Float32 when fp32_dest_acc_en=True
-    # for best precision, otherwise Float16_b.
-    scaler_format = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+    # does not support block-float formats). Always use Float16_b — the scaler
+    # is just a constant tile, not an accumulator, so Float32 precision is not
+    # needed. Using bf16 keeps the scaler CB small (2KB/tile vs 4KB for Float32)
+    # which is critical for long sequences (S=8192 → 512 scaler tiles).
+    scaler_format = ttnn.bfloat16
     scaler_tile_size = ttnn.tile_size(scaler_format)
 
     # Input/output CBs follow the input tensor's dtype
