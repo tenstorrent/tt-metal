@@ -12,7 +12,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/impl/experimental/disaggregation/noc_addr.hpp"
+#include "tt_metal/impl/internal/disaggregation/noc_addr.hpp"
 
 namespace tt::tt_metal::internal::disaggregation {
 

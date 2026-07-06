@@ -251,7 +251,7 @@ void bind_disaggregation_api(nb::module_& mod) {
     mod.def(
         "read_dram_umd",
         [](uint64_t unique_id, uint64_t noc_addr, uint32_t size_bytes) {
-            auto buf = tt::tt_metal::experimental::disaggregation::read_dram_umd(unique_id, noc_addr, size_bytes);
+            auto buf = tt::tt_metal::internal::disaggregation::read_dram_umd(unique_id, noc_addr, size_bytes);
             return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
         },
         nb::arg("unique_id"),
