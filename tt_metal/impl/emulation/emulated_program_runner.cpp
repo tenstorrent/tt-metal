@@ -10,6 +10,8 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <csignal>
 #if defined(__x86_64__) && defined(__linux__)
 #include <ucontext.h>
@@ -36,6 +38,7 @@
 #include <stdexcept>
 #include <string>
 #include <future>
+#include <chrono>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -137,22 +140,28 @@ thread_local uint32_t __emule_l1_host_ranges_count = 0;
 thread_local uint64_t* __emule_l1_resolved_ranges = nullptr;
 thread_local uint32_t* __emule_l1_resolved_ranges_count = nullptr;
 thread_local uint32_t __emule_l1_resolved_ranges_capacity = 0;
-thread_local uint32_t __emule_cb_reserved_pages[32] = {};
-thread_local uint32_t __emule_cb_waited_pages[32] = {};
+thread_local uint32_t __emule_cb_reserved_pages[EMULE_NUM_CBS] = {};
+thread_local uint32_t __emule_cb_waited_pages[EMULE_NUM_CBS] = {};
 // Dirty-CB leak flags: set by reserve/wait, cleared by push/pop; still-set at
 // kernel exit is the leak. Decoupled from the window counters. See SANITIZER_CHECKS.md §11.
-thread_local bool __emule_cb_reserve_dangling[32] = {};
-thread_local bool __emule_cb_wait_dangling[32] = {};
-thread_local const char* __emule_cb_reserve_file[32] = {};
-thread_local uint32_t __emule_cb_reserve_line[32] = {};
-thread_local const char* __emule_cb_wait_file[32] = {};
-thread_local uint32_t __emule_cb_wait_line[32] = {};
+thread_local bool __emule_cb_reserve_dangling[EMULE_NUM_CBS] = {};
+thread_local bool __emule_cb_wait_dangling[EMULE_NUM_CBS] = {};
+thread_local const char* __emule_cb_reserve_file[EMULE_NUM_CBS] = {};
+thread_local uint32_t __emule_cb_reserve_line[EMULE_NUM_CBS] = {};
+thread_local const char* __emule_cb_wait_file[EMULE_NUM_CBS] = {};
+thread_local uint32_t __emule_cb_wait_line[EMULE_NUM_CBS] = {};
 thread_local bool __emule_cb_boundary_strict = false;
 
 // DRAM equivalent of __emule_l1_tensor_ranges; consumed only by __emule_dram_ptr below.
 thread_local uint32_t __emule_dram_unreserved_base = 0;
 thread_local const uint64_t* __emule_dram_tensor_ranges = nullptr;
 thread_local uint32_t __emule_dram_tensor_ranges_count = 0;
+
+// Size (bytes) of the DRAM backing store whose base is __emule_self->bridge_dram; set
+// per-fiber in launch_cores (mirrors the bridge_dram handoff). Consumed only by
+// __emule_dram_ptr for a coarse backing-store bounds check. 0 means "unknown" — the
+// check is skipped, so the fast path is never regressed when it is unset or ASAN is off.
+thread_local uint64_t __emule_bridge_dram_size = 0;
 
 // ---------------------------------------------------------------------------
 // Bank mapping arrays — populated from SoC descriptor before kernel launch.
@@ -198,6 +207,16 @@ static inline void emule_require_self(const char* fn) {
 
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
     emule_require_self(__func__);
+    // ASAN out-of-bounds DRAM backing-store check. Catches offsets past the end of the DRAM
+    // buffer entirely (the L1 path has this; DRAM was a blind spot). Inert when ASAN is off or
+    // the size is unknown — __emule_bridge_dram_size stays 0 (set only when asan_enabled in
+    // launch_cores), so the fast path is never regressed.
+    if (__emule_bridge_dram_size > 0 && offset >= __emule_bridge_dram_size) {
+        __emule_asan_panic(
+            "[ASAN ERROR] Out-of-Bounds DRAM Access: offset 0x%lx exceeds DRAM size 0x%lx\n",
+            offset,
+            __emule_bridge_dram_size);
+    }
     // ASAN out-of-bounds DRAM check (inert when TT_METAL_EMULE_ASAN off — ranges stay null). Range-test
     // in 32 bits to match the live-range registry (uint32_t start/end); the 64-bit offset is used only
     // for the backing-store address. Assumes DRAM addresses fit in 32 bits (true for every WH/BH config).
@@ -966,6 +985,66 @@ static void emit_metal2_namespaces(
     }
 }
 
+// Machine-wide bound on concurrent JIT clang subprocesses. Parallel emule sweeps
+// launch one clang per cache-miss kernel across many worker processes; unbounded,
+// this over-subscribes RAM and the OOM killer reaps compiles (see jit_compile_kernel).
+// Each clang launch first acquires one of N flock slots in a shared /tmp dir. flock
+// is released by the kernel when the holding process dies, so a killed compile never
+// leaks a slot (a POSIX semaphore would). N defaults to hardware_concurrency and is
+// overridable via TT_EMULE_JIT_JOBS.
+static int jit_max_parallel_compiles() {
+    if (const char* v = std::getenv("TT_EMULE_JIT_JOBS")) {
+        int n = std::atoi(v);
+        if (n > 0) {
+            return n;
+        }
+    }
+    unsigned hc = std::thread::hardware_concurrency();
+    return hc > 0 ? static_cast<int>(hc) : 8;
+}
+
+class JitCompileSlot {
+public:
+    JitCompileSlot() {
+        const int n = jit_max_parallel_compiles();
+        const std::string dir = "/tmp/tt_emule_jit_slots_" + std::to_string(getuid());
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        if (!std::filesystem::is_directory(dir, ec)) {
+            // Slot dir unavailable — degrade to no concurrency cap rather than spin
+            // forever trying to open lock files under a missing directory.
+            return;
+        }
+        for (unsigned spin = 0;; ++spin) {
+            for (int i = 0; i < n; ++i) {
+                const std::string slot = dir + "/slot_" + std::to_string(i);
+                int fd = ::open(slot.c_str(), O_CREAT | O_RDWR, 0644);
+                if (fd < 0) {
+                    continue;
+                }
+                if (::flock(fd, LOCK_EX | LOCK_NB) == 0) {
+                    fd_ = fd;
+                    return;
+                }
+                ::close(fd);
+            }
+            // All slots busy: back off (capped) and retry.
+            std::this_thread::sleep_for(std::chrono::milliseconds(std::min(50u + spin * 10u, 500u)));
+        }
+    }
+    ~JitCompileSlot() {
+        if (fd_ >= 0) {
+            ::flock(fd_, LOCK_UN);
+            ::close(fd_);
+        }
+    }
+    JitCompileSlot(const JitCompileSlot&) = delete;
+    JitCompileSlot& operator=(const JitCompileSlot&) = delete;
+
+private:
+    int fd_ = -1;
+};
+
 static std::function<void()> jit_compile_kernel(
     const std::string& kernel_src_path,
     const std::vector<uint32_t>& compile_args,
@@ -1105,7 +1184,11 @@ static std::function<void()> jit_compile_kernel(
     }
     cmd << define_flags;
     cmd << " \"" << wrapper_path << "\"";
-    cmd << " 2>&1";
+    // Redirect compiler output to a per-compile log so the retry logic below can
+    // read it back: an empty log after a nonzero rc means the compiler was killed
+    // (OOM under parallel load), which is retryable; a non-empty log is a real error.
+    std::string compile_log_path = dir + "/compile.log";
+    cmd << " > \"" << compile_log_path << "\" 2>&1";
 
     std::string full_cmd = cmd.str();
     log_debug(tt::LogMetal, "JIT compile: {}", full_cmd);
@@ -1117,10 +1200,53 @@ static std::function<void()> jit_compile_kernel(
     // Safety: all path/flag inputs are derived from tt-metal internals and CMake
     // constants, not from untrusted user input. Kernel defines are written as
     // #define in the wrapper file, not as -D shell flags.
-    int rc = std::system(full_cmd.c_str());
+    //
+    // Parallel emule sweeps can transiently over-subscribe the machine with many
+    // concurrent clang jobs across worker processes; the OOM killer then reaps a
+    // clang subprocess, yielding a nonzero rc with an EMPTY compile.log. A genuine
+    // compile error always writes diagnostics, so retry only the no-diagnostics
+    // (killed-under-pressure) case, with linear backoff so a retry can succeed
+    // once sibling compiles finish and free memory. Real errors fail fast.
+    constexpr int kMaxCompileAttempts = 5;
+    int rc = 0;
+    std::string compile_log;
+    for (int attempt = 1; attempt <= kMaxCompileAttempts; ++attempt) {
+        {
+            JitCompileSlot slot;  // machine-wide cap on concurrent clang (see JitCompileSlot)
+            rc = std::system(full_cmd.c_str());
+        }
+        if (rc == 0) {
+            break;
+        }
+        compile_log.clear();
+        std::ifstream log_file(compile_log_path);
+        if (log_file) {
+            std::ostringstream log_ss;
+            log_ss << log_file.rdbuf();
+            compile_log = log_ss.str();
+        }
+        const bool killed_no_diagnostics = compile_log.find_first_not_of(" \t\r\n") == std::string::npos;
+        if (!killed_no_diagnostics || attempt == kMaxCompileAttempts) {
+            break;  // genuine compile error, or out of retries
+        }
+        log_warning(
+            tt::LogMetal,
+            "JIT compile killed with no diagnostics (rc={}), retry {}/{}: {}",
+            rc,
+            attempt,
+            kMaxCompileAttempts,
+            kernel_src_path);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200 * attempt));
+    }
     if (rc != 0) {
+        constexpr size_t max_log_bytes = 12000;
+        if (compile_log.size() > max_log_bytes) {
+            compile_log = compile_log.substr(compile_log.size() - max_log_bytes);
+        }
         throw std::runtime_error(
-            "jit_compile_kernel: compiler failed (exit " + std::to_string(rc) + ") for kernel: " + kernel_src_path);
+            "jit_compile_kernel: compiler failed (status " + std::to_string(rc) + ") for kernel: " + kernel_src_path +
+            (compile_log.empty() ? " [no compiler diagnostics — likely killed under resource pressure]"
+                                 : "\n--- compiler output ---\n" + compile_log));
     }
 
     // 8. dlopen
@@ -3036,6 +3162,7 @@ static constexpr size_t kMaxResolvedPrograms = 256;
 static void launch_cores(
     std::vector<CoreSetup>& core_setups,
     uint8_t* dram_data,
+    uint64_t dram_data_size,
     std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr,
     ChipId device_id,
     bool defer_run,
@@ -3128,7 +3255,8 @@ static void launch_cores(
             // (shared across parked fibers on a worker); per-fiber ASAN state + the per-core ObjectIntent
             // snapshot/verify are a follow-up, so ASAN is aimed at single-device runs.
             sched.spawn(
-                [ki_ptr, lx, ly, cb_array, oob_state, sem_base = cs.sem_base, sem_size = cs.sem_size]() {
+                [ki_ptr, lx, ly, cb_array, oob_state, dram_data_size, sem_base = cs.sem_base,
+                 sem_size = cs.sem_size]() {
                     auto& ki = *ki_ptr;
                     __processor_id = ki.processor_id;
                     __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
@@ -3136,6 +3264,9 @@ static void launch_cores(
                     __emule_kernel_name = ki.kernel_name.empty() ? nullptr : ki.kernel_name.c_str();
                     __emule_pending_noc_reads = 0;
                     set_sanitizer_thread_locals(oob_state, sem_base, sem_size);
+                    // Backing-store size for __emule_dram_ptr's OOB check; gated on ASAN so it stays
+                    // 0 (inert) when off, mirroring set_sanitizer_thread_locals' oob.asan_enabled gate.
+                    __emule_bridge_dram_size = oob_state.asan_enabled ? dram_data_size : 0;
                     try {
                         for (size_t t = 0; t < ki.variants.size(); ++t) {
                             if (ki.run_all_variants) {
@@ -3146,6 +3277,7 @@ static void launch_cores(
                         }
                         sweep_per_kernel_dirty_cbs(oob_state, cb_array, ki.processor_id, lx, ly);
                     } catch (...) {
+                        __emule_bridge_dram_size = 0;
                         clear_sanitizer_thread_locals();
                         std::throw_with_nested(std::runtime_error(
                             "EMULE: kernel on core (" + std::to_string(lx) + "," + std::to_string(ly) +
@@ -3153,6 +3285,7 @@ static void launch_cores(
                     }
                     __emule_kernel_name = nullptr;
                     __emule_pending_noc_reads = 0;
+                    __emule_bridge_dram_size = 0;
                     clear_sanitizer_thread_locals();
                 },
                 std::move(ctx),
@@ -3280,9 +3413,10 @@ static void dispatch_to_device(
     setup_core_state(impl, device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, core_setups);
 
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
+    uint64_t dram_data_size = dram_core ? dram_core->l1_size() : 0;
 
     OobStateOwner oob = build_oob_tensor_state(device, device_id);
-    launch_cores(core_setups, dram_data, core_map_ptr, device_id, defer_run, oob.state);
+    launch_cores(core_setups, dram_data, dram_data_size, core_map_ptr, device_id, defer_run, oob.state);
 }
 
 // ---------------------------------------------------------------------------
