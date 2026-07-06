@@ -9,7 +9,68 @@
 **Current best decode latency (Galaxy, batch=1):** ~74.8 ms @ ISL=128, ~75.4 ms @ ISL=512, ~77.3 ms @ ISL=1024 (~13.4 tok/s)
 **Current best aggregate TPS (Galaxy, batch=32):** ~367 tok/s @ ISL=128, ~358 tok/s @ ISL=512, ~350 tok/s @ ISL=1024
 
+---
+
+## Wormhole LoudBox (T3K) — 1×8 setup (tensor-parallel, batch 1)
+
+Run the LoudBox's 8 chips as a **1×8 (1D) mesh**, not 2×4. Tensor-parallel MoE (`TP=1`)
+is only accurate on a 1D mesh: the MoE all-reduce is single-axis (like Blackhole 1×4),
+whereas the 2×4 two-axis reduce drops PCC to ~0.65. On 1×8, prefill-logits PCC vs HF is
+**0.93–0.96** across ISL 128→8192 (`tests/pipeline_tests/test_text_prefill_logits_wh.py::test_text_prefill_logits_wh_tp1_1x8`).
+
+**Required env (see `agent_logs/run_baseline_b1_wh_1x8.sh`):**
+
+```bash
+# mesh: --mesh-rows 1 --mesh-cols 8
+export TT_METAL_GTEST_ETH_DISPATCH=1
+export GLM4_MOE_LITE_ENABLE_MOE=1
+export GLM4_MOE_LITE_EXPERTS_TT_DTYPE=bf8     # bf16 experts OOM WH DRAM; bf8 is the fitting max
+export GLM4_MOE_LITE_MOE_FP32_ACC=1
+export GLM4_MOE_LITE_TP=1                       # tensor-parallel across the 8 columns
+export GLM4_MOE_LITE_ATTN_DP=0
+export GLM4_MOE_LITE_HEAD_PARALLEL_ATTN=0      # 20 attn heads not divisible by tp=8
+export GLM4_MOE_LITE_HEAD_PARALLEL_KVB2=0
+export GLM4_MOE_LITE_CCL_NUM_LINKS=1           # T3K has 1 CCL link/axis; 2 deadlocks
+export GLM4_MOE_LITE_CCL_TOPOLOGY=ring         # ring all-reduce: -5.5% decode vs linear on the 8-device line
+export GLM4_MOE_LITE_PREFILL_MATMUL_TUNED=0    # tuned matmul grids are Blackhole-only
+export GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE=128 # >128 pushes MoE sparse matmul to the slow DRAM path
+export GLM4_MOE_LITE_DECODE_MLA_CORE_SCALE=0   # pin FlashMLA to 16 cores so decode fits WH L1 at long ISL
+export GLM4_MOE_LITE_DECODE_L1_ACT=1
+export GLM4_MOE_LITE_EP_L1=1
+```
+
+Notes:
+- Weight cache must be **dedicated per device grid**: the cache key encodes only device *count*
+  (`d8`), so 2×4 and 1×8 collide — reusing a 2×4 cache lands expert shards on a nonexistent
+  `MeshCoordinate([1,0])`. Use a separate `--cache-dir` for 1×8.
+- Long context uses **bf8 KV** (ISL ≥ 32K) to fit DRAM; bf16 KV below.
+- HiFi3 (vs HiFi4) for fp32-accum MLP/router matmuls is applied automatically on Wormhole
+  (`is_wormhole_b0()`-gated) — faster and more accurate there due to a HiFi4+fp32 HW bug.
+
+### Wormhole T3K (1×8 mesh, batch=1) — ring all-reduce + WH HiFi3
+
+Measured with `agent_logs/run_baseline_b1_wh_1x8.sh` (trace sampling; prefill chunk 128).
+
+| ISL | Prefill (s) | tok/s | Decode mean (ms) | KV |
+| --- | ---: | ---: | ---: | --- |
+| 512 | 1.8 | 11.3 | 88.3 | bf16 |
+| 1024 | 3.5 | 11.4 | 88.0 | bf16 |
+| 2048 | 7.1 | 11.3 | 88.2 | bf16 |
+| 4096 | 13.8 | 11.2 | 89.3 | bf16 |
+| 8192 | 29.0 | 11.0 | 91.3 | bf16 |
+| 16384 | 58.1 | 10.4 | 96.5 | bf16 |
+| 32768 | 137.1 | 9.5 | 104.8 | bf8 |
+| 65536 | 369.7 | 8.2 | 121.7 | bf8 |
+
+Two optimizations vs the initial 1×8 baseline: **ring all-reduce** (−5.5% decode; collectives
+were ~37% of device time as an O(N) linear reduce across 8 chips) and **WH HiFi3** (−5.6%
+prefill). Net ~+5% throughput at every ISL, prefill notably better at long context
+(65K: 423s → 370s), PCC held/improved.
+
 ## Performance Results
+
+> **NOTE (TODO):** The Blackhole QB-2 numbers below predate the recent WH 1×8
+> work and need to be re-checked/re-measured with the current code.
 
 ### Blackhole QB-2 (1×4 mesh, batch=1, bf16 KV)
 
