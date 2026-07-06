@@ -845,9 +845,19 @@ class Transformer(LightweightModule):
         return tt_logits, None
 
     def switch_mode(self, mode: Mode):
-        if self.prefetcher is not None:
+        if self.prefetcher is None:
+            return
+        if mode == Mode.DECODE:
+            # Create (first time) or re-activate the prefetcher's decode sub-device
+            # manager, then ensure weights are queued for prefetch.
             self.prefetcher.init(mode)
             self.prefetcher.prefetch()
+        elif mode == Mode.PREFILL:
+            # Option (a) for #47820: run prefill on the mesh device's default sub-device
+            # manager (where the prefill trace is captured), reverting the prefetcher's
+            # decode manager if it is currently active. Keeps prefill trace capture and
+            # replay on one manager across interleaved repeat batches.
+            self.prefetcher.revert_to_default_sub_device_manager()
 
     def forward(
         self,

@@ -541,6 +541,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         **kwargs,
     ):
         self.mode = Mode.PREFILL
+        # Prefill runs on the device's default sub-device manager, where its trace is
+        # captured. If a prior decode switched the device to a prefetcher's decode
+        # manager, revert now so the cached prefill trace replays on the same manager
+        # across interleaved repeat batches (#47820). No-op when no prefetcher is active.
+        for i in range(len(self.model)):
+            self.model[i].switch_mode(Mode.PREFILL)
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:

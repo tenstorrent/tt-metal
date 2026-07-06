@@ -224,6 +224,13 @@ class PrefetcherSubDevice:
         self.mesh_device.load_sub_device_manager(self.manager_id)
         self.mesh_device.set_sub_device_stall_group(self.sub_devices_id)
 
+    def load(self):
+        # Re-activate this (already-created) sub-device manager and its stall group.
+        # Used to restore the prefetcher's decode manager after an interleaved prefill
+        # reverted the mesh device to its default sub-device manager (see #47820).
+        self.mesh_device.load_sub_device_manager(self.manager_id)
+        self.mesh_device.set_sub_device_stall_group(self.sub_devices_id)
+
 
 class Prefetcher(LightweightModule):
     def __init__(
@@ -330,6 +337,11 @@ class Prefetcher(LightweightModule):
         self.init_decode_done = False
         self.init_prefill_done = False
         self.prefetch_done = False
+        # Tracks whether the prefetcher's (decode) sub-device manager is the one
+        # currently loaded on the mesh device. Interleaved prefill reverts to the
+        # default manager (where prefill traces are captured); decode restores this
+        # one. See revert_to_default_sub_device_manager() / load() below (#47820).
+        self._decode_manager_loaded = False
 
     # NOTE: DRAM prefetched weights are prefetched in the order of the construction of the module
     def register_callback(self, callback: Callable[[], None]):
@@ -362,8 +374,13 @@ class Prefetcher(LightweightModule):
         NOTE: All DRAM prefetcher APIs can only be called after init() is called for the given mode
         NOTE: Calling init() again for the same mode is a no-op
         """
-        # If the prefetcher has already been initialized for the given mode, we do not need to initialize it again
-        if mode == Mode.DECODE and self.init_decode_done or mode == Mode.PREFILL and self.init_prefill_done:
+        # If the prefetcher has already been initialized for the given mode, we do not
+        # re-create its sub-device manager. For decode we still (re)load it, since an
+        # interleaved prefill may have reverted the device to the default manager (#47820).
+        if mode == Mode.DECODE and self.init_decode_done:
+            self.load()
+            return
+        if mode == Mode.PREFILL and self.init_prefill_done:
             return
         self.mode = mode
         self.sender_cores = self.core_config.sender_cores
@@ -380,6 +397,8 @@ class Prefetcher(LightweightModule):
                 self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
                 self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
                 self.prefetcher_sub_device.init_sub_device_manager()
+                # init_sub_device_manager() also loads the manager.
+                self._decode_manager_loaded = True
             case Mode.PREFILL:
                 self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
                 self.prefetcher_sub_device.add_sub_device(self.all_core_range_set)
@@ -400,6 +419,34 @@ class Prefetcher(LightweightModule):
         logger.info("=" * 50)
         self.init_decode_done = True if mode == Mode.DECODE else False
         self.init_prefill_done = True if mode == Mode.PREFILL else False
+
+    @property
+    def is_initialized(self) -> bool:
+        """True once the prefetcher's decode sub-device manager has been created."""
+        return self.init_decode_done
+
+    def load(self) -> None:
+        """
+        Re-activate the prefetcher's decode sub-device manager if it is not currently
+        the loaded manager. Idempotent — safe to call on every decode step; only acts
+        after an interleaved prefill reverted the device to the default manager (#47820).
+        """
+        if self.init_decode_done and not self._decode_manager_loaded:
+            self.prefetcher_sub_device.load()
+            self._decode_manager_loaded = True
+
+    def revert_to_default_sub_device_manager(self) -> None:
+        """
+        Restore the mesh device's default (full-grid) sub-device manager so that prefill
+        runs — and prefill traces are captured/replayed — on the same manager across
+        repeat batches. No-op until the prefetcher's manager has actually been loaded.
+        Note: this does NOT free the prefetcher's global_cb L1 (it persists across the
+        revert); the decode manager is restored by load() on the next decode (#47820).
+        """
+        if self.init_decode_done and self._decode_manager_loaded:
+            self.mesh_device.clear_loaded_sub_device_manager()
+            self.mesh_device.reset_sub_device_stall_group()
+            self._decode_manager_loaded = False
 
     def create_address_tensor(self):
         """
