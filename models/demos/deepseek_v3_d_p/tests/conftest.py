@@ -150,11 +150,20 @@ def pytest_collection_modifyitems(config, items):
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         ttnn.FabricConfig.FABRIC_1D_RING,
     }
-    # Only skip ring/torus on a galaxy; LoudBox rings are native. Detection opens the chip, same as
-    # the get_num_devices() call below, so it adds no extra cost. On detection failure default to
-    # skipping (a missed skip on a galaxy means a hang, which is worse than over-skipping on LB).
+
+    def _is_ring_or_torus(item):
+        params = getattr(getattr(item, "callspec", None), "params", {})
+        dp = params.get("device_params")
+        return isinstance(dp, dict) and dp.get("fabric_config") in ring_or_torus_fabrics
+
+    # Only skip ring/torus on a galaxy; LoudBox rings are native. Galaxy detection via
+    # get_cluster_type() OPENS the chip cluster as a side effect, so only call it when this session
+    # actually collects a ring/torus config to decide on. Otherwise a device-free session — notably the
+    # tracy-based perf tests, which spawn a child pytest — would open the device here in the PARENT and
+    # hold CHIP_IN_USE, deadlocking the child (get_num_devices() below is likewise gated by a marker).
+    # On detection failure default to skipping (a missed skip on a galaxy hangs, worse than over-skip on LB).
     skip_rings = False
-    if on_ci:
+    if on_ci and any(_is_ring_or_torus(item) for item in items):
         try:
             skip_rings = ttnn.cluster.get_cluster_type() in (
                 ttnn.cluster.ClusterType.GALAXY,
@@ -168,10 +177,7 @@ def pytest_collection_modifyitems(config, items):
         # Galaxy ring/subtorus guard — runs before the marker check so it catches configs whether or
         # not they carry a requires_mesh_topology mark.
         if skip_rings:
-            params = getattr(getattr(item, "callspec", None), "params", {})
-            dp = params.get("device_params")
-            fabric = dp.get("fabric_config") if isinstance(dp, dict) else None
-            if fabric in ring_or_torus_fabrics:
+            if _is_ring_or_torus(item):
                 item.add_marker(
                     pytest.mark.skip(
                         reason="ring/subtorus config on a CI galaxy runner: an 8-/4-ring on one galaxy "
