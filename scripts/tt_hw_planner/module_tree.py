@@ -592,10 +592,27 @@ def _load_reference_module(model_id: str):
         import importlib.util as _ilu
 
         loader_file = _rlr.loader_path(demo_dir)
-        spec = _ilu.spec_from_file_location("_tt_hw_planner_reference_loader", str(loader_file))
-        mod = _ilu.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        ref = mod.load_reference_model(model_id)
+
+        def _exec_loader():
+            spec = _ilu.spec_from_file_location("_tt_hw_planner_reference_loader", str(loader_file))
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod.load_reference_model(model_id)
+
+        try:
+            ref = _exec_loader()
+        except ModuleNotFoundError as exc:
+            pkg = (getattr(exc, "name", "") or "").split(".")[0]
+            if not pkg:
+                raise
+            import subprocess as _sp
+            import sys as _sys
+
+            print(
+                f"  [discovery] reference loader needs '{pkg}' — installing into " f"{_sys.executable} and retrying ..."
+            )
+            _sp.run([_sys.executable, "-m", "pip", "install", pkg], check=False)
+            ref = _exec_loader()
         try:
             ref.eval()
         except Exception:
