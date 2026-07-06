@@ -51,7 +51,7 @@ def _log_dram(mesh, label):
         pass
 
 
-def run(num_layers, canvas_length, iters, prompt, max_seq_len, do_trace):
+def run(num_layers, canvas_length, iters, prompt, max_seq_len, do_trace, commit_tokens=None):
     # TP=4 attention all-reduce needs the 1D fabric initialized (as the text demo does).
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, ttnn.FabricReliabilityMode.STRICT_INIT, None)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=1300000000)
@@ -125,11 +125,16 @@ def run(num_layers, canvas_length, iters, prompt, max_seq_len, do_trace):
         logger.info(f"[denoise] EAGER warmed ms_per_step={eager_step_ms:.3f} (num_layers={num_layers})")
         print(f"RESULT num_layers={num_layers} ttft_ms={ttft_ms:.2f} eager_ms_per_step={eager_step_ms:.3f}", flush=True)
 
-        # commit: 256 sequential single-token decode-appends into the KV cache
+        # commit: sequential single-token decode-appends into the KV cache.
+        # commit_tokens lets a reduced-window profile capture only N of the
+        # canvas_length commit tokens (each is an independent single-token
+        # decode-append, so per-token cost is canvas-independent) to fit the
+        # on-device profiler buffer; scale the measured per-token cost x256.
+        n_commit = min(commit_tokens, canvas_length) if commit_tokens else canvas_length
         try:
             from models.experimental.diffusion_gemma.tt.generate import commit_canvas_tokens
 
-            host_commit = torch.randint(0, vocab, (1, canvas_length), dtype=torch.long)
+            host_commit = torch.randint(0, vocab, (1, n_commit), dtype=torch.long)
             # warm
             commit_canvas_tokens(tt_model, host_commit, start_pos=prefill.cache_len)
             ttnn.synchronize_device(mesh)
@@ -139,8 +144,15 @@ def run(num_layers, canvas_length, iters, prompt, max_seq_len, do_trace):
             ttnn.synchronize_device(mesh)
             commit_ms = (time.perf_counter() - t0) * 1e3
             signpost("COMMIT_END")
-            logger.info(f"[commit] EAGER 256-token commit ms={commit_ms:.2f} (num_layers={num_layers})")
-            print(f"RESULT_COMMIT num_layers={num_layers} commit_ms={commit_ms:.2f}", flush=True)
+            logger.info(
+                f"[commit] EAGER {n_commit}-token commit ms={commit_ms:.2f} "
+                f"per_token_ms={commit_ms/max(n_commit,1):.3f} (num_layers={num_layers})"
+            )
+            print(
+                f"RESULT_COMMIT num_layers={num_layers} n_commit={n_commit} "
+                f"commit_ms={commit_ms:.2f} per_token_ms={commit_ms/max(n_commit,1):.4f}",
+                flush=True,
+            )
         except Exception as e:
             logger.warning(f"commit measurement failed: {type(e).__name__}: {str(e)[:200]}")
             print(f"COMMIT_BLOCKED {type(e).__name__}: {str(e)[:150]}", flush=True)
@@ -182,8 +194,23 @@ def main():
     ap.add_argument("--prompt", default="The capital of France is")
     ap.add_argument("--max-seq-len", type=int, default=512)
     ap.add_argument("--no-trace", action="store_true")
+    ap.add_argument(
+        "--commit-tokens",
+        type=int,
+        default=None,
+        help="Profile only N commit tokens (default: canvas_length). Use a small N to keep "
+        "the commit phase inside the on-device profiler buffer; per-token cost is scaled x256.",
+    )
     args = ap.parse_args()
-    run(args.num_layers, args.canvas_length, args.iters, args.prompt, args.max_seq_len, do_trace=not args.no_trace)
+    run(
+        args.num_layers,
+        args.canvas_length,
+        args.iters,
+        args.prompt,
+        args.max_seq_len,
+        do_trace=not args.no_trace,
+        commit_tokens=args.commit_tokens,
+    )
 
 
 if __name__ == "__main__":

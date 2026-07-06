@@ -1,0 +1,93 @@
+{
+  "workload": {
+    "profile": "whole_generation_denoise_diffusion",
+    "target_layers": 30,
+    "canvas_length": 256,
+    "denoise_steps_per_block": 48,
+    "commit_tokens_per_block": 256,
+    "blocks": 1,
+    "model_faithful": true
+  },
+  "method": {
+    "reduced_layer_fit": [
+      2,
+      6
+    ],
+    "reason": "on-device profiler op buffer (~3.3k ops) cannot hold a 30-layer forward (~30k ops); per-layer op topology is linear so 2-point fit -> 30L is exact up to noise",
+    "aiclk_hz": 1350000000.0,
+    "fw_overlap_ratio_denoise": 1.503
+  },
+  "whole_gen_device_busy_span_s": 281.05,
+  "whole_gen_sum_fw_s": 422.45,
+  "phase_span_ms": {
+    "PREFILL": 40539.6,
+    "DENOISE": 206664.7,
+    "COMMIT": 33848.6
+  },
+  "phase_span_pct": {
+    "PREFILL": 14.4,
+    "DENOISE": 73.5,
+    "COMMIT": 12.0
+  },
+  "unit_span_ms_30L": {
+    "PREFILL": 40539.6,
+    "DENOISE": 4305.51,
+    "COMMIT": 132.22
+  },
+  "whole_gen_op_mix_sum_fw_ms": {
+    "SparseMatmulDeviceOperation": 199340.5,
+    "PermuteDeviceOperation[MoE-gather-6D {0;3;2;1;4;5}]": 177812.3,
+    "PermuteDeviceOperation[attn-head-4D {0;3;2;1}]": 12869.3,
+    "TransposeDeviceOperation": 8428.8,
+    "BinaryNgDeviceOperation": 3761.3,
+    "ReduceScatterDeviceOperation": 3472.8,
+    "UnaryDeviceOperation": 3384.4,
+    "MatmulDeviceOperation": 2345.1,
+    "SliceDeviceOperation": 1456.3,
+    "LayerNormDeviceOperation": 1436.1,
+    "FastReduceNCDeviceOperation": 1305.5,
+    "ConcatDeviceOperation": 1062.5,
+    "ArgMaxDeviceOperation": 1042.1,
+    "AllGatherDeviceOperation": 784.4,
+    "ReduceDeviceOperation": 587.6,
+    "InterleavedToShardedDeviceOperation": 493.6,
+    "CopyDeviceOperation": 428.8,
+    "TilizeWithValPaddingDeviceOperation": 397.9,
+    "ShardedToInterleavedDeviceOperation": 307.9,
+    "UntilizeWithUnpaddingDeviceOperation": 262.9,
+    "SDPAOperation": 261.7,
+    "TopKDeviceOperation": 250.9,
+    "NlpCreateHeadsDeviceOperation": 142.1,
+    "FillPadDeviceOperation": 136.8,
+    "SdpaDecodeDeviceOperation": 133.6,
+    "UntilizeDeviceOperation": 88.7,
+    "PagedUpdateCacheDeviceOperation": 71.3,
+    "SoftmaxDeviceOperation": 66.5,
+    "EmbeddingsDeviceOperation": 63.2,
+    "ScatterDeviceOperation": 59.0,
+    "RepeatDeviceOperation": 45.1,
+    "ReshapeViewDeviceOperation": 41.2,
+    "NLPCreateQKVHeadsDecodeDeviceOperation": 37.4,
+    "NLPConcatHeadsDeviceOperation": 26.5,
+    "PermuteDeviceOperation[attn-head-4D {3;1;2;0}]": 11.2
+  },
+  "whole_gen_op_mix_pct": {
+    "SparseMatmulDeviceOperation": 47.2,
+    "PermuteDeviceOperation[MoE-gather-6D {0;3;2;1;4;5}]": 42.1,
+    "PermuteDeviceOperation[attn-head-4D {0;3;2;1}]": 3.0,
+    "TransposeDeviceOperation": 2.0,
+    "BinaryNgDeviceOperation": 0.9,
+    "ReduceScatterDeviceOperation": 0.8,
+    "UnaryDeviceOperation": 0.8,
+    "MatmulDeviceOperation": 0.6,
+    "SliceDeviceOperation": 0.3,
+    "LayerNormDeviceOperation": 0.3,
+    "FastReduceNCDeviceOperation": 0.3,
+    "ConcatDeviceOperation": 0.3,
+    "ArgMaxDeviceOperation": 0.2,
+    "AllGatherDeviceOperation": 0.2,
+    "ReduceDeviceOperation": 0.1,
+    "InterleavedToShardedDeviceOperation": 0.1,
+    "CopyDeviceOperation": 0.1
+  }
+}
