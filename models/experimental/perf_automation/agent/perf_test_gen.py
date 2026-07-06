@@ -76,7 +76,8 @@ def test_<task>_perf(device_params, device):
             from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter
 
             def _build_for_perf(dev):
-                ...
+                from <model>.tt.pipeline import build_pipeline   # lift the real import
+                return build_pipeline(dev)                        # + the same build args the demo uses
             _prompt_ids = ...
             # Stage adapter profiles WHATEVER emit-e2e emitted: every PIPELINE_STAGES entry gets
             # traced (+2CQ where the stage stages its inputs). Falls back to the single decode
@@ -266,13 +267,16 @@ def generate_perf_test(
         "write a per-model adapter class — the tool ships the generic PipelineStageAdapter, which profiles "
         "WHATEVER emit-e2e emitted: every `PIPELINE_STAGES` entry is traced (+2CQ where the stage exposes "
         "`<stage>_write_inputs`), falling back to the single decode contract for decode-only pipelines. Your "
-        "ONLY job in that block is to fill `_build_for_perf(dev)` so it builds the pipeline EXACTLY as this "
-        "test/demo builds it (lift the same imports + build args, using `dev`), and set `_prompt_ids` to a "
-        "SMALL prompt. Leave everything else in the block verbatim. The clean numbers are emitted "
-        "automatically IFF the built pipeline exposes the per-stage trace hooks (or a trace-capturable "
-        "`decode_step(state)`); if its decode is repeat-prefill (re-runs the growing sequence / host argmax) "
-        "and no stage hooks exist, the adapter raises, the guard falls back to FORWARD_WALL_MS, and that is "
-        "fine. Never delete the block, never let it fail the test.\n"
+        "ONLY job in that block is to fill `_build_for_perf(dev)` so it RETURNS THE RESIDENT, STAGE-EXPOSING "
+        "PIPELINE OBJECT — the one carrying PIPELINE_STAGES + the per-stage trace hooks (or a trace-capturable "
+        "`decode_step(state)`). Call the model's module-level `build_pipeline(device, ...)` factory that "
+        "emit-e2e emits (import it from the demo's tt/pipeline module, pass `dev` + the same build args). Do "
+        "NOT return the demo's run_tts()/generate() RESULT or a closure that runs the pipeline — that object "
+        "has no stage hooks, so the adapter raises and trace+2CQ silently falls back to FORWARD_WALL_MS. Set "
+        "`_prompt_ids` to a SMALL prompt. Leave everything else in the block verbatim. The clean numbers are "
+        "emitted automatically once `_build_for_perf` returns that object; a genuine repeat-prefill pipeline "
+        "with no stage hooks and no decode_step legitimately falls back to FORWARD_WALL_MS, which is fine. "
+        "Never delete the block, never let it fail the test.\n"
         "- TRACE BLOCK + SELF-OPEN: if (per the DEVICE OPEN rule) the test self-opens a mesh, pass the "
         "device the test actually opened to `measure_adapter(...)` (NOT a fixture `device`), and put "
         "`trace_region_size`/`num_command_queues` on that self-open call when TT_PERF_TRACE (drop the "

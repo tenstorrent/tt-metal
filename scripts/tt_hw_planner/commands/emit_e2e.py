@@ -1357,6 +1357,16 @@ For EACH stage expose, ON THE PIPELINE object, the generic contract the perf/2CQ
 AR stages ALSO keep the decode contract (decode_prefill seeds resident self- AND, for a seq2seq
 decoder, cross-attn KV; decode_step reads them, never recomputes).
 
+Expose a MODULE-LEVEL factory `build_pipeline(device, model=None, **kwargs)` in tt/pipeline.py that
+CONSTRUCTS AND RETURNS the resident pipeline OBJECT — the one carrying PIPELINE_STAGES and the
+per-stage <stage>_trace_setup/_trace_step/_write_inputs hooks (+ the AR decode contract). This is the
+SINGLE entry the perf/2CQ harness (optimize's generated test) calls to OBTAIN that object for
+measurement. It MUST return the object, NOT run it — no generate()/run_tts()/one-shot result, which
+exposes none of the hooks and makes the trace engine skip. Accept and ignore any demo kwargs (text,
+prompt, language, …) for call-signature compatibility; the resident build derives its shapes from the
+config, not a prompt. `trace_capture_selftest` and the demo entry MUST build through this same factory
+so there is ONE build surface.
+
 Expose trace_capture_selftest(device): for EACH stage in PIPELINE_STAGES, capture ONE step in
 ttnn.begin_trace_capture / end_trace_capture, execute_trace it, then RELEASE the trace before the
 next stage (stage traces must NOT co-reside). Return True only if every stage captured host-free
