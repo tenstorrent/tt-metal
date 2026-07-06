@@ -183,7 +183,7 @@ def _enumerate_fp32_in_range(
     lo_key = base_lo + offset
     if lo_key > base_hi:
         return torch.empty(0, dtype=torch.float32)  # offset past the range end
-    hi_key = min(base_hi, lo_key + max_elements)
+    hi_key = min(base_hi, lo_key + max_elements - 1)
 
     keys = torch.arange(lo_key, hi_key + 1, dtype=torch.int64)
     bits = torch.where(keys < 0, INT_MIN - keys, keys).to(torch.int32)
