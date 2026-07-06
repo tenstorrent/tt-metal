@@ -461,11 +461,16 @@ class Prefetcher(LightweightModule):
         occupies — notably core (0,0), where the origin-anchored sharded RMSNorm's CBs
         otherwise clash with the resident global CB (program.cpp L1 clash, #47820).
 
-        Rebuilt lazily on the next decode run() (global_cb is None -> re-created and the
-        dram_prefetcher op re-run). The prefetched weight tensors and the address tensor
-        are DRAM/L1-resident and kept, so only the global CB is freed and rebuilt (this
-        does mean weights are re-prefetched on the next decode — a perf cost accepted to
-        make repeat batches correct). No-op if the global CB was never created.
+        Rebuilt lazily on the next decode run() (global_cb + address tensor are None ->
+        re-created and the dram_prefetcher op re-run). The prefetched weight tensors are
+        DRAM-resident and kept (their addresses are stable), so the rebuild re-prefetches
+        weights into a fresh global CB — a perf cost accepted to make repeat batches
+        correct. No-op if the global CB was never created.
+
+        We reset the full runtime allocation set (global CB, its op output, and the L1
+        address tensor) so the next decode's rebuild is identical to the very first build
+        — a partial reset left device/trace state that hung the following decode's trace
+        capture (#47820).
         """
         if self.global_cb is None:
             return
@@ -482,6 +487,13 @@ class Prefetcher(LightweightModule):
         ttnn.synchronize_device(self.mesh_device)
         self.global_cb.deallocate()
         self.global_cb = None
+        # Also drop the L1 address tensor so run() recreates it, making the next decode's
+        # rebuild path identical to the first-time build (which captures cleanly). Kept in
+        # DRAM/L1, so free it explicitly. prefetched_tensor_addr (host list) persists, so
+        # create_address_tensor() can rebuild it.
+        if getattr(self, "prefetched_tt_addr_tensor", None) is not None:
+            ttnn.deallocate(self.prefetched_tt_addr_tensor)
+            self.prefetched_tt_addr_tensor = None
 
     def create_address_tensor(self):
         """
