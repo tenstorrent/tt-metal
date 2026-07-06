@@ -62,21 +62,22 @@ void kernel_main() {
 
     // Outer loop over Q blocks
     for (uint32_t qb = 0; qb < num_q_blocks; qb++) {
-        // Push Q block: B_q rows × D_t cols, TileRowMajor order
-        for (uint32_t sq = 0; sq < B_q; sq++) {
-            uint32_t q_tile_row = qb * B_q + sq;
-            for (uint32_t d = 0; d < D_t; d++) {
-                uint32_t tile_id = q_tile_base + q_tile_row * D_t + d;
-                cb_reserve_back(cb_q, 1);
-                uint32_t l1_write_addr = get_write_ptr(cb_q);
-                noc_async_read_tile(tile_id, q_accessor, l1_write_addr);
-                noc_async_read_barrier();
-                cb_push_back(cb_q, 1);
-            }
-        }
-
         // Inner loop over KV blocks
         for (uint32_t kvb = 0; kvb < num_kv_blocks; kvb++) {
+            // Push Q block: B_q rows × D_t cols, TileRowMajor order
+            // Re-pushed per KV block since matmul pops Q tiles
+            for (uint32_t sq = 0; sq < B_q; sq++) {
+                uint32_t q_tile_row = qb * B_q + sq;
+                for (uint32_t d = 0; d < D_t; d++) {
+                    uint32_t tile_id = q_tile_base + q_tile_row * D_t + d;
+                    cb_reserve_back(cb_q, 1);
+                    uint32_t l1_write_addr = get_write_ptr(cb_q);
+                    noc_async_read_tile(tile_id, q_accessor, l1_write_addr);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_q, 1);
+                }
+            }
+
             // Push K block: B_kv rows × D_t cols
             for (uint32_t skv = 0; skv < B_kv; skv++) {
                 uint32_t k_tile_row = kvb * B_kv + skv;

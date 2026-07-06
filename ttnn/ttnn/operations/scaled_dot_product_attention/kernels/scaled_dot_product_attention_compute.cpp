@@ -36,18 +36,28 @@ constexpr uint32_t cb_scaler = 31;
 
 constexpr uint32_t NEG_INF_BITS = 0xFF800000;
 
-// Helper: fill a CB with B_q tiles of a constant value (raw LLK init)
+// Helper: fill a CB with num_tiles of a constant value (raw LLK init)
 // Uses the correct tile_regs protocol: acquire → fill → commit → wait → pack → release → push
-void init_cb_constant(uint32_t cb_id, uint32_t num_tiles, uint32_t fill_bits, bool is_float) {
+void init_cb_constant_f(uint32_t cb_id, uint32_t num_tiles, float value) {
     fill_tile_init();
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_reserve_back(cb_id, 1);
         tile_regs_acquire();
-        if (is_float) {
-            fill_tile(0, *reinterpret_cast<const float*>(&fill_bits));
-        } else {
-            fill_tile_bitcast(0, fill_bits);
-        }
+        fill_tile(0, value);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_id);
+        tile_regs_release();
+        cb_push_back(cb_id, 1);
+    }
+}
+
+void init_cb_constant_bits(uint32_t cb_id, uint32_t num_tiles, uint32_t fill_bits) {
+    fill_tile_init();
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        cb_reserve_back(cb_id, 1);
+        tile_regs_acquire();
+        fill_tile_bitcast(0, fill_bits);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, cb_id);
@@ -78,18 +88,15 @@ void kernel_main() {
     ckernel::compute_kernel_hw_startup<ckernel::SrcOrder::Regular>(cb_m, cb_l, cb_o);
 
     // Phase 0: Init persistent state (m_i=-inf, l_i=0, O_i=0)
-    // Fix F1/F2: use correct tile_regs protocol (commit/wait) + cb_push_back
-    init_cb_constant(cb_m, B_q, NEG_INF_BITS, false);  // m_i = -inf
-    init_cb_constant(cb_l, B_q, 0.0f, true);           // l_i = 0
-    init_cb_constant(cb_o, B_q * D_t, 0.0f, true);     // O_i = 0
+    init_cb_constant_bits(cb_m, B_q, NEG_INF_BITS);  // m_i = -inf
+    init_cb_constant_f(cb_l, B_q, 0.0f);             // l_i = 0
+    init_cb_constant_f(cb_o, B_q * D_t, 0.0f);       // O_i = 0
 
     // Init matmul hardware before first matmul
     mm_block_init(cb_q, cb_k, cb_scores, /*transpose=*/1, /*ct_dim=*/B_kv, /*rt_dim=*/B_q, /*kt_dim=*/D_t);
 
     // Outer loop: Q blocks
     for (uint32_t qb = 0; qb < num_q_blocks; qb++) {
-        cb_wait_front(cb_q, B_q * D_t);
-
         // Inner loop: KV blocks
         for (uint32_t kvb = 0; kvb < num_kv_blocks; kvb++) {
             cb_wait_front(cb_k, B_kv * D_t);
@@ -100,6 +107,7 @@ void kernel_main() {
             cb_wait_front(cb_scaler, 2);
 
             // Phase 1: QK^T — S = Q @ K^T
+            // Q tiles are re-pushed by reader per KV block, so WaitAndPopPerKBlock is correct.
             ckl::matmul_block<
                 /*transpose=*/true,
                 /*packer_l1_acc=*/false,
@@ -273,23 +281,38 @@ void kernel_main() {
             }
         }
 
-        // Phase 14: Normalize — O = O_i / l_i
+        // Phase 14: Normalize — O = O_i * recip(l_i)
+        // l_i from REDUCE_ROW has values only in col 0. DivBinary (SFPU) doesn't broadcast.
+        // Step 1: compute recip(l_i) in cb_psum (col-0 only, but FPU broadcast will fix it)
+        // Step 2: O_i * recip(l_i) with BinaryFpu<Mul, Col> which broadcasts B across columns
         ckl::eltwise_chain(
-            ckl::EltwiseShape::grid(B_q, D_t),
-            ckl::CopyTile<
-                cb_o,
-                ckl::Dst::D0,
-                ckl::InputLifecycle::Streaming,
-                ckl::CopyTileReconfig::Input,
-                ckl::OperandKind::Scalar>{},
+            ckl::EltwiseShape::tiles(B_q),
             ckl::CopyTile<
                 cb_l,
-                ckl::Dst::D1,
+                ckl::Dst::D0,
                 ckl::InputLifecycle::HeldBulk,
                 ckl::CopyTileReconfig::Input,
+                ckl::OperandKind::Block>{},
+            ckl::Recip<ckl::Dst::D0>{},
+            ckl::PackTile<cb_psum, ckl::OutputLifecycle::Streaming>{});
+
+        // O_i *= recip(l_i) with Col broadcast
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::grid(B_q, D_t),
+            ckl::BinaryFpu<
+                cb_o,
+                cb_psum,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::Col,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::HeldBulk,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::Dst::D0,
+                ckl::OperandKind::Scalar,
                 ckl::OperandKind::Col>{},
-            ckl::DivBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
             ckl::PackTile<cb_output, ckl::OutputLifecycle::Streaming>{});
+
+        cb_pop_front(cb_psum, B_q);
 
         // Pop persistent state
         cb_pop_front(cb_o, B_q * D_t);
@@ -297,10 +320,8 @@ void kernel_main() {
         cb_pop_front(cb_m, B_q);
 
         // Re-init for next Q block
-        init_cb_constant(cb_m, B_q, NEG_INF_BITS, false);
-        init_cb_constant(cb_l, B_q, 0.0f, true);
-        init_cb_constant(cb_o, B_q * D_t, 0.0f, true);
-
-        cb_pop_front(cb_q, B_q * D_t);
+        init_cb_constant_bits(cb_m, B_q, NEG_INF_BITS);
+        init_cb_constant_f(cb_l, B_q, 0.0f);
+        init_cb_constant_f(cb_o, B_q * D_t, 0.0f);
     }
 }
