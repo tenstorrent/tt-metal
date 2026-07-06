@@ -791,17 +791,226 @@ void process_higher_layer_and_recurse(
 
 }  // namespace
 
+namespace {
+
+std::set<uint32_t> get_mesh_ids_for_mgd_instance_name(
+    const MeshGraphDescriptor& mesh_graph_descriptor, const std::string& instance_name) {
+    std::set<uint32_t> mesh_ids;
+    const auto& instance_ids = mesh_graph_descriptor.instances_by_name(instance_name);
+    for (const GlobalNodeId global_id : instance_ids) {
+        const auto& instance = mesh_graph_descriptor.get_instance(global_id);
+        if (instance.kind == NodeKind::Mesh || instance.kind == NodeKind::Switch) {
+            mesh_ids.insert(instance.local_id);
+        }
+    }
+    return mesh_ids;
+}
+
+std::set<uint32_t> find_pgd_nodes_at_asic_position(
+    const GroupingInfo& pgd_grouping, const tt::tt_metal::ASICPosition& position) {
+    std::set<uint32_t> pgd_nodes;
+    for (const uint32_t node_id : pgd_grouping.adjacency_graph.get_nodes()) {
+        if (node_id >= pgd_grouping.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = pgd_grouping.items[node_id];
+        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+            continue;
+        }
+        if (item.tray_id == position.first && item.asic_location == position.second) {
+            pgd_nodes.insert(node_id);
+        }
+    }
+    return pgd_nodes;
+}
+
+// Compose logical chip_id -> PGD slot (TrayID + ASICLocation) from an MGD<->PGD topology match and the PGD
+// grouping's per-node item labels. Called at PGD<->MGD commit time in get_valid_groupings_for_mgd.
+std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_position_from_pgd_match(
+    const GroupingInfo& grouping, const std::map<uint32_t, uint32_t>& mgd_node_to_grouping_node) {
+    std::map<LogicalChipId, tt::tt_metal::ASICPosition> node_to_position;
+    for (const auto& [mgd_node, grouping_node] : mgd_node_to_grouping_node) {
+        if (grouping_node >= grouping.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = grouping.items[grouping_node];
+        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+            continue;
+        }
+        node_to_position.emplace(mgd_node, tt::tt_metal::ASICPosition{item.tray_id, item.asic_location});
+    }
+    return node_to_position;
+}
+
+std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>> filter_pinnings_for_mesh_ids(
+    const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings,
+    const std::set<uint32_t>& applicable_mesh_ids) {
+    if (!pinnings.has_value()) {
+        return std::nullopt;
+    }
+    std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>> filtered;
+    filtered.reserve(pinnings->size());
+    for (const auto& pinning : *pinnings) {
+        if (applicable_mesh_ids.contains(pinning.second.mesh_id.get())) {
+            filtered.push_back(pinning);
+        }
+    }
+    if (filtered.empty()) {
+        return std::nullopt;
+    }
+    return filtered;
+}
+
+void add_mgd_to_pgd_asic_position_pinning_constraints(
+    MappingConstraints<uint32_t, uint32_t>& constraints,
+    const GroupingInfo& pgd_grouping,
+    const std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>& pinnings) {
+    std::map<uint32_t, std::set<uint32_t>> mgd_node_to_pgd_nodes;
+    for (const auto& [position, fabric_node] : pinnings) {
+        const auto pgd_nodes = find_pgd_nodes_at_asic_position(pgd_grouping, position);
+        if (pgd_nodes.empty()) {
+            continue;
+        }
+        mgd_node_to_pgd_nodes[fabric_node.chip_id].insert(pgd_nodes.begin(), pgd_nodes.end());
+    }
+    for (const auto& [mgd_node, pgd_nodes] : mgd_node_to_pgd_nodes) {
+        if (!pgd_nodes.empty()) {
+            constraints.add_required_constraint(mgd_node, pgd_nodes);
+        }
+    }
+}
+
+std::optional<tt::tt_metal::ASICPosition> get_pgd_node_asic_position(
+    const GroupingInfo& pgd_grouping, uint32_t pgd_node) {
+    if (pgd_node >= pgd_grouping.items.size()) {
+        return std::nullopt;
+    }
+    const GroupingItemInfo& item = pgd_grouping.items[pgd_node];
+    if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+        return std::nullopt;
+    }
+    return tt::tt_metal::ASICPosition{item.tray_id, item.asic_location};
+}
+
+void log_applicable_mgd_pgd_pinnings(
+    const std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>& pinnings,
+    const std::string& mgd_name,
+    const std::string& pgd_name) {
+    log_info(
+        tt::LogFabric,
+        "PGD<->MGD topology match for MGD '{}' vs PGD '{}': applying {} pinning constraint option(s)",
+        mgd_name,
+        pgd_name,
+        pinnings.size());
+    for (const auto& [position, fabric_node] : pinnings) {
+        log_info(
+            tt::LogFabric,
+            "  Pin mesh={} chip_id={} -> ASIC position (tray={}, asic_location={})",
+            fabric_node.mesh_id.get(),
+            fabric_node.chip_id,
+            position.first.get(),
+            position.second.get());
+    }
+}
+
+void log_mgd_pgd_pinning_fulfillment(
+    const std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>& pinnings,
+    const GroupingInfo& pgd_grouping,
+    const MappingResult<uint32_t, uint32_t>& mapping_result,
+    const std::string& mgd_name,
+    const std::string& pgd_name) {
+    std::map<uint32_t, std::set<tt::tt_metal::ASICPosition>> allowed_positions_by_chip_id;
+    for (const auto& [position, fabric_node] : pinnings) {
+        allowed_positions_by_chip_id[fabric_node.chip_id].insert(position);
+    }
+
+    std::size_t followed_count = 0;
+    const std::size_t total_constraints = allowed_positions_by_chip_id.size();
+
+    for (const auto& [chip_id, allowed_positions] : allowed_positions_by_chip_id) {
+        const auto mapping_it = mapping_result.target_to_global.find(chip_id);
+        if (mapping_it == mapping_result.target_to_global.end()) {
+            log_warning(
+                tt::LogFabric,
+                "PGD<->MGD pinning not fulfilled: MGD '{}' vs PGD '{}', mesh chip_id={} has no mapped PGD node",
+                mgd_name,
+                pgd_name,
+                chip_id);
+            continue;
+        }
+
+        const uint32_t mapped_pgd_node = mapping_it->second;
+        const auto actual_position = get_pgd_node_asic_position(pgd_grouping, mapped_pgd_node);
+        if (!actual_position.has_value()) {
+            log_warning(
+                tt::LogFabric,
+                "PGD<->MGD pinning not fulfilled: MGD '{}' vs PGD '{}', mesh chip_id={} mapped to PGD node {} "
+                "with unknown ASIC position",
+                mgd_name,
+                pgd_name,
+                chip_id,
+                mapped_pgd_node);
+            continue;
+        }
+
+        if (allowed_positions.contains(*actual_position)) {
+            ++followed_count;
+            log_info(
+                tt::LogFabric,
+                "PGD<->MGD pinning fulfilled: MGD '{}' vs PGD '{}', mesh chip_id={} -> PGD node {} at "
+                "(tray={}, asic_location={})",
+                mgd_name,
+                pgd_name,
+                chip_id,
+                mapped_pgd_node,
+                actual_position->first.get(),
+                actual_position->second.get());
+        } else {
+            std::string allowed_str;
+            for (const auto& allowed : allowed_positions) {
+                if (!allowed_str.empty()) {
+                    allowed_str += ", ";
+                }
+                allowed_str += fmt::format("(tray={}, asic_location={})", allowed.first.get(), allowed.second.get());
+            }
+            log_warning(
+                tt::LogFabric,
+                "PGD<->MGD pinning not fulfilled: MGD '{}' vs PGD '{}', mesh chip_id={} mapped to PGD node {} at "
+                "(tray={}, asic_location={}); allowed: [{}]",
+                mgd_name,
+                pgd_name,
+                chip_id,
+                mapped_pgd_node,
+                actual_position->first.get(),
+                actual_position->second.get(),
+                allowed_str);
+        }
+    }
+
+    log_info(
+        tt::LogFabric,
+        "PGD<->MGD pinning summary for MGD '{}' vs PGD '{}': {}/{} fabric-node pinning constraint(s) fulfilled",
+        mgd_name,
+        pgd_name,
+        followed_count,
+        total_constraints);
+}
+
+}  // namespace
+
 namespace tt::tt_fabric {
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
-    return get_valid_groupings_for_mgd(mesh_graph_descriptor, &physical_system_descriptor);
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings) const {
+    return get_valid_groupings_for_mgd(mesh_graph_descriptor, &physical_system_descriptor, pinnings);
 }
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
-    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const {
+    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor,
+    const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings) const {
     ValidGroupingsMap result;
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
@@ -836,6 +1045,10 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         const std::string& instance_name = mgd_instance_key;  // Use unique instance key (includes mesh_id)
         const GroupingInfo& mgd_grouping_info = mgd_mesh_grouping;
         const std::string& instance_type = mgd_grouping_info.type;  // Should be "MESH"
+
+        const std::set<uint32_t> applicable_mesh_ids =
+            get_mesh_ids_for_mgd_instance_name(mesh_graph_descriptor, instance_name);
+        const auto applicable_pinnings = filter_pinnings_for_mesh_ids(pinnings, applicable_mesh_ids);
 
         // Required nodes from MGD adjacency graph (this represents the topology pattern to match)
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
@@ -926,7 +1139,12 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 }
 
                 MappingConstraints<uint32_t, uint32_t> constraints;
-                constraints.add_required_constraint(0, 0);
+                if (applicable_pinnings.has_value()) {
+                    log_applicable_mgd_pgd_pinnings(*applicable_pinnings, mgd_grouping_info.name, name);
+                    add_mgd_to_pgd_asic_position_pinning_constraints(constraints, grouping_info, *applicable_pinnings);
+                } else {
+                    constraints.add_required_constraint(0, 0);
+                }
                 auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
                     mgd_grouping_info.adjacency_graph,
                     grouping_info.adjacency_graph,
@@ -934,6 +1152,10 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     ConnectionValidationMode::STRICT,
                     true);
                 if (mapping_result.success) {
+                    if (applicable_pinnings.has_value()) {
+                        log_mgd_pgd_pinning_fulfillment(
+                            *applicable_pinnings, grouping_info, mapping_result, mgd_grouping_info.name, name);
+                    }
                     best_matches_topology.push_back({name, idx, std::move(mapping_result)});
                 } else {
                     log_debug(
@@ -957,11 +1179,11 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             // (tray_id, asic_location) slot labels is intentional so find_all_in_psd places on the same graph.
             auto make_committed_grouping = [&](const MeshTopologyMatch& match) -> GroupingInfo {
                 GroupingInfo committed = mesh_flat_groupings.at(match.name)[match.idx];
-                // Save the MGD<->PGD pairing discovered during topology matching: the solve used the MGD mesh
-                // adjacency as target and this committed variant's adjacency as global, so target_to_global is
-                // exactly MGD-node -> this grouping's node id. Persisting it here (at match time) lets the
-                // logical layout follow the PGD pinning later instead of re-deriving it.
-                committed.mgd_node_to_grouping_node = match.mapping.target_to_global;
+                // The topology solve used the MGD mesh adjacency as target and this PGD variant as global, so
+                // target_to_global is MGD-node -> PGD grouping-node. Compose logical chip_id -> PGD slot pinning
+                // now so downstream consumes it directly without re-deriving the intermediate node pairing.
+                committed.mesh_node_to_asic_position =
+                    compose_mesh_node_to_asic_position_from_pgd_match(committed, match.mapping.target_to_global);
                 return committed;
             };
 
@@ -1761,39 +1983,6 @@ std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in
     return asic_ids;
 }
 
-namespace {
-// Compose the logical pinning for a placement: MGD mesh node (row-major chip_id) -> ASIC position (TrayID +
-// ASICLocation). Combines the grouping's MGD<->PGD pairing (grouping.mgd_node_to_grouping_node) with the
-// grouping-node -> AsicID solve, then resolves each ASIC to its physical position via the PSD so downstream can
-// use it directly. When the grouping has no MGD pairing, the grouping node ids are the row-major chip ids.
-// File-local helper so find_all_in_psd can populate PsdPlacement::mesh_node_to_asic_position without bloating itself.
-std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_position(
-    const GroupingInfo& grouping,
-    const std::map<uint32_t, tt::tt_metal::AsicID>& grouping_node_to_asic,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    const auto asic_position = [&](tt::tt_metal::AsicID asic_id) {
-        return tt::tt_metal::ASICPosition{
-            physical_system_descriptor.get_tray_id(asic_id), physical_system_descriptor.get_asic_location(asic_id)};
-    };
-    std::map<LogicalChipId, tt::tt_metal::ASICPosition> node_to_position;
-    if (grouping.mgd_node_to_grouping_node.has_value()) {
-        // MGD-node -> grouping-node (from the PGD<->MGD match) composed with grouping-node -> AsicID -> position.
-        for (const auto& [mgd_node, grouping_node] : *grouping.mgd_node_to_grouping_node) {
-            auto asic_it = grouping_node_to_asic.find(grouping_node);
-            if (asic_it != grouping_node_to_asic.end()) {
-                node_to_position.emplace(mgd_node, asic_position(asic_it->second));
-            }
-        }
-    } else {
-        // No MGD pairing: assume the grouping node ids are already the row-major logical chip ids.
-        for (const auto& [grouping_node, asic_id] : grouping_node_to_asic) {
-            node_to_position.emplace(grouping_node, asic_position(asic_id));
-        }
-    }
-    return node_to_position;
-}
-}  // namespace
-
 std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
@@ -1840,10 +2029,6 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
                     for (const auto& [grouping_node, asic_id] : grouping_node_to_asic) {
                         placement.asics.insert(asic_id);
                     }
-                    // Compose the logical chip_id -> ASIC position pinning now so callers get it directly off the
-                    // placement; the composition lives in a separate helper to keep this function short.
-                    placement.mesh_node_to_asic_position = compose_mesh_node_to_asic_position(
-                        placement.grouping, grouping_node_to_asic, physical_system_descriptor);
                     placements.push_back(std::move(placement));
                 }
             }

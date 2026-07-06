@@ -197,38 +197,14 @@ TopologyMappingResult run_topology_mapping(
     const PhysicalGroupingDescriptor& pgd,
     const MeshGraphDescriptor& mgd,
     const std::filesystem::path& mgd_path) {
-    // Build physical multi-mesh graph from PSD, PGD, and MGD
-    log_info(tt::LogFabric, "Building physical multi-mesh adjacency graph...");
-    PhysicalMultiMeshGraph physical_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
-
-    // Build logical multi-mesh graph from MGD
-    // Need to create MeshGraph from cluster and MGD path
-    log_info(tt::LogFabric, "Building logical multi-mesh adjacency graph...");
     auto& context = tt::tt_metal::MetalContext::instance();
     const auto& cluster = context.get_cluster();
     MeshGraph mesh_graph(cluster, mgd_path.string());
-    LogicalMultiMeshGraph logical_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
-
-    // Print adjacency maps
-    log_logical_multi_mesh_adjacency_histograms(logical_graph);
-    log_physical_multi_mesh_adjacency_histograms(physical_graph);
 
     // Configure topology mapping
     TopologyMappingConfig config;
     config.strict_mode = true;
     config.disable_rank_bindings = false;  // Pass the rank bindings to make sure there isn't host rank boundary issues
-
-    // PSD hostname grouping and tray/ASIC-location map (logical mesh 0 anchor + pinnings support).
-    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-        config.hostname_to_asics[desc.host_name].insert(asic_id);
-        config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
-    }
-
-    // Extract pinnings from MGD and add to config (same as control plane)
-    const auto& pinnings = mgd.get_pinnings();
-    for (const auto& [pos, fabric_node] : pinnings) {
-        config.pinnings.emplace_back(pos, fabric_node);
-    }
 
     // Apply the same galaxy corner pinnings as the control plane (Phase 2) so Phase 1 and Phase 2 place
     // the galaxy pins identically. Full galaxies (per-host slice >= 32) pin all four corners; sub-galaxy
@@ -251,6 +227,18 @@ TopologyMappingResult run_topology_mapping(
         }
     }
 
+    // PSD hostname grouping and tray/ASIC-location map (logical mesh 0 anchor + pinnings support).
+    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
+        config.hostname_to_asics[desc.host_name].insert(asic_id);
+        config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
+    }
+
+    // Extract pinnings from MGD and add to config (same as control plane)
+    const auto& pinnings = mgd.get_pinnings();
+    for (const auto& [pos, fabric_node] : pinnings) {
+        config.pinnings.emplace_back(pos, fabric_node);
+    }
+
     // Set per-mesh validation modes based on mesh graph policy
     for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
         config.mesh_validation_modes[mesh_id] = mesh_graph.is_intra_mesh_policy_relaxed(mesh_id)
@@ -271,6 +259,19 @@ TopologyMappingResult run_topology_mapping(
     } else {
         log_info(tt::LogFabric, "Inter-mesh validation mode: STRICT");
     }
+
+    // Build physical multi-mesh graph from PSD, PGD, and MGD
+    log_info(tt::LogFabric, "Building physical multi-mesh adjacency graph...");
+    PhysicalMultiMeshGraph physical_graph =
+        build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd, std::optional{config.pinnings});
+
+    // Build logical multi-mesh graph from MGD
+    log_info(tt::LogFabric, "Building logical multi-mesh adjacency graph...");
+    LogicalMultiMeshGraph logical_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
+
+    // Print adjacency maps
+    log_logical_multi_mesh_adjacency_histograms(logical_graph);
+    log_physical_multi_mesh_adjacency_histograms(physical_graph);
 
     // Build logical rank bindings from mesh graph: each fabric node gets its mesh_host_rank from the mesh graph
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;

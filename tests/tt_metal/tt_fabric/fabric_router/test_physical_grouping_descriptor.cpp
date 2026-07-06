@@ -2575,7 +2575,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
         std::cout << "  [" << i << "] grouping='" << placement.grouping.name << "'"
                   << " asic_count=" << placement.asics.size() << "\n";
         std::cout << "      mesh_node_to_asic_position (chip_id -> tray/asic):";
-        for (const auto& [chip_id, asic_position] : placement.mesh_node_to_asic_position) {
+        for (const auto& [chip_id, asic_position] : placement.grouping.mesh_node_to_asic_position) {
             std::cout << " " << chip_id << "->(" << asic_position.first.get() << "," << asic_position.second.get()
                       << ")";
         }
@@ -2590,11 +2590,11 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
         // find_all_in_psd reports the grouping that matched.
         EXPECT_EQ(placement.grouping.name.empty(), false) << "Placement should name the grouping that matched";
 
-        // find_all_in_psd populates the composed chip_id -> ASIC position pinning over the same footprint.
-        EXPECT_EQ(placement.mesh_node_to_asic_position.size(), 16u)
+        // Pinning is on the committed grouping; placement.grouping is a copy that preserves it.
+        EXPECT_EQ(placement.grouping.mesh_node_to_asic_position.size(), 16u)
             << "Composed pinning should cover all 16 logical chips";
         std::set<tt::tt_metal::ASICPosition> composed_positions;
-        for (const auto& [chip_id, asic_position] : placement.mesh_node_to_asic_position) {
+        for (const auto& [chip_id, asic_position] : placement.grouping.mesh_node_to_asic_position) {
             composed_positions.insert(asic_position);
         }
         std::set<tt::tt_metal::ASICPosition> footprint_positions;
@@ -2607,9 +2607,9 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     }
 }
 
-// get_valid_groupings_for_mgd should persist the MGD<->PGD pairing on every committed MESH grouping
-// (mgd_node_to_grouping_node), so the PGD pinning discovered during matching is available downstream.
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PopulatesMgdNodeMapping) {
+// get_valid_groupings_for_mgd should persist logical chip_id -> ASIC position pinning on every committed MESH
+// grouping (mesh_node_to_asic_position), so the PGD pinning discovered during matching is available downstream.
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PopulatesMeshNodeToAsicPosition) {
     const std::filesystem::path pgd_file_path =
         "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
     const std::filesystem::path mgd_file_path =
@@ -2634,31 +2634,29 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PopulatesMgdNodeMa
     ASSERT_FALSE(committed_groupings.empty());
 
     constexpr size_t kMgdNodeCount = 16;  // single_pod_4x4 is a 4x4 mesh => 16 logical chips (row-major 0..15)
-    size_t groupings_with_mapping = 0;
+    size_t groupings_with_pinning = 0;
     for (const auto& grouping : committed_groupings) {
-        ASSERT_TRUE(grouping.mgd_node_to_grouping_node.has_value())
-            << "Committed PGD grouping '" << grouping.name << "' should carry the MGD<->PGD pairing";
-        const auto& mapping = *grouping.mgd_node_to_grouping_node;
-        ++groupings_with_mapping;
+        ASSERT_FALSE(grouping.mesh_node_to_asic_position.empty())
+            << "Committed PGD grouping '" << grouping.name << "' should carry logical chip_id -> ASIC position pinning";
+        const auto& pinning = grouping.mesh_node_to_asic_position;
+        ++groupings_with_pinning;
 
-        EXPECT_EQ(mapping.size(), kMgdNodeCount)
-            << "Mapping for '" << grouping.name << "' should cover every MGD mesh node";
+        EXPECT_EQ(pinning.size(), kMgdNodeCount)
+            << "Pinning for '" << grouping.name << "' should cover every MGD mesh node";
 
-        const auto& grouping_nodes = grouping.adjacency_graph.get_nodes();
-        std::set<uint32_t> grouping_node_set(grouping_nodes.begin(), grouping_nodes.end());
-
-        std::set<uint32_t> seen_mgd_nodes;
-        std::set<uint32_t> seen_grouping_nodes;
-        for (const auto& [mgd_node, grouping_node] : mapping) {
-            EXPECT_LT(mgd_node, kMgdNodeCount) << "MGD node id out of range for '" << grouping.name << "'";
-            EXPECT_TRUE(grouping_node_set.count(grouping_node) > 0)
-                << "Mapped grouping node " << grouping_node << " not present in '" << grouping.name << "' graph";
-            EXPECT_TRUE(seen_mgd_nodes.insert(mgd_node).second) << "Duplicate MGD node key in mapping";
-            EXPECT_TRUE(seen_grouping_nodes.insert(grouping_node).second)
-                << "Mapping is not injective for '" << grouping.name << "'";
+        std::set<LogicalChipId> seen_chip_ids;
+        std::set<tt::tt_metal::ASICPosition> seen_positions;
+        for (const auto& [chip_id, asic_position] : pinning) {
+            EXPECT_LT(chip_id, kMgdNodeCount) << "Logical chip id out of range for '" << grouping.name << "'";
+            EXPECT_GT(*asic_position.first, 0u) << "Tray id should be set for chip " << chip_id;
+            EXPECT_GT(*asic_position.second, 0u) << "ASIC location should be set for chip " << chip_id;
+            EXPECT_TRUE(seen_chip_ids.insert(chip_id).second) << "Duplicate logical chip id in pinning";
+            EXPECT_TRUE(seen_positions.insert(asic_position).second)
+                << "Pinning is not injective for '" << grouping.name << "'";
         }
     }
-    EXPECT_GT(groupings_with_mapping, 0u) << "At least one committed grouping should carry the MGD<->PGD pairing";
+    EXPECT_GT(groupings_with_pinning, 0u)
+        << "At least one committed grouping should carry logical chip_id -> ASIC position pinning";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
