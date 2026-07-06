@@ -127,6 +127,10 @@ _apply_manifest_env()
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 METADATA_SIZE_BYTES = 12
 
+# LayerAck D2H FIFO. Records are METADATA_SIZE_BYTES (12 B) each; 4 KB is a PCIe-aligned
+# one-page buffer with generous headroom for in-flight records.
+LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_LAYER_ACK_FIFO_BYTES", 4 * 1024))
+
 # End-of-stream sentinel: the producer/scheduler closes the request stream with one final push whose
 # PrefillMetadata words are all -1 (0xFFFFFFFF on the wire). -1 is out of range for slot_id and both KV
 # positions, so it can't collide with a real chunk. On receipt a rank forwards it to the next rank
@@ -747,6 +751,8 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
 
     # Migration KV-chunk-table + LayerAck: single-rank only (disabled for the pipeline for now).
     ack_channel = None
+    d2h_service = None
+    layer_ack_service = None
     if single_rank:
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         if os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1":
@@ -777,8 +783,18 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
             logger.warning(f"[migration] removing stale LayerAck shm {_stale_ack_shm} from a prior run")
             os.remove(_stale_ack_shm)
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
-        runtime.set_layer_ack_channel(ack_channel)
-        logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+        d2h_service = ttnn.D2HStreamService(
+            mesh_device,
+            global_spec=None,
+            fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
+            worker_cores=SYNC_WORKER_CORES,
+            metadata_size_bytes=METADATA_SIZE_BYTES,
+        )
+        layer_ack_service = ttnn.LayerAckService(d2h_service, ack_channel)
+        layer_ack_service.start()
+        logger.info(
+            f"[migration] LayerAck channel ready at {ack_shm_name}; reader thread emits one ack per device record"
+        )
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
     run_request_loop(
@@ -796,7 +812,10 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
     # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
     import gc
 
-    h2d_service = d2d_in = d2d_out = None
+    if layer_ack_service is not None:
+        layer_ack_service.stop()  # join the reader thread before its D2H service / channel drop
+        layer_ack_service = None
+    h2d_service = d2d_in = d2d_out = d2h_service = None
     gc.collect()
     if ack_channel is not None:
         ack_channel.shutdown()  # munmap + shm_unlink
