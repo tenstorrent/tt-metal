@@ -313,15 +313,16 @@ class AceStepPipeline:
         """On-device DiT->VAE seam + VAE decode: latents [1,1,T,64] -> waveform ttnn tensor.
 
         The DiT->VAE seam is pure layout/shape/dtype conversion, done ON-DEVICE (no host round-trip)
-        so this is trace-safe: TILE->ROW_MAJOR, bf16->fp32, [1,1,T,C]->[1,T,C]. The VAE decoder wants
-        [B,T,C] ROW_MAJOR fp32.
+        so this is trace-safe: TILE->ROW_MAJOR, dtype match, [1,1,T,C]->[1,T,C]. The VAE decoder wants
+        [B,T,C] ROW_MAJOR in the VAE's own compute dtype (bf16 by default; fp32 if configured).
         """
         seq_len = latents_tt.shape[2]
-        # Typecast to fp32 while still TILE (matches the old to_torch(bf16).float() precision), then
-        # untile + reshape on-device. No host round-trip -> trace-safe.
+        # Match the VAE's compute dtype (Conv3d requires input.dtype == weight.dtype). Typecast while
+        # still TILE, then untile + reshape on-device. No host round-trip -> trace-safe.
+        vae_dtype = getattr(self.vae, "dtype", ttnn.float32) or ttnn.float32
         lat = latents_tt
-        if lat.dtype != ttnn.float32:
-            lat = ttnn.typecast(lat, ttnn.float32)
+        if lat.dtype != vae_dtype:
+            lat = ttnn.typecast(lat, vae_dtype)
         lat = ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)
         lat = ttnn.reshape(lat, (1, seq_len, self.args.audio_acoustic_hidden_dim))
         return self.vae.forward(lat)
