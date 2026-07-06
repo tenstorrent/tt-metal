@@ -121,6 +121,9 @@ class Attention1DConfig:
     topology: Optional[ttnn.Topology] = None  # None = auto-detect
     num_reduce_scatter_links: int | None = None
     num_all_gather_links: int | None = None
+    decode_agmm_num_links: int = 1
+    decode_agmm_chunks_per_sync: int = CCL_CHUNKS_PER_SYNC
+    decode_agmm_num_workers_per_link: int = CCL_NUM_WORKERS_PER_LINK
 
     # Model dimensions (derived from weights if None)
     dim: int | None = None
@@ -1073,13 +1076,13 @@ class Attention1D(LightweightModule):
             multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             all_gather_core_grid_offset=(0, 4),
             barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=1,
+            num_links=cfg.decode_agmm_num_links,
             memory_config_ag=cfg.decode_all_gather_matmul_memcfg,
             memory_config_mm=cfg.decode_residual_memcfg,
             program_config=cfg.decode_all_gather_matmul_prg_config,
             compute_kernel_config=cfg.li_o_decode_compute_kernel_cfg,
-            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
-            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            chunks_per_sync=cfg.decode_agmm_chunks_per_sync,
+            num_workers_per_link=cfg.decode_agmm_num_workers_per_link,
             num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
 
@@ -1234,7 +1237,7 @@ class Attention1D(LightweightModule):
             (configuration.n_heads * configuration.head_dim) // num_devices, configuration.dim
         )
 
-        use_fused_all_gather_matmul = model_config.get("USE_FUSED_ALL_GATHER_MATMUL", False)
+        use_fused_all_gather_matmul = getattr(configuration, "use_fused_all_gather_matmul", False)
 
         wo = LazyWeight(
             source=pt_wo,

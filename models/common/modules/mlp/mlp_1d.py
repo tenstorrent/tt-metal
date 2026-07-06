@@ -71,6 +71,9 @@ class MLP1DConfig:
     tt_ccl: TT_CCL | None = None
     topology: Optional[ttnn.Topology] = None  # None = auto-detect
     num_reduce_scatter_links: int = 1
+    decode_rs_memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG
+    decode_rs_chunks_per_sync: int = 1
+    decode_rs_num_workers_per_link: int = 1
 
     # Optional: derived from weights if None
     dim: int | None = None
@@ -391,10 +394,10 @@ class MLP1D(LightweightModule):
             barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             num_links=cfg.num_reduce_scatter_links,
             memory_config=w2_out.memory_config(),
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            intermediate_memory_config=cfg.decode_rs_memory_config,
             topology=cfg.topology,
-            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
-            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            chunks_per_sync=cfg.decode_rs_chunks_per_sync,
+            num_workers_per_link=cfg.decode_rs_num_workers_per_link,
             num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
         w2_out.deallocate(True)
@@ -503,6 +506,7 @@ class MLP1D(LightweightModule):
         decode_w2_prg_config = args.get_mlp_ff2_prg_config(Mode.DECODE, None, None)
         decode_mlp2_input_memcfg = args.get_mlp_binary_mult_mem_config(Mode.DECODE)
         decode_residual_memcfg = args.get_mlp_output_mem_config(Mode.DECODE, None)
+        mlp_rs_cfg = model_config.get("MLP_RS_CONFIG", {})
 
         # Compute memory configs for weights
         num_devices = mesh_device.get_num_devices()
@@ -588,6 +592,9 @@ class MLP1D(LightweightModule):
             max_batch_size=args.max_batch_size,
             mlp_activation_type=getattr(args, "mlp_activation_type", ttnn.UnaryOpType.SILU),
             topology=ccl_topology,
+            decode_rs_memory_config=mlp_rs_cfg.get("rs_memory_config", ttnn.L1_MEMORY_CONFIG),
+            decode_rs_chunks_per_sync=mlp_rs_cfg.get("chunks_per_sync", 1),
+            decode_rs_num_workers_per_link=mlp_rs_cfg.get("num_workers_per_link", 1),
             decode_w1_w3_prg_config=decode_w1_w3_prg_config,
             decode_w2_prg_config=decode_w2_prg_config,
             decode_mlp2_input_memcfg=decode_mlp2_input_memcfg,

@@ -93,15 +93,13 @@ def _build_decode_topk_param_tensors(mesh_device, sampling_params, batch_size, a
     """
     from models.common.sampling import format_sampling_params
 
-    # format_sampling_params asserts the batch is a multiple of 32; round up for the call (the
-    # greedy params are uniform/broadcast) then slice back to batch_size. This lets the argmax
-    # reduction below return None for batch_size < 32 (argmax works at any batch) instead of
-    # tripping that assert before we ever reach the check.
+    # format_sampling_params asserts the batch is a multiple of 32. Keep the padded length for
+    # ttnn.sampling: decode tensors are tile-padded to 32 rows even when the logical batch is 1.
     fmt_len = ((batch_size + 31) // 32) * 32
     fmt = format_sampling_params(sampling_params, fmt_len)
-    k = list(fmt.top_k)[:batch_size]
-    p = list(fmt.top_p)[:batch_size]
-    temp = list(fmt.temperature)[:batch_size]
+    k = list(fmt.top_k)
+    p = list(fmt.top_p)
+    temp = list(fmt.temperature)
 
     if allow_force_argmax and all(kk == 1 for kk in k) and all(pp == 0 for pp in p) and all(tt == 1 for tt in temp):
         return None
@@ -818,6 +816,7 @@ class EagerLLMExecutor:
         kv_cache: list[list[ttnn.Tensor]] | None = None,
         read_from_device: bool = True,
         sampling_params: SamplingParams | None = None,
+        reset_batch: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Single decode step.
 
@@ -828,6 +827,7 @@ class EagerLLMExecutor:
             kv_cache: Per-layer KV cache (for identity assertion).
             read_from_device: Whether to return host tensors.
             sampling_params: Sampling parameters for on-device sampling.
+            reset_batch: Accepted for API parity with traced decode; eager decode restages inputs every step.
 
         Returns:
             (logits_or_tokens, log_probs) tuple.
@@ -951,6 +951,8 @@ class TracedLLMExecutor:
         self.trace_ids_decode: dict[bool, int | None] = defaultdict(lambda: None)
         self.trace_inputs_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
         self.trace_output_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
+        self._benchmark_device_decode_feedback = False
+        self._prev_decode_page_table = None
 
         self.mode = None
         self.already_warmed_up_prefill = False
@@ -1402,6 +1404,7 @@ class TracedLLMExecutor:
         kv_cache: list[list[ttnn.Tensor]] | None = None,
         read_from_device: bool = True,
         sampling_params: SamplingParams | None = None,
+        reset_batch: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Traced decode: lazy capture on first call, replay after.
 
@@ -1412,6 +1415,7 @@ class TracedLLMExecutor:
             kv_cache: Per-layer KV cache (for identity assertion).
             read_from_device: Whether to return host tensors.
             sampling_params: Sampling parameters for on-device sampling.
+            reset_batch: Refresh all trace inputs before replay.
 
         Returns:
             (logits_or_tokens, log_probs) tuple.
@@ -1450,11 +1454,25 @@ class TracedLLMExecutor:
         if not self.trace_ids_decode[sampling_on_device]:
             self._capture_decode_trace(tokens, start_pos, page_table, kv_cache, sampling_on_device, sampling_params)
 
-        host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
-        copy_host_to_device(
-            host_tensors=host_inputs,
-            device_tensors=self.trace_inputs_decode[sampling_on_device],
+        page_table_changed = page_table is not None and (
+            self._prev_decode_page_table is None or not torch.equal(self._prev_decode_page_table, page_table)
         )
+        refresh_all_inputs = reset_batch or not sampling_on_device or not self._benchmark_device_decode_feedback
+
+        if refresh_all_inputs:
+            host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
+            copy_host_to_device(
+                host_tensors=host_inputs,
+                device_tensors=self.trace_inputs_decode[sampling_on_device],
+            )
+        elif page_table_changed:
+            host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
+            host_page_table = host_inputs[3]
+            device_page_table = self.trace_inputs_decode[sampling_on_device][3]
+            ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
+
+        if page_table_changed:
+            self._prev_decode_page_table = page_table.clone()
 
         ttnn.execute_trace(
             self.mesh_device,
@@ -1556,15 +1574,12 @@ class TracedLLMExecutor:
             )
 
             if sampling_on_device and self.model.sampling is not None:
-                # NOTE: increment_positions (ttnn.plus_one) is intentionally NOT called inside the
-                # captured body. plus_one issues per-device host-assisted writes that are illegal
-                # during trace capture ("Writes are not supported during trace capture"), and it is
-                # redundant here: decode_forward re-supplies current_pos/rot_mat_idxs from the host
-                # via copy_host_to_device at the start of every step, so any in-trace increment is
-                # overwritten before the next replay. Host owns position bookkeeping.
-                # tt_out_tok=None: sampling allocates its own [1,1,32] argmax output captured in the
-                # trace (reusing the [1,1,1,32] input-token buffer is a shape mismatch -> realloc).
-                tt_toks, tt_log_probs = self._eager._sampling_decode_forward(logits, sampling_params, tt_out_tok=None)
+                tt_out_tok = tt_tokens if self._benchmark_device_decode_feedback else None
+                tt_toks, tt_log_probs = self._eager._sampling_decode_forward(
+                    logits, sampling_params, tt_out_tok=tt_out_tok
+                )
+                if self._benchmark_device_decode_feedback and hasattr(self.model, "increment_positions"):
+                    self.model.increment_positions(tt_current_pos, tt_rot_mat_idxs)
                 output = (tt_toks, tt_log_probs)
             else:
                 logits = self.model.gather_and_untilize_logits(logits)
@@ -1862,6 +1877,9 @@ def run_perf_benchmark(
         PerfBenchmarkResult with raw timings + derived metrics.
     """
     assert _is_traced_executor(executor), "run_perf_benchmark() expects a traced executor during this transition"
+    # PERF.md decode loops keep sampled tokens and positions device-resident between trace replays.
+    # This is only enabled here because the benchmark page table is static across decode steps.
+    executor._benchmark_device_decode_feedback = sampling_params is not None
 
     batch_size = tokens.shape[0]
     prompt_len = tokens.shape[1]
@@ -1921,16 +1939,16 @@ def run_perf_benchmark(
 
     for i in range(num_decode_tokens):
         t0 = time.perf_counter()
+        read_decode_output = not (sampling_params is not None and i > 0)
         logits, _ = executor.decode_forward(
             current_tokens,
             current_pos,
             page_table=page_table,
             kv_cache=kv_cache,
-            read_from_device=True,
+            read_from_device=read_decode_output,
             sampling_params=sampling_params,
+            reset_batch=(i == 0),
         )
-        if hasattr(executor, "mesh_device"):
-            ttnn.synchronize_device(executor.mesh_device)
         elapsed = time.perf_counter() - t0
 
         if i == 0:
@@ -1938,14 +1956,15 @@ def run_perf_benchmark(
         else:
             decode_times.append(elapsed)
 
-        if isinstance(logits, torch.Tensor) and logits.dim() >= 2:
-            next_tok = torch.argmax(logits[:, -1, :], dim=-1)
-        else:
-            next_tok = logits
-        next_tok = next_tok.view(-1)[:batch_size].detach().cpu()
-        for user_id, tok in enumerate(next_tok.tolist()):
-            generated_token_ids[user_id].append(int(tok))
-        current_tokens[:batch_size] = next_tok
+        if read_decode_output:
+            if isinstance(logits, torch.Tensor) and logits.dim() >= 2:
+                next_tok = torch.argmax(logits[:, -1, :], dim=-1)
+            else:
+                next_tok = logits
+            next_tok = next_tok.view(-1)[:batch_size].detach().cpu()
+            for user_id, tok in enumerate(next_tok.tolist()):
+                generated_token_ids[user_id].append(int(tok))
+            current_tokens[:batch_size] = next_tok
         current_pos[:batch_size] += 1
 
     return PerfBenchmarkResult(

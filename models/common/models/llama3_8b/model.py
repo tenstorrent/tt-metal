@@ -28,19 +28,25 @@ Loop policy functions (run_teacher_forcing, run_perf_benchmark) are in
 models/common/models/executor.py.
 """
 
+import math
 from dataclasses import dataclass, field
+from pathlib import Path
+
+import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.models.executor import EagerLLMExecutor, TracedLLMExecutor
 from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig
 from models.common.modules.embedding.embedding_1d import Embedding1D, Embedding1DConfig
-from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig
-from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig
-from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
+from models.common.modules.lazy_weight import LazyWeight
+from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig, _compute_kernel_config_hifi2
+from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _create_dram_sharded_mem_config
+from models.common.modules.rmsnorm.rmsnorm_1d import SHARD_HEIGHT, RMSNorm1D, RMSNorm1DConfig
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
 from models.common.modules.tt_ccl import TT_CCL, default_topology, get_tt_ccl
+from models.common.tensor_utils import TILE_SIZE, pad_dim_to_size
 
 # =============================================================================
 # TransformerBlock1D
@@ -216,6 +222,576 @@ class Llama3Transformer1DConfig:
     cache_path: "str | None" = None
 
 
+def build_llama3_transformer_1d_config_from_model_args(
+    *,
+    mesh_device,
+    args,
+    state_dict,
+    weight_cache_path,
+    dtype=None,
+    paged_attention_config=None,
+    use_paged_kv_cache=None,
+) -> Llama3Transformer1DConfig:
+    """Translate legacy ModelArgs into explicit TTTv2 module configs."""
+    from models.tt_transformers.tt.common import Mode, rope_scaling_model_factory
+    from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+    from models.tt_transformers.tt.rope import compute_gather_cos_sin
+
+    if args.is_galaxy:
+        raise ValueError("Llama3Transformer1D only supports 1D mesh topologies.")
+
+    if use_paged_kv_cache is None:
+        use_paged_kv_cache = paged_attention_config is not None
+
+    num_devices = mesh_device.get_num_devices()
+    tt_ccl_inst = get_tt_ccl(mesh_device) if num_devices > 1 else None
+    model_config = args.get_model_config()
+    model_config["DECODE_RESIDUAL_MEMCFG"] = args.get_residual_mem_config(Mode.DECODE)
+    decoders_opt = model_config["DECODERS_OPTIMIZATIONS"]
+    weight_cache_path = Path(weight_cache_path) if weight_cache_path else None
+    embedding_cache_path = args.weight_cache_path(dtype or ttnn.bfloat8_b)
+
+    def mesh_shard(dim: int) -> ttnn.MeshMapperConfig:
+        return ttnn.MeshMapperConfig(
+            placements=[ttnn.PlacementShard(dim)],
+            mesh_shape_override=ttnn.MeshShape([num_devices]),
+        )
+
+    def cache_path_for(base, *parts):
+        if base is None or getattr(args, "dummy_weights", False):
+            return None
+        return Path(base).joinpath(*parts)
+
+    def make_embedding_config() -> Embedding1DConfig:
+        base_name = args.get_state_dict_prefix("", None) + "tok_embeddings.weight"
+        torch_weight = state_dict[base_name].unsqueeze(0).unsqueeze(0)
+        cache_dir = cache_path_for(embedding_cache_path, "embedding")
+        return Embedding1DConfig(
+            weights=LazyWeight(
+                source=torch_weight,
+                dtype=ttnn.bfloat16,
+                device=mesh_device,
+                mesh_mapper_config=mesh_shard(-1),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_dir_weight_name=(cache_dir, "tok_embeddings") if cache_dir else None,
+            ),
+            mesh_device=mesh_device,
+            weights_dtype=ttnn.bfloat16,
+            weights_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+            output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def make_rope_config() -> Rope1DConfig:
+        rope_scaling = None
+        if getattr(args, "rope_scaling_params", None) is not None:
+            rope_scaling = rope_scaling_model_factory(
+                args.rope_scaling_params, getattr(args, "original_max_context_len", None)
+            )
+        cos_torch, sin_torch = compute_gather_cos_sin(
+            dhead=args.head_dim,
+            end=2 * args.max_seq_len,
+            theta=args.rope_theta,
+            rope_scaling=rope_scaling,
+        )
+        return Rope1DConfig(
+            cos_matrix=LazyWeight(source=cos_torch, device=mesh_device),
+            sin_matrix=LazyWeight(source=sin_torch, device=mesh_device),
+            max_batch_size=args.max_batch_size,
+            head_dim=args.head_dim,
+            device=mesh_device,
+            use_qk_fused=getattr(args, "use_qk_fused", False),
+            datatype=ttnn.bfloat16,
+        )
+
+    def norm_weight_name(layer_num: int | None, weight_key: str, state_dict_prefix: str | None = None) -> str:
+        if state_dict_prefix:
+            return f"{state_dict_prefix}{weight_key}.weight"
+        if layer_num is None:
+            return f"{weight_key}.weight"
+        return f"layers.{layer_num}.{weight_key}.weight"
+
+    def make_norm_config(
+        *,
+        layer_num: int | None,
+        weight_key: str,
+        state_dict_prefix: str | None = None,
+        sharded_program_config=None,
+        sharded_output_config=None,
+    ) -> RMSNorm1DConfig:
+        weight_name = norm_weight_name(layer_num, weight_key, state_dict_prefix)
+        torch_weight = (
+            state_dict[weight_name]
+            .unsqueeze(0)
+            .view(1, 1, args.dim)
+            .reshape([1, 1, args.dim // SHARD_HEIGHT, SHARD_HEIGHT])
+        )
+        if args.rms_norm_add_unit_offset:
+            torch_weight = torch_weight + 1.0
+        return RMSNorm1DConfig(
+            weight=LazyWeight(
+                source=torch_weight,
+                dtype=ttnn.bfloat16,
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_dir_weight_name=(weight_cache_path, weight_name) if weight_cache_path else None,
+                mesh_mapper_config=(
+                    ttnn.MeshMapperConfig(
+                        placements=[ttnn.PlacementReplicate()],
+                        mesh_shape_override=ttnn.MeshShape([num_devices]),
+                    )
+                    if num_devices > 1
+                    else None
+                ),
+            ),
+            eps=args.norm_eps,
+            add_unit_offset=False,
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl_inst,
+            max_batch_size=args.max_batch_size,
+            prefill_distributed=num_devices > 1 and args.dim >= 4096,
+            decode_program_config=sharded_program_config,
+            decode_memory_config=sharded_output_config,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            ),
+        )
+
+    def make_attention_config(layer_num: int, transformation_mats: dict[str, ttnn.Tensor]) -> Attention1DConfig:
+        layer_name = args.get_state_dict_prefix("Attention", layer_num)
+        wq_str = f"{layer_name}.wq"
+        wk_str = f"{layer_name}.wk"
+        wv_str = f"{layer_name}.wv"
+        wo_str = f"{layer_name}.wo"
+        q_norm_str = f"{layer_name}.q_norm"
+        k_norm_str = f"{layer_name}.k_norm"
+
+        wqkv_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.WQKV)
+        wo_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.WO)
+        kv_cache_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.KV_CACHE)
+        activation_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.ACTIVATION)
+
+        qkv_list = []
+        for device_idx in range(num_devices):
+            wq = torch.transpose(torch.chunk(state_dict[f"{wq_str}.weight"], num_devices, dim=0)[device_idx], -2, -1)
+            wk = torch.transpose(torch.chunk(state_dict[f"{wk_str}.weight"], num_devices, dim=0)[device_idx], -2, -1)
+            wv = torch.transpose(torch.chunk(state_dict[f"{wv_str}.weight"], num_devices, dim=0)[device_idx], -2, -1)
+            qkv_list.append(torch.cat([wq, wk, wv], dim=-1))
+        qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
+
+        use_fused_all_gather_matmul = getattr(args, "use_fused_all_gather_matmul", False)
+        wqkv = LazyWeight(
+            source=qkv_cat,
+            dtype=wqkv_dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=args.create_dram_sharded_mem_config(args.dim, args.qkv_size // num_devices),
+            mesh_mapper_config=mesh_shard(-1),
+            cache_dir_weight_name=(weight_cache_path / layer_name, "wqkv_sharded") if weight_cache_path else None,
+        )
+        wo = LazyWeight(
+            source=state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0),
+            dtype=wo_dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=(
+                ttnn.DRAM_MEMORY_CONFIG
+                if use_fused_all_gather_matmul
+                else args.create_dram_sharded_mem_config((args.n_heads * args.head_dim) // num_devices, args.dim)
+            ),
+            mesh_mapper_config=mesh_shard(-1 if use_fused_all_gather_matmul else -2),
+            cache_dir_weight_name=(
+                (weight_cache_path / layer_name, "wo_width_sharded" if use_fused_all_gather_matmul else "wo")
+                if weight_cache_path
+                else None
+            ),
+        )
+
+        qk_norm_compute_kernel = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        def make_qk_norm_config(name: str) -> RMSNorm1DConfig | None:
+            weight_name = f"{name}.weight"
+            if weight_name not in state_dict:
+                return None
+            return RMSNorm1DConfig(
+                weight=LazyWeight(
+                    source=state_dict[weight_name].reshape(1, 1, -1, TILE_SIZE),
+                    dtype=ttnn.bfloat16,
+                    device=mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    cache_dir_weight_name=(
+                        (weight_cache_path / layer_name, name.rsplit(".", 1)[-1]) if weight_cache_path else None
+                    ),
+                ),
+                mesh_device=mesh_device,
+                eps=args.norm_eps,
+                add_unit_offset=args.rms_norm_add_unit_offset,
+                decode_in_sharded=False,
+                decode_out_sharded=False,
+                prefill_distributed=False,
+                compute_kernel_config=qk_norm_compute_kernel,
+            )
+
+        wqkv_bias = None
+        if f"{wq_str}.bias" in state_dict:
+            wqkv_bias = LazyWeight(
+                source=torch.concat(
+                    [
+                        torch.concat(
+                            [
+                                torch.chunk(state_dict[f"{wq_str}.bias"], num_devices)[device_idx],
+                                torch.chunk(state_dict[f"{wk_str}.bias"], num_devices)[device_idx],
+                                torch.chunk(state_dict[f"{wv_str}.bias"], num_devices)[device_idx],
+                            ],
+                            dim=-1,
+                        )
+                        for device_idx in range(num_devices)
+                    ],
+                    dim=-1,
+                )
+            )
+
+        scale = args.query_pre_attn_scalar**-0.5 if args.query_pre_attn_scalar is not None else args.head_dim**-0.5
+        attn_agmm_cfg = model_config.get("ATTN_AGMM_CONFIG", {})
+        return Attention1DConfig(
+            wqkv=wqkv,
+            wo=wo,
+            q_norm_config=make_qk_norm_config(q_norm_str),
+            k_norm_config=make_qk_norm_config(k_norm_str),
+            wqkv_bias=wqkv_bias,
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl_inst,
+            topology=args.ccl_topology(),
+            dim=args.dim,
+            n_heads=args.n_heads,
+            n_kv_heads=args.n_kv_heads,
+            head_dim=args.head_dim,
+            qkv_size=args.qkv_size,
+            max_batch_size=args.max_batch_size,
+            max_seq_len=args.max_seq_len,
+            scale=scale,
+            sliding_window=args.sliding_window if hasattr(args, "sliding_window") else None,
+            use_qk_fused=getattr(args, "use_qk_fused", False),
+            use_vllm_paged_kv_cache=use_paged_kv_cache,
+            paged_attention_config=paged_attention_config,
+            kv_cache_dtype=kv_cache_dtype,
+            min_kv_prefill_shard_seqlen=args.min_kv_prefill_shard_seqlen,
+            wqkv_dtype=wqkv_dtype,
+            wo_dtype=wo_dtype,
+            activation_dtype=activation_dtype,
+            decode_xqkv_prg_config=model_config.get("XQKV_DECODE_PROGCFG"),
+            decode_sdpa_prg_config=model_config.get("SDPA_DECODE_PROGCFG"),
+            decode_attn_output_prg_config=model_config.get("ATTN_OUTPUT_PROGCFG"),
+            decode_residual_memcfg=model_config.get("DECODE_RESIDUAL_MEMCFG"),
+            decode_create_qkv_head_memcfg=model_config.get("CREATE_QKV_DECODE_SHARD"),
+            decode_scores_memcfg=model_config.get("SCORES_BATCHED_MM_OUTPUT_MEMCFG"),
+            prefill_xqkv_prg_config=model_config.get("XQKV_PREFILL_PROGCFG"),
+            prefill_sdpa_prg_config=model_config.get("SDPA_PROGCFG"),
+            prefill_wo_prg_config=model_config.get("WO_PREFILL_PROGCFG"),
+            prefill_kv_memcfg=model_config.get("KV_PREFILL_MEM_CFG"),
+            use_fused_all_gather_matmul=use_fused_all_gather_matmul,
+            decode_all_gather_matmul_prg_config=model_config.get("ATTN_ALL_GATHER_MATMUL_PROGCFG"),
+            decode_all_gather_matmul_memcfg=model_config.get("ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"),
+            decode_agmm_num_links=attn_agmm_cfg.get("num_links", 1),
+            decode_agmm_chunks_per_sync=attn_agmm_cfg.get("chunks_per_sync", 10),
+            decode_agmm_num_workers_per_link=attn_agmm_cfg.get("num_workers_per_link", 2),
+            li_qkv_decode_compute_kernel_cfg=decoders_opt.get_math_fidelity(
+                decoder_id=layer_num, op=OpGroup.LI_QKV_DECODE, configuration=args
+            ),
+            sdpa_decode_compute_kernel_cfg=decoders_opt.get_math_fidelity(
+                decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=args
+            ),
+            li_o_decode_compute_kernel_cfg=decoders_opt.get_math_fidelity(
+                decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=args
+            ),
+            li_qkv_prefill_compute_kernel_cfg=decoders_opt.get_math_fidelity(
+                decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=args
+            ),
+            sdpa_prefill_compute_kernel_cfg=decoders_opt.get_math_fidelity(
+                decoder_id=layer_num, op=OpGroup.SDPA_PREFILL, configuration=args
+            ),
+            li_o_prefill_compute_kernel_cfg=decoders_opt.get_math_fidelity(
+                decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=args
+            ),
+            transformation_mat_decode=transformation_mats.get("decode"),
+            transformation_mat_prefill=transformation_mats.get("prefill"),
+        )
+
+    def make_mlp_config(layer_num: int) -> MLP1DConfig:
+        state_dict_prefix = args.get_state_dict_prefix("MLP", layer_num)
+        ff1_3_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.FF1_FF3)
+        ff2_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.FF2)
+        activation_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.ACTIVATION)
+        mlp_rs_cfg = model_config.get("MLP_RS_CONFIG", {})
+
+        dram_size = mesh_device.dram_grid_size()
+        dram_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_size.x - 1, dram_size.y - 1))}
+        )
+        w1_w3_mem_config = _create_dram_sharded_mem_config(
+            k=args.dim,
+            n=args.hidden_dim // num_devices,
+            dram_grid=dram_grid,
+            tile_size=TILE_SIZE,
+            dram_cores=dram_size.x,
+        )
+        w2_mem_config = _create_dram_sharded_mem_config(
+            k=args.hidden_dim // num_devices,
+            n=args.dim,
+            dram_grid=dram_grid,
+            tile_size=TILE_SIZE,
+            dram_cores=dram_size.x,
+        )
+        cache_dir = cache_path_for(weight_cache_path, state_dict_prefix)
+
+        def make_weight_source(name: str, shard_dim: int):
+            tensor = torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+            return pad_dim_to_size(tensor, dim=shard_dim, size=args.hidden_dim)
+
+        return MLP1DConfig(
+            w1=LazyWeight(
+                source=make_weight_source("w1", -1),
+                dtype=ff1_3_dtype,
+                device=mesh_device,
+                mesh_mapper_config=mesh_shard(-1),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=w1_w3_mem_config,
+                cache_dir_weight_name=(cache_dir, "w1_sharded") if cache_dir else None,
+            ),
+            w2=LazyWeight(
+                source=make_weight_source("w2", -2),
+                dtype=ff2_dtype,
+                device=mesh_device,
+                mesh_mapper_config=mesh_shard(-2),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=w2_mem_config,
+                cache_dir_weight_name=(cache_dir, "w2_sharded") if cache_dir else None,
+            ),
+            w3=LazyWeight(
+                source=make_weight_source("w3", -1),
+                dtype=ff1_3_dtype,
+                device=mesh_device,
+                mesh_mapper_config=mesh_shard(-1),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=w1_w3_mem_config,
+                cache_dir_weight_name=(cache_dir, "w3_sharded") if cache_dir else None,
+            ),
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl_inst,
+            dim=args.dim,
+            hidden_dim=args.hidden_dim,
+            max_batch_size=args.max_batch_size,
+            mlp_activation_type=getattr(args, "mlp_activation_type", ttnn.UnaryOpType.SILU),
+            topology=args.ccl_topology(),
+            decode_rs_memory_config=mlp_rs_cfg.get("rs_memory_config", ttnn.L1_MEMORY_CONFIG),
+            decode_rs_chunks_per_sync=mlp_rs_cfg.get("chunks_per_sync", 1),
+            decode_rs_num_workers_per_link=mlp_rs_cfg.get("num_workers_per_link", 1),
+            decode_w1_w3_prg_config=args.get_mlp_ff1_3_prg_config(Mode.DECODE, None, None),
+            decode_w2_prg_config=args.get_mlp_ff2_prg_config(Mode.DECODE, None, None),
+            decode_mlp2_input_memcfg=args.get_mlp_binary_mult_mem_config(Mode.DECODE),
+            decode_residual_memcfg=args.get_mlp_output_mem_config(Mode.DECODE, None),
+            w1_w3_dtype=ff1_3_dtype,
+            w2_dtype=ff2_dtype,
+            activation_dtype=activation_dtype,
+            ff1_3_compute_kernel_cfg=decoders_opt.get_math_fidelity(
+                decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=args
+            ),
+            ff2_compute_kernel_cfg=decoders_opt.get_math_fidelity(
+                decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=args
+            ),
+            decode_ff1_3_compute_kernel_cfg=decoders_opt.get_math_fidelity(
+                decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=args
+            ),
+            decode_ff2_compute_kernel_cfg=decoders_opt.get_math_fidelity(
+                decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=args
+            ),
+            decode_spill_w1_to_dram_before_w3=False,
+            prefill_len_cutoff=args.prefill_len_cutoff,
+        )
+
+    def make_lm_head_config() -> LMHead1DConfig:
+        vocab_size = args.vocab_size
+        padded_vocab_size = math.ceil(vocab_size / TILE_SIZE) * TILE_SIZE
+        size_per_device = padded_vocab_size // num_devices
+        num_splits = math.ceil(size_per_device / args.max_columns_per_device_lm_head)
+        split_sizes = [min(size_per_device, args.max_columns_per_device_lm_head)] * (num_splits - 1)
+        split_sizes.append(size_per_device - sum(split_sizes))
+
+        state_dict_prefix = args.get_state_dict_prefix("", None)
+        torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+        if vocab_size < padded_vocab_size:
+            torch_output_weights = torch.cat(
+                [
+                    torch_output_weights,
+                    torch.zeros(
+                        torch_output_weights.shape[0],
+                        padded_vocab_size - vocab_size,
+                        dtype=torch_output_weights.dtype,
+                    ),
+                ],
+                dim=-1,
+            )
+
+        dram_size = mesh_device.dram_grid_size()
+        dram_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_size.x - 1, dram_size.y - 1))}
+        )
+        cache_dir = cache_path_for(weight_cache_path, "lm_head")
+        output_weights = []
+        weights_memcfgs = []
+        for split_idx, split_size in enumerate(split_sizes):
+            device_splits = []
+            for device_idx in range(num_devices):
+                start = device_idx * size_per_device + sum(split_sizes[:split_idx])
+                end = start + split_size
+                device_splits.append(torch_output_weights[:, start:end])
+            combined_split = torch.cat(device_splits, dim=-1)
+            mem_cfg = _create_dram_sharded_mem_config(
+                k=args.dim,
+                n=math.ceil(combined_split.shape[-1] / num_devices),
+                dram_grid=dram_grid,
+                tile_size=TILE_SIZE,
+                dram_cores=dram_size.x,
+            )
+            weights_memcfgs.append(mem_cfg)
+            output_weights.append(
+                LazyWeight(
+                    source=combined_split,
+                    dtype=dtype if dtype is not None else ttnn.bfloat8_b,
+                    device=mesh_device,
+                    mesh_mapper_config=mesh_shard(-1),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=mem_cfg,
+                    cache_dir_weight_name=(cache_dir, f"output_split_{split_idx}_{combined_split.shape[-1]}")
+                    if cache_dir
+                    else None,
+                )
+            )
+
+        tile_padded_batch_rows = TILE_SIZE * math.ceil(args.max_batch_size / TILE_SIZE)
+        lm_head_core_grid = args.lm_head_core_grid
+        input_memcfg = ttnn.create_sharded_memory_config(
+            (tile_padded_batch_rows, math.ceil((args.dim // lm_head_core_grid.num_cores) / TILE_SIZE) * TILE_SIZE),
+            lm_head_core_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        return LMHead1DConfig(
+            output_weights=output_weights,
+            mesh_device=mesh_device,
+            dim=args.dim,
+            max_batch_size=args.max_batch_size,
+            program_configs=[
+                args.dram_matmul_config(tile_padded_batch_rows, args.dim, split_size, lm_head_core_grid.num_cores)
+                for split_size in split_sizes
+            ],
+            compute_kernel_config=_compute_kernel_config_hifi2(),
+            lm_head_dtype=getattr(args, "lm_head_dtype", ttnn.bfloat8_b),
+            output_memcfg=ttnn.L1_MEMORY_CONFIG,
+            input_memcfg=input_memcfg,
+            weights_memcfgs=weights_memcfgs,
+        )
+
+    def make_sampling_config() -> Sampling1DConfig | None:
+        sampling_splits = num_devices if list(mesh_device.shape) != [1, 1] else 2
+        if args.vocab_size // sampling_splits > 64 * 1024:
+            return None
+
+        num_gather_links = 1
+        if "GALAXY_NUM_LINKS" in model_config:
+            max_links = model_config["GALAXY_NUM_LINKS"]
+            max_top_k = getattr(args, "max_top_k", 32)
+            num_gather_links = min(max_top_k // 32, max_links) if max_top_k // 32 <= max_links else max_links
+
+        ag_cfg = model_config.get("SAMPLING_AG_CONFIG", {})
+        return Sampling1DConfig(
+            vocab_size=getattr(args, "padded_vocab_size", args.vocab_size),
+            valid_vocab_size=args.vocab_size,
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl_inst,
+            max_batch_size=getattr(args, "max_batch_size", 32),
+            max_top_k=getattr(args, "max_top_k", 32),
+            sub_core_grids=getattr(args, "sub_core_grids", None),
+            sub_core_grid_topk=getattr(args, "sub_core_grid_topk", None),
+            start_core=getattr(args, "start_core", ttnn.CoreCoord(0, 0)),
+            num_gather_links=num_gather_links,
+            sampling_memory_config=model_config.get("DECODE_SAMPLING_INPUT_MEMCFG", ttnn.DRAM_MEMORY_CONFIG),
+            allow_force_argmax=ag_cfg.get("allow_force_argmax", False),
+            num_argmax_gather_links=ag_cfg.get("num_links", num_gather_links),
+            ag_topology=ag_cfg.get("topology", ttnn.Topology.Linear),
+            argmax_chunks_per_sync=ag_cfg.get("chunks_per_sync", 10),
+            argmax_num_workers_per_link=1,
+            pad_to_power_of_2=getattr(args, "pad_logits_to_power_of_2", False),
+        )
+
+    rope_config = make_rope_config()
+    trans_mats_dict = RotarySetup1D.from_config(rope_config).get_both_trans_mats()
+    attn_norm_cfg = args.get_norm_config("attn", Mode.DECODE)
+    ff_norm_cfg = args.get_norm_config("ff", Mode.DECODE)
+    lm_head_norm_cfg = args.get_norm_config("lm_head", Mode.DECODE)
+    activation_dtypes = [
+        decoders_opt.get_tensor_dtype(decoder_id=i, tensor=TensorGroup.ACTIVATION) for i in range(args.n_layers)
+    ]
+
+    return Llama3Transformer1DConfig(
+        n_layers=args.n_layers,
+        vocab_size=args.vocab_size,
+        max_batch_size=args.max_batch_size,
+        max_seq_len=args.max_seq_len,
+        num_devices=num_devices,
+        mesh_device=mesh_device,
+        embedding_config=make_embedding_config(),
+        rope_config=rope_config,
+        block_configs=[
+            TransformerBlock1DConfig(
+                attention_norm_config=make_norm_config(
+                    layer_num=i,
+                    weight_key="attention_norm",
+                    sharded_program_config=attn_norm_cfg.get("sharded_program_config"),
+                    sharded_output_config=attn_norm_cfg.get("sharded_output_config"),
+                ),
+                attention_config=make_attention_config(i, trans_mats_dict),
+                ff_norm_config=make_norm_config(
+                    layer_num=i,
+                    weight_key="ffn_norm",
+                    sharded_program_config=ff_norm_cfg.get("sharded_program_config"),
+                    sharded_output_config=ff_norm_cfg.get("sharded_output_config"),
+                ),
+                mlp_config=make_mlp_config(i),
+                decode_residual_memcfg=model_config["DECODE_RESIDUAL_MEMCFG"],
+                prefill_residual_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+                activation_dtype=activation_dtypes[i],
+            )
+            for i in range(args.n_layers)
+        ],
+        norm_config=make_norm_config(
+            layer_num=None,
+            weight_key="norm",
+            state_dict_prefix=args.get_state_dict_prefix("", None),
+            sharded_program_config=lm_head_norm_cfg.get("sharded_program_config"),
+            sharded_output_config=lm_head_norm_cfg.get("sharded_output_config"),
+        ),
+        lm_head_config=make_lm_head_config(),
+        sampling_config=make_sampling_config(),
+        decode_residual_memcfg=model_config["DECODE_RESIDUAL_MEMCFG"],
+        prefill_residual_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        activation_dtypes=activation_dtypes,
+        tt_ccl=tt_ccl_inst,
+        cache_path=str(weight_cache_path) if weight_cache_path else None,
+    )
+
+
 class Llama3Transformer1D(LightweightModule):
     """TTTv2 Llama 3.1-8B Transformer.
 
@@ -258,6 +834,7 @@ class Llama3Transformer1D(LightweightModule):
         self.sampling = None
         if config.sampling_config is not None:
             self.sampling = Sampling1D.from_config(config.sampling_config)
+        self.supports_on_device_sampling = self.sampling is not None
 
         self.mesh_device = config.mesh_device
         self.tt_ccl = tt_ccl_inst
@@ -440,170 +1017,6 @@ class Llama3Transformer1D(LightweightModule):
         ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
 
-    # =========================================================================
-    # Factory: from_model_args (backward-compat bridge to TTTv1 ModelArgs)
-    # =========================================================================
-
-    @classmethod
-    def from_model_args(
-        cls,
-        mesh_device,
-        args,
-        state_dict,
-        weight_cache_path,
-        dtype=None,
-        paged_attention_config=None,
-        use_paged_kv_cache=None,
-    ):
-        """Build Llama3Transformer1D from TTTv1 ModelArgs.
-
-        This is the only place that imports from models.tt_transformers.
-        Used by the generator and demo for backward compatibility.
-        Bypasses __init__ to build from pre-constructed sub-modules.
-        """
-        from tqdm import tqdm
-
-        from models.tt_transformers.tt.common import Mode
-        from models.tt_transformers.tt.model_config import TensorGroup
-
-        instance = object.__new__(cls)
-        super(Llama3Transformer1D, instance).__init__()
-
-        if use_paged_kv_cache is None:
-            use_paged_kv_cache = paged_attention_config is not None
-
-        tt_ccl_inst = get_tt_ccl(mesh_device) if mesh_device.get_num_devices() > 1 else None
-        model_config = args.get_model_config()
-        model_config["DECODE_RESIDUAL_MEMCFG"] = args.get_residual_mem_config(Mode.DECODE)
-
-        instance.config = None
-        instance.mesh_device = mesh_device
-        instance.tt_ccl = tt_ccl_inst
-        instance.vocab_size = args.vocab_size
-        instance.n_layers = args.n_layers
-        instance.num_devices = mesh_device.get_num_devices()
-        instance.decode_residual_memcfg = model_config["DECODE_RESIDUAL_MEMCFG"]
-        instance.prefill_residual_memcfg = ttnn.DRAM_MEMORY_CONFIG
-        instance.activation_dtypes = [
-            args.decoders_optimizations.get_tensor_dtype(decoder_id=i, tensor=TensorGroup.ACTIVATION)
-            for i in range(args.n_layers)
-        ]
-
-        instance.embedding = Embedding1D.from_model_args(
-            mesh_device=mesh_device,
-            args=args,
-            weight_cache_path=args.weight_cache_path(dtype or ttnn.bfloat8_b),
-            state_dict=state_dict,
-            dtype=ttnn.bfloat16,
-        )
-
-        instance.rope_setup = RotarySetup1D.from_model_args(
-            device=mesh_device,
-            args=args,
-            model_name=args.model_name,
-        )
-        trans_mats_dict = instance.rope_setup.get_both_trans_mats()
-
-        attn_norm_cfg = args.get_norm_config("attn", Mode.DECODE)
-        ff_norm_cfg = args.get_norm_config("ff", Mode.DECODE)
-        lm_head_norm_cfg = args.get_norm_config("lm_head", Mode.DECODE)
-
-        layers = []
-        for i in tqdm(range(args.n_layers), desc="Building TTTv2 layers"):
-            attn_norm = RMSNorm1D.from_model_args(
-                mesh_device=mesh_device,
-                tt_ccl=tt_ccl_inst,
-                args=args,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                layer_num=i,
-                weight_key="attention_norm",
-                sharded_program_config=attn_norm_cfg.get("sharded_program_config"),
-                sharded_output_config=attn_norm_cfg.get("sharded_output_config"),
-            )
-            attention = Attention1D.from_model_args(
-                mesh_device=mesh_device,
-                tt_ccl=tt_ccl_inst,
-                args=args,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                layer_num=i,
-                transformation_mats=trans_mats_dict,
-                paged_attention_config=paged_attention_config,
-                use_paged_kv_cache=use_paged_kv_cache,
-            )
-            ff_norm = RMSNorm1D.from_model_args(
-                mesh_device=mesh_device,
-                tt_ccl=tt_ccl_inst,
-                args=args,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                layer_num=i,
-                weight_key="ffn_norm",
-                sharded_program_config=ff_norm_cfg.get("sharded_program_config"),
-                sharded_output_config=ff_norm_cfg.get("sharded_output_config"),
-            )
-            mlp = MLP1D.from_model_args(
-                mesh_device=mesh_device,
-                tt_ccl=tt_ccl_inst,
-                args=args,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                layer_num=i,
-                dtype=dtype,
-                model_config=model_config,
-            )
-
-            block = TransformerBlock1D(
-                attention_norm=attn_norm,
-                attention=attention,
-                ff_norm=ff_norm,
-                feed_forward=mlp,
-                decode_residual_memcfg=instance.decode_residual_memcfg,
-                prefill_residual_memcfg=ttnn.DRAM_MEMORY_CONFIG,
-                activation_dtype=instance.activation_dtypes[i],
-            )
-            layers.append(block)
-        instance.layers = layers
-
-        instance.norm = RMSNorm1D.from_model_args(
-            mesh_device=mesh_device,
-            tt_ccl=tt_ccl_inst,
-            args=args,
-            state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            layer_num=None,
-            weight_key="norm",
-            state_dict_prefix=args.get_state_dict_prefix("", None),
-            sharded_program_config=lm_head_norm_cfg.get("sharded_program_config"),
-            sharded_output_config=lm_head_norm_cfg.get("sharded_output_config"),
-        )
-
-        state_dict_prefix = args.get_state_dict_prefix("", None)
-        instance.lm_head = LMHead1D.from_model_args(
-            mesh_device=mesh_device,
-            args=args,
-            state_dict=state_dict,
-            state_dict_prefix=state_dict_prefix,
-            weight_cache_path=weight_cache_path,
-            max_columns_per_device=args.max_columns_per_device_lm_head,
-            dtype=dtype,
-            model_config=model_config,
-            tt_ccl=tt_ccl_inst,
-        )
-
-        instance.sampling = None
-        sampling_splits = mesh_device.get_num_devices() if list(mesh_device.shape) != [1, 1] else 2
-        if args.vocab_size // sampling_splits <= 64 * 1024:
-            instance.sampling = Sampling1D.from_model_args(
-                mesh_device=mesh_device,
-                tt_ccl=tt_ccl_inst,
-                args=args,
-                model_config=model_config,
-            )
-
-        return instance
-
 
 # =============================================================================
 # RMSNorm gather helpers
@@ -768,6 +1181,7 @@ class EagerLlamaExecutor:
         kv_cache=None,
         read_from_device=True,
         sampling_params=None,
+        reset_batch=False,
     ):
         return self._engine.decode_forward(
             tokens,
@@ -776,6 +1190,7 @@ class EagerLlamaExecutor:
             kv_cache=kv_cache,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
+            reset_batch=reset_batch,
         )
 
     # =========================================================================
@@ -926,6 +1341,7 @@ class TracedLlamaExecutor:
         kv_cache=None,
         read_from_device=True,
         sampling_params=None,
+        reset_batch=False,
     ):
         return self._engine.decode_forward(
             tokens,
@@ -934,6 +1350,7 @@ class TracedLlamaExecutor:
             kv_cache=kv_cache,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
+            reset_batch=reset_batch,
         )
 
     # =========================================================================

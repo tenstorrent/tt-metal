@@ -22,7 +22,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_buffer import LazyBuffer, resolve_lazy_buffer
-from models.common.modules.tt_ccl import default_topology, get_tt_ccl
+from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.sampling.vocab_padding import (
     build_invalid_vocab_mask,
     build_tail_invalid_vocab_mask,
@@ -71,6 +71,8 @@ class Sampling1DConfig:
     allow_force_argmax: bool = False
     num_argmax_gather_links: Optional[int] = None  # None → same as num_gather_links
     ag_topology: Optional[ttnn.Topology] = None  # None → Topology.Linear
+    argmax_chunks_per_sync: int = 10
+    argmax_num_workers_per_link: int = 1
     # Pad each per-device logit shard up to the next power of 2 before ttnn.topk. Big device-perf
     # win for non-power-of-2 vocab on the multi-device path (TTTv1's pad_logits_to_power_of_2).
     # Strict TTTv1 parity: only the multi-device path is padded — the 1×1 multi_step split path
@@ -315,21 +317,11 @@ class Sampling1D(LightweightModule):
         For other meshes, fall back to the clamped Linear+barrier path.
         """
         cfg = self.config
-        if default_topology(cfg.mesh_device) == ttnn.Topology.Ring:
-            return ttnn.experimental.all_gather_async(
-                logits,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                memory_config=logits.memory_config(),
-                topology=ttnn.Topology.Ring,
-                chunks_per_sync=24,
-                num_workers_per_link=4,
-                num_buffers_per_channel=2,
-            )
-        cluster_axis = 1
+        cluster_axis = None if 1 in cfg.mesh_device.shape else 1
         num_links, topology = self._get_argmax_all_gather_config(cluster_axis)
+        kwargs = {}
+        if cluster_axis is not None:
+            kwargs["cluster_axis"] = cluster_axis
         return ttnn.experimental.all_gather_async(
             logits,
             persistent_output_buffer=None,
@@ -337,12 +329,12 @@ class Sampling1D(LightweightModule):
             multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
             num_links=num_links,
             memory_config=logits.memory_config(),
-            cluster_axis=cluster_axis,
             topology=topology,
             barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=1,
+            chunks_per_sync=cfg.argmax_chunks_per_sync,
+            num_workers_per_link=cfg.argmax_num_workers_per_link,
             num_buffers_per_channel=2,
+            **kwargs,
         )
 
     @staticmethod
@@ -406,7 +398,7 @@ class Sampling1D(LightweightModule):
         ttnn.manual_seed(
             seeds=seeds_tensor,
             user_ids=self._user_ids,
-            sub_core_grids=cfg.sub_core_grids,
+            sub_core_grids=self._sampling_sub_core_grids,
         )
 
         # Sample
@@ -658,11 +650,14 @@ class Sampling1D(LightweightModule):
         allow_force_argmax = False
         num_argmax_gather_links = num_gather_links
         ag_topology = ttnn.Topology.Linear
+        argmax_chunks_per_sync = 10
+        argmax_num_workers_per_link = 1
         if "SAMPLING_AG_CONFIG" in mc:
             ag_cfg = mc["SAMPLING_AG_CONFIG"]
             allow_force_argmax = ag_cfg.get("allow_force_argmax", False)
             num_argmax_gather_links = ag_cfg.get("num_links", num_gather_links)
             ag_topology = ag_cfg.get("topology", ttnn.Topology.Linear)
+            argmax_chunks_per_sync = ag_cfg.get("chunks_per_sync", 10)
 
         config = Sampling1DConfig(
             vocab_size=vocab_size,
@@ -679,6 +674,8 @@ class Sampling1D(LightweightModule):
             allow_force_argmax=allow_force_argmax,
             num_argmax_gather_links=num_argmax_gather_links,
             ag_topology=ag_topology,
+            argmax_chunks_per_sync=argmax_chunks_per_sync,
+            argmax_num_workers_per_link=argmax_num_workers_per_link,
             pad_to_power_of_2=getattr(args, "pad_logits_to_power_of_2", False),
         )
         return cls.from_config(config)

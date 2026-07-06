@@ -9,7 +9,12 @@ Just signature adaptation for TTModelRunner.
 """
 
 import ttnn
-from models.common.models.llama3_8b.model import EagerLlamaExecutor, Llama3Transformer1D, TracedLlamaExecutor
+from models.common.models.llama3_8b.model import (
+    EagerLlamaExecutor,
+    Llama3Transformer1D,
+    TracedLlamaExecutor,
+    build_llama3_transformer_1d_config_from_model_args,
+)
 
 
 class Llama3Generator:
@@ -67,13 +72,14 @@ class Llama3Generator:
         state_dict = model_args.load_state_dict()
         dtype = ttnn.bfloat8_b
 
-        model = Llama3Transformer1D.from_model_args(
+        model_config = build_llama3_transformer_1d_config_from_model_args(
             mesh_device=mesh_device,
             args=model_args,
             state_dict=state_dict,
             weight_cache_path=model_args.weight_cache_path(dtype),
             dtype=dtype,
         )
+        model = Llama3Transformer1D(model_config)
 
         executor = TracedLlamaExecutor(model, mesh_device, model_args=model_args)
         return cls(executor, model_args=model_args)
