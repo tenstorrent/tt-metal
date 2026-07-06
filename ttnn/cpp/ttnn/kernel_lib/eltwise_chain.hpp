@@ -89,7 +89,7 @@ namespace compute_kernel_lib {
 
 /// Iteration shape for `eltwise_chain`. Carries both the tile grid (Ht × Wt, both in
 /// tiles) and the per-outer-iter `block_size`. Ht=1 expresses the 1D case (no row
-/// axis, plain linear walk); broadcast indexing modes (`Row`/`Col`) degenerate for
+/// axis, plain linear walk); the `Row`/`Col` indexing modes degenerate for
 /// 1D usage but remain well-defined.
 ///
 /// Factories cover the common construction paths:
@@ -162,32 +162,52 @@ struct InputLifecycle {
         HeldStream, DeferredPop, NoWaitPop;
 };
 
+// Default: wait for and pop 1 tile each iteration. Use for a normal input read once, tile by tile.
 inline constexpr InputLifecycle InputLifecycle::Streaming = {WaitPolicy::PerTile, PopPolicy::PerTile};
+// Wait for and pop block_size tiles each iteration (block_size is sized to fit DEST).
 inline constexpr InputLifecycle InputLifecycle::Chunked = {WaitPolicy::PerChunk, PopPolicy::PerChunk};
+// Wait for the whole input upfront, pop it all at the end. Tile count = the operand's size (Scalar 1, Row Wt, Col Ht,
+// Block Ht*Wt). Use when all its tiles must stay available for the whole chain and you do not reuse it afterward.
 inline constexpr InputLifecycle InputLifecycle::Bulk = {WaitPolicy::Upfront, PopPolicy::AtEnd};
+// Wait for a growing amount each iter ((i+1)*block_size tiles) and pop it all at the end, so compute can start before
+// the producer has filled the whole buffer. Use when the producer fills the buffer gradually and you do not reuse it
+// afterward.
 inline constexpr InputLifecycle InputLifecycle::Pipelined = {WaitPolicy::Cumulative, PopPolicy::AtEnd};
+// Chain does not wait or pop. Use when you already waited for the input before the chain and still need it after (chain
+// leaves it alone). Something else must have waited for it.
 inline constexpr InputLifecycle InputLifecycle::CallerManaged = {WaitPolicy::None, PopPolicy::None};
 
-// Bulk wait + per-tile pop: caller bulk-waits M upfront, chain drains one per iter.
+// Wait for the whole input upfront, then pop 1 tile per iteration. Use when the data is already produced and the
+// input buffer is also the output buffer (in-place: same buffer read and written).
 inline constexpr InputLifecycle InputLifecycle::BulkDrain = {WaitPolicy::Upfront, PopPolicy::PerTile};
 
-// Half-edge lifecycles — chain owns wait OR pop, not both; caller owns the other edge.
-// Load-bearing for persistent broadcast operands (gamma, beta, mean, recip_std) that
-// outlive the chain call.
-inline constexpr InputLifecycle InputLifecycle::HeldBulk = {
-    WaitPolicy::Upfront, PopPolicy::None};  // wait M upfront, no pop
-inline constexpr InputLifecycle InputLifecycle::HeldCumulative = {
-    WaitPolicy::Cumulative, PopPolicy::None};  // wait i+1 per iter, no pop
-inline constexpr InputLifecycle InputLifecycle::HeldStream = {
-    WaitPolicy::PerTile, PopPolicy::None};  // wait 1 per iter, no pop
-inline constexpr InputLifecycle InputLifecycle::DeferredPop = {
-    WaitPolicy::None, PopPolicy::AtEnd};  // caller waited, chain bulk-pops M
-inline constexpr InputLifecycle InputLifecycle::NoWaitPop = {
-    WaitPolicy::None, PopPolicy::PerTile};  // caller waited, chain pops per-tile
+// The next lifecycles do only half the work — the chain does the wait OR the pop, and you do the other half:
+//   - Held* : the chain waits but never pops, because you reuse the input after the chain.
+//   - *Pop  : the chain does not wait (you already did before the chain), it only pops the input.
+
+// Wait for the whole input upfront, but never pop. Use for an input you wait for once and reuse after the chain (e.g.
+// gamma/beta).
+inline constexpr InputLifecycle InputLifecycle::HeldBulk = {WaitPolicy::Upfront, PopPolicy::None};
+// Chain does not wait, pops everything at the end. Use when you already waited for the input before the chain
+// and will not reuse it after.
+inline constexpr InputLifecycle InputLifecycle::DeferredPop = {WaitPolicy::None, PopPolicy::AtEnd};
+// Wait for a growing amount each iter ((i+1)*block_size tiles), but never pop. Use when the producer fills gradually
+// AND you reuse the input after the chain (e.g. layernorm square, where the mean reduce reads it again).
+inline constexpr InputLifecycle InputLifecycle::HeldCumulative = {WaitPolicy::Cumulative, PopPolicy::None};
+// Wait for 1 tile per iter, never pop. Use when a later iter in the SAME chain reads the same tile again
+// (e.g. copy in0, copy in0, then combine — this is the FIRST copy).
+inline constexpr InputLifecycle InputLifecycle::HeldStream = {WaitPolicy::PerTile, PopPolicy::None};
+// Chain does not wait, pops 1 tile per step. Use for the second reader of a tile whose wait a previous step already did
+// (e.g. copy in0, copy in0 — this is the SECOND copy: the wait was already done, so it just pops).
+inline constexpr InputLifecycle InputLifecycle::NoWaitPop = {WaitPolicy::None, PopPolicy::PerTile};
+
+// Wait for and pop 1 tile per row (one per outer/ht step). Use for an input with one tile per row, reused across that
+// row's columns (Scalar only).
+inline constexpr InputLifecycle InputLifecycle::OuterStream = {WaitPolicy::PerOuter, PopPolicy::PerOuter};
 
 /// Validates a caller-constructed `InputLifecycle` against the legal set; every input
-/// element static_asserts on it. The half-edge cells above are legal (audit-confirmed as
-/// load-bearing); other half-edge combinations are rejected.
+/// element static_asserts on it. The wait-only / pop-only cells above are legal;
+/// other wait/pop combinations are rejected.
 constexpr bool is_legal_input_lifecycle(InputLifecycle lc) noexcept {
     return lc == InputLifecycle::Streaming || lc == InputLifecycle::Chunked || lc == InputLifecycle::Bulk ||
            lc == InputLifecycle::Pipelined || lc == InputLifecycle::CallerManaged || lc == InputLifecycle::BulkDrain ||
@@ -223,19 +243,26 @@ struct OutputLifecycle {
         HeldReserve, DeferredReserve;
 };
 
+// Default: reserve and push 1 output tile each step.
 inline constexpr OutputLifecycle OutputLifecycle::Streaming = {ReservePolicy::PerTile, PushPolicy::PerTile};
+// Reserve and push block_size output tiles each step (block_size is sized to fit DEST).
 inline constexpr OutputLifecycle OutputLifecycle::Chunked = {ReservePolicy::PerChunk, PushPolicy::PerChunk};
+// Reserve all output tiles upfront, push them all at the end.
 inline constexpr OutputLifecycle OutputLifecycle::Bulk = {ReservePolicy::Upfront, PushPolicy::AtEnd};
-// SDPA reduce_c family: bulk reserve + incremental push for downstream pipelining.
+// Reserve all output tiles upfront, but push 1 per step so a downstream consumer can start reading before the chain
+// finishes.
 inline constexpr OutputLifecycle OutputLifecycle::BulkReservePerTile = {ReservePolicy::Upfront, PushPolicy::PerTile};
+// Reserve all output tiles upfront, push block_size tiles at a time.
 inline constexpr OutputLifecycle OutputLifecycle::BulkReservePerChunk = {ReservePolicy::Upfront, PushPolicy::PerChunk};
-// L1-accumulator pack helper (tt-train compute_utils): chain emits pack_tile only,
-// caller wraps the chain with its own reserve+push window. 4 catalog sites.
+// Chain does not reserve or push (it only writes the tile). Use when you wrap the chain in your own reserve/push.
 inline constexpr OutputLifecycle OutputLifecycle::CallerManaged = {ReservePolicy::None, PushPolicy::None};
-// Chain reserves per-tile, caller pushes (rare deferred-push pattern).
+// Reserve 1 output tile per step, but do not push — you push later yourself.
 inline constexpr OutputLifecycle OutputLifecycle::HeldReserve = {ReservePolicy::PerTile, PushPolicy::None};
-// Caller bulk-reserved externally, chain bulk-pushes at end.
+// Do not reserve (you reserved upfront yourself), push all at the end.
 inline constexpr OutputLifecycle OutputLifecycle::DeferredReserve = {ReservePolicy::None, PushPolicy::AtEnd};
+// Reserve and push 1 output tile per row (one per outer/ht step). Use for chains that produce one output tile per row
+// instead of one per tile.
+inline constexpr OutputLifecycle OutputLifecycle::OuterStream = {ReservePolicy::PerOuter, PushPolicy::PerOuter};
 
 constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Streaming || lc == OutputLifecycle::Chunked || lc == OutputLifecycle::Bulk ||
@@ -244,17 +271,21 @@ constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
            lc == OutputLifecycle::DeferredReserve;
 }
 
-/// Per-input operand kind. The output kind is always `Block` (single column
-/// in the output matrix), so no enum is defined for the output side.
-///
-/// Runtime/compile-time tile-index offsets are expressed by composing one of these
-/// four canonical kinds with a `TileBase` (see `TileBase` types below). The kind
-/// carries the iteration shape; `TileBase` carries the offset.
+/// Which tile of an input operand to read at each step of the (Ht x Wt) walk.
+/// Pick the one that matches how your input maps onto the output:
+///   - Block  — a distinct tile every step; the index advances with the walk (full Ht x Wt input).
+///   - Row    — indexed by column only: the same tile-row is re-read for every output row ([1, Wt] input).
+///   - Col    — indexed by row only: the same tile-column is re-read for every output column ([Ht, 1] input).
+///   - Scalar — always the same single tile, every step.
+/// The size aspect only matters with a Bulk-style (upfront-wait) lifecycle, where the kind also sets
+/// how many tiles are waited/popped upfront: Scalar 1, Row Wt, Col Ht, Block Ht x Wt.
+/// The 1D tiles(n) shape allows only Block and Scalar; Row and Col need the 2D grid(H, W) shape.
+/// The output is always Block, so there is no output kind.
 enum class OperandKind : uint8_t {
-    Block,   // Ht × Wt — walks the full iteration domain
-    Row,     // 1  × Wt — broadcast down rows
-    Col,     // Ht × 1  — broadcast across cols
-    Scalar,  // 1  × 1  — broadcast everywhere
+    Block,
+    Row,
+    Col,
+    Scalar,
 };
 
 /// Kind × InputLifecycle compatibility.
@@ -381,8 +412,9 @@ enum class Legacy : bool { Off = false, On = true };
 /// `EltwiseShape{Ht, Wt}` overload — the 1D `n_tiles` overload static_asserts them out.
 /// Tile offsets are layered on via `TileBase`, not separate index modes.
 ///
-/// Row/Col require a non-streaming policy (caller stages all broadcast tiles upfront) —
-/// same constraint as `binary_op_helpers`' ROW/COL static_assert.
+/// Row/Col require a non-streaming policy (caller stages the whole Row/Col window — Wt or Ht
+/// tiles — upfront, since it is re-read across the full walk) — same constraint as
+/// `binary_op_helpers`' ROW/COL static_assert.
 
 /// CopyTile dtype-reconfig.
 ///
