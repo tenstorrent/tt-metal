@@ -101,22 +101,22 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
 
     KernelSpec::CompileTimeArgs cta_bindings(cta_bindings_map);
 
+    DataMovementHardwareConfig sender_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        sender_hw_config = DataMovementHardwareConfig{DataMovementGen2Config{}};
+    } else {
+        sender_hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = test_config.noc_id,
+        }};
+    }
     KernelSpec sender_spec{
         .unique_id = KernelSpecName{"sender"},
         .source = sender_kernel_path,
         .num_threads = 1,
         .compile_time_args = cta_bindings,
         .runtime_arg_schema = {.runtime_arg_names = {"num_tx", "tx_size"}},
-        .hw_config =
-            std::invoke([&] {
-                if (device->arch() == tt::ARCH::QUASAR) {
-                    return DataMovementHardwareConfig{DataMovementGen2Config{}};
-                }
-                return DataMovementHardwareConfig{DataMovementGen1Config{
-                    .processor = DataMovementProcessor::RISCV_0,
-                    .noc = test_config.noc_id,
-                }};
-            }),
+        .hw_config = sender_hw_config,
     };
 
     ProgramSpec spec{

@@ -89,6 +89,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
         .target_nodes = test_config.master_core_coord,
     };
 
+    DataMovementHardwareConfig sender_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        sender_hw_config = DataMovementHardwareConfig{DataMovementGen2Config{}};
+    } else {
+        sender_hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = test_config.noc_id,
+        }};
+    }
     KernelSpec sender_spec{
         .unique_id = KernelSpecName{"sender"},
         .source = "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender_2_0.cpp",
@@ -100,16 +109,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
             {
                 .runtime_arg_names = {"num_of_transactions", "transaction_num_pages", "dest_x", "dest_y"},
             },
-        .hw_config =
-            std::invoke([&] {
-                if (device->arch() == tt::ARCH::QUASAR) {
-                    return DataMovementHardwareConfig{DataMovementGen2Config{}};
-                }
-                return DataMovementHardwareConfig{DataMovementGen1Config{
-                    .processor = DataMovementProcessor::RISCV_0,
-                    .noc = test_config.noc_id,
-                }};
-            }),
+        .hw_config = sender_hw_config,
     };
 
     ProgramSpec spec{

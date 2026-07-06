@@ -765,24 +765,25 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
             .access_pattern = DFBAccess::STRIDED,
         };
     };
-    auto make_writer_spec =
-        [&](const experimental::KernelSpecName& writer_id, const experimental::DFBSpecName& out_dfb) {
-            return experimental::KernelSpec{
-                .unique_id = writer_id,
-                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
-                .num_threads = 1,
-                .dfb_bindings = {experimental::ConsumerOf(out_dfb, "in")},
-                .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-                .hw_config = std::invoke([&] {
-                    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-                        return experimental::DataMovementHardwareConfig{
-                            experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
-                    }
-                    return experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
-                }),
-            };
+    auto make_writer_spec = [&](const experimental::KernelSpecName& writer_id,
+                                const experimental::DFBSpecName& out_dfb) {
+        experimental::DataMovementHardwareConfig writer_hw_config;
+        if (mesh_device->arch() == tt::ARCH::QUASAR) {
+            writer_hw_config = experimental::DataMovementHardwareConfig{
+                experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
+        } else {
+            writer_hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
+        }
+        return experimental::KernelSpec{
+            .unique_id = writer_id,
+            .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
+            .num_threads = 1,
+            .dfb_bindings = {experimental::ConsumerOf(out_dfb, "in")},
+            .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+            .hw_config = writer_hw_config,
         };
+    };
 
     experimental::KernelSpec reader_spec{
         .unique_id = READER,

@@ -261,13 +261,13 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
 
     // Build a Metal 2.0 KernelSpec that works on both gen1 (single BRISC) and gen2 (all Quasar user DMs).
     // Provide both gen1 and gen2 configs so the runtime selects the one matching the current arch.
-    experimental::DataMovementHardwareConfig dm_cfg = std::invoke([&] {
-        if (is_quasar) {
-            return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-        }
-        return experimental::DataMovementHardwareConfig{
+    experimental::DataMovementHardwareConfig dm_cfg;
+    if (is_quasar) {
+        dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+    } else {
+        dm_cfg = experimental::DataMovementHardwareConfig{
             experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}};
-    });
+    }
 
     experimental::KernelSpec dm_spec{
         .unique_id = DM_KERNEL_NAME,
@@ -405,20 +405,16 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
         .advanced_options = adv_opts,
     };
     if (params.processor_class == HalProcessorClassType::DM) {
+        // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
         if (is_quasar) {
             kspec.num_threads = num_dms_;
             kspec.compile_time_args = {{"dm_id", 0}};
+            kspec.hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
         } else {
             kspec.num_threads = 1;
-        }
-        // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
-        kspec.hw_config = std::invoke([&] {
-            if (is_quasar) {
-                return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-            }
-            return experimental::DataMovementHardwareConfig{
+            kspec.hw_config = experimental::DataMovementHardwareConfig{
                 experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}};
-        });
+        }
     } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
         kspec.num_threads = 1;  // On Quasar, only 1 NEO Cluster; gen1 has a single compute group.
         kspec.hw_config = experimental::ComputeHardwareConfig{};
