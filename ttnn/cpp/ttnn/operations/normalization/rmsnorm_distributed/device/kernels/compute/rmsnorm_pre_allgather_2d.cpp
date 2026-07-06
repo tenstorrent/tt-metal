@@ -14,6 +14,7 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/debug/dprint.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 ALWI void ACQ() {
@@ -46,6 +47,10 @@ void kernel_main() {
 
     binary_op_init_common(cb_inp, cb_reduce, cb_x2);
 
+    CircularBuffer cb_inp_obj(cb_inp);
+    CircularBuffer cb_reduce_obj(cb_reduce);
+    CircularBuffer cb_x2_obj(cb_x2);
+
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         /*
          * x**2
@@ -55,9 +60,9 @@ void kernel_main() {
         mul_tiles_init(cb_inp, cb_inp);
 
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_inp, wt + blk);  // cumulative wait
+            cb_inp_obj.wait_front(wt + blk);  // cumulative wait
 
-            cb_reserve_back(cb_x2, blk);
+            cb_x2_obj.reserve_back(blk);
             ACQ();
 
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
@@ -66,7 +71,7 @@ void kernel_main() {
             }
             REL();
 
-            cb_push_back(cb_x2, blk);
+            cb_x2_obj.push_back(blk);
         }
 
         /*
@@ -80,8 +85,8 @@ void kernel_main() {
             cb_reduce,
             cb_out,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
-        cb_pop_front(cb_inp, Wt);
-        cb_pop_front(cb_reduce, 1);
+        cb_inp_obj.pop_front(Wt);
+        cb_reduce_obj.pop_front(1);
     }
 
     // if merge core, we need to do a final sum on the tile in cb_x2 and then write the result to cb_out_final
@@ -90,12 +95,16 @@ void kernel_main() {
         constexpr uint32_t cb_out_final = tt::CBIndex::c_14;
         constexpr int dst0 = 0;
 
+        CircularBuffer cb_x2_merge_obj(cb_x2_merge);
+        CircularBuffer cb_zero_obj(cb_zero);
+        CircularBuffer cb_out_final_obj(cb_out_final);
+
         // Wait for all num_cores_y tiles
-        cb_wait_front(cb_x2_merge, num_cores_y);
-        cb_wait_front(cb_zero, 1);
+        cb_x2_merge_obj.wait_front(num_cores_y);
+        cb_zero_obj.wait_front(1);
 
         // Reserve output space
-        cb_reserve_back(cb_out_final, onetile);
+        cb_out_final_obj.reserve_back(onetile);
 
         // Initialize accumulation
         binary_op_init_common(cb_x2_merge, cb_zero, cb_out_final);
@@ -116,7 +125,7 @@ void kernel_main() {
         REL();
 
         // Push output and pop input
-        cb_push_back(cb_out_final, onetile);
-        cb_pop_front(cb_x2_merge, num_cores_y);
+        cb_out_final_obj.push_back(onetile);
+        cb_x2_merge_obj.pop_front(num_cores_y);
     }
 }

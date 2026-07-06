@@ -17,6 +17,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 ALWI void ACQ() {
@@ -64,8 +65,19 @@ void kernel_main() {
 
     binary_op_init_common(cb_inp, cb_inp, cb_var);
 
-    cb_wait_front(cb_reduce, 1);  // comes from the reader
-    cb_wait_front(cb_eps, 1);     // comes from the reader
+    CircularBuffer cb_reduce_obj(cb_reduce);
+    CircularBuffer cb_eps_obj(cb_eps);
+    CircularBuffer cb_var_obj(cb_var);
+    CircularBuffer cb_recip_sqrt_var_obj(cb_recip_sqrt_var);
+    CircularBuffer cb_norm_x_input_obj(cb_norm_x_input);
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_x_normed_obj(cb_x_normed);
+    CircularBuffer cb_times_gamma_out_obj(cb_times_gamma_out);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_out_obj(cb_out);
+
+    cb_reduce_obj.wait_front(1);  // comes from the reader
+    cb_eps_obj.wait_front(1);     // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
@@ -83,8 +95,8 @@ void kernel_main() {
         /*
          * 1/sqrt(var + eps)
          */
-        cb_wait_front(cb_var, 1);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
+        cb_var_obj.wait_front(1);
+        cb_recip_sqrt_var_obj.reserve_back(1);
         reconfig_data_format(cb_var, cb_eps);
         pack_reconfig_data_format(cb_recip_sqrt_var);
 
@@ -95,8 +107,8 @@ void kernel_main() {
         rsqrt_tile<LEGACY_RSQRT>(0);
         pack_tile(0, cb_recip_sqrt_var);
         REL();
-        cb_push_back(cb_recip_sqrt_var, 1);
-        cb_pop_front(cb_var, 1);
+        cb_recip_sqrt_var_obj.push_back(1);
+        cb_var_obj.pop_front(1);
 
         /*
          * norm x
@@ -107,24 +119,25 @@ void kernel_main() {
         if constexpr (!do_gamma) {
             normed_output_cb = cb_out;
         }
+        CircularBuffer normed_output_cb_obj(normed_output_cb);
 
         reconfig_data_format(cb_norm_x_input, cb_recip_sqrt_var);
         pack_reconfig_data_format(normed_output_cb);
         mul_bcast_cols_init_short(cb_norm_x_input, cb_recip_sqrt_var);
-        cb_wait_front(cb_recip_sqrt_var, 1);
+        cb_recip_sqrt_var_obj.wait_front(1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_norm_x_input, blk);
-            cb_reserve_back(normed_output_cb, blk);
+            cb_norm_x_input_obj.wait_front(blk);
+            normed_output_cb_obj.reserve_back(blk);
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 mul_tiles_bcast_cols(cb_norm_x_input, cb_recip_sqrt_var, wtr, 0, wtr);
                 pack_tile(wtr, normed_output_cb);
             }
             REL();
-            cb_push_back(normed_output_cb, blk);
-            cb_pop_front(cb_norm_x_input, blk);
+            normed_output_cb_obj.push_back(blk);
+            cb_norm_x_input_obj.pop_front(blk);
         }
-        cb_pop_front(cb_recip_sqrt_var, 1);
+        cb_recip_sqrt_var_obj.pop_front(1);
 
         if constexpr (do_gamma) {
             /*
@@ -132,19 +145,19 @@ void kernel_main() {
              */
             reconfig_data_format(cb_x_normed, cb_gamma);
             pack_reconfig_data_format(cb_times_gamma_out);
-            cb_wait_front(cb_gamma, Wt);
+            cb_gamma_obj.wait_front(Wt);
             mul_bcast_rows_init_short(cb_x_normed, cb_gamma);
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                cb_wait_front(cb_x_normed, blk);
-                cb_reserve_back(cb_times_gamma_out, blk);
+                cb_x_normed_obj.wait_front(blk);
+                cb_times_gamma_out_obj.reserve_back(blk);
                 ACQ();
                 for (uint32_t wtr = 0; wtr < blk; wtr++) {
                     mul_tiles_bcast_rows(cb_x_normed, cb_gamma, wtr, wt + wtr, wtr);
                     pack_tile(wtr, cb_times_gamma_out);
                 }
                 REL();
-                cb_push_back(cb_times_gamma_out, blk);
-                cb_pop_front(cb_x_normed, blk);
+                cb_times_gamma_out_obj.push_back(blk);
+                cb_x_normed_obj.pop_front(blk);
             }
 
             if constexpr (do_beta) {
@@ -153,29 +166,29 @@ void kernel_main() {
                  */
                 reconfig_data_format(cb_times_gamma_out, cb_beta);
                 pack_reconfig_data_format(cb_out);
-                cb_wait_front(cb_beta, Wt);
+                cb_beta_obj.wait_front(Wt);
                 add_bcast_rows_init_short(cb_times_gamma_out, cb_beta);
                 for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                    cb_wait_front(cb_times_gamma_out, blk);
-                    cb_reserve_back(cb_out, blk);
+                    cb_times_gamma_out_obj.wait_front(blk);
+                    cb_out_obj.reserve_back(blk);
                     ACQ();
                     for (uint32_t wtr = 0; wtr < blk; wtr++) {
                         add_tiles_bcast_rows(cb_times_gamma_out, cb_beta, wtr, wt + wtr, wtr);
                         pack_tile(wtr, cb_out);
                     }
                     REL();
-                    cb_push_back(cb_out, blk);
-                    cb_pop_front(cb_times_gamma_out, blk);
+                    cb_out_obj.push_back(blk);
+                    cb_times_gamma_out_obj.pop_front(blk);
                 }
             }
         }
     }
-    cb_pop_front(cb_eps, 1);
-    cb_pop_front(cb_reduce, 1);
+    cb_eps_obj.pop_front(1);
+    cb_reduce_obj.pop_front(1);
     if constexpr (do_gamma) {
-        cb_pop_front(cb_gamma, Wt);
+        cb_gamma_obj.pop_front(Wt);
     }
     if constexpr (do_beta) {
-        cb_pop_front(cb_beta, Wt);
+        cb_beta_obj.pop_front(Wt);
     }
 }

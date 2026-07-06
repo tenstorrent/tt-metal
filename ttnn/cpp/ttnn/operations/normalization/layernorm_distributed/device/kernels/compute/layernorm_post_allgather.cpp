@@ -20,6 +20,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "api/dataflow/circular_buffer.h"
 #include "chain_llk.hpp"
 
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
@@ -120,8 +121,16 @@ void kernel_main() {
 
     binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
 
-    cb_wait_front(cb_reduce, 1);  // comes from the reader
-    cb_wait_front(cb_eps, 1);     // comes from the reader
+    CircularBuffer cb_reduce_obj(cb_reduce);
+    CircularBuffer cb_eps_obj(cb_eps);
+    CircularBuffer cb_stats_obj(cb_stats);
+    CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
+    CircularBuffer cb_mean_squared_obj(cb_mean_squared);
+    CircularBuffer cb_var_obj(cb_var);
+    CircularBuffer cb_recip_sqrt_var_obj(cb_recip_sqrt_var);
+
+    cb_reduce_obj.wait_front(1);  // comes from the reader
+    cb_eps_obj.wait_front(1);     // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
@@ -136,7 +145,7 @@ void kernel_main() {
          * RMSNorm packs mean(x**2) into cb_var. Layernorm just uses cb_stats_reduced.
          */
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_stats, cb_reduce, cb_stats_reduced);
-        cb_wait_front(cb_stats, stats_tiles_cols);
+        cb_stats_obj.wait_front(stats_tiles_cols);
 
         tile_regs_acquire();
         // Reduce sum(x**2) first
@@ -149,16 +158,16 @@ void kernel_main() {
         }
         tile_regs_commit();
 
-        cb_pop_front(cb_stats, stats_tiles_cols);
+        cb_stats_obj.pop_front(stats_tiles_cols);
 
-        cb_reserve_back(cb_stats_reduced, stats_tile_stride);
+        cb_stats_reduced_obj.reserve_back(stats_tile_stride);
 
         tile_regs_wait();
         pack_tile(0, cb_stats_reduced);
         pack_tile(1, cb_stats_reduced);
         tile_regs_release();
 
-        cb_push_back(cb_stats_reduced, stats_tile_stride);
+        cb_stats_reduced_obj.push_back(stats_tile_stride);
 
         reduce_uninit();
 
@@ -168,19 +177,19 @@ void kernel_main() {
         reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
         pack_reconfig_data_format(cb_mean_squared);
         mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
-        cb_wait_front(cb_stats_reduced, stats_tile_stride);
+        cb_stats_reduced_obj.wait_front(stats_tile_stride);
 
         tile_regs_acquire();
         mul_tiles(cb_stats_reduced, cb_stats_reduced, 1, 1, 0);
         tile_regs_commit();
 
-        cb_reserve_back(cb_mean_squared, onetile);
+        cb_mean_squared_obj.reserve_back(onetile);
 
         tile_regs_wait();
         pack_tile(0, cb_mean_squared);
         tile_regs_release();
 
-        cb_push_back(cb_mean_squared, 1);
+        cb_mean_squared_obj.push_back(1);
 
         /*
          * E[x**2] - E[x]**2
@@ -189,26 +198,26 @@ void kernel_main() {
         pack_reconfig_data_format(cb_var);
         sub_tiles_init(cb_stats_reduced, cb_mean_squared);
 
-        cb_wait_front(cb_mean_squared, 1);
+        cb_mean_squared_obj.wait_front(1);
 
         tile_regs_acquire();
         sub_tiles(cb_stats_reduced, cb_mean_squared, 0, 0, 0);
         tile_regs_commit();
 
-        cb_pop_front(cb_mean_squared, 1);
+        cb_mean_squared_obj.pop_front(1);
 
-        cb_reserve_back(cb_var, onetile);
+        cb_var_obj.reserve_back(onetile);
 
         tile_regs_wait();
         pack_tile(0, cb_var);
         tile_regs_release();
 
-        cb_push_back(cb_var, 1);
+        cb_var_obj.push_back(1);
 
         /*
          * 1/sqrt(var + eps)
          */
-        cb_wait_front(cb_var, 1);
+        cb_var_obj.wait_front(1);
         reconfig_data_format(cb_var, cb_eps);
         pack_reconfig_data_format(cb_recip_sqrt_var);
         add_tiles_init(cb_var, cb_eps);
@@ -219,15 +228,15 @@ void kernel_main() {
         rsqrt_tile<LEGACY_RSQRT>(0);
         tile_regs_commit();
 
-        cb_pop_front(cb_var, 1);
+        cb_var_obj.pop_front(1);
 
-        cb_reserve_back(cb_recip_sqrt_var, 1);
+        cb_recip_sqrt_var_obj.reserve_back(1);
 
         tile_regs_wait();
         pack_tile(0, cb_recip_sqrt_var);
         tile_regs_release();
 
-        cb_push_back(cb_recip_sqrt_var, 1);
+        cb_recip_sqrt_var_obj.push_back(1);
 
         if constexpr (do_gamma && do_beta) {
             /*
@@ -245,9 +254,9 @@ void kernel_main() {
         }
 
         // free up CBs
-        cb_pop_front(cb_stats_reduced, stats_tile_stride);
-        cb_pop_front(cb_recip_sqrt_var, 1);
+        cb_stats_reduced_obj.pop_front(stats_tile_stride);
+        cb_recip_sqrt_var_obj.pop_front(1);
     }
-    cb_pop_front(cb_eps, 1);
-    cb_pop_front(cb_reduce, 1);
+    cb_eps_obj.pop_front(1);
+    cb_reduce_obj.pop_front(1);
 }

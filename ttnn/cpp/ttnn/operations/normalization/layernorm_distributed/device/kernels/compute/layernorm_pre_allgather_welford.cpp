@@ -27,6 +27,7 @@
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/transpose_dest.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -59,6 +60,16 @@ void kernel_main() {
 #else
     compute_kernel_hw_startup(cb_inp, cb_inp, cb_scratch);
 #endif
+
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_scratch_obj(cb_scratch);
+    CircularBuffer cb_inp_obj(cb_inp);
+#if FUSE_PRE_ADD
+    CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_res_obj(cb_res);
+    CircularBuffer cb_mean_spill_obj(cb_mean_spill);
+    CircularBuffer cb_m2_spill_obj(cb_m2_spill);
+#endif
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, W>;
     auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
@@ -88,24 +99,24 @@ void kernel_main() {
         welford_init();
         welford_save_state(dst1);
         tile_regs_commit();
-        cb_reserve_back(cb_mean_spill, 1);
-        cb_reserve_back(cb_m2_spill, 1);
+        cb_mean_spill_obj.reserve_back(1);
+        cb_m2_spill_obj.reserve_back(1);
         tile_regs_wait();
         pack_reconfig_data_format(cb_mean_spill);
         pack_tile(dst1, cb_mean_spill);
         pack_tile(dst2, cb_m2_spill);
         tile_regs_release();
-        cb_push_back(cb_mean_spill, 1);
-        cb_push_back(cb_m2_spill, 1);
+        cb_mean_spill_obj.push_back(1);
+        cb_m2_spill_obj.push_back(1);
 
         uint32_t start_N = 0;
         for (auto block : generic::blocks(Wt, blk)) {
             // --- Pre-add: cb_in0 + cb_res -> cb_inp (block tiles in one tile_regs scope) ---
             reconfig_data_format(cb_in0, cb_res);
             pack_reconfig_data_format(cb_inp);
-            cb_wait_front(cb_in0, block.size());
-            cb_wait_front(cb_res, block.size());
-            cb_reserve_back(cb_inp, block.size());
+            cb_in0_obj.wait_front(block.size());
+            cb_res_obj.wait_front(block.size());
+            cb_inp_obj.reserve_back(block.size());
             if constexpr (welford_unpack_fp32_active) {
                 // SFPU path: copy_tile bypasses SrcA via UnpackToDestEn, preserving full FP32
                 copy_tile_to_dst_init_short(cb_in0);
@@ -135,14 +146,14 @@ void kernel_main() {
                 }
                 tile_regs_release();
             }
-            cb_push_back(cb_inp, block.size());
-            cb_pop_front(cb_in0, block.size());
-            cb_pop_front(cb_res, block.size());
+            cb_inp_obj.push_back(block.size());
+            cb_in0_obj.pop_front(block.size());
+            cb_res_obj.pop_front(block.size());
 
             // --- Welford: reload accumulator, update with block tiles, spill back ---
-            cb_wait_front(cb_mean_spill, 1);
-            cb_wait_front(cb_m2_spill, 1);
-            cb_wait_front(cb_inp, block.size());
+            cb_mean_spill_obj.wait_front(1);
+            cb_m2_spill_obj.wait_front(1);
+            cb_inp_obj.wait_front(block.size());
             tile_regs_acquire();
             reconfig_data_format_srca(cb_in0, cb_mean_spill);
             copy_tile_init(cb_mean_spill);
@@ -172,23 +183,23 @@ void kernel_main() {
             }
             welford_save_state(dst1);
             tile_regs_commit();
-            cb_pop_front(cb_mean_spill, 1);
-            cb_pop_front(cb_m2_spill, 1);
-            cb_pop_front(cb_inp, block.size());
-            cb_reserve_back(cb_mean_spill, 1);
-            cb_reserve_back(cb_m2_spill, 1);
+            cb_mean_spill_obj.pop_front(1);
+            cb_m2_spill_obj.pop_front(1);
+            cb_inp_obj.pop_front(block.size());
+            cb_mean_spill_obj.reserve_back(1);
+            cb_m2_spill_obj.reserve_back(1);
             tile_regs_wait();
             pack_reconfig_data_format(cb_inp, cb_mean_spill);
             pack_tile(dst1, cb_mean_spill);
             pack_tile(dst2, cb_m2_spill);
             tile_regs_release();
-            cb_push_back(cb_mean_spill, 1);
-            cb_push_back(cb_m2_spill, 1);
+            cb_mean_spill_obj.push_back(1);
+            cb_m2_spill_obj.push_back(1);
         }
 
         // Finalize: reload accumulator and write mean and variance to cb_scratch.
-        cb_wait_front(cb_mean_spill, 1);
-        cb_wait_front(cb_m2_spill, 1);
+        cb_mean_spill_obj.wait_front(1);
+        cb_m2_spill_obj.wait_front(1);
         tile_regs_acquire();
         reconfig_data_format_srca(cb_inp, cb_mean_spill);
         copy_tile_init(cb_mean_spill);
@@ -198,15 +209,15 @@ void kernel_main() {
         welford_restore_state(dst1);
         welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);
         tile_regs_commit();
-        cb_pop_front(cb_mean_spill, 1);
-        cb_pop_front(cb_m2_spill, 1);
+        cb_mean_spill_obj.pop_front(1);
+        cb_m2_spill_obj.pop_front(1);
 
-        cb_reserve_back(cb_scratch, 2);
+        cb_scratch_obj.reserve_back(2);
         tile_regs_wait();
         pack_reconfig_data_format(cb_mean_spill, cb_scratch);
         pack_tile(dst1, cb_scratch);
         pack_tile(dst2, cb_scratch);
-        cb_push_back(cb_scratch, 2);
+        cb_scratch_obj.push_back(2);
         tile_regs_release();
 #else
         reconfig_data_format(cb_inp, cb_inp);
@@ -234,7 +245,7 @@ void kernel_main() {
         // through SrcA without touching the math-thread replay buffer, so the recovery is
         // gated out.
         for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
-            cb_wait_front(cb_inp, 1);  // cumulative wait
+            cb_inp_obj.wait_front(1);  // cumulative wait
             if constexpr (welford_unpack_fp32_active) {
                 transpose_init(cb_inp);
             }
@@ -245,9 +256,9 @@ void kernel_main() {
             // welford_tile<dst0, dst1, dst2, true, 0>((wt) * 32, W, 0, {});
             welford_update<W>(dst0, start_N, *p_reciprocals);
             start_N += 32;
-            cb_pop_front(cb_inp, 1);
+            cb_inp_obj.pop_front(1);
         }
-        cb_wait_front(cb_inp, 1);  // cumulative wait
+        cb_inp_obj.wait_front(1);  // cumulative wait
         if constexpr (welford_unpack_fp32_active) {
             transpose_init(cb_inp);
         }
@@ -256,19 +267,19 @@ void kernel_main() {
             welford_init<WelfordInitMode::PreserveStats>();
         }
         welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
-        cb_pop_front(cb_inp, 1);
+        cb_inp_obj.pop_front(1);
         welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);
         // tt-llk/issues/549
         // BUG: using transpose_dest here causes a bug. where the kernel hangs
         //  transpose_dest_init();
         //  transpose_dest(dst1);
         //  transpose_dest(dst2);
-        cb_reserve_back(cb_scratch, 2);
+        cb_scratch_obj.reserve_back(2);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst1, cb_scratch);
         pack_tile(dst2, cb_scratch);
-        cb_push_back(cb_scratch, 2);
+        cb_scratch_obj.push_back(2);
         tile_regs_release();
 #endif
 
@@ -276,16 +287,16 @@ void kernel_main() {
         pack_reconfig_data_format(cb_out);
         transpose_init(cb_scratch);
         tile_regs_acquire();
-        cb_wait_front(cb_scratch, 2);  // cumulative wait
+        cb_scratch_obj.wait_front(2);  // cumulative wait
         transpose_tile(cb_scratch, 0, dst0);
         transpose_tile(cb_scratch, 1, dst1);
-        cb_pop_front(cb_scratch, 2);
+        cb_scratch_obj.pop_front(2);
 
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst0, cb_out);
         pack_tile(dst1, cb_out);
-        cb_push_back(cb_out, 2);
+        cb_out_obj.push_back(2);
         tile_regs_release();
     }
 }
