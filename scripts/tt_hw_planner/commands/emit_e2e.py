@@ -411,6 +411,11 @@ def _check_hf_fallback(src: str) -> list:
                     if root_name == "torch" and leaf in _TORCH_COMPUTE_BLOCKLIST:
                         hits.append(f"{node.name}(): {_dotted_call(sub)} [torch compute in HOT path]{via_suffix}")
                         continue
+                    if root_name == "ttnn" and leaf == "to_torch":
+                        hits.append(
+                            f"{node.name}(): {_dotted_call(sub)} [host-copy fingerprint: ttnn.to_torch in HOT path — data leaves device, host compute implied]{via_suffix}"
+                        )
+                        continue
                 if isinstance(walker, ast.Name) and walker.id == "F":
                     hits.append(
                         f"{node.name}(): {_dotted_call(sub)} [F.* (torch.nn.functional) in HOT path]{via_suffix}"
