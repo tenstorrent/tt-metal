@@ -1618,7 +1618,7 @@ def test_group_norm_sharded_welford_all_config(
 @pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_FP32_SHARDED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
-def test_group_norm_sharded_legacy_fp32(device, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x):
+def test_group_norm_sharded_legacy_all_config(device, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x):
     grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     torch.manual_seed(0)
     x = torch.rand((N, C, H, W), dtype=torch.float32)
@@ -1693,14 +1693,14 @@ def test_group_norm_sharded_legacy_fp32(device, in_dtype, gb_dtype, N, C, H, W, 
 
 
 # Legacy (non-welford) FP32 GroupNorm on DRAM-interleaved input. Interleaved analog of
-# test_group_norm_sharded_legacy_fp32 (same dtypes, gamma+beta applied), just DRAM
+# test_group_norm_sharded_legacy_all_config (same dtypes, gamma+beta applied), just DRAM
 # interleaved instead of sharded. Requires fp32_dest_acc_en=True; unbiased data (FPU reads x via
 # SrcA at TF32). Shapes are (N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x) to exercise the
 # mcast/no_mcast factory split, num_out_blocks slicing, single-core, and sub-tile group widths.
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_FP32_INTERLEAVED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
-def test_group_norm_legacy_fp32_interleaved(
+def test_group_norm_interleaved_legacy_all_config(
     device, N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x, in_dtype, gb_dtype
 ):
     grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
