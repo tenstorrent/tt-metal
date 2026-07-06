@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
@@ -210,9 +212,9 @@ def prefill_forward(
         tt_v = ttnn.to_layout(tt_v_padded, ttnn.TILE_LAYOUT)
         tt_v_padded.deallocate(True)
 
-        # SDPA requires Sq == Sk for is_causal=True. Prepend actual_pad zero rows to Q
-        # to match the extended K/V length. ttnn.pad doesn't support front-padding in
-        # tile layout, so simulate it with concat of a zeros tensor instead.
+        # Prepend actual_pad zero rows to Q to match the extended K/V length so the
+        # attn_mask dimensions [sq, sk] are square. ttnn.pad doesn't support front-padding
+        # in tile layout, so simulate it with concat of a zeros tensor instead.
         tt_q_orig = tt_q
         zeros_q = ttnn.zeros(
             [tt_q_orig.shape[0], tt_q_orig.shape[1], actual_pad, tt_q_orig.shape[3]],
@@ -225,16 +227,41 @@ def prefill_forward(
         zeros_q.deallocate(True)
         tt_q_orig.deallocate(True)
 
+        # Build a per-device explicit mask combining causal + sliding window + device-0 fix.
+        # The v2 streaming kernel (fp32_dest_acc_en=False) prohibits combining attn_mask with
+        # is_causal or sliding_window_size, so all masking is encoded here instead.
+        # Device 0 (first in Linear topology) receives zero-filled K prefix from neighbor_pad;
+        # masking those positions as -inf prevents softmax denominator inflation.
+        k_len = actual_pad + seq_len
+        sp = mesh_config.prefill.sp
+        rows_idx = torch.arange(k_len, dtype=torch.float32).unsqueeze(1)  # [k_len, 1]
+        cols_idx = torch.arange(k_len, dtype=torch.float32).unsqueeze(0)  # [1, k_len]
+        attend = (cols_idx <= rows_idx) & ((rows_idx - cols_idx) < config.sliding_window)
+        base_mask = torch.where(attend, torch.tensor(0.0), torch.tensor(float("-inf"))).to(torch.bfloat16)
+        mask_cpu = base_mask.unsqueeze(0).unsqueeze(0).expand(sp, 1, k_len, k_len).clone()
+        mask_cpu[0, :, :, :actual_pad] = float("-inf")  # block zero-filled prefix on device 0
+
+        # sp_axis=0: shard dim 0 along mesh rows (SP), replicate across mesh cols (TP)
+        tt_attn_mask = ttnn.as_tensor(
+            mask_cpu,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, None)),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         tt_sdpa_out_padded = ttnn.transformer.scaled_dot_product_attention(
             tt_q,
             tt_k,
             tt_v,
-            is_causal=True,
-            sliding_window_size=config.sliding_window,
+            attn_mask=tt_attn_mask,
+            is_causal=False,
             program_config=program_config.get_prefill_sdpa_config(mesh_device, actual_pad + seq_len),
             compute_kernel_config=sdpa_compute_config,
             attention_sink=weights.sinks,
         )
+        tt_attn_mask.deallocate(True)
         tt_q.deallocate(True)
         tt_k.deallocate(True)
         tt_v.deallocate(True)
