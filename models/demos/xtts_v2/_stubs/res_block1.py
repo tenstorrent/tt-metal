@@ -49,17 +49,19 @@ def build(device, torch_module):
         w = c.weight.detach().float()          # [C_out, C_in, k]
         c_out, c_in, k = w.shape
         taps = [
-            ttnn.from_torch(
+            ttnn.as_tensor(
                 w[:, :, tap].t().contiguous(), dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT, device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             for tap in range(k)
         ]
         bias = None
         if c.bias is not None:
-            bias = ttnn.from_torch(
+            bias = ttnn.as_tensor(
                 c.bias.detach().reshape(1, 1, c_out).contiguous().float(),
                 dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         return {"taps": taps, "bias": bias, "k": k, "cin": c_in,
                 "dil": int(c.dilation[0]), "pad": int(c.padding[0])}

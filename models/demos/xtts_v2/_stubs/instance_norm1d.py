@@ -35,16 +35,16 @@ def build(device, torch_module):
 
     weight = bias = None
     if affine and getattr(m, "weight", None) is not None:
-        weight = ttnn.from_torch(
-            m.weight.detach().reshape(1, -1, 1).float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        weight = ttnn.as_tensor(
+            m.weight.detach().reshape(1, -1, 1).float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        bias = ttnn.from_torch(
-            m.bias.detach().reshape(1, -1, 1).float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        bias = ttnn.as_tensor(
+            m.bias.detach().reshape(1, -1, 1).float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
     def forward(x, *args, **kwargs):
         if not isinstance(x, ttnn.Tensor):
-            x = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            x = ttnn.as_tensor(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if x.get_dtype() != ttnn.float32:
             x = ttnn.typecast(x, ttnn.float32)
         # x: [B, C, L]; normalize over the last (time) axis per (B, C).

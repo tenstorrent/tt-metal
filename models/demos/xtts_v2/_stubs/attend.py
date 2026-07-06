@@ -39,11 +39,12 @@ def _to_ttnn(x, device):
         import torch
 
         if isinstance(x, torch.Tensor):
-            return ttnn.from_torch(
+            return ttnn.as_tensor(
                 x.to(torch.bfloat16),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
     except Exception:
         pass

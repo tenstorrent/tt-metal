@@ -51,9 +51,10 @@ def build(device, torch_module):
     gpt2_forward = _build_gpt2_model(device, m.transformer.float())
 
     # Token embedding (ROW_MAJOR for ttnn.embedding).
-    emb_w = ttnn.from_torch(
+    emb_w = ttnn.as_tensor(
         m.embeddings.weight.detach().contiguous().to(torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     # Absolute position-prefix lookup via the graduated
     # learned_position_embeddings leaf stub (returns float32 [sl, D]).
@@ -62,22 +63,26 @@ def build(device, torch_module):
     # lm_head = Sequential(final_norm: LayerNorm, mel_head: Linear).
     norm = m.lm_head[0]
     linear = m.lm_head[1]
-    lnf_w = ttnn.from_torch(
+    lnf_w = ttnn.as_tensor(
         norm.weight.detach().contiguous().to(torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    lnf_b = ttnn.from_torch(
+    lnf_b = ttnn.as_tensor(
         norm.bias.detach().contiguous().to(torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     # nn.Linear weight is [out, in]; ttnn matmul wants [in, out].
-    head_w = ttnn.from_torch(
+    head_w = ttnn.as_tensor(
         linear.weight.detach().t().contiguous().to(torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    head_b = ttnn.from_torch(
+    head_b = ttnn.as_tensor(
         linear.bias.detach().contiguous().to(torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     # The LM head is a 1024->1026 projection whose bf16-accumulated matmul
@@ -95,25 +100,37 @@ def build(device, torch_module):
     # Snapshot the stateful prefix embedding stored via store_prefix_emb().
     prefix_torch = m.cached_prefix_emb.detach().contiguous().to(torch.bfloat16)
     prefix_len = int(prefix_torch.shape[1])
-    prefix_tt = ttnn.from_torch(
+    prefix_tt = ttnn.as_tensor(
         prefix_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     def forward(_primary=None, *args, **kwargs):
         import torch as _torch
 
-        input_ids = kwargs["input_ids"]
-        gen_inputs = input_ids[:, prefix_len:]           # host int slice
-        gen_len = int(gen_inputs.shape[1])
-
-        ids_tt = ttnn.from_torch(
-            gen_inputs.to(_torch.int32).contiguous(), dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
-        )
+        # Host-free decode: when a device `gen_ids_tt` [1, gen_len] (uint32) is
+        # supplied, embed it directly — no host slice, no host->device upload. The
+        # ids are grown on device by the caller via ttnn.concat of the on-device
+        # argmax token, so the whole autoregressive feed stays resident.
+        gen_ids_tt = kwargs.get("gen_ids_tt")
+        if gen_ids_tt is not None:
+            ids_tt = gen_ids_tt
+            gen_len = int(ids_tt.shape[1])
+            pos_src = ids_tt                             # lpe reads only .shape[1]
+        else:
+            input_ids = kwargs["input_ids"]
+            gen_inputs = input_ids[:, prefix_len:]       # host int slice
+            gen_len = int(gen_inputs.shape[1])
+            ids_tt = ttnn.as_tensor(
+                gen_inputs.to(_torch.int32).contiguous(), dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            pos_src = gen_inputs
         tok = ttnn.embedding(ids_tt, emb_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        # lpe reads only gen_inputs.shape[1]=gen_len and returns float32
+        # lpe reads only pos_src.shape[1]=gen_len and returns float32
         # [gen_len, D]; cast to bf16 so ttnn.add operand dtypes match tok.
-        pos = lpe(gen_inputs)                            # float32 [gen_len, D]
+        pos = lpe(pos_src)                               # float32 [gen_len, D]
         pos = ttnn.reshape(pos, [1, gen_len, model_dim])
         pos = ttnn.typecast(pos, ttnn.bfloat16)
         gen_emb = ttnn.add(tok, pos)                     # [1, gen_len, D]
