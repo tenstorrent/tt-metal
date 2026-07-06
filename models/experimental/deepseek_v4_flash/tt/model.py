@@ -125,6 +125,17 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         self.use_submeshes = use_submeshes
         self.num_submeshes = full_device.get_num_devices()
+
+        # Layers are distributed across submeshes round-robin: layer ``li`` lives on
+        # submesh ``li % pipeline_stages`` (layer 0 -> submesh 0, layer 1 -> submesh 1,
+        # ... wrapping back to submesh 0). ``pipeline_stages`` is the number of
+        # submeshes actually populated (capped at the layer count for tiny stacks).
+        # The decode dataflow therefore forms a *ring* 0 -> 1 -> ... -> (S-1) -> 0,
+        # traversed once per round-robin "round".
+        n = config.num_hidden_layers if max_layers is None else min(max_layers, config.num_hidden_layers)
+        self.num_layers = n
+        self.pipeline_stages = min(self.num_layers, self.num_submeshes) if use_submeshes else 1
+
         if use_submeshes:
             logger.info(f"Using submeshes: {self.num_submeshes}")
             full_device.reshape(ttnn.MeshShape(1, full_device.get_num_devices()))
@@ -135,12 +146,18 @@ class DeepSeekV4Model(DeepSeekV4Module):
             self.last_device = self.submeshes[-1]
 
             # Create socket pairs between submeshes for copying hidden_states .
-            # One pair per (from_id, to_id) with from_id != to_id; reused for all forward passes.
-            num_submeshes = full_device.get_num_devices()
+            # The round-robin layer placement makes the decode dataflow a *ring*:
+            # submesh k hands off to submesh (k+1) % pipeline_stages, including the
+            # wrap-around edge (S-1 -> 0). One directed pair per ring edge, reused for
+            # all forward passes.
             self.submesh_socket_pairs = {}
             socket_memconfig = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 16 * 1024)
-            for from_id in range(num_submeshes - 1):
-                to_id = from_id + 1
+            ring_edges = (
+                [(k, (k + 1) % self.pipeline_stages) for k in range(self.pipeline_stages)]
+                if self.pipeline_stages > 1
+                else []
+            )
+            for from_id, to_id in ring_edges:
                 from_submesh = self.submeshes[from_id]
                 to_submesh = self.submeshes[to_id]
                 socket_connections = []
@@ -164,17 +181,15 @@ class DeepSeekV4Model(DeepSeekV4Module):
             self.first_device = full_device
             self.last_device = full_device
 
-        n = config.num_hidden_layers if max_layers is None else min(max_layers, config.num_hidden_layers)
-        self.num_layers = n
+        n = self.num_layers
 
         self.embed_tokens = DeepSeekV4Embedding(loader, self.first_device, cache=cache)
 
         self.layers: list[DeepSeekV4DecoderLayer] = []
         self.layer_devices: list[ttnn.MeshDevice] = []
-        self.layers_per_device = 6  # 43 layers across 8 devices.
         for li in range(n):
             if self.use_submeshes:
-                layer_device_id = li // self.layers_per_device
+                layer_device_id = self._submesh_id_for_layer(li)
                 current_device = self.submeshes[layer_device_id]
                 logger.info(f"Layer {li} is on device {layer_device_id}")
             else:
@@ -275,6 +290,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
             weights[k] = self._thunk(f"layers.{layer_idx}.{k}")
         return weights
 
+    def _submesh_id_for_layer(self, layer_idx: int) -> int:
+        """Round-robin layer -> submesh mapping: layer ``li`` lives on submesh
+        ``li % pipeline_stages`` (layer 0 -> 0, 1 -> 1, ..., wrapping back to 0)."""
+        return layer_idx % self.pipeline_stages
+
     def _expert_provider(self, layer_idx: int):
         def provider(e: int):
             base = f"layers.{layer_idx}.mlp.experts.{e}"
@@ -291,7 +311,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             "gate.tid2eid": self.loader.get_tensor(f"layers.{layer_idx}.mlp.gate.tid2eid").long(),
         }
         if self.use_submeshes:
-            this_device = self.submeshes[layer_idx // self.layers_per_device]
+            this_device = self.submeshes[self._submesh_id_for_layer(layer_idx)]
         else:
             this_device = self.first_device
         return DeepSeekV4HashRouter(self.config, weights, this_device)
@@ -382,7 +402,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         last_submesh_id = 0
         for li, layer in enumerate(self.layers):
             if self.use_submeshes:
-                current_submesh_id = li // self.layers_per_device
+                current_submesh_id = self._submesh_id_for_layer(li)
                 if current_submesh_id != last_submesh_id:
                     streams = self._copy_streams_between_submeshes(streams, last_submesh_id, current_submesh_id)
                 this_device = self.submeshes[current_submesh_id]
@@ -493,7 +513,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         rd = cfg.qk_rope_head_dim
         hc, d, w = cfg.hc_mult, cfg.hidden_size, self.sliding_window
-        num_sm = (self.num_layers + self.layers_per_device - 1) // self.layers_per_device
+        num_sm = self.pipeline_stages
 
         # --- Canonical per-step input packet layout (shared by every submesh) --- #
         # All per-step inputs are fused into ONE tiny fixed-shape INT32 packet
@@ -538,15 +558,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.submeshes_io = []
         for k in range(num_sm):
             device = self.submeshes[k]
-            layers_k = [li for li in range(self.num_layers) if li // self.layers_per_device == k]
+            layers_k = [li for li in range(self.num_layers) if self._submesh_id_for_layer(li) == k]
             types = {cfg.layer_types[li] for li in layers_k}
             crs = {cfg.compress_rates[t] for t in types if t != "sliding_attention"}
             sm = {
                 "device": device,
                 "index": k,
                 "layers": layers_k,
-                "first": k == 0,
-                "last": layers_k and layers_k[-1] == self.num_layers - 1,
                 "win_rope": {},
                 "rope_invfreq": {},
                 "mask_gen": {},
@@ -611,15 +629,21 @@ class DeepSeekV4Model(DeepSeekV4Module):
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     ),
                 )
-            if k == 0:
-                # The only per-step host-written state: submesh 0's tiny fused packet
-                # (token + positions). Everything downstream is fed over the socket.
+            # Submesh 0 owns global layer 0, whose per-step inputs are host-written into
+            # the tiny fused packet (token + positions); everything downstream is fed
+            # over the ring sockets. Under round-robin, submesh 0 *also* revisits the ring
+            # for its later layers (8, 16, ...), so it needs recv buffers too. In general
+            # every submesh that runs any layer other than global layer 0 receives the
+            # residual streams + packet from its ring predecessor.
+            if 0 in layers_k:
                 sm["pkt"] = _dev_zeros([1, 1, 1, self._pkt_w], device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-            else:
-                # Receive buffers for the residual streams and the fused packet.
+            if any(li != 0 for li in layers_k):
                 sm["streams_in"] = _dev_zeros([1, 1, hc, d], device)
                 sm["pkt_in"] = _dev_zeros([1, 1, 1, self._pkt_w], device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             self.submeshes_io.append(sm)
+        # The global-last layer (num_layers-1) lands on this submesh under round-robin;
+        # its trace produces the final head output consumed by :meth:`decode_traced`.
+        self._output_sm_index = (self.num_layers - 1) % num_sm
         self._traced_captured = False
 
     def _device_rope(self, inv_freq: ttnn.Tensor, scaling: float, pos_f: ttnn.Tensor) -> tuple:
@@ -656,63 +680,84 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return ttnn.typecast(ttnn.multiply(invalid, _MASK_NEG), ttnn.bfloat16)
 
     def _decode_submesh_static(self, sm: dict) -> ttnn.Tensor:
-        """Run one submesh's slice of the decode stack over the per-step input
-        packets / in-place caches (shared by the compile run and the trace capture).
+        """Run one submesh's round-robin layers over the per-step input packets /
+        in-place caches (shared by the compile run and the trace capture).
 
-        The per-step inputs arrive as ONE tiny fused INT32 packet ``[1,1,1,3]`` =
-        ``[token, pos_sliding, pos_compress]``. Submesh 0 reads its single persistent
-        host-written packet buffer directly; every later submesh receives the packet
-        (and the residual streams) over the socket. Each submesh then *splits* the
-        packet on device and generates both the RoPE rows and the additive masks from
-        ``pos_compress`` — and, unless it is the last, forwards the streams and packet
-        unchanged to the next submesh."""
+        Under round-robin placement the decode dataflow is a *ring*: consecutive
+        global layers live on consecutive submeshes, so a submesh's layers are *not*
+        contiguous in the global order — between two layers on the same submesh the
+        residual streams travel all the way around the ring. This method therefore
+        drives one recv / run / send cycle *per layer* rather than once per submesh:
+
+          * The per-step inputs are ONE tiny fused INT32 packet ``[1,1,1,3]`` =
+            ``[token, pos_sliding, pos_compress]``. Global layer 0 (on submesh 0)
+            reads submesh 0's host-written packet; every other layer receives the
+            streams + packet from its ring predecessor ``(k-1) % S``.
+          * Each layer splits the packet on device and generates its RoPE rows and
+            additive mask from ``pos_compress``.
+          * Unless it is the global-last layer, it forwards the streams + packet to
+            its ring successor ``(k+1) % S``. The global-last layer applies the head.
+
+        For a single-stage stack (``pipeline_stages == 1``) there is no ring: the
+        streams simply chain layer-to-layer on submesh 0 with no socket traffic.
+        """
         cfg = self.config
         k = sm["index"]
-        if sm["first"]:
-            pkt = sm["pkt"]
-        else:
-            # Receive the residual streams and the fused packet from the previous
-            # submesh directly into the persistent buffers. Captured inside this
-            # submesh's trace so the cross-submesh copies need no host-side op
-            # dispatch at replay time. Order must match the sender below.
-            _, receiver_socket = self.submesh_socket_pairs[(k - 1, k)]
-            ttnn.experimental.recv_direct_async(sm["streams_in"], receiver_socket)
-            ttnn.experimental.recv_direct_async(sm["pkt_in"], receiver_socket)
-            pkt = sm["pkt_in"]
-
-        # Split the packet -> token, sliding position [1], compress position [1].
-        token = ttnn.typecast(ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 0], [1, 1, 1, 1]), [1, 1]), ttnn.uint32)  # [1,1]
-        sliding_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 1], [1, 1, 1, 2]), [1])
-        compress_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2], [1, 1, 1, 3]), [1])
-
-        # Generate the per-step RoPE rows and additive masks on device from the
-        # absolute position (nothing position-dependent is shipped in the packet).
-        pos_f = ttnn.typecast(ttnn.to_layout(ttnn.reshape(compress_pos, [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32)
-        rope_views: dict[str, tuple] = {}
-        for rt, (inv_freq, scaling) in sm["rope_invfreq"].items():
-            rope_views[rt] = self._device_rope(inv_freq, scaling, pos_f)
-
-        types = {cfg.layer_types[li] for li in sm["layers"]}
-        mask_views: dict[str, ttnn.Tensor] = {}
-        for lt in types:
-            a, b, cr = sm["mask_gen"][lt]
-            mask_views[lt] = self._device_mask(a, b, cr, pos_f)
-
-        if sm["first"]:
-            inputs_embeds = self.embed_tokens(token)  # [1, 1, D]
-            b, s, d = inputs_embeds.shape
-            streams = ttnn.repeat(ttnn.reshape(inputs_embeds, [b, s, 1, d]), ttnn.Shape([1, 1, cfg.hc_mult, 1]))
-        else:
-            streams = sm["streams_in"]
+        multi = self.pipeline_stages > 1
+        prev_k = (k - 1) % self.pipeline_stages
+        next_k = (k + 1) % self.pipeline_stages
+        streams = None  # carried across layers only in the single-stage case
+        out = None
         for li in sm["layers"]:
             layer = self.layers[li]
+            is_first = li == 0
+            is_last = li == self.num_layers - 1
+
+            # Obtain this layer's per-step packet (and, when multi-stage, its input
+            # streams) — from the host buffer for global layer 0, else over the ring.
+            if is_first or not multi:
+                pkt = sm["pkt"]
+            else:
+                # Receive the residual streams + fused packet from the ring
+                # predecessor into the persistent buffers. Captured inside the trace,
+                # so the copies need no host-side dispatch at replay. Order must match
+                # the sender below.
+                _, receiver_socket = self.submesh_socket_pairs[(prev_k, k)]
+                ttnn.experimental.recv_direct_async(sm["streams_in"], receiver_socket)
+                ttnn.experimental.recv_direct_async(sm["pkt_in"], receiver_socket)
+                pkt = sm["pkt_in"]
+
+            # Split the packet -> token, sliding position [1], compress position [1].
+            token = ttnn.typecast(
+                ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 0], [1, 1, 1, 1]), [1, 1]), ttnn.uint32
+            )  # [1,1]
+            sliding_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 1], [1, 1, 1, 2]), [1])
+            compress_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2], [1, 1, 1, 3]), [1])
+
+            # Generate this layer's RoPE rows and additive mask on device from the
+            # absolute position (nothing position-dependent is shipped in the packet).
+            pos_f = ttnn.typecast(
+                ttnn.to_layout(ttnn.reshape(compress_pos, [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32
+            )
             lt = cfg.layer_types[li]
             rope_type = "main" if lt == "sliding_attention" else "compress"
-            cos, sin, neg_sin = rope_views[rope_type]
+            inv_freq, scaling = sm["rope_invfreq"][rope_type]
+            cos, sin, neg_sin = self._device_rope(inv_freq, scaling, pos_f)
+            a, b, cr = sm["mask_gen"][lt]
+            mask = self._device_mask(a, b, cr, pos_f)
             if lt == "sliding_attention":
                 cos_win = sin_win = None
             else:
                 cos_win, sin_win = sm["win_rope"][cfg.compress_rates[lt]]
+
+            if is_first:
+                inputs_embeds = self.embed_tokens(token)  # [1, 1, D]
+                bb, ss, dd = inputs_embeds.shape
+                streams = ttnn.repeat(ttnn.reshape(inputs_embeds, [bb, ss, 1, dd]), ttnn.Shape([1, 1, cfg.hc_mult, 1]))
+            elif multi:
+                streams = sm["streams_in"]
+            # else (single-stage, li>0): reuse the ``streams`` carried from the prior layer.
+
             streams = layer.decode_static(
                 streams,
                 cos,
@@ -720,25 +765,26 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 neg_sin,
                 cos_win,
                 sin_win,
-                mask_views[lt],
+                mask,
                 sm["scaches"][li],
                 sliding_pos,
                 compress_pos,
                 hash_token=token if layer.mlp.is_hash else None,
             )
-        if sm["last"]:
-            streams = self.norm(self.hc_head(streams))
-            if self._lm_head_traced is not None:
-                streams = self._lm_head_traced(streams)
-        else:
-            # Send the residual streams and the fused packet to the next submesh over
-            # the socket pair. Captured inside this submesh's trace, so the
-            # cross-submesh copies are dispatched on device at replay time (no host
-            # round-trip). Order must match the receiver above.
-            sender_socket, _ = self.submesh_socket_pairs[(k, k + 1)]
-            ttnn.experimental.send_direct_async(streams, sender_socket)
-            ttnn.experimental.send_direct_async(pkt, sender_socket)
-        return streams
+
+            if is_last:
+                streams = self.norm(self.hc_head(streams))
+                if self._lm_head_traced is not None:
+                    streams = self._lm_head_traced(streams)
+                out = streams
+            elif multi:
+                # Send the residual streams + fused packet to the ring successor.
+                # Captured inside the trace, so dispatched on device at replay (no
+                # host round-trip). Order must match the receiver above.
+                sender_socket, _ = self.submesh_socket_pairs[(k, next_k)]
+                ttnn.experimental.send_direct_async(streams, sender_socket)
+                ttnn.experimental.send_direct_async(pkt, sender_socket)
+        return out if out is not None else streams
 
     def _build_packet(self, token_id: int, pos: int) -> ttnn.Tensor:
         """Host-build the whole fused packet ``[1,1,1,3]`` as INT32:
@@ -811,9 +857,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         the per-step inputs and replays each submesh's trace in order. The residual
         streams are socket-copied between submeshes from *inside* each trace
         (device-to-device, no host hop and no per-step host op dispatch).
-        Returns the last submesh's persistent output tensor — logits ``[1,1,vocab]``
-        if an ``lm_head`` was passed to :meth:`prepare_static_decode`, else the
-        pre-head hidden ``[1, 1, 1, hidden]``.
+        Returns the persistent output tensor of the submesh holding the global-last
+        layer — logits ``[1,1,vocab]`` if an ``lm_head`` was passed to
+        :meth:`prepare_static_decode`, else the pre-head hidden ``[1, 1, 1, hidden]``.
 
         The returned tensor is overwritten by the next call, so consume it (e.g.
         ``ttnn.to_torch``) before decoding the following token.
@@ -823,7 +869,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
             self._capture_traces()
         for sm in self.submeshes_io:
             ttnn.execute_trace(sm["device"], sm["tid"], cq_id=0, blocking=False)
-        return self.submeshes_io[-1]["output"]
+        # Under round-robin the global-last layer (and thus the head output) does not
+        # land on the last submesh in the list, but on ``(num_layers-1) % S``.
+        return self.submeshes_io[self._output_sm_index]["output"]
 
     def decode_sampled_burst(self, first_token_id: int, start_pos: int, n_steps: int) -> list[int]:
         """Autoregressively decode ``n_steps`` tokens with greedy (top-1) sampling
@@ -845,7 +893,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """
         if not self.use_submeshes:
             raise NotImplementedError("traced sampling requires use_submeshes=True")
-        sm0, sm_last = self.submeshes_io[0], self.submeshes_io[-1]
+        sm0, sm_last = self.submeshes_io[0], self.submeshes_io[self._output_sm_index]
         if sm0["device"] != sm_last["device"]:
             raise NotImplementedError(
                 "on-device sampling feedback currently requires a single submesh "
