@@ -1,15 +1,6 @@
-import os
+from models.tt_dit.utils.ltx import apply_fast_env
 
-# LTX_FAST=1 is a single-switch alias for the served fast-mode env bundle (bf8 DiT-linear quant +
-# step-cut denoise schedule + traced + host weight cache), mirroring ltx_server build_worker_env's
-# fast branch so a bare `LTX_FAST=1 pytest ...` reproduces it. Runs at collection (module top level,
-# not a fixture) because pipeline_ltx_distilled reads LTX_S1/S2_SIGMAS and module.py reads
-# TT_DIT_HOST_WEIGHT_CACHE at import — a fixture would land after that. setdefault so an explicit
-# override still wins. Values must stay in sync with build_worker_env; the tree switch it also does
-# (TT_METAL_HOME -> ltx-rt) can't be set from here, so run this from an ltx-rt checkout.
-if os.environ.get("LTX_FAST", "0") in ("1", "true", "True"):
-    os.environ.setdefault("LTX_QUANT", "all_bf8_lofi")
-    os.environ.setdefault("LTX_S1_SIGMAS", "1.0,0.9875,0.975,0.909375,0.725,0.421875,0.0")
-    os.environ.setdefault("LTX_S2_SIGMAS", "0.909375,0.0")
-    os.environ.setdefault("LTX_TRACED", "1")
-    os.environ.setdefault("TT_DIT_HOST_WEIGHT_CACHE", "1")
+# LTX_FAST=1 expands to the served fast-mode bundle at collection time — the pipeline reads the sigma
+# schedule at import, before any fixture would run. apply_fast_env is the shared definition (see
+# utils/ltx.py) so the pytest bundle can't drift from the ltx_server worker's.
+apply_fast_env()

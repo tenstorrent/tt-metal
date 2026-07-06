@@ -30,6 +30,33 @@ def default_ltx_gemma() -> str:
     return os.environ.get("GEMMA_PATH") or "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 
+# Fast-mode env bundle: bf8 DiT-linear quant + step-cut denoise schedule. The single authority for
+# both the pytest harness (via conftest) and the ltx_server worker, so the schedule can't drift
+# between them. Validated at ~11.7s warm gen (bh_2x4sp1tp0): S1 8->6 steps (the 1.0->0.975 head is
+# redundant within the structure basin), S2 3->1 (Stage-2 only refines an already-coherent latent,
+# so one step holds composition byte-identical to the 3-step baseline). Cutting S2 is the dominant
+# lever: Stage-2 costs ~3.15s/step vs Stage-1's ~0.72s/step.
+FAST_QUANT = "all_bf8_lofi"
+FAST_S1_SIGMAS = "1.0,0.9875,0.975,0.909375,0.725,0.421875,0.0"
+FAST_S2_SIGMAS = "0.909375,0.0"
+
+
+def apply_fast_env(env=None):
+    """Expand LTX_FAST=1 into the concrete fast-mode vars; no-op unless LTX_FAST is truthy.
+
+    setdefault, so an explicit var still wins. TT_DIT_HOST_WEIGHT_CACHE is read at layer import, so a
+    caller wanting it must apply this before importing the pipeline (or set it in the process env).
+    """
+    env = os.environ if env is None else env
+    if env.get("LTX_FAST", "0") not in ("1", "true", "True"):
+        return
+    env.setdefault("LTX_QUANT", FAST_QUANT)
+    env.setdefault("LTX_S1_SIGMAS", FAST_S1_SIGMAS)
+    env.setdefault("LTX_S2_SIGMAS", FAST_S2_SIGMAS)
+    env.setdefault("LTX_TRACED", "1")
+    env.setdefault("TT_DIT_HOST_WEIGHT_CACHE", "1")
+
+
 def print_ltx_timing_table(
     pipeline, *, label, num_frames, height, width, mesh_shape, sp_axis, tp_axis, topology, output_path, prompt
 ):
