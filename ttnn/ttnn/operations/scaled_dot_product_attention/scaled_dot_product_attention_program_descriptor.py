@@ -122,14 +122,20 @@ def create_program_descriptor(
     mask_pages = 2 * (actual_B_q * actual_B_kv) if has_mask else 1
     scale_pages = 1
     output_pages = 2 * (actual_B_q * D_t)
-    scores_pages = actual_B_q * actual_B_kv
+    # cb_scores holds both QK^T scores (B_q×B_kv tiles, Phase 1) and PV output
+    # (B_q×D_t tiles, Phase 12). It must be sized for the max of the two.
+    scores_pages = max(actual_B_q * actual_B_kv, actual_B_q * D_t)
     m_pages = max(2, actual_B_q)
     l_pages = max(2, actual_B_q)
     o_pages = max(2, actual_B_q * D_t)
     m_new_pages = max(2, actual_B_q)
     psum_pages = max(2, actual_B_q)
     pv_pages = max(2, actual_B_q * actual_B_kv)
-    scaler_pages = 2
+    # cb_scaler: 2 tiles per KV block (MAX + SUM). The reader runs ahead of compute
+    # (limited by Q/K/V CB double-buffering to ~2 KV blocks lookahead), so the scaler
+    # CB must hold enough for the reader's full lookahead. Use 2 * num_kv_blocks to
+    # be safe (the reader pushes all KV blocks' scalers if compute is slow).
+    scaler_pages = 2 * num_kv_blocks
 
     cbs = []
 

@@ -149,6 +149,7 @@ void kernel_main() {
                 cb_scaler,
                 cb_m_new,
                 ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::of(B_q, B_kv));
+            // NOTE: scaler popped after reduce — MAX scaler (tile 0) consumed
             cb_pop_front(cb_scaler, 1);
 
             // Phase 4: OnlineMax — m_new = max(m_i, m_block)
@@ -264,6 +265,8 @@ void kernel_main() {
             ckl::add<cb_l, cb_psum, cb_l>(ckl::EltwiseShape::tiles(B_q));
 
             // Phase 12: PV = P @ V
+            // Shape: M=B_q, N=D_t, K=B_kv. Single subblock (1,1) of size (B_q, D_t).
+            // DEST constraint: B_q * D_t <= DEST_AUTO_LIMIT (4 with fp32_dest_acc_en).
             ckl::matmul_block<
                 /*transpose=*/false,
                 /*packer_l1_acc=*/false,
@@ -282,22 +285,21 @@ void kernel_main() {
                 false,
                 ckl::NoneActivation,
                 ckl::matmul_config::DataFormatReconfig::NONE>(
-                cb_pv_buf,
-                cb_v_buf,
-                cb_scores_buf,
-                cb_scores_buf,
-                ckl::MatmulBlockShape::of(B_q, D_t, B_q, D_t, B_kv, 1));
+                cb_pv_buf, cb_v_buf, cb_scores_buf, cb_scores_buf, ckl::MatmulBlockShape::of(1, 1, B_q, D_t, B_kv, 1));
 
             // Phase 13: O_i += PV
             ckl::add<cb_o, cb_scores, cb_o>(ckl::EltwiseShape::grid(B_q, D_t));
 
-            // Cleanup
-            cb_pop_front(cb_k, B_kv * D_t);
-            cb_pop_front(cb_v, B_kv * D_t);
+            // Cleanup: K and V tiles are already popped by the matmul helpers
+            // (WaitAndPopPerKBlock in both Phase 1 QK^T and Phase 12 PV matmuls).
+            // Only pop mask if present.
             if constexpr (has_mask) {
                 cb_pop_front(cb_attn_mask, B_q * B_kv);
             }
         }
+
+        // Pop scaler tiles (pushed once per Q block, reused across all KV blocks)
+        cb_pop_front(cb_scaler, 2);
 
         // Phase 14: Normalize — O = O_i * recip(l_i)
         // l_i from REDUCE_ROW has values only in col 0. DivBinary (SFPU) doesn't broadcast.
@@ -337,8 +339,7 @@ void kernel_main() {
         cb_pop_front(cb_l, B_q);
         cb_pop_front(cb_m, B_q);
 
-        // Re-init for next Q block (need eltwise mode after matmul phases)
-        ckernel::compute_kernel_hw_startup<ckernel::SrcOrder::Regular>(cb_m, cb_l, cb_o);
+        // Re-init persistent state for next Q block.
         init_cb_constant_bits(cb_m, B_q, NEG_INF_BITS);
         init_cb_constant_f(cb_l, B_q, 0.0f);
         init_cb_constant_f(cb_o, B_q * D_t, 0.0f);
