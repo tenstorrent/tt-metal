@@ -203,4 +203,27 @@ TEST(WorkerConfigBuffer, VeryBasic) {
     EXPECT_FALSE(reservation3.first.need_sync);
 }
 
+// Regression for #48268: PrintStatus walked the ring buffer starting from alloc_index_ instead of
+// free_index_, so the `while (free_index != alloc_index_)` loop was immediately false and no queued
+// entries were ever visited. Exercise the walk (now factored into get_queued_entry_indices) and
+// confirm it returns the queued (freeable) entries. Prior to the fix this vector was always empty.
+TEST(WorkerConfigBuffer, PrintStatusWalksQueuedEntries) {
+    WorkerConfigBufferMgr mgr;
+    mgr.init_add_buffer(0, 1024);
+
+    // Allocate three entries without freeing any: free_index_ stays at 0 while alloc_index_
+    // advances to 3, leaving entries 0, 1, 2 queued.
+    for (uint32_t i = 0; i < 3; i++) {
+        auto reservation = mgr.reserve({10});
+        EXPECT_FALSE(reservation.first.need_sync);
+        mgr.alloc(i + 1);
+    }
+
+    EXPECT_EQ(mgr.get_queued_entry_indices(0), (std::vector<size_t>{0, 1, 2}));
+
+    // After freeing up to sync_count 2, entries 0 and 1 are reclaimed; only entry 2 remains queued.
+    mgr.free(2);
+    EXPECT_EQ(mgr.get_queued_entry_indices(0), (std::vector<size_t>{2}));
+}
+
 }  // namespace worker_config_buffer_tests
