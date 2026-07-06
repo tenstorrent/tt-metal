@@ -58,6 +58,31 @@ class BriaFiboTextProjection(Module):
         return self.linear(x)
 
 
+def inject_text(encoder_hidden_states: ttnn.Tensor, projected: ttnn.Tensor) -> ttnn.Tensor:
+    """Concat-halves injection for FIBO dual blocks (tp=1).
+
+    Replaces the upper half of the context (prompt) features with the per-block
+    projected text embedding:
+
+        out[..., :half] = encoder_hidden_states[..., :half]
+        out[..., half:] = projected
+
+    where ``half = inner_dim // 2 = 1536``.
+
+    Args:
+        encoder_hidden_states: Context tensor of shape ``[batch, P, inner_dim]``
+            (inner_dim = 3072 for FIBO).
+        projected: Per-block text projection of shape ``[batch, P, inner_dim // 2]``
+            (i.e. ``[batch, P, 1536]``).
+
+    Returns:
+        Concatenated tensor of shape ``[batch, P, inner_dim]``.
+    """
+    half = projected.shape[-1]  # 1536 = inner_dim // 2
+    first_half = encoder_hidden_states[:, :, :half]
+    return ttnn.concat([first_half, projected], dim=-1)
+
+
 class BriaFiboTimestepEmbed(Module):
     """Timestep-only embedding for FIBO: sinusoidal → MLP → [batch, inner_dim].
 
