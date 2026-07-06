@@ -188,7 +188,6 @@ class SmolLM3Attention(Module):
     ) -> None:
         super().__init__()
 
-        # Change 1: store use_rope flag
         self._use_rope = use_rope
 
         if ctx.tp_axis is not None:
@@ -206,7 +205,6 @@ class SmolLM3Attention(Module):
         opt_group_count, opt_group_size, split_factor = optimal_groups(group_count, group_size, tp_factor)
         padded_heads = opt_group_count * opt_group_size
 
-        # Change 2: bias=False (SmolLM3 has attention_bias=False)
         self.qkv_proj = ColParallelLinear(
             hidden_size,
             (padded_heads + 2 * opt_group_count) * head_dim,
@@ -278,8 +276,6 @@ class SmolLM3Attention(Module):
                 state.pop("q_proj.weight"), state.pop("k_proj.weight"), state.pop("v_proj.weight")
             )
 
-        # Change 3: DELETE qkv-bias-merge block — SmolLM3 has no q/k/v bias
-
         if "o_proj.weight" in state:
             o = state["o_proj.weight"]
 
@@ -313,7 +309,6 @@ class SmolLM3Attention(Module):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Change 4: guard RoPE on self._use_rope (NoPE skips it)
         cos, sin = pos_embeds
         if self._use_rope:
             q = _apply_rope(q, cos, sin)
@@ -331,7 +326,6 @@ class SmolLM3Attention(Module):
 
         x = ttnn.transformer.concatenate_heads(x)
 
-        # Change 5: gate all-gathers on self._tp_factor > 1 instead of self._tp_axis is not None
         if self._tp_factor > 1:
             x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
@@ -354,3 +348,49 @@ class SmolLM3Attention(Module):
             k_chunk_size=chunk_size,
             exp_approx_mode=False,
         )
+
+
+class SmolLM3DecoderLayer(Module):
+    def __init__(
+        self,
+        *,
+        hidden_size: int,
+        num_attention_heads: int,
+        num_key_value_heads: int,
+        intermediate_size: int,
+        hidden_act: str,
+        rms_norm_eps: float,
+        use_rope: bool,
+        ctx: SmolLM3Context,
+    ) -> None:
+        super().__init__()
+
+        self.self_attn = SmolLM3Attention(
+            hidden_size=hidden_size,
+            num_heads=num_attention_heads,
+            num_key_value_heads=num_key_value_heads,
+            use_rope=use_rope,
+            ctx=ctx,
+        )
+        self.mlp = SmolLM3Mlp(
+            hidden_size=hidden_size, intermediate_size=intermediate_size, hidden_act=hidden_act, ctx=ctx
+        )
+        self.input_layernorm = SmolLM3RmsNorm(hidden_size, eps=rms_norm_eps, ctx=ctx)
+        self.post_attention_layernorm = SmolLM3RmsNorm(hidden_size, eps=rms_norm_eps, ctx=ctx)
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        *,
+        attention_bias: ttnn.Tensor | None = None,
+        pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
+    ) -> ttnn.Tensor:
+        residual = x
+        x = self.input_layernorm.forward(x)
+        x = self.self_attn.forward(x, attention_bias=attention_bias, pos_embeds=pos_embeds)
+        x = x + residual
+
+        residual = x
+        x = self.post_attention_layernorm.forward(x)
+        x = self.mlp.forward(x)
+        return x + residual

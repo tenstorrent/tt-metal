@@ -146,3 +146,58 @@ def test_smollm3_config_from_hf():
     assert cfg.hidden_size == 2048
     assert len(cfg.no_rope_layers) == 36 and sum(cfg.no_rope_layers) == 27
     assert cfg.attention_bias is False
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
+def test_smollm3_decoder_layer(*, mesh_device):
+    from models.tt_dit.encoders.smollm3.config import SmolLM3Config
+    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3Context, SmolLM3DecoderLayer, create_rope_tensors
+
+    torch.manual_seed(0)
+    hf = _load_hf_smollm3()
+    cfg = hf.config
+    seq = 128
+    hf_layer = hf.model.layers[0]  # layer 0 is a RoPE layer
+
+    sm_cfg = SmolLM3Config.from_hf_config(cfg)
+
+    ctx = SmolLM3Context(device=mesh_device, tp_axis=None, ccl_manager=None)
+
+    # layer 0 has no_rope_layers[0] == 1 → use_rope=True
+    use_rope = bool(sm_cfg.no_rope_layers[0])
+
+    layer = SmolLM3DecoderLayer(
+        hidden_size=cfg.hidden_size,
+        num_attention_heads=cfg.num_attention_heads,
+        num_key_value_heads=cfg.num_key_value_heads,
+        intermediate_size=cfg.intermediate_size,
+        hidden_act=cfg.hidden_act,
+        rms_norm_eps=cfg.rms_norm_eps,
+        use_rope=use_rope,
+        ctx=ctx,
+    )
+    layer.load_torch_state_dict(hf_layer.state_dict())
+
+    x = torch.randn(1, seq, cfg.hidden_size)
+    cos, sin = create_rope_tensors(1, seq, sm_cfg.head_dim, sm_cfg.rope_theta)
+
+    # HF reference: attention_mask=None → SDPA uses is_causal=True (module.is_causal=True),
+    # matching the TT layer's is_causal=attention_bias is None path.
+    with torch.no_grad():
+        ref = hf_layer(
+            x,
+            position_embeddings=(cos[:, 0], sin[:, 0]),  # HF expects (B, seq, head_dim)
+            attention_mask=None,
+        )
+        ref = ref[0] if isinstance(ref, tuple) else ref
+
+    tt_x = tt_tensor.from_torch(x, device=mesh_device)
+    tt_cos = tt_tensor.from_torch(cos, device=mesh_device)
+    tt_sin = tt_tensor.from_torch(sin, device=mesh_device)
+    tt_out = layer.forward(
+        tt_x,
+        attention_bias=None,
+        pos_embeds=(tt_cos, tt_sin),
+    )
+    assert_quality(ref, tt_tensor.to_torch(tt_out), pcc=0.99, relative_rmse=0.2)
