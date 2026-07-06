@@ -108,12 +108,18 @@ def _snap(component: str, suffix: str) -> Path:
 
 
 def _is_torch_wrapper(stub: Path) -> bool:
-    """Delegate to the SAME detector the fsm loop uses so 'native vs CPU-fallback' means the
-    same thing in both engines."""
+    """Inverse of the fsm's strict `_stub_body_is_native`. Falls back to `cli._stub_uses_torch_wrapper`
+    only if the import fails."""
     try:
-        return bool(_cli._stub_uses_torch_wrapper(stub))
+        from scripts.tt_hw_planner.bringup_loop import _stub_body_is_native
     except Exception:
+        try:
+            return bool(_cli._stub_uses_torch_wrapper(stub))
+        except Exception:
+            return False
+    if not stub.is_file():
         return False
+    return not _stub_body_is_native(stub)
 
 
 def _graduation_block_reason(stub: Path) -> str | None:
@@ -135,16 +141,23 @@ def _graduation_block_reason(stub: Path) -> str | None:
 
 
 def _is_graduated(component: str) -> bool:
-    """Graduation per the SHARED contract emit-e2e/promote read: a `.py.last_good_native` snapshot
-    exists next to the stub (written on a PCC pass)."""
-    return _snap(component, ".py.last_good_native").is_file()
+    """Snapshot exists AND current stub is native. Re-checking the stub closes the overlay-restore
+    loophole where a stale snapshot can sit next to a regressed torch-wrapper stub."""
+    if not _snap(component, ".py.last_good_native").is_file():
+        return False
+    if _is_torch_wrapper(_stub_path(component)):
+        return False
+    return True
 
 
 def _is_shard_graduated(component: str) -> bool:
-    """Shard graduation: a `.py.last_good_sharded` snapshot exists (written when the shard-aware body
-    passed gathered-PCC on the mesh). Separate from `.py.last_good_native` so single-device graduation
-    is never disturbed."""
-    return _snap(component, ".py.last_good_sharded").is_file()
+    """Shard graduation: `.py.last_good_sharded` exists AND stub is native. Separate snapshot suffix
+    so single-device graduation isn't disturbed."""
+    if not _snap(component, ".py.last_good_sharded").is_file():
+        return False
+    if _is_torch_wrapper(_stub_path(component)):
+        return False
+    return True
 
 
 def _shard_mode_active() -> bool:

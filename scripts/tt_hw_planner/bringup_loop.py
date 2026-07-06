@@ -887,39 +887,10 @@ def _stub_import_path(demo_dir: Path, component_safe: str, repo_root: Path) -> s
     return ".".join(rel.with_suffix("").parts)
 
 
-def _stub_has_graduated_from_autofill(stub_path: Path) -> bool:
-    """True iff the stub HAS BEEN VERIFIED-GRADUATED (PCC passed against
-    native ttnn code) at some point.
-
-    Detection requires BOTH:
-
-      1. Positive graduation evidence: a ``.py.last_good_native`` snapshot
-         sibling exists. That file is written ONLY by
-         ``_snapshot_native_stub`` in the auto-iterate loop, upon a PCC
-         test passing. Its existence means "at some point this component
-         had a working native ttnn forward verified by PCC."
-
-      2. Current stub does NOT delegate to torch fallback. AST-aware
-         detection so we don't false-positive on the LLM leaving
-         ``_get_torch_submodule`` as a dead helper while writing native
-         ttnn elsewhere. Catches the case where a graduated stub was
-         later edited back to fallback (rare but possible).
-
-    Why BOTH: previously this function returned True for any stub
-    without torch-fallback markers — which mis-classified op-synth
-    scaffolded stubs (no fallback markers, but the body is just
-    pre-bound ``_apply_*`` helpers that were never PCC-validated) as
-    graduated. The snapshot-exists check is positive evidence; the
-    fallback-absence check guards against later regressions.
-    """
+def _stub_body_is_native(stub_path: Path) -> bool:
+    """True iff no forward-method delegates to torch fallback. Helper defs of the same names are
+    tolerated. Does NOT check for a snapshot — compose with the caller's snapshot check."""
     if not stub_path.is_file():
-        return False
-    # Positive evidence: PCC graduation snapshot from a prior successful
-    # iteration. No snapshot → never graduated, no matter what the
-    # current stub body looks like (could be placeholder, scaffold,
-    # in-progress LLM draft, etc.).
-    snapshot = stub_path.with_suffix(".py.last_good_native")
-    if not snapshot.is_file():
         return False
     try:
         text = stub_path.read_text(errors="ignore")
@@ -1005,6 +976,18 @@ def _stub_has_graduated_from_autofill(stub_path: Path) -> bool:
             if _calls_fallback(node) and node.name not in helper_function_names:
                 return False
     return True
+
+
+def _stub_has_graduated_from_autofill(stub_path: Path) -> bool:
+    """Verified-graduated: `.py.last_good_native` snapshot exists AND current body is native.
+    Without the body re-check, op-synth-scaffolded stubs (no fallback markers, dead-helper bodies)
+    would falsely count as graduated."""
+    if not stub_path.is_file():
+        return False
+    snapshot = stub_path.with_suffix(".py.last_good_native")
+    if not snapshot.is_file():
+        return False
+    return _stub_body_is_native(stub_path)
 
 
 def _emit_pcc_template(
