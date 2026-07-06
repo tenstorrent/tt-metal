@@ -780,7 +780,8 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                         "[Real-time profiler] Device {}: X280 drainer FW did not start (l2cpu {}, "
                         "heartbeat=0x{:x}). The L2CPU's L3 LIM ECC is likely not primed on this board — "
                         "run `tt x280-prime {}` once after each cold power cycle, then rerun. Continuing "
-                        "without X280 kernel-zone capture.",
+                        "without X280 kernel-zone capture (the DRAM-based device profiler covers kernel "
+                        "zones as a fallback while TT_METAL_DEVICE_PROFILER is set).",
                         device_id,
                         kL2CpuIndex,
                         hb,
@@ -853,8 +854,15 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     }
 
     // Announce activation; paired with NotifyProgramRealtimeProfilerDeactivated on shutdown.
+    // Additionally, for chips where the X280 drainer actually booted (x280_active), announce the
+    // "X280 won" signal so the standard DeviceProfiler stands down and doesn't read those chips'
+    // SPSC rings (two consumers corrupt the ring head). If X280 lost, the standard profiler is
+    // free to collect (gated only by TT_METAL_DEVICE_PROFILER).
     for (const auto& dev_state : devices_) {
         tt::NotifyProgramRealtimeProfilerActivated(dev_state.chip_id);
+        if (dev_state.x280_active) {
+            tt::NotifyProgramX280ProfilerActivated(dev_state.chip_id);
+        }
     }
 
     const auto init_throttle_now = std::chrono::steady_clock::now();
@@ -1388,6 +1396,7 @@ void RealtimeProfilerManager::shutdown() {
     // tt::IsProgramRealtimeProfilerActive() queries don't observe a chip mid-shutdown.
     for (const auto& dev_state : devices_) {
         tt::NotifyProgramRealtimeProfilerDeactivated(dev_state.chip_id);
+        tt::NotifyProgramX280ProfilerDeactivated(dev_state.chip_id);  // no-op if X280 never won here
     }
     devices_.clear();
 }

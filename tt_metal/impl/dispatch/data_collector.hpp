@@ -96,6 +96,15 @@ public:
     void NotifyRealtimeProfilerDeactivated(uint32_t chip_id);
     bool IsRealtimeProfilerActive() const;
 
+    // "X280 won" tracking, per chip. The RT manager notifies this ONLY when the X280 kernel-zone
+    // drainer actually booted for a chip (x280_active). While set, the X280 is the sole consumer of
+    // that chip's SPSC kernel-profiler rings, so the standard DeviceProfiler must not read them —
+    // two consumers race on the ring head (HOST_BUFFER_END_INDEX) and corrupt markers. Shares the
+    // callback-list mutex.
+    void NotifyX280ProfilerActivated(uint32_t chip_id);
+    void NotifyX280ProfilerDeactivated(uint32_t chip_id);
+    bool IsX280ProfilerActive(uint32_t chip_id) const;
+
     void DumpData();
 
 private:
@@ -148,6 +157,10 @@ private:
 
     // Chip ids whose RT profiler is currently live; shares the callback-list mutex.
     std::unordered_set<uint32_t> realtime_profiler_active_chips_;
+    // Chip ids where the X280 drainer won (booted) and owns the SPSC profiler rings; shares the
+    // callback-list mutex. Distinct from realtime_profiler_active_chips_ (which is set for every
+    // RT-managed chip regardless of whether X280 booted).
+    std::unordered_set<uint32_t> x280_profiler_active_chips_;
 };
 
 }  // namespace tt::tt_metal

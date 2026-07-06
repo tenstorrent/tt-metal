@@ -352,6 +352,21 @@ bool DataCollector::IsRealtimeProfilerActive() const {
     return !realtime_profiler_active_chips_.empty();
 }
 
+void DataCollector::NotifyX280ProfilerActivated(uint32_t chip_id) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    x280_profiler_active_chips_.insert(chip_id);
+}
+
+void DataCollector::NotifyX280ProfilerDeactivated(uint32_t chip_id) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    x280_profiler_active_chips_.erase(chip_id);
+}
+
+bool DataCollector::IsX280ProfilerActive(uint32_t chip_id) const {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    return x280_profiler_active_chips_.contains(chip_id);
+}
+
 void DataCollector::DumpData() {
     if (program_id_to_dispatch_data.empty() && program_id_to_kernel_groups.empty() &&
         program_id_to_call_count.empty()) {

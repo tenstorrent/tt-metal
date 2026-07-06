@@ -1494,6 +1494,16 @@ void DeviceProfiler::readRiscProfilerResults(
     const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include) {
     ZoneScoped;
 
+    // X280 wins: if the X280 kernel-zone drainer booted for this chip, it is the sole consumer of
+    // the per-RISC SPSC profiler rings. The standard DeviceProfiler must not read them — a second
+    // consumer races on the ring head (HOST_BUFFER_END_INDEX) and corrupts markers. This is the
+    // single chokepoint every read path funnels through, so gating here covers mid-run, finish,
+    // teardown, and interval-thread reads. When X280 did NOT boot, this is false and the standard
+    // profiler collects as usual (already gated upstream by TT_METAL_DEVICE_PROFILER).
+    if (tt::IsProgramX280ProfilerActive(device_id)) {
+        return;
+    }
+
     if (data_source == ProfilerDataBufferSource::DRAM_AND_L1) {
         readRiscProfilerResults(device, worker_core, ProfilerDataBufferSource::DRAM, metadata, riscs_to_include);
         readRiscProfilerResults(device, worker_core, ProfilerDataBufferSource::L1, metadata, riscs_to_include);

@@ -109,4 +109,11 @@ bool IsProgramRealtimeProfilerActive();
 void NotifyProgramRealtimeProfilerActivated(uint32_t chip_id);
 void NotifyProgramRealtimeProfilerDeactivated(uint32_t chip_id);
 
+// "X280 won" hooks: the RT manager notifies these only for chips where the X280 kernel-zone
+// drainer actually booted. IsProgramX280ProfilerActive(chip) lets the standard DeviceProfiler
+// skip reading a chip's SPSC rings while X280 owns them (X280 wins).
+void NotifyProgramX280ProfilerActivated(uint32_t chip_id);
+void NotifyProgramX280ProfilerDeactivated(uint32_t chip_id);
+bool IsProgramX280ProfilerActive(uint32_t chip_id);
+
 }  // end namespace tt

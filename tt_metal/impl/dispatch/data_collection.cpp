@@ -100,6 +100,18 @@ void NotifyProgramRealtimeProfilerDeactivated(uint32_t chip_id) {
     tt::tt_metal::MetalContext::instance().data_collector()->NotifyRealtimeProfilerDeactivated(chip_id);
 }
 
+void NotifyProgramX280ProfilerActivated(uint32_t chip_id) {
+    tt::tt_metal::MetalContext::instance().data_collector()->NotifyX280ProfilerActivated(chip_id);
+}
+
+void NotifyProgramX280ProfilerDeactivated(uint32_t chip_id) {
+    tt::tt_metal::MetalContext::instance().data_collector()->NotifyX280ProfilerDeactivated(chip_id);
+}
+
+bool IsProgramX280ProfilerActive(uint32_t chip_id) {
+    return tt::tt_metal::MetalContext::instance().data_collector()->IsX280ProfilerActive(chip_id);
+}
+
 }  // namespace tt
 
 // Public experimental API — delegates to the internal tt:: functions.
