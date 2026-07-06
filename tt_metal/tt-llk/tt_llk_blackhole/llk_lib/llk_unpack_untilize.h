@@ -16,6 +16,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "hal/address_counters.h"
 #include "llk_unpack_common.h"
 #include "sanitizer/api.h"
 
@@ -191,16 +192,17 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
     // Program srcA and srcB base addresses
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
-    TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b0010); // Clear l1 addr y cnt
+    // Clear l1 addr y cnt (ch0_y = 0)
+    address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel0>().Y<0>().apply();
     if constexpr (first_pass)
     {
-        // Select top faces in the 1st pass
-        TTI_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Z, 0);
+        // Select top faces in the 1st pass (ch0_z = 0)
+        address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel0>().Z<0>().apply();
     }
     else
     {
-        // Select bottom faces in the 2nd pass
-        TTI_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Z, 2);
+        // Select bottom faces in the 2nd pass (ch0_z = 2)
+        address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel0>().Z<2>().apply();
     }
 
     // Wait for free context
@@ -228,7 +230,8 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
                 TT_MOP(0, 8 - face_2xr_cnt - 1, unp_cfg_context == 0 ? 0 : 0xff);               // Run the MOP
                 TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // set data valid
                 TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-                TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1000); // Clear srcA addr y cnt
+                // Clear srcA addr y cnt (ch1_y = 0)
+                address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel1>().Y<0>().apply();
                 rem_blocks_in_row -= (8 - face_2xr_cnt);
                 face_2xr_cnt = 0;
             }
@@ -255,7 +258,8 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
         {
             TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32);
         }
-        TTI_INCADCXY(0b001, 0, 0, 1, 0); // inc l1 addr y cnt
+        // inc l1 addr y cnt (ch0_y += 1)
+        address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel0>().Y<1>().increment();
     }
 
     // T6::SEMGET for context release

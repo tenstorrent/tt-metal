@@ -55,13 +55,13 @@ enum class GetOpType : std::uint8_t
  * selector/setter returns a *new* ADC type with its choice folded into the template parameters,
  * so the whole description is assembled at compile time with no runtime state:
  *
- *   1. select_client<...>()      — one or more @ref AddressCounterClient (Unpacker0/Unpacker1/Packers).
- *   2. select_channel<Channel>() — select a single @ref AddressChannel to configure next.
- *   3. set_X/Y/Z/W<value>()      — assign values to counters for the currently selected channel.
+ *   1. client<...>()      — one or more @ref AddressCounterClient (Unpacker0/Unpacker1/Packers).
+ *   2. channel<Channel>() — select a single @ref AddressChannel to configure next.
+ *   3. X/Y/Z/W<value>()   — assign values to counters for the currently selected channel.
  *
- * A given set_X/Y/Z/W applies only to the channel selected in step 2. To program both channels,
+ * A given X/Y/Z/W applies only to the channel selected in step 2. To program both channels,
  * finish one channel's counters, then select the other channel and set its counters:
- *   select_channel<Channel0>() → set_* ... → select_channel<Channel1>() → set_* ...
+ *   channel<Channel0>() → X/Y/Z/W ... → channel<Channel1>() → X/Y/Z/W ...
  *
  * Then terminate with an emitter:
  *   - apply()                      — emit the minimal SETADC* instruction sequence that programs the
@@ -73,24 +73,24 @@ enum class GetOpType : std::uint8_t
  * @code
  *   // Program Unpacker0's X and Y counters on both channels, one channel at a time:
  *   address_counters
- *       .select_client<AddressCounterClient::Unpacker0>()
- *       .select_channel<AddressChannel::Channel0>()
- *       .set_X<face_r_dim>()
- *       .set_Y<0>()
- *       .select_channel<AddressChannel::Channel1>()
- *       .set_X<face_r_dim>()
- *       .set_Y<0>()
+ *       .client<AddressCounterClient::Unpacker0>()
+ *       .channel<AddressChannel::Channel0>()
+ *       .X<face_r_dim>()
+ *       .Y<0>()
+ *       .channel<AddressChannel::Channel1>()
+ *       .X<face_r_dim>()
+ *       .Y<0>()
  *       .apply();
  * @endcode
  *
  * @tparam SetMask     compile-time bitmask recording which per-channel counter slots have been assigned.
- *                     Each counter owns a 2-bit field (one bit per channel); a bit is set when set_*<value>()
+ *                     Each counter owns a 2-bit field (one bit per channel); a bit is set when X/Y/Z/W<value>()
  *                     wrote that channel's slot.
- * @tparam X/X1, Y/Y1, Z/Z1, W/W1  Per-counter Channel0/Channel1 values; set_*<value>() writes only the
- *                     currently selected channel (the one from the most recent select_channel<...>()).
+ * @tparam X/X1, Y/Y1, Z/Z1, W/W1  Per-counter Channel0/Channel1 values; X/Y/Z/W<value>() writes only the
+ *                     currently selected channel (the one from the most recent channel<...>()).
  * @tparam ClientMask  compile-time bitmask of the selected @ref AddressCounterClient(s).
  * @tparam ChannelMask compile-time bitmask of every selected @ref AddressChannel (cumulative).
- * @tparam CurrentChannel  the single channel most recently selected; set_*<value>() targets it.
+ * @tparam CurrentChannel  the single channel most recently selected; X/Y/Z/W<value>() targets it.
  *
  * @note At least one client and one channel must be selected before any emitter is called
  *       (enforced by static_assert). The emitter chooses the fewest SETADC / INCADC instructions
@@ -135,7 +135,7 @@ struct ADC
     }
 
     template <AddressCounterClient... clients>
-    constexpr auto select_client() const
+    constexpr auto client() const
     {
         return ADC<
             SetMask,
@@ -152,18 +152,18 @@ struct ADC
             W_Channel1> {};
     }
 
-    template <AddressChannel channel>
-    constexpr auto select_channel() const
+    template <AddressChannel Channel>
+    constexpr auto channel() const
     {
-        static_assert(!(ChannelMask & ckernel::to_underlying(channel)), "channel already selected — select_channel<...>() called twice for the same channel");
+        static_assert(!(ChannelMask & ckernel::to_underlying(Channel)), "channel already selected — channel<...>() called twice for the same channel");
 
         // ChannelMask accumulates every selected channel (used by the emitter and the double-select guard);
-        // CurrentChannel is replaced so subsequent set_*<value>() write only this channel.
+        // CurrentChannel is replaced so subsequent X/Y/Z/W<value>() write only this channel.
         return ADC<
             SetMask,
             ClientMask,
-            ChannelMask | ckernel::to_underlying(channel),
-            ckernel::to_underlying(channel),
+            ChannelMask | ckernel::to_underlying(Channel),
+            ckernel::to_underlying(Channel),
             X_Channel0,
             X_Channel1,
             Y_Channel0,
@@ -175,25 +175,25 @@ struct ADC
     }
 
     template <std::uint32_t value>
-    constexpr auto set_X() const
+    constexpr auto X() const
     {
         return _set_counter<Counter::X, value>();
     }
 
     template <std::uint32_t value>
-    constexpr auto set_Y() const
+    constexpr auto Y() const
     {
         return _set_counter<Counter::Y, value>();
     }
 
     template <std::uint8_t value>
-    constexpr auto set_Z() const
+    constexpr auto Z() const
     {
         return _set_counter<Counter::Z, value>();
     }
 
     template <std::uint8_t value>
-    constexpr auto set_W() const
+    constexpr auto W() const
     {
         return _set_counter<Counter::W, value>();
     }
@@ -319,8 +319,8 @@ private:
     // Shared validation for both get_operation() and apply().
     static constexpr void _assert_selection()
     {
-        static_assert(ClientMask != 0, "no client selected — call select_client<...>() first");
-        static_assert(ChannelMask != 0, "no channel selected — call select_channel<...>() first");
+        static_assert(ClientMask != 0, "no client selected — call client<...>() first");
+        static_assert(ChannelMask != 0, "no channel selected — call channel<...>() first");
     }
 
 public:
@@ -475,8 +475,8 @@ public:
     // TT_ADDRCRXY and ADDRCRZW were never used and were removed in later arhitecures
     // inline __attribute__((always_inline)) void add_and_reset() const
     // {
-    //     static_assert(ClientMask != 0, "add_and_reset(): no client selected — call select_client<...>() first");
-    //     static_assert(ChannelMask != 0, "add_and_reset(): no channel selected — call select_channel<...>() first");
+    //     static_assert(ClientMask != 0, "add_and_reset(): no client selected — call client<...>() first");
+    //     static_assert(ChannelMask != 0, "add_and_reset(): no channel selected — call channel<...>() first");
 
     //     if constexpr (_is_set(X_SET)) {}
     //     if constexpr (_is_set(Y_SET)) {}

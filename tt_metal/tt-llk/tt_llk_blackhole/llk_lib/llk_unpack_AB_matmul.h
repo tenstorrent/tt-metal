@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "hal/address_counters.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 #include "sanitizer/api.h"
@@ -61,7 +62,12 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                         SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
                         SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                    address_counters.client<AddressCounterClient::Unpacker0>()
+                        .channel<AddressChannel::Channel0>()
+                        .Z<0>()
+                        .channel<AddressChannel::Channel1>()
+                        .Z<0>()
+                        .apply(); // Set ch0_z=0, ch1_z=0
                 }
                 else
                 {
@@ -91,7 +97,12 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                         SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
                         SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                    address_counters.client<AddressCounterClient::Unpacker0>()
+                        .channel<AddressChannel::Channel0>()
+                        .Z<0>()
+                        .channel<AddressChannel::Channel1>()
+                        .Z<0>()
+                        .apply(); // Set ch0_z=0, ch1_z=0
                 }
                 else
                 {
@@ -131,7 +142,12 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                         SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
                         SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                    address_counters.client<AddressCounterClient::Unpacker1>()
+                        .channel<AddressChannel::Channel0>()
+                        .Z<0>()
+                        .channel<AddressChannel::Channel1>()
+                        .Z<0>()
+                        .apply(); // Set ch0_z=0, ch1_z=0
                 }
                 else
                 {
@@ -161,7 +177,12 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                         SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
                         SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                    address_counters.client<AddressCounterClient::Unpacker1>()
+                        .channel<AddressChannel::Channel0>()
+                        .Z<0>()
+                        .channel<AddressChannel::Channel1>()
+                        .Z<0>()
+                        .apply(); // Set ch0_z=0, ch1_z=0
                 }
                 else
                 {
@@ -261,7 +282,14 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     // in large matmul, datacopy will disable the transpose of faces, so we need it turn it back on for matmul.
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose);
 
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
+        .channel<AddressChannel::Channel0>()
+        .Z<0>()
+        .W<0>()
+        .channel<AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 
     if (unpA_partial_face)
     {
@@ -397,7 +425,12 @@ inline void _llk_unpack_AB_matmul_(
                     SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_UNPACR(
                     SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                address_counters.client<AddressCounterClient::Unpacker1>()
+                    .channel<AddressChannel::Channel0>()
+                    .Z<0>()
+                    .channel<AddressChannel::Channel1>()
+                    .Z<0>()
+                    .apply(); // Set ch0_z=0, ch1_z=0
             }
             else
             {
@@ -414,7 +447,12 @@ inline void _llk_unpack_AB_matmul_(
                     SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_UNPACR(
                     SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                address_counters.client<AddressCounterClient::Unpacker0>()
+                    .channel<AddressChannel::Channel0>()
+                    .Z<0>()
+                    .channel<AddressChannel::Channel1>()
+                    .Z<0>()
+                    .apply(); // Set ch0_z=0, ch1_z=0
             }
             else
             {

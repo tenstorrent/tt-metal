@@ -13,6 +13,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "hal/address_counters.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_unpack_common.h"
@@ -73,7 +74,10 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
     {
         if (transpose_of_faces)
         {
-            tmp.set_end_ops(primary_end_op, TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001));
+            // srcA ch0_z = 1
+            tmp.set_end_ops(
+                primary_end_op,
+                address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel0>().Z<1>().get_operation<GetOpType::SETTER>());
         }
         else
         {
@@ -90,15 +94,16 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
         ckernel_template tmp(outerloop, innerloop, srca_op);
         tmp.set_start_op(unpack_srcb);
 
+        // srcB ch0_z (this should be num_faces_c_dim, but can't pass it here until it's compile time)
         if (num_faces_c_dim < MAX_NUM_FACES_C_DIM)
         {
             set_end_op_with_transpose(
-                tmp, TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 1 /*this should be num_faces_c_dim, but can't pass it here until its compile time*/, 0b0001));
+                tmp, address_counters.client<AddressCounterClient::Unpacker1>().channel<AddressChannel::Channel0>().Z<1>().get_operation<GetOpType::SETTER>());
         }
         else
         {
             set_end_op_with_transpose(
-                tmp, TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2 /*this should be num_faces_c_dim, but can't pass it here until its compile time*/, 0b0001));
+                tmp, address_counters.client<AddressCounterClient::Unpacker1>().channel<AddressChannel::Channel0>().Z<2>().get_operation<GetOpType::SETTER>());
         }
 
         tmp.program();
@@ -109,7 +114,8 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
         LLK_ASSERT(
             num_faces_c_dim >= num_faces_r_dim,
             "If num_faces_c_dim is less than num_faces_r_dim (i.e 32x16), then BROADCAST_TYPE::ROW is not supported, Can be fixed in the future");
-        static constexpr std::uint32_t unpack_srcb_clear_z = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001);
+        static constexpr std::uint32_t unpack_srcb_clear_z = // srcB ch0_z = 0
+            address_counters.client<AddressCounterClient::Unpacker1>().channel<AddressChannel::Channel0>().Z<0>().get_operation<GetOpType::SETTER>();
         ckernel_template tmp(outerloop, innerloop, unpack_srcb, srca_op);
         set_end_op_with_transpose(tmp, unpack_srcb_clear_z);
 
@@ -129,7 +135,8 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
         // NONE: no broadcast, A and B faces are paired 1:1
         if (transpose_of_faces)
         {
-            static constexpr std::uint32_t srca_set_z = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);
+            static constexpr std::uint32_t srca_set_z = // srcA ch0_z = 1
+                address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel0>().Z<1>().get_operation<GetOpType::SETTER>();
             // Flip r & c dimension due to transpose of SrcA, SrcA unpack increments L1 pointer by num_faces_c_dim
             ckernel_template tmp(num_faces_c_dim, num_faces_r_dim, unpack_srca_transpose, unpack_srcb);
             tmp.set_end_op(srca_set_z);
@@ -241,7 +248,15 @@ inline void _llk_unpack_AB_(
     [[maybe_unused]] const std::uint32_t bcast_row_idx = 0,
     [[maybe_unused]] const std::uint32_t srcb_format   = 0)
 {
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
+    // reset counters: Z/W = 0 on both channels of both unpackers
+    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
+        .channel<AddressChannel::Channel0>()
+        .Z<0>()
+        .W<0>()
+        .channel<AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 
     if constexpr (BType == BroadcastType::ROW)
     {

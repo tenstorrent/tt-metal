@@ -10,6 +10,7 @@
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
+#include "hal/address_counters.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
@@ -121,10 +122,22 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
 
     // Set the packer X counter to pack the specified number of datums per row
-    TTI_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
+    address_counters.client<AddressCounterClient::Packers>()
+        .channel<AddressChannel::Channel0>()
+        .X<row_num_datums - 1>()
+        .channel<AddressChannel::Channel1>()
+        .X<0x0>()
+        .apply();
 
     // Reset Z/W counters
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1111);
+    address_counters.client<AddressCounterClient::Packers>()
+        .channel<AddressChannel::Channel0>()
+        .Z<0>()
+        .W<0>()
+        .channel<AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 }
 
 /**
@@ -150,8 +163,8 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
 
     ckernel::ckernel_template::run();
 
-    // Reset Z counters after pack operation
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    // Reset Z counters after pack operation: ch0_z = ch1_z = 0
+    address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().Z<0>().channel<AddressChannel::Channel1>().Z<0>().apply();
 }
 
 /**

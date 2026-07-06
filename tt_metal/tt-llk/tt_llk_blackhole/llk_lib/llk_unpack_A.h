@@ -66,20 +66,11 @@ inline void _llk_unpack_A_mop_config_(
         TT_OP_UNPACR(SrcB, 0b0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     static constexpr std::uint32_t srca_set_z_1           = // set srcA ch0_z = 1
-        address_counters.select_client<AddressCounterClient::Unpacker0>()
-            .select_channel<AddressChannel::Channel0>()
-            .set_Z<1>()
-            .get_operation<GetOpType::SETTER>();
+        address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel0>().Z<1>().get_operation<GetOpType::SETTER>();
     static constexpr std::uint32_t srcb_set_z_2 = // set srcB ch0_z = 2
-        address_counters.select_client<AddressCounterClient::Unpacker1>()
-            .select_channel<AddressChannel::Channel0>()
-            .set_Z<2>()
-            .get_operation<GetOpType::SETTER>();
+        address_counters.client<AddressCounterClient::Unpacker1>().channel<AddressChannel::Channel0>().Z<2>().get_operation<GetOpType::SETTER>();
     static constexpr std::uint32_t srcb_clear_z = // set srcB ch0_z = 0
-        address_counters.select_client<AddressCounterClient::Unpacker1>()
-            .select_channel<AddressChannel::Channel0>()
-            .set_Z<0>()
-            .get_operation<GetOpType::SETTER>();
+        address_counters.client<AddressCounterClient::Unpacker1>().channel<AddressChannel::Channel0>().Z<0>().get_operation<GetOpType::SETTER>();
 
     if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
@@ -88,11 +79,11 @@ inline void _llk_unpack_A_mop_config_(
             const std::uint32_t outerloop = 2;
             const std::uint32_t innerloop = 2;
             ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest_transpose_of_faces);
-            tmp.set_end_op(address_counters.select_client<AddressCounterClient::Unpacker0>()
-                               .select_channel<AddressChannel::Channel0>()
-                               .set_Z<1>()
-                               .select_channel<AddressChannel::Channel1>()
-                               .set_Z<2>()
+            tmp.set_end_op(address_counters.client<AddressCounterClient::Unpacker0>()
+                               .channel<AddressChannel::Channel0>()
+                               .Z<1>()
+                               .channel<AddressChannel::Channel1>()
+                               .Z<2>()
                                .get_operation<GetOpType::SETTER>()); // srcA ch0_z=1, ch1_z=2
             tmp.program();
         }
@@ -320,10 +311,8 @@ inline void _llk_unpack_A_init_(
         //   acc_to_dest DEST_TO_SRCA   -> SrcB only      (SrcA comes from DEST, e.g. hardswish x*hardsigmoid(x))
         //   acc_to_dest DEST_TO_SRCB   -> SrcA only      (SrcB comes from DEST)
         //   broadcast                  -> SrcB
-        constexpr bool reads_srca =
-            (BType == BroadcastType::NONE) && !(acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA);
-        constexpr bool reads_srcb =
-            (BType != BroadcastType::NONE) || (acc_to_dest && binary_reuse_dest != EltwiseBinaryReuseDestType::DEST_TO_SRCB);
+        constexpr bool reads_srca       = (BType == BroadcastType::NONE) && !(acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA);
+        constexpr bool reads_srcb       = (BType != BroadcastType::NONE) || (acc_to_dest && binary_reuse_dest != EltwiseBinaryReuseDestType::DEST_TO_SRCB);
         constexpr std::uint32_t UNP_SEL = (reads_srca && reads_srcb) ? p_setadc::UNP_AB : (reads_srca ? p_setadc::UNP_A : p_setadc::UNP_B);
         config_unpacker_x_end<UNP_SEL>(face_r_dim);
     }
@@ -403,13 +392,13 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     llk::san::operation_check<llk::san::Operation::UnpackA>(BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, unpack_src_format, unpack_dst_format);
 
     // Clear z/w start counters on both channels of both unpackers (emitted as a single SETADCZW).
-    address_counters.select_client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
-        .select_channel<AddressChannel::Channel0>()
-        .set_Z<0>()
-        .set_W<0>()
-        .select_channel<AddressChannel::Channel1>()
-        .set_Z<0>()
-        .set_W<0>()
+    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
+        .channel<AddressChannel::Channel0>()
+        .Z<0>()
+        .W<0>()
+        .channel<AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
         .apply();
 
     // Program srcA and srcB base addresses
