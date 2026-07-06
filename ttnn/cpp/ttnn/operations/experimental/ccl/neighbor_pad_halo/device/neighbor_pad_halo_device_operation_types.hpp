@@ -35,6 +35,12 @@ struct NpHaloParams {
     size_t np_pad2_num_links = 2;
     tt::tt_metal::MemoryConfig np_output_mem_config;
     std::string padding_mode;
+    // Padded-input mode (opt-in, default 0 = contiguous input). When >0 the input tensor is a padded
+    // [.., H+2*input_pad_h, W+2*input_pad_w, C] buffer and the readers exchange the halo of its INTERIOR
+    // (offset by input_pad_h/w, row stride = padded W, frame stride = padded H*W). Lets the copy-free
+    // decode feed conv3d's padded-output buffer straight into the exchange with no interior repack.
+    uint32_t input_pad_h = 0;
+    uint32_t input_pad_w = 0;
 
     // GlobalSemaphore is not default constructible, so an explicit constructor is required.
     NpHaloParams(
@@ -82,7 +88,9 @@ struct NpHaloParams {
         "np_pad2_right",
         "np_num_links",
         "np_pad2_num_links",
-        "padding_mode");
+        "padding_mode",
+        "input_pad_h",
+        "input_pad_w");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -95,7 +103,9 @@ struct NpHaloParams {
             np_pad2_right,
             np_num_links,
             np_pad2_num_links,
-            padding_mode);
+            padding_mode,
+            input_pad_h,
+            input_pad_w);
     }
 };
 

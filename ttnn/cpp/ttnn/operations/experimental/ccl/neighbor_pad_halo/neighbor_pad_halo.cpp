@@ -29,7 +29,9 @@ ttnn::Tensor neighbor_pad_halo(
     uint32_t np_pad2_cluster_axis,
     size_t np_pad2_num_links,
     const std::string& padding_mode,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    uint32_t input_pad_h,
+    uint32_t input_pad_w) {
     TT_FATAL(np_padding_h > 0, "neighbor_pad_halo: np_padding_h must be > 0");
     TT_FATAL(np_pad_dim2 > 0, "neighbor_pad_halo: 2D padding required (np_pad_dim2 must be > 0)");
 
@@ -65,6 +67,8 @@ ttnn::Tensor neighbor_pad_halo(
         np_pad2_num_links,
         output_mem_config,
         padding_mode);
+    params.input_pad_h = input_pad_h;
+    params.input_pad_w = input_pad_w;
 
     return ttnn::prim::neighbor_pad_halo(input, halo_buffer, params);
 }
