@@ -545,6 +545,26 @@ def tt_conv1d_nlc(
         conv_config.deallocate_activation = True
         if params.out_channels >= 256 or params.kernel_size >= 7:
             conv_config.force_split_reader = True
+        # Wide convs re-read the [Cin*k, Cout] weight per output block, so weights/act
+        # double-buffering is the dominant wall-clock lever (proven 1.46x / ~10µs on the
+        # identical-shape TextEncoder conv, see _batched_tt_conv1d_nlc). Explicit BLOCK sharding
+        # pins the output to a 2D core grid so a wide-channel generator conv uses every output
+        # tile as a core (ceil(H/32)*ceil(C/32)) instead of the auto-heuristic's inconsistent
+        # 20-26 for the 320x128 body convs. Numerically inert — this is spatial distribution of
+        # independent output tiles, not a reduction split, so the per-element MAC order is
+        # unchanged (verified: resblocks 0.99990/0.99990, conv_post 0.99994 identical to the
+        # pre-change baseline). Guarded to wide convs and the non-chunked (L<=2048) region so the
+        # extra double-buffer L1 is bounded; act_block_h_override=32 caps the per-core CB (64
+        # regresses hard on BH per the TextEncoder sweep). The out_channels band is capped at 256:
+        # the double-buffered weight CB scales with Cin*k*Cout, and the Decoder's wide AdainResBlk1d
+        # convs (out=1024, e.g. encode 514->1024) overflow BH L1 (>2.5 MB CBs vs 1.5 MB/bank) if
+        # this recipe is applied — 128..256 covers every generator body/source conv while excluding
+        # those.
+        if L <= 2048 and 128 <= params.out_channels <= 256:
+            conv_config.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            conv_config.enable_act_double_buffer = True
+            conv_config.enable_weights_double_buffer = True
+            conv_config.act_block_h_override = 32
         # For large L with dilation=1: capping act_block_h to 32 (one TILE row) reduces
         # the per-core CB footprint to avoid L1 overflow.  For dilation=1 this is correct
         # because the halo is only (kernel_size-1)//2 rows, well within a 32-row block.
