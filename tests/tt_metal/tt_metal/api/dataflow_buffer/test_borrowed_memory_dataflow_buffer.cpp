@@ -111,7 +111,7 @@ void run_borrowed_memory_dfb_program(
 
     // --- Producer kernel (dfb_producer.cpp) ---
     KernelSpec producer_spec = (arch == ARCH::QUASAR)
-                                   ? MakeMinimalGen2DMKernel("producer", static_cast<uint8_t>(cfg.num_producers))
+                                   ? MakeMinimalGen2DMKernel("producer", cfg.num_producers)
                                    : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer_spec.source = DFB_PRODUCER_KERNEL;
     producer_spec.compile_time_args = {
@@ -132,18 +132,16 @@ void run_borrowed_memory_dfb_program(
     KernelSpec consumer_spec;
     if (cfg.tensix_consumer) {
         // dfb_t6_consumer.cpp: drains the DFB, does not write to DRAM.
-        consumer_spec = (arch == ARCH::QUASAR)
-            ? MakeMinimalComputeKernel("consumer", static_cast<uint8_t>(cfg.num_consumers))
-            : MakeMinimalComputeKernel("consumer");
+        consumer_spec = (arch == ARCH::QUASAR) ? MakeMinimalComputeKernel("consumer", cfg.num_consumers)
+                                               : MakeMinimalComputeKernel("consumer");
         consumer_spec.source = DFB_TENSIX_CONSUMER_KERNEL;
         consumer_spec.compile_time_args = {
             {"num_entries_per_consumer", entries_per_consumer},
         };
     } else {
         // dfb_consumer.cpp: reads DFB and writes to dst_tensor.
-        consumer_spec = (arch == ARCH::QUASAR)
-                            ? MakeMinimalGen2DMKernel("consumer", static_cast<uint8_t>(cfg.num_consumers))
-                            : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+        consumer_spec = (arch == ARCH::QUASAR) ? MakeMinimalGen2DMKernel("consumer", cfg.num_consumers)
+                                               : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
         consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
         consumer_spec.compile_time_args = {
             {"num_entries_per_consumer", entries_per_consumer},
