@@ -3,9 +3,9 @@
 """
 pytest hooks for the accuracy suite (auto-loaded by pytest; nothing imports it).
 
-They bracket the whole run so each per-op CSV reflects only this run:
+They bracket the whole run so each per-op file reflects only this run:
   - before the run: delete leftover shard files (clear_shards)
-  - after the run: merge this run's shards into one CSV per op (merge_shards)
+  - after the run: merge this run's shards into one Parquet file per op (merge_shards)
 
 When tests run in parallel (pytest -n) there are many worker processes plus one
 controller. We run clear/merge only on the controller (the single process
@@ -33,4 +33,6 @@ def pytest_sessionfinish(session, exitstatus):
 
         written = merge_shards()
         if written:
-            logger.success("Merged {} per-op CSV(s) into {}", len(written), OUTPUT_DIR)
+            logger.success(
+                "Merged {} per-op Parquet file(s) into {}", len(written), OUTPUT_DIR
+            )

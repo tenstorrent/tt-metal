@@ -45,8 +45,8 @@ from helpers.test_variant_parameters import (
 
 _THIS_DIR = Path(__file__).resolve().parent
 
-# ── CSV schema ──────────────────────────
-CSV_COLUMNS: List[str] = [
+# ── Output schema ──────────────────────────
+OUTPUT_COLUMNS: List[str] = [
     "op",
     "input_format",
     "output_format",
@@ -55,9 +55,9 @@ CSV_COLUMNS: List[str] = [
     "intervals",
     "seed",
     "sample_index",
-    "x",
-    "golden",
-    "hw",
+    "test_value",
+    "golden_result",
+    "hardware_result",
     "approx_mode",
     "fast_mode",
     "dest_acc",
@@ -67,11 +67,6 @@ CSV_COLUMNS: List[str] = [
     "is_finite_hw",
     "is_finite_golden",
 ]
-
-# Float precision on disk: float32 needs up to 9 significant digits to
-# round-trip exactly (bf16/fp16 need far fewer), so %.9g is lossless for every
-# format we sweep while staying far shorter than full float64 repr.
-FLOAT_FORMAT = "%.9g"
 
 _ARCH_ABBR = {"wormhole": "wh", "blackhole": "bh", "quasar": "qsr"}
 _FMT_ABBR = {
@@ -88,7 +83,7 @@ _ARCH = os.getenv("CHIP_ARCH", "unknown").lower()
 OUTPUT_DIR = _THIS_DIR / "_csv_output" / _ARCH_ABBR.get(_ARCH, _ARCH)
 SHARD_DIR = OUTPUT_DIR / "_shards"
 
-# How rows are ordered inside each final per-op CSV.
+# How rows are ordered inside each final per-op file.
 MERGE_SORT_COLS = [
     "op",
     "input_format",
@@ -96,7 +91,7 @@ MERGE_SORT_COLS = [
     "approx_mode",
     "fast_mode",
     "dest_acc",
-    "x",
+    "test_value",
 ]
 
 # How many input points each op's curve is sampled at.
@@ -189,11 +184,11 @@ def rows_dataframe(
     hw,
     out_fmt_enum_name: str,
 ) -> "pd.DataFrame":
-    """Build the CSV rows for one variant (one op + format + config).
+    """Build the output rows for one variant (one op + format + config).
 
     Takes the raw sweep arrays (x, golden, hw), sorts them by x, computes the
-    error columns (via accuracy_metrics), and returns a DataFrame in CSV_COLUMNS
-    order — ready to hand to write_shard.
+    error columns (via accuracy_metrics), and returns a DataFrame in
+    OUTPUT_COLUMNS order — ready to hand to write_shard.
     """
     x = np.asarray(x, dtype=np.float64)
     golden = np.asarray(golden, dtype=np.float64)
@@ -216,26 +211,26 @@ def rows_dataframe(
             "intervals": intervals,
             "seed": seed,
             "sample_index": np.arange(n, dtype=np.int64),
-            "x": x,
-            "golden": golden,
-            "hw": hw,
+            "test_value": x,
+            "golden_result": golden,
+            "hardware_result": hw,
             "approx_mode": approx,
             "fast_mode": fast,
             "dest_acc": dest,
             "signed_error": m["signed_error"],
             "rel_error": m["rel_error"],
             "signed_ulp_error": m["signed_ulp_error"],
-            "is_finite_hw": np.where(m["is_finite_hw"], "T", "F"),
-            "is_finite_golden": np.where(m["is_finite_golden"], "T", "F"),
+            "is_finite_hw": m["is_finite_hw"],
+            "is_finite_golden": m["is_finite_golden"],
         }
     )
-    return df[CSV_COLUMNS]
+    return df[OUTPUT_COLUMNS]
 
 
 def write_shard(df: "pd.DataFrame", variant: str) -> Path:
-    """Write one variant's DataFrame to SHARD_DIR/{variant}.csv.
+    """Write one variant's DataFrame to SHARD_DIR/{variant}.parquet.
 
-    *variant* is the unique shard stem (it is no longer a CSV column, so it is
+    *variant* is the unique shard stem (it is not an output column, so it is
     passed explicitly).
 
     The write is atomic: data goes to a per-process temp file, then os.replace
@@ -243,36 +238,36 @@ def write_shard(df: "pd.DataFrame", variant: str) -> Path:
     same shard, the reader never sees a half-written file — one clean copy wins.
     """
     SHARD_DIR.mkdir(parents=True, exist_ok=True)
-    shard_path = SHARD_DIR / f"{variant}.csv"
+    shard_path = SHARD_DIR / f"{variant}.parquet"
     tmp_path = SHARD_DIR / f"{variant}.{os.getpid()}.tmp"
-    df.to_csv(tmp_path, index=False, float_format=FLOAT_FORMAT)
+    df.to_parquet(tmp_path, engine="pyarrow", compression="zstd", index=False)
     os.replace(tmp_path, shard_path)
     return shard_path
 
 
 def merge_shards() -> List[Path]:
-    """Merge current-run shards into one sorted CSV per op (overwrite).
+    """Merge current-run shards into one sorted Parquet file per op (overwrite).
 
     Reads only the shards present in SHARD_DIR, groups by op, sorts by
-    MERGE_SORT_COLS, and overwrites OUTPUT_DIR/{op}.csv from scratch. Never
-    reads a pre-existing final CSV.
+    MERGE_SORT_COLS, and overwrites OUTPUT_DIR/{op}.parquet from scratch. Never
+    reads a pre-existing final file.
 
-    Only ops present in the current run are rewritten. Other per-op CSVs are
+    Only ops present in the current run are rewritten. Other per-op files are
     left as-is. Delete OUTPUT_DIR first for a completely fresh set.
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    shard_files = sorted(SHARD_DIR.glob("*.csv")) if SHARD_DIR.exists() else []
+    shard_files = sorted(SHARD_DIR.glob("*.parquet")) if SHARD_DIR.exists() else []
     if not shard_files:
         return []
 
-    frames = [pd.read_csv(f) for f in shard_files]
+    frames = [pd.read_parquet(f) for f in shard_files]
     combined = pd.concat(frames, ignore_index=True)
 
     written: List[Path] = []
     for op_name, group in combined.groupby("op", sort=True):
         ordered = group.sort_values(MERGE_SORT_COLS, kind="stable")
-        out_path = OUTPUT_DIR / f"{op_name}.csv"
-        ordered.to_csv(out_path, index=False, float_format=FLOAT_FORMAT)
+        out_path = OUTPUT_DIR / f"{op_name}.parquet"
+        ordered.to_parquet(out_path, engine="pyarrow", compression="zstd", index=False)
         written.append(out_path)
     return written
 
@@ -280,7 +275,7 @@ def merge_shards() -> List[Path]:
 def clear_shards() -> None:
     """Remove the shard dir so a run starts with no stale shards.
 
-    Only the intermediate shards are cleared — the merged per-op CSVs in
+    Only the intermediate shards are cleared — the merged per-op files in
     OUTPUT_DIR are intentionally left (so partial runs accumulate, and a crash
     can't lose the existing corpus). See merge_shards for the full trade-off.
     """
