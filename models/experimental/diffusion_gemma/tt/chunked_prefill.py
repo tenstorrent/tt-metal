@@ -49,12 +49,25 @@ Scope (prototype, gated by ``DG_CHUNKED_PREFILL``, default OFF)
 * Single-user (``batch_size == 1``) bounded-memory prefill. Batched chunked
   prefill is the #47557 batched-canvas / #47488 paged-ownership follow-up.
 * Full-attention layers get true cross-chunk attention via the paged
-  ``chunked_scaled_dot_product_attention`` op. Sliding-window layers are correct
-  as long as the total context ``<= sliding_window`` (1024) — within the window
-  a causal chunked SDPA is exactly the sliding SDPA. Sliding-window chunked
-  prefill for prompts *longer* than the window needs the overlapping-window
-  scheme (gemma4 ``chunked_prefill_sdpa_sliding``) adapted to the multi-chunk
-  contract; that is documented as an OPEN item, not implemented here.
+  ``chunked_scaled_dot_product_attention`` op, reading all prior chunks straight
+  from the paged KV cache. Memory bound: ``O(chunk_size)`` prefill scratch (prior
+  chunks live in the paged cache, never materialized).
+* Sliding-window layers work for prompts of *any* length — including *longer*
+  than the sliding window (1024). The paged chunked SDPA op is **causal-only**
+  (no window mask), so sliding layers cannot use it once total context exceeds
+  the window (over-attention). Instead each sliding layer threads a **bounded
+  rolling in-memory K/V window buffer** (``<= sliding_window + chunk_size``
+  positions) across chunks: every chunk appends its RoPE'd K/V to the buffer,
+  runs the overlapping-window causal+sliding SDPA (gemma4
+  ``chunked_prefill_sdpa_sliding``, copied below) over the buffer for this
+  chunk's queries, then trims the buffer back to the last ``sliding_window``
+  positions. A sliding query at absolute pos ``p`` only depends on K/V in
+  ``(p - window, p]``, so the trimmed buffer always contains every key any of the
+  chunk's queries can attend — making the bounded result identical to a single
+  full-length sliding-window prefill. Memory bound: ``O(chunk_size + window)``.
+
+Both attention kinds therefore stay bounded-memory, so prompts far past the
+single-chunk ``O(prompt_len)`` OOM cliff (>64k) prefill in a fixed footprint.
 """
 
 from __future__ import annotations
@@ -89,11 +102,34 @@ def chunked_prefill_enabled() -> bool:
     return os.environ.get(FLAG, "0") == "1"
 
 
+# ── per-sliding-layer rolling K/V window buffer (threaded across chunks) ──────
+@dataclass
+class _SlidingWindowState:
+    """Bounded rolling in-memory K/V window buffers, one per sliding-window layer.
+
+    Keyed by ``id(weights)`` (the per-layer ``AttentionWeights`` object is unique
+    and alive for the whole chunked-prefill call, so its id is a stable per-layer
+    key). Each value is ``(k_buf, v_buf)`` device tensors holding RoPE'd K/V for a
+    contiguous run of absolute positions ending at the last-appended chunk; the
+    run is trimmed to ``<= sliding_window`` positions after each chunk so peak
+    residency is ``<= sliding_window + chunk_size``.
+    """
+
+    buffers: dict  # id(weights) -> (k_buf, v_buf)
+
+    def release(self):
+        for k_buf, v_buf in self.buffers.values():
+            k_buf.deallocate(True)
+            v_buf.deallocate(True)
+        self.buffers.clear()
+
+
 # ── per-chunk context (read by the swapped attention-prefill routine) ────────
 @dataclass
 class _ChunkContext:
     chunk_start_idx: int  # absolute start position of the active chunk
     chunk_page_table: object  # ttnn.Tensor: this chunk's blocks (fill target)
+    sliding_state: _SlidingWindowState  # per-sliding-layer rolling K/V window buffers
 
 
 _CHUNK_CTX: _ChunkContext | None = None
@@ -119,6 +155,137 @@ def _chunked_sdpa_program_config(head_dim: int) -> "ttnn.SDPAProgramConfig":
         k_chunk_size=128,
         exp_approx_mode=False,
     )
+
+
+# ── sliding-window SDPA over the buffer (adapted from gemma4 chunked_prefill_sdpa_sliding) ──
+def _sliding_window_square_sdpa(tt_q, tt_k, tt_v, sliding_window, scale=1.0):
+    """One causal+sliding-window SDPA over a square (Q.s == K.s) window slice.
+
+    This is the core of gemma4 ``operations.chunked_prefill_sdpa_sliding`` (the
+    per-stride SDPA), lifted DG-local. The paged ``chunked_scaled_dot_product_...``
+    op is causal-only (no window mask); the non-chunked op supports a window mask
+    but requires ``Q.s == K.s`` (a square causal mask, with a 32768 cliff on that
+    shared length). A sliding query at absolute pos ``p`` depends only on K/V in
+    ``(p - window, p]``, so callers pass a bounded square window slice
+    (``<= sliding_window + chunk_size`` positions, well under the cliff) and keep
+    only the query rows they care about.
+
+    Unlike the gemma4 routine this does NOT slice-and-deallocate its inputs: the
+    caller here passes a *persistent* rolling window buffer that must survive the
+    call, and a full-range ``ttnn.slice`` aliases its input (so deallocating the
+    slice would free the buffer). The buffer is always a single stride, so one
+    direct SDPA call replaces the gemma4 strided loop.
+
+    Args:
+        tt_q, tt_k, tt_v: [1, heads/kv_heads, buf_len, head_dim] (TILE), RoPE'd,
+            with ``buf_len`` the same for Q and K/V (square).
+        sliding_window: window size W (Gemma4 sliding layers: 1024, tile-aligned).
+    Returns:
+        [1, num_heads, buf_len, head_dim] attention output (TILE layout).
+    """
+    # HiFi4 + FP32 dest-acc: match the non-chunked prefill SDPA's softmax-reduce
+    # precision (the reference single-prefill path uses the same fidelity).
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        tt_q.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    return ttnn.transformer.scaled_dot_product_attention(
+        tt_q,
+        tt_k,
+        tt_v,
+        is_causal=True,
+        scale=scale,
+        sliding_window_size=sliding_window,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+
+def _bounded_sliding_sdpa(ctx, key, tt_q, tt_k, tt_v, sliding_window, head_dim):
+    """Sliding-window SDPA for ONE chunk over a bounded rolling K/V window buffer.
+
+    This is the fix for "the paged chunked SDPA op is causal-only, so sliding
+    layers over-attend once total context exceeds the window". Instead of the
+    paged op, each sliding layer keeps a small rolling buffer of RoPE'd K/V:
+
+    1. **Append** this chunk's ``(tt_k, tt_v)`` to the layer's buffer (via
+       ``clone``/``concat`` so it is independent of the caller's ``tt_k``/``tt_v``,
+       which are deallocated after this call). The buffer now holds absolute
+       positions ``[buf_start, chunk_end)`` where
+       ``buf_start = max(0, chunk_start - window)`` (from the prior trim).
+    2. **Attend** the buffer for this chunk's queries via the square causal+sliding
+       SDPA (:func:`_sliding_window_square_sdpa`). ``scaled_dot_product_attention``
+       with ``is_causal`` requires ``Q.s == K.s``, so the chunk's queries are
+       front-aligned to the buffer's tail (``hist_len`` zero query rows in front);
+       only the tail ``chunk_len`` output rows (the real queries) are kept. A
+       sliding query at pos ``p`` attends only ``(p - window, p]`` — all inside the
+       buffer — so the result equals a single full-length sliding-window prefill.
+    3. **Trim** the buffer back to the last ``sliding_window`` positions so peak
+       residency stays ``<= sliding_window + chunk_size`` (bounded memory).
+
+    Returns the chunk's attention output ``[1, num_heads, chunk_len, head_dim]``.
+    """
+    state = ctx.sliding_state
+    nh = tt_q.shape[1]
+    nkv = tt_k.shape[1]
+    chunk_len = tt_q.shape[-2]
+
+    # 1. append this chunk's K/V to the rolling buffer (independent of tt_k/tt_v).
+    prev = state.buffers.get(key)
+    if prev is None:
+        k_buf = ttnn.clone(tt_k)
+        v_buf = ttnn.clone(tt_v)
+    else:
+        pk, pv = prev
+        k_buf = ttnn.concat([pk, tt_k], dim=2)
+        v_buf = ttnn.concat([pv, tt_v], dim=2)
+        pk.deallocate(True)
+        pv.deallocate(True)
+
+    buf_len = k_buf.shape[-2]
+    hist_len = buf_len - chunk_len  # history positions preceding this chunk in the buffer
+
+    # 2. square Q: front-pad this chunk's queries with hist_len zero rows so the
+    #    causal+sliding SDPA aligns query row (hist_len + j) with buffer position
+    #    j's absolute pos. hist_len is a multiple of 32 (window + chunk are
+    #    tile-aligned), so the concat/slice stay tile-aligned. The zero front rows
+    #    produce outputs that are discarded (attention rows are independent, so
+    #    they cannot affect the real query rows). The SDPA op reads but does not
+    #    deallocate its inputs, so the persistent buffer is untouched.
+    if hist_len > 0:
+        zeros_q = ttnn.zeros(
+            [1, nh, hist_len, head_dim], dtype=tt_q.dtype, layout=ttnn.TILE_LAYOUT, device=tt_q.device()
+        )
+        q_square = ttnn.concat([zeros_q, tt_q], dim=2)
+        zeros_q.deallocate(True)
+    else:
+        q_square = tt_q
+
+    o_full = _sliding_window_square_sdpa(q_square, k_buf, v_buf, sliding_window, scale=1.0)
+    if q_square is not tt_q:
+        q_square.deallocate(True)
+
+    if hist_len > 0:
+        out = ttnn.slice(o_full, [0, 0, hist_len, 0], [1, nh, buf_len, head_dim])
+        o_full.deallocate(True)
+    else:
+        out = o_full
+
+    # 3. trim the buffer to the last `sliding_window` positions (bounded memory).
+    #    ttnn.slice over a strict sub-range returns an independent copy, so the
+    #    trimmed buffer survives the original buffer's deallocation.
+    if buf_len > sliding_window:
+        trim = buf_len - sliding_window
+        k_trim = ttnn.slice(k_buf, [0, 0, trim, 0], [1, nkv, buf_len, head_dim])
+        v_trim = ttnn.slice(v_buf, [0, 0, trim, 0], [1, nkv, buf_len, head_dim])
+        k_buf.deallocate(True)
+        v_buf.deallocate(True)
+        k_buf, v_buf = k_trim, v_trim
+    state.buffers[key] = (k_buf, v_buf)
+
+    return out
 
 
 # ── copied + fixed gemma4 _prefill_forward_single ────────────────────────────
@@ -218,60 +385,62 @@ def chunked_prefill_attention_forward(
             v_cache, tt_v, ctx.chunk_page_table, batch_idx=user_id, block_size=eff_bs, **paged_modulo_kwargs
         )
 
-    # ── FIX 3: attend the FULL prefix (prior chunks) with chunk_start_idx ─────
-    k_cache, v_cache = kv_cache
-    if config.is_sliding and config.sliding_window is not None:
-        # Correct only while total context <= sliding_window: within the window a
-        # causal chunked SDPA IS the sliding SDPA. Longer sliding-window prompts
-        # need the overlapping-window scheme (OPEN item — see module docstring).
-        window = config.sliding_window
-        if ctx.chunk_start_idx + tt_q.shape[-2] > window:
-            raise NotImplementedError(
-                f"sliding-window chunked prefill past the window ({window}) is not implemented "
-                f"(chunk_start_idx={ctx.chunk_start_idx}, chunk_len={tt_q.shape[-2]})"
-            )
-
-    num_pages = page_table.shape[-1]
-    if page_table.shape[0] > 1:
-        user_pt = ttnn.slice(page_table, [user_id, 0], [user_id + 1, num_pages])
-        owns_user_pt = True
-    else:
-        user_pt = page_table
-        owns_user_pt = False
-
+    # ── FIX 3: attend the correct prefix under each layer's mask ─────────────
+    #   full-attention: the ENTIRE KV prefix (all prior chunks) via the paged
+    #     causal chunked SDPA op with chunk_start_idx — prior chunks are read
+    #     straight from the paged cache (never materialized → O(chunk) memory).
+    #   sliding-window: the paged chunked op is CAUSAL-ONLY (no window mask), so
+    #     it would over-attend once total context exceeds the window. Instead
+    #     thread a bounded rolling in-memory K/V window buffer per sliding layer
+    #     (:func:`_bounded_sliding_sdpa`) → O(chunk + window) memory. This is what
+    #     makes sliding-window chunked prefill correct for prompts LONGER than the
+    #     sliding window.
     nh = tt_q.shape[1]
     head_dim = config.head_dim
-    q_len = tt_q.shape[-2]
-    # chunked SDPA q_chunk_size=128 needs q_len % 128 == 0; pad the tail and slice back.
-    pad = (-q_len) % 128
-    q_in = tt_q
-    if pad:
-        q_in = ttnn.pad(tt_q, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
 
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        tt_q.device().arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
-    tt_sdpa = ttnn.transformer.chunked_scaled_dot_product_attention(
-        q_in,
-        k_cache,
-        v_cache,
-        user_pt,
-        chunk_start_idx=ctx.chunk_start_idx,
-        scale=1.0,
-        program_config=_chunked_sdpa_program_config(head_dim),
-        compute_kernel_config=compute_kernel_config,
-    )
-    if pad:
-        q_in.deallocate(True)
-        sdpa_unpadded = ttnn.slice(tt_sdpa, [0, 0, 0, 0], [1, nh, q_len, head_dim])
-        tt_sdpa.deallocate(True)
-        tt_sdpa = sdpa_unpadded
-    if owns_user_pt:
-        user_pt.deallocate(True)
+    if config.is_sliding and config.sliding_window is not None:
+        tt_sdpa = _bounded_sliding_sdpa(ctx, id(weights), tt_q, tt_k, tt_v, config.sliding_window, head_dim)
+    else:
+        k_cache, v_cache = kv_cache
+        num_pages = page_table.shape[-1]
+        if page_table.shape[0] > 1:
+            user_pt = ttnn.slice(page_table, [user_id, 0], [user_id + 1, num_pages])
+            owns_user_pt = True
+        else:
+            user_pt = page_table
+            owns_user_pt = False
+
+        q_len = tt_q.shape[-2]
+        # chunked SDPA q_chunk_size=128 needs q_len % 128 == 0; pad the tail and slice back.
+        pad = (-q_len) % 128
+        q_in = tt_q
+        if pad:
+            q_in = ttnn.pad(tt_q, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
+
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            tt_q.device().arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        tt_sdpa = ttnn.transformer.chunked_scaled_dot_product_attention(
+            q_in,
+            k_cache,
+            v_cache,
+            user_pt,
+            chunk_start_idx=ctx.chunk_start_idx,
+            scale=1.0,
+            program_config=_chunked_sdpa_program_config(head_dim),
+            compute_kernel_config=compute_kernel_config,
+        )
+        if pad:
+            q_in.deallocate(True)
+            sdpa_unpadded = ttnn.slice(tt_sdpa, [0, 0, 0, 0], [1, nh, q_len, head_dim])
+            tt_sdpa.deallocate(True)
+            tt_sdpa = sdpa_unpadded
+        if owns_user_pt:
+            user_pt.deallocate(True)
 
     tt_q.deallocate(True)
     kept_kv = None
@@ -406,6 +575,11 @@ def chunked_prefill(
 
     full_pt_dev = _to_device_page_table(page_table_torch, model.mesh_device)
 
+    # Rolling K/V window buffers for sliding-window layers, threaded across all
+    # chunks (one per sliding layer). Built here so it lives for the whole prefill
+    # and is released at the end — bounded to O(window + chunk_size) per layer.
+    sliding_state = _SlidingWindowState(buffers={})
+
     logits = None
     for c in range(num_chunks):
         start = c * chunk_size
@@ -432,7 +606,7 @@ def chunked_prefill(
         get_last = -1 if want_logits else 0
 
         global _CHUNK_CTX
-        _CHUNK_CTX = _ChunkContext(chunk_start_idx=start, chunk_page_table=chunk_pt_dev)
+        _CHUNK_CTX = _ChunkContext(chunk_start_idx=start, chunk_page_table=chunk_pt_dev, sliding_state=sliding_state)
         try:
             with _swap_prefill_attention():
                 out = model(
@@ -457,5 +631,6 @@ def chunked_prefill(
         elif out is not None:
             out.deallocate(True)
 
+    sliding_state.release()
     full_pt_dev.deallocate(True)
     return logits

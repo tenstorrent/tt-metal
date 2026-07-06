@@ -3,19 +3,31 @@
 
 """#47466 — DiffusionGemma bounded-memory chunked long-context prefill.
 
-Acceptance gate for ``tt/chunked_prefill.py``: prefilling a 512-token prompt as
-**2×256 chunks** must reproduce a single **1×512** prefill (PCC >= 0.999),
-proving the two fixes the shared gemma4 backbone lacks:
+Acceptance gates for ``tt/chunked_prefill.py``: prefilling a prompt in chunks
+must reproduce a single full-length prefill (last-token logits PCC >= 0.999),
+proving the fixes the shared gemma4 backbone lacks:
 
-* correct per-chunk RoPE offset (``chunk_start_idx``), and
-* cross-chunk attention through the paged KV cache (``chunk_page_table`` fill +
-  full-``page_table`` ``chunked_scaled_dot_product_attention``).
+* correct per-chunk RoPE offset (``chunk_start_idx``),
+* cross-chunk attention for full-attention layers through the paged KV cache
+  (``chunk_page_table`` fill + full-``page_table``
+  ``chunked_scaled_dot_product_attention``), and
+* correct sliding-window attention for **prompts longer than the sliding
+  window** via a bounded rolling in-memory K/V window buffer (the paged chunked
+  SDPA op is causal-only, so it over-attends past the window).
 
-If RoPE were not offset, chunk-1's tokens would be rotated as if they started at
-position 0 and the last-token logits would diverge (PCC collapses). If
-cross-chunk attention were broken, chunk-1's queries could not see chunk-0's KV
-and would again diverge. Matching the single-prefill baseline at >= 0.999 is only
-possible when BOTH are correct.
+Two gates:
+
+1. ``test_chunked_prefill_matches_single`` — 512-token prompt as **2×256**
+   chunks vs single **1×512**, sliding_window=1024 (> prompt, so sliding ==
+   causal within the window). Exercises the RoPE offset + full-attention paged
+   cross-chunk attention.
+2. ``test_chunked_prefill_sliding_past_window`` — 2048-token prompt as **8×256**
+   chunks vs single **1×2048**, sliding_window=1024 (< prompt, so sliding layers
+   EXCEED the window). This is the sliding-window gate: the sliding layers must
+   apply the window mask exactly like the single full-length prefill. With the
+   old code this path raised ``NotImplementedError`` (sliding-window chunked
+   prefill past the window was unimplemented — it would over-attend); with the
+   rolling-window buffer it matches the single prefill at PCC >= 0.999.
 
 The vehicle is a tiny random-weight 2-layer model (one sliding + one full
 attention layer) so the check isolates the chunked-prefill logic from the 26B
@@ -47,7 +59,6 @@ from models.experimental.diffusion_gemma.tt.model import DiffusionGemma4Model
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-PROMPT_LEN = 512
 CHUNK_SIZE = 256
 BLOCK_SIZE = 64
 HIDDEN = 128
@@ -60,7 +71,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _tiny_config():
+def _tiny_config(sliding_window):
     """Two-layer Gemma4 text config: one sliding + one full attention layer, MoE off."""
     layer_types = ["sliding_attention", "full_attention"]
     config = Gemma4TextConfig(
@@ -74,7 +85,7 @@ def _tiny_config():
         head_dim=HEAD_DIM,
         global_head_dim=HEAD_DIM,
         layer_types=layer_types,
-        sliding_window=1024,  # > PROMPT_LEN, so sliding == causal within the window
+        sliding_window=sliding_window,
         max_position_embeddings=262144,
         rms_norm_eps=1e-6,
         hidden_activation="gelu_pytorch_tanh",
@@ -119,9 +130,9 @@ def _to_tt_state(config):
     return {f"model.{k}": v for k, v in m.state_dict().items()}
 
 
-def _alloc_caches(mesh_device, model, *, paged):
+def _alloc_caches(mesh_device, model, prompt_len, *, paged):
     """One [k, v] pair per layer: paged (block pool) or contiguous."""
-    pac = PagedAttentionConfig(block_size=BLOCK_SIZE, max_num_blocks=PROMPT_LEN // BLOCK_SIZE) if paged else None
+    pac = PagedAttentionConfig(block_size=BLOCK_SIZE, max_num_blocks=prompt_len // BLOCK_SIZE) if paged else None
     caches = []
     for layer in model.layers:
         caches.append(
@@ -129,7 +140,7 @@ def _alloc_caches(mesh_device, model, *, paged):
                 mesh_device=mesh_device,
                 config=layer.self_attn.config,
                 max_batch_size=1,
-                max_seq_len=PROMPT_LEN,
+                max_seq_len=prompt_len,
                 paged_attention_config=pac,
             )
         )
@@ -145,12 +156,12 @@ def _last_token_logits(tt_logits, row):
     return t[row, :VOCAB]
 
 
-@pytest.mark.use_module_device
-def test_chunked_prefill_matches_single(device):
+def _chunked_vs_single_pcc(device, prompt_len, sliding_window):
+    """Build a tiny model, run 1×prompt_len vs (prompt_len/CHUNK_SIZE)×CHUNK_SIZE, return PCC."""
     torch.manual_seed(47466)
     tp = device.shape[1] if hasattr(device, "shape") else 1
 
-    config = _tiny_config()
+    config = _tiny_config(sliding_window)
     model_args = Gemma4ModelArgs.from_hf_config(config)
     model_args._hf_text_config = config
     mesh_config = MeshConfig(device.shape, decode=ModeConfig(tp=tp)) if hasattr(device, "shape") else None
@@ -164,24 +175,24 @@ def test_chunked_prefill_matches_single(device):
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         mesh_config=mesh_config,
-        max_seq_len=PROMPT_LEN,
+        max_seq_len=prompt_len,
         max_local_batch_size=1,
         num_layers=config.num_hidden_layers,
         create_kv_cache=False,
     )
 
-    # Prompt embeddings [1, 1, PROMPT_LEN, HIDDEN], tile-laid.
-    input_ids = torch.randint(0, VOCAB, (1, PROMPT_LEN), dtype=torch.int64)
+    # Prompt embeddings [1, 1, prompt_len, HIDDEN], tile-laid.
+    input_ids = torch.randint(0, VOCAB, (1, prompt_len), dtype=torch.int64)
     replicate = ttnn.ReplicateTensorToMesh(device) if hasattr(device, "shape") else None
     tokens_tt = ttnn.from_torch(
         input_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=replicate
     )
     embeds = model.embed_tokens(tokens_tt)
-    embeds = ttnn.reshape(embeds, (1, 1, PROMPT_LEN, HIDDEN))
+    embeds = ttnn.reshape(embeds, (1, 1, prompt_len, HIDDEN))
     embeds_single = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
 
-    # ── baseline: single 1×512 prefill (contiguous cache, stock gemma4 SDPA) ──
-    baseline_cache = _alloc_caches(device, model, paged=False)
+    # ── baseline: single 1×prompt_len prefill (contiguous cache, stock gemma4 SDPA) ──
+    baseline_cache = _alloc_caches(device, model, prompt_len, paged=False)
     logits_single = model(
         embeds_single,
         is_decode=False,
@@ -191,15 +202,15 @@ def test_chunked_prefill_matches_single(device):
         get_last_token=-1,
         batch_size=1,
     )
-    single_last = _last_token_logits(logits_single, PROMPT_LEN - 1)
+    single_last = _last_token_logits(logits_single, prompt_len - 1)
     logits_single.deallocate(True)
 
-    # ── chunked: 2×256 over a paged cache via the DG-local fixed prefill ──────
-    paged_cache = _alloc_caches(device, model, paged=True)
-    page_table_torch = cp.make_reference_page_table(PROMPT_LEN // BLOCK_SIZE, mesh_device=device)
+    # ── chunked: N×CHUNK_SIZE over a paged cache via the DG-local fixed prefill ──────
+    paged_cache = _alloc_caches(device, model, prompt_len, paged=True)
+    page_table_torch = cp.make_reference_page_table(prompt_len // BLOCK_SIZE, mesh_device=device)
     # embeds_single was consumed (lm_head deallocs its input chain); re-embed for the chunked run.
     embeds2 = model.embed_tokens(tokens_tt)
-    embeds2 = ttnn.reshape(embeds2, (1, 1, PROMPT_LEN, HIDDEN))
+    embeds2 = ttnn.reshape(embeds2, (1, 1, prompt_len, HIDDEN))
     embeds_chunked = ttnn.to_layout(embeds2, ttnn.TILE_LAYOUT)
     logits_chunked = cp.chunked_prefill(
         model,
@@ -218,5 +229,35 @@ def test_chunked_prefill_matches_single(device):
     from models.common.utility_functions import comp_pcc
 
     _, pcc = comp_pcc(single_last, chunked_last, pcc=0.999)
-    print(f"[chunked-prefill] last-token logits PCC (2x{CHUNK_SIZE} vs 1x{PROMPT_LEN}): {pcc}")
+    return single_last, chunked_last, pcc
+
+
+@pytest.mark.use_module_device
+def test_chunked_prefill_matches_single(device):
+    """512 tokens as 2×256 vs 1×512, window 1024 > prompt (sliding == causal)."""
+    prompt_len, sliding_window = 512, 1024
+    single_last, chunked_last, pcc = _chunked_vs_single_pcc(device, prompt_len, sliding_window)
+    print(f"[chunked-prefill] last-token logits PCC (2x{CHUNK_SIZE} vs 1x{prompt_len}, window {sliding_window}): {pcc}")
+    assert_with_pcc(single_last, chunked_last, 0.999)
+
+
+@pytest.mark.use_module_device
+def test_chunked_prefill_sliding_past_window(device):
+    """2048 tokens as 8×256 vs 1×2048, window 1024 < prompt — sliding layers EXCEED the window.
+
+    This is the sliding-window bounded-buffer gate. The last-token (pos 2047)
+    sliding query attends only (1023, 2047]; a causal-only path (the old paged
+    chunked SDPA, which raised NotImplementedError here) would over-attend the
+    full prefix. Matching the single 1×2048 prefill (which applies
+    sliding_window_size=1024) at PCC >= 0.999 proves the rolling K/V window
+    buffer applies the exact same window mask across chunk boundaries.
+    """
+    prompt_len, sliding_window = 2048, 1024
+    assert prompt_len > sliding_window, "gate must exceed the sliding window"
+    single_last, chunked_last, pcc = _chunked_vs_single_pcc(device, prompt_len, sliding_window)
+    n_chunks = prompt_len // CHUNK_SIZE
+    print(
+        f"[chunked-prefill] SLIDING last-token logits PCC "
+        f"({n_chunks}x{CHUNK_SIZE} vs 1x{prompt_len}, window {sliding_window}): {pcc}"
+    )
     assert_with_pcc(single_last, chunked_last, 0.999)
