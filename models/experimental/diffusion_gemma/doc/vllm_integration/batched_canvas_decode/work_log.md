@@ -68,13 +68,53 @@ broadcast (not shared in-place), canvas i's committed argmax is independent of c
 
 ## SHAs
 
-- (this increment) design note + `tt/batched_decode.py` + demo + tests + DG-local batch
-  generalizations; CPU-verified. SHA logged on push.
+- `8345eb1e62d` — design note + `tt/batched_decode.py` + demo + tests + DG-local batch
+  generalizations; CPU-verified. Pushed to `dg-vllm-batch`.
+
+## DEVICE_PROBLEM — 2026-07-06 (device correctness check BLOCKED)
+
+The device correctness check (`test_denoise_step_batch_is_row_independent` and the full
+`batched_decode_smoke`) is **BLOCKED on a degraded mesh**, not on the batched-decode code.
+
+- **First attempt** (`test_denoise_step_batch_is_row_independent` under
+  `flock /tmp/dg-mesh.lock timeout 900`): device opened, then a JIT kernel build failed at link
+  (`collect2: error: ld returned 1 exit status`, `JitBuildState::link` → `device.py:107`). At the
+  time another agent (Agent B / APC, `prefix_cache_smoke`) was running a device job under the same
+  lock — consistent with concurrent JIT-build contention, so I retried.
+- **Retry** (same command, flock blocking for the mesh): the mesh is now **hardware-degraded** —
+  `TT_THROW: Device 0: Timed out while waiting for active ethernet core 29-25 to become active
+  again. Try resetting the board.` (`assert_active_ethernet_cores_to_reset` during teardown, core
+  dump, exit 134). This is the **recurring recoverable eth core 29-25 fault** recorded in project
+  memory (`dg-vllm-serving-env`: "eth core 29-25 recurring reset") — recovery is `tt-smi -r` +
+  `(1,4)` mesh-smoke, which per the COMMON RULES the **orchestrator** must coordinate; I do **not**
+  run `tt-smi -r` myself. No leftover python processes from me (`pkill` clean).
+
+**Status:** STOPPED cleanly per the rules (do not thrash a degraded mesh). The batched-decode
+prototype is CPU-verified and ready; the device independence gate is a single re-run once the mesh
+is reset:
+
+```bash
+# after the orchestrator resets the mesh (tt-smi -r + (1,4) mesh-smoke):
+source /home/zni/venvs/tt-diffusion-gemma/bin/activate
+export TT_METAL_HOME=$PWD TT_METAL_RUNTIME_ROOT=$PWD ARCH_NAME=blackhole PYTHONPATH=$PWD DG_RUN_DEVICE=1 TT_LOGGER_LEVEL=ERROR
+
+# 1) cheapest gate: decision-kernel batch independence (no checkpoint, ~1 min)
+flock /tmp/dg-mesh.lock timeout 900 python -m pytest \
+  models/experimental/diffusion_gemma/tests/test_batched_denoise.py::test_denoise_step_batch_is_row_independent -q -s
+
+# 2) full model-side batched denoise: B=2 == 2×B=1 committed argmax, reduced 2 layers
+export DG_BATCH_DECODE=1 DG_CKPT=/home/zni/dg_models/diffusiongemma-26B-A4B-it
+flock /tmp/dg-mesh.lock timeout 900 python -m models.experimental.diffusion_gemma.demo.batched_decode_smoke \
+  --mesh P150x4 --num-layers 2 --canvas-length 64 --batch 2 --max-denoising-steps 3 \
+  --mode loop --probe-dim0 --local-files-only \
+  --metrics-json models/experimental/diffusion_gemma/doc/vllm_integration/batched_canvas_decode/batched_decode_smoke.json
+# expect: DG_BATCH_DECODE_SUCCESS per_row_match=[True, True] mismatch_count=[0, 0]
+```
 
 ## OPEN QUESTIONS / next
 
-- Run the device check under flock: `test_denoise_step_batch_is_row_independent` (decision-kernel
-  independence, no checkpoint) and the full `batched_decode_smoke` (B=2 vs 2×B=1, reduced layers).
-- `dim0` mode: confirm whether the shared `nlp_create_qkv_heads` / `concat_heads` accept a batch
-  dim on the prefill-shaped denoise; if not, `dim0` stays a documented non-path and `loop` is the
-  shipped prototype.
+- Re-run the two device commands above once the mesh is reset (blocked on orchestrator reset of the
+  eth-core-29-25 fault).
+- `dim0` mode: the `--probe-dim0` run will confirm whether the shared `nlp_create_qkv_heads` /
+  `concat_heads` accept a batch dim on the prefill-shaped denoise; if not, `dim0` stays a documented
+  non-path and `loop` is the shipped prototype (the gate uses `loop`).
