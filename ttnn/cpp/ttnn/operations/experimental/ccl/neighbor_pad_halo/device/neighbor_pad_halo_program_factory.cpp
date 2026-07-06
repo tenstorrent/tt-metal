@@ -993,7 +993,8 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                             static_cast<uint32_t>(w_dir ? is_last_w_device : is_first_w_device),
                             static_cast<uint32_t>(w_dir ? is_first_w_device : is_last_w_device),
                             w_dir, input_buffer->address(), input_halo_dim_size, op.np_padding_h,
-                            outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim, 0u};
+                            outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim,
+                            op.input_pad_h, op.input_pad_w, 0u};
                         SetRuntimeArgs(program, w_reader_kernel_id, {wc}, r_rt);
                         // Writer RT args: per-core (base,rows,sem xy,dir,route) then mux conn (0..16).
                         // sem targets = the neighbor's reader worker core (NOC coords are device-independent),
@@ -1125,6 +1126,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                 w_reader_rt_args.push_back(op.np_padding_h);
                 // h_halo_hbot_base
                 w_reader_rt_args.push_back(outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim);
+                // Padded-input strides for the W-edge interior reads (0 = contiguous).
+                w_reader_rt_args.push_back(op.input_pad_h);
+                w_reader_rt_args.push_back(op.input_pad_w);
                 // No conv W-edge consumer: push 0 for the (unused) per-batch region progress sem addr
                 // to keep the W-reader's per-core arg layout stable.
                 w_reader_rt_args.push_back(0u);

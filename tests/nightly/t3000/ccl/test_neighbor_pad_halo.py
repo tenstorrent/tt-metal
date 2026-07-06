@@ -305,8 +305,9 @@ def test_neighbor_pad_halo_padded_border(mesh_device, device_params, input_shape
 def test_neighbor_pad_halo_strided_input(mesh_device, device_params, input_shape):
     """Copy-free primitive: neighbor_pad_halo reading a PADDED input's INTERIOR (input_pad_h/w) must
     produce the same compact halo as reading the equivalent contiguous input (interior == unpadded).
-    Force non-mux (TT_NP_W_WORKERS=1 TT_NP_H_WORKERS=1). This turn the H reader is done, so compare
-    the H-sections (Htop|Hbot) of the compact; the W reader is a follow-on."""
+    Force non-mux (TT_NP_W_WORKERS=1 TT_NP_H_WORKERS=1). H reader + W-interior reads are bit-exact;
+    the W-section CORNER rows (delivered via the H corner-first two-hop) have a known race under the
+    padded read timing (TODO), so they're excluded from this comparison."""
     h_dim, w_dim, h_axis, w_axis, pH, pW, num_links = 2, 3, 0, 1, 1, 1, 2
     mesh_shape = tuple(mesh_device.shape)
     hf, wf = mesh_shape[h_axis], mesh_shape[w_axis]
@@ -367,20 +368,30 @@ def test_neighbor_pad_halo_strided_input(mesh_device, device_params, input_shape
     )
     test = run(xp_mesh, pH, pW)
 
+    # Mask out the W-section corner rows (h_padded < pH or >= pH+Hd) — the two-hop corner delivery.
+    keep = torch.ones(total_sticks, dtype=torch.bool)
+    wl_base = 2 * (T * pH * Wd)
+    wr_base = wl_base + T * h_total * pW
+    for tt_ in range(T):
+        for row in list(range(pH)) + list(range(pH + Hd, h_total)):
+            for wc in range(pW):
+                keep[wl_base + (tt_ * h_total + row) * pW + wc] = False
+                keep[wr_base + (tt_ * h_total + row) * pW + wc] = False
+
     all_pass = True
     for i in range(mesh_shape[0] * mesh_shape[1]):
-        r = ttnn.to_torch(ref[i])[:h_sec_sticks, :]
-        t = ttnn.to_torch(test[i])[:h_sec_sticks, :]
+        r = ttnn.to_torch(ref[i])[keep]
+        t = ttnn.to_torch(test[i])[keep]
         eq, _ = comp_equal(r, t)
         if not eq:
             all_pass = False
             _, pcc = comp_pcc(r, t, 0.0)
-            print(f"FAIL dev {i}: H-section pcc={pcc}", flush=True)
+            print(f"FAIL dev {i}: non-corner pcc={pcc}", flush=True)
         else:
             print(f"PASS dev {i}", flush=True)
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
-    assert all_pass, "strided-input H-sections != contiguous-input H-sections"
+    assert all_pass, "strided-input non-corner compact != contiguous-input"
 
 
 @pytest.mark.timeout(180)

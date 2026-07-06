@@ -71,6 +71,15 @@ void kernel_main() {
     const uint32_t input_H_dev = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t padding_h = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t h_halo_hbot_base = get_arg_val<uint32_t>(arg_idx++);
+    // Padded-input mode (0 = contiguous). When >0 the input is [.,H+2*input_pad_h,W+2*input_pad_w,C] and
+    // the W-edge input reads target its INTERIOR (row stride = padded W, frame stride = padded H*W).
+    const uint32_t input_pad_h = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t input_pad_w = get_arg_val<uint32_t>(arg_idx++);
+    // Input page for interior (t, h_in, w_col); honors padded-input strides (identity when pad==0).
+    const uint32_t in_Wp = num_interior_sticks + 2 * input_pad_w;
+    auto in_page = [&](uint32_t t, uint32_t h_in, uint32_t w_col) -> uint32_t {
+        return t * (input_H_dev + 2 * input_pad_h) * in_Wp + (h_in + input_pad_h) * in_Wp + (w_col + input_pad_w);
+    };
     // Per-batch region progress sem for this (W-direction, link). W-edge/corner conv3d tiles wait on
     // just this link's count, race-free across links (one producer per (region,link) -> monotonic).
     const uint32_t w_region_sem_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -165,8 +174,7 @@ void kernel_main() {
                         const uint32_t hp = global_idx % h_total;
                         const uint32_t l1_addr = base_l1 + m * stick_size;
                         if (hp >= padding_h && hp < padding_h + input_H_dev) {
-                            const uint32_t page = t_idx * input_H_dev * num_interior_sticks +
-                                                  (hp - padding_h) * num_interior_sticks + w_col;
+                            const uint32_t page = in_page(t_idx, hp - padding_h, w_col);
                             noc_async_read(get_noc_addr(page, input_accessor), l1_addr, stick_size);
                         } else {
                             uint32_t halo_page;
@@ -258,7 +266,7 @@ void kernel_main() {
                 uint32_t w_col = direction ? (num_interior_sticks - 1) : 0;
                 if (h_interior) {
                     uint32_t h_in = h_padded - padding_h;
-                    uint32_t page = t_idx * input_H_dev * num_interior_sticks + h_in * num_interior_sticks + w_col;
+                    uint32_t page = in_page(t_idx, h_in, w_col);
                     noc_async_read(get_noc_addr(page, input_accessor), dst_l1_addr, stick_size);
                 } else {
                     uint32_t halo_page;
@@ -294,7 +302,7 @@ void kernel_main() {
                 }
                 if (h_interior) {
                     uint32_t h_in = h_padded - padding_h;
-                    uint32_t page = t_idx * input_H_dev * num_interior_sticks + h_in * num_interior_sticks + w_col;
+                    uint32_t page = in_page(t_idx, h_in, w_col);
                     noc_async_read(get_noc_addr(page, input_accessor), dst_l1_addr, stick_size);
                 } else {
                     uint32_t halo_page;
