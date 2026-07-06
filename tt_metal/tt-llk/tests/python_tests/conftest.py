@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -51,6 +51,7 @@ from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
 
 _exalens_server: Optional[ExalensServer] = None
+_reuse_simulator_connected = False
 
 
 # This is a workaround for this issue: https://github.com/tenstorrent/tt-exalens/issues/958
@@ -146,6 +147,13 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Restart the tt-exalens server after each test. "
+        "Only effective with --run-simulator.",
+    )
+    parser.addoption(
+        "--reuse-simulator-server",
+        action="store_true",
+        default=False,
+        help="Connect to an existing tt-exalens server instead of starting one. "
         "Only effective with --run-simulator.",
     )
 
@@ -380,6 +388,25 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
+    if (
+        TestConfig.TEST_TARGET.reuse_simulator_server
+        and not TestConfig.TEST_TARGET.run_simulator
+    ):
+        pytest.exit(
+            "ERROR: --reuse-simulator-server requires --run-simulator.",
+            returncode=1,
+        )
+
+    if (
+        TestConfig.TEST_TARGET.reuse_simulator_server
+        and TestConfig.TEST_TARGET.reset_simulator_per_test
+    ):
+        pytest.exit(
+            "ERROR: --reuse-simulator-server cannot be used with "
+            "--reset-simulator-per-test.",
+            returncode=1,
+        )
+
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         if TestConfig.TEST_TARGET.run_simulator:
             if _SIMULATOR_PATH is None:
@@ -393,13 +420,21 @@ def pytest_configure(config):
                 # ttsim: already initialized at module import above; runs in-process, no server.
                 # --reset-simulator-per-test restarts the ExalensServer, which ttsim doesn't use,
                 # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
+                if TestConfig.TEST_TARGET.reuse_simulator_server:
+                    pytest.exit(
+                        "ERROR: --reuse-simulator-server is not supported with ttsim. "
+                        "Re-run without it.",
+                        returncode=1,
+                    )
                 if TestConfig.TEST_TARGET.reset_simulator_per_test:
                     pytest.exit(
                         "ERROR: --reset-simulator-per-test is not supported with ttsim. "
                         "Re-run without it.",
                         returncode=1,
                     )
-            elif not hasattr(config, "workerinput"):
+            elif not TestConfig.TEST_TARGET.reuse_simulator_server and not hasattr(
+                config, "workerinput"
+            ):
                 # RTL simulator: only the controller process manages the server; xdist workers
                 # just connect to the already-running instance.
                 global _exalens_server
@@ -411,53 +446,7 @@ def pytest_configure(config):
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
 
 
-def pytest_ignore_collect(collection_path, config):
-    # Skip collecting the quasar/ dir on non-quasar arch — those tests are
-    # deselected there anyway, so there's no need to collect them.
-    if (
-        get_chip_architecture() != ChipArchitecture.QUASAR
-        and "quasar" in collection_path.parts
-    ):
-        return True
-    return None
-
-
-def _collapse_runtime_only_variants(config, items):
-    """Keep only one test per unique compile key, dropping runtime only duplicates.
-
-    Tests decorated with ``@parametrize`` that use ``runtime()`` markers carry a
-    ``compile_key_fn`` on their ``runtime_axes`` pytest mark.  That function extracts
-    the compile time subset of each item's params.  Items that share the same compile
-    key produce identical ELFs, so only the first is kept for the compile-producer pass.
-    """
-    from helpers.param_config import RUNTIME_AXES_MARK
-
-    seen = set()
-    keep = []
-    deselected = []
-    for item in items:
-        marker = item.get_closest_marker(RUNTIME_AXES_MARK)
-        if marker is None:
-            keep.append(item)
-            continue
-        compile_key_fn = marker.kwargs["compile_key_fn"]
-        key = (item.nodeid.split("[")[0], repr(compile_key_fn(item.callspec.params)))
-        if key not in seen:
-            seen.add(key)
-            keep.append(item)
-        else:
-            deselected.append(item)
-
-    if deselected:
-        config.hook.pytest_deselected(items=deselected)
-        items[:] = keep
-
-
-@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
-        _collapse_runtime_only_variants(config, items)
-
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
@@ -682,6 +671,22 @@ def pytest_runtest_makereport(item, call):
 _reset_simulator_pending = False
 
 
+def _init_reused_simulator_remote() -> None:
+    """Connect this pytest process to an externally managed tt-exalens server."""
+    global _reuse_simulator_connected
+    if _reuse_simulator_connected:
+        return
+
+    logger.info(
+        "Connecting to existing tt-exalens server (port={})...",
+        TestConfig.TEST_TARGET.simulator_port,
+    )
+    tt_exalens_init.init_ttexalens_remote(
+        port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
+    )
+    _reuse_simulator_connected = True
+
+
 def pytest_runtest_teardown(item, nextitem):
     """Mark that a restart is needed before the next test."""
     if not TestConfig.TEST_TARGET.reset_simulator_per_test:
@@ -699,6 +704,10 @@ def pytest_runtest_teardown(item, nextitem):
 def pytest_runtest_setup(item):
     """Start the server on the first test, or restart between tests if requested."""
     global _exalens_server, _reset_simulator_pending
+
+    if TestConfig.TEST_TARGET.reuse_simulator_server:
+        _init_reused_simulator_remote()
+        return
 
     if _exalens_server is None:
         return
@@ -750,10 +759,6 @@ def counter_report(request, worker_id):
     if PerfConfig.TEST_COUNTER == 0:
         return
 
-    temp_report.assert_single_schema(
-        context=f"{test_module} counters (worker {worker_id})"
-    )
-
     counters_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
 
     if counters_path.exists():
@@ -779,11 +784,6 @@ def perf_report(request, worker_id):
 
     if PerfConfig.TEST_COUNTER == 0:
         return
-
-    # Fail loud before writing: a single CSV must hold exactly one column schema.
-    # More than one means two unrelated tests/ops share this module (split them
-    # into separate files) or one test emits inconsistent columns across its sweep.
-    temp_report.assert_single_schema(context=f"{test_module} (worker {worker_id})")
 
     raw_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv"
     post_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv"

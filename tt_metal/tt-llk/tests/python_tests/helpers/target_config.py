@@ -35,6 +35,7 @@ class TestTargetConfig:
             self.device_id: int = device_id
             self.log_level: str = log_level
             self.reset_simulator_per_test: bool = False
+            self.reuse_simulator_server: bool = False
             TestTargetConfig._initialized = True
 
     def update_from_pytest_config(self, config):
@@ -43,4 +44,7 @@ class TestTargetConfig:
         self.simulator_port = config.getoption("--port", default=5555)
         self.reset_simulator_per_test = config.getoption(
             "--reset-simulator-per-test", default=False
+        )
+        self.reuse_simulator_server = config.getoption(
+            "--reuse-simulator-server", default=False
         )
