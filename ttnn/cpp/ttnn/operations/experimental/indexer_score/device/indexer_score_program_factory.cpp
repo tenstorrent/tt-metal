@@ -80,6 +80,11 @@ inline DeviceCausalGeometry device_causal_geometry(
     const uint32_t chunk_global = sp * chunk_local;
 
     if (args.cluster_axis.has_value()) {
+        TT_FATAL(
+            device_index < sp,
+            "indexer_score: device_index {} out of range for block-cyclic sp={} (check cluster_axis vs block_cyclic_sp_axis)",
+            device_index,
+            sp);
         // SP-only block-cyclic: device_index is the SP-ring index and owns ONE block (Sq == chunk_local).
         // Mirror the update_padded_kv_cache writer's update_idxt (== rotated_chip_positions[device_index][0])
         // so the diagonal starts at this chip's TRUE logical block -- handling the boundary_chip rotation that
