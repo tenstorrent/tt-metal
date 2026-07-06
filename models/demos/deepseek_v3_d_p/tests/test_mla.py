@@ -16,6 +16,7 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
+from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -262,7 +263,7 @@ def run_model(
                     use_cache=True,
                 )
 
-            ref_kvpe = ref_cache.key_cache[0]  # layer 0
+            ref_kvpe = hf_cache_layer_kv(ref_cache, 0)[0]  # layer 0
 
             if not (is_ci_env or is_ci_v2_env):
                 # Save to cache for future runs
@@ -416,7 +417,7 @@ def test_ds_mla(
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4), (2, 4)], ids=["8x4", "2x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -428,12 +429,18 @@ def test_ds_mla(
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
         },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+        },
     ],
-    ids=["line", "ring"],
+    ids=["line", "ring", "fabric2d"],
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
-@pytest.mark.parametrize("scale_down_sl", [False], ids=["max_sl"])
+@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
 @pytest.mark.parametrize(
     "seq_len",
     [5 * 1024, 25 * 1024],
@@ -717,7 +724,6 @@ def _run_chunked_prefill(
                 rope_tensors=indexed_rope,
                 kvpe_cache=tt_kvpe_cache,
                 actual_start=kv_actual,
-                actual_end=valid_end,
                 cache_user_id=u,
             )
             out_flat = ttnn.to_torch(

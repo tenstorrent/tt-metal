@@ -419,8 +419,8 @@ MeshCoordinateRange MeshDeviceViewImpl::get_local_mesh_coord_range() const {
     const size_t num_dims = mesh_shape.dims();
 
     // Initialize min and max coordinates
-    tt::stl::SmallVector<uint32_t> min_coords(num_dims, UINT32_MAX);
-    tt::stl::SmallVector<uint32_t> max_coords(num_dims, 0);
+    ttsl::SmallVector<uint32_t> min_coords(num_dims, UINT32_MAX);
+    ttsl::SmallVector<uint32_t> max_coords(num_dims, 0);
     bool found_local = false;
 
     // Iterate through all coordinates in the mesh
@@ -436,8 +436,8 @@ MeshCoordinateRange MeshDeviceViewImpl::get_local_mesh_coord_range() const {
 
     TT_FATAL(found_local, "No local devices found in mesh device");
 
-    MeshCoordinate start_coord(tt::stl::Span<const uint32_t>(min_coords.data(), num_dims));
-    MeshCoordinate end_coord(tt::stl::Span<const uint32_t>(max_coords.data(), num_dims));
+    MeshCoordinate start_coord(ttsl::Span<const uint32_t>(min_coords.data(), num_dims));
+    MeshCoordinate end_coord(ttsl::Span<const uint32_t>(max_coords.data(), num_dims));
 
     return MeshCoordinateRange(start_coord, end_coord);
 }

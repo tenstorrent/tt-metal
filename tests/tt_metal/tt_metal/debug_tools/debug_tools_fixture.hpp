@@ -138,8 +138,11 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
 
         const auto detected_arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
+        // Watcher NOC sanitization currently only works on Quasar in slow dispatch.
+        // TODO: Remove the slow dispatch check once NOC sanitization is supported on Quasar in fast dispatch (#45878)
+        const bool slow_dispatch = !tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(
-            detected_arch == tt::ARCH::BLACKHOLE || detected_arch == tt::ARCH::QUASAR);
+            detected_arch == tt::ARCH::BLACKHOLE || (detected_arch == tt::ARCH::QUASAR && slow_dispatch));
 
         // Parent class initializes devices and any necessary flags
         DebugToolsMeshFixture::SetUp();
@@ -308,8 +311,9 @@ public:
 
         int riscv_id = static_cast<std::underlying_type_t<tt::tt_metal::DataMovementProcessor>>(config.processor);
 
-        const auto& build_state = tt::tt_metal::BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+        const auto& build_state =
+            tt::tt_metal::BuildEnvManager::get_instance(extract_context_id(device))
+                .get_kernel_build_state(device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         const auto& kernel = program_.impl().get_kernel(kernel_handle);
         const std::string full_kernel_name = kernel->get_full_kernel_name();

@@ -23,7 +23,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include "ttnn/tensor/socket_services.hpp"
+#include "ttnn/services/h2d_socket_service.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::h2d_stream_service {
@@ -36,33 +36,36 @@ void py_module_types(nb::module_& mod) {
                const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
                const tt::tt_metal::TensorSpec& global_spec,
                uint32_t fifo_size_bytes,
-               uint32_t scratch_cb_size_bytes,
+               uint32_t max_socket_page_size_bytes,
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
                tt::tt_metal::BufferType socket_buffer_type,
-               tt::tt_metal::distributed::H2DMode socket_mode,
                std::optional<CoreRange> worker_cores,
-               uint32_t metadata_size_bytes) {
+               uint32_t metadata_size_bytes,
+               bool parallel_host_push,
+               uint32_t host_push_thread_count) {
                 tt::tt_metal::H2DStreamService::Config cfg{
                     .global_spec = global_spec,
                     .mapper = std::move(mapper),
                     .socket_buffer_type = socket_buffer_type,
                     .fifo_size_bytes = fifo_size_bytes,
-                    .scratch_cb_size_bytes = scratch_cb_size_bytes,
-                    .socket_mode = socket_mode,
+                    .max_socket_page_size_bytes = max_socket_page_size_bytes,
                     .worker_cores = worker_cores,
                     .metadata_size_bytes = metadata_size_bytes,
+                    .parallel_host_push = parallel_host_push,
+                    .host_push_thread_count = host_push_thread_count,
                 };
                 new (self) tt::tt_metal::H2DStreamService(mesh_device, std::move(cfg));
             },
             nb::arg("mesh_device"),
             nb::arg("global_spec"),
-            nb::arg("fifo_size_bytes"),
-            nb::arg("scratch_cb_size_bytes"),
+            nb::arg("fifo_size_bytes") = 0u,
+            nb::arg("max_socket_page_size_bytes") = 0u,
             nb::arg("mapper").none() = nb::none(),
             nb::arg("socket_buffer_type") = tt::tt_metal::BufferType::L1,
-            nb::arg("socket_mode") = tt::tt_metal::distributed::H2DMode::DEVICE_PULL,
             nb::arg("worker_cores").none() = nb::none(),
             nb::arg("metadata_size_bytes") = 0u,
+            nb::arg("parallel_host_push") = false,
+            nb::arg("host_push_thread_count") = 0u,
             R"doc(
                 Construct a persistent H2DStreamService on the given mesh.
 
@@ -77,11 +80,15 @@ void py_module_types(nb::module_& mod) {
                     global_spec (TensorSpec): Spec of the un-sharded source tensor.
                         Drives the mapper input shape and (after distribution) the
                         per-device tensor's layout.
-                    fifo_size_bytes (int): Size of each H2D socket's FIFO buffer in
-                        bytes. Must be PCIe-aligned.
-                    scratch_cb_size_bytes (int): On-device scratch circular buffer
-                        size per recv core in bytes. Drives the chunk-picker; must
-                        be >= one tensor page.
+                    fifo_size_bytes (int, optional): Size of each H2D socket's host
+                        FIFO in bytes (PCIe-aligned). 0 (the default) auto-sizes it to
+                        a few socket pages of host headroom; an explicit value must be
+                        >= the derived socket page size.
+                    max_socket_page_size_bytes (int, optional): Upper bound on the
+                        socket page size (read-coalescing granularity) in bytes. 0 (the
+                        default) uses a burst-derived page. NOT a total scratch-CB size:
+                        the on-device CB slot depth is auto-sized to fill service-core
+                        L1 regardless.
                     mapper (TensorToMesh, optional): How the global tensor is split /
                         replicated across the mesh. Ownership transfers to the
                         service; the Python object is invalidated after this call.
@@ -94,8 +101,9 @@ void py_module_types(nb::module_& mod) {
                         explicit mapper.
                     socket_buffer_type (BufferType, optional): Memory type for the
                         socket's device-side FIFO buffer (L1 or DRAM). Default: L1.
-                    socket_mode (H2DMode, optional): Transfer mode (HOST_PUSH or
-                        DEVICE_PULL). Default: DEVICE_PULL.
+                        The service is DEVICE_PULL-only (the data FIFO lives in host
+                        pinned memory and the reader pulls each page over PCIe), so the
+                        socket transfer mode is not configurable.
                     worker_cores (CoreRange, optional): When set, after every
                         transfer the persistent receiver kernel multicasts a
                         data-ready inc to a GlobalSemaphore on every worker core
@@ -112,14 +120,26 @@ void py_module_types(nb::module_& mod) {
                         Requires `worker_cores` to be set; must be <= the
                         derived socket page size (TT_FATAL'd at construction).
                         Default: 0 (metadata path disabled).
+                    parallel_host_push (bool, optional): Experimental host-side
+                        feeder parallelism. When True and the service owns more
+                        than one socket, each forward_to_tensor fans its per-socket
+                        host writes out to a persistent pool of worker threads and
+                        blocks until all finish. No effect with a single socket.
+                        Default: False (writes run serially).
+                    host_push_thread_count (int, optional): Explicit host worker
+                        count, used only when `parallel_host_push` is enabled.
+                        0 is auto and starts the service's tuned default worker
+                        count, clamped by num_sockets. 1 forces serial; N > 1
+                        starts up to N grouped workers, each writing a
+                        contiguous socket range page-major.
             )doc")
         .def(
             "forward_to_tensor",
             // Distributed host-tensor path. Tensor must already be distributed by a
             // mapper equivalent to the one the service was constructed with (i.e.
             // its per-shard spec must equal get_per_shard_spec()). Returns once the
-            // bytes are in the socket FIFOs; call barrier() to wait for the device
-            // to drain them.
+            // bytes are in the socket FIFOs; call barrier() to wait for the device to
+            // drain them all the way into the backing tensor (DRAM).
             //
             // `metadata` must be exactly `metadata_size_bytes` bytes long when the
             // service was constructed with metadata enabled; empty otherwise. An
@@ -182,8 +202,9 @@ void py_module_types(nb::module_& mod) {
             "barrier",
             &tt::tt_metal::H2DStreamService::barrier,
             R"doc(
-                Block until the device has acknowledged every in-flight host write.
-                Call before reading the backing tensor or destroying the service.
+                Block until every forwarded transfer has fully landed in the backing
+                tensor (committed to DRAM), then return. Safe to read the backing
+                tensor afterward.
             )doc")
         .def(
             "get_backing_tensor",
@@ -356,11 +377,21 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def_static(
             "connect",
-            [](const std::string& service_id, std::optional<uint32_t> timeout_ms) {
-                return tt::tt_metal::H2DStreamService::connect(service_id, timeout_ms);
+            [](const std::string& service_id,
+               std::optional<uint32_t> timeout_ms,
+               bool parallel_host_push,
+               uint32_t host_push_thread_count) {
+                return tt::tt_metal::H2DStreamService::connect(
+                    service_id,
+                    timeout_ms,
+                    /*preprocessor=*/nullptr,
+                    parallel_host_push,
+                    host_push_thread_count);
             },
             nb::arg("service_id"),
             nb::arg("timeout_ms") = nb::none(),
+            nb::arg("parallel_host_push") = false,
+            nb::arg("host_push_thread_count") = 0u,
             R"doc(
                 Attach to an exported H2DStreamService from another process.
 
@@ -382,6 +413,14 @@ void py_module_types(nb::module_& mod) {
                         `export_descriptor`.
                     timeout_ms (int, optional): Max wait time for the
                         descriptor file. Defaults to the C++ default (10s).
+                    parallel_host_push (bool, optional): Connector-local host
+                        feeder choice; not carried by the descriptor.
+                    host_push_thread_count (int, optional): Connector-local
+                        explicit worker count, used only when
+                        `parallel_host_push` is enabled. 0 is auto and starts
+                        the service's tuned default worker count, clamped by
+                        num_sockets. 1 forces serial; N > 1 starts grouped
+                        workers.
 
                 Returns:
                     H2DStreamService: Connector-side service handle.

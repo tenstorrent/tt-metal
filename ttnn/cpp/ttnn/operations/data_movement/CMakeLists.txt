@@ -32,7 +32,8 @@ file(
     pad/device/kernels/*
     permute/device/kernels/*
     reshape_on_device/device/kernels/*
-    repeat/device/kernels/repeat_*_rm.cpp
+    repeat/device/kernels/*
+    roll/device/kernels/*
     reshape_view/device/device/*
     scatter/device/kernels/*
     sharded/device/kernels/*
@@ -97,6 +98,7 @@ target_sources(
             concat/device/concat_program_factory.hpp
             concat/device/concat_s2i_program_factory.hpp
             concat/device/concat_s2s_multi_program_factory.hpp
+            concat/device/concat_block_sharded_program_factory.hpp
             concat/device/concat_s2s_rm_program_factory.hpp
             concat/device/concat_s2s_tiled_program_factory.hpp
             # copy/
@@ -194,6 +196,9 @@ target_sources(
             # roll/
             roll/roll.hpp
             roll/roll_nanobind.hpp
+            roll/device/roll_device_operation.hpp
+            roll/device/roll_device_operation_types.hpp
+            roll/device/roll_program_factory.hpp
             # scatter/
             scatter/scatter.hpp
             scatter/scatter_nanobind.hpp
@@ -266,7 +271,6 @@ target_sources(
             tilize/device/tilize_multi_core_block_program_factory.hpp
             tilize/device/tilize_multi_core_default_program_factory.hpp
             tilize/device/tilize_multi_core_sharded_program_factory.hpp
-            tilize/device/tilize_multi_core_width_sharded_program_factory.hpp
             tilize/device/tilize_single_core_program_factory.hpp
             # tilize_with_val_padding/
             tilize_with_val_padding/tilize_with_val_padding_nanobind.hpp

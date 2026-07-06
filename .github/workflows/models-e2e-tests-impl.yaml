@@ -66,8 +66,7 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml \
-            ./.github/blackhole_demo_systems.yaml
+            ./.github/sku_config.yaml
       - name: Apply tier and model filters
         id: apply-filters
         run: |
@@ -120,7 +119,7 @@ jobs:
         # Mount the HF / tt_cache root so it always appears inside the container
         # at /mnt/MLPerf/huggingface, regardless of which BH cache mode the
         # runner uses. Host source comes from matrix.test-group['weights-cache-mode']
-        # (populated from .github/blackhole_demo_systems.yaml by prepare_test_matrix.py):
+        # (populated from the weights-cache-mode field in .github/sku_config.yaml by prepare_test_matrix.py):
         #   cloud-mlperf            → host /mnt/MLPerf/huggingface (shared NFS)
         #   local-disk / lfc        → host /localdev/blackhole_demos/huggingface_data (per-runner)
         #   yyz4-mnt-models         → host /mnt/models/huggingface (YYZ4 Exabox nfs storage mount)
@@ -149,23 +148,15 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_reports generated/test_logs
-          # Perf/accuracy are enforced by the "Validate perf and accuracy targets" step
-          # below; the in-test checks are warning-only, so the tests write complete
-          # benchmark JSON before validation runs.
-
-          # Mirror the matrix command's combined stdout+stderr to a per-leg
-          # log file so ai-summary can read it later. The brace group lets
-          # the cmd be multiple statements; PIPESTATUS forwards the real
-          # exit code that piping through tee would otherwise mask.
-          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
-          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
-
-          {
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            mkdir -p generated/test_reports
+            # Perf/accuracy are enforced by the "Validate perf and accuracy targets"
+            # step below; the in-test checks are warning-only, so the tests write
+            # complete benchmark JSON before validation runs.
             ${{ matrix.test-group.cmd }}
-          } 2>&1 | tee "$LOG_FILE"
-          exit "${PIPESTATUS[0]}"
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() }}

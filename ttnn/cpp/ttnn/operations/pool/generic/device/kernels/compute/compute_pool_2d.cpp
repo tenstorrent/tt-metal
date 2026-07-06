@@ -234,7 +234,8 @@ void kernel_main() {
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
                     // init math for reduction again since FPU gets reprogrammed by tilize
-                    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
+                    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(
+                        in_cb_id_0, in_scalar_cb_id_0)));
 #ifdef ARCH_BLACKHOLE
                     // need this on BH to set swizzle bit before pack untilize dest
                     MATH((llk_math_reconfig_remap(true)));

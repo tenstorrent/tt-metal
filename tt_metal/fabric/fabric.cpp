@@ -93,6 +93,13 @@ std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
     return mesh_shapes;
 }
 
+#if defined(TT_METAL_USE_EMULE)
+// emule has no fabric router, so the device-L1 connection table is never populated. Record the
+// fwd/bwd-to-neighbor binding host-side for the teleport's 1D dst resolution. Defined in the emule runner.
+// See tt-emule docs/fabric-ccl-emulation.md.
+extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor);
+#endif
+
 template <typename ProgramOrDescriptor>
 void append_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
@@ -205,6 +212,16 @@ void append_fabric_connection_rt_args(
     if (core_type == CoreType::WORKER) {
         append_worker_to_fabric_edm_sender_rt_args(
             fabric_router_channel, worker_teardown_semaphore_id, worker_buffer_index_semaphore_id, worker_args);
+#if defined(TT_METAL_USE_EMULE)
+        // Record (src_chip, worker_core, forwarding_direction, neighbor_chip) for the emule teleport's 1D
+        // dst resolution. Called per connection in fwd-then-bwd order (matches the kernel's read order).
+        __emule_fabric_record_conn(
+            static_cast<uint32_t>(control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id)),
+            static_cast<uint32_t>(worker_core.x),
+            static_cast<uint32_t>(worker_core.y),
+            static_cast<uint32_t>(forwarding_direction.value()),
+            static_cast<uint32_t>(control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id)));
+#endif
     } else {
         // TODO: will be deprecated. currently for ethernet dispatch case
         //       ethernet core need to have same memory mapping as worker
@@ -487,10 +504,9 @@ bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
 }
 
-// TODO: this should subtract out links used by runtime for dispatching to non-mmio capable devices, tracked by #27196
-size_t get_num_available_routing_planes_in_direction(FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
+size_t get_num_usable_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_num_available_routing_planes_in_direction(fabric_node_id, routing_direction);
+    return control_plane.get_num_usable_routing_planes(fabric_node_id, routing_direction);
 }
 namespace experimental {
 
@@ -519,12 +535,12 @@ size_t get_number_of_available_routing_planes(
         cluster_axis_directions_to_check.size());
     const auto& directions_to_check = cluster_axis_directions_to_check[cluster_axis];
 
-    size_t planes_dir0 =
-        control_plane.get_num_available_routing_planes_in_direction(fabric_node_in_row_or_col, directions_to_check[0]);
-    size_t planes_dir1 =
-        control_plane.get_num_available_routing_planes_in_direction(fabric_node_in_row_or_col, directions_to_check[1]);
-    TT_FATAL(planes_dir0 == planes_dir1, "Routing planes are not equal");
-    return planes_dir0;
+    size_t planes_dir0 = control_plane.get_num_usable_routing_planes(fabric_node_in_row_or_col, directions_to_check[0]);
+    size_t planes_dir1 = control_plane.get_num_usable_routing_planes(fabric_node_in_row_or_col, directions_to_check[1]);
+    // Take the min: dispatch-reserved planes can legitimately reduce the count in only one of the two
+    // opposing directions on an MMIO chip (e.g., the tunnel descends only southward), making the two
+    // values asymmetric while both remain valid. Conservatively take what both directions can support.
+    return std::min(planes_dir0, planes_dir1);
 }
 
 }  // namespace experimental

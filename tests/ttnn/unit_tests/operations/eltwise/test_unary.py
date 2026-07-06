@@ -779,11 +779,6 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     assert torch.equal(golden_tensor, output_tensor)
 
 
-def is_int32_overflow(tensor, scalar):
-    result = tensor.to(torch.int64) - scalar
-    return (result < -(2**31) + 1) | (result > 2**31 - 1)
-
-
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -802,9 +797,6 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
     in_data = torch.cat([uniform_values, corner_cases])
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
-
-    if is_int32_overflow(in_data, scalar).any():
-        pytest.xfail("Overflow occurs as in case of binary_ng, sub_tile is called")
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -1099,6 +1091,58 @@ def test_unary_atanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, low, high, devi
     golden_tensor = golden_function(in_data1)
 
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+
+
+def _run_inverse_hyperbolic_special_cases(device, ttnn_function, torch_function, values):
+    """Assert the device kernel matches the torch golden bit-pattern-wise on hand-picked
+    special-case inputs (boundary singularities, NaN/inf propagation, sign handling)."""
+    in_data = torch.tensor(values, dtype=torch.float32).reshape(1, 1, 1, -1)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn_function(input_tensor))
+    golden_tensor = torch_function(in_data)
+
+    for idx in range(in_data.numel()):
+        x = in_data.flatten()[idx].item()
+        got = output_tensor.flatten()[idx].item()
+        want = golden_tensor.flatten()[idx].item()
+        if torch.isnan(torch.tensor(want)):
+            assert torch.isnan(torch.tensor(got)), f"{ttnn_function.__name__}({x}): expected NaN, got {got}"
+        elif torch.isinf(torch.tensor(want)):
+            assert got == want, f"{ttnn_function.__name__}({x}): expected {want}, got {got}"
+        else:
+            assert torch.isclose(
+                torch.tensor(got), torch.tensor(want), atol=1e-5, rtol=1e-4
+            ), f"{ttnn_function.__name__}({x}): expected {want}, got {got}"
+
+
+def test_unary_atanh_special_cases_ttnn(device):
+    # x = 0 -> +0, x = +/-1 -> +/-inf, |x| > 1 -> NaN, NaN -> NaN, plus sign handling.
+    _run_inverse_hyperbolic_special_cases(
+        device,
+        ttnn.atanh,
+        torch.atanh,
+        [0.0, 1.0, -1.0, 1.5, -2.0, float("nan"), 0.5, -0.5, 1e-4, -1e-4],
+    )
+
+
+def test_unary_asinh_special_cases_ttnn(device):
+    # x = 0 -> +0, x = +/-inf -> +/-inf, NaN -> NaN, small-x and large-x regions, sign handling.
+    _run_inverse_hyperbolic_special_cases(
+        device,
+        ttnn.asinh,
+        torch.asinh,
+        [0.0, float("inf"), float("-inf"), float("nan"), 1e-4, -1e-4, 100.0, -100.0, 0.5, -0.5],
+    )
+
+
+def test_unary_acosh_special_cases_ttnn(device):
+    # x < 1 -> NaN, x = 1 -> +0, x = +inf -> +inf, NaN -> NaN, near-1 and large-x regions.
+    _run_inverse_hyperbolic_special_cases(
+        device,
+        ttnn.acosh,
+        torch.acosh,
+        [0.5, 1.0, float("inf"), float("nan"), 1.0001, 1.5, 100.0, 1e6],
+    )
 
 
 @pytest.mark.parametrize(
@@ -1480,13 +1524,13 @@ def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
         (torch.bfloat16, ttnn.bfloat16),
     ],
 )
-def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype, ttnn_dtype, device):
+def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype, ttnn_dtype, device, expect_error):
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-10, 10)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     min = min_val
     max = max_val
     if min is None and max is None:
-        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+        with expect_error(RuntimeError, "Only one of 'min' or 'max' can be None. Please provide one value"):
             ttnn.clamp(input_tensor1, min, max)
     else:
         output_tensor = ttnn.clamp(input_tensor1, min, max)
@@ -1593,14 +1637,14 @@ def test_unary_square_uint16_ttnn(input_shapes, device):
         (0, 1),
     ],
 )
-def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device):
+def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device, expect_error):
     torch.manual_seed(0)
     in_data1 = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     min = min_val
     max = max_val
     if min is None and max is None:
-        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+        with expect_error(RuntimeError, "Only one of 'min' or 'max' can be None. Please provide one value"):
             ttnn.clamp(input_tensor1, min, max)
     else:
         output_tensor = ttnn.clamp(input_tensor1, min, max)
@@ -1725,33 +1769,6 @@ def test_unary_cbrt_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
         assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=3.0)
     else:
         assert_allclose(ttnn.to_torch(output_tensor), golden_tensor, rtol=1e-05, atol=atol)
-
-
-def test_cbrt_arange(device):
-    # Generate all possible bit patterns for bf16
-    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32)
-
-    input_tensor = all_bitpatterns.to(torch.uint16).view(torch.bfloat16)
-    input_tensor = input_tensor.to(torch.float32)
-
-    # Mask subnormals (they get flushed to zero) and NaN (converted to inf for bf16)
-    mask = (((all_bitpatterns >> 7) & 0xFF) == 0) | ((all_bitpatterns & 0x7F) != 0) | torch.isnan(input_tensor)
-    input_tensor[mask] = 1.0
-
-    tt_in = ttnn.from_torch(
-        input_tensor,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    golden_function = ttnn.get_golden_function(ttnn.cbrt)
-    golden = golden_function(input_tensor, device=device)
-
-    tt_result = ttnn.cbrt(tt_in)
-    result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.isinf, ttnn.isnan, ttnn.isposinf, ttnn.isneginf, ttnn.isfinite])

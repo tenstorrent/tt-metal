@@ -81,6 +81,7 @@ class MathOperation(Enum):
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
     Fill = OpSpec("fill", MathOpType.SFPU_UNARY)
     Gelu = OpSpec("gelu", MathOpType.SFPU_UNARY)
+    GeluTanh = OpSpec("gelu_tanh", MathOpType.SFPU_UNARY)
     Hardsigmoid = OpSpec("hardsigmoid", MathOpType.SFPU_UNARY)
     Log = OpSpec("log", MathOpType.SFPU_UNARY)
     Log1p = OpSpec("log1p", MathOpType.SFPU_UNARY)
@@ -93,6 +94,14 @@ class MathOperation(Enum):
     Silu = OpSpec("silu", MathOpType.SFPU_UNARY)
     Sqrt = OpSpec("sqrt", MathOpType.SFPU_UNARY)
     Square = OpSpec("square", MathOpType.SFPU_UNARY)
+    # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
+    # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
+    EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
+    NotEqualZero = OpSpec("not_equal_zero", MathOpType.SFPU_UNARY)
+    LessThanZero = OpSpec("less_than_zero", MathOpType.SFPU_UNARY)
+    GreaterThanZero = OpSpec("greater_than_zero", MathOpType.SFPU_UNARY)
+    LessThanEqualZero = OpSpec("less_than_equal_zero", MathOpType.SFPU_UNARY)
+    GreaterThanEqualZero = OpSpec("greater_than_equal_zero", MathOpType.SFPU_UNARY)
     # Swiglu is technically a binary SFPU op (gate+up → out), but because
     # Quasar lacks the llk_math_eltwise_binary_sfpu_* dispatcher, its test
     # harness runs through the unary SFPU path. We therefore register it as
@@ -102,6 +111,10 @@ class MathOperation(Enum):
     # three offsets directly.
     SfpuSwiGLU = OpSpec("swiglu", MathOpType.SFPU_UNARY)
     Tanh = OpSpec("tanh", MathOpType.SFPU_UNARY)
+    # Typecast is dispatched by the (input, output) DataFormat pair rather than a
+    # single op, but it maps to SfpuType::typecast and runs through the shared
+    # unary-SFPU dispatch (see call_unary_sfpu_operation in sfpu_operations.h).
+    Typecast = OpSpec("typecast", MathOpType.SFPU_UNARY)
     Threshold = OpSpec("threshold", MathOpType.SFPU_UNARY)
     ReluMax = OpSpec(
         "relu_max", MathOpType.SFPU_UNARY
@@ -558,16 +571,6 @@ class UnpackerEngine(Enum):
     UnpB = "UNP_B"
     UnpS = "UNP_S"
     UnpDest = "UNP_DEST"
-
-
-class TilizeUnpackerSel(Enum):
-    """
-    Enum for selecting which unpacker(s) perform tilization.
-    """
-
-    UnpA = "UnpA"
-    UnpB = "UnpB"
-    UnpAB = "UnpAB"
 
 
 class ReluConfig(Enum):

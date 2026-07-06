@@ -15,6 +15,7 @@
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 #include "lltt.h"
+#include "sanitizer/api.h"
 #include "sfpi.h"
 
 using namespace ckernel;
@@ -245,6 +246,35 @@ inline void _llk_unpack_A_init_(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
 
+    if constexpr (BType == BroadcastType::NONE)
+    {
+        llk::san::unpack_operand_check(
+            llk::san::IGNORE,
+            unpack_src_format,
+            llk::san::IGNORE,
+            unpack_dst_format,
+            llk::san::IGNORE,
+            face_r_dim,
+            llk::san::IGNORE,
+            num_faces,
+            llk::san::IGNORE);
+    }
+    else
+    {
+        // If using broadcast UnpackA uses UNP_B... yeah i know...
+        llk::san::unpack_operand_check(
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            unpack_src_format,
+            llk::san::IGNORE,
+            unpack_dst_format,
+            llk::san::IGNORE,
+            face_r_dim,
+            llk::san::IGNORE,
+            num_faces);
+    }
+    llk::san::operation_init<llk::san::Operation::UnpackA>(BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, unpack_src_format, unpack_dst_format);
+
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
 
@@ -310,6 +340,35 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
 
+    if constexpr (BType == BroadcastType::NONE)
+    {
+        llk::san::unpack_operand_check(
+            llk::san::IGNORE,
+            unpack_src_format,
+            llk::san::IGNORE,
+            unpack_dst_format,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE);
+    }
+    else
+    {
+        // If using broadcast UnpackA uses UNP_B... yeah i know...
+        llk::san::unpack_operand_check(
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            unpack_src_format,
+            llk::san::IGNORE,
+            unpack_dst_format,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE);
+    }
+    llk::san::operation_check<llk::san::Operation::UnpackA>(BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, unpack_src_format, unpack_dst_format);
+
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
@@ -356,7 +415,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
         {
-            unpack_to_dest_tile_done(unp_cfg_context);
+            unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
         }
     }
 
@@ -365,14 +424,13 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 }
 
 /**
- * @brief Restore unpacker datum-count state after single-operand (A) unpacking.
+ * @brief No-op teardown after single-operand (A) unpacking.
  *
- * Resets the X-dimension address counter for the unpacker used by this broadcast mode back to
- * a full face worth of datums.
+ * The unpacker x-start/x-end (datum-count) state is transient and reprogrammed by each operation's
+ * init (see tt-llk#1036), so there is nothing to restore here.
  *
  * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
- * @param face_r_dim: Number of rows per face, used to compute the restored datum count.
- * @note Call @ref _llk_unpack_A_init_ with matching template args before this function.
+ * @note Call @ref _llk_unpack_A_init_ before this function.
  */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_A_uninit_()

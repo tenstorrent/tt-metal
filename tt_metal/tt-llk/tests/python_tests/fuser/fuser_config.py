@@ -10,7 +10,7 @@ from typing import List
 import pandas as pd
 import pytest
 from helpers.chip_architecture import ChipArchitecture
-from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
+from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.logger import logger
 from helpers.perf import PerfReport
 from helpers.profiler import Profiler, ProfilerData
@@ -83,20 +83,6 @@ class FuserConfig(TestConfig):
         for i, operation in enumerate(self.pipeline, start=1):
             operation.stage_id = i
             operation.num_stages = num_stages
-
-            if operation.dest_sync == DestSync.Half:
-                dest_capacity = (
-                    4 if self.global_config.dest_acc == DestAccumulation.Yes else 8
-                )
-            else:
-                dest_capacity = (
-                    8 if self.global_config.dest_acc == DestAccumulation.Yes else 16
-                )
-
-            if operation.block_tiles_x * operation.block_tiles_y > dest_capacity:
-                raise ValueError(
-                    f"Block size ({operation.block_size}) is bigger than dest capacity ({dest_capacity})"
-                )
 
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [

@@ -101,6 +101,9 @@ void invalidate_trisc_instruction_cache() {
 }
 
 void deassert_trisc() {
+    // Temporary workaround due to race vs. host deasserting TRISC reset.
+    // https://github.com/tenstorrent/tt-metal/issues/48064
+    assert_trisc_reset();
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
@@ -179,6 +182,8 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
+    // Set subordinate_sync->padding to 0 to make checks against subordinate_sync->allDMs correct.
+    subordinate_sync->padding = 0;
     while (subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE ||
            subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||

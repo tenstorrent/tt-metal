@@ -31,10 +31,10 @@
 // UMD: re-exports CoreType (used in Buffer::core_type return type).
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt::stl::json {
+namespace ttsl::json {
 template <typename T>
 struct from_json_t;
-}  // namespace tt::stl::json
+}  // namespace ttsl::json
 
 namespace tt::tt_metal {
 

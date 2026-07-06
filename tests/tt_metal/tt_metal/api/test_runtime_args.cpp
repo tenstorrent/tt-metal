@@ -1057,4 +1057,132 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
     unit_tests::runtime_args::verify_quasar_crtas(mesh_device, core, all_crtas, /*expect_shared_address*/ false);
 }
 
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
+    auto mesh_device = devices_[0];
+    const experimental::NodeCoord node{0, 0};
+    CoreRange core_range(CoreCoord{0, 0});
+    CoreRangeSet core_range_set(std::vector{core_range});
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+
+    const uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t address_2 = address_1 + sizeof(uint32_t);
+    const uint32_t value_1 = 0xaaaabbbb;
+    const uint32_t value_2 = 0xccccdddd;
+
+    // Zero-init both output slots.
+    std::vector<uint32_t> zeros(2, 0);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, address_1, zeros);
+
+    // Two kernels, each using one DM thread, writing to distinct L1 addresses.
+    const experimental::KernelSpecName K1{"k1"}, K2{"k2"};
+    auto make_dm_spec = [&](const experimental::KernelSpecName& id) {
+        return experimental::KernelSpec{
+            .unique_id = id,
+            .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
+            .num_threads = 1,
+            .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
+            .hw_config =
+                experimental::DataMovementHardwareConfig{
+                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        };
+    };
+    experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {K1, K2}, .target_nodes = core_range_set};
+    experimental::ProgramSpec spec{
+        .name = "merge_test", .kernels = {make_dm_spec(K1), make_dm_spec(K2)}, .work_units = {main_wu}};
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    // Build two partial ProgramRunArgs, one per kernel.
+    experimental::ProgramRunArgs part1;
+    part1.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = K1,
+        .runtime_arg_values = {{node, {{"address", address_1}}}},
+        .common_runtime_arg_values = {{"value", value_1}},
+    }};
+    experimental::ProgramRunArgs part2;
+    part2.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = K2,
+        .runtime_arg_values = {{node, {{"address", address_2}}}},
+        .common_runtime_arg_values = {{"value", value_2}},
+    }};
+
+    // Merge and set.
+    std::vector<experimental::ProgramRunArgs> rest = {part2};
+    experimental::ProgramRunArgs merged = experimental::MergeProgramRunArgs(std::move(part1), rest);
+    experimental::SetProgramRunArgs(program, merged);
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, true);
+
+    std::vector<uint32_t> out(2, 0);
+    tt_metal::detail::ReadFromDeviceL1(mesh_device->get_devices()[0], node, address_1, 2 * sizeof(uint32_t), out);
+    ASSERT_EQ(out, std::vector<uint32_t>({value_1, value_2}));
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
+    auto mesh_device = devices_[0];
+    const experimental::NodeCoord node{0, 0};
+    CoreRange core_range(CoreCoord{0, 0});
+    CoreRangeSet core_range_set(std::vector{core_range});
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+
+    const uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t address_2 = address_1 + sizeof(uint32_t);
+    const uint32_t value_1 = 0x11223344;
+    const uint32_t value_2 = 0x99aabbcc;
+
+    const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
+    experimental::KernelSpec dm_kernel_spec{
+        .unique_id = DM_KERNEL,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
+        .num_threads = unit_tests::runtime_args::kQuasarNumUserDms,
+        .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+    };
+    experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core_range_set};
+    experimental::ProgramSpec spec{
+        .name = "update_run_args_test", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+    Program& prog = workload.get_programs().at(device_range);
+
+    std::vector<uint32_t> zeros(2, 0);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, address_1, zeros);
+
+    // First enqueue: write value_1 to address_1.
+    experimental::ProgramRunArgs params1;
+    params1.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = {{node, {{"address", address_1}}}},
+        .common_runtime_arg_values = {{"value", value_1}},
+    }};
+    experimental::SetProgramRunArgs(prog, params1);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
+
+    // Second enqueue: update to value_2 and re-dispatch to address_2.
+    experimental::ProgramRunArgs params2;
+    params2.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = {{node, {{"address", address_2}}}},
+        .common_runtime_arg_values = {{"value", value_2}},
+    }};
+    experimental::UpdateProgramRunArgs(prog, params2);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
+
+    std::vector<uint32_t> outputs(2, 0);
+    tt_metal::detail::ReadFromDeviceL1(mesh_device->get_devices()[0], node, address_1, 2 * sizeof(uint32_t), outputs);
+    ASSERT_EQ(outputs, std::vector<uint32_t>({value_1, value_2}));
+}
+
 }  // namespace tt::tt_metal
