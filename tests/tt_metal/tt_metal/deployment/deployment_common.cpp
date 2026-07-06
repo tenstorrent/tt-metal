@@ -16,7 +16,7 @@ void handle_sigint(int) {
 
     if (!g_stop_message_printed.exchange(true)) {
         const char msg[] = "\nSIGINT received, waiting to finish current test...\n";
-        write(2, msg, sizeof msg - 1);
+        (void)write(STDERR_FILENO, msg, sizeof msg - 1);
     }
 }
 
