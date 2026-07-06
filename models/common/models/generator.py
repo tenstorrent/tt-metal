@@ -13,8 +13,9 @@ from models.common.models.llama3_8b.model import (
     EagerLlamaExecutor,
     Llama3Transformer1D,
     TracedLlamaExecutor,
-    build_llama3_transformer_1d_config_from_model_args,
+    build_llama3_transformer_1d_config,
 )
+from models.common.models.llama3_8b.runtime_args import create_llama31_runtime_args
 
 
 class Llama3Generator:
@@ -49,30 +50,22 @@ class Llama3Generator:
 
         This is the entry point called by vLLM's TTModelRunner.
         """
-        from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-
         hf_model_name = hf_config._name_or_path
         instruct = "Instruct" in hf_model_name
 
-        model_args = ModelArgs(
-            mesh_device,
+        model_args = create_llama31_runtime_args(
+            mesh_device=mesh_device,
             instruct=instruct,
             max_batch_size=max_batch_size,
-            optimizations=(
-                DecodersPrecision.from_string(optimizations)
-                if optimizations is not None
-                else DecodersPrecision.performance
-            ),
             max_seq_len=max_seq_len,
+            optimizations=optimizations,
+            n_layers=n_layers,
         )
-
-        if n_layers is not None:
-            model_args.n_layers = n_layers
 
         state_dict = model_args.load_state_dict()
         dtype = ttnn.bfloat8_b
 
-        model_config = build_llama3_transformer_1d_config_from_model_args(
+        model_config = build_llama3_transformer_1d_config(
             mesh_device=mesh_device,
             args=model_args,
             state_dict=state_dict,

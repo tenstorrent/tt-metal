@@ -37,6 +37,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.models.executor import EagerLLMExecutor, TracedLLMExecutor
+from models.common.models.llama3_8b.rope import compute_gather_cos_sin, rope_scaling_model_factory
 from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig
 from models.common.modules.embedding.embedding_1d import Embedding1D, Embedding1DConfig
 from models.common.modules.lazy_weight import LazyWeight
@@ -190,6 +191,12 @@ class TransformerBlock1D(LightweightModule):
 
 
 @dataclass
+class Llama31_8BPagedAttentionConfig:
+    block_size: int
+    max_num_blocks: int
+
+
+@dataclass
 class Llama3Transformer1DConfig:
     """Full model config. Build via from_hf_config() or construct manually."""
 
@@ -222,7 +229,7 @@ class Llama3Transformer1DConfig:
     cache_path: "str | None" = None
 
 
-def build_llama3_transformer_1d_config_from_model_args(
+def build_llama3_transformer_1d_config(
     *,
     mesh_device,
     args,
@@ -232,11 +239,7 @@ def build_llama3_transformer_1d_config_from_model_args(
     paged_attention_config=None,
     use_paged_kv_cache=None,
 ) -> Llama3Transformer1DConfig:
-    """Translate legacy ModelArgs into explicit TTTv2 module configs."""
-    from models.tt_transformers.tt.common import Mode, rope_scaling_model_factory
-    from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
-    from models.tt_transformers.tt.rope import compute_gather_cos_sin
-
+    """Translate Llama runtime args into explicit TTTv2 module configs."""
     if args.is_galaxy:
         raise ValueError("Llama3Transformer1D only supports 1D mesh topologies.")
 
@@ -246,8 +249,7 @@ def build_llama3_transformer_1d_config_from_model_args(
     num_devices = mesh_device.get_num_devices()
     tt_ccl_inst = get_tt_ccl(mesh_device) if num_devices > 1 else None
     model_config = args.get_model_config()
-    model_config["DECODE_RESIDUAL_MEMCFG"] = args.get_residual_mem_config(Mode.DECODE)
-    decoders_opt = model_config["DECODERS_OPTIMIZATIONS"]
+    model_config["DECODE_RESIDUAL_MEMCFG"] = args.get_decode_residual_mem_config()
     weight_cache_path = Path(weight_cache_path) if weight_cache_path else None
     embedding_cache_path = args.weight_cache_path(dtype or ttnn.bfloat8_b)
 
@@ -370,10 +372,10 @@ def build_llama3_transformer_1d_config_from_model_args(
         q_norm_str = f"{layer_name}.q_norm"
         k_norm_str = f"{layer_name}.k_norm"
 
-        wqkv_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.WQKV)
-        wo_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.WO)
-        kv_cache_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.KV_CACHE)
-        activation_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.ACTIVATION)
+        wqkv_dtype = args.get_tensor_dtype(layer_num, "wqkv")
+        wo_dtype = args.get_tensor_dtype(layer_num, "wo")
+        kv_cache_dtype = args.get_tensor_dtype(layer_num, "kv_cache")
+        activation_dtype = args.get_tensor_dtype(layer_num, "activation")
 
         qkv_list = []
         for device_idx in range(num_devices):
@@ -505,33 +507,21 @@ def build_llama3_transformer_1d_config_from_model_args(
             decode_agmm_num_links=attn_agmm_cfg.get("num_links", 1),
             decode_agmm_chunks_per_sync=attn_agmm_cfg.get("chunks_per_sync", 10),
             decode_agmm_num_workers_per_link=attn_agmm_cfg.get("num_workers_per_link", 2),
-            li_qkv_decode_compute_kernel_cfg=decoders_opt.get_math_fidelity(
-                decoder_id=layer_num, op=OpGroup.LI_QKV_DECODE, configuration=args
-            ),
-            sdpa_decode_compute_kernel_cfg=decoders_opt.get_math_fidelity(
-                decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=args
-            ),
-            li_o_decode_compute_kernel_cfg=decoders_opt.get_math_fidelity(
-                decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=args
-            ),
-            li_qkv_prefill_compute_kernel_cfg=decoders_opt.get_math_fidelity(
-                decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=args
-            ),
-            sdpa_prefill_compute_kernel_cfg=decoders_opt.get_math_fidelity(
-                decoder_id=layer_num, op=OpGroup.SDPA_PREFILL, configuration=args
-            ),
-            li_o_prefill_compute_kernel_cfg=decoders_opt.get_math_fidelity(
-                decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=args
-            ),
+            li_qkv_decode_compute_kernel_cfg=args.get_math_fidelity(layer_num, "li_qkv_decode"),
+            sdpa_decode_compute_kernel_cfg=args.get_math_fidelity(layer_num, "sdpa_decode"),
+            li_o_decode_compute_kernel_cfg=args.get_math_fidelity(layer_num, "li_o_decode"),
+            li_qkv_prefill_compute_kernel_cfg=args.get_math_fidelity(layer_num, "li_qkv_prefill"),
+            sdpa_prefill_compute_kernel_cfg=args.get_math_fidelity(layer_num, "sdpa_prefill"),
+            li_o_prefill_compute_kernel_cfg=args.get_math_fidelity(layer_num, "li_o_prefill"),
             transformation_mat_decode=transformation_mats.get("decode"),
             transformation_mat_prefill=transformation_mats.get("prefill"),
         )
 
     def make_mlp_config(layer_num: int) -> MLP1DConfig:
         state_dict_prefix = args.get_state_dict_prefix("MLP", layer_num)
-        ff1_3_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.FF1_FF3)
-        ff2_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.FF2)
-        activation_dtype = decoders_opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.ACTIVATION)
+        ff1_3_dtype = args.get_tensor_dtype(layer_num, "ff1_ff3")
+        ff2_dtype = args.get_tensor_dtype(layer_num, "ff2")
+        activation_dtype = args.get_tensor_dtype(layer_num, "activation")
         mlp_rs_cfg = model_config.get("MLP_RS_CONFIG", {})
 
         dram_size = mesh_device.dram_grid_size()
@@ -596,25 +586,17 @@ def build_llama3_transformer_1d_config_from_model_args(
             decode_rs_memory_config=mlp_rs_cfg.get("rs_memory_config", ttnn.L1_MEMORY_CONFIG),
             decode_rs_chunks_per_sync=mlp_rs_cfg.get("chunks_per_sync", 1),
             decode_rs_num_workers_per_link=mlp_rs_cfg.get("num_workers_per_link", 1),
-            decode_w1_w3_prg_config=args.get_mlp_ff1_3_prg_config(Mode.DECODE, None, None),
-            decode_w2_prg_config=args.get_mlp_ff2_prg_config(Mode.DECODE, None, None),
-            decode_mlp2_input_memcfg=args.get_mlp_binary_mult_mem_config(Mode.DECODE),
-            decode_residual_memcfg=args.get_mlp_output_mem_config(Mode.DECODE, None),
+            decode_w1_w3_prg_config=args.get_decode_mlp_ff1_3_prg_config(),
+            decode_w2_prg_config=args.get_decode_mlp_ff2_prg_config(),
+            decode_mlp2_input_memcfg=args.get_decode_mlp_binary_mult_mem_config(),
+            decode_residual_memcfg=args.get_decode_mlp_output_mem_config(),
             w1_w3_dtype=ff1_3_dtype,
             w2_dtype=ff2_dtype,
             activation_dtype=activation_dtype,
-            ff1_3_compute_kernel_cfg=decoders_opt.get_math_fidelity(
-                decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=args
-            ),
-            ff2_compute_kernel_cfg=decoders_opt.get_math_fidelity(
-                decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=args
-            ),
-            decode_ff1_3_compute_kernel_cfg=decoders_opt.get_math_fidelity(
-                decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=args
-            ),
-            decode_ff2_compute_kernel_cfg=decoders_opt.get_math_fidelity(
-                decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=args
-            ),
+            ff1_3_compute_kernel_cfg=args.get_math_fidelity(layer_num, "li_ff1_ff3"),
+            ff2_compute_kernel_cfg=args.get_math_fidelity(layer_num, "li_ff2"),
+            decode_ff1_3_compute_kernel_cfg=args.get_math_fidelity(layer_num, "li_ff1_ff3"),
+            decode_ff2_compute_kernel_cfg=args.get_math_fidelity(layer_num, "li_ff2"),
             decode_spill_w1_to_dram_before_w3=False,
             prefill_len_cutoff=args.prefill_len_cutoff,
         )
@@ -737,12 +719,10 @@ def build_llama3_transformer_1d_config_from_model_args(
 
     rope_config = make_rope_config()
     trans_mats_dict = RotarySetup1D.from_config(rope_config).get_both_trans_mats()
-    attn_norm_cfg = args.get_norm_config("attn", Mode.DECODE)
-    ff_norm_cfg = args.get_norm_config("ff", Mode.DECODE)
-    lm_head_norm_cfg = args.get_norm_config("lm_head", Mode.DECODE)
-    activation_dtypes = [
-        decoders_opt.get_tensor_dtype(decoder_id=i, tensor=TensorGroup.ACTIVATION) for i in range(args.n_layers)
-    ]
+    attn_norm_cfg = args.get_decode_norm_config("attn")
+    ff_norm_cfg = args.get_decode_norm_config("ff")
+    lm_head_norm_cfg = args.get_decode_norm_config("lm_head")
+    activation_dtypes = [args.get_tensor_dtype(i, "activation") for i in range(args.n_layers)]
 
     return Llama3Transformer1DConfig(
         n_layers=args.n_layers,

@@ -30,12 +30,15 @@ from loguru import logger
 
 import ttnn
 from models.common.models.executor import run_perf_benchmark, run_teacher_forcing
+from models.common.models.llama3_8b.input_preprocessing import preprocess_inputs_prefill
 from models.common.models.llama3_8b.model import (
     EagerLlamaExecutor,
     Llama3Transformer1D,
+    Llama31_8BPagedAttentionConfig,
     TracedLlamaExecutor,
-    build_llama3_transformer_1d_config_from_model_args,
+    build_llama3_transformer_1d_config,
 )
+from models.common.models.llama3_8b.runtime_args import create_llama31_runtime_args
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 
@@ -60,6 +63,7 @@ EXPECTED_METRICS = {
 }
 
 PERF_TOLERANCE = 0.05
+DEMO_DIR = Path(__file__).parent
 
 
 # =============================================================================
@@ -81,7 +85,7 @@ def get_device_name(mesh_device):
 
 def load_reference_data(model_name: str):
     """Load reference tokens and top-5 predictions from .refpt file."""
-    ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{model_name}.refpt"
+    ref_path = DEMO_DIR / "reference_outputs" / f"{model_name}.refpt"
     if not ref_path.exists():
         pytest.skip(f"Reference file not found: {ref_path}")
 
@@ -93,7 +97,7 @@ def load_reference_data(model_name: str):
 
 def load_input_prompts(batch_size: int):
     """Load input prompts for performance testing."""
-    prompts_path = Path("models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json")
+    prompts_path = DEMO_DIR / "sample_prompts" / "input_data_questions_prefill_128.json"
     if not prompts_path.exists():
         return ["What is the meaning of life?"] * batch_size
 
@@ -139,10 +143,7 @@ def log_teacher_forcing_text(prompt_tokens, predicted_tokens_per_user, reference
 
 
 def create_model_and_args(mesh_device, optimizations="performance", max_batch_size=32):
-    """Create Llama3Transformer1D and ModelArgs for testing."""
-    from models.tt_transformers.tt.common import PagedAttentionConfig
-    from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-
+    """Create Llama3Transformer1D and runtime args for testing."""
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
     instruct = "Instruct" in hf_model
 
@@ -150,27 +151,21 @@ def create_model_and_args(mesh_device, optimizations="performance", max_batch_si
 
     block_size = 32
     max_num_blocks = 1024
-    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
+    paged_attention_config = Llama31_8BPagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
 
-    model_args = ModelArgs(
-        mesh_device,
+    model_args = create_llama31_runtime_args(
+        mesh_device=mesh_device,
         instruct=instruct,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
-        optimizations=(
-            lambda args: (
-                getattr(DecodersPrecision, optimizations)(num_decoders=args.n_layers, model_name=args.model_name)
-                if isinstance(optimizations, str)
-                else optimizations
-            )
-        ),
+        optimizations=optimizations,
     )
     model_args.paged_attention_config = paged_attention_config
 
     state_dict = model_args.load_state_dict()
     dtype = ttnn.bfloat8_b
 
-    model_config = build_llama3_transformer_1d_config_from_model_args(
+    model_config = build_llama3_transformer_1d_config(
         mesh_device=mesh_device,
         args=model_args,
         state_dict=state_dict,
@@ -310,8 +305,6 @@ def _run_token_accuracy(model, model_args, mesh_device, expected):
 
 def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size, case_name):
     """Run performance benchmark (TTFT + tok/s/u)."""
-    from models.tt_transformers.tt.common import preprocess_inputs_prefill
-
     traced_executor = TracedLlamaExecutor(model, mesh_device, model_args=model_args)
     try:
         block_size = 32

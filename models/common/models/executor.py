@@ -19,9 +19,11 @@ Design principle: Thick engine, thin model executor.
 from __future__ import annotations
 
 import contextlib
+import math
 import time
 from collections import defaultdict
 from dataclasses import dataclass
+from enum import Enum
 
 import torch
 from loguru import logger
@@ -30,14 +32,68 @@ import ttnn
 from models.common.models.module_input_validation import suspend_module_input_validation, validate_module_input_configs
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_ttnn_value
-from models.tt_transformers.tt.common import (
-    Mode,
-    copy_host_to_device,
-    get_block_size,
-    get_max_prefill_chunk_size,
-    get_padded_prefill_len,
-    num_blocks_in_seq,
-)
+
+
+class Mode(Enum):
+    PREFILL = "prefill"
+    DECODE = "decode"
+
+
+def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None, shard_specs=None):
+    """Copy host tensors to existing device tensors, or create device tensors."""
+    if device_tensors is None:
+        assert mesh_device is not None, "mesh_device is required when device_tensors is None"
+        ret = []
+        for i, host_tensor in enumerate(host_tensors):
+            if shard_specs and shard_specs[i] is not None:
+                on_device = host_tensor.to(mesh_device, shard_specs[i]) if host_tensor else None
+            else:
+                on_device = ttnn.to_device(host_tensor, device=mesh_device) if host_tensor else None
+            ret.append(on_device)
+        return ret
+
+    for i, host_tensor in enumerate(host_tensors):
+        if host_tensor is None:
+            assert device_tensors[i] is None
+            continue
+        ttnn.copy_host_to_device_tensor(host_tensor, device_tensors[i])
+    return device_tensors
+
+
+def get_padded_prefill_len(seq_len: int) -> int:
+    if seq_len <= 128:
+        return 128
+    if seq_len <= 1024:
+        return 1024
+    return 2 ** (seq_len - 1).bit_length()
+
+
+def get_block_size(kv_cache):
+    return kv_cache[0][0].shape[2]
+
+
+def num_blocks_in_seq(seq_len, block_size):
+    return math.ceil(seq_len / block_size)
+
+
+def get_max_prefill_chunk_size(seq_len, max_prefill_seq_len):
+    min_chunk_size = 2048
+
+    if not isinstance(seq_len, int) or not isinstance(max_prefill_seq_len, int):
+        raise TypeError("Both seq_len and max_prefill_seq_len must be integers.")
+    if seq_len <= 0 or max_prefill_seq_len <= 0:
+        raise ValueError("Both seq_len and max_prefill_seq_len must be positive integers.")
+    if seq_len % min_chunk_size != 0:
+        raise ValueError(f"seq_len ({seq_len}) must be a multiple of {min_chunk_size}.")
+    if max_prefill_seq_len % min_chunk_size != 0:
+        raise ValueError(f"max_prefill_seq_len ({max_prefill_seq_len}) must be a multiple of {min_chunk_size}.")
+
+    for chunk_size in range(min(max_prefill_seq_len, seq_len), 0, -min_chunk_size):
+        if seq_len % chunk_size == 0:
+            return chunk_size
+
+    raise ValueError("No valid chunk size found")
+
 
 # =============================================================================
 # Page Table Helpers
@@ -253,10 +309,8 @@ class EagerLLMExecutor:
                 explicit = getattr(ma, "kv_cache_dtype", None)
                 if explicit is not None:
                     kv_cache_dtype = explicit
-                elif getattr(ma, "optimizations", None) is not None:
-                    from models.tt_transformers.tt.model_config import TensorGroup
-
-                    configured = ma.optimizations.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.KV_CACHE)
+                elif getattr(ma, "get_kv_cache_dtype", None) is not None:
+                    configured = ma.get_kv_cache_dtype(layer_num)
                     if configured is not None:
                         kv_cache_dtype = configured
 
