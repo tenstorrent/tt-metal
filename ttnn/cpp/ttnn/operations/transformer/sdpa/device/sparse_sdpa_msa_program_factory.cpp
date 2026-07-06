@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_device_operation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"  // get_linearized_index_from_physical_coord (per-device SP rank)
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
 #include <tt-metalium/constants.hpp>
@@ -16,7 +17,10 @@
 namespace ttnn::prim {
 
 tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::create_descriptor(
-    const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t, Tensor& output) {
+    const SparseSDPAMsaParams& attrs,
+    const SparseSDPAMsaInputs& t,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     // Fixed CB ids shared with the kernels. Function scope avoids unity-build collisions with sparse_sdpa.
     // K/V are separate pre-tiled caches. Reader and writer co-gather each block into shared K/V CBs.
     enum SparseCB : uint32_t {
@@ -261,6 +265,20 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const uint32_t v_group_tile_stride = tiles_per_row * vDHt;
     const uint32_t k_batch_tile_offset = cache_batch_idx * n_kv * k_group_tile_stride;
     const uint32_t v_batch_tile_offset = cache_batch_idx * n_kv * v_group_tile_stride;
+    // Per-device causal start, baked from THIS device's mesh coordinate: chunk_start = chunk_start_idx +
+    // device_index*S (device_index is the SP-ring rank along cluster_axis; 0 on a single device). The adapter
+    // runs create_descriptor once per coordinate, so each device's program gets its own chunk_start -- the same
+    // derivation indexer_score_msa uses, so the mask and the indexer's block selection share one global-position
+    // frame. override_runtime_arguments re-derives it per program on cache hits (chunk_start_idx can change).
+    uint32_t chunk_start_local_init = 0;
+    if (attrs.causal_enabled()) {
+        const bool multi_device = t.q.device_storage().get_coords().size() > 1;
+        const uint32_t device_index = (mesh_dispatch_coordinate.has_value() && multi_device)
+                                          ? ttnn::ccl::get_linearized_index_from_physical_coord(
+                                                t.q, *mesh_dispatch_coordinate, attrs.cluster_axis)
+                                          : 0u;
+        chunk_start_local_init = attrs.chunk_start_idx.value() + device_index * S;
+    }
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t work_start = i * base_work + std::min(i, extra);
@@ -278,7 +296,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
              v_batch_tile_offset,
              k_group_tile_stride,
              v_group_tile_stride,
-             /*chunk_start_local=*/0u});  // arg 10: patched per-device at dispatch when causal masking is on
+             chunk_start_local_init});  // arg 10: create-time rank-0 base; per-device SP re-patched on hits
         // Writer args 5/6 are the K/V cache-slot offsets patched on cache hits.
         writer_desc.emplace_runtime_args(
             core,

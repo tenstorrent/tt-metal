@@ -11,9 +11,11 @@
 #include <variant>
 #include <vector>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 
 namespace ttnn::prim {
 
@@ -44,26 +46,55 @@ struct SparseSDPAMsaOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
+    // ProgramDescriptor factory, invoked PER mesh coordinate by the adapter so each device bakes its own
+    // per-device causal chunk_start (chunk_start_idx + device_index*S) from its coordinate -- mirrors the
+    // indexer_score (MSA sibling) create_at, and matches the SDPA sibling ring_joint_sdpa's adapter wiring.
     struct SparseSDPAMsaProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
-            const operation_attributes_t& attrs, const tensor_args_t& t, tensor_return_value_t& output);
+            const operation_attributes_t& attrs,
+            const tensor_args_t& t,
+            tensor_return_value_t& output,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
     };
 
-    using program_factory_t = std::variant<SparseSDPAMsaProgramFactory>;
+    // Minimal operation-shaped helper so the descriptor factory can be adapted into a mesh workload.
+    struct DescriptorAdapterOperation {
+        using operation_attributes_t = SparseSDPAMsaOperation::operation_attributes_t;
+        using tensor_args_t = SparseSDPAMsaOperation::tensor_args_t;
+        using spec_return_value_t = SparseSDPAMsaOperation::spec_return_value_t;
+        using tensor_return_value_t = SparseSDPAMsaOperation::tensor_return_value_t;
+    };
 
+    // Wraps the ProgramDescriptor factory into a per-coordinate mesh workload: create runs once per device
+    // (so chunk_start is baked per-device), and override_runtime_arguments re-applies buffer bindings plus the
+    // hash-excluded scalars (cache-slot offsets, GQA strides, and per-device chunk_start) on cache hits.
+    struct MeshWorkloadFactory {
+        using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
+            DescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<SparseSDPAMsaProgramFactory>;
+        using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
+
+        static cached_mesh_workload_t create_mesh_workload(
+            const operation_attributes_t& args,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+
+        static void override_runtime_arguments(
+            cached_mesh_workload_t& cached_workload,
+            const operation_attributes_t& args,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    using program_factory_t = std::variant<MeshWorkloadFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     // Re-checks invariants excluded from the program hash, such as interleaved K/V length and cache_batch_idx.
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    // Patches per-slot K/V tile offsets and runtime K/V group strides on cache hits.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t& attrs,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 Tensor sparse_sdpa_msa(

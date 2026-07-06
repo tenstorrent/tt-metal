@@ -206,6 +206,7 @@ def run_op_msa_native(
     q_dtype=ttnn.bfloat16,
     chunk_start_idx=None,
     cluster_axis=None,
+    compute_kernel_config=None,
 ):
     """Run the native op. K/V are pre-tiled; q/indices/output stay row-major."""
     _, H, _, d = q.shape
@@ -234,6 +235,7 @@ def run_op_msa_native(
         block_size=block_size,
         chunk_start_idx=chunk_start_idx,  # set -> enable token-level diagonal-block causal mask
         cluster_axis=cluster_axis,
+        compute_kernel_config=compute_kernel_config,
     )
     # Output dtype matches q. fp8 can't be to_torch'd directly, so typecast fp8 -> bf16 on device first.
     if tt_out.dtype == ttnn.fp8_e4m3:

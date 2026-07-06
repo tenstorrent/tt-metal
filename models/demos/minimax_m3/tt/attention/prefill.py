@@ -167,9 +167,21 @@ def prefill_forward(
             n_chunks = cached_len // (seq_len * sp) + 1  # chunks now in the cache (incl. current)
             n_rows = n_chunks * chunk_local  # accumulated per-chip cache rows
             slot = user_id * kv_cache.num_layers + layer_idx
-            k_acc = ttnn.slice(kv_cache.k, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
-            v_acc = ttnn.slice(kv_cache.v, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
-            ik_acc = ttnn.slice(kv_cache.index_k, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
+            # ttnn.slice on an NdShard(ROUND_ROBIN_1D) tensor corrupts the round-robin bank mapping (a
+            # subsequent read then pulls the wrong banks -> the accumulated context is scrambled, chunked
+            # KV-PCC craters). Convert the packed cache to plain DRAM-interleaved FIRST (the round-robin is
+            # intact for the full tensor), THEN slice the slot on the interleaved result. Verified on-device
+            # by test_ndshard_reorder_probe / test_msa_sp_cache_read_ndshard_pcc. Fully on-device (no host
+            # round-trip); the eventual slab-aware in-kernel cache read (ring_joint-style) supersedes it.
+            k_int = ttnn.to_memory_config(kv_cache.k, ttnn.DRAM_MEMORY_CONFIG)
+            v_int = ttnn.to_memory_config(kv_cache.v, ttnn.DRAM_MEMORY_CONFIG)
+            ik_int = ttnn.to_memory_config(kv_cache.index_k, ttnn.DRAM_MEMORY_CONFIG)
+            k_acc = ttnn.slice(k_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
+            v_acc = ttnn.slice(v_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
+            ik_acc = ttnn.slice(ik_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
+            k_int.deallocate(True)
+            v_int.deallocate(True)
+            ik_int.deallocate(True)
             tt_sdpa_out = msa_sp_attention(
                 tt_q,
                 k_acc,
@@ -229,7 +241,13 @@ def prefill_forward(
                 kv_actual=cached_len,
                 logical_n=logical_n,
                 n_kv=config.num_kv_heads,
-                cache_global=logical_n,
+                # Ring-gather output buffer must span the FULL cache capacity: ring_joint gathers the
+                # entire per-device cache shard (seq_local = max_seq_len/sp rows -> x sp across the ring =
+                # max_seq_len), independent of the valid prefix (logical_n/kv_actual_isl drive causal
+                # masking of the not-yet-written tail). Sizing it to logical_n only worked for the 2-chunk
+                # case where the last chunk's logical_n == max_seq_len; any run with >2 chunks (e.g. 50k /
+                # 11 chunks) fails "gather dim 2 too small: got <logical_n>, expected >= max_seq_len".
+                cache_global=kv_cache.max_seq_len,
                 head_dim=config.head_dim,
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,

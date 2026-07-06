@@ -100,6 +100,205 @@ def index_branch_forward(hidden_states, weights, rope_mats, transformation_mat, 
     return iq, ik
 
 
+def _cpu_fp32_indexer(index_q, index_k, ref, *, mode, chunk_start_idx, scale, cluster_axis, device):
+    """Debug (option A): recompute the MSA indexer in HOST fp32 from the device's own bf16 index_q/index_k.
+    mode="scores" (M3_CPU_INDEXER): return fp32 block_scores (bf16 tensor), device topk kept.
+    mode="block_ids" (M3_CPU_TOPK): also do the top-k on host -> block_ids (uint32), bypassing the
+        experimental topk_large_indices op. Sentinel 0xFFFFFFFF where the selected block scored -inf;
+        top-k descending puts valid blocks as a contiguous prefix (matches sparse_sdpa_msa_reader).
+
+    Isolates the indexer (score precision #6) and — in block_ids mode — the top-k op too. If KV-PCC
+    recovers, the indexer/top-k was a driver; if flat, the decay is downstream (sdpa / MoE).
+
+    Per device (r,c) at TP=4 holds ONE index group [1,1,s_local,dim] + the full (natural-order) index_k
+    [1,1,T,dim]. Global query offset = chunk_start_idx + r*s_local (SP). Mirrors msa_block_selection.
+    Reassembles [1,G,S,*] with dims=(2,1) (seq->rows, group->cols). ONE-SHOT/nocache only (index_k natural
+    order; the cache-read path is block-cyclic)."""
+    rows, cols = tuple(device.shape)
+    iq_dts, ik_dts = ttnn.get_device_tensors(index_q), ttnn.get_device_tensors(index_k)
+    iq0 = ttnn.to_torch(iq_dts[0]).float()
+    s_local, dim = iq0.shape[2], iq0.shape[3]
+    T = ttnn.to_torch(ik_dts[0]).float().shape[2]
+    nblk = (T + BLOCK_SIZE - 1) // BLOCK_SIZE
+    tpad = nblk * BLOCK_SIZE
+    rs0 = ttnn.to_torch(ttnn.get_device_tensors(ref)[0])
+    exp_last = nblk if mode == "scores" else TOPK_BLOCKS
+    assert tuple(rs0.shape[-2:]) == (s_local, exp_last), f"cpu-indexer layout {tuple(rs0.shape)} != (s_local={s_local}, last={exp_last})"
+    G, S = cols, rows * s_local
+    last = nblk if mode == "scores" else TOPK_BLOCKS
+    glob = torch.zeros(1, G, S, last, dtype=(torch.float32 if mode == "scores" else torch.int64))
+    for d in range(rows * cols):
+        r, c = d // cols, d % cols
+        iq = ttnn.to_torch(iq_dts[d]).float()[0, 0]  # [s_local, dim]
+        ik = ttnn.to_torch(ik_dts[d]).float()[0, 0]  # [T, dim]
+        base = (chunk_start_idx or 0) + (r * s_local if cluster_axis is not None else 0)
+        qpos = torch.arange(s_local) + base
+        kpos = torch.arange(T)
+        sc = scale * (iq @ ik.t())  # [s_local, T] fp32
+        sc = sc.masked_fill(kpos[None, :] > qpos[:, None], float("-inf"))
+        if tpad > T:
+            sc = torch.cat([sc, sc.new_full((s_local, tpad - T), float("-inf"))], dim=1)
+        bs = sc.view(s_local, nblk, BLOCK_SIZE).max(-1).values  # block max-pool [s_local, nblk]
+        local = (qpos // BLOCK_SIZE).clamp(max=nblk - 1)
+        bs[torch.arange(s_local), local] = float("inf")  # force-local current block
+        if mode == "scores":
+            glob[0, c, r * s_local : (r + 1) * s_local, :] = bs
+        else:  # block_ids: top-k descending; -inf-scored slots -> sentinel (trail as a contiguous suffix)
+            vals, idx = torch.topk(bs, TOPK_BLOCKS, dim=-1)  # [s_local, TOPK] descending
+            idx = idx.to(torch.int64)
+            idx[vals == float("-inf")] = 0xFFFFFFFF
+            glob[0, c, r * s_local : (r + 1) * s_local, :] = idx
+    mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=(rows, cols), dims=(2, 1))
+    out_dtype = ttnn.bfloat16 if mode == "scores" else ttnn.uint32
+    return ttnn.from_torch(glob, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=out_dtype, mesh_mapper=mapper)
+
+
+def _host_sdpa_glob(q, k, v, block_ids, *, chunk_start_idx, scale, cluster_axis, device, token_causal=True, mask_mode="causal"):
+    """Host fp32 block-sparse attention from the device's own bf16 q/k/v + device block_ids (selection
+    UNCHANGED). Returns the reassembled global output [1, Hq, S, hd] fp32 + the (rows,cols,Hql,s_local)
+    shard geometry. ``token_causal`` matches the device op's causality (diag mask on/off) so an op-vs-host
+    diff isolates numerics, not causality. Per device (r,c): Hq_local q heads, 1 kv head, query rows
+    [r*s_local:...] at global base=chunk_start+r*s_local; placed into [1,Hq,S,hd] as dims=(2,1)."""
+    rows, cols = tuple(device.shape)
+    qd_, kd_, vd_, bd_ = (ttnn.get_device_tensors(t) for t in (q, k, v, block_ids))
+    q0 = ttnn.to_torch(qd_[0]).float()
+    Hql, s_local, hd = q0.shape[1], q0.shape[2], q0.shape[3]
+    T = ttnn.to_torch(kd_[0]).float().shape[2]
+    nblk = (T + BLOCK_SIZE - 1) // BLOCK_SIZE
+    Hq, S, SENT = Hql * cols, rows * s_local, 0xFFFFFFFF
+    glob = torch.zeros(1, Hq, S, hd, dtype=torch.float32)
+    for d in range(rows * cols):
+        r, c = d // cols, d % cols
+        qd = ttnn.to_torch(qd_[d]).float()[0]  # [Hql, s_local, hd]
+        kd = ttnn.to_torch(kd_[d]).float()[0, 0]  # [T, hd]
+        vd = ttnn.to_torch(vd_[d]).float()[0, 0]  # [T, hd]
+        bid = ttnn.to_torch(bd_[d])[0, 0].to(torch.int64)  # [s_local, TOPK]
+        base = (chunk_start_idx or 0) + (r * s_local if cluster_axis is not None else 0)
+        qpos = torch.arange(s_local) + base
+        kpos = torch.arange(T)
+        # block-selection mask [s_local, nblk] (sentinel -> dummy col), then expand to tokens (+ causal)
+        bm = torch.zeros(s_local, nblk + 1, dtype=torch.bool)
+        b = bid.clone()
+        b[(b == SENT) | (b > nblk)] = nblk
+        bm.scatter_(1, b, True)
+        tokmask = bm[:, :nblk].repeat_interleave(BLOCK_SIZE, dim=1)[:, :T]  # [s_local, T]
+        # mask_mode selects the causality applied on top of block selection:
+        #   "block"    -> selected blocks only, no token causality (device diag=0)
+        #   "causal"   -> + true token causality kpos<=qpos on ALL blocks (standard / golden)
+        #   "faithful" -> mimic the DEVICE diag=1 op: attend all selected blocks fully, mask only the
+        #                 DIAGONAL block's future tokens (block(k)==q//bs & k>q). Differs from "causal"
+        #                 only on any SELECTED FUTURE block (block(k) > q//bs), which "causal" masks but
+        #                 the device attends.
+        if not token_causal or mask_mode == "block":
+            mask = tokmask
+        elif mask_mode == "faithful":
+            block_of_k = (kpos // BLOCK_SIZE)[None, :]  # [1,T]
+            db = (qpos // BLOCK_SIZE)[:, None]  # [s_local,1]
+            diag_future = (block_of_k == db) & (kpos[None, :] > qpos[:, None])
+            mask = tokmask & (~diag_future)
+        else:  # "causal"
+            mask = tokmask & (kpos[None, :] <= qpos[:, None])
+        scores = torch.einsum("hid,td->hit", qd, kd) * scale  # [Hql, s_local, T]
+        scores = scores.masked_fill(~mask[None], float("-inf"))
+        attn = torch.softmax(scores, dim=-1)
+        glob[0, c * Hql : (c + 1) * Hql, r * s_local : (r + 1) * s_local, :] = torch.einsum("hit,td->hid", attn, vd)
+    return glob, (rows, cols, Hql, s_local)
+
+
+def _cpu_fp32_sdpa(q, k, v, block_ids, *, chunk_start_idx, scale, cluster_axis, device):
+    """M3_CPU_SDPA=1 (debug, rung 2): replace the device sparse_sdpa_msa with HOST fp32 (fully token-causal).
+    If KV-PCC recovers, the sdpa math is a driver; if flat, the decay is the MoE."""
+    glob, (rows, cols, _, _) = _host_sdpa_glob(
+        q, k, v, block_ids, chunk_start_idx=chunk_start_idx, scale=scale, cluster_axis=cluster_axis, device=device
+    )
+    mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=(rows, cols), dims=(2, 1))
+    return ttnn.from_torch(glob, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper)
+
+
+def _reassemble_msa_out(out_dev, rows, cols, Hql, s_local):
+    """Device sparse_sdpa_msa output shards [1,Hql,s_local,hd] -> global [1,Hq,S,hd] fp32 (dims=(2,1)),
+    matching _host_sdpa_glob's placement so the two can be PCC'd directly."""
+    od_ = ttnn.get_device_tensors(out_dev)
+    hd = ttnn.to_torch(od_[0]).shape[-1]
+    glob = torch.zeros(1, Hql * cols, rows * s_local, hd, dtype=torch.float32)
+    for d in range(rows * cols):
+        r, c = d // cols, d % cols
+        glob[0, c * Hql : (c + 1) * Hql, r * s_local : (r + 1) * s_local, :] = ttnn.to_torch(od_[d]).float()[0]
+    return glob
+
+
+def _dbg_op_vs_host(out_dev, q, k, v, block_ids, *, chunk_start_idx, scale, cluster_axis, device, layer_idx):
+    """M3_MSA_DBG_OPDIFF=1: per-layer PCC of the DEVICE sparse_sdpa_msa output vs a HOST fp32 recompute on
+    the SAME inputs + selection + causality. Isolates the kernel's own numerical error at real-model inputs
+    (no KV-cache propagation). token_causal mirrors the live diag-mask setting so only numerics differ."""
+    token_causal = os.getenv("M3_MSA_DIAG_MASK", "1") == "1"
+    from loguru import logger
+
+    def _pcc_t(dev, host):
+        a, b = dev.flatten().double(), host.flatten().double()
+        a, b = a - a.mean(), b - b.mean()
+        den = (a.norm() * b.norm()).item()
+        return 1.0 if den == 0 else (a @ b).item() / den
+
+    # M3_MSA_DUMP_LAYER=N: find the worst SP-shard at layer N and save its exact real inputs so the diverging
+    # op call can be replayed + DPRINT-dumped on a single device. Saved only for the real (low-PCC) pass.
+    dump_layer = os.getenv("M3_MSA_DUMP_LAYER")
+    if dump_layer is not None and int(dump_layer) == layer_idx:
+        import os as _os
+
+        rows, cols = tuple(device.shape)
+        host_glob, (_, _, Hql, s_local) = _host_sdpa_glob(
+            q, k, v, block_ids, chunk_start_idx=chunk_start_idx, scale=scale, cluster_axis=cluster_axis,
+            device=device, token_causal=token_causal, mask_mode="causal",
+        )
+        od, qd, kd, vd, bd = (ttnn.get_device_tensors(t) for t in (out_dev, q, k, v, block_ids))
+        worst_p, worst_d = 2.0, -1
+        for dd in range(rows * cols):
+            r, c = dd // cols, dd % cols
+            dev_sh = ttnn.to_torch(od[dd]).float()[0]
+            host_sh = host_glob[0, c * Hql : (c + 1) * Hql, r * s_local : (r + 1) * s_local, :]
+            p = _pcc_t(dev_sh, host_sh)
+            if p < worst_p:
+                worst_p, worst_d = p, dd
+        if worst_p < 0.95:  # real pass (compile/warmup pass is ~0.999); skip that one
+            _os.makedirs("/tmp/m3_opdump", exist_ok=True)
+            r, c = worst_d // cols, worst_d % cols
+            torch.save(
+                {
+                    "q": ttnn.to_torch(qd[worst_d]), "k": ttnn.to_torch(kd[worst_d]),
+                    "v": ttnn.to_torch(vd[worst_d]), "block_ids": ttnn.to_torch(bd[worst_d]),
+                    "chunk_start_idx": (chunk_start_idx or 0) + (r * s_local if cluster_axis is not None else 0),
+                    "scale": scale, "layer": layer_idx, "rank_r": r, "col_c": c, "shard_pcc": worst_p,
+                    "dev_out": ttnn.to_torch(od[worst_d]),
+                },
+                f"/tmp/m3_opdump/L{layer_idx}_worst.pt",
+            )
+            logger.info(
+                f"[msa-opdump L{layer_idx}] worst shard d={worst_d} (r={r},c={c}) PCC={worst_p:.5f} "
+                f"chunk_start={(chunk_start_idx or 0)+r*s_local} -> /tmp/m3_opdump/L{layer_idx}_worst.pt"
+            )
+
+    def _pcc(dev, host):
+        a, b = dev.flatten().double(), host.flatten().double()
+        a, b = a - a.mean(), b - b.mean()
+        denom = (a.norm() * b.norm()).item()
+        return 1.0 if denom == 0 else (a @ b).item() / denom
+
+    dev_glob = None
+    # compare against both host causalities: standard kpos<=qpos vs device-faithful (diagonal-only mask)
+    modes = ["causal", "faithful"] if token_causal else ["block"]
+    out = []
+    for m in modes:
+        host_glob, geom = _host_sdpa_glob(
+            q, k, v, block_ids, chunk_start_idx=chunk_start_idx, scale=scale, cluster_axis=cluster_axis,
+            device=device, token_causal=token_causal, mask_mode=m,
+        )
+        if dev_glob is None:
+            dev_glob = _reassemble_msa_out(out_dev, *geom)
+        out.append(f"{m}={_pcc(dev_glob, host_glob):.5f}")
+    logger.info(f"[msa-opdiff L{layer_idx}] device-op vs host-fp32  " + "  ".join(out))
+
+
 def msa_indexer_sparse(
     index_q,
     index_k,
@@ -150,14 +349,48 @@ def msa_indexer_sparse(
         cluster_axis=cluster_axis,
     )
 
+    # Debug (option A): M3_CPU_INDEXER -> host fp32 scores (device topk); M3_CPU_TOPK -> host fp32 scores
+    # AND host top-k (bypasses topk_large_indices). Both keep the device sparse_sdpa_msa.
+    cpu_topk = os.getenv("M3_CPU_TOPK") == "1"
+    if os.getenv("M3_CPU_INDEXER") == "1" and not cpu_topk:
+        block_scores = _cpu_fp32_indexer(
+            index_q, index_k, block_scores, mode="scores",
+            chunk_start_idx=chunk_start_idx, scale=scale, cluster_axis=cluster_axis, device=device,
+        )
+
     # The op already force-locals the current block (+inf); the real MiniMax-M3 indexer forces ONLY the
     # local block (upstream minimax_m3_vl: index_local_blocks, no init/sink block), so nothing else is added.
     _dbg_msa_save(block_scores, device, layer_idx, f"{dbg_tag}_scores" if dbg_tag else None)
 
     # Top-k block ids (uint32 row-major) — the block selection that encodes causality.
-    block_ids = ttnn.experimental.topk_large_indices(block_scores, k=TOPK_BLOCKS)
+    if cpu_topk:
+        dev_bids = ttnn.experimental.topk_large_indices(block_scores, k=TOPK_BLOCKS)  # ref for shape/layout only
+        block_ids = _cpu_fp32_indexer(
+            index_q, index_k, dev_bids, mode="block_ids",
+            chunk_start_idx=chunk_start_idx, scale=scale, cluster_axis=cluster_axis, device=device,
+        )
+    else:
+        block_ids = ttnn.experimental.topk_large_indices(block_scores, k=TOPK_BLOCKS)
     _dbg_msa_save(block_ids, device, layer_idx, dbg_tag)
 
+    # M3_CPU_SDPA=1 (debug, rung 2): recompute the attention in host fp32 (device block_ids kept).
+    if os.getenv("M3_CPU_SDPA") == "1":
+        out = ttnn.to_layout(
+            _cpu_fp32_sdpa(q, k, v, block_ids, chunk_start_idx=chunk_start_idx, scale=scale, cluster_axis=cluster_axis, device=device),
+            ttnn.TILE_LAYOUT,
+        )
+        return (out, block_ids) if return_block_ids else out
+
+    # M3_SDPA_FP32DEST=1: fp32 DEST accumulation (HiFi4) on the device sparse_sdpa_msa. Legal for bf16 q
+    # (only fp8 q *requires* it); tests whether the attention-math precision recovery we saw with host
+    # fp32 is reachable on-device via a compute_kernel_config (one-liner) instead of a kernel change.
+    _sdpa_kcfg = (
+        ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+        )
+        if os.getenv("M3_SDPA_FP32DEST") == "1"
+        else None
+    )
     # sparse_sdpa_msa: q + block-ids row-major, K/V tiled; expands blocks->tokens internally.
     out = ttnn.transformer.sparse_sdpa_msa(
         ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT),
@@ -166,7 +399,21 @@ def msa_indexer_sparse(
         block_ids,
         scale=scale,
         block_size=BLOCK_SIZE,
+        compute_kernel_config=_sdpa_kcfg,
+        # PR#48700 (temp cherry-pick): activate the diagonal-block token-level causal mask. q is bf16
+        # (fp8 q is rejected by the op). Under SP, cluster_axis=sp_axis derives per-device
+        # chunk_start = chunk_start_idx + rank*Sq. chunk_start_idx=cached_len (0 for one-shot).
+        # M3_MSA_DIAG_MASK=0 -> legacy block-only causality (A/B control to isolate the mask's effect).
+        chunk_start_idx=(chunk_start_idx if os.getenv("M3_MSA_DIAG_MASK", "1") == "1" else None),
+        cluster_axis=(cluster_axis if os.getenv("M3_MSA_DIAG_MASK", "1") == "1" else None),
     )
+    # Per-layer device-op-vs-host-fp32 PCC on the SAME inputs (kernel numerical error, no cache propagation).
+    if os.getenv("M3_MSA_DBG_OPDIFF") == "1" and layer_idx is not None:
+        _dbg_op_vs_host(
+            out, q, k, v, block_ids,
+            chunk_start_idx=chunk_start_idx, scale=scale, cluster_axis=cluster_axis, device=device, layer_idx=layer_idx,
+        )
+
     # sparse_sdpa_msa returns ROW_MAJOR; the model's concat_heads (prefill.py) needs TILE — match the
     # dense (ring_joint) output so the shared post-attention path works for MSA layers too.
     out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
@@ -292,6 +539,27 @@ def msa_sp_attention(
     k_full = gather_natural(k_acc)
     v_full = gather_natural(v_acc)
     index_k_full = gather_natural(index_k_acc)
+    # DEBUG (M3_DBG_REORDER=1): dump the reordered full-context index_k so it can be compared to the golden
+    # natural-order index_k (with the Meta-RoPE `src` permutation) -> proves whether gather_natural is broken.
+    if os.getenv("M3_DBG_REORDER") == "1" and layer_idx == int(os.getenv("M3_DBG_REORDER_LAYER", "4")) and n_chunks >= 2:
+        import os as _os
+        from loguru import logger as _lg
+
+        _os.makedirs("/tmp/reorder_dbg", exist_ok=True)
+        _ik = ttnn.to_torch(ttnn.get_device_tensors(index_k_full)[0])  # device0's full-context reorder [1,1,T,hd]
+        # Also capture the pre-reorder AllGather (block-cyclic) so the exact block-cyclic->natural permutation
+        # can be recovered offline (device-vs-device, no golden/RoPE-swizzle ambiguity).
+        _bc = mesh_config.allgather(
+            ttnn.to_memory_config(index_k_acc, ttnn.DRAM_MEMORY_CONFIG), ccl_manager, axis=sp_axis, dim=2)
+        if _bc.dtype != ttnn.bfloat16:
+            _bc = ttnn.typecast(_bc, ttnn.bfloat16)
+        _bc_t = ttnn.to_torch(ttnn.get_device_tensors(_bc)[0])
+        torch.save(
+            {"gathernat": _ik, "full_bc": _bc_t, "n_chunks": n_chunks, "chunk_local": chunk_local, "sp": sp,
+             "cached_len": cached_len, "layer": layer_idx},
+            f"/tmp/reorder_dbg/L{layer_idx}_gathernat.pt",
+        )
+        _lg.info(f"[reorder-dbg] saved L{layer_idx} gather_natural index_k {tuple(_ik.shape)} -> /tmp/reorder_dbg")
     # Per-device causality via the merged op's native mesh-coord chunk_start (#47939): device r derives
     # chunk_start = cached_len + r*Sq (Sq = q's s_local rows) from its coordinate along cluster_axis=sp_axis.
     return msa_indexer_sparse(

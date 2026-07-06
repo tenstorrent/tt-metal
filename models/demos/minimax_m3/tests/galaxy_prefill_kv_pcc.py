@@ -97,6 +97,11 @@ def check_kv_pcc(runtime, golden_dir, n_tokens, num_layers, hf_config):
     mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
     for L in range(num_layers):
         dev_k, dev_v, dev_ik = runtime.gather_layer(slot_id=0, layer_idx=L, n_tokens=n_tokens)
+        if os.getenv("M3_DBG_REORDER") == "1" and L == int(os.getenv("M3_DBG_REORDER_LAYER", "4")):
+            import os as _os
+            _os.makedirs("/tmp/reorder_dbg", exist_ok=True)
+            torch.save({"gatherlayer_ik": dev_ik}, f"/tmp/reorder_dbg/L{L}_gatherlayer.pt")
+            logger.info(f"[reorder-dbg] saved gather_layer index_k L{L} {tuple(dev_ik.shape)}")
         with safe_open(str(kv_dir / f"layer_{L}.safetensors"), framework="pt") as h:
             keys = set(h.keys())
             g_k = h.get_tensor(f"key_cache_layer_{L}").float()[:, :, :n_tokens, :][..., src]  # HF -> Meta

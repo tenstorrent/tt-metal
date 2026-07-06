@@ -27,20 +27,40 @@ pytestmark = [
 ]
 
 
+def _compute_config(device, fp32_dest):
+    """fp32_dest=True -> fp32 DEST accumulation (32-bit DEST banking, dst_size 8->4). None keeps the op
+    default (bf16 DEST). Used to A/B the fp32-dest accuracy path's perf cost. Blackhole-only op."""
+    if not fp32_dest:
+        return None
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
 @run_for_blackhole()
+@pytest.mark.parametrize("fp32_dest", [False, True], ids=["dest_bf16", "dest_fp32"])
 @pytest.mark.parametrize("kv_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
-def test_msa_perf_prod(device, kv_dtype):
+def test_msa_perf_prod(device, kv_dtype, fp32_dest):
     d, H, S, T, topk = 128, 16, 640, 56320, 16
     # Non-causal selection keeps topk=16 valid blocks for every query.
     q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=7)
-    out = run_op_msa_native(q, k, v, indices, device, kv_dtype=kv_dtype)
+    out = run_op_msa_native(
+        q, k, v, indices, device, kv_dtype=kv_dtype, compute_kernel_config=_compute_config(device, fp32_dest)
+    )
     assert tuple(out.shape) == (1, H, S, d)
 
 
 @run_for_blackhole()
+@pytest.mark.parametrize("fp32_dest", [False, True], ids=["dest_bf16", "dest_fp32"])
 @pytest.mark.parametrize("kv_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
-def test_msa_perf_prod_single_chip_gqa(device, kv_dtype):
+def test_msa_perf_prod_single_chip_gqa(device, kv_dtype, fp32_dest):
     d, H, n_kv, S, T, topk = 128, 64, 4, 640, 56320, 16
     q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, d, causal=False, seed=7)
-    out = run_op_msa_native(q, k, v, indices, device, kv_dtype=kv_dtype)
+    out = run_op_msa_native(
+        q, k, v, indices, device, kv_dtype=kv_dtype, compute_kernel_config=_compute_config(device, fp32_dest)
+    )
     assert tuple(out.shape) == (1, H, S, d)
