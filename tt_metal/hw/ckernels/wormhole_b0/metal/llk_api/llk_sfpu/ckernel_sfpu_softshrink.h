@@ -13,8 +13,7 @@ namespace ckernel::sfpu {
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_softshrink(std::uint32_t param0) {
     // Softshrink(x) = x - λ if x > λ, x + λ if x < -λ, else 0
-    // Algebraically identical to x - clamp(x, -λ, λ): clamp lowers to two SFPSWAP
-    // (min/max) ops, so the body is branchless (no predicated v_if regions).
+    // Algebraically identical to x - clamp(x, -λ, λ)
     sfpi::vFloat lambda = Converter::as_float(param0);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

@@ -2604,9 +2604,6 @@ class UnarySFPUGolden:
         return torch.max(input_tensor, torch.tensor(threshold)).item()
 
     def _lrelu(self, x, negative_slope=0.1):
-        # Leaky ReLU: matches _calculate_lrelu_ with the dispatch-baked slope
-        # (0x3dcccccd = 0.1f in sfpu_operations.h). Positives pass through,
-        # negatives are scaled by `negative_slope`.
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)

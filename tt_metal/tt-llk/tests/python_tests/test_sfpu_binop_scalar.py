@@ -29,10 +29,6 @@ def _bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
-# add/sub/mul/rsub use the scalar directly; div multiplies by the host-inverted
-# divisor (1/d), matching calculate_binop_with_scalar's DIV branch. Pick a
-# power-of-two divisor so 1/d is exact in fp32 (and bf16) — no reciprocal
-# rounding to reason about.
 _DIVISOR = 2.0
 _SCALAR_BITS = {
     MathOperation.ScalarAdd: _bits(2.0),
@@ -47,7 +43,6 @@ def _run_sfpu_binop_scalar(formats, dest_acc, mathop, input_dimensions=[32, 32])
     scalar_bits = _SCALAR_BITS[mathop]
 
     # Keep inputs small and bounded so the bf16 result stays accurate across all
-    # five modes (rsub -> [1, 3], mul -> [-2, 2], div-by-2 -> [-0.5, 0.5]).
     spec_a = StimuliSpec.uniform(low=-1.0, high=1.0)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -101,8 +96,6 @@ def _run_sfpu_binop_scalar(formats, dest_acc, mathop, input_dimensions=[32, 32])
     ), "Assert against golden failed"
 
 
-# Float scalar binops from binop_with_unary.h: add/sub/mul/div/rsub.
-# out = x + s / x - s / x * s / x / d / s - x. Float32 and Float16_b.
 @parametrize(
     formats=input_output_formats(
         [

@@ -39,9 +39,6 @@ class MathOpType(Enum):
     SFPU_BINARY = auto()
     SFPU_BINARY_INT = auto()
     SFPU_TERNARY = auto()
-    # Float unary-with-scalar binops (binop_with_unary.h: add/sub/mul/div/rsub).
-    # Dispatched by a compile-time BINOP_MODE via a dedicated test source rather
-    # than a SfpuType, so these do not go through the SfpuType-keyed MATH_OP.
     SFPU_BINOP_SCALAR = auto()
 
     FPU_BINARY = auto()
@@ -98,26 +95,22 @@ class MathOperation(Enum):
     Silu = OpSpec("silu", MathOpType.SFPU_UNARY)
     Sqrt = OpSpec("sqrt", MathOpType.SFPU_UNARY)
     Square = OpSpec("square", MathOpType.SFPU_UNARY)
-    # cpp_enum_value must exactly match the SfpuType enumerator name so that
-    # SFPU_UNARY_OPERATION = SfpuType::{value} resolves in the C++ dispatch.
     Erfinv = OpSpec("erfinv", MathOpType.SFPU_UNARY)
-    Heaviside = OpSpec("heaviside", MathOpType.SFPU_UNARY)  # value at x==0 fixed to 0.5
-    Softshrink = OpSpec("softshrink", MathOpType.SFPU_UNARY)  # lambda fixed to 0.5
+    Heaviside = OpSpec("heaviside", MathOpType.SFPU_UNARY)
+    Softshrink = OpSpec("softshrink", MathOpType.SFPU_UNARY)
     Softsign = OpSpec("softsign", MathOpType.SFPU_UNARY)
     Mish = OpSpec("mish", MathOpType.SFPU_UNARY)
     Selu = OpSpec(
         "selu", MathOpType.SFPU_UNARY
-    )  # scale/alpha fixed to defaults (1.0507/1.6733)
-    I0 = OpSpec("i0", MathOpType.SFPU_UNARY)  # polynomial approx valid on |x| <= 3.75
+    )
+    I0 = OpSpec("i0", MathOpType.SFPU_UNARY)
     Rdiv = OpSpec(
         "rdiv", MathOpType.SFPU_UNARY
-    )  # rdiv(x) = value / x; value fixed to 2.0
+    )
     Clamp = OpSpec(
         "clamp", MathOpType.SFPU_UNARY
-    )  # min/max fixed to -1.0/1.0, offset 0
-    Hardtanh = OpSpec("hardtanh", MathOpType.SFPU_UNARY)  # min/max fixed to -1.0/1.0
-    # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
-    # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
+    )
+    Hardtanh = OpSpec("hardtanh", MathOpType.SFPU_UNARY)
     EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
     NotEqualZero = OpSpec("not_equal_zero", MathOpType.SFPU_UNARY)
     LessThanZero = OpSpec("less_than_zero", MathOpType.SFPU_UNARY)
@@ -140,11 +133,11 @@ class MathOperation(Enum):
     Threshold = OpSpec("threshold", MathOpType.SFPU_UNARY)
     ReluMax = OpSpec(
         "relu_max", MathOpType.SFPU_UNARY
-    )  # ReLU_max(x, U) = max(0, min(x, U))
-    ReluMin = OpSpec("relu_min", MathOpType.SFPU_UNARY)  # ReLU_min(x, L) = max(x, L)
-    Lrelu = OpSpec("lrelu", MathOpType.SFPU_UNARY)  # Leaky ReLU (scalar slope)
-    AddInt32 = OpSpec("add_int32", MathOpType.SFPU_UNARY)  # dst(int32) + scalar
-    SubInt32 = OpSpec("sub_int32", MathOpType.SFPU_UNARY)  # dst(int32) - scalar
+    )
+    ReluMin = OpSpec("relu_min", MathOpType.SFPU_UNARY)
+    Lrelu = OpSpec("lrelu", MathOpType.SFPU_UNARY)
+    AddInt32 = OpSpec("add_int32", MathOpType.SFPU_UNARY)
+    SubInt32 = OpSpec("sub_int32", MathOpType.SFPU_UNARY)
     TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)
     TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
     TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
@@ -178,28 +171,15 @@ class MathOperation(Enum):
     # SFPU TERNARY OPERATIONS
     # =============================================================================
     SfpuWhere = OpSpec("WHERE", MathOpType.SFPU_TERNARY)
-    # Alias maintained for backward compatibility with older test cases
     TTNNWhere = SfpuWhere
-    # cpp_enum_value must exactly match the SfpuType enumerator name so that
-    # SFPU_TERNARY_OPERATION = SfpuType::{value} resolves in the C++ dispatch.
-    # addcmul: odst = idst0 + (value * idst1 * idst2)
-    # addcdiv: odst = idst0 + (value * idst1 / idst2)
     SfpuAddcmul = OpSpec("addcmul", MathOpType.SFPU_TERNARY)
     SfpuAddcdiv = OpSpec("addcdiv", MathOpType.SFPU_TERNARY)
-    # lerp:       odst = idst0 + idst2 * (idst1 - idst0)
-    # snake_beta: odst = idst0 + sin(idst1 * idst0)^2 / idst2
-    # These ternaries take three dest tiles and no scalar (SFPU_TERNARY_SCALAR is ignored).
     SfpuLerp = OpSpec("lerp", MathOpType.SFPU_TERNARY)
     SfpuSnakeBeta = OpSpec("snake_beta", MathOpType.SFPU_TERNARY)
 
     # =============================================================================
-    # SFPU FLOAT UNARY-WITH-SCALAR BINOPS (binop_with_unary.h)
+    # SFPU FLOAT UNARY-WITH-SCALAR BINOPS
     # =============================================================================
-    # out = binop(x, scalar). Dispatched by BINOP_MODE (ADD=0, SUB=1, MUL=2,
-    # DIV=3, RSUB=4) through sfpu_binop_scalar_{test,perf}.cpp. The cpp_enum_value
-    # is the human-readable mode name (not a SfpuType) — SFPU_BINOP_MODE maps it
-    # to the integer BINOP_MODE. DIV multiplies by the host-inverted scalar
-    # (1/divisor), matching calculate_binop_with_scalar's DIV branch.
     ScalarAdd = OpSpec("ADD", MathOpType.SFPU_BINOP_SCALAR)
     ScalarSub = OpSpec("SUB", MathOpType.SFPU_BINOP_SCALAR)
     ScalarMul = OpSpec("MUL", MathOpType.SFPU_BINOP_SCALAR)

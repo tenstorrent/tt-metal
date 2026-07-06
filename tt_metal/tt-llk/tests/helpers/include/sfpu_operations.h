@@ -23,11 +23,8 @@
 #include "llk_sfpu/ckernel_sfpu_addcmul.h"
 #include "llk_sfpu/ckernel_sfpu_binary.h"
 #include "llk_sfpu/ckernel_sfpu_binary_comp.h"
-// binop_with_unary.h references the ambient compute-kernel macro DST_ACCUM_MODE in
-// calculate_binop_with_scalar()'s RSUB path. Define it only for this include and undef
-// immediately, so it does not collide with the `bool DST_ACCUM_MODE` template parameter
-// used by the dispatch helpers below. Only calculate_add_int32/calculate_sub_int32 (which
-// do not use the macro) are dispatched from here.
+// This header expects a DST_ACCUM_MODE macro; scope it to the include so it
+// doesn't clash with the DST_ACCUM_MODE template param used below.
 #define DST_ACCUM_MODE 0
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #undef DST_ACCUM_MODE
@@ -367,22 +364,18 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::erfinv)
     {
-        // erfinv builds on the log helper (log(1 - x^2)); erfinv_init forwards to log_init.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(erfinv_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::sigmoid)
     {
-        // sigmoid uses sfpu_reciprocal internally; sigmoid_init forwards to recip_init.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(sigmoid_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {
-        // mish uses sfpu_reciprocal internally; mish_init forwards to recip_init.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(mish_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::rdiv)
     {
-        // rdiv = value / x uses sfpu_reciprocal internally; rdiv_init forwards to sfpu_reciprocal_init.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(rdiv_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::gelu)
@@ -391,7 +384,6 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::softsign)
     {
-        // softsign uses sfpu_reciprocal internally; init_softsign forwards to sfpu_reciprocal_init.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(init_softsign<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::gelu_tanh)
@@ -722,7 +714,6 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::relu_max)
     {
-        // Fourth template param T (threshold scalar type) — float vs uint32_t overloads.
         SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, _relu_max_, (sfpi::vFloat, APPROX_MODE, ITERATIONS, float), dst_index, vector_mode, 5.0f /* threshold */);
     }
@@ -730,7 +721,6 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         if (math_format == ckernel::to_underlying(DataFormat::Int32))
         {
-            // int32 relu_min: threshold passed as raw 2's-complement int bits.
             SFPU_UNARY_CALL(
                 DST_SYNC_MODE, DST_ACCUM_MODE, _relu_min_, (sfpi::vInt, APPROX_MODE, ITERATIONS, std::uint32_t), dst_index, vector_mode, 5u /* threshold */);
         }
@@ -742,7 +732,6 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::lrelu)
     {
-        // Leaky ReLU: negative inputs scaled by `slope` (fp32 bits). 0x3dcccccd = 0.1f.
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_lrelu_, (APPROX_MODE), dst_index, vector_mode, ITERATIONS, 0x3dcccccdu /* slope = 0.1f */);
     }
     else if constexpr (OPERATION == SfpuType::add_int32)
@@ -755,12 +744,10 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::heaviside)
     {
-        // heaviside(x) = 0 (x<0), 1 (x>0), and `value` at x==0. value = 0.5f (0x3f000000).
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_heaviside, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* value = 0.5f */);
     }
     else if constexpr (OPERATION == SfpuType::softshrink)
     {
-        // softshrink(x) with lambda = 0.5f (0x3f000000).
         SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softshrink, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* lambda = 0.5f */);
     }
@@ -795,7 +782,6 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::rdiv)
     {
-        // rdiv(x) = value / x; value = 2.0f (0x40000000). RoundingMode::None (no trunc/floor).
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -807,8 +793,6 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::clamp)
     {
-        // tt-llk clamp: result = clamp(x, min, max) + offset. min/max are fp16a (IEEE half)
-        // bit patterns, offset is fp16b (bf16). min=-1.0 (0xBC00), max=1.0 (0x3C00), offset=0.
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -823,8 +807,6 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::hardtanh)
     {
-        // tt-llk hardtanh via double-ReLU: p0=-min, p1=-(max-min), p2=max (all bf16).
-        // min=-1.0, max=1.0 -> p0=1.0 (0x3F80), p1=-2.0 (0xC000), p2=1.0 (0x3F80).
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -841,21 +823,15 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         OPERATION == SfpuType::equal_zero || OPERATION == SfpuType::not_equal_zero || OPERATION == SfpuType::less_than_zero ||
         OPERATION == SfpuType::greater_than_zero || OPERATION == SfpuType::less_than_equal_zero || OPERATION == SfpuType::greater_than_equal_zero)
     {
-        // Comparison-to-zero: writes 1.0/0.0. COMP_MODE is the SfpuType; exponent_size_8 is
-        // unused by the WH kernel (apply_zero_comp ignores it), so 0 is fine.
         SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_zero_comp_, (APPROX_MODE, OPERATION, ITERATIONS), dst_index, vector_mode, 0u /* exponent_size_8 */);
     }
     else if constexpr (OPERATION == SfpuType::erfinv)
     {
-        // calculate_erfinv processes a fixed 8 rows internally; force VectorMode::RC so the
-        // params wrapper drives all four faces (4 x 8 = 32 rows) of the tile.
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfinv, (APPROX_MODE), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
-        // Typecast selects its concrete kernel from the (IN, OUT) format pair;
-        // it always runs in VectorMode::RC (handled inside the helper).
         call_unary_typecast_operation<DST_SYNC_MODE, DST_ACCUM_MODE, TYPECAST_IN, TYPECAST_OUT, APPROX_MODE, ITERATIONS>(dst_index);
     }
     else
@@ -973,9 +949,6 @@ void call_binary_sfpu_operation(
     {
         if constexpr (BINOP == BinaryOp::ADD && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
         {
-            // Integer add over 2's-complement Int32 dest (I32 load/store), mirroring the
-            // production add_int_tile<DataFormat::Int32>: INSTRUCTION_MODE=INT32, no
-            // sign-magnitude conversion. `a + b` lowers to the same SFPIADD as the raw path.
             SFPU_BINARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
@@ -1039,13 +1012,9 @@ void call_binary_sfpu_operation(
     {
         // Use actual format when compiling for ADD_TOP_ROW tests, otherwise use Float32 as safe default for static assert
         constexpr DataFormat add_top_row_format = (BINOP == BinaryOp::ADD_TOP_ROW) ? static_cast<DataFormat>(MATH_FORMAT) : DataFormat::Float32;
-        // ADD_TOP_ROW addresses all four faces of the destination tile itself
-        // (via absolute tile_offset_* in TT_SFPLOAD/TT_SFPSTORE), so it must be
-        // invoked exactly once. Force VectorMode::RC_custom so
+        //Force VectorMode::RC_custom so the params wrapper drives all four faces (4 x 8 = 32 rows) of the tile.
         // _llk_math_eltwise_binary_sfpu_params_ takes its single-call branch
-        // and does not emit the per-face TTI_SETRWC cr_d 8 pair that would
-        // otherwise shift the dst write base between calls. This matches the
-        // production wrapper llk_math_eltwise_binary_sfpu_add_top_row.h.
+        // and does not emit the per-face TTI_SETRWC
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -1139,13 +1108,6 @@ void call_ternary_sfpu_operation_init()
 /**
  * Calls only the calculate portion of a ternary SFPU operation.
  * Must be preceded by a call to call_ternary_sfpu_operation_init() for the same operation.
- * Uses SFPU_TERNARY_CALL from llk_math_eltwise_ternary_sfpu_macros.h, which runs the
- * ckernel::_sfpu_ternary_check_<DST_SYNC_MODE, DST_ACCUM_MODE> dst-bound LLK_ASSERTs and
- * then dispatches to _llk_math_eltwise_ternary_sfpu_params_. The callable receives
- * (dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out[, value]) forwarded from
- * the params wrapper. Face-looping is driven by VectorMode::RC, so the per-call
- * ITERATIONS must be 8 (one face's worth of rows), matching the production
- * addcmul_tile/addcdiv_tile/where compute APIs.
  */
 template <
     DstSync DST_SYNC_MODE,
@@ -1206,7 +1168,6 @@ void call_ternary_sfpu_operation(
     }
     else if constexpr (OPERATION == SfpuType::lerp)
     {
-        // lerp takes no scalar: out = in0 + in2 * (in1 - in0).
         SFPU_TERNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -1220,7 +1181,6 @@ void call_ternary_sfpu_operation(
     }
     else if constexpr (OPERATION == SfpuType::snake_beta)
     {
-        // snake_beta takes no scalar: out = x + sin(alpha * x)^2 / beta.
         SFPU_TERNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
