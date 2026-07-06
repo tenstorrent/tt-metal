@@ -128,6 +128,18 @@ def run_attention_component(
                 use_cache=True,
             )
 
+    # Also compute the plain float32 reference for diagnostic comparison
+    if not is_decode:
+        with torch.no_grad():
+            reference_out_fp32, _ = reference_attention(
+                hidden_states=hidden_states,
+                position_embeddings=position_embeddings,
+                attention_mask=mask,
+                use_cache=True,
+            )
+    else:
+        reference_out_fp32 = reference_out
+
     # TTNN attention forward (no mask needed, causal masking handled internally)
     attention_module = decoder_layer.self_attn
     tt_out = attention_module(
@@ -143,7 +155,21 @@ def run_attention_component(
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=mesh_composer)[..., : batch_size * seq_len, :hidden_size]
 
-    # Compare outputs
+    # Diagnostic: log all three PCCs to identify error source
+    # PCC(TT, fp32_ref): baseline — what we had before the bfp8 fix
+    # PCC(TT, bfp8_ref): after fix — should be higher if bfp8 K/V was the problem
+    # PCC(fp32_ref, bfp8_ref): how much the bfp8 roundtrip actually changed the reference
+    from models.common.utility_functions import comp_pcc
+
+    _, pcc_tt_fp32 = comp_pcc(reference_out_fp32, tt_output_torch, 0.0)
+    _, pcc_tt_bfp8 = comp_pcc(reference_out, tt_output_torch, 0.0)
+    _, pcc_ref_diff = comp_pcc(reference_out_fp32, reference_out, 0.0)
+    logger.info(
+        f"PCC(TT vs fp32_ref)={pcc_tt_fp32:.4f}  "
+        f"PCC(TT vs bfp8_ref)={pcc_tt_bfp8:.4f}  "
+        f"PCC(fp32_ref vs bfp8_ref)={pcc_ref_diff:.4f}"
+    )
+
     passing, output = compare_tensors(tt_output_torch, reference_out, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
         logger.info(f"Attention test passed. Output: {output}")
