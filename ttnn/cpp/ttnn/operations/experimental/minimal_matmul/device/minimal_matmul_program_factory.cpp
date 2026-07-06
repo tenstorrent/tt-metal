@@ -427,6 +427,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // Env override lets A/B runs disable it (AG_ALTERNATE_MIDDLE=0) without a rebuild-time edit.
         const char* alt_middle_env = std::getenv("AG_ALTERNATE_MIDDLE");
         defines["AG_ALTERNATE_MIDDLE"] = (alt_middle_env != nullptr) ? alt_middle_env : "1";
+        // Timing-isolation knob: SKIP_IN0_DRAM_READ=1 makes the in0 injector skip the DRAM/local read
+        // (semaphores still fire) to measure the read's contribution. PCC is garbage under this flag.
+        const char* skip_in0_read_env = std::getenv("SKIP_IN0_DRAM_READ");
+        if (skip_in0_read_env != nullptr && skip_in0_read_env[0] == '1') {
+            defines["SKIP_IN0_DRAM_READ"] = "1";
+        }
         if (fused_op_signaler->read_local_slice_from_input) {
             in0_injector_defines = defines;
             in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
