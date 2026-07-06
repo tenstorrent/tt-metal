@@ -9,7 +9,7 @@ math; the device-level seam check lives in the I2V integration test."""
 
 import torch
 
-from models.tt_dit.pipelines.ltx.pipeline_ltx import ceil_to, pad_hw_replicate
+from models.tt_dit.utils.ltx import ceil_to, pad_hw_replicate
 
 
 def test_ceil_to_rounds_up_to_multiple():

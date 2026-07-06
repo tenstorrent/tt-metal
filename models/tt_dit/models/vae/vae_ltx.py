@@ -7,11 +7,12 @@
 from __future__ import annotations
 
 import math
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import torch
 from einops import rearrange
 from loguru import logger
+from safetensors import safe_open
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -29,7 +30,11 @@ from ...utils.conv3d import (
     conv_pad_width,
     get_conv3d_config,
 )
+from ...utils.ltx import pad_hw_replicate
 from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
+
+if TYPE_CHECKING:
+    from ..upsampler.latent_upsampler_ltx import LTXLatentUpsampler
 
 
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
@@ -1326,3 +1331,43 @@ class LTXVideoEncoder(Module):
         result = result[:, :, :logical_h, :logical_w, :]
         # (B, F', H', W', C) -> (B, C, F', H', W')
         return result.permute(0, 4, 1, 2, 3)
+
+
+# =============================================================================
+# Latent normalization stats + spatial-2x latent upsample (bridges the VAE
+# per-channel stats with the standalone latent upsampler).
+# =============================================================================
+
+
+def read_vae_per_channel_stats(checkpoint_path: str) -> tuple[torch.Tensor, torch.Tensor]:
+    """Read ``(mean-of-means, std-of-means)`` from a checkpoint and reshape for ``(B, C, F, H, W)``
+    broadcast — the un_normalize/normalize bookends matching ``ltx_core.upsample_video``."""
+    with safe_open(checkpoint_path, framework="pt") as f:
+        mean = f.get_tensor("vae.per_channel_statistics.mean-of-means").float()
+        std = f.get_tensor("vae.per_channel_statistics.std-of-means").float()
+    return mean.view(1, -1, 1, 1, 1), std.view(1, -1, 1, 1, 1)
+
+
+def upsample_latent(
+    upsampler: "LTXLatentUpsampler",
+    video_latent: torch.Tensor,
+    mean: torch.Tensor,
+    std: torch.Tensor,
+) -> torch.Tensor:
+    """Spatial-2x latent upsample. Mirrors ``ltx_core.upsample_video``: un_normalize
+    → bare upsampler → re_normalize. ``(B, C, F, H, W)`` host in/out.
+
+    ``mean``/``std`` are the VAE per-channel stats reshaped for ``(B, C, F, H, W)`` broadcast
+    (see ``read_vae_per_channel_stats``). The caller must load the ``upsampler`` weights onto
+    the mesh before invoking this.
+    """
+    x = video_latent.float() * std + mean
+    # Pad to even mesh shards so the upsampler's sharded convs skip the uneven-dim halo
+    # crop-masking that seams the 2x4 boundaries (s1 17x30); crop the 2x-upsampled margin
+    # off to preserve the field of view. The upsampler is built at these rounded dims so its
+    # pinned GroupNorm/conv shapes match.
+    pc = upsampler.parallel_config
+    x, H, W = pad_hw_replicate(x, pc.height_parallel.factor, pc.width_parallel.factor)
+    x = upsampler(x)
+    x = x[:, :, :, : H * 2, : W * 2]
+    return (x.float() - mean) / std

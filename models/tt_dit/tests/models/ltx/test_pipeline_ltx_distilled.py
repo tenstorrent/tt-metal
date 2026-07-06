@@ -32,8 +32,7 @@ from models.tt_dit.utils.vbench import assert_vbench_quality
 # s2); measured need is ~236 MB at 1080p (get_trace_buffers_size), so 300 MB gives headroom.
 # l1_small_size: native ttnn.conv1d (the depthwise audio taps) runs an UntilizeWithHalo gather
 # whose sharding/config tensors allocate from the dedicated L1_SMALL pool; it defaults to 0, which
-# OOMs the vocoder. 32 KB matches the audio component tests; the audio submesh (create_submesh)
-# inherits it from the parent mesh.
+# OOMs the vocoder. 32 KB matches the audio component tests.
 ring_trace_params = {**ring_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 line_trace_params = {**line_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 
@@ -565,9 +564,15 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     width = int(os.environ.get("WIDTH", "1920"))
     traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
 
+    ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
+    # Audio-only build: create the pipeline WITHOUT a checkpoint so __init__ builds/primes
+    # nothing (skipping the ~10-min video warmup and the 22B transformer / VAE / upsampler
+    # prime that dominate a cold run — decode_audio only touches the audio decoder + vocoder).
+    # Then point it at the checkpoint and construct + prime just the audio decode chain;
+    # decode_audio compiles + captures its own trace lazily on its first call.
     pipeline = LTXDistilledPipeline.create_pipeline(
         mesh_device=mesh_device,
-        checkpoint_name=default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors"),
+        checkpoint_name=None,
         gemma_path=default_ltx_gemma(),  # built as a lazy shell only; never loaded here
         sp_axis=sp_axis,
         tp_axis=tp_axis,
@@ -577,11 +582,13 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
         is_fsdp=is_fsdp,
         run_warmup=False,
         traced=traced,
-        audio_only=True,  # skip the ~10-min video warmup; decode_audio captures its own trace
         num_frames=num_frames,
         height=height,
         width=width,
     )
+    pipeline.checkpoint_name = LTXDistilledPipeline._resolve_checkpoint_file(ckpt)
+    pipeline._new_audio_decoder()
+    pipeline._prepare_audio_decoder()
 
     vps = VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
     als = AudioLatentShape.from_video_pixel_shape(vps)
@@ -639,11 +646,7 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     mel = pipeline.tt_audio_decoder(audio_spatial)  # TT mel, fed to both TT and torch
     w_conv = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
     with torch.no_grad():
-        w_torch = (
-            _build_torch_stage_c_real(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors"))(mel.float())
-            .squeeze(0)
-            .float()
-        )
+        w_torch = _build_torch_stage_c_real(ckpt)(mel.float()).squeeze(0).float()
     _save(w_conv, f"girl_audio_conv1d{'_traced' if traced else ''}.wav")
     _save(w_torch, "girl_audio_torch.wav")
 
@@ -677,7 +680,6 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     assert c_pcc > 0.95, f"conv1d-vs-torch PCC {c_pcc:.4f} below floor (traced={traced}) — vocoder output is wrong"
 
     pipeline.release_traces()
-    pipeline.release_audio_submesh()
     dur = wav.shape[-1] / sr
     print(
         f"\nAUDIO_GIRL traced={traced} "
