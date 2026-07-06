@@ -75,14 +75,58 @@ def run_attention_component(
 
     reference_attention = reference_layer.self_attn
 
-    # Reference attention forward
+    # Reference attention forward.  The TT model stores K/V in the KV cache as
+    # bfloat8_b, so to get a fair PCC comparison we simulate that same precision
+    # loss in the reference by round-tripping K and V through bfloat8_b.
     with torch.no_grad():
-        reference_out, _ = reference_attention(
-            hidden_states=hidden_states,
-            position_embeddings=position_embeddings,
-            attention_mask=mask,
-            use_cache=True,
-        )
+        if not is_decode:
+            from transformers.models.gpt_oss.modeling_gpt_oss import apply_rotary_pos_emb as _apply_rope_ref
+            from transformers.models.gpt_oss.modeling_gpt_oss import eager_attention_forward as _eager_attn_fwd
+
+            h_shape = (*hidden_states.shape[:-1], -1, reference_attention.head_dim)
+            q_ref = reference_attention.q_proj(hidden_states).view(h_shape).transpose(1, 2)
+            k_ref = reference_attention.k_proj(hidden_states).view(h_shape).transpose(1, 2)
+            v_ref = reference_attention.v_proj(hidden_states).view(h_shape).transpose(1, 2)
+
+            cos_ref, sin_ref = position_embeddings
+            q_ref, k_ref = _apply_rope_ref(q_ref, k_ref, cos_ref, sin_ref)
+
+            # Simulate bfloat8_b KV cache: convert to bfloat8_b on device and back
+            def _bfp8_roundtrip(t):
+                tt = ttnn.from_torch(
+                    t,
+                    device=mesh_device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                result = ttnn.to_torch(ttnn.get_device_tensors(tt)[0]).to(t.dtype)
+                ttnn.deallocate(tt)
+                return result
+
+            k_ref = _bfp8_roundtrip(k_ref)
+            v_ref = _bfp8_roundtrip(v_ref)
+
+            attn_out, _ = _eager_attn_fwd(
+                reference_attention,
+                q_ref,
+                k_ref,
+                v_ref,
+                mask,
+                scaling=reference_attention.scaling,
+                dropout=0.0,
+                sliding_window=reference_attention.sliding_window,
+                s_aux=reference_attention.sinks,
+            )
+            attn_out = attn_out.reshape(*hidden_states.shape[:-1], -1).contiguous()
+            reference_out = reference_attention.o_proj(attn_out)
+        else:
+            reference_out, _ = reference_attention(
+                hidden_states=hidden_states,
+                position_embeddings=position_embeddings,
+                attention_mask=mask,
+                use_cache=True,
+            )
 
     # TTNN attention forward (no mask needed, causal masking handled internally)
     attention_module = decoder_layer.self_attn
