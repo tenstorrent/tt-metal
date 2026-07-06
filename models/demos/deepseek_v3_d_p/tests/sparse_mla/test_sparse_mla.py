@@ -144,6 +144,21 @@ def _topology_from_device_params(device_params):
     )
 
 
+def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=1):
+    """Block-cyclic indexer key cache, allocated OUTSIDE ttMLA (mirrors tt_kvpe_cache) and passed into
+    ttMLA.forward(index_kv_cache=...) every call. BF8 (matches BF16 top-k within bf16 noise, half the memory)."""
+    return init_kvpe_cache(
+        kvpe_cache_head_dim=getattr(config, "index_head_dim", 128),
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        num_users=slot_num,
+        dtype=ttnn.bfloat8_b,
+    )
+
+
 def run_sparse_mla_accuracy_case(
     variant, config, mesh_device, seq_len, topology, ds_layer=None, ds_checkpoint=None, ds_repo=None
 ):
@@ -310,6 +325,7 @@ def run_sparse_mla_chunked_case(
         num_kvpe_cache_layers=1,
     )
 
+    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis)
     logger.debug(f"[{variant.name}] sparse MLA chunked: constructing TT module and indexed RoPE tensors")
     mla_tt = ttMLA(
         config,
@@ -343,7 +359,7 @@ def run_sparse_mla_chunked_case(
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
         )
-        out = mla_tt.forward(tt_x, rope_tensors, tt_kvpe_cache, actual_start=s)
+        out = mla_tt.forward(tt_x, rope_tensors, tt_kvpe_cache, actual_start=s, index_kv_cache=tt_index_kv_cache)
         outs.append(
             ttnn.to_torch(
                 out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
@@ -417,6 +433,7 @@ def run_sparse_mla_rotated_case(
     out_dim = ref_output.shape[-1]
     ref_kvpe = ref_kvpe.reshape(-1, ref_kvpe.shape[-1])  # [total_len, kvpe_dim]
 
+    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len_cache, mesh_shape, sp_axis, slot_num=1)
     mla_tt = ttMLA(
         config,
         weights,
@@ -461,7 +478,9 @@ def run_sparse_mla_rotated_case(
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
         )
-        tt_out = mla_tt.forward(tt_h, rope_tensors, tt_kvpe_cache, actual_start=kv_actual, cache_user_id=0)
+        tt_out = mla_tt.forward(
+            tt_h, rope_tensors, tt_kvpe_cache, actual_start=kv_actual, cache_user_id=0, index_kv_cache=tt_index_kv_cache
+        )
         out_flat = ttnn.to_torch(
             tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
         ).to(torch.bfloat16)[0, 0]

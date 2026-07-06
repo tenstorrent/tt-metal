@@ -935,6 +935,7 @@ class ttMLA:
         actual_start: Optional[int] = None,
         cache_user_id: int = 0,
         return_kv_intermediates: bool = False,
+        index_kv_cache: Optional[ttnn.Tensor] = None,
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, Optional[dict]]":
         if self.kv_only:
             return self._forward_kv_only(
@@ -980,6 +981,7 @@ class ttMLA:
             start_pos=kv_actual_isl or 0,
             rope_tensors=rope_tensors,
             cache_user_id=cache_user_id,
+            index_kv_cache=index_kv_cache,
         )
 
         tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local)

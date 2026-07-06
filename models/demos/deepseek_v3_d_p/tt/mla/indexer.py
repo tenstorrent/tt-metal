@@ -20,7 +20,6 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_perm_matrix
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
 # module-level INDEXER_WEIGHT_NAMES alias is defined at the bottom of this file for back-compat.
@@ -236,19 +235,13 @@ class TtIndexer:
         # rope is reconciled by _rope_perm below (permute q/k rope halves so the interleaved op matches the
         # DS reference). Single-shot (all variants) stays on the natural gather+concat path.
         self._blockcyclic = is_chunked
-        # Natural path: lazily grown replicated cache. Block-cyclic path: persistent [num_users,1,S/sp,D_idx].
+        # Block-cyclic key cache (persistent [num_users,1,S/sp,D_idx]) is NOT owned here: exactly like the
+        # MLA KVPE cache, the caller allocates it and passes it into forward(index_kv_cache=...) every call;
+        # the indexer never self-allocates it. write_k typecasts the roped key to the cache's dtype before
+        # the in-place write, so the caller controls the dtype (BF8 is validated — rotated + accuracy suites
+        # match BF16 within bf16 noise, ~5e-4 PCC — so it can be allocated BF8 to halve the memory).
+        # self._index_kbuf below is the NATURAL (single-shot) path's internal concat-grown cache only.
         self._index_kbuf = None
-        if self._blockcyclic:
-            self._index_kbuf = init_kvpe_cache(
-                kvpe_cache_head_dim=self.index_args.index_head_dim,
-                mesh_device=self.mesh_device,
-                seq_len=seq_len,
-                mesh_shape=mesh_shape,
-                sp_axis=self.sp_axis,
-                num_kvpe_cache_layers=1,
-                num_users=slot_num,
-                dtype=ttnn.bfloat16,  # keep indexer keys bf16 (the natural concat path did); avoid bf8 top-k loss
-            )
         self._upload_weights(idx_host)
         self._build_rope_tables()
         # DS block-cyclic uses the interleaved rotary_embedding_indexed op, but DS weights emit the
@@ -397,7 +390,7 @@ class TtIndexer:
         ttnn.deallocate(nope)
         return out
 
-    def _gather_index_kbuf(self) -> ttnn.Tensor:
+    def _gather_index_kbuf(self, index_kbuf: ttnn.Tensor) -> ttnn.Tensor:
         """Read the block-cyclic ND-sharded key cache back to a replicated full-T [num_users,1,T,D_idx]
         (block-cyclic order preserved, bf16 TILE) for indexer_score_dsa's block-cyclic reader — the
         analogue of ttMLA._gather_kvpe_prefix, but the score op consumes TILE so no RM/typecast step.
@@ -410,13 +403,13 @@ class TtIndexer:
         the per-slab gather with the score matmul so each SP key slab is gathered and scored as it arrives,
         overlapping the CCL with the op's own compute instead of paying a full gather up front. Op-level
         change (ring indexer_score), not a host-side reorder."""
-        cache_i = ttnn.to_memory_config(self._index_kbuf, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
+        cache_i = ttnn.to_memory_config(index_kbuf, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
         full = self._sp_all_gather(cache_i, dim=2)  # [B,1,T,D_idx] replicated, block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
         return full
 
-    def write_k(self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0):
+    def write_k(self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0, index_kbuf=None):
         """Device K stem (wk + TP all-reduce + k_norm + device rope) written into the device index-key
         cache. forward() calls this on every chunk so the key-cache stays complete — else later chunks
         score against missing keys for the early prefix. (Dense v3.1 binds a NullIndexer, so write_k never
@@ -446,8 +439,10 @@ class TtIndexer:
             # write it into this user's slot. update_padded_kv_cache places each chip's rows at the
             # block-cyclic offset (pad-aware) — the same math the query/key rope above uses.
             k = self._bc_rope_pe(k, rope_tensors, start_pos)  # [1, 1, S/sp, D_idx] bf16
+            if k.dtype != index_kbuf.dtype:  # write dtype must match the cache (update_padded_kv_cache asserts)
+                k = ttnn.typecast(k, index_kbuf.dtype)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                self._index_kbuf,
+                index_kbuf,
                 k,
                 slot_idx=cache_user_id,
                 layer_idx=0,
@@ -463,7 +458,7 @@ class TtIndexer:
         # the retired non-block-cyclic chunked mode. The live cost is the all-gather + full replication
         # (glob keys/chip vs glob/sp block-cyclic).
         #
-        # TODO(refactor, drop natural path -- pavlepopovic review): fold single-shot onto the block-cyclic
+        # TODO(refactor, drop natural path): fold single-shot onto the block-cyclic
         # path (treat it as one full-seq chunk at start_pos=0): SP-sharded cache + in-place
         # update_padded_kv_cache, no all-gather / no replication / no concat -- then delete this branch,
         # _device_rope_pe's natural use, and _sp_all_gather. Dependency: single-shot must supply the
@@ -494,10 +489,15 @@ class TtIndexer:
         start_pos: int = 0,
         rope_tensors: dict = None,
         cache_user_id: int = 0,
+        index_kv_cache: ttnn.Tensor = None,
     ) -> ttnn.Tensor:
         """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
         on the query axis (each chip scores its own S/sp rows; no Q/W all-gather). Fully on-device:
         stems, RoPE, cache, logits, topk — no host.
+
+        ``index_kv_cache`` (block-cyclic path): the persistent per-user key cache, allocated by the caller and
+        passed in every call — the same ownership as ttMLA's KVPE ``kvpe_cache``. Required for the block-cyclic
+        path (the indexer never self-allocates it); ignored by the natural (single-shot) path.
 
         ``qr`` is the shared q_a latent (q_a_proj + TP all-reduce + q_a_layernorm) — ttMLA computes it once
         and passes it in; the indexer applies wq_b to it (no q_a stem of its own). ``qr`` is NOT deallocated
@@ -512,7 +512,20 @@ class TtIndexer:
         a = self.index_args
         glob = seq_len * self.sp_factor  # global query/key count this chunk
         end_pos = start_pos + glob
-        self.write_k(hidden_states, seq_len, start_pos, rope_tensors=rope_tensors, cache_user_id=cache_user_id)
+        # Block-cyclic key cache is caller-owned (like the KVPE cache) — required, never self-allocated.
+        if self._blockcyclic:
+            assert index_kv_cache is not None, (
+                "block-cyclic indexer requires an externally-allocated index_kv_cache passed to forward() "
+                "(same ownership as the MLA KVPE cache); none was provided"
+            )
+        self.write_k(
+            hidden_states,
+            seq_len,
+            start_pos,
+            rope_tensors=rope_tensors,
+            cache_user_id=cache_user_id,
+            index_kbuf=index_kv_cache,
+        )
 
         # Q stem: the shared q_a latent (qr) -> indexer wq_b.
         q = ttnn.linear(
@@ -576,7 +589,7 @@ class TtIndexer:
             # It also needs the logits sliced to [0, end_pos) before top-k (that path validated correct at the
             # OP level, but is deferred). Investigate: slice-vs-stale-tail interaction + whether the extra
             # slice/copy is cheaper than the saved score/top-k work before turning this on.
-            k_full = self._gather_index_kbuf()  # [num_users, 1, T, D_idx] bf16 TILE, block-cyclic
+            k_full = self._gather_index_kbuf(index_kv_cache)  # [num_users, 1, T, D_idx] bf16 TILE, block-cyclic
             logits = ttnn.experimental.indexer_score_dsa(
                 q_dev,
                 k_full,
