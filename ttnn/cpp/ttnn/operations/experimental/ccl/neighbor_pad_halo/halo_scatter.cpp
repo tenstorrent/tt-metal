@@ -15,7 +15,8 @@ ttnn::Tensor halo_scatter(
     const ttnn::Tensor& interior_src,
     uint32_t np_padding_h,
     uint32_t np_padding_w,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    bool border_only) {
     TT_FATAL(np_padding_h > 0, "halo_scatter: np_padding_h must be > 0");
 
     MemoryConfig output_mem_config = memory_config.value_or(interior_src.memory_config());
@@ -24,6 +25,7 @@ ttnn::Tensor halo_scatter(
         .np_padding_h = np_padding_h,
         .np_padding_w = np_padding_w,
         .output_mem_config = output_mem_config,
+        .border_only = border_only,
     };
 
     return ttnn::prim::halo_scatter(compact_buffer, interior_src, params);

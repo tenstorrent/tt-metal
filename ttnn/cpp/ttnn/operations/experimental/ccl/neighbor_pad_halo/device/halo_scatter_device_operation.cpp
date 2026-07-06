@@ -36,7 +36,10 @@ void NpHaloScatterDeviceOperation::validate_on_program_cache_miss(
 
 TensorSpec NpHaloScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // Padded output = interior_src [B,T,H,W,C] with H,W grown by 2*pad; allocated (every page written).
+    // border_only: interior_src is ALREADY the padded buffer; output IS it (in place). repack: grow H,W.
+    if (args.border_only) {
+        return tensor_args.interior_src.tensor_spec();
+    }
     const auto& s = tensor_args.interior_src.logical_shape();
     ttnn::Shape output_shape(
         {s[0], s[1], s[2] + 2 * args.np_padding_h, s[3] + 2 * args.np_padding_w, s[4]});
@@ -50,6 +53,9 @@ TensorSpec NpHaloScatterDeviceOperation::compute_output_specs(
 
 Tensor NpHaloScatterDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (args.border_only) {
+        return tensor_args.interior_src;  // write border in place, interior preserved
+    }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.interior_src.device());
 }
 

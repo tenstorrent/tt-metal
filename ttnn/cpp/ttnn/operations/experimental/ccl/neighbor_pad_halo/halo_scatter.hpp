@@ -27,6 +27,7 @@ ttnn::Tensor halo_scatter(
     const ttnn::Tensor& interior_src,
     uint32_t np_padding_h,
     uint32_t np_padding_w,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    bool border_only = false);
 
 }  // namespace ttnn::experimental

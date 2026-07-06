@@ -109,7 +109,8 @@ void bind_halo_scatter(nb::module_& mod) {
         nb::arg("np_padding_h"),
         nb::arg("np_padding_w"),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("border_only") = false);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

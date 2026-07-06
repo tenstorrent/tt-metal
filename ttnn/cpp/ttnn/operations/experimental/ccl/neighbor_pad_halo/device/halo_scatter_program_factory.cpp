@@ -50,20 +50,22 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     Tensor& tensor_return_value) {
     Program program{};
 
-    Buffer* x_src = tensor_args.interior_src.buffer();   // [B,T,Hd,Wd,C] unpadded (interior source)
     Buffer* compact = tensor_args.compact_buffer.buffer();  // [total_sticks, C] (border source)
-    Buffer* dst = tensor_return_value.buffer();          // [B,T,Hp,Wp,C] padded output (allocated)
+    Buffer* dst = tensor_return_value.buffer();          // padded output (allocated) or in-place (border_only)
+    // border_only: no interior reads; x_src unused (point it at dst, harmless). repack: unpadded interior.
+    Buffer* x_src = op.border_only ? dst : tensor_args.interior_src.buffer();
 
     const auto& xshape = tensor_args.interior_src.logical_shape();
     const uint32_t rank = xshape.size();
-    const uint32_t Wd = xshape[rank - 2];
-    const uint32_t Hd = xshape[rank - 3];
+    const uint32_t pH = op.np_padding_h;
+    const uint32_t pW = op.np_padding_w;
+    // border_only: interior_src is padded, so subtract to get interior dims. repack: it's unpadded already.
+    const uint32_t Wd = op.border_only ? xshape[rank - 2] - 2 * pW : xshape[rank - 2];
+    const uint32_t Hd = op.border_only ? xshape[rank - 3] - 2 * pH : xshape[rank - 3];
     uint32_t outer = 1;  // product of all dims before H (B*T)
     for (uint32_t d = 0; d + 3 < rank; d++) {
         outer *= xshape[d];
     }
-    const uint32_t pH = op.np_padding_h;
-    const uint32_t pW = op.np_padding_w;
     const uint32_t Hp = Hd + 2 * pH;
     const uint32_t Wp = Wd + 2 * pW;
 
@@ -75,12 +77,16 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     const uint32_t interior_sticks = outer * Hd * Wd;
     const uint32_t border_sticks = outer * (2 * pH * Wd + 2 * pW * Hp);
     const uint32_t total_sticks = interior_sticks + border_sticks;
+    // border_only: process only the border sticks [interior_sticks, total_sticks); the kernel's global
+    // index maps >= interior_sticks to border sections, so the interior is never touched.
+    const uint32_t work_start = op.border_only ? interior_sticks : 0u;
+    const uint32_t work_count = total_sticks - work_start;
 
     // Spread across the full compute grid: each core copies a contiguous global-stick range.
     const CoreCoord grid = tensor_return_value.device()->compute_with_storage_grid_size();
-    const uint32_t num_cores = std::min<uint32_t>(grid.x * grid.y, std::max<uint32_t>(total_sticks, 1u));
+    const uint32_t num_cores = std::min<uint32_t>(grid.x * grid.y, std::max<uint32_t>(work_count, 1u));
     const CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
-    const uint32_t per_core = (total_sticks + num_cores - 1) / num_cores;  // ceil
+    const uint32_t per_core = (work_count + num_cores - 1) / num_cores;  // ceil
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
     constexpr uint32_t cb_pages = 8;  // sticks per barrier batch (in-flight reads/writes)
@@ -100,8 +106,9 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
         all_cores,
         writer_cfg);
 
-    // Per-core [x_addr, compact_addr, dst_addr, stick_start, stick_count]; contiguous ranges row-wise.
-    uint32_t assigned = 0;
+    // Per-core [x_addr, compact_addr, dst_addr, stick_start, stick_count]; contiguous ranges row-wise
+    // over [work_start, total_sticks).
+    uint32_t assigned = work_start;
     for (const auto& cr : all_cores.ranges()) {
         for (const auto& c : cr) {
             const uint32_t start = assigned;
