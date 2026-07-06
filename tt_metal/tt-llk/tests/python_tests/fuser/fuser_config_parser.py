@@ -28,7 +28,7 @@ from .fuser_config import FuserConfig, GlobalConfig
 from .validator import PackSchema
 
 FUSER_CONFIG_DIR = (
-    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_tests"
+    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser" / "tests"
 )
 
 from helpers.chip_architecture import get_chip_architecture
