@@ -653,6 +653,53 @@ def list_overlays(model_id: Optional[str] = None) -> List[Dict[str, object]]:
     return rows
 
 
+_GRADUATION_SNAPSHOT_SUFFIXES = (".py.last_good_native", ".py.last_good_sharded")
+
+
+def _prune_stale_graduation_snapshots(applied_rel: List[str], model_id: str) -> None:
+    """Delete any restored `.py.last_good_native` / `.py.last_good_sharded` whose sibling stub is
+    a torch wrapper. Without this, the bring-up gate reads the stale snapshot as "graduated" and
+    the loop exits early with components still on CPU fallback."""
+    if not applied_rel:
+        return
+    try:
+        from scripts.tt_hw_planner.bringup_loop import _stub_body_is_native
+    except Exception:
+        return
+    try:
+        repo_root = _repo_root()
+    except Exception:
+        return
+    pruned: List[str] = []
+    for rel in applied_rel:
+        matched_suffix = next((s for s in _GRADUATION_SNAPSHOT_SUFFIXES if rel.endswith(s)), None)
+        if matched_suffix is None:
+            continue
+        snap_path = repo_root / rel
+        stub_path = snap_path.with_suffix("")
+        if not snap_path.is_file() or not stub_path.is_file():
+            continue
+        try:
+            if _stub_body_is_native(stub_path):
+                continue
+        except Exception:
+            continue
+        try:
+            snap_path.unlink()
+            pruned.append(rel)
+        except OSError as exc:
+            print(
+                f"[overlay] apply_for({model_id}): could not prune stale snapshot {rel}: {exc}",
+                file=sys.stderr,
+            )
+    if pruned:
+        print(
+            f"[overlay] apply_for({model_id}): pruned {len(pruned)} stale graduation "
+            f"snapshot(s) whose sibling stub is a torch wrapper: {', '.join(pruned)}",
+            file=sys.stderr,
+        )
+
+
 def apply_for(model_id: str) -> Tuple[int, List[str]]:
     """Apply every overlay patch registered under ``model_id``.
 
@@ -715,6 +762,7 @@ def apply_for(model_id: str) -> Tuple[int, List[str]]:
             f"may need re-capture against current HEAD.",
             file=sys.stderr,
         )
+    _prune_stale_graduation_snapshots(applied, model_id)
     return len(applied), applied
 
 
