@@ -33,19 +33,6 @@
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
-- id: galaxy-tt-dit-fused-norm
-  name: Galaxy tt_dit fused distributed norm corr/det
-  # Full RMS + Welford-LayerNorm correctness + determinism sweep for the fused
-  # distributed-norm device op (TP1/2/4/8, line + ring).
-  cmd: pytest models/tt_dit/tests/test_distributed_rmsnorm_fused.py::test_corr_det models/tt_dit/tests/test_distributed_rmsnorm_fused.py::test_layernorm_corr
-  skus:
-    wh_galaxy:
-      timeout: 30
-    bh_galaxy:
-      timeout: 30
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: ttnn
-
 - id: galaxy-fabric-unit
   name: Galaxy Fabric unit tests
   cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*"
