@@ -75,12 +75,11 @@ TensorSpec make_flat_dram_tensor_spec(uint32_t page_size_bytes, uint32_t num_pag
 
 experimental::DataMovementHardwareConfig make_dm_config(DataMovementProcessor processor, NOC noc) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
-        return experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{
+        return experimental::DataMovementGen2Config{
             .disable_dfb_implicit_sync_for_all = true,
-        }};
+        };
     }
-    return experimental::DataMovementHardwareConfig{
-        experimental::DataMovementGen1Config{.processor = processor, .noc = noc}};
+    return experimental::DataMovementGen1Config{.processor = processor, .noc = noc};
 }
 
 }  // namespace

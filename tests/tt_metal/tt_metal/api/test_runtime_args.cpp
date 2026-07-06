@@ -126,10 +126,10 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
     // kernel; on WH/BH the legacy DM was a single RISCV_0 thread.
     experimental::DataMovementHardwareConfig dm_cfg;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        dm_cfg = experimental::DataMovementGen2Config{};
     } else {
-        dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
+        dm_cfg = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
     }
     const bool is_quasar = MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
     const uint32_t num_threads = is_quasar ? kQuasarNumUserDms : 1u;
@@ -219,7 +219,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
                 "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp",
             .num_threads = dm_processors_per_kernel,
             .compiler_options = {.defines = defines_vec},
-            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
             .advanced_options =
                 experimental::KernelAdvancedOptions{
                     .num_runtime_varargs = num_runtime_args,
@@ -1100,7 +1100,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         };
     };
     experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {K1, K2}, .target_nodes = core_range_set};
@@ -1158,7 +1158,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = unit_tests::runtime_args::kQuasarNumUserDms,
         .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
     experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core_range_set};
     experimental::ProgramSpec spec{

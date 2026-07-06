@@ -149,8 +149,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
             .source = rta_crta_kernel_path,
             .num_threads = 1,
             .compile_time_args = {{"l1_scratch_addr", l1_unreserved_base}},
-            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
-                .processor = DataMovementProcessor::RISCV_0}},
+            .hw_config = experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0},
         };
         experimental::KernelSpec compute_spec{
             .unique_id = COMPUTE_KERNEL_NAME,
@@ -263,10 +262,9 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     // Provide both gen1 and gen2 configs so the runtime selects the one matching the current arch.
     experimental::DataMovementHardwareConfig dm_cfg;
     if (is_quasar) {
-        dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        dm_cfg = experimental::DataMovementGen2Config{};
     } else {
-        dm_cfg = experimental::DataMovementHardwareConfig{
-            experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}};
+        dm_cfg = experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
     }
 
     experimental::KernelSpec dm_spec{
@@ -409,11 +407,10 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
         if (is_quasar) {
             kspec.num_threads = num_dms_;
             kspec.compile_time_args = {{"dm_id", 0}};
-            kspec.hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+            kspec.hw_config = experimental::DataMovementGen2Config{};
         } else {
             kspec.num_threads = 1;
-            kspec.hw_config = experimental::DataMovementHardwareConfig{
-                experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0}};
+            kspec.hw_config = experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
         }
     } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
         kspec.num_threads = 1;  // On Quasar, only 1 NEO Cluster; gen1 has a single compute group.
@@ -475,7 +472,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
         .compiler_options =
             {.defines = {{"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}}},
         .compile_time_args = {{"num_dms", num_dms_}, {"l1_sync_addr", l1_unreserved_base}},
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
         .advanced_options =
             experimental::KernelAdvancedOptions{
                 .num_runtime_varargs = default_rtas.size(),

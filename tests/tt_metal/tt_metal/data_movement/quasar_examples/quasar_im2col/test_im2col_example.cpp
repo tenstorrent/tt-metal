@@ -36,7 +36,7 @@ bool run_im2col_test(
         .source = kernel_path,
         .num_threads = 1,
         .compile_time_args = {{"num_of_addresses", num_of_addresses}},
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{

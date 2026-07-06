@@ -237,10 +237,9 @@ void RunTestOnCore(
         auto gen1_noc = use_ncrisc ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default;
         experimental::DataMovementHardwareConfig dm_cfg;
         if (is_quasar) {
-            dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+            dm_cfg = experimental::DataMovementGen2Config{};
         } else {
-            dm_cfg = experimental::DataMovementHardwareConfig{
-                experimental::DataMovementGen1Config{.processor = gen1_processor, .noc = gen1_noc}};
+            dm_cfg = experimental::DataMovementGen1Config{.processor = gen1_processor, .noc = gen1_noc};
         }
         uint32_t num_threads = is_quasar ? 6u : 1u;
         if (!is_quasar) {

@@ -89,7 +89,7 @@ void RunOneTest(
                 .source = path_metal2,
                 .num_threads = dms_per_kernel,
                 .compile_time_args = {{"usage", free}},
-                .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+                .hw_config = experimental::DataMovementGen2Config{},
             });
             kernel_names.emplace_back(name);
         }
@@ -117,8 +117,7 @@ void RunOneTest(
                 .source = path_metal2,
                 .num_threads = 1,
                 .compile_time_args = {{"usage", free}},
-                .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
-                    .processor = processor, .noc = noc}},
+                .hw_config = experimental::DataMovementGen1Config{.processor = processor, .noc = noc},
             });
             kernel_names.emplace_back(name);
         }

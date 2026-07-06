@@ -103,12 +103,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
 
     DataMovementHardwareConfig sender_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        sender_hw_config = DataMovementHardwareConfig{DataMovementGen2Config{}};
+        sender_hw_config = DataMovementGen2Config{};
     } else {
-        sender_hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
+        sender_hw_config = DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = test_config.noc_id,
-        }};
+        };
     }
     KernelSpec sender_spec{
         .unique_id = KernelSpecName{"sender"},

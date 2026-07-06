@@ -229,13 +229,13 @@ void run_single_dfb_program(
     experimental::DataMovementHardwareConfig dm_producer_cfg;
     experimental::DataMovementHardwareConfig dm_consumer_cfg;
     if (arch == ARCH::QUASAR) {
-        dm_producer_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-        dm_consumer_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        dm_producer_cfg = experimental::DataMovementGen2Config{};
+        dm_consumer_cfg = experimental::DataMovementGen2Config{};
     } else {
-        dm_producer_cfg = experimental::DataMovementHardwareConfig{
-            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0}};
-        dm_consumer_cfg = experimental::DataMovementHardwareConfig{
-            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1}};
+        dm_producer_cfg =
+            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
+        dm_consumer_cfg =
+            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1};
     }
 
     experimental::KernelSpec producer_spec;
@@ -664,7 +664,7 @@ void run_concurrent_dfbs_program(
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
                     {"chunk_offset", chunk_offset},
                 },
-            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         });
         if (disable_isync) {
             std::get<experimental::DataMovementGen2Config>(
@@ -690,7 +690,7 @@ void run_concurrent_dfbs_program(
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
                     {"chunk_offset", chunk_offset},
                 },
-            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         });
         if (disable_isync) {
             std::get<experimental::DataMovementGen2Config>(
@@ -853,7 +853,7 @@ void run_concurrent_tensix_dm_dfbs_program(
                     {"num_entries_per_consumer", num_entries_per_consumer},
                     {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
                 },
-            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         });
         if (!dfb_config.enable_producer_implicit_sync) {
             std::get<experimental::DataMovementGen2Config>(
@@ -1013,7 +1013,7 @@ void run_sequential_dfbs_program(
                 {"implicit_sync", static_cast<uint32_t>(configs[0].enable_producer_implicit_sync ? 1u : 0u)},
                 {"num_producers", num_producers},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     // Consumer kernel: same layout, plus per-DFB entries_per_consumer_<i> /
@@ -1030,7 +1030,7 @@ void run_sequential_dfbs_program(
                 {"implicit_sync", static_cast<uint32_t>(configs[0].enable_producer_implicit_sync ? 1u : 0u)},
                 {"num_consumers", num_consumers},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     // Build per-DFB DataflowBufferSpec, TensorParameter, and bindings (dfb_<i> /
@@ -1218,7 +1218,7 @@ void run_in_dfb_out_dfb_program(
                 {"num_producers", dm2tensix_config.num_producers},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
     if (!dm2tensix_config.enable_producer_implicit_sync) {
         std::get<experimental::DataMovementGen2Config>(
@@ -1277,7 +1277,7 @@ void run_in_dfb_out_dfb_program(
                 {"num_consumers", tensix2dm_config.num_consumers},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
     if (!tensix2dm_config.enable_producer_implicit_sync) {
         std::get<experimental::DataMovementGen2Config>(
@@ -1663,13 +1663,13 @@ static void run_dfb_size_override_test(
     experimental::DataMovementHardwareConfig dm_producer_cfg;
     experimental::DataMovementHardwareConfig dm_consumer_cfg;
     if (device->arch() == ARCH::QUASAR) {
-        dm_producer_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
-        dm_consumer_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+        dm_producer_cfg = experimental::DataMovementGen2Config{};
+        dm_consumer_cfg = experimental::DataMovementGen2Config{};
     } else {
-        dm_producer_cfg = experimental::DataMovementHardwareConfig{
-            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0}};
-        dm_consumer_cfg = experimental::DataMovementHardwareConfig{
-            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1}};
+        dm_producer_cfg =
+            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
+        dm_consumer_cfg =
+            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1};
     }
 
     experimental::KernelSpec producer_spec{
@@ -2326,7 +2326,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
                 {"num_producers", 1u},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
-        .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
     if (!remapper_dfb_config.enable_producer_implicit_sync) {
         std::get<experimental::DataMovementGen2Config>(

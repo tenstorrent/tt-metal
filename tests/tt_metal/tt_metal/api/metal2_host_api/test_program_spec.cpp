@@ -2780,10 +2780,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
         .unique_id = KernelSpecName{"my_dm_kernel"},
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .num_threads = 2,
-        .hw_config =
-            DataMovementHardwareConfig{
-                DataMovementGen2Config{},
-            },
+        .hw_config = DataMovementGen2Config{},
     };
 
     EXPECT_EQ(dm_kernel.unique_id.get(), "my_dm_kernel");
@@ -2891,10 +2888,7 @@ TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
             KernelSpec::RuntimeArgSchema{
                 .runtime_arg_names = {"input_ptr"},
             },
-        .hw_config =
-            DataMovementHardwareConfig{
-                DataMovementGen2Config{},
-            },
+        .hw_config = DataMovementGen2Config{},
     };
     EXPECT_EQ(k.runtime_arg_schema.runtime_arg_names.size(), 1u);
 }
@@ -2929,10 +2923,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                                 .access_pattern = DFBAccessPattern::STRIDED,
                             },
                         },
-                    .hw_config =
-                        DataMovementHardwareConfig{
-                            DataMovementGen2Config{},
-                        },
+                    .hw_config = DataMovementGen2Config{},
                 },
                 KernelSpec{
                     .unique_id = KernelSpecName{"consumer"},

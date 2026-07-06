@@ -89,10 +89,9 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                                 : tt::tt_metal::NOC::RISCV_0_default;
             experimental::DataMovementHardwareConfig dm_cfg;
             if (is_quasar) {
-                dm_cfg = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}};
+                dm_cfg = experimental::DataMovementGen2Config{};
             } else {
-                dm_cfg = experimental::DataMovementHardwareConfig{
-                    experimental::DataMovementGen1Config{.processor = gen1_proc, .noc = gen1_noc}};
+                dm_cfg = experimental::DataMovementGen1Config{.processor = gen1_proc, .noc = gen1_noc};
             }
             kernel_specs.push_back(experimental::KernelSpec{
                 .unique_id = experimental::KernelSpecName{name},

@@ -61,7 +61,7 @@ distributed::MeshWorkload create_workload(
             .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-            .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         });
         wu_kernel_names.push_back(std::move(kernel_id));
     }
