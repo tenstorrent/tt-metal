@@ -72,6 +72,12 @@ _BLOCKINGS.update(
         # leave on the channel-keyed fallback above.
         (1, 1, 1024, 1024, (1, 1, 1), 1, 64, 64): (1024, 512, 1, 8, 4),  # 208.5x
         (1, 1, 32, 1024, (3, 3, 3), 1, 34, 34): (32, 256, 1, 2, 16),  # 6.8x
+        # (1, 1, 1024, 8192, (3, 3, 3), 1, 34, 34): (128, 64, 1, 16, 16),  # REJECTED:
+        # full-decode PCC 0.762 (vs 0.999941 baseline) despite 10,176us in the isolated
+        # sweep (vs the channel-keyed fallback's much slower ~90k+us estimate for this
+        # shape). Same repeated/chunked-invocation-under-program-cache failure mode as
+        # the 128x3 rejection above. Needs a different candidate blocking re-swept and
+        # re-verified, or leave on the channel-keyed fallback.
     }
 )
 
@@ -232,7 +238,29 @@ class HunyuanSymmetricConv3d(Module):
 
         pT, pH, pW = self.padding
         x = x_bthwc
-        if self.w_mesh_axis is not None and pW > 0:
+        need_w = self.w_mesh_axis is not None and pW > 0
+        need_h = self.h_mesh_axis is not None and pH > 0
+        if need_w and need_h:
+            # Both axes sharded: one fused neighbor_pad_async dispatch instead of two
+            # sequential ones. neighbor_pad_async natively supports "fused 2D padding"
+            # when the two dims differ (H=dim2, W=dim3 always do), halving the op's
+            # dispatch count for this halo exchange.
+            sem_h = self.ccl.get_np_ping_pong_semaphore(self.h_mesh_axis)
+            sem_w = self.ccl.get_np_ping_pong_semaphore(self.w_mesh_axis)
+            barrier_semaphore = self.ccl.get_barrier_semaphore(self.h_mesh_axis)
+            x = ttnn.experimental.neighbor_pad_async(
+                x,
+                [2, 3],
+                [pH, pW],
+                [pH, pW],
+                "zeros",
+                [self.h_mesh_axis, self.w_mesh_axis],
+                [sem_h, sem_w],
+                [barrier_semaphore],
+                num_links=[self.ccl.num_links, self.ccl.num_links],
+                topology=ttnn.Topology.Linear,
+            )
+        elif need_w:
             x = vae_neighbor_pad(
                 self.ccl,
                 x,
@@ -242,7 +270,7 @@ class HunyuanSymmetricConv3d(Module):
                 padding_right=pW,
                 padding_mode="zeros",
             )
-        if self.h_mesh_axis is not None and pH > 0:
+        elif need_h:
             xp = vae_neighbor_pad(
                 self.ccl,
                 x,
@@ -252,8 +280,6 @@ class HunyuanSymmetricConv3d(Module):
                 padding_right=pH,
                 padding_mode="zeros",
             )
-            if x is not x_bthwc:
-                ttnn.deallocate(x)
             x = xp
         # x now carries the halo on any sharded axis, so the conv runs with H/W padding
         # disabled on those axes. An axis that is NOT sharded keeps its normal padding.
