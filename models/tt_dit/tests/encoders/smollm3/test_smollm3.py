@@ -241,7 +241,10 @@ def test_smollm3_encoder_all_layers(*, mesh_device):
     )
     assert len(hs) == len(ref_hs), f"got {len(hs)} states, expected {len(ref_hs)}"
     for i, (r, d) in enumerate(zip(ref_hs, hs)):
-        assert_quality(r, tt_tensor.to_torch(d), pcc=0.99)
+        try:
+            assert_quality(r, tt_tensor.to_torch(d), pcc=0.99)
+        except Exception as e:
+            raise Exception(f"state {i}: {e}") from e
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
@@ -279,6 +282,58 @@ def test_smollm3_encode_contract(*, mesh_device):
     out = tt_tensor.to_torch(prompt_embeds)
     assert out.shape[-1] == 2 * cfg.hidden_size
     assert_quality(ref_prompt, out, pcc=0.99)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
+def test_smollm3_encoder_masked(*, mesh_device):
+    from models.tt_dit.encoders.smollm3.config import SmolLM3Config
+    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
+
+    torch.manual_seed(0)
+    n_layers = int(os.environ.get("N_LAYERS", "6"))
+    seq = 128
+    n_real = 100  # right-padding: real tokens first, padding after
+
+    hf = _load_hf_smollm3()
+    hf.model.layers = hf.model.layers[:n_layers]
+    hf.config.num_hidden_layers = n_layers
+
+    tokens = torch.randint(1, hf.config.vocab_size, (1, seq))
+    attn = torch.zeros(1, seq, dtype=torch.long)
+    attn[:, :n_real] = 1
+
+    # HF reference with attention_mask
+    with torch.no_grad():
+        ref = hf.model(input_ids=tokens, attention_mask=attn, output_hidden_states=True)
+    ref_hs = [h.float() for h in ref.hidden_states]
+
+    cfg = SmolLM3Config.from_hf_config(hf.config)
+    cfg.num_hidden_layers = n_layers
+    cfg.no_rope_layers = cfg.no_rope_layers[:n_layers]
+
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    pc = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=1, mesh_axis=1))
+    enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
+    enc.load_torch_state_dict(hf.model.state_dict())
+
+    cos, sin = enc.create_rope_tensors(1, seq)
+
+    tt_ids = tt_tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
+    # attention_mask: numeric (B, seq) float tensor — prepare_attention_bias does (mask - 1.0) * inf
+    tt_mask = tt_tensor.from_torch(attn.float(), device=mesh_device)
+    tt_cos = tt_tensor.from_torch(cos, device=mesh_device)
+    tt_sin = tt_tensor.from_torch(sin, device=mesh_device)
+
+    hs = enc.forward(tt_ids, attention_mask=tt_mask, pos_embeds=(tt_cos, tt_sin))
+
+    assert len(hs) == len(ref_hs), f"got {len(hs)} states, expected {len(ref_hs)}"
+    for i, (r, d) in enumerate(zip(ref_hs, hs)):
+        # Compare only real (non-padding) positions; padding positions are undefined.
+        try:
+            assert_quality(r[:, :n_real, :], tt_tensor.to_torch(d)[:, :n_real, :], pcc=0.99)
+        except Exception as e:
+            raise Exception(f"state {i}: {e}") from e
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])

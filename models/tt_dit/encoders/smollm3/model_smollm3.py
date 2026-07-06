@@ -470,7 +470,7 @@ class SmolLM3TextEncoder(Module):
         """Return (prompt_embeds, all_hidden_states) matching the FIBO output contract.
 
         prompt_embeds = concat(all_hidden_states[-1], all_hidden_states[-2], dim=-1)
-        shape: [B, T, 2 * hidden_size] = [B, T, 4096]
+        shape: [B, T, 2 * hidden_size]
         """
         all_hidden_states = self.forward(input_ids, attention_mask=attention_mask, pos_embeds=pos_embeds)
         prompt_embeds = ttnn.concat([all_hidden_states[-1], all_hidden_states[-2]], dim=-1)
@@ -489,11 +489,11 @@ class SmolLM3TextEncoder(Module):
             padded = (
                 -(-seq_len // 32) * 32 if seq_len < MAX_CHUNK_SIZE else -(-seq_len // MAX_CHUNK_SIZE) * MAX_CHUNK_SIZE
             )
-            input_ids = ttnn.pad(input_ids, [(0, padded - seq_len)], value=0)
+            input_ids = ttnn.pad(input_ids, [(0, 0), (0, padded - seq_len)], value=0)
             pos_embeds = tuple(
                 ttnn.pad(x, [(0, 0), (0, 0), (0, padded - seq_len), (0, 0)], value=0) for x in pos_embeds
             )
-            attention_mask = ttnn.pad(attention_mask, [(0, padded - seq_len)], value=0)
+            attention_mask = ttnn.pad(attention_mask, [(0, 0), (0, padded - seq_len)], value=0)
             attention_bias = prepare_attention_bias(attention_mask)
         else:
             padded = seq_len
