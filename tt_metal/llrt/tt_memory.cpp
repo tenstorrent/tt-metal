@@ -15,8 +15,8 @@
 namespace ll_api {
 
 memory::memory() {
-    constexpr uint32_t initial_data_space_ = 0x400;
-    constexpr uint32_t initial_span_space_ = 4;
+    constexpr std::uint32_t initial_data_space_ = 0x400;
+    constexpr std::uint32_t initial_span_space_ = 4;
 
     data_.reserve(initial_data_space_);
     link_spans_.reserve(initial_span_space_);
@@ -36,15 +36,16 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
             std::string out_elf_path = std::string(path) + ".xip.elf";
             try {
                 elf.WriteImage(out_elf_path);
-            } catch (const std::exception &e) {
-                log_warning(tt::LogLLRuntime, "Failed to write XIP ELF for disassembly ({}): {}", out_elf_path, e.what());
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogLLRuntime, "Failed to write XIP ELF for disassembly ({}): {}", out_elf_path, e.what());
             } catch (...) {
                 log_warning(tt::LogLLRuntime, "Failed to write XIP ELF for disassembly: {}", out_elf_path);
             }
         }
     }
 
-    auto const& segments = elf.GetSegments();
+    const auto& segments = elf.GetSegments();
 
     // The ELF file puts the text segment first, but one set of
     // binaries (ncrisc) places data a lower address, and at least one
@@ -67,7 +68,7 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     auto lma = segments[0].lma;
 
     for (unsigned ix : map) {
-        auto const& segment = segments[map[ix]];
+        const auto& segment = segments[ix];
         if (not segment.relocs.empty()) {
             TT_THROW("{}: unexpected dynamic relocations", path);
         }
@@ -89,33 +90,34 @@ bool memory::operator==(const memory& other) const { return data_ == other.data_
 
 void memory::fill_from_mem_template(
     const memory& mem_template,
-    const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
+    const std::function<void(std::vector<std::uint32_t>::iterator, std::uint64_t addr, std::uint32_t len)>& callback) {
     link_spans_ = mem_template.link_spans_;
     data_.resize(mem_template.data_.size());
     process_spans(callback);
 }
 
 void memory::process_spans(
-    const std::function<void(std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const {
-    uint32_t offset = 0;
+    const std::function<void(std::vector<std::uint32_t>::const_iterator, std::uint64_t addr, std::uint32_t len)>&
+        callback) const {
+    std::uint32_t offset = 0;
     for (const auto& span : link_spans_) {
-        std::vector<uint32_t>::const_iterator cit = data_.cbegin() + offset;
+        std::vector<std::uint32_t>::const_iterator cit = data_.cbegin() + offset;
         callback(cit, span.addr, span.len);
         offset += span.len;
     }
 }
 
 void memory::process_spans(
-    const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
-    uint32_t offset = 0;
+    const std::function<void(std::vector<std::uint32_t>::iterator, std::uint64_t addr, std::uint32_t len)>& callback) {
+    std::uint32_t offset = 0;
     for (const auto& span : link_spans_) {
-        std::vector<uint32_t>::iterator it = data_.begin() + offset;
+        std::vector<std::uint32_t>::iterator it = data_.begin() + offset;
         callback(it, span.addr, span.len);
         offset += span.len;
     }
 }
 
-void memory::update_spans(std::function<void(uint64_t& addr)>& callback) {
+void memory::update_spans(std::function<void(std::uint64_t& addr)>& callback) {
     for (auto& span : link_spans_) {
         callback(span.addr);
     }
