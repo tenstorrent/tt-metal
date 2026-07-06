@@ -67,6 +67,7 @@ from loguru import logger
 import ttnn
 from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_checkpoint_dir
 from models.experimental.diffusion_gemma.config import DiffusionConfig
+from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
@@ -100,6 +101,13 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
     #    runner; never advertise async without proof → declare False (safe default).
     #  * on-device sampling: the canvas Gumbel-max / entropy-budget / renoise path
     #    runs on device (no host argmax, no full-logits readback) → True.
+    #  * prefix caching: the vLLM APC contract needs paged-cache ownership + a
+    #    block pool (#47488), which is NOT wired here → advertise False. A DG
+    #    serving-layer frozen prompt-prefix KV reuse prototype exists behind the
+    #    DG_PREFIX_CACHE env flag (see tt/prefix_cache.py + the prefix_cache design
+    #    note); it reuses the model-owned contiguous cache across sessions but does
+    #    NOT change the vLLM-advertised capability, so vLLM's own block pool stays
+    #    disabled. Flipping this flag requires the #47488 paged path + its tests.
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
@@ -120,6 +128,12 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # one active sequence today (see module docstring); the dict is keyed by
         # row so output formatting never assumes batch size 1.
         self._sessions: dict[int, BlockDiffusionServingSession] = {}
+        # Frozen prompt-prefix KV reuse (APC prototype, #47466): a single registry
+        # shared across sessions so a request whose aligned prompt is a prefix of the
+        # resident contiguous-cache prompt can skip its prefill. Inert unless
+        # DG_PREFIX_CACHE is set (checked per-prefill inside the session); safe for
+        # max_num_seqs=1 (one contiguous cache = one resident prompt).
+        self._prefix_cache = PrefixKVCache()
 
     # ── construction ────────────────────────────────────────────────────
     @classmethod
@@ -302,6 +316,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             gumbel_mode=self._gumbel_mode,
             seed=seed,
             stop_token_ids=[],
+            prefix_cache=self._prefix_cache,
         )
 
     def prefill_forward(
