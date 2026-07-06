@@ -53,7 +53,7 @@ N_TOKEN_MATCH = 8  # First-N tokens must match HF exactly under seeded sampling.
 # Tightening the PCC threshold requires either (a) higher-fidelity SDPA on full_attention or
 # (b) fp32 accumulation on the attention output path. Not blocking correct-output-generation.
 PCC_THRESHOLD = 0.80
-PROMPT = "Briefly: what is the capital of France?"
+PROMPT = "Briefly: what is the capital of Japan?"
 MAX_NEW_TOKENS = 32
 SEED = 0
 
@@ -76,13 +76,14 @@ EXPECTED_METRICS = {
     (2, 4, "ring", "bfp4"): {"encoder": 20.0, "denoising": 120.0, "total": 150.0},
     (2, 4, "ring", "bfp8"): {"encoder": 30.0, "denoising": 180.0, "total": 220.0},
     # WH T3K (1x8 ring) — tp=8 splits MoE intermediate 8-way, so per-device DRAM is 4x
-    # smaller than (2,4). bf16 fits here. Numbers below are calibrated from a first
-    # successful run at bfp8 (~6-9s per denoising step; converged in 3-4 steps under
-    # StableAndConfident stopping) with generous slack for warm-cache variability. The
-    # total includes stopping-criteria-driven early termination.
-    (1, 8, "ring", "bfp4"): {"encoder": 15.0, "denoising": 80.0, "total": 110.0},
-    (1, 8, "ring", "bfp8"): {"encoder": 15.0, "denoising": 100.0, "total": 130.0},
-    (1, 8, "ring", "bf16"): {"encoder": 25.0, "denoising": 160.0, "total": 200.0},
+    # smaller than (2,4). bf16 fits here. Numbers below are calibrated from a measured
+    # bfp8 run at ~39s total (with the M=256 canvas MoE fast path), with ~15% slack for
+    # warm-cache/thermal variability. Total includes stopping-criteria-driven early
+    # termination. bfp4 and bf16 numbers extrapolated from the bfp8 baseline (bfp4 ≲ bfp8
+    # since MoE DRAM traffic is smaller; bf16 > bfp8).
+    (1, 8, "ring", "bfp4"): {"encoder": 5.0, "denoising": 35.0, "total": 45.0},
+    (1, 8, "ring", "bfp8"): {"encoder": 5.0, "denoising": 35.0, "total": 45.0},
+    (1, 8, "ring", "bf16"): {"encoder": 8.0, "denoising": 55.0, "total": 65.0},
 }
 
 
@@ -231,6 +232,24 @@ def test_pipeline_diffusion_gemma(
     current_canvas = sampler.initialize_canvas(batch_size=1, device=torch.device("cpu"))
     self_cond_logits: torch.Tensor | None = None
     argmax_canvas = current_canvas.clone()
+
+    # ---- Warmup ----------------------------------------------------------------
+    # Force JIT / kernel-cache compilation of both decoder code paths before the timed
+    # loop. Section 2 already ran ``_run_encoder`` and one ``_run_decoder`` with
+    # ``self_cond_logits=None`` (the first-step path), so we only need one additional
+    # decoder call with a non-None ``self_cond_logits`` to warm the self-conditioning
+    # code path used by every subsequent step. The warmup output is discarded.
+    logger.info(
+        "[3] Warmup: 1 encoder + 1 decoder(self_cond=None) via section 2, " "+ 1 decoder(self_cond=logits) below."
+    )
+    _ = pipeline._run_decoder(
+        current_canvas,
+        encoder_kv,
+        decoder_position_ids,
+        tt_enc_masks,
+        encoder_seq_len=input_ids.shape[1],
+        self_cond_logits=tt_logits,  # section-2 logits used as a stand-in prior.
+    )
 
     logger.info(f"[3] Diffusion loop ({pipeline.config.max_denoising_steps} steps max)")
     logger.info(f"    Prompt: {PROMPT!r}")
