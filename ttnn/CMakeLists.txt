@@ -296,6 +296,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::RotaryEmbeddingIndexed
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastBack
+        TTNN::Ops::Experimental::DeepSeekPrefill::MaskedPerTokenCastBack
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Quasar
@@ -565,6 +566,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/zero_padded_k
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_back)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/masked_per_token_cast_back)
 add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
