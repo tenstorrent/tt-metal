@@ -115,6 +115,53 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
         dst_tile_index, in_cb_id)));
 }
 
+// clang-format off
+/**
+ * Copies a block of `ntiles` consecutive tiles from the specified input CB into consecutive DST
+ * register slots. This is the uniform block entry point for the copy/datacopy op group: its body is
+ * a simple loop over `copy_tile`, so it inherits `copy_tile`'s semantics (unpack into SRC, move into
+ * DST) and requires the same initialization (`copy_tile_init` / `copy_tile_to_dst_init_short`) to have
+ * been called first. The DST register buffer must be in acquired state via *acquire_dst* call, and
+ * `cb_wait_front(n)` must have made at least `start_in_tile_index + ntiles` tiles available in the
+ * input CB. This call is blocking and is only available on the compute engine.
+ *
+ * NOTE: The loop implementation is transitional. The blocking will be pushed down into llk-lib
+ * (MOPs / REPLAY buffers) by tt-metal#47485 without changing this signature.
+ *
+ * Return value: None
+ *
+ * | Argument             | Description                                                | Data type | Valid range                                         | required |
+ * |----------------------|------------------------------------------------------------|-----------|-----------------------------------------------------|----------|
+ * | in_cb_id             | The identifier of the source circular buffer (CB)          | uint32_t  | 0 to 31                                             | True     |
+ * | start_in_tile_index  | The index of the first tile to copy from the input CB      | uint32_t  | Must be less than the size of the CB                | True     |
+ * | start_dst_tile_index | The index of the first destination tile in the DST register| uint32_t  | Must be less than the size of the DST register (16) | True     |
+ * | ntiles               | The number of consecutive tiles to copy                    | uint32_t  | start_dst_tile_index + ntiles <= DST register size  | True     |
+ * */
+// clang-format on
+ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
+    for (uint32_t i = 0; i < ntiles; ++i) {
+        copy_tile(in_cb_id, start_in_tile_index + i, start_dst_tile_index + i);
+    }
+}
+
+// clang-format off
+/**
+ * Copies a block of `ntiles` consecutive tiles from the specified input CB into consecutive DST
+ * register slots, using the block unpack/datacopy llk paths intended for reloading matmul partial
+ * results back into DST. Functionally equivalent to `copy_block`, but retained as a distinct entry
+ * point for the matmul-partials use case. The DST register buffer must be in acquired state via
+ * *acquire_dst* call and requires the same initialization as `copy_tile`.
+ *
+ * Return value: None
+ *
+ * | Argument             | Description                                                | Data type | Valid range                                         | required |
+ * |----------------------|------------------------------------------------------------|-----------|-----------------------------------------------------|----------|
+ * | in_cb_id             | The identifier of the source circular buffer (CB)          | uint32_t  | 0 to 31                                             | True     |
+ * | start_in_tile_index  | The index of the first tile to copy from the input CB      | uint32_t  | Must be less than the size of the CB                | True     |
+ * | start_dst_tile_index | The index of the first destination tile in the DST register| uint32_t  | Must be less than the size of the DST register (16) | True     |
+ * | ntiles               | The number of consecutive tiles to copy                    | uint32_t  | start_dst_tile_index + ntiles <= DST register size  | True     |
+ * */
+// clang-format on
 ALWI void copy_block_matmul_partials(
     uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
