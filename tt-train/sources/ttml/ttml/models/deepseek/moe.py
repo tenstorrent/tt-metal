@@ -89,7 +89,6 @@ class _GatherTopK(ttml.autograd.Function):
         expert_ids = ttnn.arange(0, num_experts, 1, dtype=ttnn.uint32, device=routing_value.device())
         expert_ids = ttnn.reshape(expert_ids, [1, 1, 1, E])
         one_hot = ttnn.eq(topk_flat, expert_ids)
-        one_hot = ttnn.typecast(one_hot, ttnn.float32)
         one_hot = ttnn.typecast(one_hot, ttnn.bfloat16)
         one_hot = ttnn.to_layout(one_hot, routing_value.layout)
 
