@@ -522,7 +522,6 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                     break
             probe = repo / "models" / "experimental" / "perf_automation" / "cc_optimize" / "_op_sig_probe.py"
             if probe.is_file() and test_files:
-                cap = int(os.environ.get("E2E_HOST_XFER_MAX", "6"))
                 penv = dict(os.environ)
                 penv["TT_METAL_HOME"] = str(repo)
                 penv["PYTHONPATH"] = str(repo) + os.pathsep + penv.get("PYTHONPATH", "")
@@ -539,7 +538,14 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                         cwd=str(repo),
                         env=penv,
                     )
-                    xfer = []
+                    # _parse_facts rule (same as cc_optimize's scorecard, but ENFORCED
+                    # here as a gate): a ttnn.Tensor lives on-device and torch can't touch
+                    # it, so ANY host-transfer op appearing in the REAL forward's op stream
+                    # means the pipeline crosses to host mid-compute — host glue, trace+2CQ
+                    # blocked. Model-agnostic: reads the actual op stream (whatever the model
+                    # runs — encoder / decoder / prefill+decode / diffusion / …), not a
+                    # per-model map or a named step. Presence, not op-type variety.
+                    host_ops = []
                     for line in ((pr.stdout or "") + "\n" + (pr.stderr or "")).splitlines():
                         if line.startswith("PERF_OP_SIGS="):
                             import json as _json
@@ -548,14 +554,14 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
                                 sigs = _json.loads(line.split("=", 1)[1])
                             except Exception:  # noqa: BLE001
                                 sigs = []
-                            xfer = sorted({s.split("(")[0] for s in sigs if any(h in s for h in _G5_HOST_XFER)})
-                    if len(xfer) > cap:
+                            host_ops = sorted({s.split("(")[0] for s in sigs if any(h in s for h in _G5_HOST_XFER)})
+                    if host_ops:
                         reasons.append(
-                            f"G5 on-device: {len(xfer)} host round-trip op types in the forward (weight "
-                            f"streaming / host readback) exceeds {cap} — not fully on-device, trace+2CQ blocked: "
-                            + ", ".join(xfer[:8])
-                            + " (keep weights resident + sample on-device; "
-                            "E2E_ALLOW_HOST_DECODE=1 or raise E2E_HOST_XFER_MAX to waive)"
+                            "G5 on-device: the real forward round-trips to host via "
+                            + ", ".join(host_ops[:8])
+                            + " — not fully on-device, so trace+2CQ is blocked (host/torch compute is "
+                            "reached mid-forward; keep the whole forward resident + sample on-device, or "
+                            "set E2E_ALLOW_HOST_DECODE=1 to waive for a genuinely host-bound model)"
                         )
                 except Exception:  # noqa: BLE001 — probe failure is not a gate failure (best-effort)
                     pass
