@@ -16,14 +16,15 @@ Standalone Tracy capture::
         pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_profile_single_layer_prefill_decode.py \\
         ::test_profile_single_layer_prefill_decode -v
 
-Device perf CSV/JSON dump (outer driver wraps the command via ``run_device_perf``)::
+Device perf CSV/JSON dump (outer driver spawns this workload under Tracy)::
 
-    pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_device_perf_single_layer_prefill_decode.py \\
-        -v -m models_device_performance_bare_metal
+    python models/experimental/seamless_m4t_v2_large/tests/perf/test_device_perf_single_layer_prefill_decode.py
 """
 
 from __future__ import annotations
 
+import glob
+import os
 from typing import NamedTuple
 
 import pytest
@@ -45,7 +46,8 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     tt_position_ids_decode_step,
 )
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
-    MESH_DEVICE_PARAMETRIZE_TEXT,
+    DEVICE_PARAMS_TEXT,
+    DEVICE_PARAMS_TEXT_SINGLE,
     from_torch_bfloat16_tile,
     from_torch_uint32_rm,
     get_tp,
@@ -62,6 +64,23 @@ PREFILL_SEQ_LEN = 128
 DECODE_POS = PREFILL_SEQ_LEN
 ENC_SEQ_LEN = 128
 NUM_WARMUP_ITERS = 1
+
+
+def _detect_num_devices() -> int:
+    return len([p for p in glob.glob("/dev/tenstorrent/*") if os.path.basename(p).isdigit()])
+
+
+def _mesh_device_param() -> tuple[int, int]:
+    mesh_env = os.environ.get("MESH_DEVICE")
+    if mesh_env in {"P150": (1, 1), "BH-QB": (1, 4)}:
+        return {"P150": (1, 1), "BH-QB": (1, 4)}[mesh_env]
+    if "TT_MESH_WIDTH" in os.environ:
+        return (1, int(os.environ["TT_MESH_WIDTH"]))
+    return (1, 4) if _detect_num_devices() >= 4 else (1, 1)
+
+
+def _profile_device_params() -> dict:
+    return dict(DEVICE_PARAMS_TEXT_SINGLE) if _mesh_device_param() == (1, 1) else dict(DEVICE_PARAMS_TEXT)
 
 
 class _LayerPerfFixtures(NamedTuple):
@@ -252,7 +271,8 @@ def _run_prefill_decode_step(mesh_device, fixtures: _LayerPerfFixtures) -> None:
 
 @pytest.mark.timeout(3600)
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [_profile_device_params()], indirect=True)
 def test_profile_single_layer_prefill_decode(mesh_device, device_params):
     """Prefill 128 + decode 1 on a 1-layer ``TTSeamlessM4Tv2Decoder`` (Tracy profile target)."""
     del device_params

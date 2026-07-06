@@ -10,7 +10,7 @@
 
 This port targets **Blackhole QB** hosts with **four** Tenstorrent devices. Mesh shape and `device_params` come from `[tt/mesh_helpers.py](tt/mesh_helpers.py)` (`open_seamless_mesh_device()` for the demo; pytest fixtures use `MeshShape(1, 4)`). There is no Wormhole, Grayskull, or single-chip path in the supported/tested configuration.
 
-PCC tests and the Tracy device-perf driver use `l1_small_size=65536` on speech-generation paths where required.
+PCC tests and the Tracy L1 device-perf driver (`test_device_perf_single_layer_prefill_decode.py`) use `l1_small_size=65536` on speech-generation paths where required.
 
 ---
 
@@ -423,6 +423,39 @@ pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_seamless_device
 
 The outer driver spawns eager forwards in `[tests/perf/test_device_perf_forwards.py](tests/perf/test_device_perf_forwards.py)` under Tracy and reports **both** Tracy per-device kernel floors and the same TT-aligned wall metrics (via JSON side-channel).
 
+### Single-layer decoder prefill+decode (Tracy micro-benchmark)
+
+Isolated **layer-0** text-decoder kernel profiling: one **128-token prefill** (KV fill) plus **one decode step** at position 128, with a **128-token** cross-attention encoder timeline.
+
+| Item | Value |
+|------|--------|
+| Decoder layers profiled | 1 (layer 0 weights only) |
+| Decoder prefill ISL | 128 tokens (single forward, not chunked) |
+| Decode | 1 token at `DECODE_POS=128` |
+| Encoder cross-attn length | 128 |
+| Mesh | `MeshShape(1, 4)` on BH-QB (auto when 4 devices); `MeshShape(1, 1)` on P150 / single-chip (auto when 1 device). Override: `MESH_DEVICE=BH-QB` or `MESH_DEVICE=P150` |
+| Mode | Eager (no decode trace / 2CQ) — Tracy-friendly |
+
+This is **not** the full five-task demo (no encoder, no 24-layer stack, no `generate()` loop). Same **128-token** decoder ISL as the `128` rung on `[scripts/demo_perf_sweep.py](scripts/demo_perf_sweep.py)`, but kernel numbers are **not** comparable to demo `prefill_ms` (all layers + trace). On **1×1**, decode matmul head dims differ from **1×4** (no TP sharding); compare like mesh shapes only.
+
+The driver avoids importing `ttnn` (no parent `CHIP_IN_USE` lock). It spawns Tracy on `[tests/perf/test_profile_single_layer_prefill_decode.py](tests/perf/test_profile_single_layer_prefill_decode.py)` (warmup, then signpost `start` → prefill+decode → `stop`). Artifacts: `generated/profiler/seamless_m4t_v2_L1_prefill_decode/reports/<timestamp>/ops_perf_results_*.csv` plus a partial benchmark JSON (`seamless_m4t_v2_L1_prefill128_decode1_<mesh>`).
+
+```bash
+cd tt-metal
+python models/experimental/seamless_m4t_v2_large/tests/perf/test_device_perf_single_layer_prefill_decode.py
+```
+
+**Inspect the CSV with `tt-perf-report`** (per-op device kernel time between signposts):
+
+```bash
+# use the latest ops CSV from the run above
+CSV=$(ls -t generated/profiler/seamless_m4t_v2_L1_prefill_decode/reports/*/ops_perf_results_*.csv | head -1)
+
+tt-perf-report "$CSV" --start-signpost start --end-signpost stop
+```
+
+On **1×4**, look for prefill matmuls with batch **128** and decode ops (`SdpaDecodeDeviceOperation`, `PagedUpdateCacheDeviceOperation`); on **1×1** the same ops appear with a single device row. A large **op-to-op gap** between prefill and decode is usually host embedding/setup, not device kernel time.
+
 ---
 
 ## Running Tests
@@ -456,6 +489,16 @@ pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_seamless_device
 
 The outer driver spawns eager forward-only inner tests in `[tests/perf/test_device_perf_forwards.py](tests/perf/test_device_perf_forwards.py)` under Tracy (`use_decode_trace=False`, `use_2cq=False`). It reports Tracy per-device kernel floors plus TT-aligned wall metrics from `return_timings=True` (see **Performance** above).
 
+**Single-layer decoder prefill+decode** (layer 0, ISL 128, 1 decode step) — run the Python driver, then `tt-perf-report` on the ops CSV (see **Single-layer decoder prefill+decode** under Performance):
+
+```bash
+python models/experimental/seamless_m4t_v2_large/tests/perf/test_device_perf_single_layer_prefill_decode.py
+# single-chip: MESH_DEVICE=P150 python .../test_device_perf_single_layer_prefill_decode.py
+
+CSV=$(ls -t generated/profiler/seamless_m4t_v2_L1_prefill_decode/reports/*/ops_perf_results_*.csv | head -1)
+tt-perf-report "$CSV" --start-signpost start --end-signpost stop
+```
+
 ---
 
 ## Repository Layout
@@ -486,8 +529,10 @@ models/experimental/seamless_m4t_v2_large/
 │   │   ├── test_code_hifigan.py
 │   │   └── decoder_pcc_fixtures.py      # Shared decoder PCC inputs / helpers
 │   └── perf/
-│       ├── test_seamless_device_perf.py # Tracy outer driver (kernel-only)
-│       └── test_device_perf_forwards.py # Inner eager forwards for device perf
+│       ├── test_seamless_device_perf.py              # Tracy outer driver (full-model kernel-only)
+│       ├── test_device_perf_forwards.py              # Inner eager forwards for device perf
+│       ├── test_profile_single_layer_prefill_decode.py  # Inner L1 prefill+decode workload (Tracy)
+│       └── test_device_perf_single_layer_prefill_decode.py  # L1 driver: python entry + CSV/JSON dump
 ├── tt/                                  # TTNN implementation
 │   ├── common.py                        # TP reductions, hf_aligned_generation_kwargs
 │   ├── mesh_helpers.py                  # MeshShape (1,4), fabric, pytest params, demo open
