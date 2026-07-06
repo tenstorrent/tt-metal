@@ -817,8 +817,13 @@ TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
 // Test that active ethernet cores correctly validate max runtime args
 TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    // Mirror the enforced ceiling in Kernel::validate_runtime_args_size: 2 words are reserved for the watcher
+    // count words (one for the unique RTA region, one for the common) unconditionally, whether or not watcher
+    // asserts are enabled, so the usable max is the kernel-config size minus those 2 words.
+    constexpr uint32_t watcher_reserved_count_words = 2;
     uint32_t active_eth_max_runtime_args =
-        hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
+        hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t) -
+        watcher_reserved_count_words;
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
         auto* device = mesh_device->get_devices()[0];
@@ -898,8 +903,13 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
 // Test that idle ethernet cores correctly validate max runtime args using IDLE_ETH kernel config size
 TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    // Mirror the enforced ceiling in Kernel::validate_runtime_args_size: 2 words are reserved for the watcher
+    // count words (one for the unique RTA region, one for the common) unconditionally, whether or not watcher
+    // asserts are enabled, so the usable max is the kernel-config size minus those 2 words.
+    constexpr uint32_t watcher_reserved_count_words = 2;
     uint32_t idle_eth_max_runtime_args =
-        hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
+        hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t) -
+        watcher_reserved_count_words;
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
         auto* device = mesh_device->get_devices()[0];
