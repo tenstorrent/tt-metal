@@ -141,6 +141,26 @@ jobs:
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
+      - name: Download Voxtral TTS model weights (QB2 / yyz4-mnt-models)
+        if: ${{ contains(matrix.test-group.name, 'Voxtral') && (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' || matrix.test-group['weights-cache-mode'] == 'cloud-mlperf') }}
+        timeout-minutes: 30
+        run: |
+          set -e
+          export HF_HUB_OFFLINE=0
+          mkdir -p /tmp/voxtral_hf_cache/hub
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+
+          snapshot_download(
+              repo_id="mistralai/Voxtral-4B-TTS-2603",
+              allow_patterns=["*.safetensors", "*.json"],
+              cache_dir="/tmp/voxtral_hf_cache/hub",
+              token=os.environ.get("HF_TOKEN"),
+              resume_download=True,
+          )
+          PY
+          echo "VOXTRAL_CI_HF_HOME=/tmp/voxtral_hf_cache" >> "$GITHUB_ENV"
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-with-log

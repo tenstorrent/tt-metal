@@ -694,3 +694,59 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+# ─── Voxtral TTS ────────────────────────────────────────────────────────────
+
+- name: Voxtral TTS E2E PCC (teacher-forced + free-run)
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/voxtraltts/requirements.txt
+    export HF_HOME="${VOXTRAL_CI_HF_HOME:-/mnt/MLPerf/huggingface}"
+    export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
+    export TT_CACHE_PATH="${HF_HOME}/tt_cache/mistralai--Voxtral-4B-TTS-2603"
+    export CI=true
+    export VOXTRAL_E2E_FREE_RUN_STEPS=32
+    pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py \
+      -k "pipeline_teacher_forced_pcc or staged_pcc" \
+      -sv --timeout=3600
+  model: voxtral-tts
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Voxtral TTS E2E quality metrics
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/voxtraltts/requirements.txt
+    export HF_HOME="${VOXTRAL_CI_HF_HOME:-/mnt/MLPerf/huggingface}"
+    export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
+    export TT_CACHE_PATH="${HF_HOME}/tt_cache/mistralai--Voxtral-4B-TTS-2603"
+    export CI=true
+    pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_quality_metrics.py -sv --timeout=3600
+  model: voxtral-tts
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Voxtral TTS E2E perf (trace + 2CQ)
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/voxtraltts/requirements.txt
+    export HF_HOME="${VOXTRAL_CI_HF_HOME:-/mnt/MLPerf/huggingface}"
+    export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
+    export TT_CACHE_PATH="${HF_HOME}/tt_cache/mistralai--Voxtral-4B-TTS-2603"
+    export CI=true
+    pytest models/experimental/voxtraltts/tests/perf/test_e2e_performant.py \
+      -k F128 -m models_performance_bare_metal -sv --timeout=3600
+  model: voxtral-tts
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models

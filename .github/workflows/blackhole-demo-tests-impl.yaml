@@ -164,6 +164,61 @@ jobs:
               resume_download=True,
           )
           PY
+      - name: Download Voxtral TTS model weights to local cache
+        if: ${{ inputs.regenerate-ttnn-cache && matrix.test-group['weights-cache-mode'] == 'local-disk' && contains(matrix.test-group.name, 'Voxtral') }}
+        timeout-minutes: 30
+        run: |
+          set -e
+          mkdir -p /localdev/blackhole_demos/huggingface_data/hub
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+
+          snapshot_download(
+            repo_id="mistralai/Voxtral-4B-TTS-2603",
+              allow_patterns=["*.safetensors", "*.json"],
+              cache_dir="/localdev/blackhole_demos/huggingface_data/hub",
+              token=os.environ.get("HF_TOKEN"),
+              resume_download=True,
+          )
+          PY
+      - name: Download Voxtral TTS model weights (P150 CIv2 / lfc)
+        if: ${{ contains(matrix.test-group.name, 'Voxtral') && matrix.test-group['weights-cache-mode'] == 'lfc' }}
+        timeout-minutes: 30
+        run: |
+          set -e
+          mkdir -p /localdev/blackhole_demos/huggingface_data/hub
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+
+          snapshot_download(
+              repo_id="mistralai/Voxtral-4B-TTS-2603",
+              allow_patterns=["*.safetensors", "*.json"],
+              cache_dir="/localdev/blackhole_demos/huggingface_data/hub",
+              token=os.environ.get("HF_TOKEN"),
+              resume_download=True,
+          )
+          PY
+      - name: Download Voxtral TTS model weights (QB2 / yyz4-mnt-models)
+        if: ${{ contains(matrix.test-group.name, 'Voxtral') && matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' }}
+        timeout-minutes: 30
+        run: |
+          set -e
+          mkdir -p /tmp/voxtral_hf_cache/hub
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+
+          snapshot_download(
+              repo_id="mistralai/Voxtral-4B-TTS-2603",
+              allow_patterns=["*.safetensors", "*.json"],
+              cache_dir="/tmp/voxtral_hf_cache/hub",
+              token=os.environ.get("HF_TOKEN"),
+              resume_download=True,
+          )
+          PY
+          echo "VOXTRAL_CI_HF_HOME=/tmp/voxtral_hf_cache" >> "$GITHUB_ENV"
       - name: Run demo regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

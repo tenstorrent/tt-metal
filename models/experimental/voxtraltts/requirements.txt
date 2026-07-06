@@ -1,0 +1,19 @@
+# Core inference dependencies for Voxtral TTS (tokenizer, weights, audio I/O).
+# Install from repo root:
+#   python_env/bin/python -m pip install -r models/experimental/voxtraltts/requirements.txt
+mistral-common==1.11.3
+safetensors==0.8.0
+huggingface-hub==0.36.2
+soundfile==0.14.0
+scipy==1.15.3
+
+# Quality metrics for tests/pcc/test_voxtral_e2e_quality_metrics.py (UTMOS-v2, ECAPA-TDNN, Whisper WER).
+# tt-metal dev env uses CPU torch (see tt_metal/python_env/requirements-dev.txt); speechbrain
+# otherwise pulls default PyPI torchaudio which links libcudart and fails to load _torchaudio.abi3.so.
+# The +cpu wheel is only on the PyTorch CPU index (x86_64 CI / dev hosts; see requirements-dev.txt).
+--extra-index-url https://download.pytorch.org/whl/cpu
+torchaudio==2.11.0+cpu ; platform_machine == "x86_64"
+speechbrain==1.1.0
+librosa==0.10.2
+git+https://github.com/sarulab-speech/UTMOSv2.git
+websockets==16.0

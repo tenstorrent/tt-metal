@@ -123,3 +123,38 @@
   owner_id: U088VJ79WDB # Jonathan Su
   team: models
   model-name: z-image-turbo
+
+# ─── Voxtral TTS ────────────────────────────────────────────────────────────
+
+- name: Voxtral TTS demo (P150 CIv2)
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/voxtraltts/requirements.txt
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Voxtral-4B-TTS-2603
+    export CI=true
+    python models/experimental/voxtraltts/demo/demo.py
+  skus:
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U03PUAKE719
+  team: models
+  model-name: voxtral-tts
+
+- name: Voxtral TTS demo (BH QuietBox 2)
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/voxtraltts/requirements.txt
+    export HF_HOME="${VOXTRAL_CI_HF_HOME:-/localdev/blackhole_demos/huggingface_data}"
+    export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
+    export TT_CACHE_PATH="${HF_HOME}/tt_cache/mistralai--Voxtral-4B-TTS-2603"
+    export CI=true
+    export MESH_DEVICE=P150x4
+    python models/experimental/voxtraltts/demo/demo.py
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U03PUAKE719
+  team: models
+  model-name: voxtral-tts
