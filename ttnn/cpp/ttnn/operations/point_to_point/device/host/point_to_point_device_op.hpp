@@ -117,6 +117,10 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
     const PointToPointOp::operation_attributes_t& operation_attributes,
     PointToPointOp::tensor_return_value_t& output_tensor,
     const tt::tt_metal::GlobalSemaphore& semaphore);
+
+// Same-device (send_coord == receive_coord) local on-device copy — no fabric.
+tt::tt_metal::ProgramDescriptor local_copy_program_factory(
+    const PointToPointOp::tensor_args_t& tensor_args, PointToPointOp::tensor_return_value_t& output_tensors);
 }  // namespace operations::point_to_point
 
 namespace prim {
