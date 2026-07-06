@@ -178,7 +178,7 @@ print_failure_summary() {
   if [ "$failure_count" -eq 0 ]; then
     return 0
   fi
-  echo "========================================" >&2
+  echo "=c======================================" >&2
   echo " Failed commands (${failure_count}):" >&2
   echo "========================================" >&2
   local failure

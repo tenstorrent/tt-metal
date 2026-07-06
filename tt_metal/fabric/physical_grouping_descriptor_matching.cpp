@@ -1762,26 +1762,35 @@ std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in
 }
 
 namespace {
-// Compose the logical pinning for a placement: MGD mesh node (row-major chip_id) -> AsicID. Combines the
-// grouping's MGD<->PGD pairing (grouping.mgd_node_to_grouping_node) with the grouping-node -> AsicID solve.
-// When the grouping has no MGD pairing, returns grouping_node_to_asic directly (row-major identity assumed).
-// File-local helper so find_all_in_psd can populate PsdPlacement::mesh_node_to_asic without bloating itself.
-std::map<ChipId, tt::tt_metal::AsicID> compose_mesh_node_to_asic(
-    const GroupingInfo& grouping, const std::map<uint32_t, tt::tt_metal::AsicID>& grouping_node_to_asic) {
-    std::map<ChipId, tt::tt_metal::AsicID> node_to_asic;
+// Compose the logical pinning for a placement: MGD mesh node (row-major chip_id) -> ASIC position (TrayID +
+// ASICLocation). Combines the grouping's MGD<->PGD pairing (grouping.mgd_node_to_grouping_node) with the
+// grouping-node -> AsicID solve, then resolves each ASIC to its physical position via the PSD so downstream can
+// use it directly. When the grouping has no MGD pairing, the grouping node ids are the row-major chip ids.
+// File-local helper so find_all_in_psd can populate PsdPlacement::mesh_node_to_asic_position without bloating itself.
+std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_position(
+    const GroupingInfo& grouping,
+    const std::map<uint32_t, tt::tt_metal::AsicID>& grouping_node_to_asic,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    const auto asic_position = [&](tt::tt_metal::AsicID asic_id) {
+        return tt::tt_metal::ASICPosition{
+            physical_system_descriptor.get_tray_id(asic_id), physical_system_descriptor.get_asic_location(asic_id)};
+    };
+    std::map<LogicalChipId, tt::tt_metal::ASICPosition> node_to_position;
     if (grouping.mgd_node_to_grouping_node.has_value()) {
-        // MGD-node -> grouping-node (from the PGD<->MGD match) composed with grouping-node -> AsicID.
+        // MGD-node -> grouping-node (from the PGD<->MGD match) composed with grouping-node -> AsicID -> position.
         for (const auto& [mgd_node, grouping_node] : *grouping.mgd_node_to_grouping_node) {
             auto asic_it = grouping_node_to_asic.find(grouping_node);
             if (asic_it != grouping_node_to_asic.end()) {
-                node_to_asic.emplace(mgd_node, asic_it->second);
+                node_to_position.emplace(mgd_node, asic_position(asic_it->second));
             }
         }
     } else {
         // No MGD pairing: assume the grouping node ids are already the row-major logical chip ids.
-        node_to_asic.insert(grouping_node_to_asic.begin(), grouping_node_to_asic.end());
+        for (const auto& [grouping_node, asic_id] : grouping_node_to_asic) {
+            node_to_position.emplace(grouping_node, asic_position(asic_id));
+        }
     }
-    return node_to_asic;
+    return node_to_position;
 }
 }  // namespace
 
@@ -1831,9 +1840,10 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
                     for (const auto& [grouping_node, asic_id] : grouping_node_to_asic) {
                         placement.asics.insert(asic_id);
                     }
-                    // Compose the logical chip_id -> AsicID pinning now so callers get it directly off the
+                    // Compose the logical chip_id -> ASIC position pinning now so callers get it directly off the
                     // placement; the composition lives in a separate helper to keep this function short.
-                    placement.mesh_node_to_asic = compose_mesh_node_to_asic(placement.grouping, grouping_node_to_asic);
+                    placement.mesh_node_to_asic_position = compose_mesh_node_to_asic_position(
+                        placement.grouping, grouping_node_to_asic, physical_system_descriptor);
                     placements.push_back(std::move(placement));
                 }
             }

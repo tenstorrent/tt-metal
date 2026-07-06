@@ -85,24 +85,21 @@ struct GroupingInfo {
     std::optional<std::map<uint32_t, uint32_t>> mgd_node_to_grouping_node;
 };
 
-// Mesh-local logical chip id (row-major node within a single mesh), matching FabricNodeId::chip_id. The full
-// FabricNodeId (mesh_id + chip_id) is only known after the multi-mesh solve assigns logical MeshIds, so a
-// placement carries just the chip id.
-using ChipId = std::uint32_t;
-
 // One disjoint placement produced by find_all_in_psd: which grouping matched (the grouping used, which also
 // carries the MGD pairing via mgd_node_to_grouping_node), the ASICs it covers, and the composed logical
-// chip_id -> AsicID pinning.
+// chip_id -> ASIC position pinning.
 struct PsdPlacement {
     // The flattened grouping that matched this placement. Carries mgd_node_to_grouping_node (the MGD<->PGD
     // pairing) when it originated from a PGD<->MGD match.
     GroupingInfo grouping;
-    // ASIC footprint of this placement (equals the values of mesh_node_to_asic).
+    // ASIC footprint of this placement (the concrete ASICs backing mesh_node_to_asic_position's positions).
     std::unordered_set<tt::tt_metal::AsicID> asics;
-    // Logical pinning for this placement: mesh-local chip id (row-major) -> AsicID. Populated by find_all_in_psd
-    // by composing the grouping's MGD<->PGD pairing with the grouping->PSD solve. Equals a plain row-major
-    // identity when the grouping has no MGD pairing.
-    std::map<ChipId, tt::tt_metal::AsicID> mesh_node_to_asic;
+    // Logical pinning for this placement: mesh-local chip id (row-major) -> ASIC position (TrayID + ASICLocation).
+    // Populated by find_all_in_psd by composing the grouping's MGD<->PGD pairing with the grouping->PSD solve and
+    // resolving each ASIC to its physical position via the PSD, so downstream can consume it directly without a
+    // further AsicID->position conversion. Equals a plain row-major identity layout when the grouping has no MGD
+    // pairing.
+    std::map<LogicalChipId, tt::tt_metal::ASICPosition> mesh_node_to_asic_position;
 };
 
 // Type aliases for valid groupings map structure

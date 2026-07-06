@@ -2574,9 +2574,10 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
         const auto& placement = placements[i];
         std::cout << "  [" << i << "] grouping='" << placement.grouping.name << "'"
                   << " asic_count=" << placement.asics.size() << "\n";
-        std::cout << "      mesh_node_to_asic (chip_id -> asic):";
-        for (const auto& [chip_id, asic_id] : placement.mesh_node_to_asic) {
-            std::cout << " " << chip_id << "->" << asic_id.get();
+        std::cout << "      mesh_node_to_asic_position (chip_id -> tray/asic):";
+        for (const auto& [chip_id, asic_position] : placement.mesh_node_to_asic_position) {
+            std::cout << " " << chip_id << "->(" << asic_position.first.get() << "," << asic_position.second.get()
+                      << ")";
         }
         std::cout << std::endl;
     }
@@ -2589,13 +2590,20 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
         // find_all_in_psd reports the grouping that matched.
         EXPECT_EQ(placement.grouping.name.empty(), false) << "Placement should name the grouping that matched";
 
-        // find_all_in_psd populates the composed chip_id -> AsicID pinning over the same footprint.
-        EXPECT_EQ(placement.mesh_node_to_asic.size(), 16u) << "Composed pinning should cover all 16 logical chips";
-        std::unordered_set<tt::tt_metal::AsicID> composed_asics;
-        for (const auto& [chip_id, asic_id] : placement.mesh_node_to_asic) {
-            composed_asics.insert(asic_id);
+        // find_all_in_psd populates the composed chip_id -> ASIC position pinning over the same footprint.
+        EXPECT_EQ(placement.mesh_node_to_asic_position.size(), 16u)
+            << "Composed pinning should cover all 16 logical chips";
+        std::set<tt::tt_metal::ASICPosition> composed_positions;
+        for (const auto& [chip_id, asic_position] : placement.mesh_node_to_asic_position) {
+            composed_positions.insert(asic_position);
         }
-        EXPECT_EQ(composed_asics, placement.asics) << "Composed pinning should pin exactly the footprint ASICs";
+        std::set<tt::tt_metal::ASICPosition> footprint_positions;
+        for (const auto& asic_id : placement.asics) {
+            footprint_positions.insert(
+                tt::tt_metal::ASICPosition{psd.get_tray_id(asic_id), psd.get_asic_location(asic_id)});
+        }
+        EXPECT_EQ(composed_positions, footprint_positions)
+            << "Composed pinning should pin exactly the footprint ASIC positions";
     }
 }
 

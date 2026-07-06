@@ -5083,22 +5083,23 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     ASSERT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
 
     // The PGD pinning should be present and cover every logical chip exactly once. mesh_pgd_pinnings_ is keyed by
-    // FabricNodeId (mesh_id + row-major chip_id).
+    // physical MeshId, mapping to a row-major logical-chip-id -> AsicID layout.
     ASSERT_FALSE(physical_multi_mesh_graph.mesh_pgd_pinnings_.empty())
         << "Graph built from a PGD should carry a pinning";
 
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
         const auto& mesh_nodes = adjacency_graph.get_nodes();
 
-        // Collect this mesh's pinning entries (FabricNodeIds whose mesh_id matches).
+        // Collect this mesh's pinning entries (the chip-id -> ASIC position map stored under this physical MeshId).
         std::set<std::uint32_t> chip_ids;
-        std::set<tt::tt_metal::AsicID> pinned_asics;
-        for (const auto& [fabric_node_id, asic_id] : physical_multi_mesh_graph.mesh_pgd_pinnings_) {
-            if (fabric_node_id.mesh_id != mesh_id) {
-                continue;
+        std::set<AsicPosition> pinned_positions;
+        auto mesh_pin_it = physical_multi_mesh_graph.mesh_pgd_pinnings_.find(mesh_id);
+        if (mesh_pin_it != physical_multi_mesh_graph.mesh_pgd_pinnings_.end()) {
+            for (const auto& [chip_id, asic_position] : mesh_pin_it->second) {
+                EXPECT_TRUE(chip_ids.insert(chip_id).second) << "Duplicate logical chip id in pinning";
+                EXPECT_TRUE(pinned_positions.insert(asic_position).second)
+                    << "Two logical chips pinned to the same ASIC position";
             }
-            EXPECT_TRUE(chip_ids.insert(fabric_node_id.chip_id).second) << "Duplicate logical chip id in pinning";
-            EXPECT_TRUE(pinned_asics.insert(asic_id).second) << "Two logical chips pinned to the same ASIC";
         }
 
         EXPECT_EQ(chip_ids.size(), mesh_nodes.size()) << "Pinning should map every logical chip in mesh " << *mesh_id;
@@ -5108,10 +5109,14 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
             EXPECT_TRUE(chip_ids.count(c) > 0) << "Logical chip id " << c << " missing from pinning";
         }
 
-        // Every pinned ASIC must belong to this mesh's footprint, and for an exact match the pinning covers
-        // the full footprint.
-        std::set<tt::tt_metal::AsicID> mesh_asics(mesh_nodes.begin(), mesh_nodes.end());
-        EXPECT_EQ(pinned_asics, mesh_asics) << "Pinned ASICs should be exactly this mesh's ASIC footprint";
+        // Every pinned position must correspond to an ASIC in this mesh's footprint, and for an exact match the
+        // pinning covers the full footprint (expressed as positions).
+        std::set<AsicPosition> mesh_positions;
+        for (const auto& asic_id : mesh_nodes) {
+            mesh_positions.insert(AsicPosition{psd.get_tray_id(asic_id), psd.get_asic_location(asic_id)});
+        }
+        EXPECT_EQ(pinned_positions, mesh_positions)
+            << "Pinned positions should be exactly this mesh's ASIC footprint (by position)";
     }
 }
 
