@@ -36,6 +36,26 @@ constexpr uint32_t cb_scaler = 31;
 
 constexpr uint32_t NEG_INF_BITS = 0xFF800000;
 
+// Helper: fill a CB with B_q tiles of a constant value (raw LLK init)
+// Uses the correct tile_regs protocol: acquire → fill → commit → wait → pack → release → push
+void init_cb_constant(uint32_t cb_id, uint32_t num_tiles, uint32_t fill_bits, bool is_float) {
+    fill_tile_init();
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        cb_reserve_back(cb_id, 1);
+        tile_regs_acquire();
+        if (is_float) {
+            fill_tile(0, *reinterpret_cast<const float*>(&fill_bits));
+        } else {
+            fill_tile_bitcast(0, fill_bits);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_id);
+        tile_regs_release();
+        cb_push_back(cb_id, 1);
+    }
+}
+
 void kernel_main() {
     constexpr uint32_t B_q = get_compile_time_arg_val(0);
     constexpr uint32_t B_kv = get_compile_time_arg_val(1);
@@ -54,32 +74,17 @@ void kernel_main() {
     CircularBuffer cb_scores_buf(cb_scores);
     CircularBuffer cb_pv_buf(cb_pv);
 
-    // Boot init — first op is QK^T matmul
-    mm_block_init(cb_q, cb_k, cb_scores, /*transpose=*/1, /*ct_dim=*/B_kv, /*rt_dim=*/B_q, /*kt_dim=*/D_t);
+    // Boot init — eltwise mode for Phase 0 init
+    ckernel::compute_kernel_hw_startup<ckernel::SrcOrder::Regular>(cb_m, cb_l, cb_o);
 
-    // Phase 0: Init persistent state
-    fill_tile_init();
-    for (uint32_t i = 0; i < B_q; i++) {
-        cb_reserve_back(cb_m, 1);
-        tile_regs_acquire();
-        fill_tile_bitcast(0, NEG_INF_BITS);
-        pack_tile(0, cb_m);
-        tile_regs_release();
-    }
-    for (uint32_t i = 0; i < B_q; i++) {
-        cb_reserve_back(cb_l, 1);
-        tile_regs_acquire();
-        fill_tile(0, 0.0f);
-        pack_tile(0, cb_l);
-        tile_regs_release();
-    }
-    for (uint32_t i = 0; i < B_q * D_t; i++) {
-        cb_reserve_back(cb_o, 1);
-        tile_regs_acquire();
-        fill_tile(0, 0.0f);
-        pack_tile(0, cb_o);
-        tile_regs_release();
-    }
+    // Phase 0: Init persistent state (m_i=-inf, l_i=0, O_i=0)
+    // Fix F1/F2: use correct tile_regs protocol (commit/wait) + cb_push_back
+    init_cb_constant(cb_m, B_q, NEG_INF_BITS, false);  // m_i = -inf
+    init_cb_constant(cb_l, B_q, 0.0f, true);           // l_i = 0
+    init_cb_constant(cb_o, B_q * D_t, 0.0f, true);     // O_i = 0
+
+    // Init matmul hardware before first matmul
+    mm_block_init(cb_q, cb_k, cb_scores, /*transpose=*/1, /*ct_dim=*/B_kv, /*rt_dim=*/B_q, /*kt_dim=*/D_t);
 
     // Outer loop: Q blocks
     for (uint32_t qb = 0; qb < num_q_blocks; qb++) {
@@ -121,7 +126,6 @@ void kernel_main() {
             }
 
             // Phase 3: RowMax — m_block = rowmax(S)
-            ckernel::compute_kernel_hw_startup<ckernel::SrcOrder::Regular>(cb_scores, cb_scaler, cb_m_new);
             ckl::reduce<
                 ckernel::PoolType::MAX,
                 ckernel::ReduceDim::REDUCE_ROW,
@@ -132,17 +136,20 @@ void kernel_main() {
             cb_pop_front(cb_scaler, 1);
 
             // Phase 4: OnlineMax — m_new = max(m_i, m_block)
-            // Scalar: process B_q tiles one at a time
-            // cb_m held (not popped — m_i needed for rescale), cb_m_new streamed
+            // Fix F4: use OperandKind::Block for 1D tiles(B_q) chains
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(B_q),
-                ckl::CopyTile<cb_m, ckl::Dst::D0, ckl::InputLifecycle::HeldBulk>{},
+                ckl::CopyTile<
+                    cb_m,
+                    ckl::Dst::D0,
+                    ckl::InputLifecycle::HeldBulk,
+                    ckl::CopyTileReconfig::Input,
+                    ckl::OperandKind::Block>{},
                 ckl::CopyTile<cb_m_new, ckl::Dst::D1, ckl::InputLifecycle::Streaming>{},
                 ckl::BinaryMax<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D0>{},
                 ckl::PackTile<cb_m_new, ckl::OutputLifecycle::Streaming>{});
 
             // Phase 5: ExpScores — P = exp(S - m_new)
-            // 2D grid (B_q × B_kv), m_new Col-broadcast (HeldBulk, not popped)
             ckl::eltwise_chain(
                 ckl::EltwiseShape::grid(B_q, B_kv),
                 ckl::BinaryFpu<
@@ -163,25 +170,43 @@ void kernel_main() {
             ckl::copy<cb_scores, cb_pv>(ckl::EltwiseShape::tiles(B_q * B_kv));
 
             // Phase 7: Rescale l_i — l_i *= exp(m_i - m_new)
-            // Scalar: B_q tiles, all Scalar OperandKind
+            // Fix F4: use OperandKind::Block for HeldBulk cb_m, cb_m_new
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(B_q),
                 ckl::CopyTile<cb_l, ckl::Dst::D0, ckl::InputLifecycle::Streaming>{},
-                ckl::CopyTile<cb_m, ckl::Dst::D1, ckl::InputLifecycle::HeldBulk>{},
-                ckl::CopyTile<cb_m_new, ckl::Dst::D2, ckl::InputLifecycle::HeldBulk>{},
+                ckl::CopyTile<
+                    cb_m,
+                    ckl::Dst::D1,
+                    ckl::InputLifecycle::HeldBulk,
+                    ckl::CopyTileReconfig::Input,
+                    ckl::OperandKind::Block>{},
+                ckl::CopyTile<
+                    cb_m_new,
+                    ckl::Dst::D2,
+                    ckl::InputLifecycle::HeldBulk,
+                    ckl::CopyTileReconfig::Input,
+                    ckl::OperandKind::Block>{},
                 ckl::SubBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
                 ckl::Exp<ckl::Approx::Fast, ckl::Approx::Fast, ckl::Dst::D1>{},
                 ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
                 ckl::PackTile<cb_l, ckl::OutputLifecycle::Streaming>{});
 
             // Phase 8: Rescale O_i — O_i *= exp(m_i - m_new)
-            // 2D grid (B_q × D_t), m_i and m_new Col-broadcast
-            // Use BinaryFpu Mul with Col broadcast for factor
-            // But first compute factor = exp(m_i - m_new) in cb_psum
+            // Compute factor = exp(m_i - m_new) in cb_psum first
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(B_q),
-                ckl::CopyTile<cb_m, ckl::Dst::D0, ckl::InputLifecycle::HeldBulk>{},
-                ckl::CopyTile<cb_m_new, ckl::Dst::D1, ckl::InputLifecycle::HeldBulk>{},
+                ckl::CopyTile<
+                    cb_m,
+                    ckl::Dst::D0,
+                    ckl::InputLifecycle::HeldBulk,
+                    ckl::CopyTileReconfig::Input,
+                    ckl::OperandKind::Block>{},
+                ckl::CopyTile<
+                    cb_m_new,
+                    ckl::Dst::D1,
+                    ckl::InputLifecycle::HeldBulk,
+                    ckl::CopyTileReconfig::Input,
+                    ckl::OperandKind::Block>{},
                 ckl::SubBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
                 ckl::Exp<ckl::Approx::Fast, ckl::Approx::Fast, ckl::Dst::D0>{},
                 ckl::PackTile<cb_psum, ckl::OutputLifecycle::Streaming>{});
@@ -204,9 +229,9 @@ void kernel_main() {
 
             cb_pop_front(cb_psum, B_q);
 
-            // Phase 9: Update m_i — pop old, copy m_new → m_i
+            // Phase 9: Update m_i — pop old m_i, copy m_new → m_i
+            // Fix F3: don't pop cb_m_new before copy — copy will pop it (Streaming)
             cb_pop_front(cb_m, B_q);
-            cb_pop_front(cb_m_new, B_q);
             ckl::copy<cb_m_new, cb_m>(ckl::EltwiseShape::tiles(B_q));
 
             // Phase 10: RowSum — psum = rowsum(P)
@@ -249,8 +274,6 @@ void kernel_main() {
         }
 
         // Phase 14: Normalize — O = O_i / l_i
-        // DivBinary is SFPU, needs CopyTile for both operands
-        // l_i Col-broadcast across D_t
         ckl::eltwise_chain(
             ckl::EltwiseShape::grid(B_q, D_t),
             ckl::CopyTile<
@@ -274,27 +297,9 @@ void kernel_main() {
         cb_pop_front(cb_m, B_q);
 
         // Re-init for next Q block
-        for (uint32_t i = 0; i < B_q; i++) {
-            cb_reserve_back(cb_m, 1);
-            tile_regs_acquire();
-            fill_tile_bitcast(0, NEG_INF_BITS);
-            pack_tile(0, cb_m);
-            tile_regs_release();
-        }
-        for (uint32_t i = 0; i < B_q; i++) {
-            cb_reserve_back(cb_l, 1);
-            tile_regs_acquire();
-            fill_tile(0, 0.0f);
-            pack_tile(0, cb_l);
-            tile_regs_release();
-        }
-        for (uint32_t i = 0; i < B_q * D_t; i++) {
-            cb_reserve_back(cb_o, 1);
-            tile_regs_acquire();
-            fill_tile(0, 0.0f);
-            pack_tile(0, cb_o);
-            tile_regs_release();
-        }
+        init_cb_constant(cb_m, B_q, NEG_INF_BITS, false);
+        init_cb_constant(cb_l, B_q, 0.0f, true);
+        init_cb_constant(cb_o, B_q * D_t, 0.0f, true);
 
         cb_pop_front(cb_q, B_q * D_t);
     }

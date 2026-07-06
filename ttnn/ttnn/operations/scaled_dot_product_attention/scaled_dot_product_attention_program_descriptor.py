@@ -69,6 +69,11 @@ def create_program_descriptor(
     num_q_blocks = (S_q_t + B_q - 1) // B_q
     num_kv_blocks = (S_kv_t + B_kv - 1) // B_kv
 
+    # Adjust block sizes to not exceed actual tile counts
+    # This ensures reader/compute/writer all agree on tile counts per block
+    actual_B_q = min(B_q, S_q_t)
+    actual_B_kv = min(B_kv, S_kv_t)
+
     # ========== 2. CORE GRID AND WORK DISTRIBUTION ==========
     num_work_units = B * H  # one (B,H) pair per core
     max_core = ttnn.CoreCoord(7, 7)
@@ -110,20 +115,20 @@ def create_program_descriptor(
     cb_pv_id = 30
     cb_scaler_id = 31
 
-    # CB page counts
-    q_pages = 2 * (B_q * D_t)
-    k_pages = 2 * (B_kv * D_t)
-    v_pages = 2 * (B_kv * D_t)
-    mask_pages = 2 * (B_q * B_kv) if has_mask else 1
+    # CB page counts — use actual block sizes
+    q_pages = 2 * (actual_B_q * D_t)
+    k_pages = 2 * (actual_B_kv * D_t)
+    v_pages = 2 * (actual_B_kv * D_t)
+    mask_pages = 2 * (actual_B_q * actual_B_kv) if has_mask else 1
     scale_pages = 1
-    output_pages = 2 * (B_q * D_t)
-    scores_pages = B_q * B_kv
-    m_pages = max(2, B_q)
-    l_pages = max(2, B_q)
-    o_pages = max(2, B_q * D_t)
-    m_new_pages = max(2, B_q)
-    psum_pages = max(2, B_q)
-    pv_pages = max(2, B_q * B_kv)
+    output_pages = 2 * (actual_B_q * D_t)
+    scores_pages = actual_B_q * actual_B_kv
+    m_pages = max(2, actual_B_q)
+    l_pages = max(2, actual_B_q)
+    o_pages = max(2, actual_B_q * D_t)
+    m_new_pages = max(2, actual_B_q)
+    psum_pages = max(2, actual_B_q)
+    pv_pages = max(2, actual_B_q * actual_B_kv)
     scaler_pages = 2
 
     cbs = []
@@ -168,8 +173,8 @@ def create_program_descriptor(
         D_t,
         num_q_blocks,
         num_kv_blocks,
-        B_q,
-        B_kv,
+        actual_B_q,
+        actual_B_kv,
         1 if has_mask else 0,
         1 if mask_per_head else 0,
     ]
@@ -207,7 +212,7 @@ def create_program_descriptor(
         S_q_t,
         D_t,
         H,
-        B_q,
+        actual_B_q,
         num_q_blocks,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
@@ -238,8 +243,8 @@ def create_program_descriptor(
     scale_bits = struct.unpack("<I", struct.pack("<f", float(scale)))[0]
 
     compute_ct_args = [
-        B_q,
-        B_kv,
+        actual_B_q,
+        actual_B_kv,
         D_t,
         S_q_t,
         S_kv_t,
