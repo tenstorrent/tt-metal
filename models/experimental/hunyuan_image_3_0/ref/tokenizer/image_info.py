@@ -28,7 +28,7 @@ from typing import Any
 
 import torch
 
-from .resolution import Resolution, ResolutionGroup
+from .resolution import ResolutionGroup
 
 # Tensor with ``.i`` (ImageInfo) and optional ``.section_type`` / ``.vision_encoder_kwargs``.
 ImageTensor = torch.Tensor
@@ -183,15 +183,10 @@ def build_gen_image_info(
     add_timestep_r_token: bool = False,
 ) -> ImageInfo:
     """Build ``ImageInfo`` for text-to-image (mirrors HF ``ImageProcessor.build_gen_image_info``)."""
-    vae_reso_group = ResolutionGroup(
-        base_size=image_base_size,
-        extra_resolutions=[
-            Resolution("1024x768"),
-            Resolution("1280x720"),
-            Resolution("768x1024"),
-            Resolution("720x1280"),
-        ],
-    )
+    # Match upstream ImageProcessor: the step group is exactly the 33 resolutions the
+    # model's <img_ratio_0..32> tokens index. Adding extra_resolutions here inflates the
+    # group past 33, so extreme ratios (e.g. 16:9) yield a ratio_idx with no matching token.
+    vae_reso_group = ResolutionGroup(base_size=image_base_size)
     height, width = _parse_image_size(image_size, vae_reso_group)
     image_width, image_height = vae_reso_group.get_target_size(width, height)
     h_factor = int(vae_downsample_factor[0]) * int(vae_patch_size)

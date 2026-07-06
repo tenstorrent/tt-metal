@@ -78,11 +78,39 @@ STEPS = int(os.environ.get("HY_STEPS", "8"))
 NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "32"))
 GUIDANCE = float(os.environ.get("HY_GUIDANCE", "5.0"))
 SEED = int(os.environ.get("HY_SEED", "0"))
-# Image side in pixels; grid = IMAGE_SIZE / 16 (vae_downsample_factor), and the
-# backbone seq_len = text + grid^2. Raise this to scale seq_len toward the config's
-# max_position_embeddings (the run asserts the cap). Default 1024 -> 64x64 grid.
+
+
+# Output size, matching upstream --image-size formats:
+#   int / "N"  -> square NxN
+#   "HxW"      -> e.g. "1280x768" (snapped to the nearest preset resolution)
+#   "W:H"      -> aspect ratio, e.g. "16:9" (snapped to the nearest preset)
+#   "auto"     -> use the recaption-resolved size (or the 1024 default)
+# grid = image dims / 16 (vae_downsample_factor); backbone seq_len = text + grid_h*grid_w.
+# Raise this to scale seq_len toward the config's max_position_embeddings (asserted below).
 # When set, overrides the recaption-resolved size. The VAE is rebuilt for the grid.
-IMAGE_SIZE = int(os.environ["HY_IMAGE_SIZE"]) if os.environ.get("HY_IMAGE_SIZE") else None
+def _parse_image_size(v):
+    if v == "auto":
+        return None  # fall back to recaption-resolved / default 1024
+    if "x" in v or ":" in v:
+        return v  # HxW / W:H string flows through to build_gen_image_info
+    return int(v)
+
+
+IMAGE_SIZE = _parse_image_size(os.environ["HY_IMAGE_SIZE"]) if os.environ.get("HY_IMAGE_SIZE") else None
+
+
+# Max-seq stress hatch: force the latent token grid directly, bypassing the resolution
+# group's aspect-ratio snapping (which holds area ~1024^2, capping image tokens at ~4096).
+# HY_FORCE_GRID="GHxGW" (token units) drives seq_len = text + GH*GW toward the config's
+# max_position_embeddings (22800). e.g. "148x148" -> 21904 image tokens (+ text) near the cap.
+# Both dims must be even (2x2 H/W-spatial VAE decode). Skips recaption. Not a real generation
+# config — the model was trained around ~1 MP; this is a backbone/VAE scale check only.
+def _parse_force_grid(v):
+    gh, gw = (int(s) for s in v.lower().split("x"))
+    return gh, gw
+
+
+FORCE_GRID = _parse_force_grid(os.environ["HY_FORCE_GRID"]) if os.environ.get("HY_FORCE_GRID") else None
 SCALING = 0.562679178327931
 _DEMO_DIR = Path(__file__).resolve().parent
 _PKG_DIR = _DEMO_DIR.parent
@@ -326,13 +354,24 @@ def main():
     # 0) optional AR recaption: rewrite the prompt with the text-sampling loop
     #    (temperature/top-k/top-p/repetition penalty) on a resident backbone + LM head.
     cot_text, image_size = None, 1024
-    if RECAPTION:
+    if RECAPTION and FORCE_GRID is None:
         cot_text, image_size = _run_recaption(c, tok, proc, wte, PROMPT, generator)
         print(f"[demo] recaption cot_text:\n{cot_text}\n[demo] resolved image_size={image_size}")
         t = _mark("2_recaption_ar", t)
     if IMAGE_SIZE is not None:  # explicit HY_IMAGE_SIZE overrides the resolved size
         image_size = IMAGE_SIZE
         print(f"[demo] HY_IMAGE_SIZE override -> image_size={image_size}")
+    if FORCE_GRID is not None:
+        # Override the resolution-group snapping so the sequence is tokenized at the exact
+        # forced grid (GH*16 x GW*16 px). Patches ResolutionGroup.get_target_size on the
+        # class the tokenizer's build_gen_image_info instantiates, so it returns our size
+        # verbatim instead of the nearest ~1 MP preset.
+        gh, gw = FORCE_GRID
+        image_size = (gh * 16, gw * 16)  # (H, W) px; flows through _parse_image_size
+        from models.experimental.hunyuan_image_3_0.ref.tokenizer import resolution as _resmod
+
+        _resmod.ResolutionGroup.get_target_size = lambda self, width, height: (gw * 16, gh * 16)
+        print(f"[demo] HY_FORCE_GRID override -> grid=({gh},{gw}) image_size={image_size} (max-seq stress)")
 
     # 1) tokenize -> input_ids (cond row 0, uncond row 1) + contiguous image span.
     #    cot_text (when present) is injected as the assistant turn before the gen block.
@@ -343,6 +382,12 @@ def main():
     grid = bundle.rope_image_info[0][0][1]  # (64, 64)
     print(f"[demo] seq_len={S} image_span={span} grid={grid}  (max_position_embeddings={c['MAX_SEQ']})")
     assert S <= c["MAX_SEQ"], f"seq_len {S} (image_size {image_size}) exceeds max_position_embeddings {c['MAX_SEQ']}"
+    # The 2x2 H/W-spatial VAE decode shards the latent grid H->axis0, W->axis1, so each
+    # grid dim must be even (image dim divisible by 32 = 2 * vae_downsample_factor).
+    assert grid[0] % 2 == 0 and grid[1] % 2 == 0, (
+        f"latent grid {grid} must have even dims for the 2x2 H/W-spatial VAE decode; "
+        f"image_size {image_size} snapped to {grid[0] * 16}x{grid[1] * 16} px"
+    )
 
     torch.manual_seed(SEED)
     init_latent = torch.randn(1, LATENT, grid[0], grid[1])
@@ -522,7 +567,7 @@ def main():
         ttnn.close_mesh_device(vae_mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     t = _mark("6_vae_decode", t)
-    img = img[0]  # [3, 1024, 1024]
+    img = img[0]  # [3, grid_h*16, grid_w*16]
 
     from PIL import Image
 
