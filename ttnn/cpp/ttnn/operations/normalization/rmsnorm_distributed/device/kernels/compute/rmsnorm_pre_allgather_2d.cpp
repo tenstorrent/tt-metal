@@ -37,41 +37,41 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
+    constexpr uint32_t cb_inp_idx = tt::CBIndex::c_0;
+    constexpr uint32_t cb_reduce_idx = tt::CBIndex::c_1;
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
-    constexpr uint32_t cb_zero = tt::CBIndex::c_13;
+    constexpr uint32_t cb_x2_idx = tt::CBIndex::c_6;  // x**2
+    constexpr uint32_t cb_zero_idx = tt::CBIndex::c_13;
 
-    binary_op_init_common(cb_inp, cb_reduce, cb_x2);
+    binary_op_init_common(cb_inp_idx, cb_reduce_idx, cb_x2_idx);
 
-    CircularBuffer cb_inp_obj(cb_inp);
-    CircularBuffer cb_reduce_obj(cb_reduce);
-    CircularBuffer cb_x2_obj(cb_x2);
+    CircularBuffer cb_inp(cb_inp_idx);
+    CircularBuffer cb_reduce(cb_reduce_idx);
+    CircularBuffer cb_x2(cb_x2_idx);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         /*
          * x**2
          */
-        reconfig_data_format(cb_inp, cb_inp);
-        pack_reconfig_data_format(cb_x2);
-        mul_tiles_init(cb_inp, cb_inp);
+        reconfig_data_format(cb_inp_idx, cb_inp_idx);
+        pack_reconfig_data_format(cb_x2_idx);
+        mul_tiles_init(cb_inp_idx, cb_inp_idx);
 
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_inp_obj.wait_front(wt + blk);  // cumulative wait
+            cb_inp.wait_front(wt + blk);  // cumulative wait
 
-            cb_x2_obj.reserve_back(blk);
+            cb_x2.reserve_back(blk);
             ACQ();
 
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
-                pack_tile(wtr, cb_x2, wt + wtr);
+                mul_tiles(cb_inp_idx, cb_inp_idx, wt + wtr, wt + wtr, wtr);
+                pack_tile(wtr, cb_x2_idx, wt + wtr);
             }
             REL();
 
-            cb_x2_obj.push_back(blk);
+            cb_x2.push_back(blk);
         }
 
         /*
@@ -81,51 +81,51 @@ void kernel_main() {
         compute_kernel_lib::reduce<
             PoolType::AVG,
             ReduceDim::REDUCE_ROW,
-            cb_x2,
-            cb_reduce,
+            cb_x2_idx,
+            cb_reduce_idx,
             cb_out,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
-        cb_inp_obj.pop_front(Wt);
-        cb_reduce_obj.pop_front(1);
+        cb_inp.pop_front(Wt);
+        cb_reduce.pop_front(1);
     }
 
-    // if merge core, we need to do a final sum on the tile in cb_x2 and then write the result to cb_out_final
+    // if merge core, we need to do a final sum on the tile in cb_x2_idx and then write the result to cb_out_final_idx
     if (is_merge_core) {
-        constexpr uint32_t cb_x2_merge = tt::CBIndex::c_15;
-        constexpr uint32_t cb_out_final = tt::CBIndex::c_14;
+        constexpr uint32_t cb_x2_merge_idx = tt::CBIndex::c_15;
+        constexpr uint32_t cb_out_final_idx = tt::CBIndex::c_14;
         constexpr int dst0 = 0;
 
-        CircularBuffer cb_x2_merge_obj(cb_x2_merge);
-        CircularBuffer cb_zero_obj(cb_zero);
-        CircularBuffer cb_out_final_obj(cb_out_final);
+        CircularBuffer cb_x2_merge(cb_x2_merge_idx);
+        CircularBuffer cb_zero(cb_zero_idx);
+        CircularBuffer cb_out_final(cb_out_final_idx);
 
         // Wait for all num_cores_y tiles
-        cb_x2_merge_obj.wait_front(num_cores_y);
-        cb_zero_obj.wait_front(1);
+        cb_x2_merge.wait_front(num_cores_y);
+        cb_zero.wait_front(1);
 
         // Reserve output space
-        cb_out_final_obj.reserve_back(onetile);
+        cb_out_final.reserve_back(onetile);
 
         // Initialize accumulation
-        binary_op_init_common(cb_x2_merge, cb_zero, cb_out_final);
-        reconfig_data_format(cb_x2_merge, cb_zero);
-        pack_reconfig_data_format(cb_out_final);
-        add_tiles_init(cb_x2_merge, cb_zero, true);
+        binary_op_init_common(cb_x2_merge_idx, cb_zero_idx, cb_out_final_idx);
+        reconfig_data_format(cb_x2_merge_idx, cb_zero_idx);
+        pack_reconfig_data_format(cb_out_final_idx);
+        add_tiles_init(cb_x2_merge_idx, cb_zero_idx, true);
 
         // Acquire registers
         ACQ();
 
         // Add all 8 tiles together
         for (uint32_t i = 0; i < num_cores_y; i++) {
-            add_tiles(cb_x2_merge, cb_zero, i, 0, dst0);
+            add_tiles(cb_x2_merge_idx, cb_zero_idx, i, 0, dst0);
         }
 
         // Pack result
-        pack_tile(dst0, cb_out_final);
+        pack_tile(dst0, cb_out_final_idx);
         REL();
 
         // Push output and pop input
-        cb_out_final_obj.push_back(onetile);
-        cb_x2_merge_obj.pop_front(num_cores_y);
+        cb_out_final.push_back(onetile);
+        cb_x2_merge.pop_front(num_cores_y);
     }
 }
