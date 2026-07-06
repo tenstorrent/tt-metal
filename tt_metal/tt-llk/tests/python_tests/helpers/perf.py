@@ -21,7 +21,7 @@ from .logger import logger
 from .metrics import compute_metrics, export_counters, export_metrics, print_metrics
 from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
-from .test_config import BuildMode, ProfilerBuild, TestConfig
+from .test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig, TestOutcome
 from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 
 
@@ -570,10 +570,20 @@ class PerfConfig(TestConfig):
         """Return (name, value) pairs for dataclass fields, used as columns for the report."""
         return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
 
-    def run(self, perf_report: PerfReport, run_count=1):
+    @staticmethod
+    def _skip_perf_report(perf_report: PerfReport | list[None] | None) -> bool:
+        return perf_report is None or (
+            isinstance(perf_report, list)
+            and len(perf_report) == 1
+            and perf_report[0] is None
+        )
+
+    def run(self, perf_report: PerfReport | list[None] | None, run_count=1):
         results = []
         counter_results_list = []
         code_sizes = {}
+        skip_perf_report = PerfConfig._skip_perf_report(perf_report)
+        collected_result = None
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             for templates, runtimes, run_type in self.run_configs:
@@ -611,7 +621,9 @@ class PerfConfig(TestConfig):
             elf_dir = (
                 TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
             )
-            components = _CODE_SIZE_COMPONENTS.get(run_type)
+            components = (
+                None if skip_perf_report else _CODE_SIZE_COMPONENTS.get(run_type)
+            )
             if components is not None:
                 code_sizes[run_type] = sum(
                     TestConfig.get_elf_text_size(elf_dir / f"{c}.elf")
@@ -622,8 +634,25 @@ class PerfConfig(TestConfig):
             variant_counter_results = []
             for run_index in range(run_count):
                 self.write_runtimes_to_L1()
+                if self.variant_stimuli:
+                    if TestConfig.STIMULI_MODE == StimuliMode.GENERATE_ONLY:
+                        self.variant_stimuli.save_to_cache()
+                        pytest.skip(TestConfig.SKIP_JUST_FOR_STIMULI_MARKER)
+                    elif TestConfig.STIMULI_MODE == StimuliMode.LOAD_CACHED:
+                        self.variant_stimuli.load_from_cache()
+
+                    self.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
+                if skip_perf_report and self.variant_stimuli:
+                    collected_result = self.variant_stimuli.collect_results(
+                        TestConfig.TENSIX_LOCATION
+                    )
+
+                if skip_perf_report:
+                    continue
+
                 # Counter config is written by BRISC from built-in array (local L1 write).
                 # Python NOC write is skipped to avoid L1 controller state change that
                 # causes ~7 cycle overhead on Float16 unpack operations.
@@ -650,6 +679,9 @@ class PerfConfig(TestConfig):
                 # Tag profiler data with run index for proper L1-to-L1 pairing
                 profiler_data.df["run_index"] = run_index
                 variant_raw_data.append(profiler_data)
+
+            if skip_perf_report:
+                continue
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
             # WC build emits no ZONE_START/ZONE_END events (ZONE_SCOPED muted) — stats df is empty.
@@ -690,6 +722,9 @@ class PerfConfig(TestConfig):
                     )
                     if not counter_csv_df.empty:
                         counter_results_list.append(counter_csv_df)
+
+        if skip_perf_report:
+            return TestOutcome(result=collected_result)
 
         # Merge results with validation
         # how="outer" keeps all markers (some may not appear in all run types)
@@ -749,3 +784,5 @@ class PerfConfig(TestConfig):
             )
             counter_combined = sweep.merge(counter_run_results, how="cross")
             PerfConfig.COUNTER_REPORT.append(counter_combined, label=self.test_name)
+
+        return TestOutcome()

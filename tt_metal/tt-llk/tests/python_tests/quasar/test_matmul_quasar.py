@@ -6,6 +6,7 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import data_formats
+from helpers.device import BootMode
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIM,
@@ -43,6 +44,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
+    PERF_RUN_TYPE,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -139,7 +141,7 @@ _ARCH = get_chip_architecture()
 @parametrize(
     format=MATMUL_FORMAT,
     math_fidelity=matmul_math_fidelities,
-    dest_sync_mode=matmul_dest_sync_modes,
+    dest_sync_mode=lambda: matmul_dest_sync_modes(is_perf=False),
     dest_acc=matmul_dest_acc_modes,
     dimensions=runtime(
         lambda dest_acc, dest_sync_mode: matmul_dimensions(
@@ -167,6 +169,7 @@ def test_matmul(
     transpose,
     run_types,
     loop_factor,
+    boot_mode=BootMode.TRISC,
     *,
     is_perf=False,
     perf_report=None,
@@ -316,23 +319,33 @@ def test_matmul(
         if perf_report is None:
             raise ValueError("perf_report must be provided when is_perf=True")
 
-    configuration = PerfConfig(
-        "sources/quasar/matmul_quasar_test.cpp",
-        format,
-        run_types=run_types,
-        templates=templates,
-        runtimes=runtimes,
-        variant_stimuli=variant_stimuli,
-        unpack_to_dest=False,
-        dest_acc=dest_acc,
-        disable_format_inference=disable_format_inference,
-    )
+    test_config_kwargs = {
+        "test_name": "sources/quasar/matmul_quasar_test.cpp",
+        "formats": format,
+        "templates": templates,
+        "runtimes": runtimes,
+        "variant_stimuli": variant_stimuli,
+        "unpack_to_dest": False,
+        "dest_acc": dest_acc,
+        "disable_format_inference": disable_format_inference,
+    }
 
     if is_perf:
-        configuration.run(perf_report)
+        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
+        res_from_L1 = configuration.run(perf_report).result
         return
 
-    res_from_L1 = TestConfig.run(configuration).result
+    # The shared source keys off PERF_RUN_TYPE. PerfConfig injects it per run type;
+    # the functional path runs the plain L1-to-L1 kernel, so supply it explicitly.
+    configuration = TestConfig(
+        boot_mode=boot_mode,
+        **{
+            **test_config_kwargs,
+            "templates": templates + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        },
+    )
+    res_from_L1 = configuration.run().result
+
     assert len(res_from_L1) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"

@@ -45,6 +45,7 @@ from helpers.device import LLKAssertException
 from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
+from helpers.param_config import RUNTIME_AXES_MARK
 from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
@@ -411,7 +412,65 @@ def pytest_configure(config):
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
 
 
+def _make_hashable(value):
+    if isinstance(value, dict):
+        return tuple(sorted((k, _make_hashable(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_make_hashable(v) for v in value)
+    if isinstance(value, set):
+        return tuple(sorted(_make_hashable(v) for v in value))
+
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
+def _collapse_runtime_only_variants(items):
+    """Keep one compile item for variants that differ only in runtime parameters."""
+    seen_compile_keys = set()
+    collapsed_items = []
+
+    for item in items:
+        marker = item.get_closest_marker(RUNTIME_AXES_MARK)
+        if marker is None or not hasattr(item, "callspec"):
+            collapsed_items.append(item)
+            continue
+
+        compile_key_fn = marker.kwargs.get("compile_key_fn")
+        if compile_key_fn is None:
+            collapsed_items.append(item)
+            continue
+
+        test_key = item.nodeid.split("[", 1)[0]
+        compile_key = (test_key, _make_hashable(compile_key_fn(item.callspec.params)))
+        if compile_key in seen_compile_keys:
+            continue
+
+        seen_compile_keys.add(compile_key)
+        collapsed_items.append(item)
+
+    if len(collapsed_items) != len(items):
+        logger.info(
+            "Collapsed {} runtime-only variants for compile producer",
+            len(items) - len(collapsed_items),
+        )
+        items[:] = collapsed_items
+
+
+def pytest_ignore_collect(path, config):
+    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+        return False
+
+    collection_path = Path(str(path))
+    return "quasar" in collection_path.parts
+
+
 def pytest_collection_modifyitems(config, items):
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
+        _collapse_runtime_only_variants(items)
+
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
@@ -698,7 +757,7 @@ def counter_report(request, worker_id):
 
     PerfConfig.COUNTER_REPORT = None
 
-    if TestConfig.MODE == TestMode.PRODUCE:
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         return
 
     if PerfConfig.TEST_COUNTER == 0:
@@ -709,6 +768,7 @@ def counter_report(request, worker_id):
     if counters_path.exists():
         counters_path.unlink()
 
+    temp_report.assert_single_schema(f"{test_module}.counters.csv")
     temp_report.dump_csv(counters_path)
 
 
@@ -739,6 +799,7 @@ def perf_report(request, worker_id):
     if post_path.exists():
         post_path.unlink()
 
+    temp_report.assert_single_schema(f"{test_module}.csv")
     temp_report.dump_csv(raw_path)
     temp_report.post_process()
     temp_report.dump_csv(post_path)

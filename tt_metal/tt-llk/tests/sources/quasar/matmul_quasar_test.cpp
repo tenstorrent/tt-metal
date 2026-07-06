@@ -39,6 +39,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t KT_DIM      = params.KT_DIM;
     const std::uint32_t num_faces_A = params.num_faces_A;
     const std::uint32_t num_faces_B = params.num_faces_B;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #endif
@@ -116,9 +117,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t CT_DIM = params.CT_DIM;
-    const std::uint32_t RT_DIM = params.RT_DIM;
-    const std::uint32_t KT_DIM = params.KT_DIM;
+    const std::uint32_t CT_DIM      = params.CT_DIM;
+    const std::uint32_t RT_DIM      = params.RT_DIM;
+    const std::uint32_t KT_DIM      = params.KT_DIM;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
 #endif
     {
         ZONE_SCOPED("INIT")
@@ -190,10 +192,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t CT_DIM    = params.CT_DIM;
-    const std::uint32_t RT_DIM    = params.RT_DIM;
-    const std::uint32_t num_faces = params.num_faces;
-    const Operand& buffer_Res     = params.buffer_Res;
+    const std::uint32_t CT_DIM      = params.CT_DIM;
+    const std::uint32_t RT_DIM      = params.RT_DIM;
+    const std::uint32_t num_faces   = params.num_faces;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_Res       = params.buffer_Res;
 #endif
     {
         ZONE_SCOPED("INIT")
