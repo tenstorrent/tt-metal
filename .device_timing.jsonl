@@ -168,3 +168,6 @@
 {"source":"run_safe_pytest","pid":3196299,"started_at_ms":1783365863399,"wait_ms":2,"run_ms":267494,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_sdpa_multiblock_debug.py::test_multi_kv_block_no_hang","exit_code":2}
 {"source":"run_safe_pytest","pid":3197524,"started_at_ms":1783366149551,"wait_ms":2,"run_ms":16733,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_sdpa_multiblock_debug.py","exit_code":0}
 {"source":"run_safe_pytest","pid":3197968,"started_at_ms":1783366172934,"wait_ms":2,"run_ms":24712,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
+{"source":"run_safe_pytest","pid":3199892,"started_at_ms":1783366223300,"wait_ms":2,"run_ms":19948,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":3200532,"started_at_ms":1783366250359,"wait_ms":2,"run_ms":270881,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":2}
+{"source":"run_safe_pytest","pid":3202001,"started_at_ms":1783366543843,"wait_ms":2,"run_ms":21552,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_sdpa_refinement1_multiblock.py","exit_code":0}

@@ -27,13 +27,21 @@
 - **Compute config**: hard-coded HiFi4 + fp32_dest_acc_en=True + math_approx_mode=False
 - **Golden baseline**: 76 / 2648 cells passing (per verifier CLI on single-tile shapes; multi-block hang blocks the rest)
 
-### [ ] Refinement 1 — Multi-block kernel fix (CRITICAL BLOCKER)
+### [~] Refinement 1 — Multi-block kernel fix (CRITICAL BLOCKER)
 
 **Goal**: Fix the compute kernel hang that occurs when processing more than 1 Q block, more than 1 KV block, or D_t > 1 (head dim > 32). The hang is a DST sync deadlock between the unpacker, math, and packer threads when transitioning between matmul and eltwise/reduce operations across loop iterations. This refinement moves all Phase 0 cells currently in the `supported_fail` (hang/timeout) category to passing.
 
 **Verifier notes**: This is the critical blocker — without it, no other refinement can be verified on multi-block shapes. The root cause is likely that the eltwise chain's per-element init (`copy_tile_to_dst_init_short_with_dt`, `binary_op_init_common`, etc.) doesn't fully transition the math engine from matmul MOP to eltwise MOP, causing `mop_sync` to deadlock on subsequent iterations. The fix likely requires calling `binary_op_init_common` or `compute_kernel_hw_startup` before each stage transition (matmul → eltwise → reduce → matmul). The single-block case works because there's only one transition per stage.
 
 **Done when**: Every Phase 0 cell (bf16, TILE, tile_aligned, mha, fp32_dest_acc_en=True, mask_mode ∈ {none, custom}, scale_mode ∈ {auto, explicit}) with S > 32 or D > 32 passes without hanging. Specifically the `supported_fail` cells from the verifier report move to `supported_pass`.
+
+### [ ] Refinement 1b — Mask application precision fix
+
+**Goal**: Fix the `mask_mode=custom` PCC ~0.96 issue that prevents 28 golden cells from passing. The mask `BinaryFpu<Add>` is applied correctly (PCC drops from 0.995 to 0.96 when mask is present) but produces systematic numerical error.
+
+**Verifier notes**: The mask PCC is EXACTLY 0.9657 regardless of: (1) scale method (SFPU `MulUnary` vs FPU `BinaryFpu<Mul>`), (2) m_i init (-inf vs -1e38), (3) mask ordering (before vs after scale), (4) `add` convenience helper vs explicit `eltwise_chain`. DEVICE_PRINT showed scores `4.21875` become `0.52734375 = 4.21875 * 0.125` after mask add — suggesting the FPU is in MUL mode instead of ADD mode after the QK^T matmul. But PCC being identical across all changes suggests the issue is deeper. Next lever to try: use DEVICE_PRINT with TSLICE on all three TRISCs to trace the mask values through the online softmax pipeline (Phase 3 rowmax, Phase 5 exp, Phase 7/8 rescale) and identify where -inf scores corrupt the computation. Also consider: the GMPOOL MAX reduce may not handle -inf correctly in bf16, or the `BinaryMax` SFPU op in Phase 4 may produce wrong results when m_i is very negative.
+
+**Done when**: All `mask_mode=custom` golden cells pass at PCC ≥ 0.995.
 
 ### [ ] Refinement 2 — Numerical configurability expansion
 
