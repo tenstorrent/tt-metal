@@ -286,9 +286,33 @@ correct — the flowchart was the stray. Parts:
 
 Metal 2.0-enabled style improvements, run as a distinct pass *after* the initial
 minimal port. Bundling any of these into a port would violate scope discipline.
-Known items:
-- The LocalTensorAccessor `[]`-operator upgrade (Fix #1's option B).
-- Audrey has additional items in mind (less critical than the current list).
+(When this list grows past a handful, split it into its own roadmap doc.)
+
+- **CENTERPIECE — optionally-bound resources (tensor + DFB, also semaphore) →
+  first-class kernel arguments.** Today the recipe (**rule 6**) handles a
+  conditionally-bound resource with a **CTA→`#define` + `#ifdef`-gating** workaround:
+  the selecting condition moves to a kernel-side `#define`, and the binding token's
+  `constexpr` alias (and every expression referencing it) is `#ifdef`-gated — needed
+  because an unbound token's alias would otherwise fail name lookup. Yucky and
+  error-prone (a prior porter deleted comment blocks while adding `#ifdef`s).
+  **First-class / "1st-world" kernel arguments** eliminate it: presence/absence
+  becomes part of the typed kernel-arg interface (compiler-handled, no preprocessor),
+  so the kernel reads a clean conditional instead of `#ifdef` walls. Deferred because
+  converting an op to first-class kernel args is a **big lift + big diff** — wrong for
+  the minimal initial port, but the phase-2 headline.
+  - **Scope-discipline guard (important):** keep the "this is interim pending
+    first-class kernel args" knowledge *here in the roadmap, NOT in the porter-facing
+    phase-1 recipe.* Telling a porter "the real fix is first-class kernel args" tempts
+    the big conversion mid-port — the exact scope-creep the exceptionless-invariant
+    guards against. Phase-1 rule 6 stays a plain "do the `#ifdef` workaround, full
+    stop."
+  - **Verify when writing it:** confirm "first-class kernel arguments" actually covers
+    conditional *bindings* (`dfb::`/`ta::`/`sem::`), not just *args* (`args::`). Lead:
+    Mo's kernel-arg work (#46623) — but that was CTA/RTA/CRTA *arguments*; bindings are
+    a distinct channel today, so confirm the mechanism extends to them.
+- **LocalTensorAccessor `[]`-operator upgrade** (Fix #1's Option B) — Case-2a raw-base
+  → idiomatic `[]` access.
+- *(more from Audrey — less critical than the above; capture as they surface)*
 
 ## Open threads
 
