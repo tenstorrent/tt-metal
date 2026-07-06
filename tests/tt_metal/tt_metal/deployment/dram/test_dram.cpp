@@ -251,8 +251,7 @@ static void handle_sigint(int) {
 
     if (!g_stop_message_printed.exchange(true)) {
         const char msg[] = "\nSIGINT received, requesting graceful stop...\n";
-        ssize_t rc = ::write(2, msg, sizeof(msg) - 1);
-        (void)rc;
+        (void)write(STDERR_FILENO, msg, sizeof msg - 1);
     }
 }
 
