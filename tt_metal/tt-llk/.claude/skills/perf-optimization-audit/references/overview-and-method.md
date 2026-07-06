@@ -14,7 +14,7 @@ It is **NOT** a correctness audit. Every finding must be **numerically equivalen
 - **Hand-written `TTI_SFP*` / `TTI_*` / inline-asm / raw opcode pushes**: bypass the scheduler entirely → manual instruction interleaving to fill latency shadows (and removing NOPs made redundant by reordering) **is** valid here. This is the only place the "hide the bubble" class lives.
 
 ## Method
-1. **Establish grounding** (freshness contract): resolve the pinned `sfpi-gcc`; load latency + throughput facts from it and from tt-isa-docs `VectorUnit.md` (WH and BH separately); note what the compiler already schedules. **Provision the toolchain for disassembly** — run `tests/setup_testing_env.sh` to fetch the pinned sfpi (compiler + `objdump`) into `tests/sfpi/`, and confirm `tests/sfpi/sfpi.version` matches the pin (flag any mismatch — an assembly diff from the wrong compiler is not evidence). State versions consulted.
+1. **Establish grounding** (freshness contract): resolve the pinned `sfpi-gcc` (all three archs); load HW latency + throughput from tt-isa-docs `VectorUnit.md` for **WH and BH separately** — **Quasar is not in tt-isa-docs**, so ground QSR HW timing in its SFPU uArch source via `race-audit-all`'s Quasar ladder; note what the compiler already schedules. **Provision the toolchain for disassembly** — run `tests/setup_testing_env.sh` to fetch the pinned sfpi (compiler + `objdump`) into `tests/sfpi/`, and confirm `tests/sfpi/sfpi.version` matches the pin (flag any mismatch — an assembly diff from the wrong compiler is not evidence). State versions consulted.
 2. **Enumerate candidate kernels / sequences:**
    ```bash
    cd tt_metal/tt-llk
