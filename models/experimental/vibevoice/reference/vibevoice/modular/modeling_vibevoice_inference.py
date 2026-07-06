@@ -123,7 +123,7 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
     def semantic_connector(self):
         return self.model.semantic_connector
 
-    def tie_weights(self):
+    def tie_weights(self, *args, **kwargs):
         """
         Tie the weights between the input embeddings and the output embeddings.
         """
