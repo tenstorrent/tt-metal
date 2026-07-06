@@ -113,6 +113,7 @@ def create_program_descriptor(
     cb_m_new_id = 28
     cb_psum_id = 29
     cb_pv_id = 30
+    cb_pv_out_id = 23  # PV matmul output (separate from cb_scores)
     cb_scaler_id = 31
 
     # CB page counts — use actual block sizes
@@ -122,9 +123,14 @@ def create_program_descriptor(
     mask_pages = 2 * (actual_B_q * actual_B_kv) if has_mask else 1
     scale_pages = 1
     output_pages = 2 * (actual_B_q * D_t)
-    # cb_scores holds both QK^T scores (B_q×B_kv tiles, Phase 1) and PV output
-    # (B_q×D_t tiles, Phase 12). It must be sized for the max of the two.
-    scores_pages = max(actual_B_q * actual_B_kv, actual_B_q * D_t)
+    # cb_scores holds QK^T scores (B_q×B_kv tiles, Phase 1) — used for scale,
+    # mask, rowmax, exp, copyP, and rowsum. All these phases push/pop 1 tile
+    # at a time (B_q*B_kv tiles total).
+    # cb_pv_out holds the PV matmul output (B_q×D_t tiles, Phase 12) — consumed
+    # by Phase 13 (O_i += PV). Separated from cb_scores to avoid CB write-pointer
+    # alignment issues from mixed 1-tile and multi-tile push patterns.
+    scores_pages = max(2, actual_B_q * actual_B_kv)
+    pv_out_pages = max(2, actual_B_q * D_t)
     m_pages = max(2, actual_B_q)
     l_pages = max(2, actual_B_q)
     o_pages = max(2, actual_B_q * D_t)
@@ -159,6 +165,7 @@ def create_program_descriptor(
     cbs.append(make_cb(cb_m_new_id, m_new_pages))
     cbs.append(make_cb(cb_psum_id, psum_pages))
     cbs.append(make_cb(cb_pv_id, pv_pages))
+    cbs.append(make_cb(cb_pv_out_id, pv_out_pages))
     cbs.append(make_cb(cb_scaler_id, scaler_pages))
 
     # ========== 4. KERNEL DESCRIPTORS ==========

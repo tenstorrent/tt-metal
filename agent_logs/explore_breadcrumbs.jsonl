@@ -1,0 +1,1 @@
+{"event":"found_matmul_block_shape_definition","details":"matmul_block_helpers.hpp:135-166 defines MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, in0_block_k, num_k_blocks, batch=1). SDPA PV matmul at scaled_dot_product_attention_compute.cpp:295 calls of(1,1,B_q,D_t,B_kv,1).","ts":"2026-07-06T17:08:27+00:00"}

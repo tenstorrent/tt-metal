@@ -32,6 +32,7 @@ constexpr uint32_t cb_o = 27;
 constexpr uint32_t cb_m_new = 28;
 constexpr uint32_t cb_psum = 29;
 constexpr uint32_t cb_pv = 30;
+constexpr uint32_t cb_pv_out = 23;  // PV matmul output (separate from cb_scores)
 constexpr uint32_t cb_scaler = 31;
 
 constexpr uint32_t NEG_INF_BITS = 0xFF800000;
@@ -83,6 +84,7 @@ void kernel_main() {
     CircularBuffer cb_v_buf(cb_v);
     CircularBuffer cb_scores_buf(cb_scores);
     CircularBuffer cb_pv_buf(cb_pv);
+    CircularBuffer cb_pv_out_buf(cb_pv_out);
 
     // Boot init — compute_kernel_hw_startup (hardware configure) MUST be called
     // before any compute API. Use Regular src order matching the eltwise/reduce
@@ -108,9 +110,6 @@ void kernel_main() {
             cb_wait_front(cb_scaler, 2);
 
             // Phase 1: QK^T — S = Q @ K^T
-            // Q tiles are re-pushed by reader per KV block, so WaitAndPopPerKBlock is correct.
-            // DataFormatReconfig::INPUT_AND_OUTPUT — reconfig back to matmul mode after the
-            // eltwise/reduce chains that ran in the previous KV block iteration.
             ckl::matmul_block<
                 /*transpose=*/true,
                 /*packer_l1_acc=*/false,
@@ -274,6 +273,8 @@ void kernel_main() {
             // DEST constraint: B_q * D_t <= DEST_AUTO_LIMIT (4 with fp32_dest_acc_en).
             // DataFormatReconfig::INPUT_AND_OUTPUT — reconfig back to matmul mode after
             // the eltwise/reduce chains in Phases 2-11.
+            // Output to cb_pv_out (separate from cb_scores) to avoid CB write-pointer
+            // alignment issues from mixed 1-tile and multi-tile push patterns.
             ckl::matmul_block<
                 /*transpose=*/false,
                 /*packer_l1_acc=*/false,
@@ -292,10 +293,10 @@ void kernel_main() {
                 false,
                 ckl::NoneActivation,
                 ckl::matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT>(
-                cb_pv_buf, cb_v_buf, cb_scores_buf, cb_scores_buf, ckl::MatmulBlockShape::of(1, 1, B_q, D_t, B_kv, 1));
+                cb_pv_buf, cb_v_buf, cb_pv_out_buf, cb_pv_out_buf, ckl::MatmulBlockShape::of(1, 1, B_q, D_t, B_kv, 1));
 
             // Phase 13: O_i += PV
-            ckl::add<cb_o, cb_scores, cb_o>(ckl::EltwiseShape::grid(B_q, D_t));
+            ckl::add<cb_o, cb_pv_out, cb_o>(ckl::EltwiseShape::grid(B_q, D_t));
 
             // Cleanup: K and V tiles are already popped by the matmul helpers
             // (WaitAndPopPerKBlock in both Phase 1 QK^T and Phase 12 PV matmuls).
@@ -342,8 +343,9 @@ void kernel_main() {
 
         cb_pop_front(cb_psum, B_q);
 
-        // Pop persistent state
-        cb_pop_front(cb_o, B_q * D_t);
+        // Pop persistent state. cb_o was already popped by the Phase 14 chain
+        // (BinaryFpu<cb_o, ..., Streaming> pops B_q*D_t tiles). cb_l is HeldBulk
+        // in the recip chain (not popped), so pop manually.
         cb_pop_front(cb_l, B_q);
         cb_pop_front(cb_m, B_q);
 
