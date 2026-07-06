@@ -1,0 +1,25 @@
+# HostWeightBridge transport test -- 4->4 shape (4 sender chips -> 4 receiver submeshes).
+#
+# Rank 0 = sender,   owns mesh_id 0 -> a [1, 4] mesh.
+# Rank 1 = receiver, owns mesh_id 1 -> a [1, 4] parent mesh that the test splits
+#          into four [1, 1] submeshes.
+#
+# !!! HARDWARE-SPECIFIC TEMPLATE !!!
+# TT_VISIBLE_DEVICES indexes PCIe devices, not UMD chip ids. This host is four
+# N300 boards = four PCIe devices (valid ids 0..3), each board exposing two chips.
+# So "0,1" = boards 0+1 = four chips for rank 0 and "2,3" = boards 2+3 = four
+# chips for rank 1, each a routable [1, 4] line. Adjust to your machine.
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "2,3"
+
+mesh_graph_desc_path: "configurations/4_4/mgd.textproto"
