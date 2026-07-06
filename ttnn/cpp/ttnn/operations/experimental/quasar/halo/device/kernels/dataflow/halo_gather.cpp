@@ -215,11 +215,6 @@ static inline void write_stick_async(
 }
 
 void kernel_main() {
-    // DEBUG (halo disabled): structural no-op to sweep past the craq-sim go-message coherency artifact
-    // (untilize_with_halo cores finish but their DONE isn't visible to the host — a SIM bug, filed
-    // separately; the op works on coherent HW). Both halo_gather instances AND pack_untilize.cpp must be
-    // no-op'd together (producer/consumer). Output is garbage; downstream ops still run. Remove to restore.
-    return;
     constexpr uint32_t pad_val_u32 = get_arg(args::pad_val);
     constexpr uint32_t aligned_stick_nbytes = get_arg(args::aligned_stick_nbytes);
     constexpr bool is_block_sharded = get_arg(args::is_block_sharded) == 1;

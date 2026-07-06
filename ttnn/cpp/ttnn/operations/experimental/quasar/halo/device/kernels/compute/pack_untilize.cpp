@@ -12,8 +12,6 @@ constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 constexpr uint32_t NUM_RISCV_DATA_MOVEMENT_CORES = 2;
 
 void kernel_main() {
-    // DEBUG (halo disabled): structural no-op — see halo_gather.cpp. Remove to restore.
-    return;
     // Metal 2.0 named bindings:
     //   dfb::src           - borrowed input shard (compute consumes, untilizes)
     //   dfb::untilize_out0 - untilized output for reader0 (even blocks)
