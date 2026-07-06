@@ -131,7 +131,7 @@ metal_2.0/
   analyses/                     (naming: analyses/ vs reference/ — pick at execution)
     ops_port_readiness.csv                ← NEW (Diego's; vetted+curated+stamped)
     tensoraccessor_3rd_arg_taxonomy.md    ← NEW (from the 2026-06-24 dev-doc)
-    cb_issues.<csv|md>                    ← NEW (malformed-CB front-run sweep output; Borys)
+    pre_port_issues.<csv|md>              ← NEW (combined hunt-for-ops-issues sweep output; Borys)
   _meta/
     RECIPE_OVERHAUL_ROADMAP.md  ← move here (scaffold; "exclude from productization" = drop _meta/)
 ```
@@ -169,9 +169,12 @@ Decided 2026-07-06 (Borys requested a front-run malformed-CB audit). The audit h
   factor-centric sweeps. Borys's request just makes the CB one explicit.
 
 **Factor *selectively*, by front-run consumer — NOT a big-bang split of all subjects.**
-Extract a factor into its own recipe when a team fixes it ahead (malformed-CB → ops;
-3rd-arg → ops; factory-shape → already Diego's CSV). Leave the rest (custom-hash,
-other-signals, out-of-dir) embedded. A factor recipe is invocable **both** ways: "audit
+Extract by front-run *consumer* — and **don't over-split within one consumer.** Borys's
+crew does the *whole* pre-port cleanup (Device-2.0 holdovers + problem CBs + troublesome
+TensorAccessorArgs), so those combine into **one "hunt for ops issues" sweep**, not three
+(see below). Diego's factory-readiness CSV stays separate (different consumer — Diego /
+TTNN); the 3rd-arg taxonomy becomes a defer-to reference the sweep's args-check consults.
+Leave the rest (custom-hash, other-signals, out-of-dir) embedded in the op-centric gate. A factor recipe is invocable **both** ways: "audit
 factor F for op X" (op-centric composition) and "sweep F across ops" (front-run) — same
 recipe, scope is the parameter. The op-centric audit becomes the **composing layer**
 (runs the factor recipes for op X + the leftover subjects + composes the verdict).
@@ -188,6 +191,25 @@ a commitment now.
 - The CB factor is itself cohesive — the sync-free "floor" (TensorAccessor-handling) +
   the SPSC "ceiling" (DFB-endpoint-legality) are two halves of one thing → they travel
   together into the CB factor recipe.
+
+**The near-term front-run deliverable = one combined "hunt for ops issues" sweep**
+(Borys, 2026-07-06). Borys reports Device 2.0 is *mostly done*, so a separate Device-2.0
+gating stage isn't worth its weight — instead, one sweep hunts **Device-2.0 holdovers +
+problem-child CBs + troublesome TensorAccessorArgs** in a single pass, and Borys's crew
+fixes everything it flags before porting (an objective *pre-port definition-of-done* —
+this kills the last-round failure where juniors announced Device 2.0 done but the audit
+caught missed syntax later). The Device-2.0 precondition doesn't disappear — it becomes
+**internal ordering**: check Device 2.0 *first* per op; any op still carrying holdovers
+has its CB/args findings **caveated/deferred** (their signals assume Device-2.0-clean),
+few ops now. The Device-2.0 check is the most *mechanizable* part (syntactic legacy-idiom
+detection, grep/checklist-assisted) but must carry the **sanctioned-free-function
+exclusions** (`get_tile_size(cb_id)`, `get_local_cb_interface(cb_id)` are
+Device-2.0-sanctioned, not holdovers) or it false-positives. Output: one consolidated
+per-op pre-port-issues list → `analyses/`. **Big #1's CB audit content is the substantive
+core of this sweep** (Device 2.0 is mostly-mechanical + mostly-done; the args-check leans
+on the 3rd-arg taxonomy).
+`[OPEN]` "illegal TensorAccessorArgs" scope — likely travels with the CB part (same
+coupled region), confirm when writing.
 
 **Directory:** absorbed by the reorg already — factor *recipes* → `ai/` (add an
 `ai/audits/` subdir once they multiply); factor *outputs* (CB-issue list, 3rd-arg
@@ -235,17 +257,19 @@ mechanisms; add detection + refusal for CBs that can't port cleanly.
   observed access pattern, why DFB can't express it) so that, in aggregate, they
   answer "is this class rare or common?" and become Audrey's evidence for the
   LLK-consumes-LTA push.
-- **Audit half graduates to a standalone front-run factor recipe (Borys, near-term
-  — see Audit architecture).** Big #1's audit content (CB detection: sync-free floor +
-  SPSC ceiling + the flowchart classification of un-portable CBs) is packaged as a
-  standalone, sweep-capable **malformed-CB factor recipe** (`ai/audits/`), run as a
-  sweep → a consolidated **CB-issue list** (`analyses/`) that ops front-run. This is the
-  **first deliverable of big #1** (Borys's pressure); the porting-recipe half
-  (roll-back-hacks) follows. Carries the **Device-2.0-clean precondition.**
+- **Audit half graduates into the combined "hunt for ops issues" front-run sweep (Borys,
+  near-term — see Audit architecture).** Big #1's audit content (CB detection: sync-free
+  floor + SPSC ceiling + the flowchart classification of un-portable CBs) is the
+  substantive **CB core** of the one combined sweep (which also covers Device-2.0
+  holdovers + TensorAccessorArgs), run across the corpus → a consolidated
+  **pre-port-issues list** (`analyses/`) Borys's crew fixes ahead. This is the **first
+  deliverable of big #1** (Borys's pressure); the porting-recipe half (roll-back-hacks)
+  follows.
 - **Lands in:** `metal2_port_patterns.md` (the "sync-free / single-ended CB →
   self-loop-DFB interim workaround" pattern — this is the hack being rolled back),
   audit's TensorAccessor-handling + DFB-endpoint-legality (SPSC) subjects, recipe
-  rule 5; the new CB factor recipe (`ai/audits/`) + CB-issue list (`analyses/`).
+  rule 5; the combined hunt-for-ops-issues sweep (`ai/audits/`) + its pre-port-issues
+  list (`analyses/`).
 
 ## Big change #2 — Factory-shape handling under decoupling
 
