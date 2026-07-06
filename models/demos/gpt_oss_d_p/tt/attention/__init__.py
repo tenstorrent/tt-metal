@@ -105,12 +105,11 @@ class Attention:
         # Sliding-window layers use a ring-shift + plain SDPA path that doesn't need them.
         prefill_sp = mesh_config.prefill.sp
         if prefill_sp > 1 and not self.use_sliding_window:
-            seq_total = config.max_seq_len
-            # K/V are expanded to Q head count before the ring op (GQA workaround), so
-            # persistent buffers must be sized for num_heads, not num_kv_heads.
-            num_heads_local = mesh_config.shard_size(config.num_heads)
+            seq_total = config.max_seq_len * prefill_sp
+            # ring_joint_sdpa handles GQA internally; persistent buffers must match K/V head count.
+            num_kv_heads_local = mesh_config.shard_size(config.num_kv_heads)
             self.persistent_k = ttnn.as_tensor(
-                torch.zeros(1, num_heads_local, seq_total, config.head_dim),
+                torch.zeros(1, num_kv_heads_local, seq_total, config.head_dim),
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
@@ -118,7 +117,7 @@ class Attention:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self.persistent_v = ttnn.as_tensor(
-                torch.zeros(1, num_heads_local, seq_total, config.head_dim),
+                torch.zeros(1, num_kv_heads_local, seq_total, config.head_dim),
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,

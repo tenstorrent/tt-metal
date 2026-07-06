@@ -58,10 +58,16 @@ def run_attention_component(
     batch_size, seq_len, hidden_size = hidden_shape
     hidden_states = torch.randn(hidden_shape)
 
-    # Convert to TTNN tensors
+    # Determine if sequence-parallel sharding is needed for ring attention.
+    # After reshape to [1, 1, N, H], dim=-2 is "tokens" in both cases:
+    #   is_row_sharded:  N = batch_size*1  → distributes users across rows
+    #   is_sp_sharded:   N = 1*seq_len     → distributes seq tokens across rows
+    sp_factor = decoder_layer.self_attn.mesh_config.prefill.sp if not is_decode else 1
+    is_sp_sharded = sp_factor > 1 and not is_row_sharded
+
     mesh_mapper = (
         ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
-        if is_row_sharded
+        if (is_row_sharded or is_sp_sharded)
         else None
     )
 
@@ -75,70 +81,14 @@ def run_attention_component(
 
     reference_attention = reference_layer.self_attn
 
-    # Reference attention forward.  The TT model stores K/V in the KV cache as
-    # bfloat8_b, so to get a fair PCC comparison we simulate that same precision
-    # loss in the reference by round-tripping K and V through bfloat8_b.
+    # Reference attention forward
     with torch.no_grad():
-        if not is_decode:
-            from transformers.models.gpt_oss.modeling_gpt_oss import apply_rotary_pos_emb as _apply_rope_ref
-            from transformers.models.gpt_oss.modeling_gpt_oss import eager_attention_forward as _eager_attn_fwd
-
-            h_shape = (*hidden_states.shape[:-1], -1, reference_attention.head_dim)
-            q_ref = reference_attention.q_proj(hidden_states).view(h_shape).transpose(1, 2)
-            k_ref = reference_attention.k_proj(hidden_states).view(h_shape).transpose(1, 2)
-            v_ref = reference_attention.v_proj(hidden_states).view(h_shape).transpose(1, 2)
-
-            cos_ref, sin_ref = position_embeddings
-            q_ref, k_ref = _apply_rope_ref(q_ref, k_ref, cos_ref, sin_ref)
-
-            # Simulate bfloat8_b KV cache: convert to bfloat8_b on device and back
-            def _bfp8_roundtrip(t):
-                tt = ttnn.from_torch(
-                    t,
-                    device=mesh_device,
-                    dtype=ttnn.bfloat8_b,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                )
-                result = ttnn.to_torch(ttnn.get_device_tensors(tt)[0]).to(t.dtype)
-                ttnn.deallocate(tt)
-                return result
-
-            k_ref = _bfp8_roundtrip(k_ref)
-            v_ref = _bfp8_roundtrip(v_ref)
-
-            attn_out, _ = _eager_attn_fwd(
-                reference_attention,
-                q_ref,
-                k_ref,
-                v_ref,
-                mask,
-                scaling=reference_attention.scaling,
-                dropout=0.0,
-                sliding_window=reference_attention.sliding_window,
-                s_aux=reference_attention.sinks,
-            )
-            attn_out = attn_out.reshape(*hidden_states.shape[:-1], -1).contiguous()
-            reference_out = reference_attention.o_proj(attn_out)
-        else:
-            reference_out, _ = reference_attention(
-                hidden_states=hidden_states,
-                position_embeddings=position_embeddings,
-                attention_mask=mask,
-                use_cache=True,
-            )
-
-    # Also compute the plain float32 reference for diagnostic comparison
-    if not is_decode:
-        with torch.no_grad():
-            reference_out_fp32, _ = reference_attention(
-                hidden_states=hidden_states,
-                position_embeddings=position_embeddings,
-                attention_mask=mask,
-                use_cache=True,
-            )
-    else:
-        reference_out_fp32 = reference_out
+        reference_out, _ = reference_attention(
+            hidden_states=hidden_states,
+            position_embeddings=position_embeddings,
+            attention_mask=mask,
+            use_cache=True,
+        )
 
     # TTNN attention forward (no mask needed, causal masking handled internally)
     attention_module = decoder_layer.self_attn
@@ -154,21 +104,6 @@ def run_attention_component(
     # Compare outputs
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=mesh_composer)[..., : batch_size * seq_len, :hidden_size]
-
-    # Diagnostic: log all three PCCs to identify error source
-    # PCC(TT, fp32_ref): baseline — what we had before the bfp8 fix
-    # PCC(TT, bfp8_ref): after fix — should be higher if bfp8 K/V was the problem
-    # PCC(fp32_ref, bfp8_ref): how much the bfp8 roundtrip actually changed the reference
-    from models.common.utility_functions import comp_pcc
-
-    _, pcc_tt_fp32 = comp_pcc(reference_out_fp32, tt_output_torch, 0.0)
-    _, pcc_tt_bfp8 = comp_pcc(reference_out, tt_output_torch, 0.0)
-    _, pcc_ref_diff = comp_pcc(reference_out_fp32, reference_out, 0.0)
-    logger.info(
-        f"PCC(TT vs fp32_ref)={pcc_tt_fp32:.4f}  "
-        f"PCC(TT vs bfp8_ref)={pcc_tt_bfp8:.4f}  "
-        f"PCC(fp32_ref vs bfp8_ref)={pcc_ref_diff:.4f}"
-    )
 
     passing, output = compare_tensors(tt_output_torch, reference_out, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
@@ -848,16 +783,38 @@ def test_decoder(
     cos_meta = cos_meta.reshape(1, batch_size, seq_len, config.head_dim)
     sin_meta = sin_meta.reshape(1, batch_size, seq_len, config.head_dim)
 
-    mesh_mapper = (
-        ttnn.ShardTensor2dMesh(dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"])
-        if is_row_sharded
-        else None
-    )
+    # For prefill with sequence parallelism (SP>1, single-user) the sequence
+    # dimension must be sharded across mesh rows so each row sees its own token
+    # slice.  This is distinct from row-sharding which distributes batch items.
+    sp_factor = setup["mesh_config"].prefill.sp
+    is_sp_sharded = not is_decode and not is_row_sharded and sp_factor > 1
+
+    if is_row_sharded:
+        # Batch sharding: distribute batch items (dim=-3) across rows
+        rope_mesh_mapper = ttnn.ShardTensor2dMesh(
+            dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
+        )
+    elif is_sp_sharded:
+        # Sequence sharding: distribute seq tokens (dim=-2) across rows
+        rope_mesh_mapper = ttnn.ShardTensor2dMesh(
+            dims=(-2, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
+        )
+    else:
+        rope_mesh_mapper = None
+
     tt_cos = ttnn.from_torch(
-        cos_meta, device=setup["mesh_device"], mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        cos_meta,
+        device=setup["mesh_device"],
+        mesh_mapper=rope_mesh_mapper,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
     )
     tt_sin = ttnn.from_torch(
-        sin_meta, device=setup["mesh_device"], mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        sin_meta,
+        device=setup["mesh_device"],
+        mesh_mapper=rope_mesh_mapper,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
     )
 
     # For decode mode, convert cos/sin to HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode
