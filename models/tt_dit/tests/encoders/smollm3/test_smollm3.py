@@ -42,3 +42,45 @@ def test_smollm3_rope_matches_hf():
 
     torch.testing.assert_close(cos[0, 0], ref_cos, atol=1e-5, rtol=1e-5)
     torch.testing.assert_close(sin[0, 0], ref_sin, atol=1e-5, rtol=1e-5)
+
+
+import os
+
+import pytest
+
+from models.tt_dit.utils import tensor as tt_tensor
+from models.tt_dit.utils.check import assert_quality
+
+FIBO_PATH = os.environ.get("FIBO_PATH", "briaai/FIBO")
+
+
+def _load_hf_smollm3():
+    from transformers import AutoModelForCausalLM
+
+    try:
+        model = AutoModelForCausalLM.from_pretrained(FIBO_PATH, subfolder="text_encoder", torch_dtype=torch.float32)
+    except Exception as e:  # gated / offline
+        pytest.skip(f"FIBO text_encoder unavailable: {e}")
+    return model.eval()
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
+def test_smollm3_mlp(*, mesh_device):
+    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3Context, SmolLM3Mlp
+
+    torch.manual_seed(0)
+    hf = _load_hf_smollm3()
+    hf_mlp = hf.model.layers[0].mlp
+    cfg = hf.config
+    ctx = SmolLM3Context(device=mesh_device, tp_axis=None, ccl_manager=None)
+
+    mlp = SmolLM3Mlp(cfg.hidden_size, cfg.intermediate_size, cfg.hidden_act, ctx)
+    mlp.load_torch_state_dict(hf_mlp.state_dict())
+
+    x = torch.randn(1, 128, cfg.hidden_size)
+    with torch.no_grad():
+        ref = hf_mlp(x)
+    tt_x = tt_tensor.from_torch(x, device=mesh_device)
+    tt_out = mlp.forward(tt_x)
+    assert_quality(ref, tt_tensor.to_torch(tt_out), pcc=0.99)

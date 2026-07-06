@@ -5,11 +5,16 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import torch
 
 import ttnn
 
+from ...layers.linear import ColParallelLinear, RowParallelLinear
+from ...layers.module import Module
+from ...layers.normalization import RMSNorm
+from ...parallel.manager import CCLManager
 from ...utils import tensor
 
 MAX_CHUNK_SIZE = 128
@@ -91,3 +96,81 @@ def prepare_attention_bias(attention_mask: ttnn.Tensor) -> ttnn.Tensor:
     attention_mask = (attention_mask - 1.0) * math.inf
 
     return ttnn.clone(attention_mask, dtype=ttnn.bfloat4_b)
+
+
+@dataclass
+class SmolLM3Context:
+    device: ttnn.MeshDevice
+    tp_axis: int | None
+    ccl_manager: CCLManager | None
+    fsdp_mesh_axis: int | None = None
+
+
+class SmolLM3RmsNorm(RMSNorm):
+    def __init__(self, size: int, *, eps: float, ctx: SmolLM3Context) -> None:
+        super().__init__(size, norm_eps=eps, bias=False, mesh_device=ctx.device)
+        self._compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+        )
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        return super().forward(x, compute_kernel_config=self._compute_kernel_config)
+
+
+class SmolLM3Mlp(Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        intermediate_size: int,
+        hidden_act: str,
+        ctx: SmolLM3Context,
+    ) -> None:
+        super().__init__()
+
+        if ctx.tp_axis is not None:
+            assert ctx.ccl_manager is not None
+
+        # intermediate_size is much greater than hidden_size
+        self.gate_proj = ColParallelLinear(
+            hidden_size,
+            intermediate_size,
+            bias=False,
+            mesh_device=ctx.device,
+            mesh_axis=ctx.tp_axis,
+            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
+            ccl_manager=ctx.ccl_manager,
+        )
+        self.up_proj = ColParallelLinear(
+            hidden_size,
+            intermediate_size,
+            bias=False,
+            mesh_device=ctx.device,
+            mesh_axis=ctx.tp_axis,
+            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
+            ccl_manager=ctx.ccl_manager,
+        )
+        self.down_proj = RowParallelLinear(
+            intermediate_size,
+            hidden_size,
+            bias=False,
+            mesh_device=ctx.device,
+            mesh_axis=ctx.tp_axis,
+            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
+            ccl_manager=ctx.ccl_manager,
+        )
+
+        if hidden_act != "silu":
+            msg = f"unsupported activation function: {hidden_act}"
+            raise ValueError(msg)
+        self.act_fn = ttnn.silu
+
+        self._ccl_manager = ctx.ccl_manager
+        self._tp_axis = ctx.tp_axis
+        self._tp_factor = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None else 1
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x = self.act_fn(self.gate_proj.forward(x)) * self.up_proj.forward(x)
+        x = self.down_proj(x)
+        if self._tp_factor > 1:
+            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+        return x
