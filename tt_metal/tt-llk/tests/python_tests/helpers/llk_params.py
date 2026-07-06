@@ -100,16 +100,10 @@ class MathOperation(Enum):
     Softshrink = OpSpec("softshrink", MathOpType.SFPU_UNARY)
     Softsign = OpSpec("softsign", MathOpType.SFPU_UNARY)
     Mish = OpSpec("mish", MathOpType.SFPU_UNARY)
-    Selu = OpSpec(
-        "selu", MathOpType.SFPU_UNARY
-    )
+    Selu = OpSpec("selu", MathOpType.SFPU_UNARY)
     I0 = OpSpec("i0", MathOpType.SFPU_UNARY)
-    Rdiv = OpSpec(
-        "rdiv", MathOpType.SFPU_UNARY
-    )
-    Clamp = OpSpec(
-        "clamp", MathOpType.SFPU_UNARY
-    )
+    Rdiv = OpSpec("rdiv", MathOpType.SFPU_UNARY)
+    Clamp = OpSpec("clamp", MathOpType.SFPU_UNARY)
     Hardtanh = OpSpec("hardtanh", MathOpType.SFPU_UNARY)
     EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
     NotEqualZero = OpSpec("not_equal_zero", MathOpType.SFPU_UNARY)
@@ -131,9 +125,7 @@ class MathOperation(Enum):
     # unary-SFPU dispatch (see call_unary_sfpu_operation in sfpu_operations.h).
     Typecast = OpSpec("typecast", MathOpType.SFPU_UNARY)
     Threshold = OpSpec("threshold", MathOpType.SFPU_UNARY)
-    ReluMax = OpSpec(
-        "relu_max", MathOpType.SFPU_UNARY
-    )
+    ReluMax = OpSpec("relu_max", MathOpType.SFPU_UNARY)
     ReluMin = OpSpec("relu_min", MathOpType.SFPU_UNARY)
     Lrelu = OpSpec("lrelu", MathOpType.SFPU_UNARY)
     AddInt32 = OpSpec("add_int32", MathOpType.SFPU_UNARY)
