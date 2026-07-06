@@ -23,11 +23,9 @@ namespace ttnn::experimental {
 // rather than a norm_type flag, so it is intentionally NOT bound into Python.
 enum class DitFusedNormType : uint8_t { RMS = 0, LAYERNORM = 1 };
 
-// Fused distributed RMSNorm for Wan2.2 attention: per-row sum-of-squares stats,
+// Fused distributed RMSNorm for DiT attention: per-row sum-of-squares stats,
 // fabric all-gather of the partial stats across `cluster_axis`, then post-allgather
-// RMSNorm with optional head split / RoPE / dtype cast. use_device_op=true runs the
-// single fused device op; use_device_op=false chains the composite primitives (RMS-
-// only legacy baseline, kept for A/B comparison).
+// RMSNorm with optional head split / RoPE / dtype cast — all in one fused device op.
 ttnn::Tensor dit_fused_distributed_rmsnorm(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
@@ -47,13 +45,11 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    bool use_device_op = true);
+    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
-// Fused distributed Welford LayerNorm for Wan2.2 attention: (x - mean) * rsqrt(var + eps)
+// Fused distributed Welford LayerNorm for DiT attention: (x - mean) * rsqrt(var + eps)
 // with optional weight/bias, over the same fabric-all-gather device op as RMSNorm.
-// LayerNorm is only implemented on the fused device op (the Welford pre/merge has no
-// composite equivalent), so there is no use_device_op / per_head_norm knob.
+// There is no per_head_norm knob (unlike RMSNorm).
 ttnn::Tensor dit_fused_distributed_layernorm(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,

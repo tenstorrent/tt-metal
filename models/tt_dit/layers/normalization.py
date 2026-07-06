@@ -242,7 +242,6 @@ class DistributedRMSNorm(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             dtype=dtype,
-            use_device_op=True,
         )
 
 

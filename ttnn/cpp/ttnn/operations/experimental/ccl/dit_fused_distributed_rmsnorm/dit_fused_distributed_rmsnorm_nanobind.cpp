@@ -17,15 +17,12 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
     ttnn::bind_function<"dit_fused_distributed_rmsnorm", "ttnn.experimental.">(
         mod,
         R"doc(
-            Fused distributed RMSNorm for Wan2.2 attention.
+            Fused distributed RMSNorm for DiT attention.
 
             One fused device op (per-chip reader/compute/writer with a fabric-forwarder
             all-gather): per-row partial sum-of-squares, all-gather of the partial stats
             across `cluster_axis`, then finalize x * rsqrt(E[x^2] + eps) with optional head
             split, RoPE, and output-dtype cast.
-
-            Pass `use_device_op=false` to chain the three composite primitives instead
-            (RMS-only legacy baseline, kept for A/B comparison).
         )doc",
         &ttnn::experimental::dit_fused_distributed_rmsnorm,
         nb::arg("input_tensor"),
@@ -47,8 +44,7 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("num_preferred_links") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("use_device_op") = true);
+        nb::arg("compute_kernel_config") = nb::none());
 
     ttnn::bind_function<"dit_fused_distributed_layernorm", "ttnn.experimental.">(
         mod,

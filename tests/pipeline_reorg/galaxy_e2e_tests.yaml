@@ -36,9 +36,8 @@
 - id: galaxy-tt-dit-fused-norm
   name: Galaxy tt_dit fused distributed norm corr/det
   # Full RMS + Welford-LayerNorm correctness + determinism sweep for the fused
-  # distributed-norm device op (TP1/2/4/8, line + ring). CORR_SKIP_BASELINE=1 skips the
-  # composite all-gather baseline (it has watcher errors / can hang and is not a gate).
-  cmd: CORR_SKIP_BASELINE=1 pytest models/tt_dit/tests/test_distributed_rmsnorm_fused.py::test_corr_det models/tt_dit/tests/test_distributed_rmsnorm_fused.py::test_layernorm_corr
+  # distributed-norm device op (TP1/2/4/8, line + ring).
+  cmd: pytest models/tt_dit/tests/test_distributed_rmsnorm_fused.py::test_corr_det models/tt_dit/tests/test_distributed_rmsnorm_fused.py::test_layernorm_corr
   skus:
     wh_galaxy:
       timeout: 30

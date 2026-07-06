@@ -7,10 +7,9 @@
 ONE file covering BOTH production models that drive
 ``ttnn.experimental.dit_fused_distributed_rmsnorm`` (the single-program fused
 device op): **Wan2.2 14B** and **LTX-2.3 AV**. The fused op is identical for
-both; the models differ only in (a) config shapes, (b) the RoPE convention, and
-(c) what the *baseline* decomposes into. Those three axes are factored into a
-single ``Cfg`` + a handful of ``model``-dispatched helpers, so the two former
-per-model files (~1100 lines) collapse to this.
+both; the models differ only in (a) config shapes and (b) the RoPE convention.
+Those axes are factored into a single ``Cfg`` + a handful of ``model``-dispatched
+helpers, so the two former per-model files (~1100 lines) collapse to this.
 
 Per-model differences captured here
 ------------------------------------
@@ -18,28 +17,21 @@ Per-model differences captured here
   replicated). LTX is PER-HEAD (cos/sin ``(1,H,N,hd)`` with the head axis TP-
   sharded, bf16). The fused op auto-detects per-head mode from
   ``rope_cos.shape[1] == num_heads_per_device``.
-* **Baseline** (``use_device_op=False``): Wan's composite C++ op *fuses*
-  weight+RoPE in-op (the production composite), so the Wan baseline is just that
-  one op. LTX uses *unfused* trailing ops today: composite RMSNorm (+static
-  weight) followed by a standalone ``ttnn.addcmul`` (block adaLN) or standalone
-  ``rotary_embedding_llama`` (RoPE).
 * **Configs**: Wan = 7 attention call sites (self/cross x SP4/8/32 + cross_k).
   LTX = 14 shape x fusion-pattern sites per TP, including block adaLN norms.
 
 Tests
 -----
-* ``test_bench``      — traced composite/baseline vs fused timing + table/CSV.
-                        Params: wan TP4-line (BH 2x4), wan TP8-ring (BH 1x8),
-                        wan TP4 galaxy, ltx TP2/TP4 galaxy.
-* ``test_corr_det``   — fused vs fp32-PyTorch reference AND vs the on-device
-                        composite baseline, plus 10x determinism (bit-exact).
-                        Galaxy only: wan TP4, ltx TP2/TP4.
+* ``test_bench``      — traced fused-op timing + table/CSV. Params: wan TP4-line
+                        (BH 2x4), wan TP8-ring (BH 1x8), wan TP4 galaxy, ltx
+                        TP2/TP4 galaxy.
+* ``test_corr_det``   — fused op vs fp32-PyTorch reference, plus 10x determinism
+                        (bit-exact). Galaxy only: wan TP4, ltx TP2/TP4.
 
 Env hooks: ``RMS_BENCH_ONLY=cid[,cid]`` / ``CORR_ONLY=cid[,cid]`` restrict the
-sweep; ``RMS_BENCH_METHODS=baseline,fused`` picks methods; ``CORR_FRESH_POB=1``
-allocates a fresh stats buffer per determinism run (surfaces uninitialized-DRAM
-reads); ``CORR_LOCALIZE=1`` prints which tokens diverge; ``WAN_GALAXY_LINKS``
-overrides the galaxy fabric link count (default 4).
+sweep; ``CORR_FRESH_POB=1`` allocates a fresh stats buffer per determinism run
+(surfaces uninitialized-DRAM reads); ``CORR_LOCALIZE=1`` prints which tokens
+diverge; ``WAN_GALAXY_LINKS`` overrides the galaxy fabric link count (default 4).
 """
 
 from __future__ import annotations
@@ -366,9 +358,7 @@ def _fused_links(op_override):
     return op_override if op_override is not None else 2  # BH bench fused = 2-link MUX default
 
 
-def _call_op(
-    inp, submesh, sem, cfg, topology, tp_axis, *, use_device_op, pob, num_links, weight, bias, rope, per_head_norm=None
-):
+def _call_op(inp, submesh, sem, cfg, topology, tp_axis, *, pob, num_links, weight, bias, rope, per_head_norm=None):
     if per_head_norm is None:
         per_head_norm = cfg.per_head_norm
     trans = inp["trans"] if rope else None
@@ -376,7 +366,7 @@ def _call_op(
     sin = inp["sin"] if rope else None
     out_dtype = ttnn.float32 if cfg.out_dtype == "fp32" else None  # None => bf16 (current default)
     if cfg.norm == "layernorm":
-        # LayerNorm is now its own op (no per_head_norm / use_device_op knob; always device op).
+        # LayerNorm is its own op (no per_head_norm knob).
         return ttnn.experimental.dit_fused_distributed_layernorm(
             inp["x"],
             tp_axis,
@@ -409,9 +399,8 @@ def _call_op(
         rope_cos=cos,
         rope_sin=sin,
         dtype=out_dtype,
-        persistent_output_buffer=pob if use_device_op else None,
+        persistent_output_buffer=pob,
         num_preferred_links=num_links,
-        use_device_op=use_device_op,
         per_head_norm=per_head_norm,
     )
 
@@ -425,58 +414,12 @@ def _run_fused(inp, submesh, sem, cfg, topology, tp_axis, pob, op_override):
         cfg,
         topology,
         tp_axis,
-        use_device_op=True,
         pob=pob,
         num_links=_fused_links(op_override),
         weight=inp.get("weight"),  # None when weight_mode="none" (pure RMSNorm)
         bias=bias,
         rope=cfg.rope,
     )
-
-
-def _run_baseline(inp, submesh, sem, cfg, topology, tp_axis, op_override):
-    # op_override = composite link count: None on BH (default 1), GALAXY_LINKS on galaxy.
-    if cfg.model in (WAN, FLUX):
-        # Wan's composite C++ op fuses weight+RoPE in-op (the production baseline).
-        # FLUX rides the same branch; the composite can't do per_head_norm, so PHN
-        # rows benchmark against the full-row-norm composite of the SAME shape
-        # (not a perfect match, but a decent relative-cost comparison).
-        return _call_op(
-            inp,
-            submesh,
-            sem,
-            cfg,
-            topology,
-            tp_axis,
-            use_device_op=False,
-            pob=None,
-            num_links=op_override,
-            weight=inp.get("weight"),  # None when weight_mode="none" (pure RMSNorm)
-            bias=None,
-            rope=cfg.rope,
-            per_head_norm=False,
-        )
-    # LTX: composite RMSNorm (+static weight for non-block) then the *unfused* trailing op.
-    weight = None if cfg.is_block else inp["weight"]
-    normed = _call_op(
-        inp,
-        submesh,
-        sem,
-        cfg,
-        topology,
-        tp_axis,
-        use_device_op=False,
-        pob=None,
-        num_links=op_override,
-        weight=weight,
-        bias=None,
-        rope=False,
-    )
-    if cfg.is_block:  # unfused adaLN: shift + normed*(1+scale)
-        return ttnn.addcmul(inp["shift_b"], normed, inp["scale_b"], value=1.0)
-    if cfg.rope:  # unfused standalone RoPE on the BHNE output (all-bf16 op)
-        return ttnn.experimental.rotary_embedding_llama(normed, inp["cos"], inp["sin"], inp["trans"])
-    return normed
 
 
 def _make_pob(inp, submesh, cfg, num_links, tp_axis):
@@ -564,33 +507,22 @@ def _trace_and_time(submesh, run_ops, *, num_iters: int) -> float:
 
 def _bench_cfg(submesh, ccl, cfg: Cfg, topology, tp_axis, op_override) -> dict:
     inp = _build(submesh, cfg, tp_axis)
-    methods = [m.strip() for m in _os.getenv("RMS_BENCH_METHODS", "baseline,fused").split(",") if m.strip()]
     iters = _ITERS[cfg.model]
     t: dict = {}
     # A config may exceed L1 (e.g. per-head RoPE at video-self-attn width). Record the
     # failure and keep sweeping so the table shows what fuses vs. what doesn't.
-    if "baseline" in methods:
-        try:
-            sem = ccl.get_ag_ping_pong_semaphore(tp_axis)
-            t["baseline"] = _trace_and_time(
-                submesh, lambda: _run_baseline(inp, submesh, sem, cfg, topology, tp_axis, op_override), num_iters=iters
-            )
-        except Exception as e:  # noqa: BLE001
-            t["baseline_err"] = type(e).__name__
-            logger.warning(f"{cfg.cid} baseline FAILED: {str(e)[:160]}")
-    if "fused" in methods:
-        try:
-            links = _fused_links(op_override)
-            pobs = [_make_pob(inp, submesh, cfg, links, tp_axis) for _ in range(_PINGPONG)]
-            sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
-            run_ops = [
-                (lambda p=p, s=s: _run_fused(inp, submesh, s, cfg, topology, tp_axis, p, op_override))
-                for p, s in zip(pobs, sems)
-            ]
-            t["fused"] = _trace_and_time(submesh, run_ops, num_iters=iters)
-        except Exception as e:  # noqa: BLE001
-            t["fused_err"] = type(e).__name__
-            logger.warning(f"{cfg.cid} fused FAILED: {str(e)[:160]}")
+    try:
+        links = _fused_links(op_override)
+        pobs = [_make_pob(inp, submesh, cfg, links, tp_axis) for _ in range(_PINGPONG)]
+        sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
+        run_ops = [
+            (lambda p=p, s=s: _run_fused(inp, submesh, s, cfg, topology, tp_axis, p, op_override))
+            for p, s in zip(pobs, sems)
+        ]
+        t["fused"] = _trace_and_time(submesh, run_ops, num_iters=iters)
+    except Exception as e:  # noqa: BLE001
+        t["fused_err"] = type(e).__name__
+        logger.warning(f"{cfg.cid} fused FAILED: {str(e)[:160]}")
     return t
 
 
@@ -598,24 +530,22 @@ def _print_table(rows: list[dict], title: str) -> None:
     cid_w = max(len("config_id"), max(len(r["cid"]) for r in rows))
     header = (
         f"{'config_id':<{cid_w}}  {'tp':>2} {'rows':>6} {'feat':>5} {'heads':>5} {'hd':>4} "
-        f"{'pattern':<14} {'baseline us':>11} {'fused us':>9} {'speedup':>8}"
+        f"{'pattern':<14} {'fused us':>9}"
     )
     box = "=" * max(len(header), len(title))
     print("\n" + box + f"\n{title}\n" + box + f"\n{header}\n" + "-" * len(header))
     for r in rows:
-        b, f = r.get("baseline"), r.get("fused")
-        b_s = f"{b:>11.2f}" if b is not None else f"{r.get('baseline_err', 'n/a'):>11}"
+        f = r.get("fused")
         f_s = f"{f:>9.2f}" if f is not None else f"{r.get('fused_err', 'n/a'):>9}"
-        sp_s = f"{b / f:>7.2f}x" if (b is not None and f) else f"{'-':>8}"
         print(
             f"{r['cid']:<{cid_w}}  {r['tp']:>2} {r['rows']:>6} {r['feat']:>5} {r['heads']:>5} "
-            f"{(r['hd'] or 0):>4} {r['pattern']:<14} {b_s} {f_s} {sp_s}"
+            f"{(r['hd'] or 0):>4} {r['pattern']:<14} {f_s}"
         )
     print(box)
 
 
 def _write_csv(rows: list[dict], filename: str) -> None:
-    fields = ["cid", "tp", "rows", "feat", "heads", "hd", "pattern", "baseline", "fused"]
+    fields = ["cid", "tp", "rows", "feat", "heads", "hd", "pattern", "fused"]
     path = Path.cwd() / filename
     with path.open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
@@ -664,7 +594,7 @@ _BENCH_IDS = [
     indirect=["mesh_device", "device_params"],
 )
 def test_bench(mesh_device, model, tp, topology, op_override, tp_axis, full_mesh):
-    """Traced baseline vs fused timing for every config of one (model, topology)."""
+    """Traced fused-op timing for every config of one (model, topology)."""
     submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
     ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
     cfgs = _select(_make_cfgs(model, tp), "RMS_BENCH_ONLY")
@@ -685,12 +615,12 @@ def test_bench(mesh_device, model, tp, topology, op_override, tp_axis, full_mesh
         try:  # a per-config crash (e.g. input alloc / device hiccup) must not lose the table
             row.update(_bench_cfg(submesh, ccl, cfg, topology, tp_axis, op_override))
         except Exception as e:  # noqa: BLE001
-            row["fused_err"] = row["baseline_err"] = type(e).__name__
+            row["fused_err"] = type(e).__name__
             logger.warning(f"{cfg.cid} CONFIG FAILED: {str(e)[:160]}")
         rows.append(row)
     topo = "ring" if topology == ttnn.Topology.Ring else "line"
     _write_csv(rows, f"rms_bench_{model}_tp{tp}_{topo}.csv")
-    _print_table(rows, f"{model.upper()} DistributedRMSNorm: baseline vs fused (TP={tp}, {topo})")
+    _print_table(rows, f"{model.upper()} DistributedRMSNorm: fused timing (TP={tp}, {topo})")
 
 
 # ---------------------------------------------------------------------------
@@ -738,9 +668,9 @@ _CORR_IDS = [
     indirect=["mesh_device", "device_params"],
 )
 def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_mesh):
-    """Fused vs fp32-PyTorch reference AND vs on-device composite baseline, plus a
-    10x bit-exact determinism check. CORR_FRESH_POB=1 allocates a fresh stats buffer
-    per run (surfaces uninitialized-DRAM reads); CORR_LOCALIZE=1 prints divergent tokens."""
+    """Fused op vs fp32-PyTorch reference, plus a 10x bit-exact determinism check.
+    CORR_FRESH_POB=1 allocates a fresh stats buffer per run (surfaces uninitialized-DRAM
+    reads); CORR_LOCALIZE=1 prints divergent tokens."""
     submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
     fresh_pob = _os.getenv("CORR_FRESH_POB") == "1"
     links = _fused_links(op_override)
@@ -778,24 +708,6 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
                 p = _make_pob(_inp, submesh, _cfg, links, tp_axis) if fresh_pob else _pobs[k % _PINGPONG]
                 return _gather(_run_fused(_inp, submesh, s, _cfg, topology, tp_axis, p, op_override), tp_axis)
 
-            # Composite baseline is best-effort: the production distributed-rmsnorm op may
-            # not support every shape (e.g. ring_size==1 at TP=1). A baseline that can't run
-            # must not abort the fused-vs-torch correctness check, so swallow its failure.
-            # Use the LAST ping-pong set so out0 (set 0, the determinism reference) is not
-            # contaminated by the baseline's trailing fabric incs.
-            # CORR_SKIP_BASELINE=1 exercises ONLY the fused op (e.g. under watcher, where the
-            # composite baseline's all_gather_async would abort the whole process and mask the
-            # fused path). The fused-vs-torch + determinism checks below still run.
-            if _os.getenv("CORR_SKIP_BASELINE") == "1":
-                comp = None
-            else:
-                try:
-                    comp = _gather(
-                        _run_baseline(inp, submesh, sems[_PINGPONG - 1], cfg, topology, tp_axis, op_override), tp_axis
-                    )
-                except Exception as be:  # noqa: BLE001
-                    comp = None
-                    logger.warning(f"  baseline unavailable for {cfg.cid}: {type(be).__name__}: {str(be)[:120]}")
             out0 = _fused(0)
 
             ndiff, maxdelta, worst_oi = 0, 0.0, None
@@ -819,8 +731,6 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
                 )
 
             pcc_ft = _pcc(out0, ref)
-            pcc_ct = _pcc(comp, ref) if comp is not None else float("nan")
-            pcc_fc = _pcc(out0, comp) if comp is not None else float("nan")
             denom = ref.abs().mean().clamp_min(1e-6)
             maxabs = (out0 - ref).abs().max().item()
             ratio = (out0.abs().mean() / denom).item()
@@ -830,8 +740,8 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
                 flagged.append(cfg.cid)
             logger.info(
                 f"RMSCORR {cfg.cid:<22} det={'OK' if det else 'FAIL'} pcc(F:torch)={pcc_ft * 100:.4f}% "
-                f"pcc(base:torch)={pcc_ct * 100:.4f}% pcc(F:base)={pcc_fc * 100:.4f}% maxabs={maxabs:.4f} "
-                f"ratio={ratio:.4f} worstrow={worstrow * 100:.2f}% det_ndiff={ndiff}/{_det_reps} det_maxdelta={maxdelta:.4f}"
+                f"maxabs={maxabs:.4f} ratio={ratio:.4f} worstrow={worstrow * 100:.2f}% "
+                f"det_ndiff={ndiff}/{_det_reps} det_maxdelta={maxdelta:.4f}"
                 f"{'  <-- SUSPICIOUS' if susp else ''}"
             )
         except Exception as e:  # noqa: BLE001 — characterize (OOM / FATAL / hang-timeout), keep sweeping

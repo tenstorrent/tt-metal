@@ -7,9 +7,6 @@
 #include <tt-metalium/constants.hpp>
 
 #include "device/dit_fused_distributed_rmsnorm_device_operation.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
-#include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_post_all_gather.hpp"
-#include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_pre_all_gather.hpp"
 
 using namespace tt::constants;
 
@@ -39,80 +36,30 @@ ttnn::Tensor dit_fused_distributed_norm_impl(
     const std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-    const bool use_device_op,
     const DitFusedNormType norm_type,
     const std::optional<const ttnn::Tensor>& reciprocals) {
-    if (use_device_op) {
-        return ttnn::prim::dit_fused_distributed_rmsnorm(
-            input_tensor,
-            cluster_axis,
-            mesh_device,
-            multi_device_global_semaphore,
-            topology,
-            epsilon,
-            num_heads_per_device,
-            per_head_norm,
-            weight,
-            bias,
-            transformation_mat,
-            rope_cos,
-            rope_sin,
-            dtype,
-            persistent_output_buffer,
-            num_preferred_links,
-            subdevice_id,
-            memory_config,
-            compute_kernel_config,
-            norm_type,
-            reciprocals);
-    }
-
-    // LayerNorm is only implemented on the fused device-op path (it needs the
-    // Welford pre/merge that the composite pre/post-allgather ops don't provide).
-    TT_FATAL(norm_type == DitFusedNormType::RMS, "LayerNorm is only supported with use_device_op=true");
-    TT_FATAL(!bias.has_value(), "bias is only supported with use_device_op=true");
-    TT_FATAL(!per_head_norm, "per_head_norm is only supported with use_device_op=true");
-
-    // Stage 1: per-row partial stats (sum of squares) in fp32.
-    ttnn::Tensor stats = ttnn::experimental::wan_fused_rmsnorm_pre_allgather(
+    return ttnn::prim::dit_fused_distributed_rmsnorm(
         input_tensor,
-        /*dtype=*/DataType::FLOAT32,
-        compute_kernel_config,
-        /*memory_config=*/std::nullopt);
-
-    // Stage 2: all-gather the stats across the TP cluster axis.
-    // Skip when the cluster axis has a single device — stats are already complete.
-    const auto& mesh_view = mesh_device.get_view();
-    const std::size_t cluster_size = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-
-    ttnn::Tensor gathered_stats = stats;
-    if (cluster_size > 1) {
-        gathered_stats = ttnn::experimental::all_gather_async(
-            stats,
-            /*dim=*/3,
-            cluster_axis,
-            mesh_device,
-            topology,
-            multi_device_global_semaphore,
-            persistent_output_buffer,
-            /*memory_config=*/std::nullopt,
-            num_preferred_links,
-            subdevice_id);
-    }
-
-    // Stage 3: finalize normalization, optionally splitting heads, applying RoPE, and casting dtype.
-    return ttnn::experimental::wan_fused_rmsnorm_post_allgather(
-        input_tensor,
-        gathered_stats,
+        cluster_axis,
+        mesh_device,
+        multi_device_global_semaphore,
+        topology,
         epsilon,
         num_heads_per_device,
+        per_head_norm,
         weight,
+        bias,
         transformation_mat,
         rope_cos,
         rope_sin,
+        dtype,
+        persistent_output_buffer,
+        num_preferred_links,
+        subdevice_id,
         memory_config,
         compute_kernel_config,
-        dtype);
+        norm_type,
+        reciprocals);
 }
 
 std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
@@ -189,8 +136,7 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     const std::optional<size_t> num_preferred_links,
     const std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-    const bool use_device_op) {
+    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config) {
     return dit_fused_distributed_norm_impl(
         input_tensor,
         cluster_axis,
@@ -211,7 +157,6 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
         subdevice_id,
         memory_config,
         compute_kernel_config,
-        use_device_op,
         DitFusedNormType::RMS,
         /*reciprocals=*/std::nullopt);
 }
@@ -256,7 +201,6 @@ ttnn::Tensor dit_fused_distributed_layernorm(
         subdevice_id,
         memory_config,
         compute_kernel_config,
-        /*use_device_op=*/true,
         DitFusedNormType::LAYERNORM,
         reciprocals);
 }
