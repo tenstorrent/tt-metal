@@ -280,8 +280,16 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
                 ? barrier_semaphore.value().address()
                 : 0,
             barrier_core.x,  // barrier_sem_noc0_x
-            barrier_core.y   // barrier_sem_noc0_y
-        };
+            barrier_core.y,  // barrier_sem_noc0_y
+            // WAR-hazard wait: only the drain core (link 0) waits on the war semaphore before
+            // overwriting the reused persistent buffer. war_sem_addr==0 disables the wait on all
+            // other cores; the drain core's existing out_ready_sem sync fans the release out.
+            (operation_attributes.war_semaphore.has_value() && link == 0)  // war_sem_addr
+                ? static_cast<uint32_t>(operation_attributes.war_semaphore.value().address())
+                : 0,
+            (operation_attributes.war_semaphore.has_value() && link == 0)  // war_wait_value
+                ? operation_attributes.war_wait_value.value_or(0)
+                : 0};
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
         log_trace(tt::LogOp, "Writer Runtime Args:");

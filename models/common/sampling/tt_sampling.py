@@ -764,7 +764,11 @@ class TTSampling(LightweightModule):
             user_ids=self.user_ids_tt_tensor,
             sub_core_grids=self._sampling_sub_core_grids,
         )
-        # Perform the actual sampling with top-k, top-p, and temperature
+        # Perform the actual sampling with top-k, top-p, and temperature. When the CCL layer provides a
+        # WAR semaphore (llama3_70b_galaxy decode), each sampling core multicast-signals it after its
+        # final read so the next step's SAMPLING_VALUES gather can safely reuse the persistent buffer.
+        war_semaphore = getattr(self.tt_ccl, "war_semaphore", None)
+        war_sem_drain_core = getattr(self.tt_ccl, "war_sem_drain_core", None)
         tt_out_tok = ttnn.sampling(
             topk_values_gathered_bf16_interleaved,
             topk_global_indices_interleaved_untilised,
@@ -773,6 +777,8 @@ class TTSampling(LightweightModule):
             temp=self.temp_tensor,
             sub_core_grids=self._sampling_sub_core_grids,
             output_tensor=tt_out_tok,
+            war_semaphore=war_semaphore,
+            war_sem_drain_core=war_sem_drain_core,
         )
 
         # Compute logprobs if enabled

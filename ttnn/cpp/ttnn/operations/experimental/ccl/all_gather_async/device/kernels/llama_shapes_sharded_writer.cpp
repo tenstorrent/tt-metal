@@ -62,6 +62,10 @@ void kernel_main() {
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    // WAR-hazard wait (drain core only; war_sem_addr==0 on all other cores). Blocks until the
+    // downstream sampling op signals it is done reading the reused persistent buffer.
+    const uint32_t war_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t war_wait_value = get_arg_val<uint32_t>(arg_idx++);
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -123,6 +127,15 @@ void kernel_main() {
 
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+    }
+
+    // WAR-hazard wait: on the drain core (war_sem_addr != 0), block until all downstream sampling
+    // consumers of the previous decode step have signalled `war_sem` (>= war_wait_value), then reset
+    // it for the next step. This gates the persistent-buffer overwrite on consume-complete, closing
+    // the cross-sub-device Write-After-Read race that only manifests under trace.
+    if (war_sem_addr != 0) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(war_sem_addr), war_wait_value);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(war_sem_addr), 0);
     }
 
     // 1. mcast via fabric to remote tensor addresses
