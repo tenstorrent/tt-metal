@@ -539,18 +539,10 @@ struct CombineChannelDebug {
     uint32_t att_rxfull;
     uint32_t att_txqbusy;
     uint32_t att_other;
-    // Tight Tx for this channel: time/bytes strictly inside the eth-send call (see send sites).
-    uint32_t tight_cycles;
-    uint32_t tight_bytes;    // payload + header (wire bytes)
-    uint32_t tight_payload;  // net payload only (header excluded)
 };
 
 struct CombineDebug {
-    uint32_t magic;  // sanity tag (set once at the start marker); 0 / garbage => bad address
-    // Windowed cycle deltas are loop-level (from BandwidthTelemetry), not per-channel. 32-bit: a single
-    // window fits well under 2^32 cycles, and unsigned subtraction handles wraparound of the running counters.
-    uint32_t total_cycles_at_start;
-    uint32_t active_cycles_at_start;
+    uint32_t magic;
     // One counter block per sender channel index. Indexed by sender_channel_index at the send sites.
     CombineChannelDebug per_ch[MAX_NUM_SENDER_CHANNELS];
     uint32_t spare[8];  // room to grow: add per-channel fields above, or global fields here
@@ -1753,21 +1745,11 @@ FORCE_INLINE
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
         // [debug] Time only the actual data movement over Tx, and only inside the combine window.
-        uint32_t tight_send_t0;
-        if (combine_window_active) {
-            tight_send_t0 = get_timestamp_32b();
-        }
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
             perf_telemetry_recorder);
-        if (combine_window_active) {
-            volatile CombineChannelDebug* c = &combine_dbg()->per_ch[sender_channel_index];
-            c->tight_cycles += static_cast<uint32_t>(get_timestamp_32b() - tight_send_t0);
-            c->tight_bytes += pkt_header->get_payload_size_including_header();
-            c->tight_payload += pkt_header->get_payload_size_excluding_header();
-        }
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
@@ -2265,8 +2247,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     // [debug] last-seen value of the combine sender's marker (FabricTelemetry::scratch[0], written by the
     // writer_combine worker over NOC at data-send start/end). Used to emit a profiler event on change.
     uint32_t last_combine_marker = 0;
-    uint32_t iteration_counter = 0;
-    bool should_log = true;
 
     const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
     auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
@@ -2696,15 +2676,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     last_combine_marker = combine_marker;
                     DEVICE_PRINT("[cmb] marker={}\n", combine_marker);
 
-                    auto& tx_bw = local_fabric_telemetry.dynamic_info.tx_bandwidth;
                     volatile CombineDebug* d = combine_dbg();
                     if (combine_marker != 0) {
                         // START event: reset all counters, snapshot the running counters, and open the window.
                         // Snapshot only the low 32 bits; the unsigned 32-bit subtraction at the end marker
                         // gives the correct delta as long as the window is shorter than 2^32 cycles.
                         d->magic = COMBINE_DEBUG_MAGIC;
-                        d->total_cycles_at_start = static_cast<uint32_t>(tx_bw.elapsed_cycles.full);
-                        d->active_cycles_at_start = static_cast<uint32_t>(tx_bw.elapsed_active_cycles.full);
                         for (uint32_t ch = 0; ch < MAX_NUM_SENDER_CHANNELS; ch++) {
                             volatile CombineChannelDebug* c = &d->per_ch[ch];
                             c->att_total = 0;
@@ -2713,20 +2690,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             c->att_rxfull = 0;
                             c->att_txqbusy = 0;
                             c->att_other = 0;
-                            c->tight_cycles = 0;
-                            c->tight_bytes = 0;
-                            c->tight_payload = 0;
                         }
                         combine_window_active = true;
                     } else {
                         // END event: close the window, print the loop-level deltas, then one line per
                         // serviced sender channel (idle/unserviced channels are skipped).
                         combine_window_active = false;
-                        uint32_t combine_total_cycles =
-                            static_cast<uint32_t>(tx_bw.elapsed_cycles.full) - d->total_cycles_at_start;
-                        uint32_t combine_active_cycles =
-                            static_cast<uint32_t>(tx_bw.elapsed_active_cycles.full) - d->active_cycles_at_start;
-                        DEVICE_PRINT("[cmb] total={} txact={}\n", combine_total_cycles, combine_active_cycles);
                         // Per-channel send-attempt breakdown + tight Tx. Sanity per line:
                         //   enq + starved + rxfull + txqbusy + other == att.
                         for (uint32_t ch = 0; ch < MAX_NUM_SENDER_CHANNELS; ch++) {
@@ -2735,18 +2704,14 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             }
                             volatile CombineChannelDebug* c = &d->per_ch[ch];
                             DEVICE_PRINT(
-                                "[cmb] ch={} att={} enq={} starved={} rxfull={} txqbusy={} other={} tight={} "
-                                "bytes={} payload={}\n",
+                                "[cmb] ch={} att={} enq={} starved={} rxfull={} txqbusy={} other={}\n",
                                 ch,
                                 c->att_total,
                                 c->att_enqueued,
                                 c->att_starved,
                                 c->att_rxfull,
                                 c->att_txqbusy,
-                                c->att_other,
-                                c->tight_cycles,
-                                c->tight_bytes,
-                                c->tight_payload);
+                                c->att_other);
                         }
                     }
                 }
