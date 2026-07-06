@@ -541,6 +541,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         **kwargs,
     ):
         self.mode = Mode.PREFILL
+        # If a prefetcher is active, its global_cb is torn down for prefill and rebuilt
+        # (at a possibly different L1 address) on the next decode. The cached decode trace
+        # baked the old global_cb address, so it must be released and re-captured — else
+        # replay reads freed L1 and hangs the device. Release it *before* reverting the
+        # sub-device manager below, while the prefetcher's (decode) manager — where the
+        # decode trace lives — is still the active one (#47820).
+        if any(getattr(m, "prefetcher", None) is not None and m.prefetcher.is_initialized for m in self.model):
+            self._invalidate_decode_traces()
         # Prefill runs on the device's default sub-device manager, where its trace is
         # captured. If a prior decode switched the device to a prefetcher's decode
         # manager, revert now so the cached prefill trace replays on the same manager
@@ -1497,6 +1505,28 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
+
+    def _invalidate_decode_traces(self):
+        """
+        Release and clear cached decode traces so they are re-captured on the next decode.
+
+        Needed when a prefetcher tears down + rebuilds its global_cb across a prefill/decode
+        switch: the decode trace bakes the global_cb's L1 address at capture time, and a
+        rebuilt CB may land at a different address, so replaying the stale trace would read
+        freed L1 and hang the device. Must be called while the prefetcher's (decode)
+        sub-device manager is still active, since traces are stored per manager (#47820).
+        """
+        for trace_ids in self.trace_ids_decode.values():
+            if not trace_ids:
+                continue
+            for i, trace_id in trace_ids.items():
+                try:
+                    ttnn.release_trace(self.model_args[i].mesh_device, trace_id)
+                except Exception as e:
+                    logger.warning(f"Failed to release decode trace {trace_id} for model {i}: {e}")
+        self.trace_ids_decode = defaultdict(lambda: None)
+        self.trace_inputs_decode = defaultdict(lambda: None)
+        self.trace_output_decode = defaultdict(lambda: None)
 
     def _decode_forward_trace_text(
         self,
