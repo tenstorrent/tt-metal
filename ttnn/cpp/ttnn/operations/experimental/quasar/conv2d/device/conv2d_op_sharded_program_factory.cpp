@@ -1093,15 +1093,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
 
+    m2::DataMovementHardwareConfig reader_hw;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        reader_hw = m2::DataMovementGen2Config{};
+    } else {
+        reader_hw =
+            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc};
+    }
     m2::KernelSpec reader_kernel_spec{
         .unique_id = KERNEL_READER,
         .source = std::filesystem::path(reader_kernel),
         .dfb_bindings = std::move(reader_dfb_bindings),
         .semaphore_bindings = std::move(reader_sem_bindings),
         .tensor_bindings = std::move(reader_tensor_bindings),
-        .hw_config = ttnn::to_datamovement_hardware_config(
-            device->arch(),
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc}),
+        .hw_config = std::move(reader_hw),
     };
 
     // Reader compile-time args (per sub-layout).
@@ -1328,6 +1333,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     };
 
     // ---- writer mcast SENDER ----
+    m2::DataMovementHardwareConfig writer_sender_hw;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        writer_sender_hw = m2::DataMovementGen2Config{};
+    } else {
+        writer_sender_hw = m2::DataMovementGen1Config{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
+    }
     m2::KernelSpec writer_sender_spec{
         .unique_id = KERNEL_WRITER_SENDER,
         .source = std::filesystem::path(writer_sender_kernel),
@@ -1335,10 +1347,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .semaphore_bindings = {},
         .tensor_bindings = build_writer_tensor_bindings(),
         .compile_time_args = build_writer_ctas(/*is_sender=*/true),
-        .hw_config = ttnn::to_datamovement_hardware_config(
-            device->arch(),
-            m2::DataMovementGen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc}),
+        .hw_config = std::move(writer_sender_hw),
     };
     // The sender always builds the weights-mcast Semaphore objects (even under SKIP_MCAST), so always bind.
     writer_sender_spec.semaphore_bindings = {
@@ -1380,6 +1389,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     }
 
     // ---- writer mcast RECEIVER ----
+    m2::DataMovementHardwareConfig writer_receiver_hw;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        writer_receiver_hw = m2::DataMovementGen2Config{};
+    } else {
+        writer_receiver_hw = m2::DataMovementGen1Config{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
+    }
     m2::KernelSpec writer_receiver_spec{
         .unique_id = KERNEL_WRITER_RECEIVER,
         .source = std::filesystem::path(writer_receiver_kernel),
@@ -1387,10 +1403,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .semaphore_bindings = {},
         .tensor_bindings = build_writer_tensor_bindings(),
         .compile_time_args = build_writer_ctas(/*is_sender=*/false),
-        .hw_config = ttnn::to_datamovement_hardware_config(
-            device->arch(),
-            m2::DataMovementGen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc}),
+        .hw_config = std::move(writer_receiver_hw),
     };
     if (create_writer_mcast_receiver) {
         writer_receiver_spec.semaphore_bindings = {

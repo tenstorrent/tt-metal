@@ -5868,120 +5868,150 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     m2::Group<m2::KernelSpec> kernels;
 
     // in0 sender (work cores in receiver grid).
-    kernels.push_back(m2::KernelSpec{
-        .unique_id = RO_IN0_SENDER_KERNEL,
-        .source = std::filesystem::path(in0_sender_source),
-        .compiler_options = {.defines = to_m2_defines(mm_kernel_in0_sender_defines)},
-        .dfb_bindings = in0_dfb_bindings(),
-        .semaphore_bindings =
-            {
-                m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
-                m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
-            },
-        .tensor_bindings =
-            {
-                m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
-                m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
-            },
-        .compile_time_args = make_in0_sender_cta(1, 1),
-        .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
+    {
         // [#47797] Pin RISCV_1 + in0_noc instead of a plain READER role hint. The in0 block-sharded
         // mcast dest rectangle is swapped for in0_noc (start>end on NOC1), so the multicast MUST
         // issue on in0_noc; a READER hint resolves to NOC0, inverts the rectangle into a degenerate
         // multicast that never delivers VALID, and the whole grid hangs at receiver_sem.wait(VALID).
         // Matches the working mcast_2d factory.
-        .hw_config = ttnn::to_datamovement_hardware_config(
-            device->arch(),
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}),
-    });
+        m2::DataMovementHardwareConfig hw;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            hw = m2::DataMovementGen2Config{};
+        } else {
+            hw = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
+        }
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_IN0_SENDER_KERNEL,
+            .source = std::filesystem::path(in0_sender_source),
+            .compiler_options = {.defines = to_m2_defines(mm_kernel_in0_sender_defines)},
+            .dfb_bindings = in0_dfb_bindings(),
+            .semaphore_bindings =
+                {
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
+                },
+            .tensor_bindings =
+                {
+                    m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
+                    m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
+                },
+            .compile_time_args = make_in0_sender_cta(1, 1),
+            .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
+            .hw_config = std::move(hw),
+        });
+    }
 
     const bool has_no_work_in_recv =
         in0_is_sharded && in0_mcast_cores_without_work_and_in_receiver_grid.num_cores() > 0;
     const bool has_no_work_not_in_recv =
         in0_is_sharded && in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0;
     if (has_no_work_in_recv) {
-        kernels.push_back(m2::KernelSpec{
-            .unique_id = RO_IN0_NO_WORK_IN_RECV_KERNEL,
-            .source = std::filesystem::path(IN0_SENDER_BLOCK_SHARDED_KERNEL_PATH),
-            .compiler_options = {.defines = to_m2_defines(mm_kernel_in0_sender_defines)},
-            .dfb_bindings = in0_dfb_bindings(),
-            .semaphore_bindings =
-                {
-                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
-                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
-                },
-            .tensor_bindings =
-                {
-                    m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
-                    m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
-                },
-            .compile_time_args = make_in0_sender_cta(0, 1),
-            .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
+        {
             // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
-            .hw_config = ttnn::to_datamovement_hardware_config(
-                device->arch(),
-                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}),
-        });
+            m2::DataMovementHardwareConfig hw;
+            if (device->arch() == tt::ARCH::QUASAR) {
+                hw = m2::DataMovementGen2Config{};
+            } else {
+                hw = m2::DataMovementGen1Config{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
+            }
+            kernels.push_back(m2::KernelSpec{
+                .unique_id = RO_IN0_NO_WORK_IN_RECV_KERNEL,
+                .source = std::filesystem::path(IN0_SENDER_BLOCK_SHARDED_KERNEL_PATH),
+                .compiler_options = {.defines = to_m2_defines(mm_kernel_in0_sender_defines)},
+                .dfb_bindings = in0_dfb_bindings(),
+                .semaphore_bindings =
+                    {
+                        m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                        m2::SemaphoreBinding{
+                            .semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
+                    },
+                .tensor_bindings =
+                    {
+                        m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
+                        m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
+                    },
+                .compile_time_args = make_in0_sender_cta(0, 1),
+                .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
+                .hw_config = std::move(hw),
+            });
+        }
     }
     if (has_no_work_not_in_recv) {
-        kernels.push_back(m2::KernelSpec{
-            .unique_id = RO_IN0_NO_WORK_NOT_IN_RECV_KERNEL,
-            .source = std::filesystem::path(IN0_SENDER_BLOCK_SHARDED_KERNEL_PATH),
-            .compiler_options = {.defines = to_m2_defines(mm_kernel_in0_sender_defines)},
-            .dfb_bindings = in0_dfb_bindings(),
-            .semaphore_bindings =
-                {
-                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
-                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
-                },
-            .tensor_bindings =
-                {
-                    m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
-                    m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
-                },
-            .compile_time_args = make_in0_sender_cta(0, 0),
-            .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
+        {
             // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
-            .hw_config = ttnn::to_datamovement_hardware_config(
-                device->arch(),
-                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}),
-        });
+            m2::DataMovementHardwareConfig hw;
+            if (device->arch() == tt::ARCH::QUASAR) {
+                hw = m2::DataMovementGen2Config{};
+            } else {
+                hw = m2::DataMovementGen1Config{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
+            }
+            kernels.push_back(m2::KernelSpec{
+                .unique_id = RO_IN0_NO_WORK_NOT_IN_RECV_KERNEL,
+                .source = std::filesystem::path(IN0_SENDER_BLOCK_SHARDED_KERNEL_PATH),
+                .compiler_options = {.defines = to_m2_defines(mm_kernel_in0_sender_defines)},
+                .dfb_bindings = in0_dfb_bindings(),
+                .semaphore_bindings =
+                    {
+                        m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                        m2::SemaphoreBinding{
+                            .semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
+                    },
+                .tensor_bindings =
+                    {
+                        m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
+                        m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
+                    },
+                .compile_time_args = make_in0_sender_cta(0, 0),
+                .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
+                .hw_config = std::move(hw),
+            });
+        }
     }
 
     // in0 receiver (interleaved path only).
     const bool has_in0_receiver = !in0_is_sharded && in0_mcast_receivers.num_cores() > 0;
     if (has_in0_receiver) {
-        kernels.push_back(m2::KernelSpec{
-            .unique_id = RO_IN0_RECEIVER_KERNEL,
-            .source = std::filesystem::path(IN0_RECEIVER_KERNEL_PATH),
-            .dfb_bindings =
-                {
-                    m2::DFBBinding{
-                        .dfb_spec_name = RO_IN0_DFB,
-                        .accessor_name = "cb_in0",
-                        .endpoint_type = m2::DFBEndpointType::PRODUCER},
-                },
-            .semaphore_bindings =
-                {
-                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
-                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
-                },
-            .compile_time_args =
-                {
-                    {"in0_block_num_tiles", in0_block_num_tiles},
-                    {"num_blocks_inner_dim", num_blocks},
-                    {"num_blocks_w_dim", out_num_blocks_x},
-                    {"num_blocks_h_dim", out_num_blocks_y},
-                    {"batch", in0_B},
-                    {"get_batch_from_reader", 0u},
-                },
-            .runtime_arg_schema = {.runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"}},
+        {
             // [#47797] Pin RISCV_1 + in0_noc for NOC parity with the in0 sender (the receiver's
             // sender_sem.up to the sender must use the same NOC as the mcast geometry).
-            .hw_config = ttnn::to_datamovement_hardware_config(
-                device->arch(),
-                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}),
-        });
+            m2::DataMovementHardwareConfig hw;
+            if (device->arch() == tt::ARCH::QUASAR) {
+                hw = m2::DataMovementGen2Config{};
+            } else {
+                hw = m2::DataMovementGen1Config{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
+            }
+            kernels.push_back(m2::KernelSpec{
+                .unique_id = RO_IN0_RECEIVER_KERNEL,
+                .source = std::filesystem::path(IN0_RECEIVER_KERNEL_PATH),
+                .dfb_bindings =
+                    {
+                        m2::DFBBinding{
+                            .dfb_spec_name = RO_IN0_DFB,
+                            .accessor_name = "cb_in0",
+                            .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                    },
+                .semaphore_bindings =
+                    {
+                        m2::SemaphoreBinding{.semaphore_spec_name = RO_IN0_SENDER_SEM, .accessor_name = "in0_sender"},
+                        m2::SemaphoreBinding{
+                            .semaphore_spec_name = RO_IN0_RECEIVER_SEM, .accessor_name = "in0_receiver"},
+                    },
+                .compile_time_args =
+                    {
+                        {"in0_block_num_tiles", in0_block_num_tiles},
+                        {"num_blocks_inner_dim", num_blocks},
+                        {"num_blocks_w_dim", out_num_blocks_x},
+                        {"num_blocks_h_dim", out_num_blocks_y},
+                        {"batch", in0_B},
+                        {"get_batch_from_reader", 0u},
+                    },
+                .runtime_arg_schema = {.runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"}},
+                .hw_config = std::move(hw),
+            });
+        }
     }
 
     // in1 sender writer (SKIP_MCAST; on all_cores_with_work).
@@ -6075,27 +6105,35 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         if (!output_is_sharded) {
             rta_names.push_back("last_num_blocks_w_dim");
         }
-        kernels.push_back(m2::KernelSpec{
-            .unique_id = RO_IN1_SENDER_WRITER_KERNEL,
-            .source = std::filesystem::path(IN1_SENDER_WRITER_KERNEL_PATH),
-            .compiler_options = {.defines = to_m2_defines(mm_kernel_in1_sender_writer_defines)},
-            .dfb_bindings = std::move(b),
-            .semaphore_bindings =
-                {
-                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_SENDER_SEM, .accessor_name = "in1_sender"},
-                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_RECEIVER_SEM, .accessor_name = "in1_receiver"},
-                },
-            .tensor_bindings = std::move(tb),
-            .compile_time_args = std::move(cta),
-            .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
+        {
             // [#47797] Pin RISCV_0 + in1_noc (NOC0) instead of a plain WRITER role hint, so in1's
             // reads/output-writes run on the opposite NOC from the in0 mcast (NOC1) — legacy parity.
             // The bare WRITER hint resolves to NOC1 here and the writes never leave the NIU
             // (npw_sent=0), hanging the final barrier.
-            .hw_config = ttnn::to_datamovement_hardware_config(
-                device->arch(),
-                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}),
-        });
+            m2::DataMovementHardwareConfig hw;
+            if (device->arch() == tt::ARCH::QUASAR) {
+                hw = m2::DataMovementGen2Config{};
+            } else {
+                hw = m2::DataMovementGen1Config{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
+            }
+            kernels.push_back(m2::KernelSpec{
+                .unique_id = RO_IN1_SENDER_WRITER_KERNEL,
+                .source = std::filesystem::path(IN1_SENDER_WRITER_KERNEL_PATH),
+                .compiler_options = {.defines = to_m2_defines(mm_kernel_in1_sender_writer_defines)},
+                .dfb_bindings = std::move(b),
+                .semaphore_bindings =
+                    {
+                        m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_SENDER_SEM, .accessor_name = "in1_sender"},
+                        m2::SemaphoreBinding{
+                            .semaphore_spec_name = RO_IN1_RECEIVER_SEM, .accessor_name = "in1_receiver"},
+                    },
+                .tensor_bindings = std::move(tb),
+                .compile_time_args = std::move(cta),
+                .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
+                .hw_config = std::move(hw),
+            });
+        }
     }
 
     // compute (on all_cores_with_work).
@@ -6913,25 +6951,33 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         if (!output_is_sharded) {
             rta_names.push_back("last_num_blocks_w_dim");
         }
-        kernels.push_back(m2::KernelSpec{
-            .unique_id = RO_IN1_SENDER_WRITER_KERNEL,
-            .source = std::filesystem::path(IN1_SENDER_WRITER_KERNEL_PATH),
-            .compiler_options = {.defines = to_m2_defines(mm_kernel_in1_sender_writer_defines)},
-            .dfb_bindings = std::move(b),
-            .semaphore_bindings =
-                {
-                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_SENDER_SEM, .accessor_name = "in1_sender"},
-                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_RECEIVER_SEM, .accessor_name = "in1_receiver"},
-                },
-            .tensor_bindings = std::move(tb),
-            .compile_time_args = std::move(cta),
-            .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
+        {
             // Pin RISCV_0 + in1_noc (legacy parity): the multicast dest rectangle was swapped for
             // in1_noc, so the mcast must issue on in1_noc or it inverts and degenerates.
-            .hw_config = ttnn::to_datamovement_hardware_config(
-                device->arch(),
-                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}),
-        });
+            m2::DataMovementHardwareConfig hw;
+            if (device->arch() == tt::ARCH::QUASAR) {
+                hw = m2::DataMovementGen2Config{};
+            } else {
+                hw = m2::DataMovementGen1Config{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
+            }
+            kernels.push_back(m2::KernelSpec{
+                .unique_id = RO_IN1_SENDER_WRITER_KERNEL,
+                .source = std::filesystem::path(IN1_SENDER_WRITER_KERNEL_PATH),
+                .compiler_options = {.defines = to_m2_defines(mm_kernel_in1_sender_writer_defines)},
+                .dfb_bindings = std::move(b),
+                .semaphore_bindings =
+                    {
+                        m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_SENDER_SEM, .accessor_name = "in1_sender"},
+                        m2::SemaphoreBinding{
+                            .semaphore_spec_name = RO_IN1_RECEIVER_SEM, .accessor_name = "in1_receiver"},
+                    },
+                .tensor_bindings = std::move(tb),
+                .compile_time_args = std::move(cta),
+                .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
+                .hw_config = std::move(hw),
+            });
+        }
     }
 
     // in1 receiver writer (on receivers).
@@ -6990,28 +7036,36 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             in1_recv_rta_names.push_back("last_num_blocks_h_dim");
             in1_recv_rta_names.push_back("last_num_blocks_w_dim");
         }
-        kernels.push_back(m2::KernelSpec{
-            .unique_id = RO_IN1_RECEIVER_WRITER_KERNEL,
-            .source = std::filesystem::path(IN1_RECEIVER_WRITER_KERNEL_PATH),
-            .compiler_options = {.defines = to_m2_defines(mm_kernel_in1_receiver_writer_defines)},
-            .dfb_bindings = std::move(b),
-            .semaphore_bindings =
-                {
-                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_SENDER_SEM, .accessor_name = "in1_sender"},
-                    m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_RECEIVER_SEM, .accessor_name = "in1_receiver"},
-                },
-            .tensor_bindings =
-                {
-                    m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
-                },
-            .compile_time_args = std::move(cta),
-            .runtime_arg_schema = {.runtime_arg_names = std::move(in1_recv_rta_names)},
+        {
             // Pin RISCV_0 + in1_noc (legacy parity) so the receiver's NoC ops use the same NOC as
             // the sender's multicast geometry.
-            .hw_config = ttnn::to_datamovement_hardware_config(
-                device->arch(),
-                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}),
-        });
+            m2::DataMovementHardwareConfig hw;
+            if (device->arch() == tt::ARCH::QUASAR) {
+                hw = m2::DataMovementGen2Config{};
+            } else {
+                hw = m2::DataMovementGen1Config{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
+            }
+            kernels.push_back(m2::KernelSpec{
+                .unique_id = RO_IN1_RECEIVER_WRITER_KERNEL,
+                .source = std::filesystem::path(IN1_RECEIVER_WRITER_KERNEL_PATH),
+                .compiler_options = {.defines = to_m2_defines(mm_kernel_in1_receiver_writer_defines)},
+                .dfb_bindings = std::move(b),
+                .semaphore_bindings =
+                    {
+                        m2::SemaphoreBinding{.semaphore_spec_name = RO_IN1_SENDER_SEM, .accessor_name = "in1_sender"},
+                        m2::SemaphoreBinding{
+                            .semaphore_spec_name = RO_IN1_RECEIVER_SEM, .accessor_name = "in1_receiver"},
+                    },
+                .tensor_bindings =
+                    {
+                        m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
+                    },
+                .compile_time_args = std::move(cta),
+                .runtime_arg_schema = {.runtime_arg_names = std::move(in1_recv_rta_names)},
+                .hw_config = std::move(hw),
+            });
+        }
     }
 
     // compute (on all_cores).
@@ -7083,21 +7137,35 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 .accessor_name = "cb_bias",
                 .endpoint_type = m2::DFBEndpointType::CONSUMER});
         }
-        kernels.push_back(m2::KernelSpec{
-            .unique_id = RO_NOOP_BRISC_KERNEL,
-            .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
-            .dfb_bindings = std::move(noop_dm_dfb),
-            .hw_config = ttnn::to_datamovement_hardware_config(
-                device->arch(),
-                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}),
-        });
-        kernels.push_back(m2::KernelSpec{
-            .unique_id = RO_NOOP_NCRISC_KERNEL,
-            .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
-            .hw_config = ttnn::to_datamovement_hardware_config(
-                device->arch(),
-                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in1_noc}),
-        });
+        {
+            m2::DataMovementHardwareConfig hw;
+            if (device->arch() == tt::ARCH::QUASAR) {
+                hw = m2::DataMovementGen2Config{};
+            } else {
+                hw = m2::DataMovementGen1Config{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
+            }
+            kernels.push_back(m2::KernelSpec{
+                .unique_id = RO_NOOP_BRISC_KERNEL,
+                .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
+                .dfb_bindings = std::move(noop_dm_dfb),
+                .hw_config = std::move(hw),
+            });
+        }
+        {
+            m2::DataMovementHardwareConfig hw;
+            if (device->arch() == tt::ARCH::QUASAR) {
+                hw = m2::DataMovementGen2Config{};
+            } else {
+                hw = m2::DataMovementGen1Config{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in1_noc};
+            }
+            kernels.push_back(m2::KernelSpec{
+                .unique_id = RO_NOOP_NCRISC_KERNEL,
+                .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
+                .hw_config = std::move(hw),
+            });
+        }
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_COMPUTE_KERNEL,
             .source = std::filesystem::path("tt_metal/kernels/compute/blank.cpp"),

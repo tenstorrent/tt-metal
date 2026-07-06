@@ -395,11 +395,16 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                                  uint32_t reader_block_start_offset,
                                  DataMovementProcessor processor,
                                  NOC noc) {
+        DataMovementHardwareConfig reader_hw;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            reader_hw = DataMovementGen2Config{};
+        } else {
+            reader_hw = DataMovementGen1Config{.processor = processor, .noc = noc};
+        }
         KernelSpec reader{
             .unique_id = name,
             .source = std::filesystem::path(kReaderKernelPath),
-            .hw_config = ttnn::to_datamovement_hardware_config(
-                device->arch(), DataMovementGen1Config{.processor = processor, .noc = noc}),
+            .hw_config = std::move(reader_hw),
         };
 
         // Tensor bindings: OUT always (scatter-write target).  IN directly only on
