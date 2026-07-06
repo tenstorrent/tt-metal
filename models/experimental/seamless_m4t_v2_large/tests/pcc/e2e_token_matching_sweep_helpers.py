@@ -40,6 +40,14 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_token_matching_help
     T2TT_TOP1_THRESHOLD,
     T2TT_TOP5_THRESHOLD,
 )
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
+    DEVICE_PARAMS_TEXT,
+    DEVICE_PARAMS_TEXT_SINGLE,
+    MESH_DEVICE_PARAMETRIZE_TEXT_SINGLE_AND_1X4,
+    MESH_SHAPE_SINGLE,
+    _mesh_device_param,
+    _mesh_device_param_for_shape,
+)
 
 SWEEP_EVAL_STEPS = 128
 SANITY_SWEEP_LENGTHS = (32, 64, 128)
@@ -56,6 +64,24 @@ _SWEEP_LEN_THRESHOLD_OVERRIDES: dict[tuple[str, int], tuple[float, float]] = {
 
 def sweep_sequence_lengths() -> list[int]:
     return sequence_lengths(SEQ_LEN_MIN, SEQ_LEN_MAX)
+
+
+def sweep_mesh_parametrize():
+    """Pytest mesh params for token-matching / logit-PCC sweeps.
+
+    * ``MESH_DEVICE=P150`` → 1×1 only
+    * ``MESH_DEVICE=BH-QB`` → 1×4 only
+    * unset → both when hardware allows
+    """
+    mesh_env = os.environ.get("MESH_DEVICE", "").strip()
+    if mesh_env == "P150":
+        return (
+            "mesh_device,device_params",
+            [_mesh_device_param_for_shape(MESH_SHAPE_SINGLE, DEVICE_PARAMS_TEXT_SINGLE, id="1x1")],
+        )
+    if mesh_env == "BH-QB":
+        return ("mesh_device,device_params", [_mesh_device_param(DEVICE_PARAMS_TEXT)])
+    return MESH_DEVICE_PARAMETRIZE_TEXT_SINGLE_AND_1X4
 
 
 def sweep_auto_ref_enabled() -> bool:

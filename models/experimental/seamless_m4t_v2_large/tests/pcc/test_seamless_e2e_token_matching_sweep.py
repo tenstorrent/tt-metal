@@ -41,10 +41,11 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_token_matching_swee
     ensure_sweep_reference,
     maybe_save_speech_sweep_mel_env,
     maybe_skip_short_speech_sweep,
+    sweep_mesh_parametrize,
     sweep_sequence_lengths,
     sweep_thresholds_for_task,
 )
-from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import MESH_DEVICE_PARAMETRIZE_TEXT, mesh_default_device
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import mesh_default_device
 
 
 def _run_sweep_point(mesh_device, task: str, seq_len: int) -> None:
@@ -95,7 +96,7 @@ def _run_sweep_point(mesh_device, task: str, seq_len: int) -> None:
 @pytest.mark.timeout(5400)
 @pytest.mark.parametrize("seq_len", list(SANITY_SWEEP_LENGTHS))
 @pytest.mark.parametrize("task", list(TEXT_OUTPUT_TASKS))
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(*sweep_mesh_parametrize(), indirect=["mesh_device", "device_params"])
 def test_seamless_e2e_token_matching_sweep_sanity(mesh_device, device_params, reset_seeds, task, seq_len):
     """CI sanity: token matching at input lengths 32, 64, 128 for text-output tasks."""
     _ = reset_seeds
@@ -107,7 +108,7 @@ def test_seamless_e2e_token_matching_sweep_sanity(mesh_device, device_params, re
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("seq_len", sweep_sequence_lengths())
 @pytest.mark.parametrize("task", list(TEXT_OUTPUT_TASKS))
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(*sweep_mesh_parametrize(), indirect=["mesh_device", "device_params"])
 def test_seamless_e2e_token_matching_sweep(mesh_device, device_params, reset_seeds, task, seq_len):
     """Nightly: token matching at all README lengths (32→4096) for text-output tasks."""
     _ = reset_seeds
