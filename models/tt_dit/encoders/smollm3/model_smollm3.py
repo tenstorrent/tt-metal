@@ -460,6 +460,22 @@ class SmolLM3TextEncoder(Module):
     def create_rope_tensors(self, batch_size: int, sequence_length: int) -> tuple[torch.Tensor, torch.Tensor]:
         return create_rope_tensors(batch_size, sequence_length, self._head_dim, self._rope_theta)
 
+    def encode(
+        self,
+        input_ids: ttnn.Tensor,
+        *,
+        attention_mask: ttnn.Tensor | None = None,
+        pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
+    ) -> tuple[ttnn.Tensor, list[ttnn.Tensor]]:
+        """Return (prompt_embeds, all_hidden_states) matching the FIBO output contract.
+
+        prompt_embeds = concat(all_hidden_states[-1], all_hidden_states[-2], dim=-1)
+        shape: [B, T, 2 * hidden_size] = [B, T, 4096]
+        """
+        all_hidden_states = self.forward(input_ids, attention_mask=attention_mask, pos_embeds=pos_embeds)
+        prompt_embeds = ttnn.concat([all_hidden_states[-1], all_hidden_states[-2]], dim=-1)
+        return prompt_embeds, all_hidden_states
+
     def forward(
         self,
         input_ids: ttnn.Tensor,

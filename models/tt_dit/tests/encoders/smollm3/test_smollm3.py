@@ -242,3 +242,40 @@ def test_smollm3_encoder_all_layers(*, mesh_device):
     assert len(hs) == len(ref_hs), f"got {len(hs)} states, expected {len(ref_hs)}"
     for i, (r, d) in enumerate(zip(ref_hs, hs)):
         assert_quality(r, tt_tensor.to_torch(d), pcc=0.99)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
+def test_smollm3_encode_contract(*, mesh_device):
+    from models.tt_dit.encoders.smollm3.config import SmolLM3Config
+    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
+
+    torch.manual_seed(0)
+    n_layers = int(os.environ.get("N_LAYERS", "6"))
+    seq = 128
+    hf = _load_hf_smollm3()
+    hf.model.layers = hf.model.layers[:n_layers]
+    hf.config.num_hidden_layers = n_layers
+    tokens = torch.randint(0, hf.config.vocab_size, (1, seq))
+    with torch.no_grad():
+        ref = hf.model(input_ids=tokens, output_hidden_states=True)
+    ref_prompt = torch.cat([ref.hidden_states[-1], ref.hidden_states[-2]], dim=-1).float()
+
+    cfg = SmolLM3Config.from_hf_config(hf.config)
+    cfg.num_hidden_layers = n_layers
+    cfg.no_rope_layers = cfg.no_rope_layers[:n_layers]
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    pc = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=1, mesh_axis=1))
+    enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
+    enc.load_torch_state_dict(hf.model.state_dict())
+
+    cos, sin = enc.create_rope_tensors(1, seq)
+    tt_ids = tt_tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
+    prompt_embeds, hs = enc.encode(
+        tt_ids,
+        attention_mask=None,
+        pos_embeds=(tt_tensor.from_torch(cos, device=mesh_device), tt_tensor.from_torch(sin, device=mesh_device)),
+    )
+    out = tt_tensor.to_torch(prompt_embeds)
+    assert out.shape[-1] == 2 * cfg.hidden_size
+    assert_quality(ref_prompt, out, pcc=0.99)
