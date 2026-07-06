@@ -22,9 +22,15 @@ def _load_state(module, state_dict) -> None:
 
 
 def _load_gn(module, state_dict) -> None:
-    """Load a GroupNorm3D and stash its raw per-channel affine ([1,1,1,C] fp32,
-    replicated across the mesh) so the distributed (spatially-sharded) group_norm can
-    apply the affine without the packed ttnn.group_norm weights. See spatial.py."""
+    """Load a GroupNorm3D and stash its raw per-channel affine ([1,1,1,C], replicated
+    across the mesh) so the distributed (spatially-sharded) group_norm can apply the
+    affine without the packed ttnn.group_norm weights. See spatial.py.
+
+    Stored in the norm's own dtype (bf16), not fp32: the affine multiply/add broadcasts
+    this tiny tensor against the FULL-size activation (already bf16), so a fp32 operand
+    there forces every device to run a mixed-precision BF16,FP32 binary op on the
+    largest tensor in the graph for no precision benefit — measured at ~22% of total
+    VAE decode device time."""
     module.load_torch_state_dict(state_dict)
     C = module.num_channels
     dev = module.mesh_device
@@ -34,14 +40,14 @@ def _load_gn(module, state_dict) -> None:
     beta = b.reshape(1, 1, 1, C).float() if b is not None else torch.zeros(1, 1, 1, C)
     module._raw_gamma = ttnn.from_torch(
         gamma,
-        dtype=ttnn.float32,
+        dtype=module.dtype,
         layout=ttnn.TILE_LAYOUT,
         device=dev,
         mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
     )
     module._raw_beta = ttnn.from_torch(
         beta,
-        dtype=ttnn.float32,
+        dtype=module.dtype,
         layout=ttnn.TILE_LAYOUT,
         device=dev,
         mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
