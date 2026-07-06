@@ -222,7 +222,7 @@ void WorkerConfigBufferMgr::PrintStatus() {
         fprintf(stderr, "Buffer type %zu\n", i);
         log_info(tt::LogTest, "Buffer type {}", i);
 
-        size_t free_index = this->alloc_index_[i];
+        size_t free_index = this->free_index_[i];
         while (free_index != this->alloc_index_[i]) {
             auto& entry = this->entries_[free_index][i];
             log_info(
