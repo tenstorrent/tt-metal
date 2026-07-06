@@ -723,7 +723,8 @@ def test_reshard_aligned_channels_height_sharded(device, channels, tt_dtype):
     reason="Unaligned row-major HEIGHT_SHARDED reshard is unsupported: the shard row "
     "(channels * elem_size) is not 16-byte L1-aligned, so reshard's validate rejects it. "
     "The op's unaligned same-width path is incomplete (silently corrupts data / asserts). "
-    "Remove this xfail once unaligned support lands.",
+    "Remove this xfail once unaligned support lands. "
+    "See https://github.com/tenstorrent/tt-metal/issues/29514",
 )
 @pytest.mark.parametrize("channels", [1, 2, 3, 4, 5, 6, 7])
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
