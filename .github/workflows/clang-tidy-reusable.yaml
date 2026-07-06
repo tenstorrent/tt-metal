@@ -259,7 +259,9 @@ jobs:
           done
 
       - name: 🔍 Analyze code with clang-tidy
+        id: analyze
         timeout-minutes: 120
+        continue-on-error: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' }}
         run: |
           # Record the exit code rather than failing here: violations fail compile
           # edges but still export, so the gate below decides pass/fail from counts.
