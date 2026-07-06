@@ -1019,3 +1019,34 @@ QB2 (P150x4 / 4× Blackhole p300c, mesh (1,4), TP=4). Model load 17.2 s (warm di
 
 _Artifacts:_ `sweep_at48.py`, `artifacts/at48/{traced_tuned_s12,eager_adaptive_s48,traced_tuned_s48}.json`,
 `artifacts/at48_run.log`.
+
+## LEGITIMATE @48 — session 11 (2026-07-04): Lever 1 (matmul geometry) is EXHAUSTED; Lever 2 assessed
+
+### Lever 1 — sparse-MoE matmul geometry: no meaningful headroom left (device-verified)
+
+Re-ran the OPT-004 per-matmul geometry sweep on QB2 (`bench_opt004_matmul_geometry.py`, real 26B
+layer-0 MoE, mesh (1,4), TP=4, C=32; `artifacts/lever1/geom_sweep2.log`). Device grid
+**gx=11 gy=10 = 110 cores** (confirms the session-5 measurement, not the doc's 130).
+
+The **dominant** expert matmul — `gate_up` (`gathered[1,E,C,H] @ w[1,E,H,I]`, the builder shared by
+gate, up AND down) — is **already at its geometry floor**. Sweeping `in0_block_w` over every legal
+divisor of Kt=88:
+
+| in0_block_w | 1 | 2 | 4 | 8 | 11 | **22 (current)** | 44 |
+|---|---|---|---|---|---|---|---|
+| ms | 0.571 | 0.570 | 0.572 | 0.574 | 0.575 | **0.579** | 0.591 |
+
+The entire spread is **0.570–0.591 ms (~3.6%)**, and *smaller* `in0_block_w` is marginally faster —
+the opposite of OPT-004's "larger K-block lifts DRAM burst" thesis. Reason: these batched matmuls are
+**tiny per expert** (M=1 tile, N=6 tiles), so each of the 128 experts' weight bank is read once
+regardless of K-blocking; the matmul is per-core-launch/latency bound, not DRAM-burst bound, so
+`in0_block_w` is not a lever. The current `DG_SPARSE_MOE_TUNED` pick (22) is within ~2% of the best
+candidate (2) → **matmul-geometry tuning is complete; there is no bit-exact @48 gain to extract from
+it.** (untuned→tuned still 7.17× at PCC 0.99985, reconfirming OPT-004 landed correctly; it is the
+`program_config=None` auto-config that is slow, not the block size.) `down`/`gather`/`combine` are
+minor contributors and, by the same M=1-tile / already-single-K-pass logic, are at their floors too;
+the sweep was stopped after the decisive `gate_up` result to free the device.
+
+**Consequence:** the `@48 = 17.92 t/s` headline already runs `DG_SPARSE_MOE_TUNED=1`, and the matmul
+geometry inside it is optimal. The task's expected "@48 18 → low-20s from matmul geometry" is **not
+available** — the OPT-004 work that would have delivered it is already landed and in the 17.92 number.
