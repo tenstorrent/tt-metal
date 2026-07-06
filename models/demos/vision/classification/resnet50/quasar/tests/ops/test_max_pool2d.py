@@ -68,12 +68,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.timeout(300)  # the known pool-reduce dest-sync HANG would otherwise block the suite; cap it
-@pytest.mark.xfail(
-    reason="Quasar max_pool2d hangs in the pool-reduce dest handshake in compute_pool_2d.cpp "
-    "(pack tile_regs_wait / math WFD / unpack UPTW never rendezvous). LLK dest-sync target. "
-    "NOTE: xfail does not rescue a true hang; run under a timeout.",
-    strict=False,
-)
+# @pytest.mark.xfail(
+#    reason="Quasar max_pool2d hangs in the pool-reduce dest handshake in compute_pool_2d.cpp "
+#    "(pack tile_regs_wait / math WFD / unpack UPTW never rendezvous). LLK dest-sync target. "
+#    "NOTE: xfail does not rescue a true hang; run under a timeout.",
+#    strict=False,
+# )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_max_pool2d_resnet50_stem(mesh_device):
     torch.manual_seed(0)

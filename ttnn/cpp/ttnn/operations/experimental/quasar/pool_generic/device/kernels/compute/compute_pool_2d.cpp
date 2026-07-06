@@ -16,11 +16,10 @@
 #include "experimental/kernel_args.h"
 #include "api/debug/ring_buffer.h"  // DEBUG pool compute-stall: ring-buffer markers (remove after)
 
-#define DEBUG_PRINT 1  // DEBUG max_pool2d value-inflation repro; set back to 0 when done
+#define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
-#include "api/debug/dprint_tile.h"
 #include "api/debug/dprint_pages.h"
 #include "api/debug/dprint_tensix.h"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -211,20 +210,6 @@ void kernel_main() {
                 UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE12u));
                 UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)chunk));
                 curr_in_cb.wait_front(1);
-#if DEBUG_PRINT == 1
-                // DEBUG max_pool2d value-inflation: dump what the reduce actually reads for the first
-                // output stick. For a constant-0.5 input, the real reduce-input rows should be 0.5 and
-                // any padding/tail rows should be -inf (bf16 0xFF80). A phantom value (e.g. ~1.0 = the
-                // scalar, or stale L1) in the reduce input is the bug. Scalar tile should be all 1.0 for MAX.
-                if (n == 0 && c_i == 0 && chunk == 0) {
-                    DPRINT_UNPACK(
-                        "[POOL-DBG] MAX scalar tile (expect 1.0):\n{}\n",
-                        TSLICE(curr_scalar_cb_id, 0, SliceRange::hw0_32_8(), true, true));
-                    DPRINT_UNPACK(
-                        "[POOL-DBG] reduce-input in_cb tile0 (data=input, pad/tail should be -inf):\n{}\n",
-                        TSLICE(curr_in_cb_id, 0, SliceRange::hw0_32_8(), true, true));
-                }
-#endif
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
@@ -282,9 +267,20 @@ void kernel_main() {
                     fast_tilize_cb.push_back(in_ntiles_c);
                     fast_tilize_cb.wait_front(in_ntiles_c);
 
+#ifndef ARCH_QUASAR
                     fast_tilize_init(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_block(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_uninit(fast_tilize_cb_id, out_cb_id, in_ntiles_c);
+#else
+                    // QSR: fast_tilize is unported on Quasar (fast_tilize.h is #ifndef ARCH_QUASAR). Use the
+                    // supported compute-API tilize on the same fast_tilize_cb view — all CB push/wait/pop
+                    // plumbing above and below is preserved. NEEDS ON-QUASAR VALIDATION via the global
+                    // avg_pool2d correctness test: the fast->regular tilize swap keeps CB sync intact, but
+                    // the tile-view read semantics must be confirmed.
+                    tilize_init(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
+                    tilize_block(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
+                    tilize_uninit(fast_tilize_cb_id, out_cb_id);
+#endif
 
                     out_cb.push_back(in_ntiles_c);
                     fast_tilize_cb.pop_front(in_ntiles_c);
@@ -297,7 +293,13 @@ void kernel_main() {
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
                     // init math for reduction again since FPU gets reprogrammed by tilize
+#ifndef ARCH_QUASAR
                     MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
+#else
+                    // QSR: Quasar llk_math_reduce_init requires the (operandA, operandB) CBs (no zero-arg overload).
+                    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(
+                        in_cb_id_0, in_scalar_cb_id_0)));
+#endif
 #ifdef ARCH_BLACKHOLE
                     // need this on BH to set swizzle bit before pack untilize dest
                     MATH((llk_math_reconfig_remap(true)));
@@ -306,8 +308,14 @@ void kernel_main() {
                     if constexpr (is_output_block_format) {
                         pack_reconfig_data_format(pre_tilize_cb_id);
                     }
+#ifndef ARCH_QUASAR
                     PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
                         pre_tilize_cb_id)));
+#else
+                    // QSR: Quasar llk_pack_untilize_init takes only <block_ct_dim, full_ct_dim>; use the
+                    // compute-API pack_untilize_dest_init (as at the top of the kernel), which forwards 2 on Quasar.
+                    pack_untilize_dest_init<max_tiles_per_iter>(pre_tilize_cb_id);
+#endif
                 }
 #endif  // OUTPUT_TILED
             } else {

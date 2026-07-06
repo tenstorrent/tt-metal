@@ -10,7 +10,7 @@
 #include "experimental/kernel_args.h"
 #include <ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/pool_kernels_common.hpp>
 
-#define ENABLE_DEBUG_PRINT 1  // DEBUG max_pool2d value-inflation repro; set back to 0 when done
+#define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
@@ -250,8 +250,15 @@ void kernel_main() {
     DataflowBuffer config_cb(config_cb_id);
 #endif
 
+    // QSR max_pool fix: for a partial-face window (face_r_dim < 16, e.g. 3x3 -> 9), need_to_initialize_in_cb
+    // is false, but the quasar reduce reads the FULL 16-row face while the reader fills only the populated
+    // rows -> the unwritten face rows leak stale L1 into the max (value inflation; masked only when the L1
+    // residue happens to be <= the data). Force the -inf pre-clear for MAX pool. -inf is the max identity,
+    // so pre-clearing can never change a correct max; the once-at-init clear persists across the in_cb ring
+    // because the reader never overwrites those rows. (Real fix: make the quasar reduce respect face_r_dim.)
+    constexpr bool force_max_clear = !is_avg_pool;
     // fill the clear cb
-    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
+    if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
         if constexpr (reader_id == 0) {
             fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
             clear_value_cb.push_back(1);
@@ -264,26 +271,6 @@ void kernel_main() {
             clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_cb);
         }
     }
-
-#if ENABLE_DEBUG_PRINT == 1
-    // DEBUG max_pool2d value-inflation: after the (conditional) init clear, is the -inf pool identity
-    // actually in L1? For MAX, bf16_init_value / clear_value_cb[0] / in_cb[0] should all be 0xFF80 (-inf).
-    // If need_to_initialize_in_cb is 0, the in_cb was NOT pre-cleared (relies on per-block tail-fill only)
-    // -- that itself may be the leak.
-    if constexpr (reader_id == 0) {
-        volatile tt_l1_ptr uint16_t* cv =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(clear_value_cb.get_write_ptr());
-        volatile tt_l1_ptr uint16_t* ic =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(DataflowBuffer(in_cb_id).get_write_ptr());
-        DPRINT(
-            "[POOL-DBG reader] bf16_init_value=0x{:x} clear_value_cb[0]=0x{:x} in_cb[0]=0x{:x} (MAX expects "
-            "0xff80=-inf) need_to_initialize_in_cb={}\n",
-            (uint32_t)bf16_init_value,
-            (uint32_t)cv[0],
-            (uint32_t)ic[0],
-            (uint32_t)need_to_initialize_in_cb);
-    }
-#endif
 
     // initialize the scalar CB
     if constexpr (reader_id == 0 && one_scalar_per_core) {
