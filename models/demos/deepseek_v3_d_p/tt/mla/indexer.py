@@ -228,7 +228,6 @@ class TtIndexer:
             index_rope_interleave=getattr(config, "index_rope_interleave", False),
         )
         self.seq_len = seq_len
-        self.slot_num = slot_num
         self.is_chunked = is_chunked
         # Block-cyclic key-cache path (chunked prefill): mirrors the MLA KVPE cache — a persistent,
         # per-user, block-cyclic ND-sharded key cache written by update_padded_kv_cache and scored by
