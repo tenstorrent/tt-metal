@@ -47,10 +47,10 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: sdpa nightly tests (QB2 only)
+- name: sdpa nightly tests (QB2 IOMMU only)
   cmd: pytest tests/nightly/blackhole/sdpa/ -svv
   skus:
-    bh_quietbox_2:
+    bh_quietbox_2_iommu:
       timeout: 20
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
