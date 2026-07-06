@@ -187,6 +187,25 @@ def _deallocate_prompt_source(prompt_source) -> None:
 
 
 def _chunked_norm_forward(norm, hidden_states, *, chunk_size: int = 32):
+    # Batched canvas decode (#47557): RMSNorm is per-row (over hidden), and the
+    # width-sharded fast path assumes a single 32-row block, so run each canvas row
+    # through the norm independently and concat on the batch axis. Byte-identical to
+    # B=1; keeps the batched forward's norms provably per-canvas (no leakage).
+    if hidden_states.shape[0] > 1:
+        rows = []
+        for row in range(hidden_states.shape[0]):
+            row_slice = ttnn.slice(
+                hidden_states,
+                [row, 0, 0, 0],
+                [row + 1, hidden_states.shape[1], hidden_states.shape[2], hidden_states.shape[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            rows.append(_chunked_norm_forward(norm, row_slice, chunk_size=chunk_size))
+            row_slice.deallocate(True)
+        out = ttnn.concat(rows, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for row in rows:
+            row.deallocate(True)
+        return out
     if getattr(norm, "with_scale", True) is False and getattr(norm, "tt_weight", None) is None:
         return _rms_norm_dram(hidden_states, epsilon=norm.eps, chunk_size=chunk_size)
     seq_len = hidden_states.shape[-2]
@@ -298,6 +317,43 @@ def _denoise_layer_forward(
     residual.deallocate(True)
     attn_output.deallocate(True)
 
+    # FFN block (shared MLP + MoE). Both are strictly per-token (each token routes
+    # to its own experts; no cross-token interaction), and the shared gemma4 experts
+    # forward is hard [1,1,seq,H] (batch=1). For batched canvas decode (#47557) run
+    # each canvas row through the FFN independently and concat on the batch axis —
+    # per-token-equivalent to a batched FFN, byte-identical to B=1, and provably no
+    # cross-canvas leakage. The heavy attention above stays batched on dim0.
+    return _denoise_ffn_block_batched(layer, hidden_states)
+
+
+def _denoise_ffn_block_batched(layer, hidden_states):
+    """Per-canvas FFN (shared MLP + MoE + residual). Loops rows for B>1.
+
+    Batched canvas decode (#47557): the FFN is per-token, and the gemma4 experts
+    forward is batch=1, so B>1 processes each canvas row's ``[1,1,C,H]`` slice
+    independently and concatenates on the batch axis. ``hidden_states`` is consumed.
+    B=1 runs the body directly (byte-identical).
+    """
+    if hidden_states.shape[0] > 1:
+        rows = []
+        for row in range(hidden_states.shape[0]):
+            row_slice = ttnn.slice(
+                hidden_states,
+                [row, 0, 0, 0],
+                [row + 1, hidden_states.shape[1], hidden_states.shape[2], hidden_states.shape[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            rows.append(_denoise_ffn_block_single(layer, row_slice))
+        out = ttnn.concat(rows, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for row in rows:
+            row.deallocate(True)
+        hidden_states.deallocate(True)
+        return out
+    return _denoise_ffn_block_single(layer, hidden_states)
+
+
+def _denoise_ffn_block_single(layer, hidden_states):
+    """Single-canvas FFN block. ``hidden_states`` ``[1,1,C,H]`` is consumed."""
     residual = hidden_states
     normed = _chunked_norm_forward(layer.pre_feedforward_layernorm, hidden_states)
     mlp_output = layer.shared_mlp(normed)
@@ -414,6 +470,33 @@ def denoise_logits_forward(
         use_explicit_sliding_mask=use_explicit_sliding_mask,
         canvas_rope_provider=canvas_rope_provider,
     )
+    return _apply_lm_head_batched(tt_model, hidden_states)
+
+
+def _apply_lm_head_batched(tt_model, hidden_states):
+    """LM head over ``[B,1,C,H]`` post-norm hidden -> ``[B,1,C,vocab]`` logits.
+
+    Batched canvas decode (#47557): the shared gemma4 LM head uses a 1D-mcast
+    program config sized to the M (canvas) rows of a single batch, so B>1 projects
+    each canvas row independently and concatenates on the batch axis — the LM head
+    is per-token, so this is per-token-equivalent and byte-identical to B=1.
+    ``hidden_states`` is consumed.
+    """
+    if hidden_states.shape[0] > 1:
+        logits_rows = []
+        for row in range(hidden_states.shape[0]):
+            row_slice = ttnn.slice(
+                hidden_states,
+                [row, 0, 0, 0],
+                [row + 1, hidden_states.shape[1], hidden_states.shape[2], hidden_states.shape[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            logits_rows.append(tt_model._apply_lm_head(row_slice, is_decode=False))
+        out = ttnn.concat(logits_rows, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for logits_row in logits_rows:
+            logits_row.deallocate(True)
+        hidden_states.deallocate(True)
+        return out
     return tt_model._apply_lm_head(hidden_states, is_decode=False)
 
 
@@ -512,23 +595,27 @@ def read_prompt_kv_cache_by_layer(
 
 
 def embed_canvas_tokens(tt_model, canvas_tokens):
-    """Embed device canvas token ids into `[1, 1, C, H]` TILE hidden states."""
-    if canvas_tokens.shape[0] != 1:
-        raise ValueError("embed_canvas_tokens currently supports batch=1")
+    """Embed device canvas token ids into `[B, 1, C, H]` TILE hidden states.
+
+    Batched canvas decode (#47557): ``B`` canvases are embedded together on the
+    leading batch dim. ``Gemma4Model.embed_tokens([B, C])`` returns ``[1, B, C, H]``
+    (the TP all-gather path unsqueezes to 4D), so this reshapes to ``[B, 1, C, H]``
+    — a bit-exact reinterpret because dim0 is 1, so element ``(0, b, c, h)`` and
+    ``(b, 0, c, h)`` share the same row-major offset. Byte-identical at ``B=1``.
+    """
     if len(canvas_tokens.shape) == 4 and canvas_tokens.shape[-1] == 1:
+        batch = canvas_tokens.shape[0]
         canvas_len = canvas_tokens.shape[-2]
-        token_ids = ttnn.reshape(canvas_tokens, (canvas_tokens.shape[0], canvas_len))
+        token_ids = ttnn.reshape(canvas_tokens, (batch, canvas_len))
         token_ids = ttnn.to_layout(token_ids, ttnn.ROW_MAJOR_LAYOUT)
     else:
+        batch = canvas_tokens.shape[0]
         canvas_len = canvas_tokens.shape[-1]
         token_ids = canvas_tokens
     canvas_hidden = tt_model.embed_tokens(token_ids)
     if token_ids is not canvas_tokens:
         token_ids.deallocate(True)
-    if len(canvas_hidden.shape) == 3:
-        canvas_hidden = ttnn.reshape(canvas_hidden, (1, 1, canvas_len, tt_model.hidden_size))
-    elif canvas_hidden.shape[-2] != canvas_len:
-        canvas_hidden = ttnn.reshape(canvas_hidden, (1, 1, canvas_len, tt_model.hidden_size))
+    canvas_hidden = ttnn.reshape(canvas_hidden, (batch, 1, canvas_len, tt_model.hidden_size))
     return ttnn.to_layout(canvas_hidden, ttnn.TILE_LAYOUT)
 
 

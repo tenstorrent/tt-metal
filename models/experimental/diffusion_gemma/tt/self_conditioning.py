@@ -101,6 +101,16 @@ def build_self_conditioning_embedding_weight(
     )
 
 
+def _slice_batch_row(tensor, row: int):
+    """Return the ``[1, ...]`` slice of a 4D tensor at batch index ``row`` (DRAM)."""
+    return ttnn.slice(
+        tensor,
+        [row, 0, 0, 0],
+        [row + 1, tensor.shape[1], tensor.shape[2], tensor.shape[3]],
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
 def _dram_for_rms_norm(tensor):
     memory_config = tensor.memory_config()
     if memory_config.buffer_type == ttnn.BufferType.DRAM and not memory_config.is_sharded():
@@ -175,6 +185,26 @@ def _width_sharded_rms_norm(chunk, *, weight=None, epsilon: float):
 
 
 def _rms_norm_dram(tensor, *, weight=None, epsilon: float, chunk_size: int = 32):
+    # Batched canvas decode (#47557): the width-sharded RMSNorm fast path shards a
+    # single 32-row block, so a [B,1,32,H] chunk (B*32 rows) would not tile. RMSNorm
+    # is per-row (normalizes over hidden), so process each canvas row independently
+    # and concat on the batch axis — byte-identical to B=1, and provably no
+    # cross-canvas mixing. Only the cheap norm loops; the heavy matmuls stay batched.
+    if tensor.shape[0] > 1:
+        rows = []
+        for row in range(tensor.shape[0]):
+            row_slice = ttnn.slice(
+                tensor,
+                [row, 0, 0, 0],
+                [row + 1, tensor.shape[1], tensor.shape[2], tensor.shape[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            rows.append(_rms_norm_dram(row_slice, weight=weight, epsilon=epsilon, chunk_size=chunk_size))
+            row_slice.deallocate(True)
+        out = ttnn.concat(rows, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for row in rows:
+            row.deallocate(True)
+        return out
     norm_input = _dram_for_rms_norm(tensor)
     seq_len = norm_input.shape[-2]
     if seq_len <= chunk_size:
@@ -278,7 +308,8 @@ class TtSelfConditioning:
         table ``[1,1,vocab,hidden]`` (TILE). Returns the signal ``[1,1,L,hidden]``.
         For the production vocab (262144) drive ``softmax`` with an fp32
         ``compute_kernel_config`` (bf16 over a 262k-wide reduction is lossy — see the
-        bfp8 entropy drift); a moderate vocab is fine in bf16.
+        bfp8 entropy drift); a moderate vocab is fine in bf16. Batched canvas decode
+        (#47557) drives this per-row from :meth:`condition`.
         """
         vocab_size = prev_logits_tt.shape[-1]
         vocab_chunk_size = 8192
@@ -361,7 +392,29 @@ class TtSelfConditioning:
 
         ``prev_logits_tt is None`` (first step / encoder pass) -> zero signal, so the
         result is ``post_norm(inputs_embeds)``.
+
+        Batched canvas decode (#47557): self-conditioning is per-canvas (the tied
+        embedding table is shared and broadcast; gate/up/down linears are per-token),
+        so for ``B>1`` each canvas row is conditioned independently and concatenated
+        on the batch axis. Byte-identical to B=1; provably no cross-canvas mixing.
         """
+        if inputs_embeds_tt.shape[0] > 1:
+            rows = []
+            for row in range(inputs_embeds_tt.shape[0]):
+                embeds_row = _slice_batch_row(inputs_embeds_tt, row)
+                prev_row = None if prev_logits_tt is None else _slice_batch_row(prev_logits_tt, row)
+                rows.append(
+                    self.condition(
+                        embeds_row, prev_row, embedding_weight_tt, compute_kernel_config=compute_kernel_config
+                    )
+                )
+                embeds_row.deallocate(True)
+                if prev_row is not None:
+                    prev_row.deallocate(True)
+            out = ttnn.concat(rows, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for row in rows:
+                row.deallocate(True)
+            return out
         if prev_logits_tt is None:
             return _rms_norm_dram(inputs_embeds_tt, epsilon=self.eps)
         signal = self.soft_embedding(prev_logits_tt, embedding_weight_tt, compute_kernel_config=compute_kernel_config)

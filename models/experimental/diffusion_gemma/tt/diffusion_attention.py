@@ -311,6 +311,35 @@ def _manual_gqa_attention(tt_q, tt_k, tt_v):
     return out
 
 
+def _broadcast_prefix_kv_to_canvas_batch(prefix_k, prefix_v, canvas_batch: int):
+    """Repeat a batch=1 frozen prompt prefix ``(K, V)`` to ``canvas_batch`` rows.
+
+    Returns the same objects unchanged when the batch already matches (B=1 path is
+    byte-identical). Otherwise ``ttnn.repeat`` on dim0 tiles the whole ``[kv_heads,
+    P, d]`` prefix ``canvas_batch`` times, so each output row is an identical copy
+    of the shared prompt — exactly the per-canvas prefix a batched denoise needs.
+    """
+    prefix_batch = prefix_k.shape[0]
+    if prefix_batch == canvas_batch:
+        return prefix_k, prefix_v
+    if prefix_batch != 1:
+        raise ValueError(f"cannot broadcast prompt prefix batch {prefix_batch} to canvas batch {canvas_batch}")
+    repeats = [canvas_batch, 1, 1, 1]
+    return (
+        ttnn.repeat(prefix_k, ttnn.Shape(repeats)),
+        ttnn.repeat(prefix_v, ttnn.Shape(repeats)),
+    )
+
+
+def _deallocate_broadcast_prefix(prefix_k, prefix_v, original_prefix_kv) -> None:
+    """Free broadcast prefix copies, never the caller-owned originals."""
+    orig_k, orig_v = original_prefix_kv
+    if prefix_k is not orig_k:
+        prefix_k.deallocate(True)
+    if prefix_v is not orig_v:
+        prefix_v.deallocate(True)
+
+
 def denoise_attention(
     attn,
     hidden_states,
@@ -385,6 +414,14 @@ def denoise_attention(
     if prefix_kv is not None:
         prefix_k, prefix_v = prefix_kv
         canvas_k, canvas_v = tt_k, tt_v
+        # Batched canvas decode (#47557): B canvases share one frozen prompt prefix
+        # read from the batch=1 cache. Broadcast the prefix to B rows so the
+        # [prefix ; canvas] concat matches on the batch axis. Attention is a
+        # per-batch-element op, so each row i then attends to [prompt_i ; canvas_i]
+        # and never to canvas_j — this is what makes the batch independent (no
+        # cross-canvas leakage). Gated on a batch mismatch: B=1 → no repeat →
+        # byte-identical to the single-canvas path.
+        prefix_k, prefix_v = _broadcast_prefix_kv_to_canvas_batch(prefix_k, prefix_v, canvas_k.shape[0])
         prefix_k_concat = ttnn.to_memory_config(prefix_k, canvas_k.memory_config())
         prefix_v_concat = ttnn.to_memory_config(prefix_v, canvas_v.memory_config())
         tt_k = ttnn.concat([prefix_k_concat, canvas_k], dim=2)
@@ -393,6 +430,7 @@ def denoise_attention(
             prefix_k_concat.deallocate(True)
         if prefix_v_concat is not prefix_v:
             prefix_v_concat.deallocate(True)
+        _deallocate_broadcast_prefix(prefix_k, prefix_v, prefix_kv)
         canvas_k.deallocate(True)
         canvas_v.deallocate(True)
 
