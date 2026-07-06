@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -28,12 +29,9 @@ void kernel_main() {
     constexpr uint32_t in0_tile_size = get_compile_time_arg_val(11);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
     constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-    uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
-    Semaphore<> in0_sender_sem(get_compile_time_arg_val(14));
-    Semaphore<> in0_receiver_sem(get_compile_time_arg_val(15));
-    Semaphore<> in0_valid_sem(get_compile_time_arg_val(16));
+    Semaphore<> in0_sender_semaphore(get_compile_time_arg_val(14));
+    Semaphore<> in0_receiver_semaphore(get_compile_time_arg_val(15));
+    Semaphore<> in0_valid_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
@@ -198,13 +196,7 @@ void kernel_main() {
     }
 #endif
 
-    in0_valid_sem.set(VALID);
-
-    const uint64_t in0_sender_semaphore_noc_addr =
-        get_noc_addr(in0_sender_noc_x, in0_sender_noc_y, in0_sender_semaphore_addr);
-
-    const uint64_t in0_receiver_semaphore_noc_addr =
-        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
+    in0_valid_semaphore.set(VALID);
 
     /**
      * This is a Row-Major output block ordering.
@@ -270,7 +262,7 @@ void kernel_main() {
                         cb_out.pop_front(out_block_num_tiles_swiglu);
 #else
                         cb_out.wait_front(out_block_num_tiles);
-                        uint32_t out_read_ptr = get_read_ptr(cb_out_id);
+                        uint32_t out_read_ptr = cb_out.get_read_ptr();
 
                         // write_block_sync_split is more generic (support multiple output tensors)
                         // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
@@ -308,7 +300,7 @@ void kernel_main() {
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_in0.reserve_back(in0_block_num_tiles);
 
-                uint32_t in0_start_address = get_write_ptr(cb_in0_id);
+                uint32_t in0_start_address = cb_in0.get_write_ptr();
                 if constexpr (is_injector_core) {
 #ifdef FUSE_AG
                     if (is_injector_core) {
@@ -333,9 +325,9 @@ void kernel_main() {
                         (k_block + 1) * K_block_tiles);
                 } else {
                     // Get from previous device
-                    in0_receiver_sem.set(INVALID);
-                    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
-                    in0_receiver_sem.wait(VALID);
+                    in0_receiver_semaphore.set(INVALID);
+                    in0_sender_semaphore.up(noc, in0_sender_noc_x, in0_sender_noc_y, 1);
+                    in0_receiver_semaphore.wait(VALID);
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
@@ -343,22 +335,25 @@ void kernel_main() {
                 cb_in0.push_back(in0_block_num_tiles);
 
                 if (!is_sink_core) {
-                    in0_sender_sem.wait(1);
-                    in0_sender_sem.set(0);
-
-                    uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
+                    in0_sender_semaphore.wait(1);
+                    in0_sender_semaphore.set(0);
 
                     /**
                      * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
                      * padded tiles. Use `current_block_bytes`.
                      */
-                    noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(in0_start_address),
+                        UnicastEndpoint{},
+                        current_block_bytes,
+                        {},
+                        {.noc_x = in0_dest_noc_x, .noc_y = in0_dest_noc_y, .addr = in0_start_address});
 
 #ifdef ARCH_BLACKHOLE
                     noc.async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                    in0_valid_semaphore.relay_unicast(noc, in0_receiver_semaphore, in0_dest_noc_x, in0_dest_noc_y);
                 }
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
@@ -373,7 +368,7 @@ void kernel_main() {
             if constexpr (!is_output_writer) {
                 cb_in2.reserve_back(N_block_tiles);
 
-                uint32_t l1_write_addr_in2 = get_write_ptr(cb_in2_id);
+                uint32_t l1_write_addr_in2 = cb_in2.get_write_ptr();
                 for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
                     noc.async_read(
                         in2_reader,

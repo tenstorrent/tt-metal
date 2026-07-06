@@ -6,6 +6,8 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -36,7 +38,10 @@ void batch_loop(
     uint32_t q_start_addr,
     uint32_t tensor_address0,
     const uint32_t cb_write_ptr_base,
-    uint64_t qkv_read_addr,
+    const Noc& noc_obj,
+    uint32_t qkv_noc_x,
+    uint32_t qkv_noc_y,
+    uint32_t qkv_addr,
     uint32_t cur_core_idx,
     uint32_t start,
     uint32_t end,
@@ -48,19 +53,25 @@ void batch_loop(
     bool nlp_local,
     uint32_t second_half_core,
     uint32_t start_row) {
+    const uint32_t read_offset = output_row_size * second_half_core + start_row * input_row_size;
     uint32_t q_write_addr = cb_write_ptr_base + start * output_row_size;
     for (uint32_t q = start; q < end; ++q) {
-        // Device 2.0 migration: legacy primitive retained: source is a precomposed uint64_t NoC address
-        // and destination is a raw offset into a pre-resolved CB write pointer.
-        noc_async_read(qkv_read_addr, q_write_addr, output_row_size);
+        noc_obj.async_read(
+            UnicastEndpoint{},
+            CoreLocalMem<uint8_t>(q_write_addr),
+            output_row_size,
+            {.noc_x = qkv_noc_x, .noc_y = qkv_noc_y, .addr = qkv_addr},
+            {});
         q_write_addr += output_row_size;
         cur_core_idx++;
         local_count++;
-        qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                        output_row_size * second_half_core + start_row * input_row_size;
+        qkv_noc_x = in0_mcast_noc_x[cur_core_idx];
+        qkv_noc_y = in0_mcast_noc_y[cur_core_idx];
+        qkv_addr = q_start_addr + read_offset;
         if (nlp_local) {
-            qkv_read_addr = get_noc_addr(core_noc_x[local_count], core_noc_y[local_count], tensor_address0) +
-                            output_row_size * second_half_core + start_row * input_row_size;
+            qkv_noc_x = core_noc_x[local_count];
+            qkv_noc_y = core_noc_y[local_count];
+            qkv_addr = tensor_address0 + read_offset;
         }
     }
 };
@@ -85,12 +96,15 @@ void nlp_concat(
 
     uint32_t cur_core_idx = batch_start_1;
 
-    uint64_t qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                             output_row_size * second_half_core + start_row * input_row_size;
+    const uint32_t read_offset = output_row_size * second_half_core + start_row * input_row_size;
+    uint32_t qkv_noc_x = in0_mcast_noc_x[cur_core_idx];
+    uint32_t qkv_noc_y = in0_mcast_noc_y[cur_core_idx];
+    uint32_t qkv_addr = q_start_addr + read_offset;
 
     if (nlp_local) {
-        qkv_read_addr = get_noc_addr(core_noc_x[local_count], core_noc_y[local_count], tensor_address0) +
-                        output_row_size * second_half_core + start_row * input_row_size;
+        qkv_noc_x = core_noc_x[local_count];
+        qkv_noc_y = core_noc_y[local_count];
+        qkv_addr = tensor_address0 + read_offset;
     }
     uint32_t q_write_addr = 0;
     const uint32_t cb_write_ptr_base = cb_q_out.get_write_ptr();
@@ -100,7 +114,10 @@ void nlp_concat(
             q_start_addr,
             tensor_address0,
             cb_write_ptr_base,
-            qkv_read_addr,
+            noc_obj,
+            qkv_noc_x,
+            qkv_noc_y,
+            qkv_addr,
             cur_core_idx,
             start,
             end,
@@ -115,8 +132,9 @@ void nlp_concat(
         start = batch_start_2;
         end = batch_end_2;
         cur_core_idx = batch_start_2;
-        qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                        output_row_size * second_half_core + start_row * input_row_size;
+        qkv_noc_x = in0_mcast_noc_x[cur_core_idx];
+        qkv_noc_y = in0_mcast_noc_y[cur_core_idx];
+        qkv_addr = q_start_addr + read_offset;
     }
 
     noc_obj.async_read_barrier();
