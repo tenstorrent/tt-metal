@@ -93,7 +93,7 @@ struct MinimalMatmulOpReceiver {
     uint32_t il_bwd_chunk = 0;
     uint8_t il_fwd_dist = 1;  // forward cursor device = my + il_fwd_dist
     uint32_t il_fwd_chunk = 0;
-    bool il_emit_backward = true;  // next middle slot prefers backward (yields 12,4,13,5,...)
+    bool il_emit_backward = false;  // next slot prefers forward, so each pair is forward-then-backward
     bool has_straddle = false;     // any k-block owned by two devices (expected==2)
     bool use_interleaved = false;
 
@@ -183,7 +183,7 @@ struct MinimalMatmulOpReceiver {
         il_bwd_chunk = 0;
         il_fwd_dist = 1;
         il_fwd_chunk = 0;
-        il_emit_backward = true;
+        il_emit_backward = false;
 
         for (uint32_t k = 0; k < num_k_blocks; k++) {
             k_block_device_received[k] = 0;
