@@ -279,3 +279,38 @@ def test_smollm3_encode_contract(*, mesh_device):
     out = tt_tensor.to_torch(prompt_embeds)
     assert out.shape[-1] == 2 * cfg.hidden_size
     assert_quality(ref_prompt, out, pcc=0.99)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192}],
+    indirect=["device_params"],
+)
+@pytest.mark.parametrize("seq", [128, 2048])
+def test_smollm3_encoder_full_mesh(*, mesh_device, seq):
+    from models.tt_dit.encoders.smollm3.config import SmolLM3Config
+    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
+
+    torch.manual_seed(0)
+    tp_axis = 1
+    hf = _load_hf_smollm3()
+    tokens = torch.randint(0, hf.config.vocab_size, (1, seq))
+    with torch.no_grad():
+        ref = hf.model(input_ids=tokens, output_hidden_states=True)
+    ref_prompt = torch.cat([ref.hidden_states[-1], ref.hidden_states[-2]], dim=-1).float()
+
+    cfg = SmolLM3Config.from_hf_config(hf.config)
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    pc = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=mesh_device.shape[tp_axis], mesh_axis=tp_axis))
+    enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
+    enc.load_torch_state_dict(hf.model.state_dict())
+
+    cos, sin = enc.create_rope_tensors(1, seq)
+    tt_ids = tt_tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
+    prompt_embeds, _ = enc.encode(
+        tt_ids,
+        attention_mask=None,
+        pos_embeds=(tt_tensor.from_torch(cos, device=mesh_device), tt_tensor.from_torch(sin, device=mesh_device)),
+    )
+    assert_quality(ref_prompt, tt_tensor.to_torch(prompt_embeds), pcc=0.99)
