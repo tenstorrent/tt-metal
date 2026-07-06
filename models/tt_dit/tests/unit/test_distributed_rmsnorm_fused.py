@@ -977,6 +977,101 @@ def test_layernorm_adaln_batch_corr(mesh_device, tp, topology, tp_axis, full_mes
 
 
 @pytest.mark.parametrize(
+    ("mesh_device", "device_params", "tp", "topology", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_LNBATCH_PARAMS, _LNBATCH_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_layernorm_per_token_corr(mesh_device, tp, topology, tp_axis, full_mesh):
+    """Per-TOKEN affine LayerNorm: weight/bias are [1, 1, N, H] — a DISTINCT gamma/beta for every
+    token (row), folded to the same N/32 tile-rows as the input. The reader pushes each row's
+    weight/bias slice; the compute consumes them with mul_tiles/add_tiles (full-tile, not bcast)
+    and pops num_tile_cols per row. Divisible width -> resident POST. Not used by any tt_dit model
+    yet, but required by an upcoming one."""
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    dim = 1024  # 1024/4 = 256 -> 8 tile-cols (divisible): resident POST.
+    rows = 128
+    torch.manual_seed(0)
+    x_t = (torch.randn(1, 1, rows, dim, dtype=torch.bfloat16) * 2 + 4).float()
+    # DISTINCT scale/shift per TOKEN (row): [1, 1, rows, dim].
+    scale_t = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16).float()
+    shift_t = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16).float()
+
+    # fp32 reference: per-token affine. LN over the last dim, then gamma/beta that vary per row.
+    mean = x_t.mean(-1, keepdim=True)
+    var = x_t.var(-1, unbiased=False, keepdim=True)
+    ref = (((x_t - mean) / torch.sqrt(var + NORM_EPS)) * (1.0 + scale_t) + shift_t).reshape(rows, dim)
+
+    x = bf16_tensor(x_t.to(torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+    # [1,1,N,H] weight/bias: logical[-2]==N>1 -> the op detects per-token and reads per row.
+    dyn_w = float32_tensor(1.0 + scale_t, device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+    dyn_b = float32_tensor(shift_t, device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+
+    ccl = CCLManager(mesh_device=submesh, num_links=GALAXY_LINKS, topology=topology)
+    mod = DistributedLayerNorm(
+        embedding_dim=dim,
+        norm_elementwise_affine=False,
+        bias=False,
+        mesh_axis=tp_axis,
+        mesh_device=submesh,
+        ccl_manager=ccl,
+    )
+    n_launch = int(_os.getenv("LNMOD_LAUNCHES", "3"))
+    outs = [mod.forward(x, dynamic_weight=dyn_w, dynamic_bias=dyn_b) for _ in range(n_launch)]
+    gathered = [_gather(o, tp_axis) for o in outs]
+    det = all(torch.equal(gathered[0], g) for g in gathered[1:])
+    out0 = gathered[0].reshape(rows, dim)
+    pcc = _pcc(out0, ref)
+    logger.info(f"LNPERTOK tp{tp}_{topology.name} dim={dim} per-token affine pcc={pcc * 100:.4f}% det={det}")
+    assert det, "per-token affine LayerNorm not deterministic across launches"
+    assert pcc >= 0.999, f"per-token affine LayerNorm pcc too low: {pcc}"
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "tp", "topology", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_LNBATCH_PARAMS, _LNBATCH_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_layernorm_per_token_wide_corr(mesh_device, tp, topology, tp_axis, full_mesh):
+    """Per-token affine LayerNorm on a WIDE shard that engages the block-major POST
+    (dim 7168 -> 1792/device -> 56 tile-cols at TP4; force_recip_stream fires at >=56).
+    Exercises the block-major per-row weight/bias consume + per-row pop path."""
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    dim = 7168  # 7168/4 = 1792 -> 56 tile-cols (>=56 and 56%block_size==0): block-major POST.
+    rows = 64
+    torch.manual_seed(0)
+    x_t = (torch.randn(1, 1, rows, dim, dtype=torch.bfloat16) * 2 + 4).float()
+    scale_t = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16).float()
+    shift_t = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16).float()
+
+    mean = x_t.mean(-1, keepdim=True)
+    var = x_t.var(-1, unbiased=False, keepdim=True)
+    ref = (((x_t - mean) / torch.sqrt(var + NORM_EPS)) * (1.0 + scale_t) + shift_t).reshape(rows, dim)
+
+    x = bf16_tensor(x_t.to(torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+    dyn_w = float32_tensor(1.0 + scale_t, device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+    dyn_b = float32_tensor(shift_t, device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+
+    ccl = CCLManager(mesh_device=submesh, num_links=GALAXY_LINKS, topology=topology)
+    mod = DistributedLayerNorm(
+        embedding_dim=dim,
+        norm_elementwise_affine=False,
+        bias=False,
+        mesh_axis=tp_axis,
+        mesh_device=submesh,
+        ccl_manager=ccl,
+    )
+    n_launch = int(_os.getenv("LNMOD_LAUNCHES", "3"))
+    outs = [mod.forward(x, dynamic_weight=dyn_w, dynamic_bias=dyn_b) for _ in range(n_launch)]
+    gathered = [_gather(o, tp_axis) for o in outs]
+    det = all(torch.equal(gathered[0], g) for g in gathered[1:])
+    out0 = gathered[0].reshape(rows, dim)
+    pcc = _pcc(out0, ref)
+    logger.info(f"LNPERTOKW tp{tp}_{topology.name} dim={dim} (56 tile-cols, block-major) pcc={pcc * 100:.4f}% det={det}")
+    assert det, "wide per-token affine LayerNorm not deterministic across launches"
+    assert pcc >= 0.999, f"wide per-token affine LayerNorm pcc too low: {pcc}"
+
+
+@pytest.mark.parametrize(
     ("mesh_device", "device_params", "model", "tp", "topology", "tp_axis", "full_mesh"),
     [pytest.param(*p, id=i) for p, i in zip(_LNMOD_PARAMS, _LNMOD_IDS)],
     indirect=["mesh_device", "device_params"],

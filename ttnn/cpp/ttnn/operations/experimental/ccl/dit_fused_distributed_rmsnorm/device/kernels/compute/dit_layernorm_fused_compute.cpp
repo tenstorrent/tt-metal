@@ -471,6 +471,15 @@ void kernel_main() {
                     cb_push_back(output_cb, block_size);
                 }
             }
+            // Per-token weight/bias: the reader pushes row r's slice; pop it so row r+1's slice
+            // is at the front next iteration (block-major runs only for divisible num_tile_cols,
+            // so the whole row's num_tile_cols was consumed above). Resident/per-batch: no pop.
+            if constexpr (per_token_weight != 0) {
+                cb_pop_front(weight_cb, num_tile_cols);
+            }
+            if constexpr (per_token_bias != 0) {
+                cb_pop_front(bias_cb, num_tile_cols);
+            }
         } else {
             // ===== Resident POST (shard fits L1) =====
             // The intermediate CBs (xmm / norm_result / weight_result / output) are pushed
@@ -559,6 +568,12 @@ void kernel_main() {
                     tile_regs_release();
                     cb_push_back(weight_result_cb, block_size);
                 }
+                // Per-token weight is pushed fresh per row by the reader (row r's slice at the
+                // front); pop this row's num_tile_cols so row r+1's slice is at the front next
+                // iteration. Broadcast / per-batch weight stays resident (never popped).
+                if constexpr (per_token_weight != 0) {
+                    cb_pop_front(weight_cb, num_tile_cols);
+                }
             }
 
             // Sub-phase D: + bias (beta).
@@ -592,6 +607,10 @@ void kernel_main() {
                     }
                     tile_regs_release();
                     cb_push_back(output_cb, block_size);
+                }
+                // Per-token bias: pop this row's slice (see the weight pop above).
+                if constexpr (per_token_bias != 0) {
+                    cb_pop_front(bias_cb, num_tile_cols);
                 }
             }
         }  // end resident POST (else of block_major_post)
