@@ -7,6 +7,16 @@ import os
 import pytest
 import torch
 
+import ttnn
+from models.tt_dit.blocks.attention import Attention
+from models.tt_dit.blocks.transformer_block import TransformerBlock
+from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboTextProjection, inject_text
+from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
+from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils import tensor as tt_tensor
+from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
+
 FIBO_PATH = os.environ.get("FIBO_PATH", "briaai/FIBO")
 
 
@@ -96,16 +106,6 @@ def test_fibo_dual_block(*, mesh_device):
       (encoder_hidden_states, hidden_states), i.e. context first, spatial second.
     TT TransformerBlock.forward returns (spatial, prompt), i.e. spatial first.
     """
-    import ttnn
-    from models.tt_dit.blocks.attention import Attention
-    from models.tt_dit.blocks.transformer_block import TransformerBlock
-    from models.tt_dit.models.transformers.transformer_bria_fibo import inject_text
-    from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
-    from models.tt_dit.parallel.manager import CCLManager
-    from models.tt_dit.utils import tensor as tt_tensor
-    from models.tt_dit.utils.check import assert_quality
-    from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
-
     m = _load_ref_transformer()
     ref_block = m.transformer_blocks[0]
     ref_proj = m.caption_projection[0]
@@ -187,9 +187,9 @@ def test_fibo_dual_block(*, mesh_device):
     tt_prompt_rope_sin = bf16_tensor(rope_sin[:prompt_seq_len], device=mesh_device)
 
     # Inject text: project text_layer on device, then inject into context
-    tt_text_layer = tt_tensor.from_torch(text_layer, device=mesh_device)
-    from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboTextProjection
-
+    tt_text_layer = bf16_tensor(
+        text_layer, device=mesh_device
+    )  # replicated (projected to half_dim before any sharding)
     tt_proj = BriaFiboTextProjection(in_features=text_encoder_dim, hidden_size=half_dim, mesh_device=mesh_device)
     tt_proj.load_torch_state_dict(ref_proj.state_dict())
     tt_projected = tt_proj.forward(tt_text_layer)
