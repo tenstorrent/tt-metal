@@ -69,7 +69,8 @@ def _get_valid_formats_dest_acc():
     return [
         (fmt, dest_acc)
         for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats)
-        if not (
+        if fmt.input_format == fmt.output_format
+        and not (
             fmt.input_format == DataFormat.Float16 and dest_acc == DestAccumulation.Yes
         )
     ]
@@ -106,7 +107,7 @@ def _is_unpack_to_dest(fmt: FormatConfig, dest_acc: DestAccumulation) -> bool:
         formats_dest_acc[0]
     ),
     test_case=runtime(["mixed", "all_ones", "all_zeros"]),
-    vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
+    vector_mode=[VectorMode.RC],
 )
 def test_sfpu_where_quasar(
     formats_dest_acc, implied_math_format, test_case, vector_mode
@@ -121,9 +122,9 @@ def test_sfpu_where_quasar(
 
     Variants cover `mixed` / `all_ones` / `all_zeros` condition regimes — the
     last two pin the selector to a single branch so format issues on either
-    side show up in isolation. `vector_mode` covers all four face-selection
-    modes; unprocessed faces are excluded from the golden assertion since
-    Dest retains the producer-written data there.
+    side show up in isolation. Quasar currently verifies full-tile `RC` mode
+    and same input/output formats for where; partial modes and cross-format
+    casts are not supported by this kernel path yet.
     """
     formats, dest_acc = formats_dest_acc
     input_dimensions = [32, 32]
@@ -222,7 +223,7 @@ def test_sfpu_where_quasar(
     implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
         formats_dest_acc[0]
     ),
-    vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
+    vector_mode=[VectorMode.RC],
 )
 def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mode):
     """

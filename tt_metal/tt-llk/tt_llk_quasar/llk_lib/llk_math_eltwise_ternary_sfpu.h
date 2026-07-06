@@ -30,32 +30,32 @@ inline void _llk_math_eltwise_ternary_sfpu_init_()
  * @brief Dispatches a ternary SFPU kernel over faces selected by @p vector_mode.
  *
  * Sets the DEST section base to tile 0, calls @p sfpu_func once per selected face with the
- * supplied tile indices, advances the face pointer between calls, then signals
+ * supplied tile offsets, advances the face pointer between calls, then signals
  * SFPU done.
  *
  * @tparam F              Callable type matching the ternary SFPU kernel signature.
  * @tparam ARGS           Any extra arguments forwarded verbatim to @p sfpu_func.
  *
  * @param sfpu_func       Ternary SFPU kernel (e.g. @c _calculate_where_<false>).
- * @param dst_index_in0   DEST tile index for the first input operand (e.g. condition).
- * @param dst_index_in1   DEST tile index for the second input operand (e.g. true_val).
- * @param dst_index_in2   DEST tile index for the third input operand (e.g. false_val).
- * @param dst_index_out   DEST tile index that receives the result.
+ * @param in0_offset      DEST offset for the first input operand (e.g. condition).
+ * @param in1_offset      DEST offset for the second input operand (e.g. true_val).
+ * @param in2_offset      DEST offset for the third input operand (e.g. false_val).
+ * @param out_offset      DEST offset that receives the result.
  * @param vector_mode     Faces to process: R (0-1), C (0,2), RC (all 4, default), or scalar (once).
- * @param args            Extra arguments forwarded to @p sfpu_func after the tile indices.
+ * @param args            Extra arguments forwarded to @p sfpu_func after the tile offsets.
  */
 template <typename Callable, typename... Args>
 inline void _llk_math_eltwise_ternary_sfpu_params_(
     Callable&& sfpu_func,
-    std::uint32_t dst_index_in0,
-    std::uint32_t dst_index_in1,
-    std::uint32_t dst_index_in2,
-    std::uint32_t dst_index_out,
+    std::uint32_t in0_offset,
+    std::uint32_t in1_offset,
+    std::uint32_t in2_offset,
+    std::uint32_t out_offset,
     VectorMode vector_mode = VectorMode::RC,
     Args&&... args)
 {
     _llk_math_eltwise_sfpu_start_(0);
     _llk_math_eltwise_sfpu_apply_vector_mode_(
-        std::forward<Callable>(sfpu_func), vector_mode, dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<Args>(args)...);
+        std::forward<Callable>(sfpu_func), vector_mode, in0_offset, in1_offset, in2_offset, out_offset, std::forward<Args>(args)...);
     _llk_math_eltwise_sfpu_done_();
 }

@@ -61,12 +61,12 @@ inline void _init_binary_max_min_() {
 // @tparam FMT           Math-side DataFormat.
 // @tparam IS_MAX_OP     true → store max(in0, in1); false → store min.
 // @tparam ITERATIONS    Number of SFP-row pairs per face (8 for a 32×16 face).
-// @param dst_index_in0  Dest tile index of input 0 (in tile units, relative to DST_INDEX).
-// @param dst_index_in1  Dest tile index of input 1 (in tile units, relative to DST_INDEX).
-// @param dst_index_out  Dest tile index where the result is written (in tile units, relative to DST_INDEX).
+// @param in0_offset  Dest offset of input 0.
+// @param in1_offset  Dest offset of input 1.
+// @param out_offset  Dest offset where the result is written.
 template <DataFormat FMT, bool IS_MAX_OP = true, int ITERATIONS = 8>
 inline void calculate_binary_max_min(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    const std::uint32_t in0_offset, const std::uint32_t in1_offset, const std::uint32_t out_offset) {
     static_assert(
         FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b || FMT == DataFormat::Float32 ||
             FMT == DataFormat::Tf32 || FMT == DataFormat::MxFp8R || FMT == DataFormat::MxFp8P ||
@@ -75,15 +75,9 @@ inline void calculate_binary_max_min(
 
     constexpr std::uint32_t SFPMEM_MODE = _binary_max_min_sfpmem_mode_<FMT>();
 
-    // Tile-base offsets relative to the dest counter start set by SFPU_BINARY_CALL.
-    // Per-row stride comes from ADDR_MOD_6's dest.incr=2 on SFPSTORE, not from these offsets.
-    const std::uint32_t offset0 = (dst_index_in0 * 32) << 1;
-    const std::uint32_t offset1 = (dst_index_in1 * 32) << 1;
-    const std::uint32_t offset2 = (dst_index_out * 32) << 1;
-
     lltt::record(0, BINARY_MAX_MIN_REPLAY_LEN);
-    TT_SFPLOAD(p_sfpu::LREG0, SFPMEM_MODE, ADDR_MOD_7, 0 /* done */, offset0);
-    TT_SFPLOAD(p_sfpu::LREG1, SFPMEM_MODE, ADDR_MOD_7, 0 /* done */, offset1);
+    TT_SFPLOAD(p_sfpu::LREG0, SFPMEM_MODE, ADDR_MOD_7, 0 /* done */, in0_offset);
+    TT_SFPLOAD(p_sfpu::LREG1, SFPMEM_MODE, ADDR_MOD_7, 0 /* done */, in1_offset);
 
     // Step 1: SM-min/SM-max via SFPSWAP. Correct for any pair where at least one
     // operand is non-negative; inverts ordering for (neg, neg) pairs.
@@ -100,7 +94,7 @@ inline void calculate_binary_max_min(
 
     // After step 2: LREG0 = min, LREG1 = max for all sign combinations.
     // ADDR_MOD_6 (dest.incr=2) advances the dest counter by one row pair after each store.
-    TT_SFPSTORE(IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0, SFPMEM_MODE, ADDR_MOD_6, 0 /* done */, offset2);
+    TT_SFPSTORE(IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0, SFPMEM_MODE, ADDR_MOD_6, 0 /* done */, out_offset);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

@@ -211,7 +211,7 @@ inline void _llk_math_transpose_dest_init_()
  */
 inline void _llk_math_transpose_dest_(const std::uint32_t tile_idx)
 {
-    _set_dst_write_addr_<ckernel::trisc::DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
     // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
     // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit.

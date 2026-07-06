@@ -207,7 +207,7 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape& tensor_sh
 template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx, [[maybe_unused]] const TensorShape& tensor_shape)
 {
-    _set_dst_write_addr_<ckernel::trisc::DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
     if constexpr (unpack_to_dest)
     {

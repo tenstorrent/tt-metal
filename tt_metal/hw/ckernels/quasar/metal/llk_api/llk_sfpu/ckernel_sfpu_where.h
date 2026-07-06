@@ -43,29 +43,27 @@ namespace sfpu {
  *         section base setup are owned by
  *         @c SFPU_TERNARY_CALL.
  *
- * @param dst_index_in0 DEST tile index holding the condition operand.
- * @param dst_index_in1 DEST tile index holding the true-branch operand.
- * @param dst_index_in2 DEST tile index holding the false-branch operand.
- * @param dst_index_out DEST tile index that receives the per-lane result.
+ * @param in0_offset DEST offset holding the condition operand.
+ * @param in1_offset DEST offset holding the true-branch operand.
+ * @param in2_offset DEST offset holding the false-branch operand.
+ * @param out_offset DEST offset that receives the per-lane result.
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_where(
-    const std::uint32_t dst_index_in0,
-    const std::uint32_t dst_index_in1,
-    const std::uint32_t dst_index_in2,
-    const std::uint32_t dst_index_out) {
-    constexpr std::uint32_t dst_tile_size_sfpi = 32;
-
+    const std::uint32_t in0_offset,
+    const std::uint32_t in1_offset,
+    const std::uint32_t in2_offset,
+    const std::uint32_t out_offset) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat cond = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat true_val = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat result = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];  // load false_val into result reg
+        sfpi::vFloat cond = sfpi::dst_reg[in0_offset >> 1];
+        sfpi::vFloat true_val = sfpi::dst_reg[in1_offset >> 1];
+        sfpi::vFloat result = sfpi::dst_reg[in2_offset >> 1];  // load false_val into result reg
 
         v_if(cond != 0) { result = true_val; }
         v_endif;
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        sfpi::dst_reg[out_offset >> 1] = result;
         sfpi::dst_reg++;
     }
 }

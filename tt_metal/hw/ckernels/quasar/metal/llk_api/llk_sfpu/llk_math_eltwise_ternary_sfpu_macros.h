@@ -42,10 +42,10 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
     (::ckernel::_sfpu_ternary_check_<DST_SYNC, DST_ACCUM>(DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE),         \
      _llk_math_eltwise_ternary_sfpu_params_(                                                                        \
          ::ckernel::sfpu::FN<_SFPU_TERN_EXPAND TEMPLATES>,                                                          \
-         DST_IN0,                                                                                                   \
-         DST_IN1,                                                                                                   \
-         DST_IN2,                                                                                                   \
-         DST_OUT,                                                                                                   \
+         ::ckernel::get_sfpu_dst_tile_offset(DST_IN0),                                                              \
+         ::ckernel::get_sfpu_dst_tile_offset(DST_IN1),                                                              \
+         ::ckernel::get_sfpu_dst_tile_offset(DST_IN2),                                                              \
+         ::ckernel::get_sfpu_dst_tile_offset(DST_OUT),                                                              \
          VECTOR_MODE,                                                                                               \
          ##__VA_ARGS__))
 
@@ -54,7 +54,13 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
     DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...)                          \
     (::ckernel::_sfpu_ternary_check_<DST_SYNC, DST_ACCUM>(DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE), \
      _llk_math_eltwise_ternary_sfpu_params_(                                                                \
-         ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
+         ::ckernel::sfpu::FN,                                                                               \
+         ::ckernel::get_sfpu_dst_tile_offset(DST_IN0),                                                      \
+         ::ckernel::get_sfpu_dst_tile_offset(DST_IN1),                                                      \
+         ::ckernel::get_sfpu_dst_tile_offset(DST_IN2),                                                      \
+         ::ckernel::get_sfpu_dst_tile_offset(DST_OUT),                                                      \
+         VECTOR_MODE,                                                                                       \
+         ##__VA_ARGS__))
 
 /*
  * Ternary SFPU init macros (4 total)

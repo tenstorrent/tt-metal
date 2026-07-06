@@ -22,7 +22,7 @@ namespace sfpu
 //   lt(A,B) = LT(A,B)           gt(A,B) = LT(B,A)
 //   ge(A,B) = NOT LT(A,B)       le(A,B) = NOT LT(B,A)
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+inline void calculate_binary_comp_int32(const std::uint32_t in0_offset, const std::uint32_t in1_offset, const std::uint32_t out_offset)
 {
     static_assert(
         RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge,
@@ -36,18 +36,13 @@ inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const
         TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
     }
 
-    const std::uint32_t idx_x = swap_operands ? dst_index_in1 : dst_index_in0;
-    const std::uint32_t idx_y = swap_operands ? dst_index_in0 : dst_index_in1;
-
-    constexpr std::uint32_t tile_row_stride = trisc::NUM_FACES * FACE_R_DIM;
-    const std::uint32_t base_x              = idx_x * tile_row_stride;
-    const std::uint32_t base_y              = idx_y * tile_row_stride;
-    const std::uint32_t base_out            = dst_index_out * tile_row_stride;
+    const std::uint32_t x_offset = swap_operands ? in1_offset : in0_offset;
+    const std::uint32_t y_offset = swap_operands ? in0_offset : in1_offset;
 
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, base_x + (d << 1));
-        TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, base_y + (d << 1));
+        TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, x_offset + (d << 1));
+        TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, y_offset + (d << 1));
 
         if constexpr (SIGN_MAGNITUDE_FORMAT)
         {
@@ -90,7 +85,7 @@ inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const
             }
         }
 
-        TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, base_out + (d << 1));
+        TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, out_offset + (d << 1));
     }
 }
 

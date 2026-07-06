@@ -11,6 +11,11 @@
 namespace ckernel
 {
 
+namespace trisc
+{
+enum class DstTileShape : std::uint8_t;
+}
+
 // Currently unused but kept for backwards compatibility
 enum class VectorMode : std::uint8_t
 {
@@ -129,13 +134,21 @@ enum class DstSync : std::uint8_t
  * and by 32-bit dest accumulation (FP32/Int32) vs 16-bit modes. Quasar SFPU
  * macro checks currently use standard 32x32 destination tiles only.
  */
-template <DstSync SYNC_MODE, bool ACCUM_MODE>
+template <DstSync SYNC_MODE, bool ACCUM_MODE, trisc::DstTileShape TILE_SHAPE = static_cast<trisc::DstTileShape>(6)>
 constexpr std::uint32_t get_dest_max_tiles()
 {
     constexpr std::uint32_t dest_register_size = SYNC_MODE == DstSync::SyncHalf ? (ACCUM_MODE ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
                                                                                 : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+    constexpr std::uint32_t tile_shape         = static_cast<std::uint32_t>(TILE_SHAPE);
+    static_assert(tile_shape == 6, "Quasar get_dest_max_tiles currently supports only 32x32 destination tiles");
 
-    return dest_register_size >> 6;
+    return dest_register_size >> tile_shape;
+}
+
+constexpr std::uint32_t get_sfpu_dst_tile_offset(const std::uint32_t dst_index)
+{
+    constexpr std::uint32_t tile_stride = 64;
+    return dst_index * tile_stride;
 }
 
 enum class MathFidelity : std::uint8_t

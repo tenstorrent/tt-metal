@@ -10,15 +10,9 @@
 
 template <typename Callable, typename... Args>
 inline void _llk_math_eltwise_binary_sfpu_params_(
-    Callable&& sfpu_func,
-    std::uint32_t dst_index_in0,
-    std::uint32_t dst_index_in1,
-    std::uint32_t dst_index_out,
-    VectorMode vector_mode = VectorMode::RC,
-    Args&&... args)
+    Callable&& sfpu_func, std::uint32_t in0_offset, std::uint32_t in1_offset, std::uint32_t out_offset, VectorMode vector_mode = VectorMode::RC, Args&&... args)
 {
     _llk_math_eltwise_sfpu_start_(0);
-    _llk_math_eltwise_sfpu_apply_vector_mode_(
-        std::forward<Callable>(sfpu_func), vector_mode, dst_index_in0, dst_index_in1, dst_index_out, std::forward<Args>(args)...);
+    _llk_math_eltwise_sfpu_apply_vector_mode_(std::forward<Callable>(sfpu_func), vector_mode, in0_offset, in1_offset, out_offset, std::forward<Args>(args)...);
     _llk_math_eltwise_sfpu_done_();
 }
