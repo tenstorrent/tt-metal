@@ -77,6 +77,15 @@ class AceStepPipeline:
     condition_encoder: object = None  # AceStepConditionEncoder (-> DiT cross-attn context)
     tokenizer: object = None  # HF Qwen3 tokenizer
     _hf_text_cfg: object = None  # text-encoder HF config (for its RoPE)
+    _null_condition_emb: object = None  # torch [1,1,2048] learned null cross-attn context (for CFG)
+
+    def _uncond_context(self, cond_context):
+        """Build the CFG null/unconditional cross-attn context: null_condition_emb expanded to the
+        conditional context shape [1,1,enc_len,2048] (matches the reference's null_condition_emb path)."""
+        assert self._null_condition_emb is not None, "null_condition_emb not loaded; CFG unavailable"
+        enc_len = cond_context.shape[2]
+        null = self._null_condition_emb.reshape(1, 1, 1, -1).expand(1, 1, enc_len, -1).contiguous()
+        return ttnn.from_torch(null, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     # ---- denoise ----
     def _rope_tables(self, t_prime: int):
@@ -105,7 +114,16 @@ class AceStepPipeline:
         return ttnn.from_torch(mk, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     def generate(
-        self, hidden_noise, context_latents, encoder_hidden_states, *, infer_steps=30, shift=1.0, use_trace=False
+        self,
+        hidden_noise,
+        context_latents,
+        encoder_hidden_states,
+        *,
+        infer_steps=30,
+        shift=1.0,
+        use_trace=False,
+        guidance_scale=1.0,
+        uncond_encoder_hidden_states=None,
     ):
         """Run the ODE denoise loop. Inputs are TT tensors [1,1,T,·]; returns clean latents TT.
 
@@ -114,6 +132,12 @@ class AceStepPipeline:
         encoder_hidden_states: [1,1,enc,2048]
         use_trace:             capture the DiT velocity step as a ttnn trace and replay it each step
                                (removes the per-step host dispatch). Numerically identical to eager.
+        guidance_scale:        classifier-free guidance strength. >1.0 enables CFG: run the DiT twice
+                               per step (conditional + unconditional/null context) and combine the two
+                               velocities via APG (apg_forward, the reference default). uncond context
+                               must be provided when guidance_scale>1. guidance_scale=1.0 = no CFG
+                               (single pass, the legacy path).
+        uncond_encoder_hidden_states: the null-condition context [1,1,enc,2048] for the uncond pass.
         """
         seq_len = hidden_noise.shape[2]
         t_prime = seq_len // PATCH
@@ -122,6 +146,14 @@ class AceStepPipeline:
 
         solver = FlowMatchStep(self.mesh_device)
         t = _shifted_timesteps(infer_steps, shift, torch.device("cpu"))
+
+        do_cfg = guidance_scale > 1.0
+        if do_cfg:
+            assert uncond_encoder_hidden_states is not None, "CFG (guidance_scale>1) needs uncond context"
+            return self._generate_cfg(
+                hidden_noise, context_latents, encoder_hidden_states, uncond_encoder_hidden_states,
+                cos_tt, sin_tt, sliding, solver, t, guidance_scale,
+            )
 
         if use_trace:
             return self._generate_traced(
@@ -137,6 +169,40 @@ class AceStepPipeline:
                 xt, context_latents, t_scalar, t_scalar, cos_tt, sin_tt, encoder_hidden_states, sliding_mask=sliding
             )
             xt_new = solver.euler_step(xt, vt, t_curr - t_prev)
+            if step_idx > 0:
+                ttnn.deallocate(xt)
+            xt = xt_new
+        return xt  # [1,1,T,64] clean latents
+
+    def _generate_cfg(
+        self, hidden_noise, context_latents, enc_cond, enc_uncond, cos_tt, sin_tt, sliding, solver, t, guidance_scale
+    ):
+        """CFG denoise loop (APG), PURE TTNN so it stays trace-capturable.
+
+        Mirrors the reference sample() loop: per step run DiT(xt, cond) and DiT(xt, null), combine the
+        two velocities via APG (apg_forward_ttnn) on-device, then Euler step. dim=-2 matches the
+        reference [B,T,C] time-axis projection (dims=[1]) for our [1,1,T,64] latents. No host
+        round-trip -> the whole loop is on-device (trace-safe). The APG momentum running-average is a
+        resident device buffer updated in place per step.
+        """
+        from models.experimental.acestep.tt.apg_guidance import TTMomentumBuffer, apg_forward_ttnn
+
+        momentum_buffer = TTMomentumBuffer()
+        xt = hidden_noise
+        for step_idx in range(len(t) - 1):
+            t_curr = float(t[step_idx].item())
+            t_prev = float(t[step_idx + 1].item())
+            t_scalar = torch.tensor([t_curr], dtype=torch.float32)
+            vt_cond = self.dit.forward(
+                xt, context_latents, t_scalar, t_scalar, cos_tt, sin_tt, enc_cond, sliding_mask=sliding
+            )
+            vt_uncond = self.dit.forward(
+                xt, context_latents, t_scalar, t_scalar, cos_tt, sin_tt, enc_uncond, sliding_mask=sliding
+            )
+            vt = apg_forward_ttnn(vt_cond, vt_uncond, guidance_scale, momentum_buffer=momentum_buffer, dim=-2)
+            xt_new = solver.euler_step(xt, vt, t_curr - t_prev)
+            ttnn.deallocate(vt_cond)
+            ttnn.deallocate(vt_uncond)
             if step_idx > 0:
                 ttnn.deallocate(xt)
             xt = xt_new
@@ -202,12 +268,16 @@ class AceStepPipeline:
         shift: float = 1.0,
         seed: int = 0,
         use_trace: bool = False,
+        guidance_scale: float = 1.0,
     ):
         """Text -> 48 kHz stereo song in one call. Returns torch waveform [1, 2, samples].
 
         prompt:  style / caption text.  lyrics: optional lyric text.  seconds: song length.
+        guidance_scale: classifier-free guidance strength (reference base default 7.0). >1.0 makes the
+        model follow the prompt (without it the output is noise-like). Enables the CFG denoise path
+        (two DiT passes/step + APG). 1.0 = legacy no-CFG single pass.
         use_trace: capture the DiT denoise step as a ttnn trace and replay it each ODE step,
-        removing the per-step host dispatch (numerically identical to eager).
+        removing the per-step host dispatch (numerically identical to eager). Ignored under CFG.
         Tokenization, text encoding, conditioning, denoise (infer_steps ODE) and VAE decode are
         all handled internally. Requires the pipeline built with text/condition encoders
         (create_tt_pipeline(..., with_encoders=True), the default).
@@ -226,7 +296,11 @@ class AceStepPipeline:
         context = torch.cat([torch.zeros(1, 1, seq_len, hidden_ch), torch.ones(1, 1, seq_len, hidden_ch)], dim=-1)
         noise_tt = ttnn.from_torch(noise, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         context_tt = ttnn.from_torch(context, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        latents = self.generate(noise_tt, context_tt, enc_hs, infer_steps=infer_steps, shift=shift, use_trace=use_trace)
+        uncond_hs = self._uncond_context(enc_hs) if guidance_scale > 1.0 else None
+        latents = self.generate(
+            noise_tt, context_tt, enc_hs, infer_steps=infer_steps, shift=shift, use_trace=use_trace,
+            guidance_scale=guidance_scale, uncond_encoder_hidden_states=uncond_hs,
+        )
         return self.decode(latents)
 
     def _latent_len(self, seconds: float) -> int:
@@ -361,6 +435,21 @@ def create_tt_pipeline(
     hf = load_config()
     rope = Qwen3RotaryEmbedding(hf)
     mod = load_modeling_module()
+    # Load the learned null-condition embedding [1,1,2048] for classifier-free guidance (the uncond
+    # cross-attn context). Present in the base checkpoint; None-tolerant if absent (CFG then errors).
+    null_condition_emb = None
+    if with_encoders:
+        try:
+            from models.experimental.acestep.reference.weight_utils import load_state_dict
+
+            sd = load_state_dict()
+            for k in ("null_condition_emb", "decoder.null_condition_emb"):
+                if k in sd:
+                    null_condition_emb = sd[k].float()
+                    break
+        except Exception:
+            null_condition_emb = None
+
     return AceStepPipeline(
         args=args,
         dit=dit,
@@ -373,4 +462,5 @@ def create_tt_pipeline(
         condition_encoder=condition_encoder,
         tokenizer=tokenizer,
         _hf_text_cfg=hf_text_cfg,
+        _null_condition_emb=null_condition_emb,
     )
