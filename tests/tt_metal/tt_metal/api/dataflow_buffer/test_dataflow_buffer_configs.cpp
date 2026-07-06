@@ -21,7 +21,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "device_fixture.hpp"
@@ -30,6 +29,11 @@
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include <gmock/gmock.h>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "../metal2_host_api/test_helpers.hpp"
 
 namespace tt::tt_metal {
 
@@ -945,6 +949,136 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     validate_intra_tensix_dfb(program, logical_core, config);
+}
+
+// Run args for the minimal spec's two kernels (both declare empty RTA schemas, so empty arg sets).
+inline experimental::ProgramRunArgs MakeMinimalRunArgs(const experimental::NodeCoord& node) {
+    auto kernel_args = [&](const char* name) {
+        return experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{name},
+            .advanced_options =
+                experimental::AdvancedKernelRunArgs{.runtime_varargs = {{node, {}}}, .common_runtime_varargs = {}},
+        };
+    };
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args.push_back(kernel_args("dm_kernel"));
+    params.kernel_run_args.push_back(kernel_args("compute_kernel"));
+    return params;
+}
+
+// num_entries override on a finalized DFB recomputes the txn descriptor in place while PRESERVING the
+// TC assignment and transaction IDs (only the threshold changes for the new ring depth).
+TEST_F(MeshDeviceFixture, DFBReentryOverridePreservesTcAndRecomputesTxn) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB transaction IDs / tile counters require Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    ASSERT_TRUE(dfb->configs_finalized);
+    ASSERT_TRUE(dfb->config.enable_producer_implicit_sync);
+    ASSERT_GT(dfb->producer_txn_descriptor.num_txn_ids, 0);
+
+    // Snapshot TC assignment + transaction IDs before the override.
+    auto snapshot_tcs = [](const auto& d) {
+        std::vector<uint32_t> tcs;
+        for (const auto& group : d->groups) {
+            for (const auto& rc : group.hw_risc_configs) {
+                for (uint8_t i = 0; i < rc.config.num_tcs_to_rr; ++i) {
+                    tcs.push_back(static_cast<uint32_t>(rc.config.packed_tile_counter[i]));
+                }
+            }
+        }
+        return tcs;
+    };
+    const std::vector<uint32_t> tcs_before = snapshot_tcs(dfb);
+    const uint8_t num_txn_ids_before = dfb->producer_txn_descriptor.num_txn_ids;
+    const std::vector<uint8_t> txn_ids_before(
+        dfb->producer_txn_descriptor.txn_ids, dfb->producer_txn_descriptor.txn_ids + num_txn_ids_before);
+    const uint8_t threshold_before = dfb->producer_txn_descriptor.num_entries_to_process_threshold;
+
+    // Override num_entries 2 -> 4 (still divisible by the preserved txn-id divisor).
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .num_entries = 4});
+    EXPECT_NO_THROW(experimental::SetProgramRunArgs(program, params));
+
+    // Size-derived state updated.
+    EXPECT_EQ(dfb->config.num_entries, 4u);
+    EXPECT_EQ(dfb->capacity, 4u);
+    EXPECT_TRUE(dfb->configs_finalized);  // not reset
+
+    // TC assignment + transaction IDs preserved.
+    EXPECT_EQ(snapshot_tcs(dfb), tcs_before);
+    EXPECT_EQ(dfb->producer_txn_descriptor.num_txn_ids, num_txn_ids_before);
+    const std::vector<uint8_t> txn_ids_after(
+        dfb->producer_txn_descriptor.txn_ids,
+        dfb->producer_txn_descriptor.txn_ids + dfb->producer_txn_descriptor.num_txn_ids);
+    EXPECT_EQ(txn_ids_after, txn_ids_before);
+
+    // Threshold recomputed for the new num_entries (threshold = num_entries / num_txn_ids).
+    EXPECT_EQ(dfb->producer_txn_descriptor.num_entries_to_process_threshold, threshold_before * 2);
+}
+
+// On re-entry the txn-id count is preserved, so a num_entries override that breaks the preserved divisor
+// is rejected up front with an actionable message.
+TEST_F(MeshDeviceFixture, DFBReentryNumEntriesViolatesTxnDivisorFails) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB transaction-id divisor check requires Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .num_entries = 3});
+
+    EXPECT_THAT(
+        [&] { experimental::SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("num_entries override 3 is not divisible by")));
+}
+
+// An entry_size override that pushes the TRISC ring extent past the uint16 L1-aligned-unit limit is
+// rejected by the ring-extent re-validation.
+TEST_F(MeshDeviceFixture, DFBReentryEntrySizeRingExtentFails) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB ring-extent check requires Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .entry_size = 64u * 1024u * 1024u});
+
+    EXPECT_THAT(
+        [&] { experimental::SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("exceeds uint16_t; reduce capacity, stride, or entry_size")));
+}
+
+// capacity (num_entries / max(producers, consumers)) is stored as uint16_t (the tile-counter register
+// width); an override that pushes it past the max is rejected rather than silently truncated.
+TEST_F(MeshDeviceFixture, DFBOverrideCapacityExceedsUint16Fails) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB capacity / tile-counter limit requires Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back(
+        {.dfb = experimental::DFBSpecName{"dfb_0"}, .num_entries = 70000});  // capacity 70000 > 65535
+    EXPECT_THAT(
+        [&] { experimental::SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("capacity 70000 exceeds the maximum 65535")));
 }
 
 }  // end namespace tt::tt_metal

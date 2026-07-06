@@ -1,5 +1,6 @@
 set(HOSTDEVCOMMON_JIT_API_HEADERS
     api/hostdevcommon/common_values.hpp
+    api/hostdevcommon/dispatch_telemetry_types.hpp
     api/hostdevcommon/dprint_common.h
     api/hostdevcommon/kernel_structs.h
     api/hostdevcommon/profiler_common.h

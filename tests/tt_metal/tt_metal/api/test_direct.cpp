@@ -21,6 +21,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -185,7 +186,7 @@ struct ReaderWriterConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
     tt::DataFormat l1_data_format = tt::DataFormat::Invalid;
-    experimental::metal2_host_api::NodeCoord node;
+    experimental::NodeCoord node;
 };
 /// @brief Does Dram --> Reader --> DFB --> Writer --> Dram on a single core.
 /// Uses the Metal 2.0 host API on every arch; on WH/BH the runtime selects the
@@ -224,11 +225,11 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     const uint32_t num_threads = (is_quasar && test_config.num_tiles > 1) ? 2u : 1u;
     const uint32_t num_tiles_per_thread = test_config.num_tiles / num_threads;
 
-    constexpr const char* L1_DFB = "l1_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
+    const experimental::DFBSpecName L1_DFB{"l1_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
 
-    experimental::metal2_host_api::DataflowBufferSpec l1_dfb_spec{
+    experimental::DataflowBufferSpec l1_dfb_spec{
         .unique_id = L1_DFB,
         .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
@@ -237,92 +238,78 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
     // Both gen1 and gen2 configs are populated; the runtime picks the one
     // matching the active arch.
-    experimental::metal2_host_api::DataMovementConfiguration reader_dm_cfg{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+    experimental::DataMovementHardwareConfig reader_dm_cfg{
+        .gen1_config =
+            experimental::DataMovementHardwareConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-        .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
-    experimental::metal2_host_api::DataMovementConfiguration writer_dm_cfg{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+    experimental::DataMovementHardwareConfig writer_dm_cfg{
+        .gen1_config =
+            experimental::DataMovementHardwareConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-        .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = num_threads,
-        .dfb_bindings = {{
-            .dfb_spec_name = L1_DFB,
-            .local_accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec = reader_dm_cfg,
+        .dfb_bindings = {experimental::ProducerOf(L1_DFB, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = reader_dm_cfg,
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = num_threads,
-        .dfb_bindings = {{
-            .dfb_spec_name = L1_DFB,
-            .local_accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec = writer_dm_cfg,
+        .dfb_bindings = {experimental::ConsumerOf(L1_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = writer_dm_cfg,
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec wu{
+        .name = "main",
         .kernels = {READER, WRITER},
         .target_nodes = test_config.node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "reader_writer",
+    experimental::ProgramSpec spec{
+        .name = "reader_writer",
         .kernels = {reader_spec, writer_spec},
         .dataflow_buffers = {l1_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = READER,
-            .named_runtime_args =
-                {{.node = test_config.node,
-                  .args =
-                      {{"src_addr", input_dram_byte_address},
-                       {"src_bank_id", 0u},
-                       {"num_tiles", num_tiles_per_thread},
-                       {"dram_page_stride", per_tile_stride}}}},
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{test_config.node,
+                  {{"src_addr", input_dram_byte_address},
+                   {"src_bank_id", 0u},
+                   {"num_tiles", num_tiles_per_thread},
+                   {"dram_page_stride", per_tile_stride}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = WRITER,
-            .named_runtime_args =
-                {{.node = test_config.node,
-                  .args =
-                      {{"dst_addr", output_dram_byte_address},
-                       {"dst_bank_id", 0u},
-                       {"num_tiles", num_tiles_per_thread},
-                       {"dram_page_stride", per_tile_stride}}}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values =
+                {{test_config.node,
+                  {{"dst_addr", output_dram_byte_address},
+                   {"dst_bank_id", 0u},
+                   {"num_tiles", num_tiles_per_thread},
+                   {"dram_page_stride", per_tile_stride}}}},
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
@@ -335,7 +322,8 @@ struct ReaderDatacopyWriterConfig {
     size_t tile_byte_size = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
-    experimental::metal2_host_api::NodeCoord node;
+    experimental::NodeCoord node;
+    bool dst_full_sync_en = false;
 };
 
 // Shared host-side state for reader_datacopy_writer: DRAM buffers, sizing,
@@ -409,22 +397,22 @@ bool reader_datacopy_writer(
     const uint32_t per_core_tile_cnt = test_config.num_tiles / num_threads;
     const uint32_t num_tiles_per_thread = test_config.num_tiles / num_threads;
 
-    constexpr const char* INPUT_DFB = "input_dfb";
-    constexpr const char* OUTPUT_DFB = "output_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
+    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     // Implicit sync is enabled by default for both DFBs (no DM kernel opts out
-    // via Gen2DataMovementConfig::disable_implicit_sync_for). The program-level
+    // via Gen2Config::disable_dfb_implicit_sync_for). The program-level
     // reservation flag set below is independent of per-DFB sync mode.
-    experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
+    experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_input_data_format,
     };
-    experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
+    experimental::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
@@ -433,120 +421,119 @@ bool reader_datacopy_writer(
 
     // Both gen1 and gen2 configs are populated; the runtime picks the one
     // matching the active arch.
-    experimental::metal2_host_api::DataMovementConfiguration reader_dm_cfg{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+    experimental::DataMovementHardwareConfig reader_dm_cfg{
+        .gen1_config =
+            experimental::DataMovementHardwareConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-        .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
-    experimental::metal2_host_api::DataMovementConfiguration writer_dm_cfg{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+    experimental::DataMovementHardwareConfig writer_dm_cfg{
+        .gen1_config =
+            experimental::DataMovementHardwareConfig::Gen1Config{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-        .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = num_threads,
-        .dfb_bindings = {{
-            .dfb_spec_name = INPUT_DFB,
-            .local_accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec = reader_dm_cfg,
+        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = reader_dm_cfg,
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = num_threads,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUTPUT_DFB,
-            .local_accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .config_spec = writer_dm_cfg,
+        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = writer_dm_cfg,
     };
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    // 32-bit input formats require 32-bit dest mode; otherwise the unpacker
+    // would write 32-bit data into a 16-bit dest. Derived, not user-supplied.
+    const bool fp32_dest_acc_en = (test_config.l1_input_data_format == tt::DataFormat::Float32) ||
+                                  (test_config.l1_input_data_format == tt::DataFormat::Int32) ||
+                                  (test_config.l1_input_data_format == tt::DataFormat::UInt32);
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp",
         .num_threads = num_threads,
         .dfb_bindings =
             {{
                  .dfb_spec_name = INPUT_DFB,
-                 .local_accessor_name = "in",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
-                 .local_accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = {{"per_core_tile_cnt", per_core_tile_cnt}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .compile_time_args = {{"per_core_tile_cnt", per_core_tile_cnt}},
+        .hw_config =
+            experimental::ComputeHardwareConfig{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = test_config.dst_full_sync_en,
+                .unpack_to_dest_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode =
+                    (test_config.l1_input_data_format == tt::DataFormat::Float32)
+                        ? experimental::ComputeHardwareConfig::
+                              UnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
+                        : experimental::ComputeHardwareConfig::UnpackToDestModes{},
+            },
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec wu{
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = test_config.node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "reader_datacopy_writer",
+    experimental::ProgramSpec spec{
+        .name = "reader_datacopy_writer",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     log_info(tt::LogTest, "Num tiles per thread: {}", num_tiles_per_thread);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = READER,
-            .named_runtime_args =
-                {{.node = test_config.node,
-                  .args =
-                      {{"src_addr", ctx.input_dram_byte_address},
-                       {"src_bank_id", 0u},
-                       {"num_tiles", num_tiles_per_thread},
-                       {"dram_page_stride", ctx.per_tile_stride}}}},
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{test_config.node,
+                  {{"src_addr", ctx.input_dram_byte_address},
+                   {"src_bank_id", 0u},
+                   {"num_tiles", num_tiles_per_thread},
+                   {"dram_page_stride", ctx.per_tile_stride}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = WRITER,
-            .named_runtime_args =
-                {{.node = test_config.node,
-                  .args =
-                      {{"dst_addr", ctx.output_dram_byte_address},
-                       {"dst_bank_id", 0u},
-                       {"num_tiles", num_tiles_per_thread},
-                       {"dram_page_stride", ctx.per_tile_stride}}}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values =
+                {{test_config.node,
+                  {{"dst_addr", ctx.output_dram_byte_address},
+                   {"dst_bank_id", 0u},
+                   {"num_tiles", num_tiles_per_thread},
+                   {"dram_page_stride", ctx.per_tile_stride}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = COMPUTE,
-        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
@@ -583,7 +570,7 @@ TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderWriter) {
         .num_tiles = 1,
         .tile_byte_size = 2 * 32 * 32,
         .l1_data_format = tt::DataFormat::Float16_b,
-        .node = experimental::metal2_host_api::NodeCoord(0, 0)};
+        .node = experimental::NodeCoord(0, 0)};
     for (unsigned int id = 0; id < num_devices_; id++) {
         test_config.num_tiles = 1;
         ASSERT_TRUE(unit_tests::dram::direct::reader_writer(devices_.at(id), test_config));
@@ -599,9 +586,9 @@ TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
         .tile_byte_size = 2 * 32 * 32,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_data_format = tt::DataFormat::Float16_b,
-        .node = experimental::metal2_host_api::NodeCoord(0, 0)};
+        .node = experimental::NodeCoord(0, 0)};
     for (unsigned int id = 0; id < num_devices_; id++) {
-        if (devices_.at(id)->arch() != ARCH::QUASAR) { // TODO (#38092): Remove when we can run back to back tests on Quasar
+        if (devices_.at(id)->arch() != ARCH::QUASAR) { // Remove when we can run back to back tests on Quasar VCS (on CI)
             test_config.num_tiles = 1;
             ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
             test_config.num_tiles = 4;
@@ -609,6 +596,27 @@ TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
         }
         test_config.num_tiles = 8;
         ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
+    }
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDatacopyToDestWriter) {
+    // Int32/Float32 x SyncFull/SyncHalf
+    for (const tt::DataFormat data_format : {tt::DataFormat::Int32, tt::DataFormat::Float32}) {
+        for (const bool dst_full_sync_en : {true, false}) {
+            SCOPED_TRACE(
+                std::string(data_format == tt::DataFormat::Int32 ? "Int32" : "Float32") +
+                (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
+            unit_tests::dram::direct::ReaderDatacopyWriterConfig test_config = {
+                .num_tiles = 4,
+                .tile_byte_size = sizeof(uint32_t) * constants::TILE_HEIGHT * constants::TILE_WIDTH,
+                .l1_input_data_format = data_format,
+                .l1_output_data_format = data_format,
+                .node = experimental::NodeCoord(0, 0),
+                .dst_full_sync_en = dst_full_sync_en};
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
+            }
+        }
     }
 }
 

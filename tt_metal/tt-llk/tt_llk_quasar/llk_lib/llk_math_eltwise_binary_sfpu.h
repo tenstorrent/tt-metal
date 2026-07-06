@@ -8,8 +8,17 @@
 
 #include "llk_math_eltwise_sfpu_common.h"
 
-template <bool APPROXIMATE, class F, class... ARGS>
-inline void _llk_math_eltwise_binary_sfpu_params_(F&& sfpu_func, std::uint32_t dst_tile_index, ARGS&&... args)
+template <typename Callable, typename... Args>
+inline void _llk_math_eltwise_binary_sfpu_params_(
+    Callable&& sfpu_func,
+    std::uint32_t dst_index_in0,
+    std::uint32_t dst_index_in1,
+    std::uint32_t dst_index_out,
+    VectorMode vector_mode = VectorMode::RC,
+    Args&&... args)
 {
-    _llk_math_eltwise_sfpu_params_(std::forward<F>(sfpu_func), dst_tile_index, std::forward<ARGS>(args)...);
+    _llk_math_eltwise_sfpu_start_(0);
+    _llk_math_eltwise_sfpu_apply_vector_mode_(
+        std::forward<Callable>(sfpu_func), vector_mode, dst_index_in0, dst_index_in1, dst_index_out, std::forward<Args>(args)...);
+    _llk_math_eltwise_sfpu_done_();
 }

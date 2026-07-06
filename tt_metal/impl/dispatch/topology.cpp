@@ -114,6 +114,13 @@ constexpr noc_selection_t k_fabric_mux_noc = {
     .downstream_noc = NOC::NOC_0,
 };
 
+// Quasar only has a single NOC
+constexpr noc_selection_t k_quasar_noc = {
+    .non_dispatch_noc = NOC::NOC_0,
+    .upstream_noc = NOC::NOC_0,
+    .downstream_noc = NOC::NOC_0,
+};
+
 // clang-format off
 static const std::vector<DispatchKernelNode> single_chip_arch_1cq = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_prefetcher_noc},
@@ -135,6 +142,11 @@ static const std::vector<DispatchKernelNode> single_chip_arch_2cq_dispatch_s = {
     {3, 0, 0, 1, DISPATCH_HD, {2, x, x, x}, {5, x, x, x}, k_dispatcher_noc},
     {4, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_dispatcher_s_noc},
     {5, 0, 0, 1, DISPATCH_S, {2, x, x, x}, {3, x, x, x}, k_dispatcher_s_noc},
+};
+
+static const std::vector<DispatchKernelNode> quasar_single_chip_1cq = {
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, x, x, x}, k_quasar_noc},
+    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, k_quasar_noc},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
@@ -407,10 +419,21 @@ DispatchTopology::DispatchTopology(
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
     bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
+    bool are_fd_kernels_on_same_core = descriptor_.cluster().arch() == tt::ARCH::QUASAR && descriptor_.num_cqs() == 1;
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
-        CoreType::WORKER, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster, descriptor_.rtoptions());
+        CoreType::WORKER,
+        descriptor_.num_cqs(),
+        descriptor_.hal(),
+        is_galaxy_cluster,
+        are_fd_kernels_on_same_core,
+        descriptor_.rtoptions());
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
-        CoreType::ETH, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster, descriptor_.rtoptions());
+        CoreType::ETH,
+        descriptor_.num_cqs(),
+        descriptor_.hal(),
+        is_galaxy_cluster,
+        /*are_fd_kernels_on_same_core=*/false,
+        descriptor_.rtoptions());
 }
 
 DispatchTopology::~DispatchTopology() { reset(); }
@@ -442,8 +465,12 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
 
     // Helper function to get nodes for single device
     auto populate_single_device = [&]() {
+        const bool is_quasar = this->descriptor_.cluster().arch() == tt::ARCH::QUASAR;
         if (num_hw_cqs == 1) {
-            return single_chip_arch_1cq;
+            return is_quasar ? quasar_single_chip_1cq : single_chip_arch_1cq;
+        }
+        if (is_quasar) {
+            TT_THROW("Quasar fast dispatch does not support 2 CQs yet");
         }
         if (this->get_dispatch_query_manager_().dispatch_s_enabled()) {
             return single_chip_arch_2cq_dispatch_s;
@@ -465,6 +492,9 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
             index_offset += nodes_for_one_mmio.size();
         }
     } else {
+        if (this->descriptor_.cluster().arch() == tt::ARCH::QUASAR) {
+            TT_THROW("Multi-chip dispatch topology is not supported on Quasar.");
+        }
         // Need to handle N300/T3000 separately from TG/TGG since they have different templates/tunnel depths
         // If using fabric, upstream would have already initialized to the proper config for dispatch
         if (descriptor_.cluster().is_galaxy_cluster()) {

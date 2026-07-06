@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_rdiv.h"
+#include "ckernel_sfpu_rdiv.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -14,7 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rdiv_tile_init() { MATH((llk_math_eltwise_unary_sfpu_rdiv_init<APPROX>())); }
+ALWI void rdiv_tile_init() { MATH(SFPU_UNARY_INIT_FN(rdiv, sfpu::rdiv_init, (APPROX))); }
 
 // clang-format off
 /**
@@ -33,7 +34,14 @@ ALWI void rdiv_tile_init() { MATH((llk_math_eltwise_unary_sfpu_rdiv_init<APPROX>
 // clang-format on
 template <RoundingMode rounding_mode = RoundingMode::None>
 ALWI void rdiv_tile(uint32_t dst_index, uint32_t value, VectorMode vector_mode = VectorMode::RC) {
-    MATH((llk_math_eltwise_unary_sfpu_rdiv<APPROX, DST_ACCUM_MODE, rounding_mode>(dst_index, value, vector_mode)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_rdiv,
+        (APPROX, DST_ACCUM_MODE, rounding_mode, 8 /* ITERATIONS */),
+        dst_index,
+        vector_mode,
+        value));
 }
 
 }  // namespace ckernel

@@ -24,7 +24,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"
@@ -37,8 +37,8 @@ namespace {
 
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental::metal2_host_api;
-using namespace tt::tt_metal::experimental::metal2_host_api::test_helpers;
+using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal::experimental::test_helpers;
 using namespace ttnn;
 
 // ============================================================================
@@ -57,7 +57,7 @@ constexpr const char* kWriterKernelPath =
 // Returns the comma-separated CTA value string for the KERNEL_COMPILE_TIME_ARGS define.
 // This enables device kernels that use TensorAccessorArgs<0, 0>() (positional CTA access)
 // to compile correctly under the Metal 2.0 API, which does not pass positional CTAs through
-// compile_time_arg_bindings.
+// compile_time_args.
 std::string build_cta_define(const TensorAccessorArgs& accessor_args) {
     const auto ctas = accessor_args.get_compile_time_args();
     std::ostringstream ss;
@@ -109,7 +109,7 @@ struct StridedDFBTestParams {
 // On Quasar (num_dm_threads DM threads), each thread handles every N-th page.
 //
 // kernel_builder_fn: a callable (KernelSpec& reader, KernelSpec& writer) → void
-//    that sets the arch-specific fields (num_threads, config_spec, DFB bindings).
+//    that sets the arch-specific fields (num_threads, hw_config, DFB bindings).
 template <typename T, typename KernelBuilderFn>
 void run_strided_dfb_copy_test(
     const StridedDFBTestParams& params,
@@ -141,7 +141,7 @@ void run_strided_dfb_copy_test(
     const NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "strided_pages_dfb_copy";
+    spec.name = "strided_pages_dfb_copy";
 
     const TensorAccessorArgs input_accessor_args(*input_buffer);
     const TensorAccessorArgs output_accessor_args(*output_buffer);
@@ -156,14 +156,14 @@ void run_strided_dfb_copy_test(
     kernel_builder_fn(reader, writer);
 
     // Inject CTA define so TensorAccessorArgs<0, 0>() resolves at compile time
-    reader.source = KernelSpec::SourceFilePath{kReaderKernelPath};
-    writer.source = KernelSpec::SourceFilePath{kWriterKernelPath};
-    reader.compiler_options.defines.push_back({"KERNEL_COMPILE_TIME_ARGS", input_cta_str});
-    writer.compiler_options.defines.push_back({"KERNEL_COMPILE_TIME_ARGS", output_cta_str});
+    reader.source = kReaderKernelPath;
+    writer.source = kWriterKernelPath;
+    reader.compiler_options.defines.emplace("KERNEL_COMPILE_TIME_ARGS", input_cta_str);
+    writer.compiler_options.defines.emplace("KERNEL_COMPILE_TIME_ARGS", output_cta_str);
 
     // Runtime varargs: [0]=base_addr, [1]=total_pages
-    reader.runtime_arguments_schema.num_runtime_varargs = 2;
-    writer.runtime_arguments_schema.num_runtime_varargs = 2;
+    reader.advanced_options.num_runtime_varargs = 2;
+    writer.advanced_options.num_runtime_varargs = 2;
 
     // DFB: one entry per page, pipelined depth = num_dfb_entries.
     // data_format_metadata must be set — set_dfb_tile_dims calls get_tile_size() unconditionally
@@ -180,18 +180,24 @@ void run_strided_dfb_copy_test(
     // -----------------------------------------------------------------------
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    ProgramRunParams run_params;
-    run_params.kernel_run_params = {
-        ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = "reader",
-            .runtime_varargs = {{node, {input_buffer->address(), total_pages}}},
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{"reader"},
+            .advanced_options =
+                AdvancedKernelRunArgs{
+                    .runtime_varargs = {{node, {input_buffer->address(), total_pages}}},
+                },
         },
-        ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = "writer",
-            .runtime_varargs = {{node, {output_buffer->address(), total_pages}}},
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{"writer"},
+            .advanced_options =
+                AdvancedKernelRunArgs{
+                    .runtime_varargs = {{node, {output_buffer->address(), total_pages}}},
+                },
         },
     };
-    SetProgramRunParameters(program, run_params);
+    SetProgramRunArgs(program, run_params);
 
     // -----------------------------------------------------------------------
     // Dispatch and verify
@@ -229,8 +235,8 @@ TEST_P(TensorAccessorStridedDFBTest, Gen1StridedPagesCopy) {
         reader = MakeMinimalGen1DMKernel("reader", DataMovementProcessor::RISCV_0);
         writer = MakeMinimalGen1DMKernel("writer", DataMovementProcessor::RISCV_1);
         // STRIDED with 1 thread: stride=1, each thread accesses all DFB entries
-        BindDFBToKernel(reader, "staging_dfb", "my_dfb", KernelSpec::DFBEndpointType::PRODUCER);
-        BindDFBToKernel(writer, "staging_dfb", "my_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+        reader.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
+        writer.dfb_bindings.push_back(ConsumerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
     };
 
     switch (params.dtype) {
@@ -301,8 +307,8 @@ TEST_P(TensorAccessorStridedDFBTest, QuasarStridedPagesCopy) {
         reader = MakeMinimalDMKernel("reader", kNumDMThreads);
         writer = MakeMinimalDMKernel("writer", kNumDMThreads);
         // STRIDED with 3 threads: each thread owns every 3rd DFB entry
-        BindDFBToKernel(reader, "staging_dfb", "my_dfb", KernelSpec::DFBEndpointType::PRODUCER);
-        BindDFBToKernel(writer, "staging_dfb", "my_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+        reader.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
+        writer.dfb_bindings.push_back(ConsumerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
     };
 
     // DFB depth: 2 entries per DM thread (double-buffer) × 3 threads = 6 entries

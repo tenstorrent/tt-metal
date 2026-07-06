@@ -38,11 +38,13 @@ void kernel_main() {
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {
         cb.reserve_back(num_read_per_barrier);
+        const uint32_t cb_write_ptr = cb.get_write_ptr();
         uint32_t l1_write_offset = 0;
 
         for (uint32_t i = 0; i < num_read_per_barrier; ++i) {
-            noc.async_read(
-                s, cb, stick_size_bytes, {.page_id = i_stick, .offset_bytes = 0}, {.offset_bytes = l1_write_offset});
+            // Restored native sharded multi-page split (see common.hpp helper).
+            tt::data_movement::common::noc_async_read_sharded(
+                noc, cb_write_ptr + l1_write_offset, s, i_stick, 0, stick_size_bytes);
             l1_write_offset += stick_size_bytes;
 
             curr_c++;

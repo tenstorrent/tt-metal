@@ -139,17 +139,9 @@ std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::P
             switch (params.processor_class) {
                 case HalProcessorClassType::DM: return fmt::format("dm{}", params.processor_id); break;
                 case HalProcessorClassType::COMPUTE:
-                    return (
-                        params.is_fw ? fmt::format(
-                                           "trisc{}",
-                                           params.processor_id %
-                                               experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE)
-                                     : fmt::format(
-                                           "neo{}_trisc{}",
-                                           params.processor_id /
-                                               experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE,
-                                           params.processor_id %
-                                               experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE));
+                    return fmt::format(
+                        "trisc{}",
+                        params.processor_id % experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
             }
         case HalProgrammableCoreType::ACTIVE_ETH: return "erisc";
         case HalProgrammableCoreType::IDLE_ETH:

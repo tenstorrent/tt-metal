@@ -18,7 +18,11 @@
 #include "tt_metal/impl/dispatch/kernels/device_print_dispatch.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "hostdevcommon/profiler_common.h"
+#include "hostdevcommon/dispatch_telemetry_types.hpp"
 #include "hostdev/dev_msgs.h"
+#include "risc_common.h"
+
+#include <array>
 
 // dispatch_s has a customized command buffer allocation for NOC 1.
 // Cmd Buf 0 is used for regular writes.
@@ -42,9 +46,14 @@ constexpr uint32_t distributed_dispatcher =
 constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
 constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;
 constexpr uint32_t max_num_go_signal_noc_data_entries = MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES;
+constexpr uintptr_t dispatch_telemetry_control_addr = DISPATCH_TELEMETRY_CONTROL_ADDR;
+constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
+constexpr uintptr_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
 constexpr uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
 constexpr uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
 constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
+volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl* dispatch_telemetry_control =
+    reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl*>(dispatch_telemetry_control_addr);
 
 constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
 constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
@@ -158,6 +167,9 @@ static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
 
 static uint32_t num_worker_sems = 1;
 
+// The dispatch message entry limit also bounds the number of sub-devices.
+static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
+
 FORCE_INLINE
 void dispatch_s_wr_reg_cmd_buf_init() {
     uint64_t xy_local_addr = get_noc_addr_helper(my_noc_xy, 0);
@@ -242,6 +254,7 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     last_wait_stream = wait_stream;
     volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
         static_cast<uintptr_t>(STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
+    DEVICE_PRINT("DISPATCH_S: wait_for_workers: wait_count: {}, worker_sem: {}\n", wait_count, *worker_sem);
     while (stream_wrap_gt(wait_count, *worker_sem)) {
         if (rt_profiler_enabled) {
             record_realtime_timestamp(rt_profiler_msg, false);
@@ -321,6 +334,9 @@ void process_go_signal_mcast_cmd() {
         invalidate_l1_cache();
         // Update dispatch_d with the latest num_workers
         update_worker_completion_count_on_dispatch_d();
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        device_print_dispatcher.execute();
+#endif
     }
     mcasts_sent++;  // Go signal sent -> update counter
 
@@ -400,6 +416,19 @@ void process_go_signal_mcast_cmd() {
             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(aligned_go_signal_storage)), dst, sizeof(uint32_t));
     }
 
+    if (telemetry_enabled) {
+        static uint32_t local_launch_seq_counter = 0;
+        const uint32_t stream_index = wait_stream - first_stream_used;
+        ASSERT(stream_index < max_num_worker_sems);
+        auto dispatch_telemetry =
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base);
+
+        dispatch_telemetry_control->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
+        dispatch_telemetry->last_work_launch_timestamp[stream_index] = get_timestamp();
+        dispatch_telemetry_control->launched_work_start_stream_sem[stream_index] = wait_count;
+        dispatch_telemetry_control->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
+    }
+
 #if DEVICE_PRINT_DISPATCH_ENABLED
     // Workers have just been notified to start a new program; reset the stall-detection
     // window so it measures THIS program's print activity rather than dispatch_s's
@@ -468,7 +497,7 @@ void set_go_signal_noc_data() {
 FORCE_INLINE
 void merge_dispatch_d_noc_counter_deltas() {
     if constexpr (distributed_dispatcher) {
-        DEVICE_PRINT("merge_dispatch_d_noc_counter_deltas is only supported when dispatch_d runs on the same core");
+        DPRINT("merge_dispatch_d_noc_counter_deltas is only supported when dispatch_d runs on the same core\n");
         ASSERT(0);
         return;
     }
@@ -510,8 +539,7 @@ void merge_dispatch_d_noc_counter_deltas() {
 
 void kernel_main() {
     set_l1_data_cache<true>();
-    DPRINT << "dispatch_s : start" << ENDL();
-    DEVICE_PRINT("dispatch_s : start\n");
+    DPRINT("dispatch_s : start\n");
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();
@@ -574,6 +602,13 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
+            case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS:
+                cmd_ptr += set_sub_device_worker_counts<telemetry_enabled>(
+                    cmd_ptr,
+                    workers_per_sub_device,
+                    &dispatch_telemetry_control->sub_device_worker_counts_update,
+                    dispatch_telemetry_base);
+                break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE:
                 if (rt_profiler_enabled) {
@@ -591,12 +626,12 @@ void kernel_main() {
                     dispatch_s_noc_inline_dw_write(
                         realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
                 }
+                if constexpr (telemetry_enabled) {
+                    dispatch_telemetry_control->compute_terminate = 1;
+                }
                 done = true;
                 break;
-            default:
-                DPRINT << "dispatcher_s invalid command" << ENDL();
-                DEVICE_PRINT("dispatcher_s invalid command\n");
-                ASSERT(0);
+            default: DPRINT("dispatcher_s invalid command\n"); ASSERT(0);
         }
         // Dispatch s only supports single page commands for now
         ASSERT(cmd_ptr <= (reinterpret_cast<uintptr_t>(cmd) + cb_page_size));
@@ -622,8 +657,7 @@ void kernel_main() {
 
     noc_async_full_barrier();
 
-    DPRINT << "dispatch_s : done" << ENDL();
-    DEVICE_PRINT("dispatch_s : done\n");
+    DPRINT("dispatch_s : done\n");
 #if DEVICE_PRINT_DISPATCH_ENABLED
     device_print_dispatcher.shutdown();
 #endif

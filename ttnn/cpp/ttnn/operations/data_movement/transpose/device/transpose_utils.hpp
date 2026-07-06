@@ -5,11 +5,6 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <cstdint>
-#include <optional>
-#include <span>
 
 namespace ttnn::operations::data_movement::transpose {
 
@@ -22,18 +17,11 @@ bool is_native_transpose_sharding(
 std::optional<tt::tt_metal::ShardSpec> adjust_shard_spec_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
 
+// Build a sharded spec over the full compute grid from the post-transform shape.
 tt::tt_metal::ShardSpec generate_transpose_shard_spec(
-    const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, tt::tt_metal::TensorMemoryLayout memory_layout);
-
-// Copy RuntimeTensorShape common args for `buffer` into `dst` (size-checked).
-void copy_transpose_common_runtime_args(const tt::tt_metal::Buffer& buffer, std::span<std::uint32_t> dst);
-
-// Refresh reader/writer common args on program-cache hits.
-void refresh_transpose_common_runtime_args(
-    tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    const tt::tt_metal::Buffer& input_buffer,
-    const tt::tt_metal::Buffer& output_buffer);
+    const Tensor& input_tensor,
+    const ttnn::Shape& padded_out_shape,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt);
 
 }  // namespace ttnn::operations::data_movement::transpose

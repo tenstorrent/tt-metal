@@ -146,7 +146,7 @@ def _print_and_write_summary(case_id: str, rows: list[dict], summary: dict) -> N
             {
                 "id": "quad_aime_fast",
                 "prompts_file": FAST_PROMPTS_FILE,
-                "max_new_tokens": 8000,
+                "max_new_tokens": 8192 - 512,
                 "max_seq_len": 8192,
                 "max_users_per_row": 8,
                 "repeat_count": _env_int("DEEPSEEK_AIME_FAST_REPEAT_COUNT", 6),
@@ -159,7 +159,7 @@ def _print_and_write_summary(case_id: str, rows: list[dict], summary: dict) -> N
             {
                 "id": "quad_aime_full",
                 "prompts_file": FULL_PROMPTS_FILE,
-                "max_new_tokens": 32365,
+                "max_new_tokens": 32768 - 512,
                 "max_seq_len": 32768,
                 "max_users_per_row": 8,
                 "min_correct": _env_int("DEEPSEEK_AIME_FULL_MIN_CORRECT", 24),

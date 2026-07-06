@@ -16,8 +16,7 @@ void kernel_main() {
     const uint32_t N = get_arg_val<uint32_t>(1);
     const uint32_t tile_offset = get_arg_val<uint32_t>(2);
     const uint32_t Wt = get_arg_val<uint32_t>(3);
-    const uint32_t scaler = get_arg_val<uint32_t>(4);
-    const uint32_t mask_w = get_arg_val<uint32_t>(5);
+    const uint32_t mask_w = get_arg_val<uint32_t>(4);
 
     // Constants
     constexpr auto cb_in = tt::CBIndex::c_0;
@@ -40,10 +39,11 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<cb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
     // Generate mask tile
+    CircularBuffer cb_mask_obj(cb_mask);
     if (is_fp32) {
-        generate_mask_w<uint32_t>(cb_mask, mask_w);
+        generate_mask_w<uint32_t>(cb_mask_obj, mask_w);
     } else {
-        generate_mask_w<uint16_t>(cb_mask, mask_w);
+        generate_mask_w<uint16_t>(cb_mask_obj, mask_w);
     }
 
     Noc noc;

@@ -22,9 +22,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     const auto& args = operation_attributes;
     auto& output_tensors = tensor_return_value;
     // Tensor references
-    const auto& input_tensor = tensor_args.input;
-    const auto& value_tensor = std::get<0>(output_tensors);
-    const auto& index_tensor = std::get<1>(output_tensors);
+    const auto& input_tensor = tensor_args.input.mesh_tensor();
+    const auto& value_tensor = std::get<0>(output_tensors).mesh_tensor();
+    const auto& index_tensor = std::get<1>(output_tensors).mesh_tensor();
 
     // Determine index output format based on dimension size constraints
     const ttnn::Shape input_shape = input_tensor.padded_shape();
@@ -52,11 +52,6 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
     const uint32_t value_tile_size = tile_size(output_val_cb_data_format);
     const uint32_t index_tile_size = tile_size(output_ind_cb_data_format);
     const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
-
-    // Device memory buffer pointers for kernel runtime arguments
-    auto* const input_buffer = input_tensor.buffer();
-    auto* const values_buffer = value_tensor.buffer();
-    auto* const index_buffer = index_tensor.buffer();
 
     // Tensor shape and dimension calculations
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
@@ -196,9 +191,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
         total_number_of_cores,                // Total number of cores
         static_cast<uint32_t>(uint16_output)  // Index format flag
     };
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
     if (tensor_args.indices.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(tensor_args.indices->buffer()).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_args.indices->mesh_tensor()).append_to(reader_compile_time_args);
     }
     const std::map<std::string, std::string> reader_defines_map = {
         {"GENERATE_INDICES", "1"},  // tensor_args.indices.has_value() ? "0" : "1" - GH issue: #36329
@@ -221,8 +216,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
         Ktiles,                // K value in tiles
         total_number_of_cores  // Total number of cores
     };
-    tt::tt_metal::TensorAccessorArgs(values_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(index_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(value_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(index_tensor).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -264,17 +259,18 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
                 reader_desc.emplace_runtime_args(
                     core,
                     {
-                        input_buffer,
+                        input_tensor,
                         id,
                         work_per_core,
-                        tensor_args.indices.has_value() ? tensor_args.indices->buffer()->address()
-                                                        : 0u,  // Optional indices tensor
+                        tensor_args.indices.has_value()
+                            ? static_cast<uint32_t>(tensor_args.indices->mesh_tensor().address())
+                            : 0u,  // Optional indices tensor
                     });
                 writer_desc.emplace_runtime_args(
                     core,
                     {
-                        values_buffer,
-                        index_buffer,
+                        value_tensor,
+                        index_tensor,
                         id,
                         work_per_core,
                     });

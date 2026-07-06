@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/eltwise_binary_sfpu.h"
-#include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/typecast.h"
+#include "api/compute/tile_move_copy.h"
 
 #include <cstdint>
 

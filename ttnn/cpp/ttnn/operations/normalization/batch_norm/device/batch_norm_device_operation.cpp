@@ -118,42 +118,6 @@ BatchNormOperation::tensor_return_value_t BatchNormOperation::create_output_tens
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-ttsl::hash::hash_t BatchNormOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
-
-    TT_FATAL(is_device_tensor(input), "Unexpected type {}", input.storage_type());
-
-    // For input tensor
-    auto base_tuple = std::make_tuple(attributes, input.dtype(), input.memory_config());
-
-    // To extract (optional<DataType>, optional<MemoryConfig>) from optional tensors
-    auto get_optional_tensor_info = [](const std::optional<const Tensor>& tensor_opt)
-        -> std::tuple<std::optional<DataType>, std::optional<MemoryConfig>> {
-        if (!tensor_opt.has_value()) {
-            return std::make_tuple(std::nullopt, std::nullopt);
-        }
-
-        const auto& tensor = tensor_opt.value();
-        return std::make_tuple(std::optional{tensor.dtype()}, std::optional{tensor.memory_config()});
-    };
-
-    auto args_tuple = std::tuple_cat(
-        base_tuple,
-        get_optional_tensor_info(batch_mean),
-        get_optional_tensor_info(batch_var),
-        get_optional_tensor_info(weight),
-        get_optional_tensor_info(bias),
-        get_optional_tensor_info(output));
-
-    // Apply the hash operation
-    return std::apply(
-        [](auto&&... args) {
-            return operation::hash_operation<BatchNormOperation>(std::forward<decltype(args)>(args)...);
-        },
-        std::move(args_tuple));
-}
-
 ttsl::hash::hash_t BatchNormOperation::operation_attributes_t::to_hash() const {
     return ttsl::hash::hash_objects_with_default_seed(eps, memory_config, get_dtype(), compute_kernel_config);
 }

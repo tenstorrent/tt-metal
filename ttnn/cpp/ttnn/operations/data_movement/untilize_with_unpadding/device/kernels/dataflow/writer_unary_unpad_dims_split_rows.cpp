@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 inline uint64_t round_down_32(uint64_t a) { return (a >> 5) << 5; }
 
@@ -38,31 +42,32 @@ void kernel_main() {
                       : block_row_size / 64;  // Assuming 4 / 2 bytes per datum, there are 128 / 64 bytes per tile row
 
     const auto s = TensorAccessor(dst_args, dst_addr);
+    Noc noc;
+    CircularBuffer cb_out0(cb_id_out0);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
-            cb_wait_front(cb_id_out0, num_tiles_block_c);
-            cb_pop_front(cb_id_out0, num_tiles_block_c);
+            cb_out0.wait_front(num_tiles_block_c);
+            cb_out0.pop_front(num_tiles_block_c);
         }
     };
 
     auto write_block = [&](uint32_t base_stick_id, uint32_t num_rows, uint32_t offset, uint32_t block_size) {
-        cb_wait_front(cb_id_out0, num_tiles_block_c);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        cb_out0.wait_front(num_tiles_block_c);
+        uint32_t l1_read_addr = cb_out0.get_read_ptr();
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t dst_noc_addr = s.get_noc_addr(curr_stick_id) + offset;
-
-            // Write out tmp buffer
-            noc_async_write(l1_read_addr, dst_noc_addr, block_size);
+            CoreLocalMem<uint32_t> src(l1_read_addr);
+            noc.async_write(
+                src, s, block_size, {.offset_bytes = 0}, {.page_id = curr_stick_id, .offset_bytes = offset});
 
             l1_read_addr += block_row_size;
             curr_stick_id++;
 
             // Block write
-            noc_async_write_barrier();
+            noc.async_write_barrier();
         }
-        cb_pop_front(cb_id_out0, num_tiles_block_c);
+        cb_out0.pop_front(num_tiles_block_c);
     };
 
     auto write_block_rows = [&](uint32_t num_rows_block, uint32_t base_stick_id) {

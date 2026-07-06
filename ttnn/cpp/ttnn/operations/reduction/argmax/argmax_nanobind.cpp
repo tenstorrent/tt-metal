@@ -15,59 +15,45 @@ namespace ttnn::operations::reduction::detail {
 void bind_reduction_argmax_operation(nb::module_& mod) {
     const auto* doc =
         R"doc(
-            Returns the indices of the maximum value of elements in the :attr:`input_tensor`.
-            If no :attr:`dim` is provided, it will return the indices of maximum value of all elements in given :attr:`input_tensor`.
+            Argmax. Returns indices of maximum values.
+            Output is UINT32, ROW_MAJOR, INTERLEAVED (DRAM or L1).
 
             Args:
-                input_tensor (ttnn.Tensor): the input tensor. Must be on the device.
+                input_tensor (ttnn.Tensor): On-device, INTERLEAVED input.
 
             Keyword args:
-                dim (int, optional): dimension to reduce. Defaults to `None`.
-                keepdim (bool, optional): whether to keep the reduced dimension. Defaults to `False`.
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. If specified, must be on the same device as :attr:`input_tensor`. Defaults to `None`.
+                dim (int, optional): Dim to reduce. ``None`` reduces all elements (ROW_MAJOR input only). Default: ``None``.
+                keepdim (bool, optional): Keep reduced dim. Default: ``False``.
+                sub_core_grids (CoreRangeSet, optional): Limits execution to a subset of cores. Supported on ROW_MAJOR last-dim reductions (<= 2 ranges) and batch/channel dim reductions. Default: ``None``.
+                memory_config (ttnn.MemoryConfig, optional): Output memory (INTERLEAVED DRAM/L1). Default: input's memory_config.
+                output_tensor (ttnn.Tensor, optional): Preallocated output (must be UINT32, ROW_MAJOR, INTERLEAVED, same device). Default: ``None``.
 
-            Returns:
-                ttnn.Tensor: Output tensor containing the indices of the maximum value.
+            Supported:
 
-            Note:
-                The input tensor supports the following data types and layouts:
+            - **dim=None** (reduce all elements):
+              - input layout: ROW_MAJOR
+              - dtypes: BFLOAT16/FLOAT32/INT32/UINT32/UINT16
 
-                .. list-table:: Input Tensor
-                    :header-rows: 1
+            - **dim = rank-1** (last / width):
+              - ROW_MAJOR input: BFLOAT16/FLOAT32/INT32/UINT32/UINT16 (multi-core by default)
+              - TILE input: BFLOAT16/FLOAT32 (single-core)
 
-                    * - dtype
-                      - layout
-                    * - FLOAT32
-                      - ROW_MAJOR, TILE
-                    * - BFLOAT16
-                      - ROW_MAJOR, TILE
-                    * - UINT32
-                      - ROW_MAJOR
-                    * - INT32
-                      - ROW_MAJOR
-                    * - UINT16
-                      - ROW_MAJOR
+            - **dim = rank-2** (height):
+              - BFLOAT16/FLOAT32 only
+              - ROW_MAJOR inputs are internally tilized; this path runs single-core
 
-                The output tensor will be of the following data type and layout:
+            - **0 <= dim < rank-2** (batch/channel dims, rank >= 3):
+              - BFLOAT16/FLOAT32 only (integer dtypes not supported)
+              - input may be ROW_MAJOR or TILE (ROW_MAJOR is converted to TILE internally)
+              - output is produced in TILE internally and converted to ROW_MAJOR
+              - ``sub_core_grids`` is supported (pass a single-core ``CoreRangeSet`` to run on one core)
 
-                .. list-table:: Output Tensor
-                    :header-rows: 1
+            Not supported:
 
-                    * - dtype
-                      - layout
-                    * - UINT32
-                      - ROW_MAJOR
-
-            Memory Support:
-                - Interleaved: DRAM and L1
-
-            Limitations:
-                - All input tensors must be on-device.
-                - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1 or :attr:`dim` = rank - 1).
-                - Sharding is not supported for this operation
-                - Reduction over all elements (when dim=None) is not supported with the TILE input tensor layout
-                - The (optional) preallocated output tensor must have ROW_MAJOR layout and must be on the same device as :attr:`input_tensor`
+            - Sharded tensors (inputs/outputs must be INTERLEAVED)
+            - TILE input with ``dim=None``
+            - Batch/channel dim reductions with INT/UINT inputs
+            - Integer dtypes on batch/channel dim reductions
         )doc";
 
     ttnn::bind_function<"argmax">(
@@ -79,7 +65,6 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
         nb::arg("keepdim") = false,
         nb::kw_only(),
         nb::arg("sub_core_grids") = nb::none(),
-        nb::arg("use_multicore") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none());
 }

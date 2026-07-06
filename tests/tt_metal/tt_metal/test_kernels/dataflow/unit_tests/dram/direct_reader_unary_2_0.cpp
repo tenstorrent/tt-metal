@@ -47,8 +47,8 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
 #ifdef ARCH_QUASAR
-        // Noc::TxnIdMode::ENABLED is only declared on Quasar.
-        noc.async_read<Noc::TxnIdMode::ENABLED>(src_dram, dfb, {.bank_id = src_bank_id, .addr = tlocal_src_addr}, {});
+        // NocOptions::TXN_ID uses the DFB-integrated trid path on Quasar.
+        noc.async_read<NocOptions::TXN_ID>(src_dram, dfb, {.bank_id = src_bank_id, .addr = tlocal_src_addr}, {});
 #else
         dfb.reserve_back(ublock_size_tiles);
         noc.async_read(src_dram, dfb, ublock_size_bytes, {.bank_id = src_bank_id, .addr = tlocal_src_addr}, {});

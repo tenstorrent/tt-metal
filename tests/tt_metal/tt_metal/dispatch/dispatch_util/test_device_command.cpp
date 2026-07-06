@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/vector_aligned.hpp>
@@ -114,6 +115,20 @@ TEST(DeviceCommandTest, AddDispatchSetNumWorkerSems) {
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
     command.add_dispatch_set_num_worker_sems(0, DispatcherSelect::DISPATCH_MASTER);
+    EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
+}
+
+TEST(DeviceCommandTest, AddDispatchSetSubDeviceWorkerCounts) {
+    constexpr uint32_t num_sub_devices = 3;
+    std::array<uint32_t, num_sub_devices> workers_per_sub_device = {4, 7, 2};
+
+    DeviceCommandCalculator calculator;
+    calculator.add_dispatch_set_sub_device_worker_counts(num_sub_devices);
+
+    HostMemDeviceCommand command(calculator.write_offset_bytes());
+    command.add_dispatch_set_sub_device_worker_counts(
+        ttsl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()),
+        DispatcherSelect::DISPATCH_MASTER);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
@@ -236,7 +251,7 @@ TEST(DeviceCommandTest, AddDispatchWritePackedLarge) {
         std::vector<CQDispatchWritePackedLargeSubCmd> sub_cmds(1);
 
         uint8_t data[4] = {};
-        std::vector<tt::stl::Span<const uint8_t>> data_collection{{data, 4}};
+        std::vector<ttsl::Span<const uint8_t>> data_collection{{data, 4}};
         command.add_dispatch_write_packed_large(
             CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN, 0, 1, sub_cmds, data_collection, nullptr);
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());

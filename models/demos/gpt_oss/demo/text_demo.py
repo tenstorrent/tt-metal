@@ -17,9 +17,7 @@ Updated to use refactored TestFactory and MeshConfig patterns:
 - Passes mesh_config to create_tt_model for proper sharding
 """
 
-import json
 import os
-from pathlib import Path
 
 import pytest
 import torch
@@ -33,7 +31,9 @@ from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mes
 # Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
 from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
+from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len, preprocess_inputs_prefill
@@ -396,6 +396,37 @@ def prepare_gpt_oss_generator_args(
             False,  # stop_at_eos
             False,  # run_in_ci
         ),
+        # Seqlen sweep: 1k-128k context lengths, one step per seqlen (on single-row meshes, >64k steps are skipped)
+        (
+            [
+                "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            ],  # input_prompts: list of 8 files, one per sweep step
+            1,  # data_parallel
+            1,  # batch_size
+            8,  # repeat_batches (one per seqlen step)
+            128 * 1024,  # max_seq_len (single-row meshes cap at 64k via is_seqlen_sweep guard)
+            32,  # max_generated_tokens (minimal decode to verify prefill works)
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params
+            True,  # enable_decode_trace
+            False,  # enable_prefill_trace (avoid trace memory issues at 128k)
+            False,  # warmup_prefill
+            False,  # users_row_sharded
+            False,  # long_context_mode
+            True,  # stop_at_eos
+            # run_in_ci=False: the GPT-OSS e2e pipeline runs this demo file without a -k filter, so a
+            # CI-enabled seqlen-sweep case would be collected by the regular e2e job and fail. GPT-OSS is
+            # descoped from the sweep pipeline pending #48533; keep this case out of CI until re-scoped
+            # (the sweep pipeline will select it explicitly via -k "seqlen-sweep").
+            False,  # run_in_ci
+        ),
     ],
     ids=[
         "prefill_128",
@@ -410,6 +441,7 @@ def prepare_gpt_oss_generator_args(
         "batch128_logprobs",
         "long_context_128k",
         "long_context_short_prefill_long_decode",
+        "seqlen-sweep",
     ],
 )
 @parametrize_mesh_with_fabric()
@@ -437,12 +469,17 @@ def test_gpt_oss_demo(
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     mesh_shape = tuple(mesh_device.shape)
+    test_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
+    is_seqlen_sweep = "seqlen-sweep" in test_id
+    # On single-row meshes (T3K, LoudBox), cap max_seq_len at 64k for seqlen-sweep so steps >64k are skipped
+    actual_max_seq_len = min(max_seq_len, 64 * 1024) if (is_seqlen_sweep and mesh_shape[0] == 1) else max_seq_len
     if mesh_shape[0] == 1:
         if batch_size > 1:
             pytest.skip(
                 f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
             )
-        elif max_seq_len > 64 * 1024:
+        elif max_seq_len > 64 * 1024 and not is_seqlen_sweep:
+            # Seqlen sweep uses actual_max_seq_len (capped at 64k) for execution; skip only non-sweep tests
             pytest.skip(f"Long context demo with >64k tokens skipped for mesh shape {mesh_shape} due to OOM.")
     if is_blackhole() and batch_size > 1:
         pytest.skip(
@@ -486,13 +523,17 @@ def test_gpt_oss_demo(
     num_real_users = mesh_device.shape[0] if long_context_mode else global_batch_size
     users_per_row = global_batch_size // mesh_device.shape[0]
 
-    if isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
+    seqlen_sweep_files = None
+    if is_seqlen_sweep:  # seqlen-sweep: list of file paths, loaded per step during repeat_batch_prompts construction
+        seqlen_sweep_files = input_prompts
+        real_prompts = None  # not used; each step loads its own prompts
+    elif isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
         real_prompts = input_prompts * num_real_users
     elif isinstance(input_prompts, str):  # Inputs from file
         real_prompts, _ = load_inputs(input_prompts, num_real_users, instruct=False)
     else:
         raise ValueError(
-            f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
+            f"Invalid input prompts: {input_prompts}. Expected a list of prompts, a single-item list, or a string path to a json file."
         )
 
     # Prepare GPT-OSS with tt_transformers infrastructure
@@ -511,7 +552,7 @@ def test_gpt_oss_demo(
         mesh_device=mesh_device,
         global_batch_size=global_batch_size,
         optimizations=optimizations,
-        max_seq_len=max_seq_len,
+        max_seq_len=actual_max_seq_len,
         page_params=page_params,
         paged_attention=paged_attention,
         mesh_config=mesh_config,  # Pass our refactored mesh config
@@ -589,8 +630,28 @@ def test_gpt_oss_demo(
 
     # Create repeat batches (like tt-transformers)
     repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+    if is_seqlen_sweep:
+        # Load each seqlen step from its own file; skip steps exceeding the mesh's seqlen cap.
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> "16k" -> 16384).
+        from pathlib import Path
+
+        for sweep_file in seqlen_sweep_files:
+            label = Path(sweep_file).stem.split("_")[-1]  # e.g. "16k"
+            if not (label.endswith("k") and label[:-1].isdigit()):
+                continue
+            step_len = int(label[:-1]) * 1024
+            if step_len > actual_max_seq_len:
+                logger.info(
+                    f"Seqlen sweep step ({step_len // 1024}k) skipped: exceeds mesh cap of {actual_max_seq_len // 1024}k"
+                )
+                continue
+            step_prompts, _ = load_inputs(sweep_file, num_real_users, instruct=False)
+            repeat_batch_prompts.append(step_prompts)
+    else:
+        for i in range(repeat_batches):
+            repeat_batch_prompts.append(
+                [input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))]
+            )
 
     num_tokens_generated_decode = []
 
@@ -934,27 +995,31 @@ def test_gpt_oss_demo(
         tt_device_name = "GLX" if tt_device_name == "TG" else tt_device_name  # TG is old nomenclature of 4U galaxy.
         model_name = model_args[0].model_name
         model_device_key = f"{tt_device_name}_{model_name}"
-
-        with open(Path(__file__).parent.parent.joinpath("perf_targets.json"), "r") as f:
-            perf_targets = json.load(f)
-        prefill_pad_length = 1 << max(prefill_lens).bit_length()  # round up to the next power of 2
+        sku = get_current_device_sku_name()
         targets = {}
-        if (
-            f"batch_{batch_size}" in perf_targets["targets"]
-            and f"prefill_{prefill_pad_length}" in perf_targets["targets"][f"batch_{batch_size}"]
-            and model_device_key in perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"]
-        ):
-            targets = {
-                "prefill_t/s": perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
-                    model_device_key
-                ]["TTFT"],
-                "decode_t/s": perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
-                    model_device_key
-                ]["decode_tok_s"],
-                "decode_t/s/u": perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
-                    model_device_key
-                ]["decode_tok_s_u"],
-            }
+        resolved_perf_targets = resolve_perf_targets(
+            model_name=model_name,
+            sku=sku,
+            batch_size=global_batch_size,
+            seq_len=max(prefill_lens),
+        )
+        if resolved_perf_targets:
+            if resolved_perf_targets.get("prefill_t/s") is not None:
+                targets["prefill_t/s"] = float(resolved_perf_targets["prefill_t/s"])
+            if resolved_perf_targets.get("decode_t/s") is not None:
+                targets["decode_t/s"] = float(resolved_perf_targets["decode_t/s"])
+            if resolved_perf_targets.get("decode_t/s/u") is not None:
+                targets["decode_t/s/u"] = float(resolved_perf_targets["decode_t/s/u"])
+            if not targets:
+                logger.warning(
+                    f"No centralized perf targets found for {model_device_key} "
+                    f"(batch={global_batch_size}, seq_len={max(prefill_lens)})"
+                )
+        else:
+            logger.warning(
+                f"No centralized perf targets found for {model_device_key} "
+                f"(batch={global_batch_size}, seq_len={max(prefill_lens)})"
+            )
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
@@ -987,7 +1052,7 @@ def test_gpt_oss_demo(
         )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
+            run_type="demo_perf",
             ml_model_name=model_args[0].base_model_name,
             ml_model_type="llm",
             device_name=tt_device_name,
@@ -998,65 +1063,17 @@ def test_gpt_oss_demo(
             output_sequence_length=num_tokens_generated_decode[0],
         )
 
-        # check measurements against CI performance targets
-        logger.info(
-            f"Checking measurements against CI performance targets for {model_name} on {tt_device_name} for padded prefill length {prefill_pad_length}"
-        )
-        # Only call verify_perf if the model_device_key exists in the targets
-        if f"batch_{batch_size}" in perf_targets["ci"] and False:
-            if f"prefill_{prefill_pad_length}" in perf_targets["ci"][f"batch_{batch_size}"]:
-                if model_device_key in perf_targets["ci"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"]:
-                    perf_config = perf_targets["ci"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
-                        model_device_key
-                    ]
-
-                    # Parse TTFT target with tolerance
-                    current_ttft_target = perf_config["TTFT"]
-                    if isinstance(current_ttft_target, list):
-                        ttft_tolerance = current_ttft_target[1]
-                        current_ttft_target = current_ttft_target[0]
-                    else:
-                        ttft_tolerance = 1.15  # Default 15% tolerance
-
-                    # Parse decode_tok_s_u target with tolerance
-                    decode_tsu_target = perf_config["decode_tok_s_u"]
-                    if isinstance(decode_tsu_target, list):
-                        decode_tolerance = decode_tsu_target[1]
-                        decode_tsu_target = decode_tsu_target[0]
-                    else:
-                        decode_tolerance = 1.15  # Default 15% tolerance
-
-                    # Verify prefill performance with prefill-specific tolerance
-                    prefill_targets = {
-                        "prefill_time_to_token": current_ttft_target / 1000,  # convert to seconds
-                    }
-                    verify_perf(
-                        measurements,
-                        prefill_targets,
-                        high_tol_percentage=ttft_tolerance,
-                        expected_measurements={k: True for k in prefill_targets.keys()},
-                    )
-
-                    # Verify decode performance with decode-specific tolerance
-                    decode_targets = {
-                        "decode_t/s/u": decode_tsu_target,
-                        "decode_t/s": decode_tsu_target * global_batch_size,  # calculate from per-user rate
-                    }
-                    verify_perf(
-                        measurements,
-                        decode_targets,
-                        high_tol_percentage=decode_tolerance,
-                        expected_measurements={k: True for k in decode_targets.keys()},
-                    )
-                else:
-                    logger.warning(
-                        f"No CI performance targets found for model {model_name} on device {tt_device_name} for prefill length {prefill_pad_length}. Skipping performance verification."
-                    )
-            else:
-                logger.warning(
-                    f"No CI performance targets found for prefill length {prefill_pad_length}. Skipping performance verification."
-                )
+        if targets:
+            verify_perf(
+                measurements,
+                expected_measurements={k: True for k in ("prefill_t/s", "decode_t/s", "decode_t/s/u") if k in targets},
+                model_name=model_name,
+                sku=sku,
+                batch_size=global_batch_size,
+                seq_len=max(prefill_lens),
+            )
         else:
-            logger.warning(
-                f"No CI performance targets found for batch size {batch_size}. Skipping performance verification."
+            logger.info(
+                "Skipping in-demo verify_perf checks for GPT-OSS due to missing centralized SKU/targets. "
+                "Performance validation remains enforced by centralized target validation in CI."
             )

@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_padded_slice ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::PaddedSlice ALIAS ttnn_op_experimental_padded_slice)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_padded_slice TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_padded_slice TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_padded_slice)
 set_target_properties(
     ttnn_op_experimental_padded_slice

@@ -22,7 +22,7 @@ inline void _sfpu_load_imm32_(const std::uint32_t dest, const std::uint32_t val)
 
 inline void _sfpu_load_imm16_(const std::uint32_t dest, const std::uint32_t val)
 {
-    TT_SFPLOADI(dest, 2, val); // insmod == 2 will write imm16 value treated as unsigned integer, right justified and padded with zeroes on the MSBs
+    TT_SFPLOADI(dest, 2, val & 0xFFFF); // insmod == 2 will write imm16 value treated as unsigned integer, right justified and padded with zeroes on the MSBs
 }
 
 inline void _sfpu_load_config32_(const std::uint32_t dest, const std::uint32_t upper16, const std::uint32_t lower16)

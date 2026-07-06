@@ -12,6 +12,7 @@ import ttnn
 
 from models.common.utility_functions import torch2tt_tensor, run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_layer_norm, ttnn_rms_norm
 
 TEST_PADDING_VALUE = -42
 
@@ -61,7 +62,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
         )
 
         if test_id == 0:
-            ttz = ttnn.layer_norm(
+            ttz = ttnn_layer_norm(
                 in0_t,
                 residual_input_tensor=in1_t,
                 epsilon=epsf,
@@ -69,7 +70,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 compute_kernel_config=compute_kernel_config,
             )
         if test_id == 1:
-            ttz = ttnn.layer_norm(
+            ttz = ttnn_layer_norm(
                 in0_t,
                 residual_input_tensor=in1_t,
                 epsilon=epsf,
@@ -78,7 +79,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 compute_kernel_config=compute_kernel_config,
             )
         if test_id == 2:
-            ttz = ttnn.layer_norm(
+            ttz = ttnn_layer_norm(
                 in0_t,
                 residual_input_tensor=in1_t,
                 epsilon=epsf,
@@ -88,7 +89,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 compute_kernel_config=compute_kernel_config,
             )
         if test_id == 3:
-            ttz = ttnn.rms_norm(
+            ttz = ttnn_rms_norm(
                 in0_t,
                 residual_input_tensor=in1_t,
                 epsilon=epsf,
@@ -96,7 +97,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 compute_kernel_config=compute_kernel_config,
             )
         if test_id == 4:
-            ttz = ttnn.rms_norm(
+            ttz = ttnn_rms_norm(
                 in0_t,
                 residual_input_tensor=in1_t,
                 epsilon=epsf,
@@ -105,7 +106,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 compute_kernel_config=compute_kernel_config,
             )
         if test_id == 5:
-            ttz = ttnn.rms_norm(
+            ttz = ttnn_rms_norm(
                 in0_t,
                 residual_input_tensor=in1_t,
                 epsilon=epsf,
@@ -115,11 +116,11 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 compute_kernel_config=compute_kernel_config,
             )
         if test_id == 6:
-            ttz = ttnn.layer_norm(
+            ttz = ttnn_layer_norm(
                 in0_t, epsilon=epsf, memory_config=out_mem_config, compute_kernel_config=compute_kernel_config
             )
         if test_id == 7:
-            ttz = ttnn.layer_norm(
+            ttz = ttnn_layer_norm(
                 in0_t,
                 epsilon=epsf,
                 weight=gamma_t,
@@ -127,7 +128,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 compute_kernel_config=compute_kernel_config,
             )
         if test_id == 8:
-            ttz = ttnn.layer_norm(
+            ttz = ttnn_layer_norm(
                 in0_t,
                 epsilon=epsf,
                 weight=gamma_t,
@@ -136,11 +137,11 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 compute_kernel_config=compute_kernel_config,
             )
         if test_id == 9:
-            ttz = ttnn.rms_norm(
+            ttz = ttnn_rms_norm(
                 in0_t, epsilon=epsf, memory_config=out_mem_config, compute_kernel_config=compute_kernel_config
             )
         if test_id == 10:
-            ttz = ttnn.rms_norm(
+            ttz = ttnn_rms_norm(
                 in0_t,
                 epsilon=epsf,
                 weight=gamma_t,
@@ -148,7 +149,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 compute_kernel_config=compute_kernel_config,
             )
         if test_id == 11:
-            ttz = ttnn.rms_norm(
+            ttz = ttnn_rms_norm(
                 in0_t,
                 epsilon=epsf,
                 weight=gamma_t,
@@ -304,7 +305,7 @@ def test_layer_norm_block_sharded_height_pad(device, grid_end, shard_orientation
         fp32_dest_acc_en=True,
     )
 
-    out = ttnn.layer_norm(
+    out = ttnn_layer_norm(
         x,
         weight=weight,
         bias=bias,
@@ -349,7 +350,7 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias)
+    output_tensor = ttnn_layer_norm(input_tensor, weight=weight, bias=bias)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)

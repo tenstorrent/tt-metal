@@ -40,6 +40,15 @@ struct SdpaDecodeParams {
     // small TP). Drives both the kernel's per-block stride and its head-parallel
     // reduction grid. When nullopt, falls back to K.padded_shape[1] (legacy behavior).
     std::optional<uint32_t> num_kv_heads_override = std::nullopt;
+    // Optional circular-buffer capacity (in tokens) for the K/V cache view. When set,
+    // the kernel computes ``virtual_pos %= cache_position_modulo`` before resolving the
+    // page_table entry for every tile read, so a bounded sliding-window cache of
+    // capacity N can be addressed by absolute positions ≥ N. Required for layers using
+    // vLLM's SlidingWindowSpec, which sizes the per-layer page_table to
+    // sliding_window/block_size entries and zero-pads the rest. Must be a multiple of
+    // the effective block_size and ≥ sliding_window_size when both are set. Paged-mode
+    // only (validated in validate_on_program_cache_miss).
+    std::optional<uint32_t> cache_position_modulo = std::nullopt;
 };
 
 struct SdpaDecodeInputs {

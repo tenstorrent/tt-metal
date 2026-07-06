@@ -7,6 +7,7 @@
 #include <variant>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
+#include <tt_stl/reflection.hpp>  // ttsl::hash::hash_t
 
 #include "ttnn/tensor/tensor.hpp"
 #include "generic_op_program_factory.hpp"
@@ -20,7 +21,7 @@ struct GenericOpDeviceOperation {
     using tensor_args_t = generic::tensor_args_t;
     using spec_return_value_t = generic::spec_return_value_t;
     using tensor_return_value_t = generic::tensor_return_value_t;
-    using program_factory_t = std::variant<program::GenericMeshProgramFactory>;
+    using program_factory_t = std::variant<program::GenericMeshDescriptorFactory>;
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

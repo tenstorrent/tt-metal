@@ -7,9 +7,16 @@
 /**
  * Fast cache-hit patching for descriptor-factory programs.
  *
- * This is a temporary shim. Metal 2.0 solves the same problem at the framework level with
- * native Tensor/Buffer bindings. This shim should be removed once op factories migrate to
- * the Metal 2.0 API.
+ * ⚠️ TEMPORARY SHIM — DO NOT BUILD ON THIS, DO NOT ADD CALLERS. ⚠️
+ *
+ * A stop-gap that lets descriptor-based op factories re-patch Buffer addresses and the handful
+ * of hash-excluded scalar runtime args on a program-cache hit — standing in for the legacy
+ * override_runtime_arguments() path until Metal 2.0 lands. Metal 2.0 solves this at the
+ * framework level with native Tensor/Buffer bindings, at which point THIS ENTIRE FILE AND ITS
+ * IMPLEMENTATION ARE DELETED. Do not extend the API, do not depend on it outside the
+ * mesh-device-operation adapter. New code almost certainly wants the Metal 2.0 binding instead.
+ *
+ * CODE REVIEWERS: if anyone builds on top of this, reject immediately — unless it's Diego.
  *
  * Usage:
  *   // In create_descriptor() — cache miss:
@@ -31,6 +38,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -89,12 +97,27 @@ struct ResolvedBindings {
 // declares, both runtime-arg bindings and CB `.buffer` bindings.  Deciding
 // whether the resulting `ResolvedBindings` is safe to fast-path on a given
 // cache hit is the caller's job (see DescriptorMeshWorkloadAdapter::apply_descriptor),
-// because the safety check depends on workload contract — specifically whether
+// because the safety check depends on workload variant — specifically whether
 // a slow-path rebuild is available to refresh raw (non-binding) runtime args.
+//
+// tensor_buffers is ordered inputs-first (see collect_tensor_buffers): the first
+// num_input_buffers entries come from tensor_args, the rest from the output(s) and any
+// workload buffers.  This split lets the resolver distinguish two kinds of aliasing:
+//   - the SAME buffer appearing twice WITHIN the inputs (e.g. matmul(X, X)) is ambiguous —
+//     a future call with distinct same-shape tensors would miscompute — so we bail to the
+//     slow path.
+//   - an OUTPUT buffer that aliases an INPUT buffer (an in-place op writing back into its
+//     input) is safe: every binding for that buffer resolves to the one shared address,
+//     which is correct on every dispatch — so we keep the fast path.
+// num_input_buffers defaults to SIZE_MAX, which treats every entry as an input (the original
+// conservative behavior: bail on any duplicate).
 //
 // Call immediately after Program{desc} on cache miss; store in shared_variables.
 ResolvedBindings resolve_bindings(
-    Program& program, const ProgramDescriptor& desc, std::span<Buffer* const> tensor_buffers);
+    Program& program,
+    const ProgramDescriptor& desc,
+    std::span<Buffer* const> tensor_buffers,
+    size_t num_input_buffers = std::numeric_limits<size_t>::max());
 
 // Apply resolved bindings to the cached program on a cache hit.
 // current_buffers must be the output of collect_tensor_buffers() for the
@@ -105,5 +128,31 @@ ResolvedBindings resolve_bindings(
 // post-first-enqueue) without any cross-call pointer state.
 void apply_resolved_bindings(
     Program& program, const ResolvedBindings& bindings, std::span<Buffer* const> current_buffers);
+
+// ---------------------------------------------------------------------------
+// Dynamic (non-Buffer) runtime args
+// ---------------------------------------------------------------------------
+
+// Declares one runtime-arg slot whose value is DYNAMIC: it is intentionally excluded from the
+// program-cache hash (so two calls that differ only in this value still cache-hit) and therefore
+// MUST be re-applied to the cached program on every dispatch.  This is the non-Buffer analog of
+// BufferBinding: BufferBinding re-patches a buffer address on a cache hit; DynamicRuntimeArg
+// re-patches an arbitrary scalar that a custom compute_program_hash deliberately omitted (e.g. an
+// RNG seed, an [from,to) range, a semaphore L1 address).  The owning device operation produces the
+// current values for each dispatch (see DeviceOperation::get_dynamic_runtime_args); this struct is
+// just the destination (kernel/core/arg) plus the value to write.
+struct DynamicRuntimeArg {
+    uint32_t kernel_idx = 0;  // index into ProgramDescriptor::kernels
+    CoreCoord core{};         // ignored when is_common == true
+    uint32_t arg_idx = 0;     // position within that kernel/core's runtime args
+    uint32_t value = 0;       // current value, derived from the live operation_attributes
+    bool is_common = false;   // true => common (non-per-core) runtime args
+};
+
+// Write each DynamicRuntimeArg's value into the cached program's live runtime args.  Call on every
+// cache hit (after apply_resolved_bindings) for ops that declare dynamic non-Buffer runtime args.
+// Uses GetRuntimeArgs / GetCommonRuntimeArgs for the same pre/post-first-enqueue correctness as
+// apply_resolved_bindings.
+void apply_dynamic_runtime_args(Program& program, std::span<const DynamicRuntimeArg> dynamic_args);
 
 }  // namespace tt::tt_metal

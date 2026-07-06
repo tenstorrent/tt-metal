@@ -81,13 +81,6 @@ inline static CoreDescriptorSet GetAllCores(
     return dispatch_cores;
 }
 
-inline uint64_t GetDprintBufAddr(ChipId device_id, const CoreCoord& virtual_core, int risc_id) {
-    auto core_type = llrt::get_core_type(device_id, virtual_core);
-    uint64_t addr = tt::tt_metal::MetalContext::instance().hal().get_dev_noc_addr(
-        core_type, tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
-    return addr + (sizeof(DebugPrintMemLayout) * risc_id);
-}
-
 inline uint64_t GetDevicePrintBufAddr(ChipId device_id, const CoreCoord& virtual_core) {
     return tt::tt_metal::MetalContext::instance().hal().get_dev_noc_addr(
         llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
@@ -262,4 +255,14 @@ inline void fprintClientName(FILE* f, uint32_t client_id) {
         fprintf(f, "NEO_%u", client_id - overlay::NEO_0);
     }
 }
+
+// DPRINT queries can take tens of seconds per poll on RTL sim.
+inline int debug_server_wait_timeout_sec(const llrt::RunTimeOptions& rtoptions) {
+    return rtoptions.get_simulator_enabled() ? 30 : 5;
+}
+
+inline int debug_server_finish_timeout_sec(const llrt::RunTimeOptions& rtoptions) {
+    return rtoptions.get_simulator_enabled() ? 30 : 2;
+}
+
 }  // namespace tt::tt_metal

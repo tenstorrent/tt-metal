@@ -22,6 +22,9 @@ uint32_t get_relative_cq_offset(uint8_t cq_id, uint32_t cq_size) { return cq_id 
 uint16_t get_umd_channel(uint16_t channel) { return channel & 0x3; }
 
 uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t base) {
+    if (base != 0) {
+        return base + get_relative_cq_offset(cq_id, cq_size);
+    }
     return base + (DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel)) +
            ((channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE) + get_relative_cq_offset(cq_id, cq_size);
 }
@@ -156,17 +159,6 @@ uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id) {
         &progress, sizeof(uint32_t), dispatcher_core_virtual, dev_dispatch_progress_ptr);
 
     return progress;
-}
-
-uint32_t calculate_expected_workers_to_finish(
-    const tt::tt_metal::IDevice* device,
-    const SubDeviceId& sub_device_id,
-    tt::tt_metal::HalProgrammableCoreType core_type) {
-    // Sub Device manager state must be correct (from device init)
-    // If core type is active ethernet, it does not include fabric routers which were created using slow dispatch
-    // Not managed by fast dispatch
-    const auto num_workers = device->num_worker_cores(core_type, sub_device_id);
-    return num_workers;
 }
 
 }  // namespace tt::tt_metal

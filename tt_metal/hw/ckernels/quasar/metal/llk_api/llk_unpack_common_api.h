@@ -30,8 +30,15 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
     const std::uint32_t unpB_operand_id = get_operand_id(unpB_operand);
 
-    // Program buffer descriptors for all 32 dataflow buffers, i is the logical dfb id
-    for (std::uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; ++i) {
+    // Program buffer descriptors for all 32 dataflow buffers, i is the logical dfb id.
+    // Skip non-participating DFBs via entry_size==0 (g_dfb_interface[] is zero-init,
+    // so non-populated entries naturally fall out). Loop bound is dfb::NUM_DFBS because
+    // g_dfb_interface[] is sized NUM_DFBS (=32) and NUM_CIRCULAR_BUFFERS resolves to 64
+    // on Quasar — GCC -Werror=aggressive-loop-optimizations rejects the OOB.
+    for (std::uint32_t i = 0; i < dfb::NUM_DFBS; ++i) {
+        if (g_dfb_interface[i].entry_size == 0) {
+            continue;
+        }
         const DataFormat l1_data_format = static_cast<DataFormat>(unpack_src_format[i]);
 
         if (l1_data_format == DataFormat::Invalid) {
@@ -143,3 +150,9 @@ inline void llk_unpack_reconfig_data_format(
     llk_unpack_reconfig_data_format_srcb<EN_32BIT_DEST, dim_stride_target, to_from_int8>(
         srcb_old_operand, srcb_new_operand);
 }
+
+/**
+ * @brief Issues a dummy SrcB dvalid so the math thread can satisfy its SRCB_VLD
+ * stall in transpose-dest. Used by the transpose_wh_dest compute API.
+ */
+inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcB_dummy_valid_(); }

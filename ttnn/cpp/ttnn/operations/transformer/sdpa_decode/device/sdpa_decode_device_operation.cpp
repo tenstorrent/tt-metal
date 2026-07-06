@@ -158,6 +158,33 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(operation_attributes.num_kv_heads_override.value() > 0, "num_kv_heads_override must be > 0");
     }
 
+    if (operation_attributes.cache_position_modulo.has_value()) {
+        TT_FATAL(
+            tensor_args.page_table_tensor.has_value(),
+            "cache_position_modulo is only supported in paged mode (when page_table is provided)");
+        const uint32_t modulo = operation_attributes.cache_position_modulo.value();
+        TT_FATAL(modulo > 0, "cache_position_modulo must be > 0 when provided");
+        // Wrap must align with block boundaries (otherwise a wrapped position would split
+        // across two physical blocks and the kernel can't address it). Pull
+        // effective_block_size from the same fallback the program factory uses.
+        const uint32_t effective_block_size = operation_attributes.block_size_override.value_or(k_shape[2]);
+        TT_FATAL(
+            modulo % effective_block_size == 0,
+            "cache_position_modulo ({}) must be a multiple of effective block_size ({})",
+            modulo,
+            effective_block_size);
+        if (operation_attributes.sliding_window_size.has_value() &&
+            operation_attributes.sliding_window_size.value() > 0) {
+            TT_FATAL(
+                modulo >= operation_attributes.sliding_window_size.value(),
+                "cache_position_modulo ({}) must be >= sliding_window_size ({}); a tighter "
+                "capacity would let the SDPA attention range wrap multiple times and "
+                "double-count positions.",
+                modulo,
+                operation_attributes.sliding_window_size.value());
+        }
+    }
+
     if (operation_attributes.paged_attention) {
         // Paged attention verification
         TT_FATAL(
@@ -514,6 +541,8 @@ ttsl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
         operation_attributes.block_size_override,
         // Enters compile-time args via num_kv_heads (parallelization grid + strides).
         operation_attributes.num_kv_heads_override,
+        // Enters compile-time args via capacity_t (per-tile page_table wrap).
+        operation_attributes.cache_position_modulo,
         tensor_args.q,
         tensor_args.k,
         tensor_args.v,
@@ -546,7 +575,8 @@ Tensor sdpa_decode(
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v,
     std::optional<uint32_t> block_size_override,
-    std::optional<uint32_t> num_kv_heads_override) {
+    std::optional<uint32_t> num_kv_heads_override,
+    std::optional<uint32_t> cache_position_modulo) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -563,6 +593,7 @@ Tensor sdpa_decode(
         .head_dim_v = head_dim_v,
         .block_size_override = block_size_override,
         .num_kv_heads_override = num_kv_heads_override,
+        .cache_position_modulo = cache_position_modulo,
     };
 
     auto tensor_args = OperationType::tensor_args_t{

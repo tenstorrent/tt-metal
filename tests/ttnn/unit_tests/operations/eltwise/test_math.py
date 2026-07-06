@@ -159,10 +159,24 @@ def test_rad2deg(device, h, w):
     run_math_unary_test(device, h, w, ttnn.rad2deg, ulp=1)
 
 
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_cbrt(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.cbrt, ulp=1)
+def test_cbrt(device):
+    # Exhaustive over every bf16 value.
+    # Evaluate the registered golden in fp64 by upcasting the input,
+    # in bf16 the non-representable 1/3 was rounding the reference up to 2 ULP short of the true
+    # cube root while the kernel was correct. Subnormal bf16 inputs are flushed to zero on device.
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor = input_tensor[torch.isfinite(input_tensor.to(torch.float32))]
+    input_tensor = torch.where(
+        input_tensor.to(torch.float32).abs() < 2.0**-126, torch.zeros_like(input_tensor), input_tensor
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.cbrt)
+    golden = golden_function(input_tensor.to(torch.float64))
+
+    tt_in = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    result = ttnn.to_torch(ttnn.cbrt(tt_in))
+    assert_with_ulp(golden, result, 1)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -188,6 +202,39 @@ def test_sqrt(device, h, w, layout):
 @pytest.mark.parametrize("w", [128])
 def test_digamma(device, h, w):
     run_math_unary_test(device, h, w, ttnn.digamma, ulp=1)
+
+
+def test_digamma_large_x(device):
+    """Regression guard for digamma at large x (issue #45520: "behaves bad for x>1000").
+
+    The LUT kernel is fit on [0.01, 102]; beyond it a Bernoulli asymptotic branch
+    (ln(x) - 1/2x - 1/12x^2 + ...) restores the (1, inf) support the pre-LUT composite
+    op had. ``test_digamma`` only exercises [2, 102], so this covers the LUT->asymptotic
+    crossover (102) and several decades past x=1000.
+    """
+    xs = torch.tensor(
+        [[101.0, 102.0, 103.0, 150.0, 500.0, 1000.0, 5000.0, 1e4, 5e4, 1e5, 5e5, 1e6, 1e7, float("inf")]],
+        dtype=torch.bfloat16,
+    )
+    golden = torch.digamma(xs.to(torch.float64)).to(torch.float32)
+    input_tensor = ttnn.from_torch(xs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.digamma(input_tensor))
+    assert_with_ulp(golden, output_tensor, 2, allow_nonfinite=True)
+
+
+def test_digamma_small_x(device):
+    """Guard the steep near-pole region [0.01, 2): psi has a pole at 0 (psi(x) ~ -1/x),
+    the steepest part of the fitted domain. test_digamma only exercises [2, 102].
+    Sample avoids the zero-crossing at x~=1.4616 where ULP is ill-defined.
+    """
+    xs = torch.tensor(
+        [[0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 0.75, 1.0, 1.25, 1.75, 1.9, 1.99]],
+        dtype=torch.bfloat16,
+    )
+    golden = torch.digamma(xs.to(torch.float64)).to(torch.float32)
+    input_tensor = ttnn.from_torch(xs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.digamma(input_tensor))
+    assert_with_ulp(golden, output_tensor, 2)
 
 
 @pytest.mark.parametrize("h", [64])

@@ -27,64 +27,38 @@ namespace compute_kernel_lib {
 // Internal Helper Implementations
 // =============================================================================
 
-template <uint32_t dfb_id>
-constexpr bool has_32x32_tiles() {
-    // pack_tile_r/c_dim[] available on PACK; unpack_tile_r/c_dim[] on UNPACK/MATH.
-    // Both originate from the same desc.buf_tile_r/c_dim_arr, so values are identical.
-#if defined(UCK_CHLKC_PACK)
-    constexpr uint32_t tile_r_dim = pack_tile_r_dim[dfb_id];
-    constexpr uint32_t tile_c_dim = pack_tile_c_dim[dfb_id];
-#else
-    constexpr uint32_t tile_r_dim = unpack_tile_r_dim[dfb_id];
-    constexpr uint32_t tile_c_dim = unpack_tile_c_dim[dfb_id];
-#endif
-    // Fast tilize requires 32x32 tiles
-    return tile_r_dim == 32 && tile_c_dim == 32;
-}
-
 template <uint32_t input_dfb>
 constexpr bool has_supported_fast_tilize_format() {
-    // Fast tilize only supports Float32 (0) and Float16_b (5)
-    // DataFormat enum values: Float32 = 0, Float16_b = 5, Int32 = 8, etc.
-    // unpack_src_format (UNPACK/MATH) and pack_dst_format (PACK) are both the L1 format
-    // for the DFB, equalized by JIT (genfiles.cpp:equalize_data_format_vectors).
-#if defined(UCK_CHLKC_PACK)
-    constexpr auto format = pack_dst_format[input_dfb];
-#else
-    constexpr auto format = unpack_src_format[input_dfb];
-#endif
-    return format == 0 || format == 5;  // Float32 or Float16_b
+    constexpr auto format = dfb_l1_format<input_dfb>();
+    return format == static_cast<uint32_t>(DataFormat::Float32) ||
+           format == static_cast<uint32_t>(DataFormat::Float16_b);
 }
 
 template <uint32_t input_dfb>
 constexpr bool is_fp32_input_format() {
-#if defined(UCK_CHLKC_PACK)
-    constexpr auto format = pack_dst_format[input_dfb];
-#else
-    constexpr auto format = unpack_src_format[input_dfb];
-#endif
-    return format == 0;  // Float32
+    return dfb_l1_format<input_dfb>() == static_cast<uint32_t>(DataFormat::Float32);
 }
 
 template <uint32_t output_dfb>
 constexpr bool is_fp32_output_format() {
-#if defined(UCK_CHLKC_PACK)
-    constexpr auto format = pack_dst_format[output_dfb];
-#else
-    constexpr auto format = unpack_src_format[output_dfb];
-#endif
-    return format == 0;  // Float32
+    return dfb_l1_format<output_dfb>() == static_cast<uint32_t>(DataFormat::Float32);
 }
 
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 constexpr bool can_use_fast_tilize() {
+#ifdef ARCH_QUASAR
+    // Quasar has no fast-tilize LLK (and per the LLK team it never will) — only regular tilize.
+    // Always take the regular tilize_init/tilize_block/tilize_uninit path below.
+    return false;
+#else
     // Float32 OUTPUT is unsupported: fast-tilize's pack path uses Read_32b=0
     // (bf16-stride stepping through DEST), which truncates fp32 DEST to bf16.
     // That truncation is acceptable for bf16/bfp output but destroys precision
     // for fp32 output, producing garbage results in downstream fp32 consumers
     // (see attn_matmul_fp32 regression).
-    return block_width_tiles < 256 && has_32x32_tiles<output_dfb>() && !get_dst_full_sync_enabled() &&
+    return block_width_tiles < 256 && dfb_has_32x32_tiles<output_dfb>() && !get_dst_full_sync_enabled() &&
            has_supported_fast_tilize_format<input_dfb>() && !is_fp32_output_format<output_dfb>();
+#endif
 }
 
 // =============================================================================
@@ -167,7 +141,13 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             } else
 #endif
             {
+#ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
                 fast_tilize_init(input_dfb, block_width_tiles, output_dfb);
+#else
+                // Unreachable: can_use_fast_tilize() returns false on Quasar so use_fast is always false.
+                // Trap (watcher/runtime assert) in case this path is ever reached.
+                ASSERT(false);
+#endif
             }
         } else {
             tilize_init(input_dfb, block_width_tiles, output_dfb);
@@ -210,7 +190,13 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         out_dfb.reserve_back(block_width_tiles);
 
         if constexpr (use_fast) {
+#ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
             fast_tilize_block(input_dfb, block_width_tiles, output_dfb);
+#else
+            // Unreachable: can_use_fast_tilize() returns false on Quasar so use_fast is always false.
+            // Trap (watcher/runtime assert) in case this path is ever reached.
+            ASSERT(false);
+#endif
         } else {
             tilize_block(input_dfb, block_width_tiles, output_dfb);
         }
@@ -228,7 +214,13 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
         if constexpr (use_fast) {
+#ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
             fast_tilize_uninit(input_dfb, output_dfb, block_width_tiles);
+#else
+            // Unreachable: can_use_fast_tilize() returns false on Quasar so use_fast is always false.
+            // Trap (watcher/runtime assert) in case this path is ever reached.
+            ASSERT(false);
+#endif
         } else {
             tilize_uninit(input_dfb, output_dfb);
         }

@@ -139,8 +139,12 @@ PipelineParallelLlama::PipelineParallelLlama(
     if (is_last_rank()) {
         ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
         if (is_tensor_parallel) {
+            fmt::print(
+                "WARNING: Building pipeline-parallel + tensor-parallel LM head with "
+                "gather_output=false. PP+TP end-to-end correctness has not been validated; "
+                "please sanity-check loss values before relying on this path.\n");
             fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-                embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true);
+                embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ false);
         } else {
             fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
         }

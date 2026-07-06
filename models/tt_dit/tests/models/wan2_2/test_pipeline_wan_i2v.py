@@ -12,6 +12,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
 
 from ....utils.test import line_params, ring_params
@@ -78,17 +80,29 @@ def test_pipeline_inference(
     guidance_scale = 3.5
     guidance_scale_2 = 3.5
 
-    pipeline = WanPipelineI2V.create_pipeline(
-        mesh_device=mesh_device,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        num_links=num_links,
-        dynamic_load=dynamic_load,
-        topology=topology,
-        is_fsdp=is_fsdp,
-        height=height,
-        width=width,
-        num_frames=num_frames,
+    h_factor = tuple(mesh_device.shape)[tp_axis]
+    w_factor = tuple(mesh_device.shape)[sp_axis]
+    parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(w_factor, sp_axis), tp=(h_factor, tp_axis))
+    vae_parallel_config = VaeHWParallelConfig.from_tuples(height=(h_factor, tp_axis), width=(w_factor, sp_axis))
+    encoder_parallel_config = EncoderParallelConfig.from_tuple((h_factor, tp_axis))
+
+    pipeline = WanPipelineI2V(
+        device=mesh_device,
+        config=WanPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            encoder_parallel_config=encoder_parallel_config,
+            num_links=num_links,
+            dynamic_load=dynamic_load,
+            topology=topology,
+            is_fsdp=is_fsdp,
+            checkpoint_name="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
+            model_type="i2v",
+            height=height,
+            width=width,
+            num_frames=num_frames,
+        ),
     )
 
     prompt = "The cat in the hat runs up the hill to the house."
@@ -98,24 +112,16 @@ def test_pipeline_inference(
         logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
         with torch.no_grad():
-            result = pipeline(
-                prompt=prompt,
+            frames = pipeline(
+                prompts=[prompt],
+                negative_prompts=[negative_prompt],
                 image_prompt=image_prompt,
-                negative_prompt=negative_prompt,
-                height=height,
-                width=width,
-                num_frames=num_frames,
                 num_inference_steps=num_inference_steps,
                 seed=seed,
                 guidance_scale=guidance_scale,
                 guidance_scale_2=guidance_scale_2,
                 output_type="uint8",
             )
-
-        if hasattr(result, "frames"):
-            frames = result.frames
-        else:
-            frames = result[0] if isinstance(result, tuple) else result
 
         logger.info(f"Inference completed successfully")
         logger.info(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")

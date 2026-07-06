@@ -25,8 +25,6 @@ void kernel_main() {
 
     // Constants
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes_val = get_tile_size(values_cb_index);
-    const uint32_t tile_bytes_idx = get_tile_size(output_ind_cb_index);
 
     // Tensor config
     const auto values_tensor_accessor = TensorAccessor(values_tensor_args, dst_addr0);
@@ -35,6 +33,8 @@ void kernel_main() {
     Noc noc;
     CircularBuffer values_cb(values_cb_index);
     CircularBuffer indices_cb(output_ind_cb_index);
+    const uint32_t tile_bytes_val = values_cb.get_tile_size();
+    const uint32_t tile_bytes_idx = indices_cb.get_tile_size();
 
     // Get Kt rows of values and then Kt rows of indices from compute kernel
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {

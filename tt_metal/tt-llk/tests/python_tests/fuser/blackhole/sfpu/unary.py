@@ -6,10 +6,10 @@ from typing import List
 
 import torch
 from fuser.block_data import BlockData
-from fuser.compute_node import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fused_sfpu import Sfpu
 from fuser.fuser_config import GlobalConfig
+from fuser.sfpu_node import SfpuNode
 from helpers.golden_generators import (
     UnarySFPUGolden,
     get_golden_generator,
@@ -53,12 +53,12 @@ class UnarySfpu(Sfpu):
         tensor: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
-        format_input = operation.output.data_format
-        format_output = operation.output.data_format
+        format_input = config.sentinel.golden_math_format
+        format_output = config.sentinel.golden_math_format
         dest_acc = config.dest_acc
 
         generate_sfpu_golden = get_golden_generator(UnarySFPUGolden)
@@ -80,7 +80,7 @@ class UnarySfpu(Sfpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
@@ -97,17 +97,17 @@ class UnarySfpu(Sfpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
+        dest_sync = operation.dest_sync.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
         op = f"SfpuType::{self.operation.cpp_enum_value}"
 
         return (
             f"    test_utils::call_unary_sfpu_operation<"
-            f"dest_sync{stage}, {dest_acc}, "
+            f"{dest_sync}, {dest_acc}, "
             f"{op}, {approx_mode}, {dest_acc}, {self.iterations}"
             f">({self.dest_idx}, {config.sentinel.math_format}, {self.fill_const_value});\n"
         )

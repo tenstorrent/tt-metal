@@ -192,6 +192,12 @@ class TestConfig:
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
     INFRA_TESTING: ClassVar[bool] = False
 
+    # CLI perf counter flags
+    ENABLE_PERF_COUNTERS: ClassVar[bool] = False
+    DUMP_RAW_COUNTERS: ClassVar[bool] = False
+    DUMP_RAW_METRICS: ClassVar[bool] = False
+    DUMP_CSV_COUNTERS: ClassVar[bool] = False
+
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
     RUNTIME_ADDRESS_COVERAGE: ClassVar[int] = 0x6E000
@@ -206,36 +212,53 @@ class TestConfig:
 
     # Performance counter L1 memory addresses
     # NOTE: These addresses must match the values in tests/helpers/include/counters.h
-    # Single shared buffer layout: 86 config words + 172 data words + 1 sync control word
-    PERF_COUNTERS_BASE_ADDR: ClassVar[int] = 0x16A000
-    _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 86
-    _PERF_COUNTERS_DATA_WORDS: ClassVar[int] = 172
-    _PERF_COUNTERS_BUFFER_SIZE: ClassVar[int] = (
-        _PERF_COUNTERS_CONFIG_WORDS + _PERF_COUNTERS_DATA_WORDS
-    ) * 4  # 1032 bytes (0x408)
+    # Shared config + per-zone data layout (must match counters.h).
+    # Shared config (200 words = 800 B) at base; per-zone data (5 bank-cycle
+    # words + 200 counter-count words + sync = 860 B) follows.
+    # 8 zones × 860 + 800 = 7680 B, fits below profiler region at 0x16AFF4.
+    PERF_COUNTERS_BASE_ADDR: ClassVar[int] = 0x169000
+    PERF_COUNTERS_MAX_ZONES: ClassVar[int] = 8  # Max zones (must match counters.h)
+    _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 200
+    _PERF_COUNTERS_DATA_WORDS: ClassVar[int] = 200  # per-zone counter-count slots
+    _PERF_COUNTERS_BANK_CYCLES_WORDS: ClassVar[int] = 5  # OUT_L per bank (5 banks)
 
-    # Shared buffer addresses (all threads use same buffer)
+    # Shared config region
     PERF_COUNTERS_CONFIG_ADDR: ClassVar[int] = PERF_COUNTERS_BASE_ADDR
-    PERF_COUNTERS_DATA_ADDR: ClassVar[int] = (
+    PERF_COUNTERS_ZONES_BASE: ClassVar[int] = (
         PERF_COUNTERS_BASE_ADDR + _PERF_COUNTERS_CONFIG_WORDS * 4
     )
+
+    # Per-zone data layout: [bank_cycles (5)][counter_counts (DATA_WORDS)][sync (1) + pad]
+    _PERF_COUNTERS_ZONE_DATA_BYTES: ClassVar[int] = (
+        _PERF_COUNTERS_BANK_CYCLES_WORDS + _PERF_COUNTERS_DATA_WORDS
+    ) * 4  # 820 B = 20 (cycles) + 800 (counts)
+
+    # Size of one full zone block (data + sync/pad)
+    PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
+
+    # Zone-0 flat addresses (kept for legacy callers; prefer zone_*_addr helpers below).
+    PERF_COUNTERS_DATA_ADDR: ClassVar[int] = PERF_COUNTERS_ZONES_BASE
     PERF_COUNTERS_SYNC_CTRL_ADDR: ClassVar[int] = (
-        PERF_COUNTERS_BASE_ADDR + _PERF_COUNTERS_BUFFER_SIZE
+        PERF_COUNTERS_ZONES_BASE + _PERF_COUNTERS_ZONE_DATA_BYTES
     )
 
-    # Total size for memory reservation
-    PERF_COUNTERS_SIZE: ClassVar[int] = (
-        _PERF_COUNTERS_BUFFER_SIZE + 4
-    )  # +4 for sync control word
+    # Trailing metadata written by PerfCounterManager (must match counters.h):
+    # enabled_flag (4 B) + bank_mask (4 B) + valid_count[MAX_ZONES] (4 B each).
+    _PERF_COUNTERS_TRAILING_METADATA_BYTES: ClassVar[int] = (
+        4 + 4 + PERF_COUNTERS_MAX_ZONES * 4
+    )
 
-    # Device print buffer; must match dprint.h. Sits above loaders, under RUNTIME_ARGS_START.
-    # PROCESSOR_COUNT and DEVICE_PRINT_BUFFER_SIZE are set per-arch in setup_arch():
-    # device-side DevicePrintMemoryLayout (hostdev/device_print_common.h) sizes itself from
-    # TensixProcessorTypes::COUNT (5 on WH/BH, 24 on Quasar).
-    # Subject to change once debug print is removed; it can be turned into a flat buffer
-    # sized independently of thread count.
-    # 0x15000 fits the L1 gap between TRISC2_LOADER_INIT_MEM end and
-    # RUNTIME_ARGS_START (0x20000) on BH/WH/Quasar non-coverage layouts.
+    # Total L1 reservation: shared config + per-zone blocks + trailing metadata.
+    PERF_COUNTERS_SIZE: ClassVar[int] = (
+        _PERF_COUNTERS_CONFIG_WORDS * 4
+        + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
+        + _PERF_COUNTERS_TRAILING_METADATA_BYTES
+    )
+
+    # Legacy alias — sums per-zone bytes for back-compat with old callers
+    _PERF_COUNTERS_BUFFER_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES
+
+    # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
     # Coverage builds extend TRISC sections past this address; device print
     # is disabled under coverage so the conflict doesn't matter.
     DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x15000
@@ -244,11 +267,9 @@ class TestConfig:
     # -DLLK_RUNTIME_ARGS_START so dprint.h can static_assert that the
     # device print buffer doesn't overlap RUNTIME_ARGS.
     DEVICE_PRINT_RUNTIME_ARGS_START: ClassVar[int] = 0x20000
-    DEVICE_PRINT_PER_THREAD_SIZE: ClassVar[int] = (
-        1024  # passed to the build as -DDPRINT_BUFFER_SIZE
-    )
     PROCESSOR_COUNT: ClassVar[int] = 0
-    DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0
+    DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0x4000  # WH/BH/Quasar TRISC
+    DEVICE_PRINT_BUFFER_SIZE2: ClassVar[int] = 0x2000  # Quasar DM
     DEVICE_PRINT_ENABLED: ClassVar[bool] = False
 
     # Single source of truth that maps component, risc_id and display name.
@@ -256,12 +277,38 @@ class TestConfig:
     # _risc_names_tensix and make_device_print_parser in device_print.py.
     # The kernel needs it to tell the host who it is when it prints, and
     # the host needs it to map it into a string and find the ELF on disk.
+    # Quasar overrides this in setup_arch.
     RISC_INFO: ClassVar[dict[str, tuple[int, str]]] = {
         "unpack": (2, "UNPACK"),
         "math": (3, "MATH"),
         "pack": (4, "PACK"),
-        "sfpu": (5, "SFPU"),  # Quasar only
     }
+
+    @staticmethod
+    def device_print_buffers() -> list[tuple[int, int, int]]:
+        """Per-buffer (base_address, size, processor_count) the host parser reads.
+
+        Mirrors DevicePrintMemoryLayout (see dprint_buffer.h) and the dprint server's
+        get_core_buffers(): WH/BH have a single buffer; Quasar has a TRISC/compute
+        buffer (16 processors) immediately followed by a DM buffer (8 processors).
+        processor_count drives the Aux header size, so it must match the device-side
+        DevicePrintBuffer template arguments.
+        """
+        base = TestConfig.DEVICE_PRINT_BUFFER_BASE
+        if TestConfig.ARCH == ChipArchitecture.QUASAR:
+            return [
+                (
+                    base,
+                    TestConfig.DEVICE_PRINT_BUFFER_SIZE,
+                    16,
+                ),  # TRISC, processor_offset 8
+                (
+                    base + TestConfig.DEVICE_PRINT_BUFFER_SIZE,
+                    TestConfig.DEVICE_PRINT_BUFFER_SIZE2,
+                    8,
+                ),  # DM, processor_offset 0
+            ]
+        return [(base, TestConfig.DEVICE_PRINT_BUFFER_SIZE, TestConfig.PROCESSOR_COUNT)]
 
     @staticmethod
     def setup_arch():
@@ -291,6 +338,12 @@ class TestConfig:
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES
                 TestConfig.KERNEL_COMPONENTS = ["unpack", "math", "pack", "sfpu"]
+                TestConfig.RISC_INFO = {
+                    "unpack": (8, "UNPACK"),
+                    "math": (9, "MATH"),
+                    "pack": (10, "PACK"),
+                    "sfpu": (11, "SFPU"),
+                }
                 TestConfig.PROCESSOR_COUNT = 24
                 TestConfig.TRISC_START_ADDRS = [
                     0x16DFF0,
@@ -311,12 +364,6 @@ class TestConfig:
                 raise ValueError(
                     "Must provide CHIP_ARCH environment variable (wormhole / blackhole / quasar)"
                 )
-
-        TestConfig.DEVICE_PRINT_BUFFER_SIZE = (
-            # Change after debug print is removed.
-            TestConfig.DEVICE_PRINT_PER_THREAD_SIZE
-            * TestConfig.PROCESSOR_COUNT
-        )
 
     @staticmethod
     def setup_paths(sources_path: Path):
@@ -390,7 +437,11 @@ class TestConfig:
         speed_of_light: bool = False,
     ):
         debug_flag = "" if no_debug_symbols else "-g "
-        TestConfig.OPTIONS_ALL = f"{debug_flag}-O3 -std=c++17 -ffast-math"
+        TestConfig.OPTIONS_ALL = (
+            f"{debug_flag}-O3 "
+            "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
+            "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+        )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage
         TestConfig.SPEED_OF_LIGHT = speed_of_light
@@ -415,10 +466,13 @@ class TestConfig:
 
         if detailed_artefacts:
             TestConfig.OPTIONS_ALL += (
-                "-save-temps=obj -fdump-tree-all -fdump-rtl-all -v"
+                "-save-temps=obj -fdump-tree-all -fdump-rtl-all -v "
             )
 
-        TestConfig.OPTIONS_LINK = "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace"
+        TestConfig.OPTIONS_LINK = (
+            "-nostdlib -nostartfiles "
+            "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,--trace "
+        )
         # LLK_ASSERT uses ebreak under ENV_LLK_INFRA (see common/llk_assert.h). Match Hal tensix cflags
         # (wh_hal.cpp / bh_hal.cpp): -mno-tt-fix-whbhebreak avoids 8 NOPs after ebreak.
         no_wh_ebreak_fixup = (
@@ -428,10 +482,12 @@ class TestConfig:
             else ""
         )
         TestConfig.INITIAL_OPTIONS_COMPILE = (
-            "-nostdlib -fno-use-cxa-atexit -Werror -Wall -fno-asynchronous-unwind-tables -fno-exceptions -fno-rtti -Wunused-parameter "
-            "-Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls -Wuninitialized -Wmaybe-uninitialized "
+            "-Wall -Werror -Wno-error=deprecated-declarations "
+            "-Wunused-parameter "
+            "-Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls "
+            "-Wuninitialized -Wmaybe-uninitialized "
             f"{no_wh_ebreak_fixup}"
-            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE} "
+            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
         TestConfig.INCLUDES = [
@@ -544,6 +600,7 @@ class TestConfig:
         l1_acc: L1Accumulation = L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
+        requires_device_print: bool = False,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -575,6 +632,7 @@ class TestConfig:
         self.skip_build_header = skip_build_header
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
+        self.requires_device_print = requires_device_print
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -605,6 +663,9 @@ class TestConfig:
                 chip_arch=TestConfig.CHIP_ARCH,
                 disable_format_inference=self.disable_format_inference,
                 unpacking_to_srcs=self.unpack_to_srcs,
+                # `formats` may be an InputOutputFormat (carries the hint) or a
+                # FormatConfig (doesn't); fall back to None for the latter.
+                register_format_hint=getattr(formats, "register_format_hint", None),
             )
             self.pack_size = TILE_SIZES.get(self.formats_config[0].output_format, 128)
             self.unpack_size_a = TILE_SIZES.get(
@@ -680,15 +741,15 @@ class TestConfig:
 
         if not self.compile_time_formats:
             # Append struct.pack format for each FormatConfig to L1. Each "I" encodes one
-            # uint32_t DataFormat enum. Eleven I's = eleven fields appended in
+            # uint32_t DataFormat enum. Twelve I's = twelve fields appended in
             # write_runtimes_to_L1 (same order as argument_data). struct.pack encodes
             # those values using runtime_format into bytes for RuntimeParams on device.
             if self.L1_to_L1_iterations == 1:
                 lines.append("FormatConfig formats;")
-                self.runtime_format += "IIIIIIIIIII"
+                self.runtime_format += "IIIIIIIIIIII"
             else:
                 lines.append(f"FormatConfig formats[{self.L1_to_L1_iterations}];")
-                self.runtime_format += self.L1_to_L1_iterations * "IIIIIIIIIII"
+                self.runtime_format += self.L1_to_L1_iterations * "IIIIIIIIIIII"
 
         if self.variant_stimuli:
             stimuli_fields, stimuli_pack_format = (
@@ -727,6 +788,7 @@ class TestConfig:
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.unpack_B_dst],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.unpack_S_dst],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.math],
+                        TestConfig.DATA_FORMAT_ENUM[format_tuple.sfpu_math],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.pack_src],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.pack_dst],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.pack_S_src],
@@ -850,9 +912,6 @@ class TestConfig:
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
 
-        if TestConfig.DEVICE_PRINT_ENABLED:
-            OPTIONS_COMPILE += "-DDEBUG_PRINT_ENABLED "
-
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
 
@@ -895,9 +954,17 @@ class TestConfig:
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+                # Only compile BRISC with counter support when counters are enabled,
+                # otherwise BRISC arms counter hardware which adds monitoring overhead.
+                perf_cnt_flag = (
+                    "-DPERF_COUNTERS_COMPILED "
+                    if TestConfig.ENABLE_PERF_COUNTERS
+                    else ""
+                )
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
+                    f"{perf_cnt_flag}"
                     f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
                     f'-o {shared_elf_dir / "brisc.elf"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}'
                 )
@@ -957,6 +1024,10 @@ class TestConfig:
                 f"ckernel::to_underlying(DataFormat::{fmt.math.name})"
                 for fmt in self.formats_config
             ]
+            sfpu_math_values = [
+                f"ckernel::to_underlying(DataFormat::{fmt.sfpu_math.name})"
+                for fmt in self.formats_config
+            ]
             pack_in_values = [
                 f"ckernel::to_underlying(DataFormat::{fmt.pack_src.name})"
                 for fmt in self.formats_config
@@ -983,14 +1054,15 @@ class TestConfig:
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_B_OUT_LIST = {{{', '.join(unpack_b_out_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_S_OUT_LIST = {{{', '.join(unpack_s_out_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> MATH_FORMAT_LIST = {{{', '.join(math_values)}}};",
+                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> SFPU_MATH_FORMAT_LIST = {{{', '.join(sfpu_math_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_IN_LIST = {{{', '.join(pack_in_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_OUT_LIST = {{{', '.join(pack_out_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_S_IN_LIST = {{{', '.join(pack_s_in_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_S_OUT_LIST = {{{', '.join(pack_s_out_values)}}};",
                     "constexpr std::array<FormatConfig, L1_to_L1_ITERATIONS> formats_array = {",
-                    "{FormatConfig(UNPACK_A_IN_LIST[0], UNPACK_B_IN_LIST[0], UNPACK_S_IN_LIST[0], UNPACK_A_OUT_LIST[0], UNPACK_B_OUT_LIST[0], UNPACK_S_OUT_LIST[0], MATH_FORMAT_LIST[0], PACK_IN_LIST[0], PACK_OUT_LIST[0], PACK_S_IN_LIST[0], PACK_S_OUT_LIST[0]),",
+                    "{FormatConfig(UNPACK_A_IN_LIST[0], UNPACK_B_IN_LIST[0], UNPACK_S_IN_LIST[0], UNPACK_A_OUT_LIST[0], UNPACK_B_OUT_LIST[0], UNPACK_S_OUT_LIST[0], MATH_FORMAT_LIST[0], SFPU_MATH_FORMAT_LIST[0], PACK_IN_LIST[0], PACK_OUT_LIST[0], PACK_S_IN_LIST[0], PACK_S_OUT_LIST[0]),",
                     "FormatConfig(",
-                    "UNPACK_A_IN_LIST[1], UNPACK_B_IN_LIST[1], UNPACK_S_IN_LIST[1], UNPACK_A_OUT_LIST[1], UNPACK_B_OUT_LIST[1], UNPACK_S_OUT_LIST[1], MATH_FORMAT_LIST[1], PACK_IN_LIST[1], PACK_OUT_LIST[1], PACK_S_IN_LIST[1], PACK_S_OUT_LIST[1])}};",
+                    "UNPACK_A_IN_LIST[1], UNPACK_B_IN_LIST[1], UNPACK_S_IN_LIST[1], UNPACK_A_OUT_LIST[1], UNPACK_B_OUT_LIST[1], UNPACK_S_OUT_LIST[1], MATH_FORMAT_LIST[1], SFPU_MATH_FORMAT_LIST[1], PACK_IN_LIST[1], PACK_OUT_LIST[1], PACK_S_IN_LIST[1], PACK_S_OUT_LIST[1])}};",
                 ]
             )
 
@@ -1008,11 +1080,12 @@ class TestConfig:
                     f"constexpr auto UNPACK_B_OUT = ckernel::to_underlying(DataFormat::{formats_config.unpack_B_dst.name});",
                     f"constexpr auto UNPACK_S_OUT = ckernel::to_underlying(DataFormat::{formats_config.unpack_S_dst.name});",
                     f"constexpr auto MATH_FORMAT = ckernel::to_underlying(DataFormat::{formats_config.math.name});",
+                    f"constexpr auto SFPU_MATH_FORMAT = ckernel::to_underlying(DataFormat::{formats_config.sfpu_math.name});",
                     f"constexpr auto PACK_IN = ckernel::to_underlying(DataFormat::{formats_config.pack_src.name});",
                     f"constexpr auto PACK_OUT = ckernel::to_underlying(DataFormat::{formats_config.pack_dst.name});",
                     f"constexpr auto PACK_S_IN = ckernel::to_underlying(DataFormat::{formats_config.pack_S_src.name});",
                     f"constexpr auto PACK_S_OUT = ckernel::to_underlying(DataFormat::{formats_config.pack_S_dst.name});",
-                    "constexpr FormatConfig formats = FormatConfig(UNPACK_A_IN, UNPACK_B_IN, UNPACK_S_IN, UNPACK_A_OUT, UNPACK_B_OUT, UNPACK_S_OUT, MATH_FORMAT, PACK_IN, PACK_OUT, PACK_S_IN, PACK_S_OUT);",
+                    "constexpr FormatConfig formats = FormatConfig(UNPACK_A_IN, UNPACK_B_IN, UNPACK_S_IN, UNPACK_A_OUT, UNPACK_B_OUT, UNPACK_S_OUT, MATH_FORMAT, SFPU_MATH_FORMAT, PACK_IN, PACK_OUT, PACK_S_IN, PACK_S_OUT);",
                 ]
             )
 
@@ -1039,6 +1112,8 @@ class TestConfig:
             '#include "llk_defs.h"',
             f"{sfpu_types_include}",
             (
+                # perf.h provides PerfRunType (needed for the PERF_RUN_TYPE declaration below).
+                # Test sources that use MEASURE_PERF_COUNTERS get counters.h via params.h.
                 '#include "perf.h"'
                 if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
                 else ""
@@ -1173,6 +1248,19 @@ class TestConfig:
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
+                # EXPERIMENT: enable -DPERF_COUNTERS_COMPILED on TRISC.
+                # Quasar is intentionally excluded: it adds a 4th compute thread
+                # (SFPU) and the entry/exit barrier in `counters.h` posts a fixed
+                # number of tokens for 3 threads, so enabling perf counters on
+                # Quasar would deadlock the SFPU thread (it would spinwait on a
+                # semaphore that never gets the extra post). A static_assert in
+                # `counters.h` enforces this at compile time as a safety net.
+                if (
+                    TestConfig.ENABLE_PERF_COUNTERS
+                    and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
+                ):
+                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+
                 COVERAGES_DEPS = (
                     f"-Wl,--start-group {shared_obj_dir}/coverage.o -lgcov -Wl,--end-group "
                     if self.coverage_build == CoverageBuild.Yes
@@ -1180,7 +1268,7 @@ class TestConfig:
                 )
                 trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
                 device_print_flags = ""
-                if TestConfig.DEVICE_PRINT_ENABLED:
+                if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
                     risc_id, _ = TestConfig.RISC_INFO[name]
                     # Quasar: kernel addresses the buffer through the uncached alias
                     # (see device_print.h:get_lock_atomic).
@@ -1188,9 +1276,11 @@ class TestConfig:
                         0x400000 if TestConfig.ARCH == ChipArchitecture.QUASAR else 0
                     )
                     device_print_flags = (
+                        "-DDEBUG_PRINT_ENABLED "
                         f"-DLLK_DEVICE_PRINT_BUFFER_BASE={kernel_buffer_base:#x} "
                         f"-DLLK_RUNTIME_ARGS_START={TestConfig.DEVICE_PRINT_RUNTIME_ARGS_START:#x} "
-                        f"-DDPRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_PER_THREAD_SIZE} "
+                        f"-DDEVICE_PRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_BUFFER_SIZE} "
+                        f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
                         f"-DPROCESSOR_INDEX={risc_id} "
                     )
                 compile_command = (
@@ -1271,6 +1361,10 @@ class TestConfig:
 
     BRISC_ELF_LOADED: ClassVar[bool] = False
     LAST_LOADED_ELFS: ClassVar[Path] = Path()
+    # Max BRISC bring-up attempts after a reset. A board-wide `tt-smi -r 0`
+    # can leave a core slow-to-boot or wedged; each attempt re-issues the
+    # soft-reset kick (re-polling alone cannot recover a wedged core).
+    BRISC_BOOT_MAX_ATTEMPTS: ClassVar[int] = 3
 
     def run_elf_files(self) -> list:
         boot_mode = (
@@ -1281,7 +1375,7 @@ class TestConfig:
 
         # Zero the device print buffer header before each kernel run so the
         # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock.
-        if TestConfig.DEVICE_PRINT_ENABLED:
+        if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
             write_words_to_device(
                 TestConfig.TENSIX_LOCATION,
                 TestConfig.DEVICE_PRINT_BUFFER_BASE,
@@ -1301,28 +1395,49 @@ class TestConfig:
         if boot_mode == BootMode.BRISC:
             if not TestConfig.BRISC_ELF_LOADED:
                 commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
-                TestConfig.BRISC_ELF_LOADED = True
                 load_elf(
                     elf_file=str((TestConfig.SHARED_ELF_DIR / "brisc.elf").absolute()),
                     location=TestConfig.TENSIX_LOCATION,
                     risc_name="brisc",
                     verify_write=True,
                 )
-                # Pre-clear BriscCounter so we cannot latch onto a stale
-                # boot-ready sentinel left in L1 by a prior pytest process —
-                # mailboxes live at fixed L1 addresses outside any ELF
-                # section, so they survive ELF reload.
-                write_words_to_device(
-                    TestConfig.TENSIX_LOCATION,
-                    device_module.Mailboxes.BriscCounter.value,
-                    [0],
-                )
-                commit_tensix_soft_reset(
-                    0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
-                )
-                wait_brisc_boot_ready(
-                    TestConfig.TENSIX_LOCATION, timeout=brisc_cmd_timeout
-                )
+                # Bring BRISC up, retrying the soft-reset kick until it reaches
+                # its polling loop. A board-wide `tt-smi -r 0` can leave a core
+                # slow-to-boot or wedged; re-polling alone never recovers a
+                # wedged core, so each attempt re-asserts then de-asserts the
+                # BRISC soft reset. BRISC_ELF_LOADED is latched only after
+                # boot-ready succeeds, so a failed bring-up is retried on the
+                # next test instead of poisoning the rest of this worker's run.
+                last_err = None
+                for attempt in range(TestConfig.BRISC_BOOT_MAX_ATTEMPTS):
+                    if attempt:
+                        commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
+                    # Pre-clear BriscCounter so we cannot latch onto a stale
+                    # boot-ready sentinel left in L1 by a prior pytest process —
+                    # mailboxes live at fixed L1 addresses outside any ELF
+                    # section, so they survive ELF reload.
+                    write_words_to_device(
+                        TestConfig.TENSIX_LOCATION,
+                        device_module.Mailboxes.BriscCounter.value,
+                        [0],
+                    )
+                    commit_tensix_soft_reset(
+                        0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
+                    )
+                    try:
+                        wait_brisc_boot_ready(
+                            TestConfig.TENSIX_LOCATION, timeout=brisc_cmd_timeout
+                        )
+                    except TimeoutError as err:
+                        last_err = err
+                        continue
+                    TestConfig.BRISC_ELF_LOADED = True
+                    break
+                else:
+                    raise TimeoutError(
+                        f"BRISC bring-up did not become ready after "
+                        f"{TestConfig.BRISC_BOOT_MAX_ATTEMPTS} attempts"
+                    ) from last_err
 
             # Reset only TRISCs, BRISC stays alive in its polling loop
             commit_brisc_command(
@@ -1491,7 +1606,7 @@ class TestConfig:
         dprint_parser = None
         dprint_lines: list[str] = []
         wrapped_poll_callback = poll_callback
-        if TestConfig.DEVICE_PRINT_ENABLED:
+        if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
             from .device_print import make_device_print_parser
 
             dprint_parser = make_device_print_parser(self)

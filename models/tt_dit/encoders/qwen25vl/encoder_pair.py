@@ -16,6 +16,7 @@ from ...encoders.qwen25vl.model_qwen25vl import Qwen25VlTextEncoder
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
+from ...utils.tracing import Tracer
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -48,6 +49,7 @@ class Qwen25VlTokenizerEncoderPair:
         else:
             self._tokenizer = Qwen2Tokenizer.from_pretrained(checkpoint)
         self._encoder = self._load_encoder(checkpoint, encoder_subfolder, use_torch=use_torch)
+        self._tracer = None if use_torch else Tracer(self._encoder.forward, device=device, clone_prep_inputs=False)
 
     def _load_encoder(
         self, checkpoint: str, subfolder: str | None, *, use_torch: bool
@@ -61,17 +63,26 @@ class Qwen25VlTokenizerEncoderPair:
         if use_torch:
             return torch_model
 
+        # transformers 5.x moved the text hyperparameters from the top-level
+        # Qwen2_5_VLConfig into a nested `text_config`, and normalized the rope kwargs
+        # (rope_theta, mrope_section, rope_scaling) into a single `rope_parameters` dict
+        # (the old top-level `rope_theta` / `rope_scaling` attributes are consumed). Read
+        # `rope_parameters` first, falling back to `rope_scaling` for <5.x configs.
+        text_config = getattr(torch_model.config, "text_config", torch_model.config)
+        rope_params = getattr(text_config, "rope_parameters", None) or getattr(text_config, "rope_scaling", None) or {}
+        rope_theta = getattr(text_config, "rope_theta", None) or rope_params.get("rope_theta")
+
         model = Qwen25VlTextEncoder(
-            vocab_size=torch_model.config.vocab_size,
-            hidden_size=torch_model.config.hidden_size,
-            intermediate_size=torch_model.config.intermediate_size,
-            hidden_act=torch_model.config.hidden_act,
-            num_hidden_layers=torch_model.config.num_hidden_layers,
-            num_attention_heads=torch_model.config.num_attention_heads,
-            num_key_value_heads=torch_model.config.num_key_value_heads,
-            rms_norm_eps=torch_model.config.rms_norm_eps,
-            rope_theta=torch_model.config.rope_theta,
-            mrope_section=torch_model.config.rope_scaling["mrope_section"],
+            vocab_size=text_config.vocab_size,
+            hidden_size=text_config.hidden_size,
+            intermediate_size=text_config.intermediate_size,
+            hidden_act=text_config.hidden_act,
+            num_hidden_layers=text_config.num_hidden_layers,
+            num_attention_heads=text_config.num_attention_heads,
+            num_key_value_heads=text_config.num_key_value_heads,
+            rms_norm_eps=text_config.rms_norm_eps,
+            rope_theta=rope_theta,
+            mrope_section=rope_params["mrope_section"],
             device=self._device,
             ccl_manager=self._ccl_manager,
             parallel_config=self._parallel_config,
@@ -134,12 +145,13 @@ class Qwen25VlTokenizerEncoderPair:
         ttnn.synchronize_device(self._device)
 
     def encode(
-        self, prompts: Sequence[str], *, num_images_per_prompt: int, sequence_length: int
+        self, prompts: Sequence[str], *, num_images_per_prompt: int, sequence_length: int, enable_tracing: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return _get_qwen_prompt_embeds(
             prompts=prompts,
             num_images_per_prompt=num_images_per_prompt,
             tokenizer=self._tokenizer,
+            tracer=self._tracer if enable_tracing else None,
             text_encoder=self._encoder,
             sequence_length=sequence_length,
             mesh_device=self._device,
@@ -149,7 +161,9 @@ class Qwen25VlTokenizerEncoderPair:
 # adapted from https://github.com/huggingface/diffusers/blob/v0.35.2/src/diffusers/pipelines/qwenimage/pipeline_qwenimage.py#L188
 def _get_qwen_prompt_embeds(
     prompts: Sequence[str],
+    *,
     text_encoder: Qwen25VlTextEncoder | Qwen2_5_VLForConditionalGeneration,
+    tracer: Tracer | None = None,
     tokenizer: PreTrainedTokenizerBase,
     mesh_device: ttnn.MeshDevice | None,
     sequence_length: int,
@@ -185,7 +199,7 @@ def _get_qwen_prompt_embeds(
         tt_cos = tensor.from_torch(cos, device=mesh_device)
         tt_sin = tensor.from_torch(sin, device=mesh_device)
 
-        tt_hidden_states = text_encoder.forward(
+        tt_hidden_states = (tracer or text_encoder.forward)(
             tt_tokens, attention_mask=tt_attention_mask, pos_embeds=(tt_cos, tt_sin)
         )
         tt_prompt_embeds = tt_hidden_states[-1]

@@ -155,7 +155,7 @@ void kernel_main() {
                 write_offset = 0;
                 for (uint32_t block = 0; block < num_blocks_first_stage; block++) {
                     for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; tile_idx++) {
-                        noc.async_read<Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
+                        noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                             remote_ep,
                             cb_external_obj,
                             single_tile_size_bytes,
@@ -181,7 +181,7 @@ void kernel_main() {
 
                         write_offset = 0;
                         for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
-                            noc.async_read<Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
+                            noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                                 remote_ep,
                                 cb_external_obj,
                                 single_tile_size_bytes,
@@ -201,6 +201,8 @@ void kernel_main() {
             cb_reduce_first_stage_obj.wait_front(num_tiles_per_partial_result * num_tiles_to_read);
             reduce_second_stage_sem.up(noc, remote_coords_second_stage[0].x, remote_coords_second_stage[0].y, 1);
         }
+
+        cb_partial_obj.pop_front(num_tiles_per_partial_result * block_h);
     };
     global_reduce_receiver(cb_ex_partial2, cb_ex_external2, cb_ex2);
     noc.async_atomic_barrier();

@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Constexpr
@@ -21,19 +25,27 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<1>();
     const auto s = TensorAccessor(dst_args, dst_addr);
 
-    uint64_t base_dst_noc_addr[tile_height];
+    Noc noc;
+    CircularBuffer cb_out(cb_id_out0);
 
-    auto write_tiles = [&](const uint32_t& num_tiles, const uint32_t& width_size, const uint32_t& stride_size) {
-        cb_wait_front(cb_id_out0, num_tiles);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+    uint32_t curr_stick_offset = 0;
+    uint32_t row_stick_ids[tile_height];
+
+    auto write_tiles = [&](const uint32_t& num_tiles, const uint32_t& width_size) {
+        cb_out.wait_front(num_tiles);
+        uint32_t l1_read_addr = cb_out.get_read_ptr();
         for (uint32_t k = 0; k < tile_height; k++) {
-            uint64_t dst_noc_addr = base_dst_noc_addr[k];
-            noc_async_write(l1_read_addr, dst_noc_addr, width_size);
+            CoreLocalMem<uint32_t> src(l1_read_addr);
+            noc.async_write(
+                src,
+                s,
+                width_size,
+                {.offset_bytes = 0},
+                {.page_id = row_stick_ids[k], .offset_bytes = curr_stick_offset});
             l1_read_addr += width_size;
-            base_dst_noc_addr[k] += width_size + stride_size;
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles);
+        noc.async_write_barrier();
+        cb_out.pop_front(num_tiles);
     };
 
     uint32_t stick_id = start_stick_id;
@@ -41,10 +53,11 @@ void kernel_main() {
     uint32_t curr_offset = offset_within_stick;
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
         for (uint32_t tile_id = 0; tile_id < num_tiles_per_core; tile_id++) {
-            for (uint32_t j = stick_id; j < (tile_height + stick_id); j++) {
-                base_dst_noc_addr[j] = get_noc_addr(j, s, curr_offset);
+            for (uint32_t j = 0; j < tile_height; j++) {
+                row_stick_ids[j] = stick_id + j;
             }
-            write_tiles(1, tile_width_size, stick_size - curr_offset - tile_width_size);
+            curr_stick_offset = curr_offset;
+            write_tiles(1, tile_width_size);
             curr_offset += tile_width_size;
         }
 

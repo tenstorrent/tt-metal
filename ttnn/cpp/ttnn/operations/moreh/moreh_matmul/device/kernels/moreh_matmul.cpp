@@ -4,7 +4,8 @@
 
 // Implemented based on bmm.cpp
 #include "api/compute/matmul.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/transpose.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -40,14 +41,14 @@ FORCE_INLINE void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idx
 }
 
 // TODO: move it to moreh_common.hpp if more use cases.
-FORCE_INLINE void transpose_wh_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t idst = 0) {
+FORCE_INLINE void transpose_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t idst = 0) {
     CircularBuffer ocb_obj(ocb);
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format_srca(icb);
 #endif
-    transpose_wh_init_short(icb);
+    transpose_init(icb);
     tile_regs_acquire();
-    transpose_wh_tile(icb, itile, idst);
+    transpose_tile(icb, itile, idst);
     tile_regs_commit();
     ocb_obj.reserve_back(onetile);
     tile_regs_wait();
@@ -59,7 +60,7 @@ FORCE_INLINE void transpose_wh_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t i
     ocb_obj.push_back(onetile);
 }
 
-FORCE_INLINE void transpose_tile(uint32_t& mm_src, bool transpose, bool need_mask, bool is_input) {
+FORCE_INLINE void transpose_src_tile(uint32_t& mm_src, bool transpose, bool need_mask, bool is_input) {
     if (!transpose) {
         return;
     }
@@ -67,12 +68,12 @@ FORCE_INLINE void transpose_tile(uint32_t& mm_src, bool transpose, bool need_mas
     if (need_mask) {
         CircularBuffer mm_src_obj(mm_src);
         mm_src_obj.wait_front(onetile);
-        transpose_wh_tile_to_cb(mm_src, mm_src);
+        transpose_tile_to_cb(mm_src, mm_src);
         mm_src_obj.pop_front(onetile);
     } else {
         uint32_t trans_src = (is_input) ? (cb_in0) : (cb_in1);
         mm_src = (is_input) ? (cb_intermed1) : (cb_intermed2);
-        transpose_wh_tile_to_cb(trans_src, mm_src);
+        transpose_tile_to_cb(trans_src, mm_src);
     }
 }
 
@@ -200,9 +201,9 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
     CircularBuffer cb_in3_obj(cb_in3);
     CircularBuffer cb_intermed0_obj(cb_intermed0);
     // TODO: checking required when the input cb format and intermediate cb format are different.
-    mm_init(cb_in0, cb_in1, cb_out0);
+    matmul_init(cb_in0, cb_in1);
     if (transpose_input || transpose_other) {
-        transpose_wh_init(cb_in0, cb_out0);
+        transpose_init(cb_in0);
     }
 
     if (need_input_mask_h || need_input_mask_w) {
@@ -252,7 +253,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
                 input_last_row,
                 transpose_input,
                 true);
-            transpose_tile(mm_src0, transpose_input, need_input_mask, true);
+            transpose_src_tile(mm_src0, transpose_input, need_input_mask, true);
 
             mask_tile_to_cb(
                 mm_src1,
@@ -263,7 +264,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
                 other_last_col,
                 transpose_other,
                 false);
-            transpose_tile(mm_src1, transpose_other, need_other_mask, false);
+            transpose_src_tile(mm_src1, transpose_other, need_other_mask, false);
 
             ////////////////////
             // matmul
@@ -292,7 +293,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(mm_src0, mm_src1);
 #endif
-            mm_init_short(mm_src0, mm_src1);
+            matmul_init(mm_src0, mm_src1);
             matmul_tiles(mm_src0, mm_src1, 0, 0, 0);
             tile_regs_commit();
 
@@ -329,7 +330,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
     CircularBuffer cb_in0_obj(cb_in0);
     CircularBuffer cb_in1_obj(cb_in1);
-    mm_init(cb_in0, cb_in1, cb_out0);
+    matmul_init(cb_in0, cb_in1);
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
         tile_regs_acquire();
         for (uint32_t kt = 0; kt < Kt; kt++) {
@@ -377,6 +378,8 @@ void kernel_main() {
     for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
         output_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out0);
 
     if (need_transpose || need_mask || need_bias_add) {
         matmul_with_transpose_and_mask<is_scalar_bias>(

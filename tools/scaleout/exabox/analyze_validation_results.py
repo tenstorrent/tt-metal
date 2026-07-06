@@ -91,7 +91,7 @@ CATEGORIES = {
         "Missing channel connections",
     ),
     "recovered_connections": (
-        r"Ethernet Links were Retrained",
+        r"Rediscovering ethernet links after successful link retraining",
         "BLUE",
         "Recovered connections",
     ),

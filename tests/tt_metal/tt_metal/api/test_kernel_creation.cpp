@@ -88,7 +88,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         } else if (dispatch_core_type == CoreType::ETH) {
             EXPECT_ANY_THROW(tt_metal::CreateKernel(
                                  program_,
-                                 "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
+                                 "tests/tt_metal/tt_metal/test_kernels/device_print/erisc_print.cpp",
                                  CoreRangeSet(dispatch_core_range_set),
                                  EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0}););
         }

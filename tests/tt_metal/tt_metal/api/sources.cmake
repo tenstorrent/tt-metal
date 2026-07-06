@@ -26,21 +26,22 @@ set(UNIT_TESTS_API_SOURCES
     distribution_spec/test_buffer_distribution_spec.cpp
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp
-    metal2_host_api/test_program_run_params.cpp
+    metal2_host_api/test_scratchpad_hw.cpp
+    metal2_host_api/test_program_run_args.cpp
+    metal2_host_api/test_table.cpp
     test_kernel_thread_sync.cpp
-    tensor/test_tensor_sharding.cpp
-    tensor/test_host_tensor.cpp
-    tensor/test_mesh_tensor.cpp
-    tensor/test_tensor_types.cpp
     test_banked.cpp
     test_bit_utils.cpp
     test_filesystem_utils.cpp
+    test_graph_tracking.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
     test_compile_defines.cpp
     test_compiler_include_paths.cpp
     test_direct.cpp
     test_dram_kernels.cpp
+    test_dram_sender_global_cb.cpp
+    test_dram_subchannel_helper.cpp
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
     test_global_circular_buffers.cpp
@@ -67,5 +68,47 @@ set(UNIT_TESTS_API_SOURCES
     test_descriptor_patching.cpp
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
+    test_zero_memory_api.cpp
     disaggregation/test_kv_chunk_address_table.cpp
+)
+
+# tt-emule ASAN sanitizer tests. These EXPECT_DEATH tests assert on the emule
+# ASAN panic (e.g. "Illegal Semaphore Access") and JIT kernels that reference
+# emule-only defines/intrinsics (EMULE_SEM_BASE, __emule_local_l1_to_ptr). They
+# only build/pass under the emule backend; on ttsim/HW the kernels fail to
+# compile and the death tests fail. Gate them so they never enter the non-emule
+# unit_tests_api binary.
+if(TT_METAL_USE_EMULE)
+    list(
+        APPEND
+        UNIT_TESTS_API_SOURCES
+        test_alignment_writes.cpp
+        test_cb_leak.cpp
+        test_cb_pages.cpp
+        test_host_alignment.cpp
+        test_metadata_size.cpp
+        test_noc_without_barrier.cpp
+        test_padded_write.cpp
+        test_semaphore_write.cpp
+        test_tensor_bad_access.cpp
+        test_valid_mem_wrong_alloc.cpp
+        test_write_beyond_res_pages.cpp
+        test_write_outside_tensor.cpp
+    )
+endif()
+
+# Runtime tensor tests build into their own executable (unit_tests_tensor),
+# mirroring unit_tests_ttnn_tensor, so they stay out of the tt-metalium smoke binary.
+set(UNIT_TESTS_API_TENSOR_SOURCES
+    tensor/common_tensor_test_utils.cpp
+    tensor/test_tensor_sharding.cpp
+    tensor/test_host_tensor.cpp
+    tensor/test_host_tensor_to_layout.cpp
+    tensor/test_mesh_tensor.cpp
+    tensor/test_tensor_types.cpp
+    tensor/test_tensor_layout.cpp
+    tensor/test_create_tensor.cpp
+    tensor/test_create_tensor_with_layout.cpp
+    tensor/test_tensor_nd_sharding.cpp
+    tensor/test_vector_conversion.cpp
 )

@@ -28,12 +28,11 @@ xt::xarray<float> frobenius_normalize_ref(const xt::xarray<float>& X, float eps)
 }  // namespace
 
 class FrobeniusNormalizeTest : public ::testing::TestWithParam<FrobeniusCase> {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
     }
-
-    void TearDown() override {
+    static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
     }
 };

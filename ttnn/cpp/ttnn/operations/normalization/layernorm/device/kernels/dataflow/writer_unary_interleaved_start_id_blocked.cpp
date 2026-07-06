@@ -7,7 +7,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
-
 namespace generic = norm::kernel_util::generic;
 
 void kernel_main() {

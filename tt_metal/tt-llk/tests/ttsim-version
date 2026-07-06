@@ -1,8 +1,8 @@
-# ttsim release 1.6.3
+# ttsim release 1.9.3
 
 ttsim_repo='https://github.com/tenstorrent/ttsim'
-ttsim_version='1.6.3'
+ttsim_version='1.9.3'
 ttsim_tag="v${ttsim_version}"
 ttsim_hashtype='sha256'
-ttsim_wh_so_hash='211707c4b774917fa60f5200269b11de7f0696e0a3b1fafabaee76a61956496f'
-ttsim_bh_so_hash='38ee2deb0f1fe494c3dcf75e0946aa04391d956749a42bddbf3b2f9a53cdd69f'
+ttsim_wh_so_hash='9272408d1273d21173b15cfade0186ab78443ec3ed141b727c29de93d0c0de48'
+ttsim_bh_so_hash='0556b8a5d881ee1b04d925fe30f0ff0beefafd8f2f7b3a1c40f591e8c9f19954'
