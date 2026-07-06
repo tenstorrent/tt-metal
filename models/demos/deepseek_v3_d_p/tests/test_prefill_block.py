@@ -739,6 +739,11 @@ def test_kimi_prefill_block(
 # run_model()/create_hf_model() like the DeepSeek/Kimi block tests. Instead it COMPOSES the CPU
 # references GLM already owns (reference.glm_5_1.glm_decoder_layer_reference): x + MLA_cpu(attn_norm(x))
 # then + FFN(ffn_norm(x+mla_out)) — exactly TtPrefillBlock.forward.
+# Why not generalize run_model to take this composed ref? run_model's PCC path is built around
+# create_hf_model() + a single HF module; GLM's only full HF module (GlmMoeDsaModel) is non-absorbed
+# (256-expert, dense attention) and too slow to run per-block (~15-25h) — the absorbed CPU composition
+# runs in ~7s/layer. Folding this in would mean adding a pluggable "reference callable" seam to the
+# shared runner; a fair future cleanup, but out of scope here (keeps the fast path off the shared path).
 #
 # Weights (like the transformer tests): LOAD real weights from the prebuilt ttnn cache when present &
 # complete (device) + matching host weights from the checkpoint (reference); else RANDOM for both. Never

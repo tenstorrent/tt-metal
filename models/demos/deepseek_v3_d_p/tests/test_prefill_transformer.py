@@ -245,7 +245,18 @@ def run_model(
         if _pinned and os.path.isdir(_pinned) and os.path.exists(os.path.join(_pinned, "metadata.json")):
             trace_dir = Path(_pinned)
             trace = load_debug_trace(trace_dir, num_layers=num_layers, isl=isl_total)
-            logger.info(f"Loaded pinned debug trace from {trace_dir} (num_layers={num_layers}, isl={isl_total})")
+            # load_debug_trace(isl=...) chops the per-row tensors (token_ids/decoder/kv) to isl_total, but
+            # the stored logits/next_token_id stay the full-sequence products (never isl-sliced). Mark the
+            # trace sliced when we chopped a longer golden, so the later full-model logits/first-token
+            # checks are skipped — otherwise trace_full_model stays True and they compare this shorter
+            # prefill against the 55k golden's final-token logits and false-fail.
+            native_isl = len(trace.metadata.get("token_ids", []))
+            if native_isl > isl_total:
+                trace_sliced = True
+            logger.info(
+                f"Loaded pinned debug trace from {trace_dir} "
+                f"(num_layers={num_layers}, isl={isl_total}, native_isl={native_isl}, sliced={trace_sliced})"
+            )
 
     cache_key = ReferenceCacheKey(
         weight_type=weight_type,

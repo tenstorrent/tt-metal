@@ -507,6 +507,13 @@ class ttMLA:
     def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
         """Resolve the tuned matmul config for this weight/seq_len, applying head-count and
         chunked-mode gating. Returns None when no tuned config applies (caller falls back to defaults).
+
+        The gating *tags* (num_heads / q_lora_rank / chunked_only) are declared in the config
+        (mla_config.py); only the *match* is resolved here at runtime, because it depends on this live
+        ttMLA. chunked_only in particular is a per-instance property (single-shot vs chunked runner) that
+        the static, shared config can't know — so keeping all three checks together at this single
+        consume-time point is more cohesive than splitting head/q_lora filtering into the config and
+        leaving chunked here.
         """
         cfg = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
         # Some tuned configs are head-count specific (the chunked-prefill 640 set was tuned for Kimi's
