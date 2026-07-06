@@ -2,7 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tracy perf harness for the DeepSeek V3.2 MLA (DSA) chunked-prefill layer.
+Tracy perf harness for the DeepSeek V3.2 MLA chunked-prefill layer, in two variants (``attn_mode``):
+  * ``sparse`` — the DSA path: the indexer selects the top-``index_topk`` (2048) latents and feeds
+    them to ``sparse_sdpa``.
+  * ``dense``  — the baseline sparse must beat: the SAME model with the indexer dropped
+    (``has_indexer=False``), attending the ENTIRE ``cache + chunk`` prefix via the dense ring MLA
+    (``ttnn.transformer.ring_mla``, ``logical_n = cache + chunk``). That is exactly the work the
+    sparse path replaces, so its device-kernel time is the ceiling sparse should come in under.
+
+Both variants share every other dim (MLA heads/chip, local query rows, KVPE depth, RoPE, mesh) so
+their per-op CSVs are directly comparable.
 
 Production scenario (defaults): process one **5k-token chunk** with **50k tokens already cached**,
 on the Galaxy **SP=8 × TP=4** mesh.
@@ -21,21 +30,27 @@ No reference values: this just runs the real device forward and reports per-op d
 Multi-chip rows are device-collapsed (compute=max, collectives=avg across chips) via merge_device_rows
 so the reported time is per-step critical path, not the ~8× over-count of summing parallel device rows.
 
-Two-test pattern (mirrors tests/nightly/blackhole/sdpa):
-  * test_mla_chunked_perf_impl  — the work to profile. Builds the v32 ttMLA, populates the index/KV
-    caches directly to stand in for the cached prefix (no warm-up forwards), then wraps a SINGLE
-    `chunk`-token forward in signpost("start"/"stop"). Run this under tracy.
-  * test_mla_chunked_perf       — the driver. Spawns the impl under tracy via run_device_profiler,
-    reads the device ops log for the signposted region, prints a per-op table, and writes a CSV.
+Two-test pattern (mirrors tests/nightly/blackhole/sdpa), both parameterized by ``attn_mode``:
+  * test_mla_chunked_perf_impl  — the work to profile. Builds the v32 ttMLA (sparse: has_indexer=True;
+    dense: has_indexer=False), and for sparse populates the indexer K-cache directly to stand in for
+    the cached prefix (no warm-up forwards). Dense needs no cache fill — ring_mla reads the prefix by
+    logical_n (args), not by cached data. Then wraps a SINGLE `chunk`-token forward in
+    signpost("start"/"stop"). Run this under tracy.
+  * test_mla_chunked_perf       — the driver. Spawns the matching-mode impl under tracy via
+    run_device_profiler (selected with `-k <attn_mode>`), reads the device ops log for the signposted
+    region, prints a per-op table, and writes a per-mode CSV.
 
-Run (Blackhole Galaxy/LoudBox/QuietBox):
+Run (Blackhole Galaxy/LoudBox/QuietBox) — runs both modes back-to-back:
     pytest -m perf models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_mla_chunked_perf -s
+Just one mode:
+    pytest -m perf ...::test_mla_chunked_perf -k dense -s
 
-Knobs (env): DS_PERF_CACHE (default 51200), DS_PERF_CHUNK (default 5120), DS_PERF_CSV.
-DS_PERF_CHUNK is the Galaxy-global target chunk; smaller boxes scale the measured chunk by SP/8.
+Knobs (env): DS_PERF_CACHE (default 51200), DS_PERF_CHUNK (default 5120), DS_PERF_CSV (sparse),
+DS_DENSE_PERF_CSV (dense). DS_PERF_CHUNK is the Galaxy-global target chunk; smaller boxes scale the
+measured chunk by SP/8.
 
-NOTE: caches are POPULATED directly (random index keys; KVPE left at init) rather than warmed with
-real chunks — only op shapes/timing matter here, not values. The indexer rope now scales from the HF
+NOTE: only op shapes/timing matter here, not values. Sparse POPULATES the indexer K-cache directly
+(random keys; KVPE left at init); dense populates nothing. The indexer rope now scales from the HF
 config (mla.py), so `config.max_seq_len = total` is enough for a 50k+ context (no manual rope bump).
 """
 
@@ -62,8 +77,15 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 
 CACHE_TOKENS = int(os.environ.get("DS_PERF_CACHE", 51200))  # 50 * 1024 already cached
 CHUNK_TOKENS = int(os.environ.get("DS_PERF_CHUNK", 5120))  # 5 * 1024 processed this step
-SUBDIR = "deepseek_v32_sparse_mla_perf"
-CSV_OUT = os.environ.get("DS_PERF_CSV", "deepseek_v32_sparse_mla_perf.csv")
+
+# attn_mode -> profiler subdir / CSV path. Per-mode so the two runs don't clobber each other and the
+# CSVs stay directly comparable.
+ATTN_MODES = ("sparse", "dense")
+SUBDIR = {mode: f"deepseek_v32_{mode}_mla_perf" for mode in ATTN_MODES}
+CSV_OUT = {
+    "sparse": os.environ.get("DS_PERF_CSV", "deepseek_v32_sparse_mla_perf.csv"),
+    "dense": os.environ.get("DS_DENSE_PERF_CSV", "deepseek_v32_dense_mla_perf.csv"),
+}
 
 pytestmark = pytest.mark.perf
 
@@ -163,13 +185,16 @@ def _require_perf(request):
     indirect=True,
 )
 @pytest.mark.parametrize("variant", ["deepseek_v32"], indirect=True, ids=["deepseek_v32"])
+@pytest.mark.parametrize("attn_mode", list(ATTN_MODES), ids=list(ATTN_MODES))
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test — skip on CI")
 @pytest.mark.timeout(0)
-def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only):
+def test_mla_chunked_perf_impl(mesh_device, device_params, variant, attn_mode, config_only):
     from tracy import signpost
 
     if PERF_SKIP_REASON:
         pytest.skip(PERF_SKIP_REASON)
+
+    has_indexer = attn_mode == "sparse"  # dense baseline drops the indexer -> full-prefix ring MLA
 
     cache, chunk = PERF_WORKLOAD.cache_tokens, PERF_WORKLOAD.chunk_tokens
     total = cache + chunk
@@ -194,6 +219,9 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
     weights = random_mla_weights(config)
 
     # Indexer rope now scales from config.max_seq_len (set above) — no manual bump needed.
+    # has_indexer selects the path: sparse binds TtIndexer + sparse_sdpa; dense binds a NullIndexer +
+    # _dense_chunked_attn (full-prefix ring MLA). resolve_has_indexer honours the explicit override
+    # (mla/indexer.py), so the config's DSA fields don't force sparse on the dense run.
     mla = ttMLA(
         config,
         dict(weights),
@@ -204,6 +232,7 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
         tp_axis=tp_axis,
         is_chunked=True,
         layer_num=1,
+        has_indexer=has_indexer,
     )
 
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(total, chunk)
@@ -216,18 +245,20 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
         num_kvpe_cache_layers=1,
     )
 
-    # Represent `cache` already-processed tokens by POPULATING the caches directly (no warm-up
-    # forwards). The indexer K-cache (replicated, natural order, grown by concat) is filled with random
-    # keys so the measured chunk scores against a full `cache`-length prefix. The KVPE block-cyclic
-    # cache is left at its init: the measured chunk writes its own slab and the gather reads the full
-    # prefix, and cache values don't change op shapes/timing.
-    mla._indexer._index_kbuf = ttnn.from_torch(
-        torch.randn(1, 1, cache, mla._indexer.index_args.index_head_dim, dtype=torch.bfloat16),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    # Represent `cache` already-processed tokens without warm-up forwards. SPARSE: populate the indexer
+    # K-cache (replicated, natural order, grown by concat) with random keys so the measured chunk scores
+    # against a full `cache`-length prefix. DENSE: nothing to populate — ring_mla reads the prefix by
+    # logical_n (= kv_actual_isl + chunk_size_global = total), not by cached data. In both modes the KVPE
+    # block-cyclic cache is left at its init: the measured chunk writes its own slab, the gather/ring
+    # reads the full prefix, and cache values don't change op shapes/timing.
+    if has_indexer:
+        mla._indexer._index_kbuf = ttnn.from_torch(
+            torch.randn(1, 1, cache, mla._indexer.index_args.index_head_dim, dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
     hidden = make_hidden(chunk, config.hidden_size, seed=42)  # only the measured chunk
     shard_dims = [None, None]
@@ -242,8 +273,8 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
     )
 
     logger.info(
-        f"profiling {PERF_WORKLOAD.system_name} proxy: one {chunk}-token chunk @ {cache}-token cache "
-        f"(end_pos={total}) on SP={sp}×TP={tp}; local chunk={chunk // sp}, "
+        f"profiling {PERF_WORKLOAD.system_name} {attn_mode.upper()} proxy: one {chunk}-token chunk @ "
+        f"{cache}-token cache (end_pos={total}) on SP={sp}×TP={tp}; local chunk={chunk // sp}, "
         f"local MLA heads={config.num_attention_heads // tp}, local indexer heads={config.index_n_heads // tp}"
     )
     signpost("start")
@@ -256,9 +287,10 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
 # ============================================================================
 # Outer: drive the impl under tracy, post-process, print + write CSV
 # ============================================================================
+@pytest.mark.parametrize("attn_mode", list(ATTN_MODES), ids=list(ATTN_MODES))
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="perf test — run locally with tracy")
 @pytest.mark.timeout(0)
-def test_mla_chunked_perf():
+def test_mla_chunked_perf(attn_mode):
     from tracy.process_model_log import run_device_profiler
 
     if PERF_SKIP_REASON:
@@ -272,12 +304,14 @@ def test_mla_chunked_perf():
     # The impl is skipif(CI=="true"); CI=false in the subprocess lets it run there (mirrors the
     # tests/nightly/blackhole/sdpa perf pattern). The driver itself opens no device, so when the gate is
     # run by node-id only the tracy subprocess opens the board — no parent CHIP_IN_USE lock contention.
+    # `-k {attn_mode}` selects this mode's impl parametrization only (the strings "sparse"/"dense" appear
+    # solely in the attn_mode id), so each tracy run profiles exactly one mode's forward.
     command = (
         "pytest -m perf models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py"
-        "::test_mla_chunked_perf_impl"
+        f"::test_mla_chunked_perf_impl -k {attn_mode}"
     )
     with mock.patch.dict(os.environ, {"CI": "false"}):
-        run_device_profiler(command, SUBDIR, device_analysis_types=["device_kernel_duration"])
+        run_device_profiler(command, SUBDIR[attn_mode], device_analysis_types=["device_kernel_duration"])
 
     dur_col = "DEVICE KERNEL DURATION [ns]"
     # Rows between signpost("start") and signpost("stop") = the measured chunk's device ops, with ONE
@@ -286,7 +320,7 @@ def test_mla_chunked_perf():
     # the device dimension to one row per logical op call with the standard merge_device_rows rule:
     #   * compute ops -> MAX duration across chips (the slowest chip gates the step = critical path)
     #   * collectives -> AVG duration across chips (all chips run the same collective together)
-    df = post_process_ops_log(SUBDIR, has_signposts=True)
+    df = post_process_ops_log(SUBDIR[attn_mode], has_signposts=True)
     df[dur_col] = pd.to_numeric(df[dur_col], errors="coerce")
     df = merge_device_rows(df)  # filters to tt_dnn_device rows internally
     assert len(df), "no device ops in the signposted region — was the impl skipped (wrong device count)?"
@@ -307,7 +341,7 @@ def test_mla_chunked_perf():
     ]
     table = "\n".join(
         [
-            f"DeepSeek V3.2 MLA chunked perf — {PERF_WORKLOAD.system_name} proxy "
+            f"DeepSeek V3.2 {attn_mode.upper()} MLA chunked perf — {PERF_WORKLOAD.system_name} proxy "
             f"{PERF_WORKLOAD.chunk_tokens}-tok chunk @ {PERF_WORKLOAD.cache_tokens}-tok cache, "
             f"SP={PERF_WORKLOAD.sp}×TP={PERF_WORKLOAD.tp}",
             f"Galaxy target: {CHUNK_TOKENS}-tok chunk @ {CACHE_TOKENS}-tok cache, SP=8×TP=4; "
@@ -322,5 +356,5 @@ def test_mla_chunked_perf():
     logger.info("\n" + table)
     print("\n" + table)  # ensure full table reaches stdout even if logging is filtered
 
-    by_op.reset_index().to_csv(CSV_OUT, index=False)
-    logger.info(f"per-op CSV written to {os.path.abspath(CSV_OUT)}")
+    by_op.reset_index().to_csv(CSV_OUT[attn_mode], index=False)
+    logger.info(f"per-op CSV written to {os.path.abspath(CSV_OUT[attn_mode])}")
