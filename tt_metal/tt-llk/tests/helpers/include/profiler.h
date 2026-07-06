@@ -91,7 +91,7 @@ constexpr std::uint32_t BARRIER_END   = BUFFERS_START;
 constexpr std::uint32_t BARRIER_START = BARRIER_END - (NUM_CORES * sizeof(std::uint32_t));
 
 using barrier_ptr_t = volatile std::uint32_t (*)[NUM_CORES];
-using buffer_ptr_t  = std::uint32_t (*)[BUFFER_LENGTH];
+using buffer_ptr_t  = volatile std::uint32_t (*)[BUFFER_LENGTH];
 
 extern barrier_ptr_t barrier_ptr;
 extern buffer_ptr_t buffer;
