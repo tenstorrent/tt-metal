@@ -641,6 +641,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     std::map<std::string, std::string> compute_defines{};
     compute_defines["PACKER_L1_ACC"] = "1";
+    if (op.swiglu_oai) {
+        // SwiGLU-OAI activation (MiniMax-M3 / gpt-oss): clamp(gate,max=L),
+        // clamp(up,±L), (up+1)*gate*sigmoid(alpha*gate). Bakes alpha=1.702,
+        // limit=7.0 (SwiGLUConfigGPTOSS) in the kernel.
+        compute_defines["SWIGLU_OAI"] = "1";
+    }
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
