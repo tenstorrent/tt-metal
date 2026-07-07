@@ -640,6 +640,12 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             else None
         )
 
+    def prefetch_weights(self):
+        # self.o_b_proj.fetch_weights()
+        self.kv_proj.fetch_weights()
+        self.q_b_proj.fetch_weights()
+        self.q_a_proj.fetch_weights()
+
     def _sdpa_decode(self, q: ttnn.Tensor, kv: ttnn.Tensor, mask: ttnn.Tensor) -> ttnn.Tensor:
         """Single-token (``S == 1``) attention via the fused SDPA-decode op.
 

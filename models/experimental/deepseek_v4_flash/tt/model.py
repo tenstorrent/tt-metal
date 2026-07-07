@@ -425,6 +425,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
             )
             last_submesh_id = current_submesh_id
             _profile(this_device)
+            next_layer_for_device_id = li + self.pipeline_stages
+            if next_layer_for_device_id < self.num_layers:
+                assert (
+                    self._submesh_id_for_layer(next_layer_for_device_id) == current_submesh_id
+                ), "Next layer is not on the same submesh"
+                next_layer = self.layers[next_layer_for_device_id]
+                next_layer.self_attn.prefetch_weights()
         return self.norm(self.hc_head(streams))
 
     # ------------------------------------------------------------------ #
@@ -784,6 +791,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 sender_socket, _ = self.submesh_socket_pairs[(k, next_k)]
                 ttnn.experimental.send_direct_async(streams, sender_socket)
                 ttnn.experimental.send_direct_async(pkt, sender_socket)
+                streams.deallocate()
+                next_layer_for_device_id = li + self.pipeline_stages
+                if next_layer_for_device_id < self.num_layers:
+                    next_layer = self.layers[next_layer_for_device_id]
+                    next_layer.self_attn.prefetch_weights()
         return out if out is not None else streams
 
     def _build_packet(self, token_id: int, pos: int) -> ttnn.Tensor:
