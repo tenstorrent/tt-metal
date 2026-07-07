@@ -180,7 +180,6 @@ class LinearDecode(DeepSeekV4Module):
         result = ttnn.experimental.matmul_decode(
             x, l1_weights, partial_width_sharded=self.partial_width_sharded, output_mem_config=output_memory_config
         )
-        result = ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG)
         l1_weights.deallocate()
         return result
 
