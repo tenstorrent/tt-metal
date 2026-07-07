@@ -621,8 +621,7 @@ class LongCatImagePipelineTT:
                 image_nchw.to(torch.float32).permute(0, 2, 3, 1).reshape(1, 1, H * W, C).contiguous(),
                 dtype=F32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, memory_config=DRAM,
             )
-            moments, hb = stub._encode(x_cf, H, W)  # [1,1,hb*hb, 2*lat]
-            wb = hb
+            moments, hb, wb = stub._encode(x_cf, H, W)  # [1,1,hb*wb, 2*lat] (hb,wb independent)
             mom = ttnn.reshape(moments, [1, 1, hb * wb, 2 * lat])
             if mom.layout != TILE:
                 mom = ttnn.to_layout(mom, TILE)
