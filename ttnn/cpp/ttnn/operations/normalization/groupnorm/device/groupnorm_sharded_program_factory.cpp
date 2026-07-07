@@ -66,8 +66,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(im_data_format);
-    // When the welford stats CBs are fp32, the welford reader kernels must combine mean/variance
-    // as fp32 rather than bf16 (see welford_reader_*_sharded_gn_v2.cpp).
+    // Tells the welford reader kernels to combine mean/variance as fp32 (see welford_reader_*_sharded_gn_v2.cpp).
     const bool stats_is_fp32 = cb_data_format == tt::DataFormat::Float32;
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
     if (gamma.has_value()) {
@@ -327,14 +326,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
     uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
     uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
-    // Scalar CBs (scaler c_2, scaler-c c_4, eps c_3, ones c_26) are always bf16: their values are
-    // written as bf16 bit patterns, so binding them to cb_data_format (Float32 on the legacy fp32
-    // path) would reinterpret the bits as fp32 -> garbage. Precision is irrelevant for these constants.
+    // Scalar CBs (scaler c_2, scaler-c c_4, eps c_3, ones c_26) are written as bf16 bit patterns, so
+    // they stay bf16 even on the legacy fp32 path where cb_data_format is Float32.
     const tt::DataFormat eps_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t eps_single_tile_size = tt::tile_size(eps_cb_data_format);
     uint32_t scalar_single_tile_size = eps_single_tile_size;
-    // c_2 is a bf16 reduce scaler on the legacy path, but the welford kernel repurposes it as cb_xmm
-    // (an fp32 intermediate following cb_data_format, needing 3 tile slots).
+    // Welford repurposes c_2 as the fp32 cb_xmm intermediate (3 tile slots); legacy uses it as the bf16 scaler.
     const tt::DataFormat in2_cb_data_format = use_welford ? cb_data_format : eps_cb_data_format;
     const uint32_t in2_single_tile_size = use_welford ? single_tile_size : scalar_single_tile_size;
     uint32_t in2_CB_size = in2_single_tile_size * (use_welford ? 3 : 1);
@@ -739,12 +736,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     //  - Welford: prerequisite for UnpackToDestFp32 (set below), which bypasses the unpacker's
     //    Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
     //    UnpackToDestFp32 writes into.
-    //  - Legacy (non-welford): mirrors LayerNorm's legacy fp32 — the reduction accumulates in the
-    //    fp32 DEST register and stores intermediates fp32 (im_data_format=Float32), which requires
+    //  - Legacy (non-welford): the reduction is accumulated in the fp32 DEST register, which requires
     //    fp32_dest_acc_en.
-    // Without fp32 DEST, inputs are silently truncated to TF32 (10 mantissa bits) on SrcA. The host
-    // op defaults fp32_dest_acc_en=true for fp32 input, so this only fires when a user-supplied
-    // compute_kernel_config explicitly disables it.
+    // Without fp32 DEST, inputs are silently truncated to TF32 (10 mantissa bits) through SrcA.
     TT_FATAL(
         !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
         "group_norm with Float32 input requires fp32_dest_acc_en=true in the compute kernel config; "
