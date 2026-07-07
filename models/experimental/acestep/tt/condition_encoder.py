@@ -71,7 +71,8 @@ class AceStepConditionEncoder(LightweightModule):
         return cls(config)
 
     def forward(
-        self, text, lyric, timbre, lyric_cos, lyric_sin, timbre_cos, timbre_sin, lyric_sliding=None, timbre_sliding=None
+        self, text, lyric, timbre, lyric_cos, lyric_sin, timbre_cos, timbre_sin, lyric_sliding=None,
+        timbre_sliding=None, timbre_cls=False
     ):
         cfg = self.config
 
@@ -80,6 +81,12 @@ class AceStepConditionEncoder(LightweightModule):
         )  # [1,1,Lt,hidden]
         lyric_ctx = self.lyric_encoder.forward(lyric, lyric_cos, lyric_sin, sliding_mask=lyric_sliding)
         timbre_ctx = self.timbre_encoder.forward(timbre, timbre_cos, timbre_sin, sliding_mask=timbre_sliding)
+
+        # Reference AceStepTimbreEncoder slices position 0 as the single CLS timbre token per reference
+        # audio (hidden_states[:, 0, :]) -> 1 token, not the whole encoded sequence. timbre_cls=True
+        # reproduces this (used by the real generation path); default off preserves the per-module tests.
+        if timbre_cls:
+            timbre_ctx = timbre_ctx[:, :, 0:1, :]
 
         # pack_sequences twice, all-valid -> concat(lyric, timbre) then concat(that, text).
         ctx = ttnn.concat([lyric_ctx, timbre_ctx], dim=2)

@@ -78,6 +78,7 @@ class AceStepPipeline:
     tokenizer: object = None  # HF Qwen3 tokenizer
     _hf_text_cfg: object = None  # text-encoder HF config (for its RoPE)
     _null_condition_emb: object = None  # torch [1,1,2048] learned null cross-attn context (for CFG)
+    _silence_latent: object = None  # torch [1,15000,64] learned silence src latent (text2music src)
 
     def _uncond_context(self, cond_context):
         """Build the CFG null/unconditional cross-attn context: null_condition_emb expanded to the
@@ -265,10 +266,14 @@ class AceStepPipeline:
         lyrics: str = "",
         seconds: float = 8.0,
         infer_steps: int = 30,
-        shift: float = 1.0,
+        shift: float = 3.0,
         seed: int = 0,
         use_trace: bool = False,
-        guidance_scale: float = 1.0,
+        guidance_scale: float = 7.0,
+        vocal_language: str = "en",
+        bpm=None,
+        keyscale: str = "",
+        timesignature: str = "",
     ):
         """Text -> 48 kHz stereo song in one call. Returns torch waveform [1, 2, samples].
 
@@ -287,13 +292,28 @@ class AceStepPipeline:
         ), "generate_song needs the encoders; build with create_tt_pipeline(..., with_encoders=True)"
         assert self.vae is not None, "generate_song needs the VAE; build with with_vae=True"
 
-        enc_hs = self.encode_prompt(prompt, lyrics)
+        enc_hs = self.encode_prompt(
+            prompt, lyrics, vocal_language=vocal_language, audio_duration=seconds,
+            bpm=bpm, keyscale=keyscale, timesignature=timesignature,
+        )
         seq_len = self._latent_len(seconds)
         gen = torch.Generator().manual_seed(seed)
         noise = torch.randn(1, 1, seq_len, self.args.audio_acoustic_hidden_dim, generator=gen)
         # text2music: silence source latents + all-valid chunk mask.
         hidden_ch = self.args.audio_acoustic_hidden_dim
-        context = torch.cat([torch.zeros(1, 1, seq_len, hidden_ch), torch.ones(1, 1, seq_len, hidden_ch)], dim=-1)
+        # text2music src_latents = the LEARNED silence_latent (NOT zeros), tiled/cropped to seq_len;
+        # chunk_masks = ones (full-generation span). Ref: diffusers AceStepPipeline.prepare_src_latents.
+        if self._silence_latent is not None:
+            sl = self._silence_latent  # [1, 15000, 64]
+            if sl.shape[1] >= seq_len:
+                src = sl[:, :seq_len, :]
+            else:
+                reps = (seq_len + sl.shape[1] - 1) // sl.shape[1]
+                src = sl.repeat(1, reps, 1)[:, :seq_len, :]
+            src = src.reshape(1, 1, seq_len, hidden_ch)
+        else:
+            src = torch.zeros(1, 1, seq_len, hidden_ch)
+        context = torch.cat([src, torch.ones(1, 1, seq_len, hidden_ch)], dim=-1)
         noise_tt = ttnn.from_torch(noise, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         context_tt = ttnn.from_torch(context, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         uncond_hs = self._uncond_context(enc_hs) if guidance_scale > 1.0 else None
@@ -307,17 +327,49 @@ class AceStepPipeline:
         n = max(2, int(round(seconds * self.LATENT_HZ)))
         return n + (n % 2)  # even for patch_size=2
 
-    def encode_prompt(self, prompt: str, lyrics: str = ""):
+    # SFT prompt template — the text encoder was trained with this EXACT format (the newlines are
+    # load-bearing). Feeding the raw prompt (no template) produces meaningless conditioning -> static
+    # audio. Ref: diffusers AceStepPipeline SFT_GEN_PROMPT + _format_prompt.
+    _SFT_GEN_PROMPT = "# Instruction\n{}\n\n# Caption\n{}\n\n# Metas\n{}<|endoftext|>\n"
+    _DIT_INSTRUCTION = "Fill the audio semantic mask based on the given conditions:"
+
+    @staticmethod
+    def _metadata_string(bpm=None, keyscale="", timesignature="", audio_duration=None) -> str:
+        bpm_str = str(bpm) if bpm is not None and bpm > 0 else "N/A"
+        ts_str = timesignature if timesignature and timesignature.strip() else "N/A"
+        ks_str = keyscale if keyscale and keyscale.strip() else "N/A"
+        dur_str = f"{int(audio_duration)} seconds" if audio_duration and audio_duration > 0 else "30 seconds"
+        return f"- bpm: {bpm_str}\n- timesignature: {ts_str}\n- keyscale: {ks_str}\n- duration: {dur_str}\n"
+
+    def encode_prompt(
+        self,
+        prompt: str,
+        lyrics: str = "",
+        *,
+        vocal_language: str = "en",
+        audio_duration: float = 30.0,
+        bpm=None,
+        keyscale: str = "",
+        timesignature: str = "",
+    ):
         """Tokenize + encode prompt/lyrics -> DiT cross-attn context TT tensor [1,1,ctx,hidden].
 
-        text  -> tokenizer -> TT text encoder -> text_hidden_states (projected inside cond-enc)
-        lyric -> tokenizer -> text_encoder.embed_tokens lookup (matches the reference)
+        Applies the SFT prompt template (instruction + caption + metadata) and the lyric-language
+        format the text encoder was TRAINED on — without it the conditioning is meaningless and the
+        audio is static. Ref: diffusers AceStepPipeline._format_prompt.
+
+        text  -> SFT template -> tokenizer -> TT text encoder -> text_hidden_states
+        lyric -> language-header format -> tokenizer -> text_encoder.embed_tokens lookup
         timbre-> silence (text2music, no reference audio)
         """
         from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
 
-        text_ids = torch.tensor([self.tokenizer(prompt, truncation=True, max_length=256).input_ids])
-        lyric_ids = torch.tensor([self.tokenizer(lyrics or prompt, truncation=True, max_length=2048).input_ids])
+        metas = self._metadata_string(bpm=bpm, keyscale=keyscale, timesignature=timesignature, audio_duration=audio_duration)
+        formatted_text = self._SFT_GEN_PROMPT.format(self._DIT_INSTRUCTION, prompt, metas)
+        formatted_lyrics = f"# Languages\n{vocal_language}\n\n# Lyric\n{lyrics}<|endoftext|>"
+
+        text_ids = torch.tensor([self.tokenizer(formatted_text, truncation=True, max_length=256).input_ids])
+        lyric_ids = torch.tensor([self.tokenizer(formatted_lyrics, truncation=True, max_length=2048).input_ids])
         tlen, llen = text_ids.shape[1], lyric_ids.shape[1]
 
         # 1. text encoder (its own RoPE: theta from the text-encoder config, head_dim 128).
@@ -331,9 +383,18 @@ class AceStepPipeline:
         )
         lyric_tt = ttnn.from_torch(lyric_hs, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-        # 3. timbre = silence (text2music: no reference audio).
-        timbre_len = 96
-        timbre = torch.zeros(1, 1, timbre_len, self.args.audio_acoustic_hidden_dim)
+        # 3. timbre = the GENUINE learned silence_latent (text2music, no reference audio). Reference
+        # feeds refer_audio = silence_latent[:, :timbre_fix_frame(750), :] (NOT zeros), runs the 4-layer
+        # timbre encoder, and slices position 0 as the single CLS timbre token. Feeding zeros produced
+        # degenerate timbre -> static audio. Ref: conditioning_embed.infer_refer_latent (silence path).
+        # NB: our MLP1D requires seq_len divisible by prefill_len_cutoff (512) above 512, so we use 512
+        # silence frames (the reference uses 750). The CLS token at pos 0 aggregates the silence context
+        # bidirectionally either way; 512 vs 750 of the same learned silence is a negligible difference.
+        timbre_len = 512
+        if self._silence_latent is not None:
+            timbre = self._silence_latent[:, :timbre_len, :].reshape(1, 1, timbre_len, self.args.audio_acoustic_hidden_dim)
+        else:
+            timbre = torch.zeros(1, 1, timbre_len, self.args.audio_acoustic_hidden_dim)
         timbre_tt = ttnn.from_torch(timbre, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         # 4. condition encoder -> packed cross-attn context.
@@ -349,6 +410,7 @@ class AceStepPipeline:
             tbsin,
             lyric_sliding=self._enc_sliding(llen),
             timbre_sliding=self._enc_sliding(timbre_len),
+            timbre_cls=True,
         )
 
     def _rope_tt(self, rope, seq_len: int):
@@ -450,6 +512,21 @@ def create_tt_pipeline(
         except Exception:
             null_condition_emb = None
 
+    # Load the genuine learned silence_latent (text2music src_latents). Ships as silence_latent.pt in
+    # the base checkpoint snapshot ([1,64,15000] -> [1,15000,64]).
+    silence_latent = None
+    if with_encoders:
+        try:
+            import glob as _glob
+            from models.experimental.acestep.reference.hf_reference import _snapshot_dir
+
+            hits = _glob.glob(str(_snapshot_dir() / "silence_latent.pt"))
+            if hits:
+                sl = torch.load(hits[0], map_location="cpu").float()  # [1,64,15000]
+                silence_latent = sl.transpose(1, 2).contiguous()  # [1,15000,64]
+        except Exception:
+            silence_latent = None
+
     return AceStepPipeline(
         args=args,
         dit=dit,
@@ -463,4 +540,5 @@ def create_tt_pipeline(
         tokenizer=tokenizer,
         _hf_text_cfg=hf_text_cfg,
         _null_condition_emb=null_condition_emb,
+        _silence_latent=silence_latent,
     )
