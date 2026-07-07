@@ -180,6 +180,38 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
         return rehomed
 
+    def release_decode_traces(self) -> None:
+        """Release all captured decode traces and clear their bookkeeping.
+
+        A captured decode trace reserves a device DRAM trace region plus
+        worker-core / L1 resources. A subsequent large device-buffer
+        allocation (e.g. the receive scratch buffers a device-socket weight
+        update allocates for the full state dict) can collide with that
+        reserved state and wedge an on-device CCL/transfer op -- observed as an
+        unrecoverable device timeout inside ``ttnn.synchronize_device`` on the
+        first weight update after generation has captured its decode trace
+        (the theta_0 update, before any decode, transfers fine).
+
+        Decode traces are captured lazily on the first ``decode_forward``
+        (never during warmup, which only captures prefill traces), keyed
+        ``{sampling_on_device: {model_id: trace_id}}`` and each captured on
+        ``self.model_args[model_id].mesh_device`` (cq_id=0). Releasing them here
+        restores the clean pre-decode device state; tt-transformers re-captures
+        the decode trace lazily on the next generation (the id dict is reset to
+        the ``None`` default, so ``_decode_forward_trace_text`` recaptures).
+
+        The device must be idle before this is called (the caller is
+        responsible for quiescing, e.g. ``ttnn.synchronize_device``).
+        """
+        for trace_ids in self.trace_ids_decode.values():
+            if not trace_ids:
+                continue
+            for model_id, trace_id in trace_ids.items():
+                ttnn.release_trace(self.model_args[model_id].mesh_device, trace_id)
+        self.trace_ids_decode = defaultdict(lambda: None)
+        self.trace_inputs_decode = defaultdict(lambda: None)
+        self.trace_output_decode = defaultdict(lambda: None)
+
     def _set_sampling_trace_mode(self, enabled: bool):
         for model_instance in self.model:
             sampling_module = getattr(model_instance, "sampling", None)
