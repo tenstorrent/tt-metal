@@ -853,18 +853,16 @@ class Transformer(LightweightModule):
             self.prefetcher.init(mode)
             self.prefetcher.prefetch()
         elif mode == Mode.PREFILL:
-            # Option (a) for #47820: run prefill on the mesh device's default sub-device
-            # manager (where the prefill trace is captured), reverting the prefetcher's
-            # decode manager if it is currently active. Keeps prefill trace capture and
-            # replay on one manager across interleaved repeat batches.
-            #
-            # Also free the persistent global CB L1: on repeat batches the decode global
-            # CB stays resident and clashes with the prefill sharded RMSNorm CBs on core
-            # (0,0). Freeing it here lets prefill use those cores; it is rebuilt on the
-            # next decode run(). Order: tear down the CB while the prefetcher's manager is
-            # still active, then revert to the default manager for prefill.
-            self.prefetcher.teardown_global_cb()
-            self.prefetcher.revert_to_default_sub_device_manager()
+            # #47820: run prefill on the mesh device's default sub-device manager (where
+            # the prefill trace is captured), and fully tear down the prefetcher's
+            # decode-time state so the NEXT decode re-inits from scratch. This frees the
+            # persistent global CB L1 (which otherwise clashes with the prefill sharded
+            # RMSNorm on core (0,0)) and, crucially, removes the prefetcher's sub-device
+            # manager + resets init/prefetch state so the next decode re-captures its
+            # trace cleanly — re-capturing against a reused manager + rebuilt CB hangs
+            # trace capture on repeat batches. The generator releases the (per-manager)
+            # decode traces just before this call, while this manager is still active.
+            self.prefetcher.reset_for_reinit()
 
     def forward(
         self,

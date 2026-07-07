@@ -495,6 +495,44 @@ class Prefetcher(LightweightModule):
             ttnn.deallocate(self.prefetched_tt_addr_tensor)
             self.prefetched_tt_addr_tensor = None
 
+    def reset_for_reinit(self) -> None:
+        """
+        Fully tear down decode-time prefetcher state on a prefill switch so the NEXT decode
+        re-initializes from scratch: fresh sub-device manager, re-inserted prefetch queue,
+        re-created global CB, and a re-captured decode trace.
+
+        Re-capturing a decode trace against half-stale prefetcher state (reused manager +
+        rebuilt CB) hangs trace capture on repeat batches — the workers park at Go-Wait
+        while host-side capture never completes. A clean reinit makes batch N's decode
+        setup identical to batch 0's first-time setup, which captures cleanly (#47820).
+
+        The caller must release any decode traces (which live on this manager) BEFORE
+        calling this; here we free the global CB / op / address tensor, revert to the
+        default manager, remove the prefetcher's manager, and reset all decode init state
+        (init flags, worker sub-device, prefetch queue) so init()/prefetch()/run() rebuild
+        everything on the next decode.
+        """
+        if not self.init_decode_done:
+            # Nothing to tear down yet (first prefill, before any decode init).
+            self.mode = Mode.PREFILL
+            return
+        # 1. Free the global CB, its op output, and the L1 address tensor (drains device).
+        self.teardown_global_cb()
+        # 2. Revert to the default (full-grid) manager for prefill.
+        self.revert_to_default_sub_device_manager()
+        # 3. Remove the prefetcher's (now inactive) sub-device manager and reset decode
+        #    init state so the next switch_mode(DECODE) rebuilds from scratch and
+        #    prefetch() re-inserts the weight queue.
+        if self.prefetcher_sub_device is not None:
+            self.mesh_device.remove_sub_device_manager(self.prefetcher_sub_device.manager_id)
+            self.prefetcher_sub_device = None
+        self.init_decode_done = False
+        self.init_prefill_done = False
+        self.prefetch_done = False
+        self.worker_sub_device_id = None
+        self.prefetched_tensors = []
+        self.prefetched_tensor_addr = []
+
     def create_address_tensor(self):
         """
         Creates a ttnn tensor which holds the addresses of the tensors to be prefetched
