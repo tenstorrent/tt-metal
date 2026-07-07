@@ -461,16 +461,11 @@ class Prefetcher(LightweightModule):
         occupies — notably core (0,0), where the origin-anchored sharded RMSNorm's CBs
         otherwise clash with the resident global CB (program.cpp L1 clash, #47820).
 
-        Rebuilt lazily on the next decode run() (global_cb + address tensor are None ->
-        re-created and the dram_prefetcher op re-run). The prefetched weight tensors are
-        DRAM-resident and kept (their addresses are stable), so the rebuild re-prefetches
-        weights into a fresh global CB — a perf cost accepted to make repeat batches
-        correct. No-op if the global CB was never created.
-
-        We reset the full runtime allocation set (global CB, its op output, and the L1
-        address tensor) so the next decode's rebuild is identical to the very first build
-        — a partial reset left device/trace state that hung the following decode's trace
-        capture (#47820).
+        Only the global CB is freed; the prefetcher's sub-device manager, the L1 address
+        tensor, and the cached decode trace are all kept. The next decode re-allocates the
+        global CB at the same L1 address (ensure_global_cb_allocated) and replays the
+        cached trace — we do NOT re-capture, because re-capturing the async dram_prefetcher
+        op hangs trace capture on repeat batches (#47820). No-op if the CB was never made.
         """
         if self.global_cb is None:
             return
@@ -485,53 +480,42 @@ class Prefetcher(LightweightModule):
         # while the device still references it, corrupting NOC state and hanging the next
         # op (observed as a device timeout in the following prefill) (#47820).
         ttnn.synchronize_device(self.mesh_device)
+        self._prev_global_cb_address = self.global_cb.buffer_address()
         self.global_cb.deallocate()
         self.global_cb = None
-        # Also drop the L1 address tensor so run() recreates it, making the next decode's
-        # rebuild path identical to the first-time build (which captures cleanly). Kept in
-        # DRAM/L1, so free it explicitly. prefetched_tensor_addr (host list) persists, so
-        # create_address_tensor() can rebuild it.
-        if getattr(self, "prefetched_tt_addr_tensor", None) is not None:
-            ttnn.deallocate(self.prefetched_tt_addr_tensor)
-            self.prefetched_tt_addr_tensor = None
+        # NOTE: the L1 address tensor is intentionally KEPT allocated (small, on the sender
+        # cores) so its address stays stable across the prefill — the decode trace bakes it
+        # too, so freeing + reallocating it would add a second same-address dependency.
 
-    def reset_for_reinit(self) -> None:
+    def ensure_global_cb_allocated(self) -> None:
         """
-        Fully tear down decode-time prefetcher state on a prefill switch so the NEXT decode
-        re-initializes from scratch: fresh sub-device manager, re-inserted prefetch queue,
-        re-created global CB, and a re-captured decode trace.
+        Re-allocate the global CB (freed for the preceding prefill by teardown_global_cb)
+        so the cached decode trace — which baked the CB's L1 address at capture — can be
+        replayed without re-capture. Called on the decode switch, after the prefetcher's
+        sub-device manager is reloaded, so allocation happens in the same manager context
+        as the original capture. The replayed trace's dram_prefetcher op fills the CB.
 
-        Re-capturing a decode trace against half-stale prefetcher state (reused manager +
-        rebuilt CB) hangs trace capture on repeat batches — the workers park at Go-Wait
-        while host-side capture never completes. A clean reinit makes batch N's decode
-        setup identical to batch 0's first-time setup, which captures cleanly (#47820).
-
-        The caller must release any decode traces (which live on this manager) BEFORE
-        calling this; here we free the global CB / op / address tensor, revert to the
-        default manager, remove the prefetcher's manager, and reset all decode init state
-        (init flags, worker sub-device, prefetch queue) so init()/prefetch()/run() rebuild
-        everything on the next decode.
+        The rebuilt CB must land at the SAME L1 address as at capture; we log it (and the
+        previous address) so a mismatch is visible. No-op on the first decode (the CB is
+        created by run() during the compile pass) and when no CB was ever freed (#47820).
         """
-        if not self.init_decode_done:
-            # Nothing to tear down yet (first prefill, before any decode init).
-            self.mode = Mode.PREFILL
+        if not self.init_decode_done or self.global_cb is not None:
             return
-        # 1. Free the global CB, its op output, and the L1 address tensor (drains device).
-        self.teardown_global_cb()
-        # 2. Revert to the default (full-grid) manager for prefill.
-        self.revert_to_default_sub_device_manager()
-        # 3. Remove the prefetcher's (now inactive) sub-device manager and reset decode
-        #    init state so the next switch_mode(DECODE) rebuilds from scratch and
-        #    prefetch() re-inserts the weight queue.
-        if self.prefetcher_sub_device is not None:
-            self.mesh_device.remove_sub_device_manager(self.prefetcher_sub_device.manager_id)
-            self.prefetcher_sub_device = None
-        self.init_decode_done = False
-        self.init_prefill_done = False
-        self.prefetch_done = False
-        self.worker_sub_device_id = None
-        self.prefetched_tensors = []
-        self.prefetched_tensor_addr = []
+        self.global_cb_size = self.max_tensor_block_size
+        self.global_cb = ttnn.create_global_circular_buffer(
+            self.mesh_device,
+            self.sender_receiver_mapping,
+            self.global_cb_size,
+        )
+        new_addr = self.global_cb.buffer_address()
+        prev_addr = getattr(self, "_prev_global_cb_address", None)
+        if prev_addr is not None and new_addr != prev_addr:
+            logger.warning(
+                f"[DRAM Prefetcher] global CB re-allocated at {new_addr} but decode trace baked {prev_addr} "
+                f"— address mismatch will corrupt trace replay (#47820)"
+            )
+        else:
+            logger.info(f"[DRAM Prefetcher] Re-allocated global CB at {new_addr} (matches capture)")
 
     def create_address_tensor(self):
         """

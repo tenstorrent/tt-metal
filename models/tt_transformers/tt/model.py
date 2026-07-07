@@ -849,20 +849,21 @@ class Transformer(LightweightModule):
             return
         if mode == Mode.DECODE:
             # Create (first time) or re-activate the prefetcher's decode sub-device
-            # manager, then ensure weights are queued for prefetch.
+            # manager, ensure weights are queued, and re-allocate the global CB (freed
+            # for the preceding prefill) at its original L1 address so the cached decode
+            # trace can be replayed without re-capture (#47820).
             self.prefetcher.init(mode)
             self.prefetcher.prefetch()
+            self.prefetcher.ensure_global_cb_allocated()
         elif mode == Mode.PREFILL:
             # #47820: run prefill on the mesh device's default sub-device manager (where
-            # the prefill trace is captured), and fully tear down the prefetcher's
-            # decode-time state so the NEXT decode re-inits from scratch. This frees the
-            # persistent global CB L1 (which otherwise clashes with the prefill sharded
-            # RMSNorm on core (0,0)) and, crucially, removes the prefetcher's sub-device
-            # manager + resets init/prefetch state so the next decode re-captures its
-            # trace cleanly — re-capturing against a reused manager + rebuilt CB hangs
-            # trace capture on repeat batches. The generator releases the (per-manager)
-            # decode traces just before this call, while this manager is still active.
-            self.prefetcher.reset_for_reinit()
+            # the prefill trace is captured). Free the persistent global CB L1 — it
+            # otherwise clashes with the prefill sharded RMSNorm on core (0,0) — but KEEP
+            # the prefetcher's sub-device manager and the cached decode trace. The next
+            # decode re-allocates the global CB at the same address and replays the trace
+            # (no re-capture; re-capturing the async prefetcher op hangs on repeat batches).
+            self.prefetcher.teardown_global_cb()
+            self.prefetcher.revert_to_default_sub_device_manager()
 
     def forward(
         self,
