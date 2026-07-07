@@ -100,3 +100,12 @@ Result: passed in 30.42s. All 5 tests passed. PCCs printed in this full run: syn
 - Other concerns: `prefill_forward` stores setup-time causal mask but defaults to `is_causal=True`; accepted because the skill allows causal SDPA without mask and PCC tests pass. Ignored `__pycache__` files exist in the autoport tree and are excluded from the checkpoint commit.
 - Hard-check gaps noted by reviewer: review did not rerun hardware tests; tests validate seq 16 and 64 with `max_seq_len=seq_len` rather than a separate `seq_len < max_seq_len` case.
 - Anomalies classified by reviewer: Qwen-like prompt details conflict with actual Llama forge/HF config and are controlled by translating actual source semantics; context-checker `DRAM-limited` label is a controlled schema compatibility issue; supplied forge graph is decode/cache-oriented after CPU prefill and this prefill-only limitation is documented.
+
+## Local Commit
+
+- Repo: `/localdev/mvasiljevic/tt-metal`
+- Branch: `mvasiljevic/llama-bs32-rerun`
+- Implementation checkpoint commit: `ffa42eee731`
+- SHA-record follow-up commit: see final stage handoff.
+- Scope: stage-owned files under `models/autoports/meta_llama_llama_3_1_8b_instruct`
+- Unrelated untracked files excluded: `multigoal-logs/`
