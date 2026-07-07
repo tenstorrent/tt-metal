@@ -80,10 +80,7 @@ constexpr uint32_t kStressRuntimeId = 0xBEEFu;
 // in anonymous namespaces would collide at compile time.
 constexpr double kMaxStressDurationNs = 1'000'000'000.0;
 
-// Quiesce + drain window before unregistering the callback. Mirrors the
-// 500ms used in test_realtime_profiler_sanity.cpp; bumped to 2s here
-// because at 4096 entries × ~50–80 µs/push the worst-case drain is
-// ~250–330 ms (ring fully backed up at trace replay completion).
+// Quiesce + drain window before unregistering the callback.
 constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
 
 // Allowed slack for the deterministic startup race where the compute kernel
