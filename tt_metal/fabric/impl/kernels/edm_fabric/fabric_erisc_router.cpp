@@ -639,7 +639,7 @@ struct ReceiverLog {
     uint32_t base_ack_gap;
     uint32_t base_wr_sent_gap;
     uint32_t base_wr_flush_gap;
-    // [debug] DRAM flush state (see flush_log_region_to_dram). dram_write_offset is the next byte offset into
+    // [debug] DRAM flush state (see flush_log_records_to_dram). dram_write_offset is the next byte offset into
     // this router's DRAM receiver-log buffer; dram_records is the running total of records flushed to DRAM
     // this window (reported at the STOP marker).
     uint32_t dram_write_offset;
@@ -688,29 +688,38 @@ FORCE_INLINE void reset_receiver_log(
     log->base_wr_flush_gap = wr_flush >= completion ? wr_flush - completion : 0;
 }
 
-// [debug] Fixed flush granularity: one whole L1 log region (header + records) per bulk write. Both L1 log
-// regions are carved at 4096 B by the builder, so a flush writes 4096 B and advances the DRAM cursor by the
-// same amount. 4096 is a multiple of the 16 B Blackhole NOC write alignment and the region base is aligned,
-// so the transfer is legal; writing the whole region avoids any per-record offset-alignment fixups.
-constexpr uint32_t LOG_DRAM_FLUSH_CHUNK_BYTES = 4096;
-
-// [debug] Blocking bulk-flush of one L1 log region to its per-router DRAM buffer. The DRAM buffer lives in a
-// single bank (bank), at a fixed per-bank byte offset (dram_base); the write targets exactly that bank via
-// get_noc_addr_from_bank_id, so the buffer never straddles a bank boundary. Advances *dram_write_offset by
-// one chunk and returns true; returns false WITHOUT writing once the buffer would overflow (dram_size), so
-// the caller can fall back to dropping. Plain blocking noc_async_write: flushes happen only when an L1 buffer
-// fills (every few hundred logged state-changes = dozens+ of tokens), so the stall is rare and coarse enough
-// not to materially perturb the flow-control timing being measured.
-FORCE_INLINE bool flush_log_region_to_dram(
-    uint32_t l1_src, uint32_t dram_base, uint32_t dram_size, uint32_t bank, volatile uint32_t* dram_write_offset) {
+// [debug] Blocking bulk-flush of `bytes` of packed records (starting at records_l1_src in L1) to this
+// router's DRAM buffer. The buffer lives in a single bank at a fixed per-bank byte offset (dram_base); the
+// write targets exactly that bank via get_noc_addr_from_bank_id, so it never straddles a bank boundary. The
+// caller passes bytes = num_records * sizeof(record) and we advance *dram_write_offset by exactly that, so
+// successive flushes lay their records down contiguously -- DRAM ends up holding one packed record array,
+// not a series of fixed-size chunks. Returns false WITHOUT writing once the buffer would overflow
+// (dram_size), so the caller can account the drop.
+//
+// Alignment: records_l1_src is &records[0] (16 B-aligned: the region base and both record-array offsets are
+// 16 B multiples) and dram_base is 16 B-aligned. Every full-buffer flush moves CAPACITY*sizeof(record) --
+// a 16 B multiple for both logs (500*8, 256*14) -- so the DRAM offset stays 16 B-aligned and each write's
+// start addresses satisfy the NOC 16 B write-alignment requirement (only the start addresses must be
+// aligned, not the length). Only the final partial flush can move a non-multiple, and nothing follows it.
+//
+// Plain blocking noc_async_write: flushes happen only when an L1 buffer fills (every few hundred logged
+// state-changes = dozens+ of tokens), so the stall is rare and coarse enough not to materially perturb the
+// flow-control timing being measured.
+FORCE_INLINE bool flush_log_records_to_dram(
+    uint32_t records_l1_src,
+    uint32_t bytes,
+    uint32_t dram_base,
+    uint32_t dram_size,
+    uint32_t bank,
+    volatile uint32_t* dram_write_offset) {
     uint32_t off = *dram_write_offset;
-    if (off + LOG_DRAM_FLUSH_CHUNK_BYTES > dram_size) {
-        return false;  // DRAM buffer full -> caller drops
+    if (off + bytes > dram_size) {
+        return false;  // DRAM buffer full -> caller accounts the drop
     }
     uint64_t dst = get_noc_addr_from_bank_id<true>(bank, dram_base + off);
-    noc_async_write(l1_src, dst, LOG_DRAM_FLUSH_CHUNK_BYTES);
+    noc_async_write(records_l1_src, dst, bytes);
     noc_async_write_barrier();
-    *dram_write_offset = off + LOG_DRAM_FLUSH_CHUNK_BYTES;
+    *dram_write_offset = off + bytes;
     return true;
 }
 
@@ -729,23 +738,24 @@ FORCE_INLINE void record_receiver_flow_state(
 
     uint32_t idx = log->count;
     if (idx >= RECEIVER_LOG_CAPACITY) {
-        // L1 buffer full: bulk-flush the whole region to DRAM and wrap in place, preserving the delta
+        // L1 buffer full: bulk-flush its CAPACITY records to DRAM and wrap in place, preserving the delta
         // baseline (last_*/base_*_gap) so the reconstructed counter chain continues seamlessly across the
-        // flushed chunk boundary. If the DRAM buffer is also full, fall back to dropping (leaving last_*
-        // frozen keeps the stored rows self-consistent).
-        if (flush_log_region_to_dram(
-                static_cast<uint32_t>(receiver_log_buffer_addr),
+        // flushed boundary. If the DRAM buffer is also full, we cannot persist these CAPACITY records, so
+        // account them as dropped (symmetric to the flushed case's dram_records += CAPACITY) and wrap anyway;
+        // later fills will keep dropping CAPACITY at a time until the window ends.
+        if (flush_log_records_to_dram(
+                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&log->records[0])),
+                RECEIVER_LOG_CAPACITY * sizeof(ReceiverLogRecord),
                 static_cast<uint32_t>(receiver_log_dram_buffer_base),
                 static_cast<uint32_t>(receiver_log_dram_buffer_size),
                 log_dram_bank_id,
                 &log->dram_write_offset)) {
             log->dram_records += RECEIVER_LOG_CAPACITY;
-            log->count = 0;
-            idx = 0;
         } else {
-            log->dropped++;
-            return;
+            log->dropped += RECEIVER_LOG_CAPACITY;
         }
+        log->count = 0;
+        idx = 0;
     }
     uint32_t now = get_timestamp_32b();
 
@@ -854,7 +864,7 @@ struct SenderLog {
     // occupancy. Good enough to keep sent >= acked >= cmpl and the (acked - cmpl) in-rx-buffer estimate sane.
     uint32_t base_sent_gap[SENDER_LOG_NUM_CHANNELS];
     uint32_t base_acked_gap[SENDER_LOG_NUM_CHANNELS];
-    // [debug] DRAM flush state (see flush_log_region_to_dram): next byte offset into this router's DRAM
+    // [debug] DRAM flush state (see flush_log_records_to_dram): next byte offset into this router's DRAM
     // sender-log buffer, and the running total of records flushed to DRAM this window.
     uint32_t dram_write_offset;
     uint32_t dram_records;
@@ -932,21 +942,22 @@ __attribute__((noinline)) void record_sender_flow_state(uint32_t iter) {
 
     uint32_t idx = log->count;
     if (idx >= SENDER_LOG_CAPACITY) {
-        // L1 full: bulk-flush the whole region to DRAM and wrap in place, preserving the delta baseline so
-        // the reconstructed chain stays continuous across the chunk boundary. Drop only if DRAM is full too.
-        if (flush_log_region_to_dram(
-                static_cast<uint32_t>(sender_log_buffer_addr),
+        // L1 full: bulk-flush its CAPACITY records to DRAM and wrap in place, preserving the delta baseline so
+        // the reconstructed chain stays continuous across the boundary. If DRAM is full too, account the
+        // CAPACITY unflushable records as dropped (symmetric to dram_records += CAPACITY) and wrap anyway.
+        if (flush_log_records_to_dram(
+                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&log->records[0])),
+                SENDER_LOG_CAPACITY * sizeof(SenderLogRecord),
                 static_cast<uint32_t>(sender_log_dram_buffer_base),
                 static_cast<uint32_t>(sender_log_dram_buffer_size),
                 log_dram_bank_id,
                 &log->dram_write_offset)) {
             log->dram_records += SENDER_LOG_CAPACITY;
-            log->count = 0;
-            idx = 0;
         } else {
-            log->dropped++;
-            return;
+            log->dropped += SENDER_LOG_CAPACITY;
         }
+        log->count = 0;
+        idx = 0;
     }
     uint32_t now = get_timestamp_32b();
     uint32_t ts_d = now - log->last_ts;
@@ -1000,10 +1011,12 @@ static __attribute__((noinline)) void dump_receiver_log() {
         // still reconstructable inline below. Once any chunk has been flushed the chain spans DRAM chunks and
         // reconstruction moves host-side (reading the DRAM buffer). Capture this before the tail flush.
         bool fit_entirely_in_l1 = (rlog->dram_records == 0);
-        // Flush the final partial chunk so the DRAM buffer holds the complete trace, then report totals.
+        // Flush the final partial run of records so the DRAM buffer holds the complete trace, then report
+        // totals. Records land right after the last full flush, keeping DRAM one contiguous record array.
         if (rlog->count > 0) {
-            if (flush_log_region_to_dram(
-                    static_cast<uint32_t>(receiver_log_buffer_addr),
+            if (flush_log_records_to_dram(
+                    static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&rlog->records[0])),
+                    rlog->count * sizeof(ReceiverLogRecord),
                     static_cast<uint32_t>(receiver_log_dram_buffer_base),
                     static_cast<uint32_t>(receiver_log_dram_buffer_size),
                     log_dram_bank_id,
@@ -1061,10 +1074,12 @@ static __attribute__((noinline)) void dump_sender_log() {
     if constexpr (sender_log_enabled()) {
         volatile SenderLog* slog = sender_log();
         bool fit_entirely_in_l1 = (slog->dram_records == 0);
-        // Flush the final partial chunk so the DRAM buffer holds the complete trace, then report totals.
+        // Flush the final partial run of records so the DRAM buffer holds the complete trace, then report
+        // totals. Records land right after the last full flush, keeping DRAM one contiguous record array.
         if (slog->count > 0) {
-            if (flush_log_region_to_dram(
-                    static_cast<uint32_t>(sender_log_buffer_addr),
+            if (flush_log_records_to_dram(
+                    static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&slog->records[0])),
+                    slog->count * sizeof(SenderLogRecord),
                     static_cast<uint32_t>(sender_log_dram_buffer_base),
                     static_cast<uint32_t>(sender_log_dram_buffer_size),
                     log_dram_bank_id,
