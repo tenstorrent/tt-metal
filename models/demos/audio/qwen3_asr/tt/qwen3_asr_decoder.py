@@ -74,12 +74,14 @@ class Qwen3ASRDecoder(Transformer):
         S = inputs_embeds.shape[-2]
         last = S - 1
         # Always pad prefill to a multiple of 512 (the Blackhole prefill_len_cutoff), min 512.
-        # The MLP reshapes x to [1, S//512, 512, -1] only when S >= 512, so a 256-pad prefill
-        # takes a DIFFERENT (no-reshape) code path. Mixing 256-pad and >=512-pad prefills in
-        # one long-lived process corrupts the model (every later request returns garbage/empty)
-        # — likely a program-cache/KV-shape inconsistency across the two paths. Forcing every
-        # prefill onto the >=512 reshape path keeps it consistent. (256 alone is fine; mixing
-        # is not.) Caps single-shot at max_seq_len (2048 -> ~150s). Trailing pad is causal-masked.
+        # tt_transformers' MLP reshapes prefill x to [1, S_pad//512, 512, -1] for S_pad >= 512, so
+        # different padded lengths differ only in the batch dim -3 (512 -> [1,1,512,d], 1024 ->
+        # [1,2,512,d]). A tt-metal program-cache collision (the prefill matmul hash doesn't cover
+        # dim -3) then reuses the first bucket's program for the next: confirmed on device, a 512
+        # prefill followed by a 1024 prefill TT_FATALs (1024 alone is fine). Real ASR prompts are
+        # always <=512 tokens, so min-512 pins every request to the single [1,1,512,d] shape and
+        # sidesteps the collision. Caps single-shot at max_seq_len (2048 -> ~150s); trailing pad is
+        # causal-masked. See README "Known limitations" and docs/prefill_program_cache_collision_issue.md.
         S_pad = ((S + 511) // 512) * 512
         if S_pad != S:
             inputs_embeds = torch.nn.functional.pad(inputs_embeds, (0, 0, 0, S_pad - S))
