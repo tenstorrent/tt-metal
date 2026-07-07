@@ -182,7 +182,6 @@ class FusedKernelGenerator:
             f"#define FUSED_TEST\n"
             f'#include "ckernel.h"\n'
             f'#include "llk_defs.h"\n'
-            # f'#include "ckernel_debug.h"\n'
             f'#include "ckernel_defs.h"\n'
             f'#include "ckernel_sfpu.h"\n'
             f'#include "tensix_types.h"\n'

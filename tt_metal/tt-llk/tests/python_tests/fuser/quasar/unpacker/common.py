@@ -16,7 +16,7 @@ def is_datacopy_node(compute_node: FpuNode) -> bool:
 def is_unary_unpacker(compute_node: FpuNode) -> bool:
     from fuser.quasar.unpacker.unpack_a import UnpackerA
 
-    return isinstance(compute_node.unpacker, (UnpackerA))
+    return isinstance(compute_node.unpacker, UnpackerA)
 
 
 def _emit_buf_desc(
