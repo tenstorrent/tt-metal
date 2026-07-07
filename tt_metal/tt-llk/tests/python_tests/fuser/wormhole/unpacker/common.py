@@ -126,8 +126,8 @@ def dvalid_init() -> str:
     return ""
 
 
-def sync_with_packer(stage_id: int) -> str:
-    if stage_id > 1:
+def sync_with_packer(needs_pack_sync: bool) -> str:
+    if needs_pack_sync:
         return (
             "t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);\n"
             "t6_semaphore_get<>(semaphore::PACK_DONE);\n"
