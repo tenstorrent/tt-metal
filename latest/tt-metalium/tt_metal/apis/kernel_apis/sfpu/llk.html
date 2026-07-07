@@ -185,6 +185,7 @@ C++ like interface for programming.</p>
 <ul class="simple">
 <li><p>tt-wh-tensix</p></li>
 <li><p>tt-bh-tensix</p></li>
+<li><p>tt-qsr32-tensix</p></li>
 </ul>
 </div>
 </blockquote>
@@ -220,17 +221,17 @@ C++ like interface for programming.</p>
 <span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1.5F</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">1.2F</span><span class="p">;</span>
 
 <span class="w">    </span><span class="c1">// This emits a loadi (into tmp), loadi (as a temp for 1.2F) and a mad</span>
-<span class="w">    </span><span class="n">vFloat</span><span class="w"> </span><span class="n">tmp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">s2vFloat16a</span><span class="p">(</span><span class="n">value</span><span class="p">);</span>
+<span class="w">    </span><span class="n">vFloat</span><span class="w"> </span><span class="n">tmp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sFloat16a</span><span class="p">(</span><span class="n">bitpattern</span><span class="p">);</span>
 <span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tmp</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">1.2F</span><span class="p">;</span>
 
 <span class="w">    </span><span class="n">v_if</span><span class="w"> </span><span class="p">((</span><span class="n">a</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mf">4.0F</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">8.0F</span><span class="p">)</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mf">12.0F</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">16.0F</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">vInt</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exexp_nodebias</span><span class="p">(</span><span class="n">a</span><span class="p">);</span>
+<span class="w">        </span><span class="n">vInt</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exexp</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">ExponentMode</span><span class="o">::</span><span class="n">Biased</span><span class="p">);</span>
 <span class="w">        </span><span class="n">b</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="mh">0xAA</span><span class="p">;</span>
 <span class="w">        </span><span class="n">v_if</span><span class="w"> </span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">130</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">            </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">6</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">setexp</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="mi">127</span><span class="p">);</span>
 <span class="w">        </span><span class="p">}</span>
 <span class="w">        </span><span class="n">v_endif</span><span class="p">;</span>
-<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="n">v_elseif</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">s2vFloat16a</span><span class="p">(</span><span class="mf">3.0F</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="n">v_elseif</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mf">3.0f</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="c1">// RISCV branch</span>
 <span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">take_abs</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">            </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">7</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">abs</span><span class="p">(</span><span class="n">a</span><span class="p">);</span>
@@ -283,15 +284,31 @@ namespace.</p>
 <section id="user-visible-data-types">
 <h3>User Visible Data Types<a class="headerlink" href="#user-visible-data-types" title="Permalink to this heading"></a>
 </h3>
-<p>The following data types are visible to the programmer:</p>
+<p>The following vector data types are visible to the programmer:</p>
 <blockquote>
 <div>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">vFloat</span></code>, <code class="docutils literal notranslate"><span class="pre">vFloat16a</span></code>, <code class="docutils literal notranslate"><span class="pre">vFloat16b</span></code> - floating point</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vInt</span></code> - 2’s complement integer</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vUInt</span></code>, <code class="docutils literal notranslate"><span class="pre">vUInt16</span></code>- unsigned integer</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vSMag</span></code>, <code class="docutils literal notranslate"><span class="pre">vSMag16</span></code>- sign-magnitude integer</p></li>
-<li><p>enum <code class="docutils literal notranslate"><span class="pre">LRegs</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vFloat</span></code> - 32-bit IEEE float</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vInt</span></code> - 32-bit 2’s complement integer</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vUInt</span></code>- 32-bit unsigned integer</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vSMag</span></code>- 32-bit sign-magnitude integer</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vMag</span></code> - known-positive 32-bit sign-magnitude integer</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vBool</span></code> - boolean result of a conditional or logical operator</p></li>
+</ul>
+</div>
+</blockquote>
+<p>The following restricted-range types are also available. These are
+held in one of the above data representations, but hold values
+restricted to a subdomain of the type.</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">vFloat16a</span></code> - fp16a format (5-bit exponent, 10-bit fraction)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vFloat16b</span></code> - fp16b format (8-bit exponent, 7-bit fraction)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vUInt16</span></code>- 16-bit unsigned integer</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vUInt8</span></code>- 8-bit unsigned integer</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vSMag16</span></code>- 16-bit sign-magnitude integer</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vSMag8</span></code>- 8-bit sign-magnitude integer</p></li>
 </ul>
 </div>
 </blockquote>
@@ -301,7 +318,6 @@ format, but possibly with a restricted range. The width of this type
 depends on the target architecture. On Wormhole, Blackhole &amp; Quasar this is
 a vector of 32 32-bit values. Users should be aware that vector length
 may change with future architectures.</p>
-<p>LRegs are the SFPU’s general purpose vector registers.  <code class="docutils literal notranslate"><span class="pre">LRegs</span></code> enumerates these registers.</p>
 <section id="user-visible-constants">
 <h4>User Visible Constants<a class="headerlink" href="#user-visible-constants" title="Permalink to this heading"></a>
 </h4>
@@ -332,6 +348,12 @@ may change with future architectures.</p>
 </ul>
 </div>
 </blockquote>
+<p>LRegs are the SFPU’s general purpose vector registers.  The <code class="docutils literal notranslate"><span class="pre">LRegs</span></code>
+enum enumerates these registers.</p>
+<p>On Quasar, <code class="docutils literal notranslate"><span class="pre">SrcS</span></code> is accessed via user-visible types:
+<code class="docutils literal notranslate"><span class="pre">UnpackSrcS</span></code>, <code class="docutils literal notranslate"><span class="pre">PackSrcS</span></code> and <code class="docutils literal notranslate"><span class="pre">ComputeSrcS</span></code>. Declare a local
+variable of the appropriate type, and then access just as <code class="docutils literal notranslate"><span class="pre">dst_reg</span></code>
+is accessed.</p>
 </section>
 <section id="macros">
 <h4>Macros<a class="headerlink" href="#macros" title="Permalink to this heading"></a>
@@ -340,13 +362,13 @@ may change with future architectures.</p>
 <blockquote>
 <div>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">v_if()</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">v_elseif()</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">v_if(COND)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">v_elseif(COND)</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">v_else</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">v_endif</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">v_block</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">v_endblock</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">v_and()</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">v_and(COND)</span></code></p></li>
 </ul>
 </div>
 </blockquote>
@@ -393,92 +415,313 @@ may change with future architectures.</p>
 <section id="data-type-details">
 <h3>Data Type Details<a class="headerlink" href="#data-type-details" title="Permalink to this heading"></a>
 </h3>
-<section id="vfloat">
-<h4>vFloat<a class="headerlink" href="#vfloat" title="Permalink to this heading"></a>
+<section id="loading-and-storing">
+<h4>Loading and Storing<a class="headerlink" href="#loading-and-storing" title="Permalink to this heading"></a>
 </h4>
+<p>Values may be transfered to and from <code class="docutils literal notranslate"><span class="pre">dst_reg</span></code> (and on Quasar, one
+of the SrcS objects):</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+<span class="n">vUInt</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">1</span><span class="p">];</span>
+
+<span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="p">;</span>
+<span class="n">dst_reg</span><span class="p">[</span><span class="mi">2</span><span class="p">].</span><span class="n">mode</span><span class="o">&lt;</span><span class="n">DataLayout</span><span class="o">::</span><span class="n">FP16b</span><span class="o">&gt;</span><span class="p">()</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="p">;</span>
+<span class="n">dst_reg</span><span class="p">[</span><span class="mi">3</span><span class="p">].</span><span class="n">mode</span><span class="o">&lt;</span><span class="n">DataLayout</span><span class="o">::</span><span class="n">SM32</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>If no <code class="docutils literal notranslate"><span class="pre">mode</span></code> override is provided, the data representation in
+<code class="docutils literal notranslate"><span class="pre">dst_reg</span></code> depends on the type being transferred, and in some cases
+tha Architecture. You may override that default with the <code class="docutils literal notranslate"><span class="pre">mode</span></code>
+function, which optionally specifies a data representation, and an
+optional addr_mode operand. This may be specified on both loads and
+stores.  The following data representations and defaults are
+available:</p>
 <blockquote>
 <div>
 <ul class="simple">
-<li><p>Assignment: from float, dst_reg[n]</p></li>
-<li><p>Conversion: <code class="docutils literal notranslate"><span class="pre">reinterpret&lt;AnotherVecType&gt;()</span></code> converts, in place, between vInt and vUInt and vFloat</p></li>
-<li><p>Immediate loads: see section <strong>Immediate Floating Point Values</strong> below</p></li>
-<li><p>Operators: <code class="docutils literal notranslate"><span class="pre">+</span></code>/<code class="docutils literal notranslate"><span class="pre">-</span></code>/<code class="docutils literal notranslate"><span class="pre">*</span></code> should work as expected with dst_reg[n], vFloat and vConst</p></li>
-<li><p>Conditionals: all 6 (<code class="docutils literal notranslate"><span class="pre">&lt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">==</span></code>, <code class="docutils literal notranslate"><span class="pre">!=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;</span></code>) are supported.  Note that <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code> and <code class="docutils literal notranslate"><span class="pre">&gt;</span></code> pay a performance penalty relative to the others</p></li>
+<li><p>FSrcB - (vFloat) dynamic float representation</p></li>
+<li><p>F32 - 32-bit float</p></li>
+<li><p>F16a - (vFloat16a) 16-bit float16a</p></li>
+<li><p>F16b - (vFloat16b) 16-bit float16b</p></li>
+<li><p>I32 - (vInt, except Wormhole), 32-bit 2’s complement integer</p></li>
+<li><p>U32 - (vUInt), 32-bit unsigned integer</p></li>
+<li><p>U16 - (vUInt16), 16-bit unsigned integer</p></li>
+<li><p>SM32 - (vSMag), 32-bit sign-magnitude integer</p></li>
+<li><p>SM16 - (vSMag16), 16-bit sign-magnitude integer</p></li>
+<li><p>M32 - (vMag), 32-bit magnitude only integer</p></li>
+</ul>
+</div>
+</blockquote>
+<p>On Wormhole, the default mode for <code class="docutils literal notranslate"><span class="pre">vInt</span></code> is <code class="docutils literal notranslate"><span class="pre">SM32</span></code>. In all cases
+when transfering a <code class="docutils literal notranslate"><span class="pre">vInt</span></code> to or from <code class="docutils literal notranslate"><span class="pre">SM32</span></code>, or tranferring
+<code class="docutils literal notranslate"><span class="pre">vSMag</span></code> to or from <code class="docutils literal notranslate"><span class="pre">I32</span></code> a conversion operation is inserted – on
+Wormhole this is part of the load or store, on other architectures it
+is a separate operation. It is unspecified how 2’s complement’s most
+negative value converts to sign-magnitude.  Not all data
+representations are permitted for all types.</p>
+<p>Quasar’s SrcS reg accessors may also use a <cite>done</cite> modifier, to set the
+‘’done’’ bit in the load or store:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">ComputeSrcS</span><span class="w"> </span><span class="n">srcs</span><span class="p">;</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">srcs</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+<span class="p">...</span>
+<span class="n">srcs</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">done</span><span class="p">()</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">done</span></code> and <code class="docutils literal notranslate"><span class="pre">mode</span></code> may be combined in either order on a single access.</p>
+</section>
+<section id="conversion-and-type-punning">
+<h4>Conversion and Type Punning<a class="headerlink" href="#conversion-and-type-punning" title="Permalink to this heading"></a>
+</h4>
+<p>Value-preserving conversions that are also bit-preserving are
+supported implicitly (or may be specified explicitly):</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">vFloat16a</span></code> and <code class="docutils literal notranslate"><span class="pre">vFloat16b</span></code> readily convert to <code class="docutils literal notranslate"><span class="pre">vFloat</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vUInt16`</span> <span class="pre">converts</span> <span class="pre">to</span> <span class="pre">``vUInt</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vSMag16</span></code> converts to <code class="docutils literal notranslate"><span class="pre">vSMag</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vMag</span></code> converts to <code class="docutils literal notranslate"><span class="pre">vInt</span></code>, <code class="docutils literal notranslate"><span class="pre">vUInt</span></code> and <code class="docutils literal notranslate"><span class="pre">vSMag</span></code>.</p></li>
+</ul>
+</div>
+</blockquote>
+<p>Potentially value &amp; bit preserving conversions may be specified using
+a functions-style cast.  For instance:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vUInt</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">c</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">vUInt16</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>This conversion preves the bit pattern, but is not implicit (unlike
+c++’s scalar <code class="docutils literal notranslate"><span class="pre">int</span></code> and <code class="docutils literal notranslate"><span class="pre">unsigned</span></code> types.</p>
+<p>Other bit-preserving conversions may be explicitly specified with the <cite>as`</cite>
+function:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">as</span><span class="o">&lt;</span><span class="n">vUInt</span><span class="o">&gt;</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Other value-preserving (or approximating) conversions use the
+<code class="docutils literal notranslate"><span class="pre">convert</span></code> function:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">convert</span><span class="o">&lt;</span><span class="n">vFloat16b</span><span class="o">&gt;</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">RoundMode</span><span class="o">::</span><span class="n">Nearest</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">c</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">convert</span><span class="o">&lt;</span><span class="n">vSMag</span><span class="o">&gt;</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w"> </span><span class="c1">// convert to sign-mag</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">d</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">convert</span><span class="o">&lt;</span><span class="n">vInt</span><span class="o">&gt;</span><span class="w"> </span><span class="p">(</span><span class="n">c</span><span class="p">);</span><span class="w"> </span><span class="c1">// convert smag-&gt;int</span>
+</pre></div>
+</div>
+<p>the <code class="docutils literal notranslate"><span class="pre">RoundMode</span></code> operand is optional, and the following are provided:</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">NearestAway</span></code> - round to nearest, ties round away from zero (Wormhole &amp; Blackhole)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">NearestEven</span></code> - round to nearest, ties round to even fraction (Quasar)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">NearestStochastic</span></code> - round to nearest, ties round stochastically (default)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Zero</span></code> - round to zero (not Wormhole)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Nearest</span></code> - Alias for <code class="docutils literal notranslate"><span class="pre">NearestAway</span></code>, or <code class="docutils literal notranslate"><span class="pre">NearestEven</span></code></p></li>
 </ul>
 </div>
 </blockquote>
 </section>
-<section id="vint">
-<h4>vInt<a class="headerlink" href="#vint" title="Permalink to this heading"></a>
+<section id="operators">
+<h4>Operators<a class="headerlink" href="#operators" title="Permalink to this heading"></a>
 </h4>
-<blockquote>
-<div>
-<ul class="simple">
-<li><p>Assignment: from integer, dst_reg[n]</p></li>
-<li><p>Conversion: <code class="docutils literal notranslate"><span class="pre">reinterpret&lt;AnotherVecType&gt;()</span></code> converts, in place, between vFloat and vUInt</p></li>
-<li><p>Operators: <code class="docutils literal notranslate"><span class="pre">&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">&amp;=</span></code>, <code class="docutils literal notranslate"><span class="pre">|</span></code>, <code class="docutils literal notranslate"><span class="pre">|=</span></code>, <code class="docutils literal notranslate"><span class="pre">~</span></code>, <code class="docutils literal notranslate"><span class="pre">^</span></code>, <code class="docutils literal notranslate"><span class="pre">^=</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;&lt;</span></code> (Wormhole only) and <code class="docutils literal notranslate"><span class="pre">+</span></code>, <code class="docutils literal notranslate"><span class="pre">-</span></code>, <code class="docutils literal notranslate"><span class="pre">+=</span></code>, <code class="docutils literal notranslate"><span class="pre">-=</span></code>, <code class="docutils literal notranslate"><span class="pre">++</span></code>, <code class="docutils literal notranslate"><span class="pre">--</span></code>.  (there is no signed right shift)</p></li>
-<li><p>Conditionals: all 6 (<code class="docutils literal notranslate"><span class="pre">&lt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">==</span></code>, <code class="docutils literal notranslate"><span class="pre">!=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;</span></code>) are supported.  Note that <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code> and <code class="docutils literal notranslate"><span class="pre">&gt;</span></code> pay a performance penalty relative to the others</p></li>
-</ul>
-</div>
-</blockquote>
+<p>The <code class="docutils literal notranslate"><span class="pre">vFloat</span></code>, <code class="docutils literal notranslate"><span class="pre">vInt</span></code> and <code class="docutils literal notranslate"><span class="pre">vUInt</span></code> types support infix <code class="docutils literal notranslate"><span class="pre">+`</span> <span class="pre">&amp;</span>
+<span class="pre">``-</span></code> operators. The unary operators are provided.  For binary
+operators both operands can be the same, or related, vector types, or
+second may be a scalar value of the vector element type.  The <code class="docutils literal notranslate"><span class="pre">-</span></code>
+operator also permits the first operand to be a scalar.  The
+<code class="docutils literal notranslate"><span class="pre">vFloat</span></code> type also provides <code class="docutils literal notranslate"><span class="pre">*</span></code>, and the integer types provide
+<code class="docutils literal notranslate"><span class="pre">&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">|</span></code> and <code class="docutils literal notranslate"><span class="pre">^</span></code>. You may not mix the signedness of integer
+operands. For the integer operations, the second operand may also be a
+<code class="docutils literal notranslate"><span class="pre">vMag</span></code> type (the <code class="docutils literal notranslate"><span class="pre">vMag</span></code> type itself does not provide operators).</p>
+<p>The modifying variants, <code class="docutils literal notranslate"><span class="pre">OP=</span></code>, are available.</p>
+<p>Conditional operators are provided – <code class="docutils literal notranslate"><span class="pre">==</span></code>, <code class="docutils literal notranslate"><span class="pre">!=</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>,
+<code class="docutils literal notranslate"><span class="pre">&gt;</span></code> &amp; <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>. These produce a <code class="docutils literal notranslate"><span class="pre">vBool</span></code> result, which may be used
+directly or indirectly in a <code class="docutils literal notranslate"><span class="pre">v_if</span></code> conditional. Both operands must
+be related vector types, or the second operand may be an appropriate
+scalar operator, or, for integral comparisons, may be a <code class="docutils literal notranslate"><span class="pre">vMag</span></code> type.</p>
+<p><code class="docutils literal notranslate"><span class="pre">vBool``s</span> <span class="pre">may</span> <span class="pre">be</span> <span class="pre">combined</span> <span class="pre">with</span> <span class="pre">``&amp;&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">||</span></code> and <code class="docutils literal notranslate"><span class="pre">!</span></code>
+operations. Note that these are not short-circuiting.</p>
+<p>Note: There is currently a compiler defect regarding signed and
+unsigned integer comparisons, where ordering comparisons are only
+correct when the two operands are within 2^31 of eachother. Also,
+floating point comparisons use the multiply-add unit, which means
+comparisons are not strictly conforming – specifically infinities and
+signed zeroes behave differently.</p>
 </section>
-<section id="vuint">
-<h4>vUInt<a class="headerlink" href="#vuint" title="Permalink to this heading"></a>
+<section id="scalar-values">
+<h4>Scalar Values<a class="headerlink" href="#scalar-values" title="Permalink to this heading"></a>
 </h4>
-<blockquote>
-<div>
-<ul class="simple">
-<li><p>Assignment: from unsigned integer, dst_reg[n]</p></li>
-<li><p>Conversion: <code class="docutils literal notranslate"><span class="pre">reinterpret&lt;AnotherVecType&gt;()</span></code> converts, in place, between vFloat and vInt</p></li>
-<li><p>Operators: <code class="docutils literal notranslate"><span class="pre">&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">&amp;=</span></code>, <code class="docutils literal notranslate"><span class="pre">|</span></code>, <code class="docutils literal notranslate"><span class="pre">|=</span></code>, <code class="docutils literal notranslate"><span class="pre">~</span></code>, <code class="docutils literal notranslate"><span class="pre">^</span></code>, <code class="docutils literal notranslate"><span class="pre">^=</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;&lt;</span></code> (Wormhole only), <code class="docutils literal notranslate"><span class="pre">&gt;&gt;</span></code> (Wormhole only) and <code class="docutils literal notranslate"><span class="pre">+</span></code>, <code class="docutils literal notranslate"><span class="pre">-</span></code>, <code class="docutils literal notranslate"><span class="pre">+=</span></code>, <code class="docutils literal notranslate"><span class="pre">-=</span></code>, <code class="docutils literal notranslate"><span class="pre">++</span></code>, <code class="docutils literal notranslate"><span class="pre">--</span></code></p></li>
-<li><p>Conditionals: all 6 (<code class="docutils literal notranslate"><span class="pre">&lt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">==</span></code>, <code class="docutils literal notranslate"><span class="pre">!=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;</span></code>) are supported.  Note that <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code> and <code class="docutils literal notranslate"><span class="pre">&gt;</span></code> pay a performance penalty relative to the others</p></li>
-</ul>
-</div>
-</blockquote>
-<p>Note that, the destination register format is always determined by the runtime. So, for example, reading a vInt when the format is set to float32 gives unexpected results.</p>
+<p>Scalar values may be converted to vectors by using the appropriate
+constructor. In the general case this takes 2 instructions, to load
+the low and high halves of a 32-bit value. You may use the
+<code class="docutils literal notranslate"><span class="pre">sFloat16a</span></code> and <code class="docutils literal notranslate"><span class="pre">sFloat16b`</span> <span class="pre">types</span> <span class="pre">to</span> <span class="pre">pun</span> <span class="pre">a</span> <span class="pre">16-bit</span> <span class="pre">integer</span> <span class="pre">to</span> <span class="pre">the</span>
+<span class="pre">specified</span> <span class="pre">fp16</span> <span class="pre">representation.</span> <span class="pre">You</span> <span class="pre">may</span> <span class="pre">also</span> <span class="pre">use</span> <span class="pre">`sFloat16b`</span> <span class="pre">to</span> <span class="pre">convert</span>
+<span class="pre">a</span> <span class="pre">scalar</span> <span class="pre">``float</span></code> to fp16b format, ensuring a single load immediate
+instruction is used.</p>
+<p>The compiler optimizes constant loading, using known-constant
+register values, operations on those known constants, or an optimized
+sequence of high and/or low load immediates. If the value being loaded
+is dynamic, it will take advantage of knowing the scalar type is
+representable in 16 bits (<code class="docutils literal notranslate"><span class="pre">int16_t</span></code>, <code class="docutils literal notranslate"><span class="pre">uint16_t</span></code>, or one of the
+<code class="docutils literal notranslate"><span class="pre">sFloat16a</span></code> or <code class="docutils literal notranslate"><span class="pre">sFloat16b</span></code> types).</p>
 </section>
 </section>
 <section id="library">
 <h3>Library<a class="headerlink" href="#library" title="Permalink to this heading"></a>
 </h3>
-<p>Below <code class="docutils literal notranslate"><span class="pre">Vec</span></code> means any vector type.</p>
-<p>Below is a list of library calls, further documentation is below.</p>
+<p>The sfpi library also provides the following API. In many cases below,
+<code class="docutils literal notranslate"><span class="pre">vFloat</span></code> implies any float vector type, <code class="docutils literal notranslate"><span class="pre">vSMag</span></code> any sign-magnitude
+vector type and <code class="docutils literal notranslate"><span class="pre">vUInt</span></code> any unsigned vector type.</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vInt</span><span class="w"> </span><span class="n">exexp</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
-<span class="n">vInt</span><span class="w"> </span><span class="n">exexp_nodebias</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="n">vInt</span><span class="w"> </span><span class="nf">exexp</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">ExponentMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ExponentMode</span><span class="o">::</span><span class="n">Unbiased</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>Extracts, optionally debiases and then returns the 8-bit exponent in ‘’v’’ in bits 7:0.</p>
+<p>Extracts a biased or unbiased exponent as a 2’s complement
+integer. <code class="docutils literal notranslate"><span class="pre">ExponentMode</span></code> may be <code class="docutils literal notranslate"><span class="pre">Unbiased</span></code> or <code class="docutils literal notranslate"><span class="pre">Biased</span></code>.</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vInt</span><span class="w"> </span><span class="n">exman8</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
-<span class="n">vInt</span><span class="w"> </span><span class="n">exman9</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="n">vMag</span><span class="w"> </span><span class="nf">exman</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">MantissaMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MantissaMode</span><span class="o">::</span><span class="n">FractionOnly</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>Extracts and returns the mantissa of v.  ‘’exman8’’ adds the hidden bit and pads the left side with 8 zeros while ‘’exman9’ does not include the hidden bit and pads the left side with 9 zeros.</p>
+<p>Extracts the mantissa of v.  <code class="docutils literal notranslate"><span class="pre">MantissaMode</span></code> may be
+<code class="docutils literal notranslate"><span class="pre">FractionOnly</span></code> or <code class="docutils literal notranslate"><span class="pre">WithUnitBit</span></code> (also <code class="docutils literal notranslate"><span class="pre">ImplicitOne</span></code>).</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">setexp</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">exp</span><span class="p">)</span>
-<span class="n">vFloat</span><span class="w"> </span><span class="n">setexp</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">Vec</span><span class="p">[</span><span class="n">U</span><span class="p">]</span><span class="n">Short</span><span class="w"> </span><span class="n">exp</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="n">vMag</span><span class="w"> </span><span class="nf">exsgn</span><span class="p">({</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vInt</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">v</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>Replaces the exponent of ‘’v’’ with the exponent in bits 7:0 of ‘’exp’’ and returns the result (preserving the sign and mantissa of ‘’v’’).</p>
+<p>Extracts the sign bit</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">setman</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">man</span><span class="p">)</span>
-<span class="n">vFloat</span><span class="w"> </span><span class="n">setman</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">Vec</span><span class="p">[</span><span class="n">U</span><span class="p">]</span><span class="n">Short</span><span class="w"> </span><span class="n">man</span><span class="p">)</span><span class="w"> </span><span class="c1">// This does not work on GS due to a HW bug</span>
+<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="nf">setexp</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">exp</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">setexp</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="n">exp</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">copyexp</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">src</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">addexp</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">delta</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>Replaces the mantissa of  ‘’v’’ with the mantissa in the low bits of ‘’man’’ and returns the result (preserving the sign and exponent of ‘’v’’).</p>
+<p>Replaces the exponent of <code class="docutils literal notranslate"><span class="pre">v</span></code> with the value of <code class="docutils literal notranslate"><span class="pre">exp</span></code>, or the
+exponent bits of <code class="docutils literal notranslate"><span class="pre">src</span></code>. <code class="docutils literal notranslate"><span class="pre">addexp</span></code> adjusts the exponent by adding <code class="docutils literal notranslate"><span class="pre">delta</span></code>.</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">setsgn</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">sgn</span><span class="p">)</span>
-<span class="n">vFloat</span><span class="w"> </span><span class="n">copysgn</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">sgn</span><span class="p">)</span>
-<span class="n">vFloat</span><span class="w"> </span><span class="n">copysgn</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="n">sgn</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="nf">setman</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="n">man</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">setman</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">vUInt</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">man</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">copyman</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">src</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>Replaces the sign bit of ‘’v’’ with the sign in ‘’sgn’’ and returns the result (preserving the exponent and mantissa of ‘’v’’).  Note that the ‘’int32_t’’ version takes the sign from bit 0 while the ‘’vFloat’’ and ‘’vInt’’ versions take the sign from the sign bit location (bit 19 on GS and bit 32 on WH).</p>
+<p>Replaces the mantissa of  <code class="docutils literal notranslate"><span class="pre">v</span></code> with the value of <code class="docutils literal notranslate"><span class="pre">man</span></code> or the
+mantissa bits of <code class="docutils literal notranslate"><span class="pre">src</span></code>.</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">addexp</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">exp</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vMag</span><span class="p">}</span><span class="w"> </span><span class="n">setsgn</span><span class="p">({</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vMag</span><span class="p">}</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">sgn</span><span class="p">);</span>
+<span class="n">vMag</span><span class="w"> </span><span class="nf">setsgn</span><span class="p">(</span><span class="n">vUInt</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">sgn</span><span class="p">);</span>
+<span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vMag</span><span class="p">}</span><span class="w"> </span><span class="n">setsgn2</span><span class="p">({</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vMag</span><span class="p">}</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">vInt</span><span class="p">,</span><span class="n">vUInt</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">sgn</span><span class="p">)</span>
+<span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vMag</span><span class="p">}</span><span class="w"> </span><span class="n">copysgn</span><span class="p">({</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vMag</span><span class="p">}</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vInt</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">cpy</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>Adds the 8-bit value in ‘’exp’’ to the exponent of ‘’v’’ and returns the result (preserving the sign and mantissa of ‘’v’’).</p>
+<p>Replaces the sign bit of ‘’v’’ with the value of <code class="docutils literal notranslate"><span class="pre">sgn</span></code>, or copies
+that of <code class="docutils literal notranslate"><span class="pre">cpy</span></code>.  Note: <code class="docutils literal notranslate"><span class="pre">setsgn2</span></code> will be renamed once the
+deprecated <code class="docutils literal notranslate"><span class="pre">setsgn</span></code> function that matches its signature is deleted.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="nf">abs</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">);</span>
+<span class="n">vMag</span><span class="w"> </span><span class="nf">abs</span><span class="p">({</span><span class="n">vInt</span><span class="o">|</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">v</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Returns the absolute value of ‘’v’’.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vInt</span><span class="w"> </span><span class="n">lz</span><span class="p">({</span><span class="n">vInt</span><span class="p">,</span><span class="n">vUInt</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">LZMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LZMode</span><span class="o">::</span><span class="n">All</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Returns the count of leading (left-most) zeros of ‘’v’’. <code class="docutils literal notranslate"><span class="pre">LZMode</span></code>
+may be <code class="docutils literal notranslate"><span class="pre">All</span></code> or <code class="docutils literal notranslate"><span class="pre">IgnoreSign</span></code> (treats bit 31 as zero).</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vUInt</span><span class="w"> </span><span class="nf">shft</span><span class="p">(</span><span class="n">vUInt</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">amt</span><span class="p">,</span><span class="w"> </span><span class="n">ShiftMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ShiftMode</span><span class="o">::</span><span class="n">Logical</span><span class="p">);</span>
+<span class="n">vUInt</span><span class="w"> </span><span class="nf">shft</span><span class="p">(</span><span class="n">vUInt</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="n">amt</span><span class="p">,</span><span class="w"> </span><span class="n">ShiftMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ShiftMode</span><span class="o">::</span><span class="n">Logical</span><span class="p">);</span>
+<span class="n">vInt</span><span class="w"> </span><span class="nf">shft</span><span class="p">(</span><span class="n">vInt</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">amt</span><span class="p">,</span><span class="w"> </span><span class="n">ShiftMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ShiftMode</span><span class="o">::</span><span class="n">Arithmetic</span><span class="p">);</span>
+<span class="n">vInt</span><span class="w"> </span><span class="nf">shft</span><span class="p">(</span><span class="n">vInt</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="n">amt</span><span class="p">,</span><span class="w"> </span><span class="n">ShiftMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ShiftMode</span><span class="o">::</span><span class="n">Arithmetic</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Performs a left shift (when ‘’amt’’ is positive) or right shift (when
+‘’amt’’ is negative) of ‘’v’’ by ‘’amt’’ bits. <code class="docutils literal notranslate"><span class="pre">ShiftMode</span></code> may be
+<code class="docutils literal notranslate"><span class="pre">Logical</span></code> or <code class="docutils literal notranslate"><span class="pre">Arithmetic</span></code>.  Wormhole does not support arithmetic
+shifts and a compilation error will occur unless one explicitly
+specifies <code class="docutils literal notranslate"><span class="pre">Logical</span></code>.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vBool</span><span class="w"> </span><span class="nf">is_nan</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">);</span>
+<span class="n">vBool</span><span class="w"> </span><span class="nf">is_finite</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">);</span>
+<span class="n">vBool</span><span class="w"> </span><span class="nf">is_normal</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">);</span>
+<span class="n">vBool</span><span class="w"> </span><span class="nf">is_subnormal</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">);</span>
+<span class="n">vBool</span><span class="w"> </span><span class="nf">is_zero</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">);</span>
+<span class="n">vBool</span><span class="w"> </span><span class="nf">is_inf</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">);</span>
+<span class="n">vBool</span><span class="w"> </span><span class="nf">is_pos</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">);</span>
+<span class="n">vBool</span><span class="w"> </span><span class="nf">is_neg</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Compute the named feature of <cite>v</cite>. <code class="docutils literal notranslate"><span class="pre">is_nbormal</span></code> is true when <code class="docutils literal notranslate"><span class="pre">v</span></code> is
+a finite non-zero, non-subnormal number. <code class="docutils literal notranslate"><span class="pre">is_finite</span></code> is true when
+<code class="docutils literal notranslate"><span class="pre">v</span></code> is neither a nan nor an infinity.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vMag</span><span class="w"> </span><span class="nf">fractional_mul</span><span class="w"> </span><span class="p">({</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vUInt</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vUInt</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">FractionalHalf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FractionalHalf</span><span class="o">::</span><span class="n">Low</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>compute 23 bits of product of the low (fractional) 23-bits of <code class="docutils literal notranslate"><span class="pre">a</span></code>
+and <code class="docutils literal notranslate"><span class="pre">b</span></code>.  <code class="docutils literal notranslate"><span class="pre">FractionalHalf</span></code> may be either <code class="docutils literal notranslate"><span class="pre">Low</span></code> or <code class="docutils literal notranslate"><span class="pre">High</span></code>.  Not
+available on Wormhole.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">swap</span><span class="p">(</span><span class="n">vType</span><span class="w"> </span><span class="o">&amp;</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">vType</span><span class="w"> </span><span class="o">&amp;</span><span class="n">b</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Swaps the values of <code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code>.  Note that this uses the
+<code class="docutils literal notranslate"><span class="pre">sfpswap</span></code> instruction, rather than simply exchanging registers
+(unlike <code class="docutils literal notranslate"><span class="pre">std::swap</span></code>).</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">min</span><span class="p">({</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSmag</span><span class="p">}</span><span class="w"> </span><span class="n">b</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">min</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">b</span><span class="p">);</span>
+<span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">max</span><span class="p">({</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSmag</span><span class="p">}</span><span class="w"> </span><span class="n">b</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">max</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">b</span><span class="p">);</span>
+<span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">clamp</span><span class="p">({</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSMag</span><span class="p">}</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSmag</span><span class="p">}</span><span class="w"> </span><span class="n">lower</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSmag</span><span class="p">}</span><span class="w"> </span><span class="n">upper</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">clamp</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">lower</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">upper</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">symmetric_clamp</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">bound</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Return the minimum, maximum or clamped value.  <code class="docutils literal notranslate"><span class="pre">symmetric_clamp</span></code>
+clamps to the range <cite>[-bound,+bound]</cite>.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">pair</span><span class="o">&lt;</span><span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSMag</span><span class="p">},{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSmag</span><span class="p">}</span><span class="o">&gt;</span><span class="w"> </span><span class="n">min_max</span><span class="w"> </span><span class="p">({</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSmag</span><span class="p">}</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">vFloat</span><span class="p">,</span><span class="n">vSmag</span><span class="p">}</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="n">mask</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Separate <cite>a</cite> &amp; <cite>b</cite> elements into minima and maxima according to
+<code class="docutils literal notranslate"><span class="pre">mask</span></code>. Mask is either a 32-bit combination of 0xff or 0x00 bytes,
+or a 4-bit number.  Where each byte (or bit) is zero, the minimum
+element will be placed in the first part of the paired result.  Where
+it is non-zero, the maximum will be chosen.  Thus, by default this
+returns the min/max pair.  With a <code class="docutils literal notranslate"><span class="pre">mask</span></code> of <code class="docutils literal notranslate"><span class="pre">0xffffffff</span></code> or <code class="docutils literal notranslate"><span class="pre">0xf</span></code>
+the max/min pair will be returned. Non-permitted <code class="docutils literal notranslate"><span class="pre">mask</span></code> values will
+result in a compilation error. It may be convenient to use a
+structured binding to hold the result:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="p">[</span><span class="n">min</span><span class="p">,</span><span class="w"> </span><span class="n">max</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">min_max</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">);</span>
+</pre></div>
+</div>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vInt</span><span class="w"> </span><span class="nf">rand</span><span class="w"> </span><span class="p">();</span>
+</pre></div>
+</div>
+<p>Return a random integer. Due to hardware limitations, the random
+distribution is not flat. Not available on Wormhole.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="nf">rectified_linear_unit</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">src</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Compute ReLU, which is <code class="docutils literal notranslate"><span class="pre">max</span> <span class="pre">(src,</span> <span class="pre">0)</span></code>.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="nf">approx_recip</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">RecipMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">RecipMode</span><span class="o">::</span><span class="n">All</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">approx_exp</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">src</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">approx_sqrt</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">src</span><span class="p">);</span>
+<span class="n">vFloat</span><span class="w"> </span><span class="nf">approx_tanh</span><span class="w"> </span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">src</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Compute approximate reciprocals, exponentials, square roots and
+hyperbolic tangents. <code class="docutils literal notranslate"><span class="pre">RecipMode</span></code> may be <code class="docutils literal notranslate"><span class="pre">All</span></code> or <code class="docutils literal notranslate"><span class="pre">IfNegative</span></code>.
+Not available on Wormhole, and <cite>sqrt</cite> and <cite>tanh</cite> not available on
+Blackhole.</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">lut</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l0</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l1</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l2</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span>
 <span class="n">vFloat</span><span class="w"> </span><span class="n">lut_sign</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l0</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l1</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l2</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span>
@@ -514,32 +757,6 @@ may change with future architectures.</p>
 </div>
 </blockquote>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vInt</span><span class="w"> </span><span class="n">lz</span><span class="p">(</span><span class="n">Vec</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
-</pre></div>
-</div>
-<p>Returns the count of leading (left-most) zeros of ‘’v’’.</p>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">abs</span><span class="p">(</span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
-<span class="n">vInt</span><span class="w"> </span><span class="n">abs</span><span class="p">(</span><span class="n">vInt</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
-</pre></div>
-</div>
-<p>Returns the absolute value of ‘’v’’.</p>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vUInt</span><span class="w"> </span><span class="n">shft</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="n">amt</span><span class="p">)</span>
-</pre></div>
-</div>
-<p>Performs a left shift (when ‘’amt’’ is positive) or right shift (when ‘’amt’’ is negative) of ‘’v’’ by ‘’amt’’ bits.</p>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">vec_swap</span><span class="p">(</span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">A</span><span class="p">,</span><span class="w"> </span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">B</span><span class="p">)</span>
-</pre></div>
-</div>
-<p>Swaps the (integer or floating point) vectors in ‘’A’’ and ‘’B’’.</p>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">vec_min_max</span><span class="p">(</span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">min</span><span class="p">,</span><span class="w"> </span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">max</span><span class="p">)</span>
-</pre></div>
-</div>
-<p>Compares and swaps each element of the two vectors such that on return ‘’min’’ contains all of the minimum values and ‘’max’’ contains all of the maximum values.</p>
-<div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="n">Vec</span><span class="w"> </span><span class="n">subvec_shflror1</span><span class="p">(</span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
 <span class="n">Vec</span><span class="w"> </span><span class="n">subvec_shflshr1</span><span class="p">(</span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
 </pre></div>
@@ -548,96 +765,6 @@ may change with future architectures.</p>
 <div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">subvec_transp</span><span class="p">(</span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">A</span><span class="p">,</span><span class="w"> </span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">B</span><span class="p">,</span><span class="w"> </span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">C</span><span class="p">,</span><span class="w"> </span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">D</span><span class="p">)</span>
 </pre></div>
 </div>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vInt</span><span class="w"> </span><span class="n">lz_nosgn</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">Vec</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
-</pre></div>
-</div>
-<p>Returns the count of leading (left-most) zeros of ‘’v’’ ignoring the sign bit.</p>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">ToType</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span><span class="w"> </span><span class="nc">FromType</span><span class="o">&gt;</span>
-<span class="n">ToType</span><span class="w"> </span><span class="n">convert</span><span class="w"> </span><span class="p">(</span><span class="n">FromType</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="n">RoundMode</span><span class="w"> </span><span class="n">rounding</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">RoundMode</span><span class="o">::</span><span class="n">NearestStochastic</span><span class="p">)</span>
-<span class="k">template</span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">ToType</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span><span class="w"> </span><span class="nc">FromType</span><span class="o">&gt;</span>
-<span class="n">ToType</span><span class="w"> </span><span class="n">convert</span><span class="w"> </span><span class="p">(</span><span class="n">FromType</span><span class="w"> </span><span class="n">in</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="n">descale</span><span class="p">,</span><span class="w"> </span><span class="n">RoundMode</span><span class="w"> </span><span class="n">rounding</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">RoundMode</span><span class="o">::</span><span class="n">NearestStochastic</span><span class="p">)</span>
-</pre></div>
-</div>
-<p>Not all conversions are supported, and a compilation error will occur
-if not available.  The following rounding modes are available:</p>
-<blockquote>
-<div>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">NearestEven</span></code> - round to nearest, ties to even mantissa (Quasar)</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">NearestAway</span></code> - round to nearest, ties away from zero (Wormhole, Blackhole)</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">NearestStochastic</span></code> - round to nearest, ties randomly up or down</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">Stochastic</span></code> - deprecated alias for <code class="docutils literal notranslate"><span class="pre">NearestStochastic</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">Zero</span></code> - round towards zero (Blackhole and Quasar)</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">Nearest</span></code> - <code class="docutils literal notranslate"><span class="pre">NearestEven</span></code>, if available, else <code class="docutils literal notranslate"><span class="pre">NearestAway</span></code></p></li>
-</ul>
-</div>
-</blockquote>
-</section>
-<section id="immediate-floating-point-values">
-<h3>Immediate Floating Point Values<a class="headerlink" href="#immediate-floating-point-values" title="Permalink to this heading"></a>
-</h3>
-<p>Assigning a float to a <code class="docutils literal notranslate"><span class="pre">vFloat</span></code>, the floating point value is converted
-to an fp16a, fp16b, or fp32 by first looking to see if the range fits in fp16b
-and if not using fp16a (or fp32).  If the value is not known at compile time,
-then it is loaded as an fp32.  Note that on Wormhole fp32 loads take 2 cycles.</p>
-<p>For more explicit conversions, use one of the classes <code class="docutils literal notranslate"><span class="pre">s2vFloat16a</span></code> and
-<code class="docutils literal notranslate"><span class="pre">s2vFloat16b</span></code>.  Each takes either an integer or floating point value.  Floating
-point immediate values are converted at compilation time and incur no overhead.
-Floating point variables that are not known at compilation time are converted at run
-time.  An integer value loaded into floating point vector (via one of the
-conversion routines) is treated as a bit pattern and incurs no overhead, see
-examples below.</p>
-<p>Note: fp16a conversions do not presently handle denorms/nans, etc. properly.</p>
-<p>Example uses:</p>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1.0f</span><span class="p">;</span><span class="w">               </span><span class="c1">// Load fb16b value</span>
-<span class="n">vFloat</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">500000.0f</span><span class="p">;</span><span class="w">          </span><span class="c1">// GS load fp16b value, WH fp32 value</span>
-<span class="n">vFloat</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">s2vFloat16a</span><span class="p">(</span><span class="mf">3.0F</span><span class="p">);</span><span class="w">  </span><span class="c1">// Load fp16a value, no overhead</span>
-<span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">ui</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x3c00</span><span class="p">;</span>
-<span class="n">vFloat</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">s2vFloat16a</span><span class="p">(</span><span class="n">ui</span><span class="p">);</span><span class="w">    </span><span class="c1">// Load fp16a value (1.0F), no overhead</span>
-<span class="kt">float</span><span class="w"> </span><span class="n">f</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1.0F</span><span class="p">;</span>
-<span class="n">vFloat</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">s2vFloat16a</span><span class="p">(</span><span class="n">f</span><span class="p">);</span><span class="w">     </span><span class="c1">// Load fp16a value, overhead if value cannot be determined at compile time</span>
-</pre></div>
-</div>
-<section id="boolean-operators">
-<h4>Boolean Operators<a class="headerlink" href="#boolean-operators" title="Permalink to this heading"></a>
-</h4>
-<p>All conditionals operating on base types can be combined with any of <code class="docutils literal notranslate"><span class="pre">&amp;&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">||</span></code>, <code class="docutils literal notranslate"><span class="pre">!</span></code>.</p>
-</section>
-<section id="vbool">
-<h4>vBool<a class="headerlink" href="#vbool" title="Permalink to this heading"></a>
-</h4>
-<p><code class="docutils literal notranslate"><span class="pre">vBool</span></code> doesn’t exist, but the functionality can be obtained by executing
-conditional instructions outside of a <code class="docutils literal notranslate"><span class="pre">v_if</span></code> and assigning the result to a
-<code class="docutils literal notranslate"><span class="pre">vInt</span></code>.  This can be useful to, e.g., use RISCV code to conditionally generate
-an SFPU predicate.  For example, the following function evaluates different
-predicated conditionals based on the value of a function parameter:</p>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">sfpi_inline</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="n">sfpu_is_fp16_zero</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="o">&amp;</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">uint</span><span class="w"> </span><span class="n">exponent_size_8</span><span class="p">)</span>
-<span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">exponent_size_8</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">v</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mf">0.0F</span><span class="p">;</span>
-<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">vInt</span><span class="w"> </span><span class="n">tmp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x3800</span><span class="p">;</span><span class="w"> </span><span class="c1">// loads {0, 8'd112, 10'b0}</span>
-<span class="w">        </span><span class="n">tmp</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">reinterpret</span><span class="o">&lt;</span><span class="n">vInt</span><span class="o">&gt;</span><span class="p">(</span><span class="n">v</span><span class="p">);</span>
-<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">tmp</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="p">}</span>
-</pre></div>
-</div>
-<p>which may be called by:</p>
-<div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">v_if</span><span class="w"> </span><span class="p">(</span><span class="n">sfpu_is_fp16_zero</span><span class="p">(</span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">exponent_size_8</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="p">...</span>
-<span class="p">}</span>
-<span class="n">v_endif</span><span class="p">;</span>
-</pre></div>
-</div>
-<p>If exponent_size_8 is known at compile time, this has no overhead.  If not,
-the predication is determined at runtime.</p>
-</section>
 <section id="assigning-and-using-constant-registers">
 <h4>Assigning and Using Constant Registers<a class="headerlink" href="#assigning-and-using-constant-registers" title="Permalink to this heading"></a>
 </h4>
@@ -676,6 +803,14 @@ back into the LReg.</p>
 <span class="w">                                 </span><span class="c1">// to preserve the value in LReg1 (if desired)</span>
 </pre></div>
 </div>
+<p>You may mark an lreg as used in code that the compiler cannot examine
+with the <code class="docutils literal notranslate"><span class="pre">used</span></code> function:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">l_reg</span><span class="p">[</span><span class="n">LRegs</span><span class="o">::</span><span class="n">LReg0</span><span class="p">].</span><span class="n">used</span><span class="p">();</span>
+<span class="c1">// your code here</span>
+</pre></div>
+</div>
+<p>The compiler will not keep a value live in  lreg0 across your code.</p>
 </section>
 </section>
 </section>
@@ -688,13 +823,14 @@ back into the LReg.</p>
 <p>Note that the wrapper introduces temporaries in a number of places.  For
 example:</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">1</span><span class="p">];</span>
+<div class="highlight"><pre><span></span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">vFloat</span><span class="p">(</span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">vFloat</span><span class="p">(</span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">1</span><span class="p">]);</span>
 </pre></div>
 </div>
 <p>loads dst_reg[0] and dst_reg[1] into temporary LREGs (as expected).</p>
-<p>The compiler will not spill registers.  Exceeding the number of registers
-available will result in the cryptic: <code class="docutils literal notranslate"><span class="pre">error:</span> <span class="pre">cannot</span> <span class="pre">store</span> <span class="pre">SFPU</span> <span class="pre">register</span>
-<span class="pre">(register</span> <span class="pre">spill?)</span> <span class="pre">-</span> <span class="pre">exiting!</span></code> without a line number.</p>
+<p>The compiler cannot spill registers (there is no hardware mechanism to
+do so).  Exceeding the number of registers available will result in
+the cryptic: <code class="docutils literal notranslate"><span class="pre">error:</span> <span class="pre">cannot</span> <span class="pre">store</span> <span class="pre">SFPU</span> <span class="pre">register</span> <span class="pre">(register</span> <span class="pre">spill?)</span> <span class="pre">-</span>
+<span class="pre">exiting!</span></code> without a line number.</p>
 <p>The compiler does a reasonable job with lifetime analysis when assigning
 variables to registers.  Reloading or recalculating results helps the compiler
 free up and reuse registers and is a good way to correct a spilling error.</p>
