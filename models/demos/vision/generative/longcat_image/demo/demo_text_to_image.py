@@ -10,7 +10,8 @@ end-to-end PCC vs the HF golden.
 
 Run:
     python -m models.demos.vision.generative.longcat_image.demo.demo_text_to_image \
-        --prompt "a photograph of a cat on a red sofa" --size 256 --steps 4 --guidance 4.5
+        --prompt "a photograph of a cat on a red sofa" --size 512 --steps 24 --guidance 4.5
+    # add --cq 2 to run the denoise loop under trace + two command queues
 """
 
 from __future__ import annotations
@@ -50,6 +51,10 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="longcat_image_t2i.png")
     ap.add_argument("--compare_golden", action="store_true", help="also run the HF golden and print e2e PCC")
+    ap.add_argument(
+        "--cq", type=int, default=1, choices=[1, 2],
+        help="command queues; 2 enables the trace+2CQ denoise overlap (per-step input staging on CQ1)",
+    )
     args = ap.parse_args()
 
     from diffusers import LongCatImagePipeline
@@ -60,7 +65,13 @@ def main():
     pipe.tokenizer_max_length = args.max_length
 
     latents_packed = None
-    device = ttnn.open_device(device_id=0, l1_small_size=24576)
+    open_kwargs = {"l1_small_size": 24576}
+    if args.cq == 2:
+        # trace+2CQ needs a second command queue AND an explicit trace region (the 1CQ path
+        # rides Blackhole's default region; keep 2CQ robust by sizing it like the perf test).
+        open_kwargs["num_command_queues"] = 2
+        open_kwargs["trace_region_size"] = 209715200  # 200 MB
+    device = ttnn.open_device(device_id=0, **open_kwargs)
     try:
         # deterministic seeded latents shared with the golden (if comparing)
         vsf = pipe.vae_scale_factor
@@ -69,7 +80,7 @@ def main():
         raw = torch.randn(1, 16, lh, lh, generator=gen, dtype=torch.float32)
         latents_packed = P._pack_latents(raw, 1, 16, lh, lh)
 
-        ttp = P.LongCatImagePipelineTT(device, pipe)
+        ttp = P.LongCatImagePipelineTT(device, pipe, num_cqs=args.cq)
         result = ttp.run_text_to_image(
             prompt=args.prompt,
             negative_prompt=args.negative_prompt,
