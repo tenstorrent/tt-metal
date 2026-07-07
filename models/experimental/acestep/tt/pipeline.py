@@ -112,6 +112,10 @@ class AceStepPipeline:
     _hf_text_cfg: object = None  # text-encoder HF config (for its RoPE)
     _null_condition_emb: object = None  # torch [1,1,2048] learned null cross-attn context (for CFG)
     _silence_latent: object = None  # torch [1,15000,64] learned silence src latent (text2music src)
+    lm_planner: object = None  # AceStepTextEncoder over acestep-5Hz-lm-1.7B (the CoT song planner)
+    _lm_tokenizer: object = None  # HF tokenizer for the LM planner
+    _lm_head_weight: object = None  # torch [vocab,hidden] tied embedding = LM head
+    _lm_hf_cfg: object = None  # LM planner HF config (for its RoPE)
 
     def _uncond_context(self, cond_context):
         """Build the CFG null/unconditional cross-attn context: null_condition_emb expanded to the
@@ -392,6 +396,74 @@ class AceStepPipeline:
     SAMPLE_RATE = 48000
     LATENT_HZ = 25  # 25 latent frames / second
 
+    def plan_song(self, query: str, *, max_new_tokens: int = 160, seed: int = 0):
+        """Run the 5Hz LM planner ("Songwriter") on the device to turn a plain user query into a song
+        blueprint via Chain-of-Thought. Returns a dict with parsed fields (caption, bpm, keyscale,
+        timesignature, duration, genres) plus the raw text. The LM is a 28-layer causal Qwen3 with a
+        tied embedding head; we decode greedily (argmax) on-device using the TT LM planner forward.
+
+        Requires the pipeline built with the LM planner (create_tt_pipeline(..., with_lm=True)).
+        """
+        assert self.lm_planner is not None, "plan_song needs the LM planner; build with with_lm=True"
+        from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
+
+        rope = Qwen3RotaryEmbedding(self._lm_hf_cfg)
+        hidden = self._lm_hf_cfg.hidden_size
+        eos_ids = {self._lm_tokenizer.eos_token_id}
+        im_end = self._lm_tokenizer.convert_tokens_to_ids("<|im_end|>")
+        if im_end is not None:
+            eos_ids.add(im_end)
+        W = self._lm_head_weight  # [vocab, hidden]
+
+        msgs = [{"role": "user", "content": query}]
+        text = self._lm_tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+        prompt_ids = self._lm_tokenizer(text, return_tensors="pt").input_ids[0].tolist()
+        n_prompt = len(prompt_ids)
+        ids = list(prompt_ids)
+
+        for _ in range(max_new_tokens):
+            L = len(ids)
+            t = torch.tensor([ids])
+            pos = torch.arange(L).unsqueeze(0)
+            cos, sin = rope(torch.zeros(1, L, hidden), pos)
+            ct = ttnn.from_torch(cos.reshape(1, 1, L, -1), device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            st = ttnn.from_torch(sin.reshape(1, 1, L, -1), device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            h = ttnn.to_torch(self.lm_planner.forward(t, ct, st)).float().reshape(1, L, hidden)
+            nxt = int((h[0, -1] @ W.t()).argmax())
+            ids.append(nxt)
+            if nxt in eos_ids:
+                break
+
+        raw = self._lm_tokenizer.decode(ids[n_prompt:], skip_special_tokens=False)
+        return {"raw": raw, **self._parse_blueprint(raw)}
+
+    @staticmethod
+    def _parse_blueprint(raw: str) -> dict:
+        """Parse the LM planner's CoT blueprint (YAML-ish 'key: value' lines inside <think>...) into
+        generate_song kwargs. Tolerant of missing fields (falls back to sensible defaults)."""
+        import re
+
+        fields = {}
+        for key in ("caption", "bpm", "keyscale", "timesignature", "duration", "genres", "language"):
+            # multi-line-safe: capture up to the next 'key:' or block end
+            m = re.search(rf"^\s*{key}:\s*(.+?)(?=\n\s*\w+:|\n\s*</think>|\Z)", raw, re.MULTILINE | re.DOTALL)
+            if m:
+                fields[key] = " ".join(m.group(1).split())
+        out = {}
+        # caption: prefer the model's caption, else the genres
+        out["caption"] = fields.get("caption") or fields.get("genres", "")
+        try:
+            out["bpm"] = int(float(fields["bpm"])) if fields.get("bpm") else None
+        except ValueError:
+            out["bpm"] = None
+        out["keyscale"] = fields.get("keyscale", "")
+        out["timesignature"] = fields.get("timesignature", "")
+        try:
+            out["seconds"] = float(fields["duration"]) if fields.get("duration") else None
+        except ValueError:
+            out["seconds"] = None
+        return out
+
     def generate_song(
         self,
         prompt: str,
@@ -619,7 +691,7 @@ class AceStepPipeline:
 
 
 def create_tt_pipeline(
-    args: AceStepModelConfig, mesh_device, *, with_vae: bool = True, with_encoders: bool = True
+    args: AceStepModelConfig, mesh_device, *, with_vae: bool = True, with_encoders: bool = True, with_lm: bool = False
 ) -> AceStepPipeline:
     """Assemble the full TT text-to-music pipeline from the genuine checkpoint.
 
@@ -630,6 +702,7 @@ def create_tt_pipeline(
     - with_vae:      build the VAE decoder (needed for audio output / generate_song / decode).
     - with_encoders: build the text + condition encoders + tokenizer (needed for generate_song /
                      encode_prompt). Set False for DiT-only latent tests.
+    - with_lm:       build the 5Hz LM planner ("Songwriter") for plan_song (query -> song blueprint).
     """
     from models.experimental.acestep.tt.model_config import build_condition_encoder, build_text_encoder
 
@@ -681,6 +754,18 @@ def create_tt_pipeline(
         except Exception:
             silence_latent = None
 
+    # LM planner ("Songwriter"): query -> CoT song blueprint. Optional (large 1.7B model).
+    lm_planner = lm_tokenizer = lm_head_weight = lm_hf_cfg = None
+    if with_lm:
+        from transformers import AutoTokenizer
+        from models.experimental.acestep.reference.weight_utils import pipeline_dir
+        from models.experimental.acestep.tt.model_config import build_lm_planner
+
+        lm_planner, hf_lm = build_lm_planner(mesh_device)
+        lm_hf_cfg = hf_lm.config
+        lm_head_weight = hf_lm.embed_tokens.weight.detach().float()  # tied embedding = LM head
+        lm_tokenizer = AutoTokenizer.from_pretrained(str(pipeline_dir() / "acestep-5Hz-lm-1.7B"))
+
     return AceStepPipeline(
         args=args,
         dit=dit,
@@ -695,4 +780,8 @@ def create_tt_pipeline(
         _hf_text_cfg=hf_text_cfg,
         _null_condition_emb=null_condition_emb,
         _silence_latent=silence_latent,
+        lm_planner=lm_planner,
+        _lm_tokenizer=lm_tokenizer,
+        _lm_head_weight=lm_head_weight,
+        _lm_hf_cfg=lm_hf_cfg,
     )
