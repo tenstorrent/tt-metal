@@ -181,17 +181,8 @@ skus:
     runs_on:
       - exabox-multihost-with-nfs
     allocation:
-      type: MGD
+      type: Count
       count: 1
-      mgd_file: models/demos/deepseek_v3_b1/scaleout_configs/rev_c/one_galaxy/single_galaxy_8x4_exabox_mesh_graph_descriptor.textproto
-
-  bh_spsg_host_io:
-    runs_on:
-      - exabox-multihost-with-nfs
-    allocation:
-      type: MGD
-      count: 1
-      mgd_file: models/demos/deepseek_v3_b1/scaleout_configs/rev_c/one_galaxy/host_io_mesh_graph_descriptor.textproto
 
   bh_sp1:
     runs_on:
