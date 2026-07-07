@@ -643,15 +643,24 @@ def build_llama3_transformer_1d_config(
     max_batch_size: int,
     max_seq_len: int,
     model_name: str,
-    model_info: dict,
+    dim: int,
+    n_heads: int,
+    n_kv_heads: int,
+    n_layers: int,
+    head_dim: int,
+    hidden_dim: int,
+    vocab_size: int,
+    norm_eps: float,
+    padded_vocab_size: int,
+    rope_cos,
+    rope_sin,
     model_cache_path: str | Path,
     state_dict,
     optimizations="performance",
-    n_layers: int | None = None,
     weight_cache_path=None,
     dtype=None,
     paged_attention_config=None,
-    use_paged_kv_cache=None,
+    pad_logits_to_power_of_2=False,
 ) -> Llama3Transformer1DConfig:
     """Build explicit TTTv2 module configs from Llama-3.1-8B construction data."""
     num_devices = mesh_device.get_num_devices()
@@ -667,24 +676,7 @@ def build_llama3_transformer_1d_config(
     if num_devices == 32:
         raise ValueError("Llama3Transformer1D only supports 1D mesh topologies.")
 
-    if use_paged_kv_cache is None:
-        use_paged_kv_cache = paged_attention_config is not None
-
-    n_layers = n_layers or model_info["n_layers"]
-    dim = model_info["dim"]
-    n_heads = model_info["n_heads"]
-    n_kv_heads = model_info["n_kv_heads"]
-    head_dim = model_info["head_dim"]
-    hidden_dim = model_info["hidden_dim"]
-    vocab_size = model_info["vocab_size"]
-    norm_eps = model_info["norm_eps"]
-    padded_vocab_size = model_info.get("padded_vocab_size", vocab_size)
-    rope_cos = model_info["rope_cos"]
-    rope_sin = model_info["rope_sin"]
-    query_pre_attn_scalar = model_info.get("query_pre_attn_scalar")
-    sliding_window = model_info.get("sliding_window")
-    pad_logits_to_power_of_2 = model_info.get("pad_logits_to_power_of_2", False)
-    mlp_activation_type = model_info.get("mlp_activation_type", ttnn.UnaryOpType.SILU)
+    use_paged_kv_cache = paged_attention_config is not None
 
     if optimizations is None:
         decoder_precision = Llama31DecoderPrecision.performance(n_layers, model_name)
@@ -1209,7 +1201,7 @@ def build_llama3_transformer_1d_config(
                 )
             )
 
-        scale = query_pre_attn_scalar**-0.5 if query_pre_attn_scalar is not None else head_dim**-0.5
+        scale = head_dim**-0.5
         return Attention1DConfig(
             wqkv=wqkv,
             wo=wo,
@@ -1227,7 +1219,6 @@ def build_llama3_transformer_1d_config(
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
             scale=scale,
-            sliding_window=sliding_window,
             use_qk_fused=True,
             use_vllm_paged_kv_cache=use_paged_kv_cache,
             paged_attention_config=paged_attention_config,
@@ -1317,7 +1308,7 @@ def build_llama3_transformer_1d_config(
             dim=dim,
             hidden_dim=hidden_dim,
             max_batch_size=max_batch_size,
-            mlp_activation_type=mlp_activation_type,
+            mlp_activation_type=ttnn.UnaryOpType.SILU,
             topology=ccl_topology(),
             decode_rs_memory_config=mlp_rs_cfg.get("rs_memory_config", ttnn.L1_MEMORY_CONFIG),
             decode_rs_chunks_per_sync=mlp_rs_cfg.get("chunks_per_sync", 1),

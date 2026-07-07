@@ -23,35 +23,23 @@ from models.common.tensor_utils import nearest_multiple
 @dataclass(frozen=True)
 class RopeScaling:
     rope_type: str
-    factor: float | None = None
-    original_max_position_embeddings: int | None = None
-    low_freq_factor: float = 1.0
-    high_freq_factor: float = 4.0
+    factor: float
+    original_max_position_embeddings: int
+    low_freq_factor: float
+    high_freq_factor: float
 
 
-def rope_scaling_model_factory(
-    rope_scaling_params: dict | None, original_max_context_len: int | None = None
-) -> RopeScaling | None:
-    if rope_scaling_params is None:
-        return None
-
-    rope_type = rope_scaling_params.get("rope_type") or rope_scaling_params.get("type")
-    if rope_type in ("default", "mrope"):
-        logger.warning(
-            f"Rope scaling type was set to {rope_type}, defaulting to no rope scaling as this rope type is not supported yet by TTTv2"
-        )
-        return None
-    if rope_type not in ("linear", "llama3"):
+def llama3_rope_scaling(rope_parameters: dict) -> RopeScaling:
+    rope_type = rope_parameters["rope_type"]
+    if rope_type != "llama3":
         raise ValueError(f"Unsupported RoPE scaling type for Llama-3.1-8B TTTv2 path: {rope_type}")
 
     return RopeScaling(
         rope_type=rope_type,
-        factor=rope_scaling_params.get("factor"),
-        original_max_position_embeddings=rope_scaling_params.get(
-            "original_max_position_embeddings", original_max_context_len
-        ),
-        low_freq_factor=rope_scaling_params.get("low_freq_factor", 1.0),
-        high_freq_factor=rope_scaling_params.get("high_freq_factor", 4.0),
+        factor=rope_parameters["factor"],
+        original_max_position_embeddings=rope_parameters["original_max_position_embeddings"],
+        low_freq_factor=rope_parameters["low_freq_factor"],
+        high_freq_factor=rope_parameters["high_freq_factor"],
     )
 
 
@@ -75,9 +63,6 @@ def _gather_cos_sin(position_ids: torch.Tensor, cos: torch.Tensor, sin: torch.Te
 
 
 def _llama3_scaled_inv_freq(freqs: torch.Tensor, scaling: RopeScaling) -> torch.Tensor:
-    assert scaling.factor is not None
-    assert scaling.original_max_position_embeddings is not None
-
     low_freq_wavelen = scaling.original_max_position_embeddings / scaling.low_freq_factor
     high_freq_wavelen = scaling.original_max_position_embeddings / scaling.high_freq_factor
     new_freqs = []
@@ -96,24 +81,14 @@ def _llama3_scaled_inv_freq(freqs: torch.Tensor, scaling: RopeScaling) -> torch.
 
 
 def compute_gather_cos_sin(
-    dhead: int, end: int, theta: float, rope_scaling: RopeScaling | None
+    dhead: int, end: int, theta: float, rope_scaling: RopeScaling
 ) -> tuple[torch.Tensor, torch.Tensor]:
     seq_len = end // 2
     inv_freq = 1.0 / (theta ** (torch.arange(0, dhead, 2).float() / dhead))
 
-    if rope_scaling is None:
-        t = torch.arange(seq_len, dtype=inv_freq.dtype)
-        freqs = torch.outer(t, inv_freq)
-        emb = torch.cat((freqs, freqs), dim=-1)
-        return _permute_to_meta_format(emb.cos(), emb.sin())
-
-    if rope_scaling.rope_type == "linear":
-        assert rope_scaling.factor is not None
-        inv_freq = inv_freq / rope_scaling.factor
-    elif rope_scaling.rope_type == "llama3":
-        inv_freq = _llama3_scaled_inv_freq(inv_freq, rope_scaling)
-    else:
+    if rope_scaling.rope_type != "llama3":
         raise ValueError(f"Unsupported RoPE scaling type for Llama-3.1-8B TTTv2 path: {rope_scaling.rope_type}")
+    inv_freq = _llama3_scaled_inv_freq(inv_freq, rope_scaling)
 
     t = torch.arange(seq_len * 2.0)
     freqs = torch.outer(t, inv_freq).float()
@@ -241,70 +216,6 @@ def convert_hf_state_dict_to_meta(state_dict, *, head_dim: int, n_heads: int, n_
     return _map_hf_to_meta_keys(state_dict)
 
 
-def load_hf_model_info(
-    hf_model: str,
-    *,
-    num_devices: int,
-    cluster_shape: list[int],
-    trust_remote_code: bool = False,
-):
-    hf_config = AutoConfig.from_pretrained(
-        hf_model,
-        trust_remote_code=trust_remote_code,
-        local_files_only=os.getenv("CI") == "true",
-    )
-    config = hf_config.to_dict()
-    text_config = config.get("text_config", config)
-    dim = text_config.get("dim", text_config.get("hidden_size"))
-    n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
-    n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
-    n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
-    vocab_size = text_config["vocab_size"]
-    padded_vocab_size = nearest_multiple(vocab_size, ttnn.TILE_SIZE * num_devices)
-    hidden_dim = text_config["intermediate_size"]
-    model_name = os.path.basename(os.path.normpath(config["_name_or_path"])) if config.get("_name_or_path") else None
-    sampling_splits = num_devices if cluster_shape != [1, 1] else 2
-    rope_parameters = text_config.get("rope_parameters") or {}
-    rope_scaling_params = text_config.get("rope_scaling")
-    if not rope_scaling_params and rope_parameters.get("rope_type") not in (None, "default"):
-        rope_scaling_params = rope_parameters
-    original_max_context_len = text_config.get("original_max_position_embeddings", None)
-
-    return {
-        "hf_config": hf_config,
-        "dim": dim,
-        "n_heads": n_heads,
-        "n_kv_heads": n_kv_heads,
-        "n_layers": n_layers,
-        "full_model_n_layers": n_layers,
-        "norm_eps": text_config.get("norm_eps", text_config.get("rms_norm_eps")),
-        "vocab_size": vocab_size,
-        "padded_vocab_size": padded_vocab_size,
-        "head_dim": text_config.get("head_dim", dim // n_heads) or dim // n_heads,
-        "max_context_len": text_config.get("max_position_embeddings"),
-        "hidden_dim": hidden_dim,
-        "model_name": model_name,
-        "pad_logits_to_power_of_2": cluster_shape != [1, 1]
-        and should_pad_sampling_logits_to_power_of_2(padded_vocab_size, sampling_splits),
-        "unpadded_hidden_dim": hidden_dim,
-        "layer_types": text_config.get("layer_types", None),
-        "sliding_window": text_config.get("sliding_window", None),
-        "rope_theta": text_config.get("rope_theta") or rope_parameters.get("rope_theta"),
-        "rope_theta_local": text_config.get("rope_local_base_freq"),
-        "use_sliding_window": text_config.get("use_sliding_window", None),
-        "rope_scaling_params": rope_scaling_params,
-        "original_max_context_len": original_max_context_len,
-        "rope_scaling": (
-            rope_scaling_model_factory(rope_scaling_params, original_max_context_len) if rope_scaling_params else None
-        ),
-        "query_pre_attn_scalar": text_config.get("query_pre_attn_scalar", None),
-        "mlp_activation_type": ttnn.UnaryOpType.SILU,
-        "is_multimodal": False,
-        "state_dict_text_prefix": "",
-        "state_dict_vision_prefix": "visual.",
-    }
-
-
 def load_tokenizer(hf_model: str, *, trust_remote_code: bool = False):
     tokenizer = AutoTokenizer.from_pretrained(
         hf_model,
@@ -333,12 +244,8 @@ class Llama3RuntimeConfig:
 
     model_name: str
     model_cache_path: Path
-    cluster_shape: list[int]
-    max_batch_size: int
-    max_seq_len: int
     max_prefill_chunk_size: int
     max_context_len: int
-    paged_attention_config: object | None = None
     trace_prefill_supported_seq_lens: tuple[int, ...] = (128, 1024)
 
     def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
@@ -450,8 +357,6 @@ def load_converted_state_dict(
         local_files_only=os.getenv("CI") == "true",
     )
     state_dict = model.state_dict()
-    fuse_qkv = any("qkv" in layer_name for layer_name in state_dict)
-    fuse_mlp = any("gate_up" in layer_name for layer_name in state_dict)
     state_dict = _standardize_hf_keys(state_dict)
     state_dict = convert_hf_state_dict_to_meta(
         state_dict,
@@ -464,7 +369,7 @@ def load_converted_state_dict(
             layer_num = int(key.split("layers.")[1].split(".")[0])
             if layer_num >= n_layers:
                 state_dict.pop(key)
-    return state_dict, fuse_qkv, fuse_mlp
+    return state_dict
 
 
 def _model_cache_path(hf_model: str, mesh_device) -> Path:
@@ -478,7 +383,7 @@ def _max_prefill_chunk_size(mesh_device) -> int:
     override = os.getenv("MAX_PREFILL_CHUNK_SIZE")
     if override is not None:
         return int(override) * 1024
-    return {"N150": 4, "N300": 64, "T3K": 128}.get(get_device_name(mesh_device), 128) * 1024
+    return {"N150": 4, "N300": 64, "T3K": 128}[get_device_name(mesh_device)] * 1024
 
 
 def _weight_cache_path(model_cache_path: Path, *, instruct: bool, dtype):
@@ -512,62 +417,57 @@ def from_pretrained(
     if instruct is None:
         instruct = "Instruct" in Path(hf_model).name
 
-    hf_model_info = load_hf_model_info(
+    hf_config = AutoConfig.from_pretrained(
         hf_model,
-        num_devices=mesh_device.get_num_devices(),
-        cluster_shape=list(mesh_device.shape),
+        local_files_only=os.getenv("CI") == "true",
     )
-    model_name = hf_model_info.get("model_name") or hf_model.strip("/").split("/")[-1]
+    text_config = hf_config.to_dict()
+    model_name = Path(hf_model).name
     tokenizer = load_tokenizer(hf_model)
+    num_hidden_layers = n_layers if n_layers is not None else text_config["num_hidden_layers"]
 
-    rope_scaling = hf_model_info.get("rope_scaling")
     rope_cos, rope_sin = compute_gather_cos_sin(
-        dhead=hf_model_info["head_dim"],
+        dhead=text_config["hidden_size"] // text_config["num_attention_heads"],
         end=2 * max_seq_len,
-        theta=hf_model_info["rope_theta"],
-        rope_scaling=rope_scaling,
+        theta=text_config["rope_parameters"]["rope_theta"],
+        rope_scaling=llama3_rope_scaling(text_config["rope_parameters"]),
     )
-    model_info = {
-        key: value
-        for key, value in hf_model_info.items()
-        if key
-        not in {
-            "hf_config",
-            "rope_parameters",
-            "rope_scaling",
-            "rope_scaling_params",
-            "original_max_context_len",
-            "rope_theta",
-            "rope_theta_local",
-        }
-    }
-    model_info["rope_cos"] = rope_cos
-    model_info["rope_sin"] = rope_sin
-    effective_n_layers = n_layers or model_info["n_layers"]
     model_cache_path = _model_cache_path(hf_model, mesh_device)
 
-    state_dict, _, _ = load_converted_state_dict(
-        hf_model,
-        head_dim=model_info["head_dim"],
-        n_heads=model_info["n_heads"],
-        n_kv_heads=model_info["n_kv_heads"],
-        n_layers=effective_n_layers,
-    )
-    # todo)) model_info is over-engineer as well...
     model_config = build_llama3_transformer_1d_config(
         mesh_device=mesh_device,
         instruct=instruct,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
         model_name=model_name,
-        model_info=model_info,
+        dim=text_config["hidden_size"],
+        n_heads=text_config["num_attention_heads"],
+        n_kv_heads=text_config["num_key_value_heads"],
+        n_layers=num_hidden_layers,
+        head_dim=text_config["hidden_size"] // text_config["num_attention_heads"],
+        hidden_dim=text_config["intermediate_size"],
+        vocab_size=text_config["vocab_size"],
+        norm_eps=text_config["rms_norm_eps"],
+        padded_vocab_size=nearest_multiple(text_config["vocab_size"], ttnn.TILE_SIZE * mesh_device.get_num_devices()),
+        rope_cos=rope_cos,
+        rope_sin=rope_sin,
         model_cache_path=model_cache_path,
-        state_dict=state_dict,
+        state_dict=load_converted_state_dict(
+            hf_model,
+            head_dim=text_config["hidden_size"] // text_config["num_attention_heads"],
+            n_heads=text_config["num_attention_heads"],
+            n_kv_heads=text_config["num_key_value_heads"],
+            n_layers=num_hidden_layers,
+        ),
         optimizations=optimizations,
-        n_layers=n_layers,
         weight_cache_path=_weight_cache_path(model_cache_path, instruct=instruct, dtype=dtype),
         dtype=dtype,
         paged_attention_config=paged_attention_config,
+        pad_logits_to_power_of_2=list(mesh_device.shape) != [1, 1]
+        and should_pad_sampling_logits_to_power_of_2(
+            nearest_multiple(text_config["vocab_size"], ttnn.TILE_SIZE * mesh_device.get_num_devices()),
+            mesh_device.get_num_devices() if list(mesh_device.shape) != [1, 1] else 2,
+        ),
     )
     max_prefill_chunk_size = _max_prefill_chunk_size(mesh_device)
     trace_prefill_supported_seq_lens = tuple(
@@ -576,12 +476,8 @@ def from_pretrained(
     runtime_config = Llama3RuntimeConfig(
         model_name=model_name,
         model_cache_path=model_cache_path,
-        cluster_shape=list(mesh_device.shape),
-        max_batch_size=max_batch_size,
-        max_seq_len=max_seq_len,
         max_prefill_chunk_size=max_prefill_chunk_size,
-        max_context_len=model_info["max_context_len"],
-        paged_attention_config=paged_attention_config,
+        max_context_len=text_config["max_position_embeddings"],
         trace_prefill_supported_seq_lens=trace_prefill_supported_seq_lens,
     )
     return Llama3ForCausalLM(

@@ -287,6 +287,15 @@ class EagerLLMExecutor:
         """Model args come from the model object."""
         return getattr(self.model, "model_args", None)
 
+    @property
+    def model_config(self):
+        return getattr(self.model, "config", None)
+
+    @property
+    def cluster_shape(self):
+        cfg = self.model_config
+        return list(cfg.mesh_device.shape) if cfg is not None else [1, 1]
+
     # =========================================================================
     # KV Cache
     # =========================================================================
@@ -471,7 +480,7 @@ class EagerLLMExecutor:
             page_table: Page table for paged attention [batch_size, max_blocks]. Required.
         """
         B = tokens.shape[0]
-        max_batch = self.model_args.max_batch_size if self.model_args else B
+        max_batch = self.model_config.max_batch_size if self.model_config else B
         assert B == max_batch, f"Batch size {B} must equal max_batch_size {max_batch}"
 
         tokens_padded = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
@@ -486,7 +495,7 @@ class EagerLLMExecutor:
         rot_current_pos = torch.maximum(current_pos, torch.tensor(0, dtype=torch.int64))
         rope_idxs = self.model.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
 
-        cluster_shape = self.model_args.cluster_shape if self.model_args else [1, 1]
+        cluster_shape = self.cluster_shape
         current_pos_tt = ttnn.from_torch(
             current_pos,
             device=None,
@@ -715,7 +724,7 @@ class EagerLLMExecutor:
 
         batch_size, batch_seq_len = tokens.shape
         vocab_size = self.model.vocab_size
-        cluster_shape = self.model_args.cluster_shape if self.model_args else [1, 1]
+        cluster_shape = self.cluster_shape
 
         # todo)) output_tensor is just overwritten later? why allocate it here then?
         output_tensor = torch.zeros(batch_size, 1, vocab_size)
@@ -897,7 +906,7 @@ class EagerLLMExecutor:
         B = tokens.shape[0]
         vocab_size = self.model.vocab_size
         num_devices = self.model.num_devices
-        cluster_shape = self.model_args.cluster_shape if self.model_args else [1, 1]
+        cluster_shape = self.cluster_shape
 
         sampling_on_device = sampling_params is not None
 
@@ -1020,6 +1029,15 @@ class TracedLLMExecutor:
         """Model args come from the model object."""
         return getattr(self.model, "model_args", None)
 
+    @property
+    def model_config(self):
+        return getattr(self.model, "config", None)
+
+    @property
+    def cluster_shape(self):
+        cfg = self.model_config
+        return list(cfg.mesh_device.shape) if cfg is not None else [1, 1]
+
     # =========================================================================
     # Delegate KV cache to eager engine
     # =========================================================================
@@ -1097,7 +1115,7 @@ class TracedLLMExecutor:
 
         required_end = start_pos + S
         pad_len = max(0, required_end - mat_len)
-        max_seq_len = self.model_args.max_seq_len if self.model_args else mat_len
+        max_seq_len = self.model_config.max_seq_len if self.model_config else mat_len
 
         cos_slice = rope.cos_matrix[:, :, 0:max_seq_len, :]
         sin_slice = rope.sin_matrix[:, :, 0:max_seq_len, :]
@@ -1280,7 +1298,7 @@ class TracedLLMExecutor:
 
         batch_size, batch_seq_len = tokens.shape
         vocab_size = self.model.vocab_size
-        cluster_shape = self.model_args.cluster_shape if self.model_args else [1, 1]
+        cluster_shape = self.cluster_shape
         output_tensor = torch.zeros(batch_size, 1, vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
         # todo)) empty_slots is only used when integrating with vLLM? If true, we should move this integration into generator.py
@@ -1487,7 +1505,7 @@ class TracedLLMExecutor:
         B = tokens.shape[0]
         vocab_size = self.model.vocab_size
         num_devices = self.model.num_devices
-        cluster_shape = self.model_args.cluster_shape if self.model_args else [1, 1]
+        cluster_shape = self.cluster_shape
 
         if (
             sampling_on_device

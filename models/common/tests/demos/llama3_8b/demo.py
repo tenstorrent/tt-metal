@@ -221,7 +221,7 @@ def _run_token_accuracy(llm, mesh_device, expected):
     max_batch_size = model_config.max_batch_size
     prompt_tokens = prompt_tokens.repeat(max_batch_size, 1)
     block_size = 32
-    max_num_blocks = runtime_config.paged_attention_config.max_num_blocks
+    max_num_blocks = attention_config.paged_attention_config.max_num_blocks
     max_num_blocks_per_user = max_num_blocks // max_batch_size
 
     kv_cache_shape = (
@@ -275,7 +275,7 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
     try:
         block_size = 32
         max_batch_size = model_config.max_batch_size
-        max_num_blocks = runtime_config.paged_attention_config.max_num_blocks
+        max_num_blocks = attention_config.paged_attention_config.max_num_blocks
         max_num_blocks_per_user = max_num_blocks // max_batch_size
 
         kv_cache_shape = (
