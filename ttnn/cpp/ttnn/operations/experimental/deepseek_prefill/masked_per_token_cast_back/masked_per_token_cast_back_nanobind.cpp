@@ -31,6 +31,10 @@ void bind_experimental_masked_per_token_cast_back_operation(nb::module_& mod) {
                 * :attr:`input_e4m3`: FP8_E4M3 ROW_MAJOR tensor of shape [..., M, H]. Requires
                   H % 128 == 0, DRAM interleaved memory, and Blackhole hardware.
                 * :attr:`input_scale`: FLOAT32 ROW_MAJOR DRAM interleaved tensor of shape [..., M, H/128].
+                  Provide either this OR `metadata` (exactly one).
+                * :attr:`metadata`: optional dispatch metadata tensor [..., M, metadata_len] (int32/uint32),
+                  whose row tail (columns [metadata_len - H/128, metadata_len)) holds the per-token fp32
+                  scales bit-stored as int32. When given, scales are read from here instead of `input_scale`.
                 * :attr:`expert_region_offsets`: UINT32 ROW_MAJOR DRAM interleaved, (1, num_routed_experts).
                 * :attr:`expert_token_counts`: UINT32 ROW_MAJOR DRAM interleaved, (1, num_routed_experts).
                 * :attr:`global_expert_idx_table`: UINT32 ROW_MAJOR DRAM interleaved, (experts_per_chip,).
@@ -45,13 +49,14 @@ void bind_experimental_masked_per_token_cast_back_operation(nb::module_& mod) {
         )doc",
         &masked_per_token_cast_back,
         nb::arg("input_e4m3").noconvert(),
-        nb::arg("input_scale").noconvert(),
+        nb::arg("input_scale").noconvert(),  // pass a FLOAT32 (M,H/128) scale tensor, or None when using `metadata`
         nb::arg("expert_region_offsets").noconvert(),
         nb::arg("expert_token_counts").noconvert(),
         nb::arg("global_expert_idx_table").noconvert(),
         nb::arg("experts_per_chip"),
         nb::arg("output_dtype") = std::nullopt,
-        nb::arg("memory_config") = std::nullopt);
+        nb::arg("memory_config") = std::nullopt,
+        nb::arg("metadata").noconvert() = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::masked_per_token_cast_back::detail

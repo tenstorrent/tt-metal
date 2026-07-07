@@ -334,6 +334,7 @@ class TtMoe(LightweightModule):
             num_links=self.row_num_links,
             topology=self.row_topology,
             subdevice_id=self.dispatch_sd_id,
+            fp8_output=True,
         )
 
         # Initialize combine module (row axis: axis 0)
@@ -600,6 +601,9 @@ class TtMoe(LightweightModule):
             )
         logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
+        # COMPRESS (full grid, before sub-device split): bf16 x -> fp8_e4m3 + per-token fp32 scales.
+        x_fp8, x_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x)
+
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.load_sub_device_manager(self.sd_manager_id)
@@ -620,13 +624,16 @@ class TtMoe(LightweightModule):
         # Dispatch expects full emb_dim on each device (x already has this)
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
         dispatched_buffer, metadata = self.dispatch_module(
-            x,
+            x_fp8,
             scores,
             indices,
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
             padding_config=padding_config,
+            scales=x_scales,
         )
+        ttnn.deallocate(x_fp8)
+        ttnn.deallocate(x_scales)
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.clear_loaded_sub_device_manager()
         # padding_config was shared with both the gate and dispatch; free it now that
@@ -637,6 +644,20 @@ class TtMoe(LightweightModule):
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
+
+        # DECOMPRESS (masked): fp8 dispatch buffer -> bf16 using per-token scales from the metadata tail.
+        dispatched_buffer_bf16 = ttnn.experimental.deepseek_prefill.masked_per_token_cast_back(
+            dispatched_buffer,
+            None,
+            tt_expert_region_offsets,
+            tt_expert_token_counts,
+            self.global_expert_idx_tt,
+            self.experts_per_chip,
+            output_dtype=ttnn.bfloat16,
+            metadata=metadata,
+        )
+        ttnn.deallocate(dispatched_buffer)
+        dispatched_buffer = dispatched_buffer_bf16
 
         signpost("shared_expert_and_dispatch_end")
 

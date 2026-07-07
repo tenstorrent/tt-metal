@@ -58,6 +58,9 @@ void kernel_main() {
     constexpr uint32_t cb_table_scratch = get_compile_time_arg_val(13);
     constexpr uint32_t num_cores = get_compile_time_arg_val(14);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(15);
+    // Column offset (in fp32/int32 elements) of the scale tail within each scale-source row. 0 for a plain
+    // (M, H/128) scale tensor; = metadata_len - H/128 (i.e. skip the routing header) for the metadata path.
+    constexpr uint32_t scale_col_offset = get_compile_time_arg_val(16);
     constexpr uint32_t block_w = 128;
     constexpr uint32_t tiles_per_block = block_w / tile_w;
     constexpr uint32_t face_elems = face_h * face_w;                                        // fp32 per face
@@ -68,7 +71,7 @@ void kernel_main() {
 
     (void)block_ht;  // kept as a compile-time layout arg for tensor accessor offset stability
 
-    constexpr auto input_e4m3_accessor_args = TensorAccessorArgs<16>();
+    constexpr auto input_e4m3_accessor_args = TensorAccessorArgs<17>();
     constexpr auto scale_args = TensorAccessorArgs<input_e4m3_accessor_args.next_compile_time_args_offset()>();
     constexpr auto region_args = TensorAccessorArgs<scale_args.next_compile_time_args_offset()>();
     constexpr auto counts_args = TensorAccessorArgs<region_args.next_compile_time_args_offset()>();
@@ -224,7 +227,7 @@ void kernel_main() {
             uint32_t col0_off = face_base_off;
             for (uint32_t r = 0; r < face_h; ++r) {
                 if (s < real_in_block) {
-                    uint32_t val = scratch_mem[(tok_off >> 2) + block_idx_b];
+                    uint32_t val = scratch_mem[(tok_off >> 2) + scale_col_offset + block_idx_b];
                     page[col0_off >> 2] = val;
                     ++block_idx_b;
                     if (block_idx_b >= blocks_per_row) {

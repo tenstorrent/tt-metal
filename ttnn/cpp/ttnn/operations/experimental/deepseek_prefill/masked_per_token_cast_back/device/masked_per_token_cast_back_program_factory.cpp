@@ -75,6 +75,14 @@ MaskedPerTokenCastBackProgramFactory::cached_program_t MaskedPerTokenCastBackPro
     const uint32_t out_tile_bytes = tile_h * tile_w * out_elem_bytes;  // cb_out page = one output tile
     const uint32_t scale_aligned_page_bytes = input_scale.buffer()->aligned_page_size();
 
+    // Column offset (in fp32/int32 elements) of the per-token scale tail within each scale-source row.
+    // Plain scale tensor: 0 (row is exactly H/128 scales). Metadata tensor: skip the leading routing
+    // columns, so offset = scale_last_dim - H/128 (== 5 for the standard 5-field metadata header).
+    const uint32_t blocks_per_row_hint = H / block_w;
+    const uint32_t scale_last_dim = static_cast<uint32_t>(input_scale.logical_shape()[-1]);
+    const uint32_t scale_col_offset =
+        operation_attributes.scales_from_metadata ? (scale_last_dim - blocks_per_row_hint) : 0;
+
     const uint32_t region_aligned_page_bytes = expert_region_offsets.buffer()->aligned_page_size();
     const uint32_t counts_aligned_page_bytes = expert_token_counts.buffer()->aligned_page_size();
     const uint32_t table_aligned_page_bytes = global_expert_idx_table.buffer()->aligned_page_size();
@@ -187,7 +195,8 @@ MaskedPerTokenCastBackProgramFactory::cached_program_t MaskedPerTokenCastBackPro
         cb_counts_scratch_r_idx,
         cb_table_scratch_r_idx,
         num_cores,
-        operation_attributes.experts_per_chip};
+        operation_attributes.experts_per_chip,
+        scale_col_offset};
     TensorAccessorArgs(src_e4m3_buffer).append_to(reader_ct_args);
     TensorAccessorArgs(src_scale_buffer).append_to(reader_ct_args);
     TensorAccessorArgs(region_buffer).append_to(reader_ct_args);

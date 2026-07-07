@@ -336,6 +336,8 @@ class TtPrefillBlock(LightweightModule):
             mesh_device.get_num_devices(),
             mesh_config.dispatch_group_size,
             dispatch_buffer_capacity_factor,
+            emb_dim=emb_dim,
+            fp8_scaled_input=True,
         )
 
         return TtMoe(

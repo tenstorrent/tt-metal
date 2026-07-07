@@ -55,6 +55,8 @@ void MaskedPerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     const auto& expert_token_counts = tensor_args.expert_token_counts;
     const auto& global_expert_idx_table = tensor_args.global_expert_idx_table;
 
+    const bool scales_from_metadata = attrs.scales_from_metadata;
+
     validate_tensor_specs(input_e4m3, "masked_per_token_cast_back: input_e4m3");
     validate_tensor_specs(input_scale, "masked_per_token_cast_back: input_scale");
     validate_index_tensor(expert_region_offsets, "masked_per_token_cast_back: expert_region_offsets");
@@ -73,9 +75,20 @@ void MaskedPerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_e4m3.dtype() == tt::tt_metal::DataType::FP8_E4M3,
         "masked_per_token_cast_back: input_e4m3 dtype must be FP8_E4M3");
-    TT_FATAL(
-        input_scale.dtype() == tt::tt_metal::DataType::FLOAT32,
-        "masked_per_token_cast_back: input_scale dtype must be FLOAT32");
+    // Scale source dtype: plain scale path requires FLOAT32; metadata path carries the fp32 scales
+    // bit-stored in the int32 metadata tail, so UINT32/INT32 are also accepted there.
+    if (scales_from_metadata) {
+        const auto sdt = input_scale.dtype();
+        TT_FATAL(
+            sdt == tt::tt_metal::DataType::FLOAT32 || sdt == tt::tt_metal::DataType::UINT32 ||
+                sdt == tt::tt_metal::DataType::INT32,
+            "masked_per_token_cast_back: metadata scale source dtype must be FLOAT32/UINT32/INT32, got {}",
+            sdt);
+    } else {
+        TT_FATAL(
+            input_scale.dtype() == tt::tt_metal::DataType::FLOAT32,
+            "masked_per_token_cast_back: input_scale dtype must be FLOAT32");
+    }
 
     const auto tile_shape = input_e4m3.tensor_spec().tile().get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
@@ -127,14 +140,30 @@ void MaskedPerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
 
     const uint32_t H = static_cast<uint32_t>(e4m3_shape[-1]);
     const uint32_t H_scale = static_cast<uint32_t>(scale_shape[-1]);
-    // M and H are arbitrary (the kernels zero-pad the partial last tile-row / column-block). The
-    // e4m3 width must equal scale_width * 128, which keeps H a multiple of the block width.
-    TT_FATAL(
-        H == H_scale * fp8::BLOCK_W,
-        "masked_per_token_cast_back: e4m3 last dim ({}) must equal scale last dim ({}) * BLOCK_W ({})",
-        H,
-        H_scale,
-        fp8::BLOCK_W);
+    if (scales_from_metadata) {
+        // Metadata row = [routing fields ...][H/BLOCK_W fp32 scales]. Require H % BLOCK_W == 0 and that the
+        // row is wide enough to hold the H/BLOCK_W scale tail after the leading routing columns.
+        TT_FATAL(
+            H % fp8::BLOCK_W == 0,
+            "masked_per_token_cast_back: e4m3 last dim ({}) must be a multiple of BLOCK_W ({})",
+            H,
+            fp8::BLOCK_W);
+        const uint32_t blocks_per_row = H / fp8::BLOCK_W;
+        TT_FATAL(
+            H_scale >= blocks_per_row,
+            "masked_per_token_cast_back: metadata last dim ({}) must be >= H/BLOCK_W ({}) to hold the scale tail",
+            H_scale,
+            blocks_per_row);
+    } else {
+        // M and H are arbitrary (the kernels zero-pad the partial last tile-row / column-block). The
+        // e4m3 width must equal scale_width * 128, which keeps H a multiple of the block width.
+        TT_FATAL(
+            H == H_scale * fp8::BLOCK_W,
+            "masked_per_token_cast_back: e4m3 last dim ({}) must equal scale last dim ({}) * BLOCK_W ({})",
+            H,
+            H_scale,
+            fp8::BLOCK_W);
+    }
 
     uint64_t folded_M = 1;
     for (size_t i = 0; i + 1 < rank; ++i) {
@@ -202,12 +231,14 @@ ttnn::Tensor masked_per_token_cast_back(
     const Tensor& global_expert_idx_table,
     uint32_t experts_per_chip,
     tt::tt_metal::DataType output_dtype,
-    const tt::tt_metal::MemoryConfig& output_memory_config) {
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    bool scales_from_metadata) {
     using OperationType = ttnn::experimental::prim::masked_per_token_cast_back::MaskedPerTokenCastBackDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_dtype = output_dtype,
         .output_memory_config = output_memory_config,
-        .experts_per_chip = experts_per_chip};
+        .experts_per_chip = experts_per_chip,
+        .scales_from_metadata = scales_from_metadata};
     auto tensor_args = OperationType::tensor_args_t{
         .input_e4m3 = input_e4m3,
         .input_scale = input_scale,
