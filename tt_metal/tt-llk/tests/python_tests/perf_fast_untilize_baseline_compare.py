@@ -4,23 +4,29 @@
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
 from fast_untilize_common import (
-    FAST_UNTILIZE_DEST_SYNC_MODES,
     FAST_UNTILIZE_DIMS,
     FAST_UNTILIZE_TILE_C,
     FAST_UNTILIZE_TILE_R,
     fast_untilize_dest_acc_modes,
     fast_untilize_formats,
 )
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.param_config import parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    DEST_SYNC,
     LOOP_FACTOR,
     TILE_COUNT,
     generate_input_dim,
 )
+
+
+def baseline_pack_untilize_block_ct_dim(ct_dim, dest_acc):
+    max_dest_tiles = 4 if dest_acc == DestAccumulation.Yes else 8
+    for candidate in range(min(ct_dim, max_dest_tiles), 0, -1):
+        if ct_dim % candidate == 0:
+            return candidate
+    return 1
 
 
 @pytest.mark.perf
@@ -30,29 +36,33 @@ from helpers.test_variant_parameters import (
     formats=fast_untilize_formats(),
     dest_acc=fast_untilize_dest_acc_modes,
     dimensions=FAST_UNTILIZE_DIMS,
-    dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
-    stimulus_kind=["random"],
     loop_factor=[1, 4, 16],
 )
-def test_perf_fast_untilize(
-    perf_report, formats, dest_acc, dimensions, dest_sync, stimulus_kind, loop_factor
+def test_perf_fast_untilize_baseline_compare(
+    perf_report, formats, dest_acc, dimensions, loop_factor
 ):
-    assert stimulus_kind == "random"
+    """Pack-untilize baseline on the same geometry/formats as test_fast_untilize."""
+    input_height_tiles, input_width_tiles = dimensions
+    if input_width_tiles < 2:
+        pytest.skip(
+            "BH fast_untilize supports ct>=2; ct=1 uses the standard fallback path"
+        )
 
-    rt_dim, ct_dim = dimensions
+    rt_dim, ct_dim = input_height_tiles, input_width_tiles
     tile_count = rt_dim * ct_dim
-    dimensions = (rt_dim * FAST_UNTILIZE_TILE_R, ct_dim * FAST_UNTILIZE_TILE_C)
+    pixel_dimensions = (rt_dim * FAST_UNTILIZE_TILE_R, ct_dim * FAST_UNTILIZE_TILE_C)
+    block_ct_dim = baseline_pack_untilize_block_ct_dim(ct_dim, dest_acc)
 
     configuration = PerfConfig(
-        "sources/fast_untilize_test.cpp",
+        "sources/pack_untilize_perf.cpp",
         formats,
         run_types=[
             PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
             PerfRunType.PACK_ISOLATE,
         ],
-        templates=[generate_input_dim(dimensions, dimensions), DEST_SYNC(dest_sync)],
+        templates=[
+            generate_input_dim(pixel_dimensions, pixel_dimensions, block_ct_dim)
+        ],
         runtimes=[
             TILE_COUNT(tile_count),
             LOOP_FACTOR(loop_factor),

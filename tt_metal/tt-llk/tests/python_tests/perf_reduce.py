@@ -21,7 +21,6 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATH_OP,
     REDUCE_POOL_TYPE,
-    REDUCE_TO_ONE,
     TILE_COUNT,
 )
 
@@ -57,6 +56,9 @@ def test_perf_reduce(
     math_fidelity,
     is_reduce_to_one,
 ):
+    # Perf covers only the non-reduce-to-one path; reduce_perf.cpp derives its
+    # behavior from REDUCE_DIM and never consumes an IS_REDUCE_TO_ONE flag, so
+    # there is no runtime to wire here (passing REDUCE_TO_ONE would be a no-op).
     assert is_reduce_to_one is False
 
     tile_count = 16
@@ -75,7 +77,7 @@ def test_perf_reduce(
             REDUCE_POOL_TYPE(pool_type),
             MATH_FIDELITY(math_fidelity),
         ],
-        runtimes=[TILE_COUNT(tile_count), REDUCE_TO_ONE(is_reduce_to_one)],
+        runtimes=[TILE_COUNT(tile_count)],
         variant_stimuli=StimuliConfig(
             None,
             formats.input_format,

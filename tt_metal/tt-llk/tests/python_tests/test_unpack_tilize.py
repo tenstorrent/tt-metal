@@ -41,13 +41,11 @@ from helpers.utils import passed_test
         ]
     ),
     num_faces=[2, 4],
-    dimensions=[(2, 2)],
     input_dimensions=[[64, 64]],
 )
 def test_unpack_tilize_float(
     formats,
     num_faces,
-    dimensions,
     input_dimensions,
 ):
     if (
@@ -68,7 +66,6 @@ def test_unpack_tilize_float(
         formats,
         num_faces=num_faces,
         input_dimensions=input_dimensions,
-        dimensions=dimensions,
     )
 
 
@@ -94,13 +91,11 @@ def test_unpack_tilize_float32_lossless(
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     num_faces=[2, 4],
-    dimensions=[(2, 2)],
     input_dimensions=[[64, 64]],
 )
 def test_unpack_tilize_int(
     formats,
     num_faces,
-    dimensions,
     input_dimensions,
 ):
     unpack_tilize(
@@ -108,7 +103,6 @@ def test_unpack_tilize_int(
         unpack_to_dest=True,
         num_faces=num_faces,
         input_dimensions=input_dimensions,
-        dimensions=dimensions,
     )
 
 
@@ -135,15 +129,9 @@ def unpack_tilize(
     dest_acc=None,
     num_faces=4,
     input_dimensions=None,
-    dimensions=None,
 ):
     if input_dimensions is None:
         input_dimensions = [64, 64]
-    if dimensions is not None:
-        assert dimensions == (
-            input_dimensions[0] // 32,
-            input_dimensions[1] // 32,
-        )
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,

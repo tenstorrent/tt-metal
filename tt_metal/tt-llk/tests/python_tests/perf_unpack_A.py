@@ -6,10 +6,7 @@
 import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
-    BroadcastType,
-    EltwiseBinaryReuseDestType,
     PerfRunType,
-    StochasticRounding,
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
@@ -20,6 +17,15 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
+
+# NOTE: This perf kernel (unpack_transpose_perf.cpp) exercises only the
+# unpack-A transpose path, so the only axes it can honor are the two transpose
+# flags plus the input geometry. The broadcast / acc_to_dest / reuse_dest /
+# stochastic_rnd / num_faces / face_r_dim axes swept by the functional
+# test_unpack_comprehensive are intentionally omitted here rather than pinned to
+# unused single values, so compare_test_and_perf.py reports them as
+# functional-only instead of falsely identical.
 
 
 @pytest.mark.perf
@@ -28,30 +34,16 @@ from helpers.test_variant_parameters import (
     formats=input_output_formats(
         [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Int32],
     ),
-    broadcast_type=[BroadcastType.None_],
-    disable_src_zero=[False],
-    acc_to_dest=[False],
-    stochastic_rnd=[StochasticRounding.No],
-    reuse_dest=[EltwiseBinaryReuseDestType.NONE],
     transpose_of_faces=[Transpose.No, Transpose.Yes],
     within_face_16x16_transpose=[Transpose.No, Transpose.Yes],
-    num_faces=[4],
-    face_r_dim=[16],
     input_dimensions=[[256, 256]],
 )
 def test_perf_unpack_comprehensive(
     perf_report,
     cpp_source,
     formats,
-    broadcast_type,
-    disable_src_zero,
-    acc_to_dest,
-    stochastic_rnd,
-    reuse_dest,
     transpose_of_faces,
     within_face_16x16_transpose,
-    num_faces,
-    face_r_dim,
     input_dimensions,
 ):
     # Int32 format restrictions
@@ -85,7 +77,15 @@ def test_perf_unpack_comprehensive(
             "Skipping test for transpose_of_faces=False and within_face_16x16_transpose=False"
         )
 
-    tile_count = 16
+    # Derive the measured tile count from the declared geometry (full 32x32
+    # tiles) instead of hardcoding it, so input_dimensions is truthful.
+    assert (
+        input_dimensions[0] % DEFAULT_TILE_R_DIM == 0
+        and input_dimensions[1] % DEFAULT_TILE_C_DIM == 0
+    ), f"input_dimensions {input_dimensions} must be a whole number of 32x32 tiles"
+    tile_count = (input_dimensions[0] // DEFAULT_TILE_R_DIM) * (
+        input_dimensions[1] // DEFAULT_TILE_C_DIM
+    )
 
     configuration = PerfConfig(
         cpp_source,

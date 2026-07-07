@@ -68,7 +68,7 @@ from helpers.utils import passed_test
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     approx_mode=[ApproximationMode.No],
-    input_dimensions=[[128, 64]],
+    input_dimensions=[[64, 32]],
 )
 def test_sfpu_binary_float(
     formats,
@@ -104,6 +104,8 @@ def test_sfpu_binary_float(
         formats,
         dest_acc,
         math_op,
+        input_dimensions=input_dimensions,
+        approx_mode=approx_mode,
         broadcast_type=bcast_dim,
     )
 
@@ -126,7 +128,7 @@ def test_sfpu_binary_float(
     ],
     approx_mode=[ApproximationMode.No],
     dest_acc=[DestAccumulation.Yes],
-    input_dimensions=[[128, 64]],
+    input_dimensions=[[64, 32]],
 )
 def test_sfpu_binary_int(
     formats,
@@ -139,6 +141,8 @@ def test_sfpu_binary_int(
         formats,
         dest_acc,
         math_op,
+        input_dimensions=input_dimensions,
+        approx_mode=approx_mode,
     )
 
 
@@ -154,7 +158,7 @@ def test_sfpu_binary_int(
     math_op=[MathOperation.SfpuAddTopRow],
     approx_mode=[ApproximationMode.No],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    input_dimensions=[[128, 64]],
+    input_dimensions=[[64, 32]],
 )
 def test_sfpu_binary_add_top_row(
     formats, dest_acc, math_op, approx_mode, input_dimensions
@@ -164,7 +168,6 @@ def test_sfpu_binary_add_top_row(
             "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
         )
 
-    input_dimensions = [64, 32]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -196,7 +199,7 @@ def test_sfpu_binary_add_top_row(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=math_op),
-            APPROX_MODE(),
+            APPROX_MODE(approx_mode),
             BROADCAST_TYPE(LlkBroadcastType.None_),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A)],
@@ -233,11 +236,10 @@ def sfpu_binary(
     formats,
     dest_acc,
     mathop,
+    input_dimensions,
+    approx_mode=ApproximationMode.No,
     broadcast_type=None,
 ):
-
-    input_dimensions = [64, 32]
-
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -290,7 +292,7 @@ def sfpu_binary(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
-            APPROX_MODE(),
+            APPROX_MODE(approx_mode),
             BROADCAST_TYPE(bcast),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A)],

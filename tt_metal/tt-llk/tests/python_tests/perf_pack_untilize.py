@@ -19,9 +19,12 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 
 _PACK_UNTILIZE_INPUT_DIMENSIONS = [
-    [rt * 32, ct * 32] for rt in range(1, 9) for ct in range(1, 9)
+    [rt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM]
+    for rt in range(1, 9)
+    for ct in range(1, 9)
 ]
 
 
@@ -57,8 +60,8 @@ def test_perf_pack_untilize(
     ):
         pytest.skip("Pack Untilize does not support mixing Int32 with other formats")
 
-    full_rt_dim = input_dimensions[0] // 32
-    full_ct_dim = input_dimensions[1] // 32
+    full_rt_dim = input_dimensions[0] // DEFAULT_TILE_R_DIM
+    full_ct_dim = input_dimensions[1] // DEFAULT_TILE_C_DIM
 
     max_block_dim = 4 if formats.input_format.is_32_bit() else 8
 
