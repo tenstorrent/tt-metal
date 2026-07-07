@@ -937,11 +937,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
-    // Quasar requires the multicast rectangle to be specified from the min (top-left) corner
-    // (start <= end). WH/BH reverse the corners for a NOC_1 mcast to walk the rectangle in the NOC's
-    // direction, but on Quasar that reversed rectangle is malformed and the mcast hangs waiting for
-    // acks (watcher + noc-sanitize flags this). Keep the computed min->max order on Quasar.
-    if (in0_noc == tt::tt_metal::NOC::NOC_1 && device->arch() != tt::ARCH::QUASAR) {
+    // A multicast rectangle must be specified with start <= end. Two arch paths:
+    //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+    //  * Quasar (single NOC, non-torus): ascending regardless of NOC. in0_noc defaults to NOC_1 on Quasar
+    //    too, so the WH/BH swap would degenerate the rectangle to [max..min] and hang the sender on mcast
+    //    acks. Force ascending via component-wise min/max. (#48552)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -1818,10 +1824,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
-    // Quasar mcast rectangle must be specified from the min (top-left) corner (start <= end); skip the
-    // WH/BH NOC-direction corner reversal on Quasar (see the in0 note above). Malformed rectangle else
-    // hangs the mcast waiting for acks.
-    if (in1_noc == tt::tt_metal::NOC::NOC_0 && device->arch() != tt::ARCH::QUASAR) {
+    // A multicast rectangle must be specified with start <= end. Two arch paths (see the in0 note above):
+    //  * WH/BH: an in1 NOC_0 multicast runs high->low, so swap start/end (unchanged).
+    //  * Quasar (single NOC, non-torus): force ascending via component-wise min/max regardless of NOC,
+    //    else the reversed [max..min] rectangle hangs the sender on mcast acks. (#48552)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    } else if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -3780,11 +3792,17 @@ void override_program_parameters(
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
-    // Quasar requires the multicast rectangle to be specified from the min (top-left) corner
-    // (start <= end). WH/BH reverse the corners for a NOC_1 mcast to walk the rectangle in the NOC's
-    // direction, but on Quasar that reversed rectangle is malformed and the mcast hangs waiting for
-    // acks (watcher + noc-sanitize flags this). Keep the computed min->max order on Quasar.
-    if (in0_noc == tt::tt_metal::NOC::NOC_1 && device->arch() != tt::ARCH::QUASAR) {
+    // A multicast rectangle must be specified with start <= end. Two arch paths:
+    //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+    //  * Quasar (single NOC, non-torus): ascending regardless of NOC. in0_noc defaults to NOC_1 on Quasar
+    //    too, so the WH/BH swap would degenerate the rectangle to [max..min] and hang the sender on mcast
+    //    acks. Force ascending via component-wise min/max. (#48552)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -4654,10 +4672,16 @@ void override_program_parameters(
 
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
-    // Quasar mcast rectangle must be specified from the min (top-left) corner (start <= end); skip the
-    // WH/BH NOC-direction corner reversal on Quasar (see the in0 note above). Malformed rectangle else
-    // hangs the mcast waiting for acks.
-    if (in1_noc == tt::tt_metal::NOC::NOC_0 && device->arch() != tt::ARCH::QUASAR) {
+    // A multicast rectangle must be specified with start <= end. Two arch paths (see the in0 note above):
+    //  * WH/BH: an in1 NOC_0 multicast runs high->low, so swap start/end (unchanged).
+    //  * Quasar (single NOC, non-torus): force ascending via component-wise min/max regardless of NOC,
+    //    else the reversed [max..min] rectangle hangs the sender on mcast acks. (#48552)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    } else if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -6232,11 +6256,17 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
-    // Quasar requires the multicast rectangle to be specified from the min (top-left) corner
-    // (start <= end). WH/BH reverse the corners for a NOC_1 mcast to walk the rectangle in the NOC's
-    // direction, but on Quasar that reversed rectangle is malformed and the mcast hangs waiting for
-    // acks (watcher + noc-sanitize flags this). Keep the computed min->max order on Quasar.
-    if (in0_noc == tt::tt_metal::NOC::NOC_1 && device->arch() != tt::ARCH::QUASAR) {
+    // A multicast rectangle must be specified with start <= end. Two arch paths:
+    //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+    //  * Quasar (single NOC, non-torus): ascending regardless of NOC. in0_noc defaults to NOC_1 on Quasar
+    //    too, so the WH/BH swap would degenerate the rectangle to [max..min] and hang the sender on mcast
+    //    acks. Force ascending via component-wise min/max. (#48552)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -7187,10 +7217,16 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
     // in1_noc is defined above (hoisted before kernel creation so the in1 writers pin the same NOC).
-    // Quasar mcast rectangle must be specified from the min (top-left) corner (start <= end); skip the
-    // WH/BH NOC-direction corner reversal on Quasar (see the in0 note above). Malformed rectangle else
-    // hangs the mcast waiting for acks.
-    if (in1_noc == tt::tt_metal::NOC::NOC_0 && device->arch() != tt::ARCH::QUASAR) {
+    // A multicast rectangle must be specified with start <= end. Two arch paths (see the in0 note above):
+    //  * WH/BH: an in1 NOC_0 multicast runs high->low, so swap start/end (unchanged).
+    //  * Quasar (single NOC, non-torus): force ascending via component-wise min/max regardless of NOC,
+    //    else the reversed [max..min] rectangle hangs the sender on mcast acks. (#48552)
+    if (device->arch() == tt::ARCH::QUASAR) {
+        CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
+        CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
+        start_core_noc = lo;
+        end_core_noc = hi;
+    } else if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
     }
 
