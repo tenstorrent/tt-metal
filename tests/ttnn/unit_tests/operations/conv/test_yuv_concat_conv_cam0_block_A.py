@@ -753,14 +753,158 @@ def run_uv_pixel_unshuffle_op(device, tt_rm: ttnn.Tensor, tt_unpack: ttnn.Tensor
 
 
 # ===========================================================================
-# TEST 2 — pixel_unshuffle Y + UV  (ttnn.pixel_unshuffle replaces 6D bottleneck)
+# TEST 1 — pixel_unshuffle Y + UV only  (baseline concat structure kept)
+# ===========================================================================
+#
+# Replaces R1+P1+R2+P2 (6D reshape+permute) with ttnn.pixel_unshuffle but
+# keeps the baseline concat: two separate NCHW→NHWC permutes + concat dim=3.
+#
+#   Test 0:  6D reshape+permute  + 2-permute concat           (baseline)
+#   Test 1:  pixel_unshuffle     + 2-permute concat           ← this test
+#   Test 2:  pixel_unshuffle     + 1-permute concat (optimised)
+#
+# A to_layout(TILE) step is inserted before each permute because
+# ttnn.pixel_unshuffle returns ROW_MAJOR DRAM and the permute expects TILE.
+
+
+@pytest.mark.parametrize("batch, yuv_ic, yuv_oc, input_h, input_w", [_CONFIG])
+def test_yuv_concat_conv_cam0_block_A_pixel_unshuffle_only(device, batch, yuv_ic, yuv_oc, input_h, input_w):
+    """
+    pixel_unshuffle Y+UV; concat structure identical to baseline (2 permutes).
+
+    Replaces only:
+      ★ R1+P1  (Y path, ~2.56 ms)  →  ttnn.pixel_unshuffle(r=4)
+      ★ R2+P2  (UV path, ~1.97 ms) →  ttnn.pixel_unshuffle(r=2) after avgpool
+
+    Concat kept as baseline:
+      tilize Y  RM→TILE  → permute NCHW→NHWC [N,384,384,16]  L1
+      tilize UV RM→TILE  → permute NCHW→NHWC [N,384,384, 8]  L1
+      flatten + concat dim=3 → [N,1,147456,24]  DRAM
+      conv2d IC=24 OC=64
+    """
+    DRAM, L1, RM, TILE = ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
+    d = make_dims(batch, yuv_ic, yuv_oc, input_h, input_w)
+    compute, conv_dw, conv_final = _make_conv_configs(device)
+
+    # ── Torch tensors ──────────────────────────────────────────────────────
+    torch.manual_seed(42)
+    x = torch.randn(batch, yuv_ic, input_h, input_w, dtype=torch.bfloat16)
+    torch_yw = torch.randn(yuv_oc, yuv_ic, 1, 1, dtype=torch.bfloat16)
+    torch_yb = torch.randn(1, 1, 1, yuv_oc, dtype=torch.bfloat16)
+    torch_dw = torch.full((d.uv_c, 1, 2, 1), 0.5, dtype=torch.bfloat16)
+    torch_fw = torch.randn(d.final_oc, d.final_ic, 1, 1, dtype=torch.bfloat16)
+    torch_fb = torch.randn(1, 1, 1, d.final_oc, dtype=torch.bfloat16)
+
+    # ── CPU golden (pixel_unshuffle; baseline concat pattern) ───────────────
+    yuv_out = F.conv2d(x.float(), torch_yw.reshape(yuv_oc, yuv_ic, 1, 1).float(), bias=torch_yb.reshape(yuv_oc).float())
+    y_us = torch.nn.PixelUnshuffle(4)(yuv_out[:, 0:1])  # [1,16,384,384]
+    uv_avg = F.avg_pool2d(yuv_out[:, 1:3], kernel_size=(2, 1), stride=(2, 2))
+    uv_us = torch.nn.PixelUnshuffle(d.r_uv)(uv_avg)  # [1, 8,384,384]
+    cat = torch.cat([y_us.permute(0, 2, 3, 1), uv_us.permute(0, 2, 3, 1)], dim=3).permute(0, 3, 1, 2)
+    golden = F.conv2d(
+        cat.float(), torch_fw.reshape(d.final_oc, d.final_ic, 1, 1).float(), bias=torch_fb.reshape(d.final_oc).float()
+    )
+
+    # ── Device weights ──────────────────────────────────────────────────────
+    tt_yw, tt_yb = _prep_yuv_weights(device, torch_yw, torch_yb, d, DRAM, RM, TILE)
+    tt_dw = _prep_dw_weights(device, torch_dw, d, DRAM, RM, TILE, compute, conv_dw)
+    tt_fw, tt_fb = _prep_final_weights(device, torch_fw, torch_fb, d, DRAM, RM, TILE, compute, conv_final)
+
+    # ── Forward pass ────────────────────────────────────────────────────────
+    tt_input = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=RM, device=device, memory_config=DRAM)
+
+    # Stage 1: YUV Adapter → [1, 3, 1536, 1536] TILE DRAM
+    tt17 = run_yuv_adapter(device, tt_input, tt_yw, tt_yb, d)
+
+    # Stage 2 (PS): Y pixel_unshuffle → [1, 16, 384, 384] ROW_MAJOR DRAM
+    tt_y = run_y_path_pixel_unshuffle(device, tt17, d)
+
+    # Stage 3a: UV avgpool + unpack → [N, 2, 768, 768] ROW_MAJOR DRAM
+    tt_rm_uv, tt_unpack_uv = run_uv_avgpool(device, tt17, tt_dw, d, compute, conv_dw)
+
+    # Stage 3b (PS): UV pixel_unshuffle(r=2) → [N, 8, 384, 384] ROW_MAJOR DRAM
+    tt_uv = run_uv_pixel_unshuffle_op(device, tt_rm_uv, tt_unpack_uv, d)
+
+    # Stage 4: baseline concat (2 NCHW→NHWC permutes) + final conv
+    # ttnn.pixel_unshuffle returns RM DRAM — tilize to TILE before permuting
+    tt_y_tile = ttnn.to_layout(tt_y, TILE, memory_config=DRAM)
+    ttnn.deallocate(tt_y)
+    tt_uv_tile = ttnn.to_layout(tt_uv, TILE, memory_config=DRAM)
+    ttnn.deallocate(tt_uv)
+
+    # permute Y NCHW→NHWC  [N, 384, 384, 16]  TILE L1
+    tt_y_nhwc = ttnn.permute(tt_y_tile, (0, 2, 3, 1), memory_config=L1)
+    ttnn.deallocate(tt_y_tile)
+    _check("y_nhwc ", tt_y_nhwc, [d.batch, d.out_h, d.out_w, d.r_y * d.r_y], TILE, "L1")
+
+    # permute UV NCHW→NHWC  [N, 384, 384, 8]  TILE L1
+    tt_uv_nhwc = ttnn.permute(tt_uv_tile, (0, 2, 3, 1), memory_config=L1)
+    ttnn.deallocate(tt_uv_tile)
+    _check("uv_nhwc", tt_uv_nhwc, [d.batch, d.out_h, d.out_w, d.r_uv * d.r_uv * d.uv_c], TILE, "L1")
+
+    # flatten  [N, 1, 147456, 16]  and  [N, 1, 147456, 8]
+    tt_yf = ttnn.reshape(tt_y_nhwc, (d.batch, 1, d.concat_sp, d.r_y * d.r_y))
+    tt_uvf = ttnn.reshape(tt_uv_nhwc, (d.batch, 1, d.concat_sp, d.r_uv * d.r_uv * d.uv_c))
+
+    # concat dim=3 → [N, 1, 147456, 24]  TILE DRAM  (identical to baseline)
+    tt_cat = ttnn.concat([tt_yf, tt_uvf], dim=3, memory_config=DRAM)
+    ttnn.deallocate(tt_y_nhwc)
+    ttnn.deallocate(tt_yf)
+    ttnn.deallocate(tt_uv_nhwc)
+    ttnn.deallocate(tt_uvf)
+    _check("concat ", tt_cat, [d.batch, 1, d.concat_sp, d.final_ic], TILE, "DRAM")
+
+    # final conv2d IC=24, OC=64, k=1×1
+    tt_out = ttnn.conv2d(
+        input_tensor=tt_cat,
+        weight_tensor=tt_fw,
+        in_channels=d.final_ic,
+        out_channels=d.final_oc,
+        device=device,
+        bias_tensor=tt_fb,
+        kernel_size=(1, 1),
+        stride=(1, 1),
+        padding=(0, 0, 0, 0),
+        dilation=(1, 1),
+        batch_size=d.batch,
+        input_height=d.out_h,
+        input_width=d.out_w,
+        groups=1,
+        dtype=ttnn.bfloat16,
+        conv_config=conv_final,
+        compute_config=compute,
+        slice_config=ttnn.Conv2dL1FullSliceConfig,
+    )
+    ttnn.deallocate(tt_cat)
+    ttnn.deallocate(tt_fw)
+    ttnn.deallocate(tt_fb)
+    _check("conv   ", tt_out, [d.batch, 1, d.concat_sp, d.final_oc], TILE, "L1")
+
+    # unpack NHWC → NCHW  [N, 64, 384, 384]  TILE DRAM
+    tt_out = ttnn.to_memory_config(
+        ttnn.permute(ttnn.reshape(tt_out, (d.batch, d.out_h, d.out_w, d.final_oc)), (0, 3, 1, 2), memory_config=L1),
+        DRAM,
+    )
+    _check("output ", tt_out, [d.batch, d.final_oc, d.out_h, d.out_w], TILE, "DRAM")
+
+    # ── Verify ──────────────────────────────────────────────────────────────
+    result = ttnn.to_torch(ttnn.to_layout(tt_out, RM, memory_config=DRAM))
+    ttnn.deallocate(tt_out)
+
+    assert list(result.shape) == [batch, d.final_oc, d.out_h, d.out_w]
+    pcc = torch.corrcoef(torch.stack([result.float().flatten(), golden.flatten()]))[0, 1].item()
+    assert pcc >= 0.99, f"PCC {pcc:.6f} < 0.99"
+
+
+# ===========================================================================
+# TEST 2 — pixel_unshuffle Y + UV + optimized concat (1 permute before conv)
 # ===========================================================================
 
 
 @pytest.mark.parametrize("batch, yuv_ic, yuv_oc, input_h, input_w", [_CONFIG])
 def test_yuv_concat_conv_cam0_block_A_pixel_unshuffle(device, batch, yuv_ic, yuv_oc, input_h, input_w):
     """
-    Full forward pass using ttnn.pixel_unshuffle for Y and UV paths.
+    pixel_unshuffle Y+UV + optimized concat (single NCHW→NHWC permute).
 
     Replaces the 6D reshape bottlenecks:
       ★ R1+P1  (Y path, ~2.56 ms)  →  ttnn.pixel_unshuffle(r=4) on [1,1,1536,1536]
@@ -769,9 +913,9 @@ def test_yuv_concat_conv_cam0_block_A_pixel_unshuffle(device, batch, yuv_ic, yuv
     Input:  [1, 3, 1536, 1536]  ROW_MAJOR  DRAM  bfloat16
     Output: [1, 64,  384,  384]  TILE       DRAM  bfloat16
 
-    Better concat+conv vs baseline:
-      Baseline: 2 separate NCHW→NHWC permutes + concat_dim3 + conv2d  (7 ops)
-      This:     concat_dim1 NCHW + 1 permute + flatten + conv2d        (6 ops, -1 permute)
+    Optimised concat vs baseline (Test 0) and pixel_unshuffle-only (Test 1):
+      Baseline/Test 1: 2 separate NCHW→NHWC permutes + concat_dim3 + conv2d
+      This (Test 2):   concat_dim1 NCHW + 1 permute + flatten + conv2d  (-1 permute)
 
     UV channel ordering: k = c_uv*4 + rh*2 + rw  (PyTorch PixelUnshuffle standard)
     PCC >= 0.99 vs CPU golden applying identical ops.
