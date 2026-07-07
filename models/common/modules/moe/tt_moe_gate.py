@@ -432,7 +432,7 @@ class TTMoEGate:
         n_tiles = self._padded_experts // 32
         grid_x = self._grid.x
         in0_block_w = max(d for d in range(1, 33) if k_tiles % d == 0)
-        per_core_n = next((d for d in range(2, n_tiles + 1) if n_tiles % d == 0 and n_tiles // d <= grid_x), n_tiles)
+        per_core_n = next((d for d in range(1, n_tiles + 1) if n_tiles % d == 0 and n_tiles // d <= grid_x), n_tiles)
         # out_subblock_w capped at dst_subblock_cap too: out_subblock_h can be 1, so w alone can equal the
         # h*w budget — without the cap a wide per_core_n (e.g. 8) would pick w=8,h=1 = 8 tiles, busting fp32's 4.
         out_subblock_w = next((w for w in range(min(per_core_n, dst_subblock_cap), 0, -1) if per_core_n % w == 0), 1)
