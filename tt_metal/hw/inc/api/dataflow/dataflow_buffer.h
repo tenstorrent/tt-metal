@@ -76,8 +76,11 @@ public:
 
     uint16_t get_id() const { return logical_dfb_id_; }
 
+    // Returns the size of each entry in the DFB
     uint32_t get_entry_size() const;
     uint32_t get_stride_size() const;
+    // Returns the total number of entries that can be stored in the DFB
+    uint32_t get_total_num_entries() const;
 
     // Explicit sync APIs
     void reserve_back(uint16_t num_entries) { reserve_back_impl(num_entries); }

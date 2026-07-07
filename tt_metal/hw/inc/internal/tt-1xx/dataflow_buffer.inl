@@ -25,6 +25,8 @@ inline uint32_t DataflowBuffer::get_entry_size() const { return local_dfb_interf
 
 inline uint32_t DataflowBuffer::get_stride_size() const { return local_dfb_interface_.fifo_page_size; }
 
+inline uint32_t DataflowBuffer::get_total_num_entries() const { return local_dfb_interface_.fifo_num_pages; }
+
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
 #ifdef COMPILE_FOR_TRISC
     PACK((llk_wait_for_free_tiles<false, false, false>(logical_dfb_id_, num_entries)));
