@@ -1,0 +1,7 @@
+candidate,attention_fidelity,mlp_fidelity,cache_dtype,pcc,traced_decode_host_ms,trace_id,status,error
+lofi_bf16_cache,MathFidelity.LoFi,MathFidelity.LoFi,DataType.BFLOAT16,0.999995772300,1.284914,MeshTraceId(0),pass,
+hifi2_attention_lofi_mlp,MathFidelity.HiFi2,MathFidelity.LoFi,DataType.BFLOAT16,0.999995772300,1.282814,MeshTraceId(1),pass,
+lofi_attention_hifi2_mlp,MathFidelity.LoFi,MathFidelity.HiFi2,DataType.BFLOAT16,0.999995772300,1.349031,MeshTraceId(2),pass,
+hifi2_both_bf16_cache,MathFidelity.HiFi2,MathFidelity.HiFi2,DataType.BFLOAT16,0.999995772300,1.324359,MeshTraceId(3),pass,
+lofi_bfloat8_cache,MathFidelity.LoFi,MathFidelity.LoFi,DataType.BFLOAT8_B,0.999995791152,1.275702,MeshTraceId(4),pass,
+hifi2_attention_lofi_mlp_bfloat8_cache,MathFidelity.HiFi2,MathFidelity.LoFi,DataType.BFLOAT8_B,0.999995065334,1.310287,MeshTraceId(5),pass,

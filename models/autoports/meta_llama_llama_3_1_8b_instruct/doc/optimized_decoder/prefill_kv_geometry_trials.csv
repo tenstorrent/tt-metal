@@ -1,0 +1,8 @@
+candidate,seq_len,grid_x,grid_y,in0_block_w,out_subblock_h,out_subblock_w,per_core_m,per_core_n,mcast_in0,real_prefill_pcc,prefill_host_ms,status,error
+default_auto,16,,,,,,,,,0.999993565943,1.406425,pass,
+kv_16c_osw2_mcast_false,16,8,2,2,1,2,1,2,False,0.999981136939,1.197319,pass,
+kv_16c_osw2_mcast_true,16,8,2,2,1,2,1,2,True,0.999993565943,1.197349,pass,
+kv_8c_osw2_mcast_true,16,8,1,2,1,2,1,4,True,0.999993565943,1.271580,pass,
+kv_8c_osw4_mcast_true,16,8,1,2,1,4,1,4,True,0.999993565943,1.235526,pass,
+kv_4c_osw4_mcast_true,16,4,1,2,1,4,1,8,True,0.999993565943,1.212439,pass,
+kv_16c_osw2_mcast_true,64,8,2,2,1,2,1,2,True,,,error,TT_FATAL Number of blocks exceeds number of cores: 32 blocks > 16 cores

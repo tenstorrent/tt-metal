@@ -1,0 +1,7 @@
+in0_block_w,status,pcc,eager_decode_host_ms,traced_decode_host_ms,error
+4,pass,0.9999945223413205,2.405167557299137,1.29790510982275,
+7,pass,0.9999945489629193,1.580006442964077,1.2891767546534538,
+8,pass,0.9999945475656632,1.5867557376623154,1.287541352212429,
+14,pass,0.9999946726460582,1.5869829803705215,1.285512000322342,
+28,pass,0.999994807758983,1.5809256583452225,1.3102181255817413,
+56,error,,,,TT_THROW @ /localdev/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1549: tt::exception info: Statically allocated circular buffers in program 107 clash with L1 buffers on core range [0-0 - 7-7]. L1 buffer allocated at 1302528 and static circular buffer region ends at 1422624 backtrace:  --- /localdev/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ecac3) [0x7f86e64c5ac3]  --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)  ---

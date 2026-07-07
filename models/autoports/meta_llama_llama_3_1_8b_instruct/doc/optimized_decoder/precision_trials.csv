@@ -1,0 +1,5 @@
+candidate,attention_dtype,mlp_dtype,attention_fidelity,mlp_fidelity,real_decode_pcc_pass,pcc,eager_decode_host_ms,traced_decode_host_ms,trace_id
+bfp8_attn_bfp8_mlp_lofi,DataType.BFLOAT8_B,DataType.BFLOAT8_B,MathFidelity.LoFi,MathFidelity.LoFi,True,0.999996123984,2.450670,1.844985,MeshTraceId(0)
+bfp4_attn_bfp8_mlp_lofi,DataType.BFLOAT4_B,DataType.BFLOAT8_B,MathFidelity.LoFi,MathFidelity.LoFi,True,0.999995626784,1.600519,1.818997,MeshTraceId(1)
+bfp8_attn_bfp4_mlp_lofi,DataType.BFLOAT8_B,DataType.BFLOAT4_B,MathFidelity.LoFi,MathFidelity.LoFi,True,0.999995127710,1.642180,1.372625,MeshTraceId(2)
+bfp4_attn_bfp4_mlp_lofi,DataType.BFLOAT4_B,DataType.BFLOAT4_B,MathFidelity.LoFi,MathFidelity.LoFi,True,0.999994672646,1.730113,1.286569,MeshTraceId(3)

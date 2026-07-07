@@ -1,0 +1,3 @@
+candidate,prefill_host_ms,traced_decode_host_ms,real_prefill_pcc,real_decode_pcc,trace_id
+separate_gate_up,1.397374,1.288511,0.999993824614,0.999994713734,MeshTraceId(0)
+packed_gate_up,1.463058,1.333333,0.999993824614,0.999994713734,MeshTraceId(1)

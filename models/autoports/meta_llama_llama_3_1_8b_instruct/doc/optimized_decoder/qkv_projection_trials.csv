@@ -1,0 +1,3 @@
+candidate,prefill_host_ms,traced_decode_host_ms,real_prefill_pcc,real_decode_pcc,trace_id
+packed_qkv,1.428290,1.293605,0.999993865021,0.999994722156,MeshTraceId(0)
+separate_qkv,1.288909,1.413042,0.999993865021,0.999994722156,MeshTraceId(1)

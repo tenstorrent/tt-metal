@@ -1,0 +1,22 @@
+candidate,rep,grid_x,grid_y,num_cores,in0_block_w,out_subblock_h,out_subblock_w,per_core_N,status,eager_decode_host_ms,traced_decode_host_ms,hf_decode_pcc,trace_replay_pcc,notes
+auto_default,0,auto,auto,auto,auto,auto,auto,auto,PASS,2.613741,1.136758,0.965033525382,1.000000000000,implicit TTNN geometry before source change
+auto_default,1,auto,auto,auto,auto,auto,auto,auto,PASS,2.655748,1.127473,0.965033525382,1.000000000000,implicit TTNN geometry before source change
+auto_default,2,auto,auto,auto,auto,auto,auto,auto,PASS,2.667018,1.135470,0.965033525382,1.000000000000,implicit TTNN geometry before source change
+explicit_8x8_i2_s7,0,8,8,64,2,1,7,7,PASS,2.671160,1.202752,0.964965598448,1.000000000000,explicit visible default geometry
+explicit_8x8_i2_s7,1,8,8,64,2,1,7,7,PASS,2.696279,1.199962,0.964965598448,1.000000000000,explicit visible default geometry
+geom_8x8_i4_s7,0,8,8,64,4,1,7,7,PASS,2.733975,1.058298,0.965033525382,1.000000000000,selected candidate
+geom_8x8_i4_s7,1,8,8,64,4,1,7,7,PASS,2.782071,1.059280,0.965033525382,1.000000000000,selected candidate
+geom_8x8_i4_s7,2,8,8,64,4,1,7,7,PASS,2.844711,1.059390,0.965033525382,1.000000000000,selected candidate
+geom_8x4_i4_s7,0,8,4,32,4,1,7,14,PASS,2.633070,1.127356,0.965033525382,1.000000000000,correct but slower than selected
+geom_8x4_i4_s7,1,8,4,32,4,1,7,14,PASS,2.665018,1.130488,0.965033525382,1.000000000000,correct but slower than selected
+geom_8x4_i4_s2,0,8,4,32,4,1,2,14,PASS,2.651923,1.115075,0.965033525382,1.000000000000,correct but slower than selected
+geom_8x4_i2_s7,0,8,4,32,2,1,7,14,PASS,2.661848,1.238868,0.964965598448,1.000000000000,smaller K block slower
+geom_4x8_i4_s7,0,4,8,32,4,1,7,14,FAIL_PCC,2.669510,1.189015,0.360581298179,1.000000000000,wrong output despite trace replay
+geom_8x2_i8_s7,0,8,2,16,8,1,7,28,ERROR,,,,,TT_FATAL shard_shape[1] 128 divided by tile 32 must be divisible by in0_block_w 8
+geom_8x2_i8_s4,0,8,2,16,8,1,4,28,ERROR,,,,,TT_FATAL shard_shape[1] 128 divided by tile 32 must be divisible by in0_block_w 8
+geom_4x4_i8_s7,0,4,4,16,8,1,7,28,ERROR,,,,,TT_FATAL shard_shape[1] 128 divided by tile 32 must be divisible by in0_block_w 8
+geom_8x1_i16_s8,0,8,1,8,16,1,8,56,ERROR,,,,,TT_FATAL shard_shape[1] 128 divided by tile 32 must be divisible by in0_block_w 16
+geom_8x1_i16_s7,0,8,1,8,16,1,7,56,ERROR,,,,,TT_FATAL shard_shape[1] 128 divided by tile 32 must be divisible by in0_block_w 16
+geom_4x2_i16_s8,0,4,2,8,16,1,8,56,ERROR,,,,,TT_FATAL shard_shape[1] 128 divided by tile 32 must be divisible by in0_block_w 16
+final_code_perf,0,8,8,64,4,1,7,7,PASS,,1.066837,,,post-change perf_host_timings_gate_up_geometry.csv
+final_code_tracy,0,8,8,64,4,1,7,7,PASS,,1.099665,,,post-change Tracy host row and tt_perf_report_decode_gate_up_geometry shows gate/up 202/201 us

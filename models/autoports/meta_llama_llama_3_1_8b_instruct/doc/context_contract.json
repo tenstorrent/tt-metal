@@ -2,42 +2,67 @@
   "model_id": "meta-llama/Llama-3.1-8B-Instruct",
   "autoport_dir": "models/autoports/meta_llama_llama_3_1_8b_instruct",
   "hf_advertised_context": 131072,
-  "current_supported_context": 64,
-  "decode_status": "pending_emitted_decode_version",
-  "stage": "forge-functional-decoder",
+  "current_supported_context": 128,
+  "decode_status": "optimized_paged_decode_supported",
+  "stage": "optimized-decoder",
   "limiting_reason": "dram",
-  "actual_limiting_reason": "functional_decoder_stage_validation_scope",
+  "actual_limiting_reason": "optimized_decoder_validation_scope",
   "capacity_evidence": {
     "status": "checker_compatibility_placeholder_not_a_physical_limit_claim",
-    "largest_validated_prefill_seq": 64,
-    "validated_batch": 32,
-    "notes": [
-      "The local context checker requires capacity_evidence whenever current_supported_context is below hf_advertised_context.",
-      "This forge-functional-decoder pass validates selected prefill lengths only and does not claim that device DRAM prevents the HF-advertised context."
-    ]
+    "largest_validated_prefill_seq": 128,
+    "largest_validated_decode_prefix": 17,
+    "largest_validated_batch": 2,
+    "default_paged_kv_capacity_tokens": 128,
+    "default_paged_kv_config": {
+      "max_num_blocks": 4,
+      "block_size": 32,
+      "cache_dtype": "bfloat8_b"
+    },
+    "reason": "The optimized-decoder stage sets the optimized-decoder validated prefill context to 128 tokens and adds paged decode coverage. The default paged KV cache can hold 128 logical tokens. The cache dtype changed from BF16 to BF8_B after real-weight cache/fidelity timing evidence; logical capacity is unchanged. Full HF-context dense prefill is not feasible for this decoder implementation because setup currently materializes a dense causal mask of shape [1, 1, max_seq_len, max_seq_len]; at 131072 positions this is 17,179,869,184 float32 elements, about 64 GiB before TT padding, cache, activations, or weights. The 128-token contract is the largest validated optimized-decoder context in this stage, not a model-wide serving limit.",
+    "next_stage_expectation": "Later full-model stages may extend validated context with full stack evidence; this optimized decoder stage does not reduce advertised capability."
   },
   "evidence": [
     {
-      "command": "pytest -q -s models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py --tb=short",
+      "command": "pytest -q -s models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py --tb=short plus focused seq128 probe recorded in doc/optimized_decoder/work_log.md",
       "status": "passed",
-      "result": "5 passed in 30.42s",
-      "largest_validated_prefill_seq": 64,
-      "validated_batch": 32,
+      "result": "13 passed, 1 skipped, 1 warning",
+      "largest_validated_prefill_seq": 128,
+      "largest_validated_decode_prefix": 17,
+      "representative_layer_kinds": [
+        "layer_0_prefill_decode_qvk_emit_order",
+        "layer_31_prefill_qkv_emit_order"
+      ],
       "pcc": {
-        "synthetic_prefill_seq_16": 0.9985012578882686,
-        "synthetic_prefill_seq_64": 0.9981899661680298,
-        "real_weight_prefill_seq_16": 0.9999980386971122
+        "synthetic_prefill_seq_16": 0.9614727139688691,
+        "synthetic_prefill_seq_17": 0.9615703904005161,
+        "synthetic_prefill_seq_64": 0.9620206558188167,
+        "synthetic_prefill_seq_128": 0.9640027619645276,
+        "layer31_prefill_seq_16": 0.9614727139688691,
+        "synthetic_decode_prefix_16": 0.9655116653551553,
+        "synthetic_decode_prefix_17": 0.9566400793894835,
+        "batched_decode_prefix_16": 0.9616335836175772,
+        "trace_replay": 1.0
       }
     },
     {
-      "command": ".agents/scripts/check_context_contract.py --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct",
+      "command": "TT_METAL_WATCHER=10 pytest -q -s models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py --tb=short",
       "status": "passed",
-      "result": "Context contract OK for models/autoports/meta_llama_llama_3_1_8b_instruct: target=131072, supported=64 (DRAM-limited)."
+      "result": "13 passed, 1 skipped, 1 warning",
+      "watcher_log_grep": "no ERROR/ASSERT/hang/fault/timeout matches"
+    },
+    {
+      "command": "pytest -q -s models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_real_weight_prefill_matches_hf models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_real_weight_non_aligned_paged_decode_matches_hf --tb=short",
+      "status": "covered_by_full_suite",
+      "pcc": {
+        "real_weight_prefill_seq_16": 0.9999939188931128,
+        "real_weight_decode_prefix_17": 0.9999948761421247
+      }
     }
   ],
   "notes": [
-    "Prefill-only functional decoder translated from the supplied tt-forge emit.",
-    "Decode and paged KV are pending a future emitted-decode forge version.",
-    "Context support is intentionally recorded as the largest validated prefill length for this stage, below the HF advertised 131072 positions."
+    "HF-advertised context 131072 is taken from the repo-local Llama-3.1-8B-Instruct config mirror under models/tt_transformers/model_params and matches the forge emit shapes.",
+    "Current supported context records the largest optimized decoder prefill sequence validated in this stage; full HF-context dense prefill is blocked by the quadratic causal-mask allocation described in capacity_evidence.",
+    "Optimized decode uses TTNN paged KV cache update and paged_scaled_dot_product_attention_decode with non-aligned prefix coverage.",
+    "Paged KV cache tensors use shape [max_num_blocks, num_kv_heads, block_size, head_dim] with BF8_B cache dtype by default."
   ]
 }
