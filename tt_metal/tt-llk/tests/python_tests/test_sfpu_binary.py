@@ -67,12 +67,16 @@ from helpers.utils import passed_test
         # MathOperation.SfpuElwNe,
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    approx_mode=[ApproximationMode.No],
+    input_dimensions=[[128, 64]],
 )
 def test_sfpu_binary_float(
     formats,
     dest_acc,
     mathop,
     bcast_dim,
+    approx_mode,
+    input_dimensions,
 ):
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
@@ -122,12 +126,14 @@ def test_sfpu_binary_float(
     ],
     approx_mode=[ApproximationMode.No],
     dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[128, 64]],
 )
 def test_sfpu_binary_int(
     formats,
     dest_acc,
     mathop,
     approx_mode,
+    input_dimensions,
 ):
     sfpu_binary(
         formats,
@@ -146,9 +152,13 @@ def test_sfpu_binary_int(
         same=True,
     ),
     mathop=[MathOperation.SfpuAddTopRow],
+    approx_mode=[ApproximationMode.No],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[128, 64]],
 )
-def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
+def test_sfpu_binary_add_top_row(
+    formats, dest_acc, mathop, approx_mode, input_dimensions
+):
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip(
             "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"

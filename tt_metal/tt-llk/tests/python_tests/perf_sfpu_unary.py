@@ -252,8 +252,19 @@ def _run_math_isolate(formats, mathop, input_dimensions):
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Int32], same=True),
+    approx_mode=[ApproximationMode.No],
     mathop=_INT32_UNARY_OPS,
+    fast_mode=[FastMode.No],
+    dest_acc=[DestAccumulation.Yes],
     input_dimensions=[[128, 64]],
 )
-def test_perf_eltwise_unary_sfpu_int(perf_report, formats, mathop, input_dimensions):
+def test_perf_eltwise_unary_sfpu_int(
+    perf_report,
+    formats,
+    approx_mode,
+    mathop,
+    fast_mode,
+    dest_acc,
+    input_dimensions,
+):
     _run_math_isolate(formats, mathop, input_dimensions).run(perf_report)

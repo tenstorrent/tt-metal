@@ -32,6 +32,7 @@ from helpers.test_variant_parameters import (
     math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     broadcast_type=[BroadcastType.None_],
     transpose_srca=[Transpose.No],
+    input_dimensions=[[256, 32]],
     tile_dimensions=[[32, 32]],
     tile_count=16,
     math_fidelity=lambda formats, math_op: get_valid_math_fidelities(
@@ -45,6 +46,7 @@ def test_perf_eltwise_binary(
     math_op,
     broadcast_type,
     transpose_srca,
+    input_dimensions,
     tile_dimensions,
     tile_count,
     math_fidelity,

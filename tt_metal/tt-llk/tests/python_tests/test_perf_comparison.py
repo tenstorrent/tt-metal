@@ -156,6 +156,17 @@ def pair_functions(
     return pairs
 
 
+# Axes intentionally absent or asymmetric between functional and perf sweeps.
+# Omitted from the report so rename/subset alignment work stays visible.
+IGNORED_AXES = frozenset(
+    {
+        "combo_idx",  # internal zip index when tuple axes are split
+        "iterations",  # perf SFPU repeat count (measurement knob)
+        "loop_factor",  # perf outer repeat count (measurement knob)
+    }
+)
+
+
 def fmt_values(values: list[str], full: bool, limit: int = 8) -> str:
     if full or len(values) <= limit:
         return ", ".join(values) if values else "-"
@@ -164,7 +175,11 @@ def fmt_values(values: list[str], full: bool, limit: int = 8) -> str:
 
 def compare(test_axes: dict, perf_axes: dict, full: bool) -> None:
     """Report identical vs differing axes; for differing ones print both sweeps."""
-    all_axes = list(dict.fromkeys([*test_axes, *perf_axes]))
+    all_axes = [
+        axis
+        for axis in dict.fromkeys([*test_axes, *perf_axes])
+        if axis not in IGNORED_AXES
+    ]
     same, diff = [], []
     for axis in all_axes:
         in_t, in_p = axis in test_axes, axis in perf_axes

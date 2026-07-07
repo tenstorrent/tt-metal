@@ -30,6 +30,7 @@ from helpers.test_variant_parameters import (
     dest_acc=[DestAccumulation.No],
     mathop=[MathOperation.ReduceColumn],
     reduce_pool=[ReducePool.Max],  # Only MAX is supported for SDPA reduce
+    input_dimensions=[[128, 64]],
     loop_factor=list(
         range(10, 201, 10)
     ),  # Multiple loop factors to minimize profiler overhead
@@ -40,6 +41,7 @@ def test_perf_sfpu_reduce_sdpa(
     dest_acc,
     mathop,
     reduce_pool,
+    input_dimensions,
     loop_factor,
 ):
     """
@@ -53,7 +55,6 @@ def test_perf_sfpu_reduce_sdpa(
     max reduction, which is the typical operation in SDPA softmax computation.
     """
 
-    input_dimensions = [128, 64]
     tile_count = input_dimensions[1] // 32 * input_dimensions[0] // 32
 
     # Run performance benchmarks focusing on MATH_ISOLATE to measure SFPU cycles

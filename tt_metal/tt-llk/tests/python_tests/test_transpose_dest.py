@@ -106,6 +106,16 @@ _TRANSPOSE_DEST_FLOAT_COMBOS = generate_transpose_dest_float_combinations(
     dest_acc=lambda combo_idx: [_TRANSPOSE_DEST_FLOAT_COMBOS[combo_idx][1]],
     math_transpose_faces=lambda combo_idx: [_TRANSPOSE_DEST_FLOAT_COMBOS[combo_idx][2]],
     unpack_to_dest=lambda combo_idx: [_TRANSPOSE_DEST_FLOAT_COMBOS[combo_idx][3]],
+    unpack_transpose_faces=lambda dest_acc, math_transpose_faces: [
+        (
+            Transpose.Yes
+            if (
+                dest_acc == DestAccumulation.Yes
+                and math_transpose_faces == Transpose.No
+            )
+            else Transpose.No
+        )
+    ],
 )
 def test_transpose_dest_float(
     combo_idx,
@@ -113,12 +123,14 @@ def test_transpose_dest_float(
     dest_acc,
     math_transpose_faces,
     unpack_to_dest,
+    unpack_transpose_faces,
 ):
     transpose_dest(
         formats=formats,
         dest_acc=dest_acc,
         math_transpose_faces=math_transpose_faces,
         unpack_to_dest=unpack_to_dest,
+        unpack_transpose_faces=unpack_transpose_faces,
     )
 
 
@@ -263,7 +275,22 @@ def transpose_dest_int8(
     assert torch.equal(res_tensor, golden_tensor), "Assert against golden failed"
 
 
-def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
+def transpose_dest(
+    formats,
+    dest_acc,
+    math_transpose_faces,
+    unpack_to_dest,
+    unpack_transpose_faces=None,
+):
+    if unpack_transpose_faces is None:
+        unpack_transpose_faces = (
+            Transpose.Yes
+            if (
+                dest_acc == DestAccumulation.Yes
+                and math_transpose_faces == Transpose.No
+            )
+            else Transpose.No
+        )
 
     input_dimensions = [64, 64]
 
@@ -308,16 +335,7 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
         formats,
         templates=[MATH_TRANSPOSE_FACES(math_transpose_faces)],
         runtimes=[
-            # When math_transpose_faces is False, unpack_transpose_faces should be Transpose.Yes
-            # This mode is supported only for 32-bit dest
-            UNPACK_TRANS_FACES(
-                Transpose.Yes
-                if (
-                    dest_acc == DestAccumulation.Yes
-                    and math_transpose_faces == Transpose.No
-                )
-                else Transpose.No
-            ),
+            UNPACK_TRANS_FACES(unpack_transpose_faces),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(),
         ],

@@ -13,6 +13,9 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
+_UNPACK_TILIZE_FLOAT_DIMENSIONS = [(rt, ct) for rt in range(1, 9) for ct in range(1, 9)]
+_UNPACK_TILIZE_INT_DIMENSIONS = [(rt, ct) for rt in range(1, 3) for ct in range(1, 3)]
+
 
 @pytest.mark.perf
 @parametrize(
@@ -25,19 +28,18 @@ from helpers.test_variant_parameters import (
         ]
     ),
     num_faces=[4],
-    rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
-    ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
+    dimensions=_UNPACK_TILIZE_FLOAT_DIMENSIONS,
 )
 def test_perf_unpack_tilize_float(
     perf_report,
     formats,
     num_faces,
-    rt_dim,
-    ct_dim,
+    dimensions,
 ):
     if formats.input_format == DataFormat.Bfp8_b:
         pytest.skip("Bfp8_b input not supported for unpack_tilize")
 
+    rt_dim, ct_dim = dimensions
     _perf_unpack_tilize(
         perf_report,
         formats,
@@ -50,16 +52,15 @@ def test_perf_unpack_tilize_float(
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     num_faces=[4],
-    rt_dim=[1, 2],
-    ct_dim=[1, 2],
+    dimensions=_UNPACK_TILIZE_INT_DIMENSIONS,
 )
 def test_perf_unpack_tilize_int(
     perf_report,
     formats,
     num_faces,
-    rt_dim,
-    ct_dim,
+    dimensions,
 ):
+    rt_dim, ct_dim = dimensions
     _perf_unpack_tilize(
         perf_report,
         formats,

@@ -125,6 +125,7 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
     transpose_srca=[Transpose.Yes, Transpose.No],
     input_dimensions=[[256, 32]],
+    tile_count=[16],
     tile_dimensions=lambda transpose_srca, broadcast_type: _get_valid_tile_dimensions(
         transpose_srca, broadcast_type
     ),
@@ -137,6 +138,7 @@ def test_eltwise_binary(
     math_fidelity,
     transpose_srca,
     input_dimensions,
+    tile_count,
     tile_dimensions,
 ):
     if transpose_srca == Transpose.Yes and broadcast_type == BroadcastType.Scalar:

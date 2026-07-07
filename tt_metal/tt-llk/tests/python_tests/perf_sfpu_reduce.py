@@ -32,12 +32,23 @@ from helpers.test_variant_parameters import (
     dest_acc=[DestAccumulation.Yes],
     mathop=[MathOperation.ReduceRow],
     reduce_pool=[ReducePool.Max],
+    input_bounds=[[-1000, 1000]],
+    dimension_combinations=[[32, 32]],
+    reduced_extent=[32],
     loop_factor=list(range(10, 201, 10)),
 )
 def test_perf_sfpu_reduce(
-    perf_report, formats, dest_acc, mathop, reduce_pool, loop_factor
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    reduce_pool,
+    input_bounds,
+    dimension_combinations,
+    reduced_extent,
+    loop_factor,
 ):
-    input_dimensions = [32, 32]
+    input_dimensions = dimension_combinations
     tile_count = 1
 
     configuration = PerfConfig(
