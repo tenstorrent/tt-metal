@@ -340,8 +340,13 @@ def test_full_model(mesh_device, reset_seeds, request):
     hf_config_check = TestFactory.create_hf_config()
     is_moe = getattr(hf_config_check, "enable_moe_block", False)
     # MoE experts are replicated: ~764 MB/layer at bf8. Dense MLP: ~3*H*I/TP*2 bytes.
-    if is_moe and tp < 8:
-        pytest.skip(f"MoE model too large for TP={tp} (expert weights replicated)")
+    # Keep the default skip, but allow one-off PCC probes on smaller meshes.
+    allow_moe_tp4_probe = os.getenv("GEMMA4_ALLOW_MOE_TP4", "0") == "1"
+    if is_moe and tp < 8 and not allow_moe_tp4_probe:
+        pytest.skip(
+            f"MoE model too large for TP={tp} (expert weights replicated); "
+            "set GEMMA4_ALLOW_MOE_TP4=1 for an explicit PCC/OOM probe"
+        )
     if hf_config_check.hidden_size > 4096 and tp < 2:
         pytest.skip(f"Model too large for single device (hidden={hf_config_check.hidden_size})")
 
