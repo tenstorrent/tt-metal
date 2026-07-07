@@ -117,6 +117,24 @@ def create_program_descriptor(
     actual_B_q = min(B_q, S_q_t)
     actual_B_kv = min(B_kv, S_kv_t)
 
+    # ========== 1c. D_CHUNK (L1 budget management) ==========
+    # Chunk the head_dim (D_t) so that all D_t-scaling CBs become
+    # D_CHUNK-bounded (constant). The D_CHUNK outer loop replays all KV
+    # blocks per chunk: QK^T is K-blocked over the full D_t (cb_q/cb_k
+    # shrink to D_CHUNK), and PV/O_i/output are N-chunked (cb_v/cb_o/
+    # cb_pv_out/cb_output shrink to D_CHUNK). When D_t <= MAX_D_CHUNK,
+    # D_CHUNK = D_t and the outer loop runs once — identical to the
+    # original non-chunked behavior.
+    MAX_D_CHUNK = 8
+    if D_t <= MAX_D_CHUNK:
+        D_CHUNK = D_t
+    else:
+        D_CHUNK = MAX_D_CHUNK
+        while D_t % D_CHUNK != 0:
+            D_CHUNK -= 1
+    num_k_blocks_qk = D_t // D_CHUNK  # K-blocks for QK^T
+    num_d_chunks = D_t // D_CHUNK  # N-chunks for PV/O_i/output
+
     # ========== 2. CORE GRID AND WORK DISTRIBUTION ==========
     num_work_units = B * H  # one (B,H) pair per work unit
     # Use 8×7 grid (56 worker cores). The 8th row (y=7) contains dispatch
@@ -168,12 +186,15 @@ def create_program_descriptor(
     cb_psum_id = 29
     cb_pv_id = 30
     cb_pv_out_id = 23  # PV matmul output (separate from cb_scores)
+    cb_qk_partials_id = 22  # QK^T K-block spill/reload intermediates
     cb_scaler_id = 31
 
-    # CB page counts — use actual block sizes
-    q_pages = 2 * (actual_B_q * D_t)
-    k_pages = 2 * (actual_B_kv * D_t)
-    v_pages = 2 * (actual_B_kv * D_t)
+    # CB page counts — D_CHUNK-bounded (constant, not D_t-scaling)
+    # cb_q/cb_k: 2 × D_CHUNK (double-buffered, one K-block in flight)
+    q_pages = 2 * (actual_B_q * D_CHUNK)
+    k_pages = 2 * (actual_B_kv * D_CHUNK)
+    # cb_v: 2 × D_CHUNK (double-buffered, one N-chunk in flight)
+    v_pages = 2 * (actual_B_kv * D_CHUNK)
     # Mask CB: for custom mask, reader streams from DRAM (double-buffered).
     # For causal mask, reader generates 1 tile per diagonal KV block (B_q*B_kv=1).
     # For padding mask (non-aligned S_kv, no caller mask), reader generates
@@ -181,21 +202,26 @@ def create_program_descriptor(
     needs_mask_cb = has_mask or is_causal_mask or needs_padding_mask
     mask_pages = 2 * (actual_B_q * actual_B_kv) if needs_mask_cb else 1
     scale_pages = 1
-    output_pages = 2 * (actual_B_q * D_t)
+    # cb_output: D_CHUNK-bounded (one N-chunk of output tiles)
+    output_pages = 2 * (actual_B_q * D_CHUNK)
     # cb_scores holds QK^T scores (B_q×B_kv tiles, Phase 1) — used for scale,
     # mask, rowmax, exp, copyP, and rowsum. All these phases push/pop 1 tile
-    # at a time (B_q*B_kv tiles total).
-    # cb_pv_out holds the PV matmul output (B_q×D_t tiles, Phase 12) — consumed
+    # at a time (B_q*B_kv tiles total). Constant-sized (does not scale with D_t).
+    # cb_pv_out holds the PV matmul output (B_q×D_CHUNK tiles, Phase 12) — consumed
     # by Phase 13 (O_i += PV). Separated from cb_scores to avoid CB write-pointer
     # alignment issues from mixed 1-tile and multi-tile push patterns.
     scores_pages = max(2, actual_B_q * actual_B_kv)
-    pv_out_pages = max(2, actual_B_q * D_t)
+    pv_out_pages = max(2, actual_B_q * D_CHUNK)
     m_pages = max(2, actual_B_q)
     l_pages = max(2, actual_B_q)
-    o_pages = max(2, actual_B_q * D_t)
+    # cb_o: D_CHUNK-bounded (persistent O_i per N-chunk)
+    o_pages = max(2, actual_B_q * D_CHUNK)
     m_new_pages = max(2, actual_B_q)
     psum_pages = max(2, actual_B_q)
     pv_pages = max(2, actual_B_q * actual_B_kv)
+    # cb_qk_partials: QK^T K-block spill/reload. Holds B_q×B_kv tiles (the
+    # output block). Double-buffered for spill/reload pipelining.
+    qk_partials_pages = max(2, actual_B_q * actual_B_kv)
     # cb_scaler: 2 tiles per KV block (MAX + SUM). The reader runs ahead of compute
     # (limited by Q/K/V CB double-buffering to ~2 KV blocks lookahead), so the scaler
     # CB must hold enough for the reader's full lookahead. Use 2 * num_kv_blocks to
@@ -255,6 +281,7 @@ def create_program_descriptor(
     cbs.append(make_cb(cb_psum_id, psum_pages, intermediate_format, intermediate_tile_size))
     cbs.append(make_cb(cb_pv_id, pv_pages, intermediate_format, intermediate_tile_size))
     cbs.append(make_cb(cb_pv_out_id, pv_out_pages, intermediate_format, intermediate_tile_size))
+    cbs.append(make_cb(cb_qk_partials_id, qk_partials_pages, intermediate_format, intermediate_tile_size))
     cbs.append(make_cb(cb_scaler_id, scaler_pages, scaler_format, scaler_tile_size))
 
     # ========== 4. KERNEL DESCRIPTORS ==========
@@ -278,8 +305,11 @@ def create_program_descriptor(
         1 if is_causal_mask else 0,  # [12] is_causal
         1 if has_kv_padding else 0,  # [13] has_kv_padding
         S_kv_padded,  # [14] actual S_kv (for padding mask generation)
+        D_CHUNK,  # [15] D chunk size for L1 budget management
+        num_k_blocks_qk,  # [16] num K-blocks for QK^T
+        num_d_chunks,  # [17] num D-chunks for PV/O_i
     ]
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())  # offset 18
     reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
     if has_mask:
@@ -318,8 +348,10 @@ def create_program_descriptor(
         H,
         actual_B_q,
         num_q_blocks,
+        D_CHUNK,  # [5] D chunk size
+        num_d_chunks,  # [6] num D-chunks
     ]
-    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())  # offset 7
 
     # Writer RT args: flatten all work units for each core.
     # Format per core: [num_work_units, output_addr, start_tile_0, start_tile_1, ...]
@@ -353,6 +385,9 @@ def create_program_descriptor(
         scale_bits,
         1 if is_causal_mask else 0,  # [9] is_causal
         1 if has_kv_padding else 0,  # [10] has_kv_padding
+        D_CHUNK,  # [11] D chunk size
+        num_k_blocks_qk,  # [12] num K-blocks for QK^T
+        num_d_chunks,  # [13] num D-chunks for PV/O_i
     ]
 
     compute_rt_args = ttnn.RuntimeArgs()

@@ -123,9 +123,12 @@ void kernel_main() {
     constexpr uint32_t is_causal = get_compile_time_arg_val(12);
     constexpr uint32_t has_kv_padding = get_compile_time_arg_val(13);
     const uint32_t S_kv_actual = get_compile_time_arg_val(14);  // actual S_kv (before tile padding)
+    constexpr uint32_t D_CHUNK = get_compile_time_arg_val(15);
+    const uint32_t num_k_blocks_qk = get_compile_time_arg_val(16);
+    const uint32_t num_d_chunks = get_compile_time_arg_val(17);
 
-    // TensorAccessorArgs start at CT offset 15
-    constexpr auto q_args = TensorAccessorArgs<15>();
+    // TensorAccessorArgs start at CT offset 18
+    constexpr auto q_args = TensorAccessorArgs<18>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -181,182 +184,177 @@ void kernel_main() {
 
         // Outer loop over Q blocks
         for (uint32_t qb = 0; qb < num_q_blocks; qb++) {
-            // Inner loop over KV blocks
-            for (uint32_t kvb = 0; kvb < num_kv_blocks; kvb++) {
-                // Causal mask: determine block relationship to diagonal
-                // For causal (self-attention, S_q == S_kv), tile row/col indices
-                // are qb*B_q + sq and kvb*B_kv + skv. With B_q=B_kv=1, the
-                // diagonal is at qb == kvb.
-                if constexpr (is_causal) {
-                    if (kvb > qb) {
-                        // Future block: entire tile is -inf.
-                        // Still push Q/K/V (compute will run QK^T but scores
-                        // become -inf after mask add → softmax drops them).
-                        // But for efficiency, we can skip Q/K/V entirely and
-                        // let compute skip the block. However, compute expects
-                        // K/V tiles for the matmul. So we push dummy K/V tiles.
-                        // Actually — we need to push SOMETHING for K/V or the
-                        // matmul will hang waiting for input. The simplest approach:
-                        // push the real Q/K/V tiles (they're just data), and
-                        // push a -inf mask. The compute kernel adds the mask
-                        // to scores, making them all -inf, which the online
-                        // softmax naturally drops (exp(-inf) = 0).
-                        // This is simpler than skipping and avoids CB sync issues.
+            // D_CHUNK outer loop: replay all KV blocks per D_CHUNK.
+            // Q and K are re-read per D_CHUNK (K-blocked over full D_t).
+            // V is read only for the current D_CHUNK (N-chunked).
+            for (uint32_t dc = 0; dc < num_d_chunks; dc++) {
+                // Inner loop over KV blocks
+                for (uint32_t kvb = 0; kvb < num_kv_blocks; kvb++) {
+                    // Causal mask: determine block relationship to diagonal
+                    if constexpr (is_causal) {
+                        if (kvb > qb) {
+                            // Future block: entire tile is -inf.
+                            // Still push Q/K/V (compute will run QK^T but scores
+                            // become -inf after mask add → softmax drops them).
+                        }
                     }
-                }
 
-                // Push Q block: B_q rows × D_t cols, TileRowMajor order
-                // Re-pushed per KV block since matmul pops Q tiles
-                for (uint32_t sq = 0; sq < B_q; sq++) {
-                    uint32_t q_tile_row = qb * B_q + sq;
-                    for (uint32_t d = 0; d < D_t; d++) {
-                        uint32_t tile_id = q_tile_base + q_tile_row * D_t + d;
-                        cb_reserve_back(cb_q, 1);
-                        uint32_t l1_write_addr = get_write_ptr(cb_q);
-                        noc_async_read_tile(tile_id, q_accessor, l1_write_addr);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_q, 1);
-                    }
-                }
-
-                // Push K block: B_kv rows × D_t cols
-                for (uint32_t skv = 0; skv < B_kv; skv++) {
-                    uint32_t k_tile_row = kvb * B_kv + skv;
-                    for (uint32_t d = 0; d < D_t; d++) {
-                        uint32_t tile_id = kv_tile_base + k_tile_row * D_t + d;
-                        cb_reserve_back(cb_k, 1);
-                        uint32_t l1_write_addr = get_write_ptr(cb_k);
-                        noc_async_read_tile(tile_id, k_accessor, l1_write_addr);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_k, 1);
-                    }
-                }
-
-                // Push V block: B_kv rows × D_t cols
-                for (uint32_t skv = 0; skv < B_kv; skv++) {
-                    uint32_t v_tile_row = kvb * B_kv + skv;
-                    for (uint32_t d = 0; d < D_t; d++) {
-                        uint32_t tile_id = kv_tile_base + v_tile_row * D_t + d;
-                        cb_reserve_back(cb_v, 1);
-                        uint32_t l1_write_addr = get_write_ptr(cb_v);
-                        noc_async_read_tile(tile_id, v_accessor, l1_write_addr);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_v, 1);
-                    }
-                }
-
-                // Push mask block
-                // When has_kv_padding, the last KV tile has zero-padded rows
-                // that must be masked out with -1e9. This is needed for all
-                // mask modes (none, custom, causal) to prevent spurious
-                // attention on padded K/V rows.
-                if constexpr (is_causal) {
-                    // Causal mask: generate on-device based on block position
-                    for (uint32_t sq = 0; sq < B_q; sq++) {
-                        for (uint32_t skv = 0; skv < B_kv; skv++) {
-                            cb_reserve_back(cb_attn_mask, 1);
-                            uint32_t q_tile_idx = qb * B_q + sq;
-                            uint32_t kv_tile_idx = kvb * B_kv + skv;
-                            if (kv_tile_idx > q_tile_idx) {
-                                // Future block: all -inf
-                                if (mask_is_fp32) {
-                                    fill_constant_tile<uint32_t, FP32_NEG_INF_BITS>(cb_attn_mask);
-                                } else {
-                                    fill_constant_tile<uint16_t, BF16_NEG_INF_BITS>(cb_attn_mask);
-                                }
-                            } else if (kv_tile_idx == q_tile_idx) {
-                                // Diagonal block: triangular mask
-                                if (mask_is_fp32) {
-                                    fill_causal_mask_tile<uint32_t, FP32_ZERO_BITS, FP32_NEG_INF_BITS>(cb_attn_mask);
-                                } else {
-                                    fill_causal_mask_tile<uint16_t, BF16_ZERO_BITS, BF16_NEG_INF_BITS>(cb_attn_mask);
-                                }
-                            } else {
-                                // Past block: all zeros (no masking)
-                                if (mask_is_fp32) {
-                                    fill_constant_tile<uint32_t, FP32_ZERO_BITS>(cb_attn_mask);
-                                } else {
-                                    fill_constant_tile<uint16_t, BF16_ZERO_BITS>(cb_attn_mask);
-                                }
+                    // Push Q and K blocks interleaved per K-block.
+                    // The matmul_block helper with WaitAndPopPerKBlock expects
+                    // B_q * D_CHUNK Q tiles AND B_kv * D_CHUNK K tiles per K-block.
+                    // Interleaving Q and K per K-block avoids CB deadlock: if we push
+                    // all Q first, cb_q fills up and the reader blocks on reserve_back
+                    // while compute blocks on wait_front(cb_k).
+                    for (uint32_t kblk = 0; kblk < num_k_blocks_qk; kblk++) {
+                        // Push Q tiles for this K-block
+                        for (uint32_t sq = 0; sq < B_q; sq++) {
+                            uint32_t q_tile_row = qb * B_q + sq;
+                            for (uint32_t d = 0; d < D_CHUNK; d++) {
+                                uint32_t d_idx = kblk * D_CHUNK + d;
+                                uint32_t tile_id = q_tile_base + q_tile_row * D_t + d_idx;
+                                cb_reserve_back(cb_q, 1);
+                                uint32_t l1_write_addr = get_write_ptr(cb_q);
+                                noc_async_read_tile(tile_id, q_accessor, l1_write_addr);
+                                noc_async_read_barrier();
+                                cb_push_back(cb_q, 1);
                             }
-                            // Overlay padding on last KV tile for padded rows
-                            if constexpr (has_kv_padding) {
+                        }
+                        // Push K tiles for this K-block
+                        for (uint32_t skv = 0; skv < B_kv; skv++) {
+                            uint32_t k_tile_row = kvb * B_kv + skv;
+                            for (uint32_t d = 0; d < D_CHUNK; d++) {
+                                uint32_t d_idx = kblk * D_CHUNK + d;
+                                uint32_t tile_id = kv_tile_base + k_tile_row * D_t + d_idx;
+                                cb_reserve_back(cb_k, 1);
+                                uint32_t l1_write_addr = get_write_ptr(cb_k);
+                                noc_async_read_tile(tile_id, k_accessor, l1_write_addr);
+                                noc_async_read_barrier();
+                                cb_push_back(cb_k, 1);
+                            }
+                        }
+                    }
+
+                    // Push V block: B_kv rows × D_CHUNK cols (only current N-chunk)
+                    for (uint32_t skv = 0; skv < B_kv; skv++) {
+                        uint32_t v_tile_row = kvb * B_kv + skv;
+                        for (uint32_t d = 0; d < D_CHUNK; d++) {
+                            uint32_t d_idx = dc * D_CHUNK + d;
+                            uint32_t tile_id = kv_tile_base + v_tile_row * D_t + d_idx;
+                            cb_reserve_back(cb_v, 1);
+                            uint32_t l1_write_addr = get_write_ptr(cb_v);
+                            noc_async_read_tile(tile_id, v_accessor, l1_write_addr);
+                            noc_async_read_barrier();
+                            cb_push_back(cb_v, 1);
+                        }
+                    }
+
+                    // Push mask block (same as before — mask is D-independent)
+                    if constexpr (is_causal) {
+                        // Causal mask: generate on-device based on block position
+                        for (uint32_t sq = 0; sq < B_q; sq++) {
+                            for (uint32_t skv = 0; skv < B_kv; skv++) {
+                                cb_reserve_back(cb_attn_mask, 1);
+                                uint32_t q_tile_idx = qb * B_q + sq;
+                                uint32_t kv_tile_idx = kvb * B_kv + skv;
+                                if (kv_tile_idx > q_tile_idx) {
+                                    if (mask_is_fp32) {
+                                        fill_constant_tile<uint32_t, FP32_NEG_INF_BITS>(cb_attn_mask);
+                                    } else {
+                                        fill_constant_tile<uint16_t, BF16_NEG_INF_BITS>(cb_attn_mask);
+                                    }
+                                } else if (kv_tile_idx == q_tile_idx) {
+                                    if (mask_is_fp32) {
+                                        fill_causal_mask_tile<uint32_t, FP32_ZERO_BITS, FP32_NEG_INF_BITS>(
+                                            cb_attn_mask);
+                                    } else {
+                                        fill_causal_mask_tile<uint16_t, BF16_ZERO_BITS, BF16_NEG_INF_BITS>(
+                                            cb_attn_mask);
+                                    }
+                                } else {
+                                    if (mask_is_fp32) {
+                                        fill_constant_tile<uint32_t, FP32_ZERO_BITS>(cb_attn_mask);
+                                    } else {
+                                        fill_constant_tile<uint16_t, BF16_ZERO_BITS>(cb_attn_mask);
+                                    }
+                                }
+                                if constexpr (has_kv_padding) {
+                                    if (kv_tile_idx == S_kv_t - 1) {
+                                        uint32_t s_kv_in_tile = S_kv_actual - (S_kv_t - 1) * 32;
+                                        if (mask_is_fp32) {
+                                            overlay_padding_mask<uint32_t, FP32_NEG_INF_BITS>(
+                                                cb_attn_mask, s_kv_in_tile);
+                                        } else {
+                                            overlay_padding_mask<uint16_t, BF16_NEG_INF_BITS>(
+                                                cb_attn_mask, s_kv_in_tile);
+                                        }
+                                    }
+                                }
+                                cb_push_back(cb_attn_mask, 1);
+                            }
+                        }
+                    } else if (has_mask) {
+                        // Custom mask: stream from DRAM, overlay padding on last KV tile
+                        for (uint32_t sq = 0; sq < B_q; sq++) {
+                            uint32_t m_sq = qb * B_q + sq;
+                            for (uint32_t skv = 0; skv < B_kv; skv++) {
+                                uint32_t m_skv = kvb * B_kv + skv;
+                                uint32_t tile_id = mask_tile_base + m_sq * S_kv_t + m_skv;
+                                cb_reserve_back(cb_attn_mask, 1);
+                                uint32_t l1_write_addr = get_write_ptr(cb_attn_mask);
+                                noc_async_read_tile(tile_id, mask_accessor, l1_write_addr);
+                                noc_async_read_barrier();
+                                if constexpr (has_kv_padding) {
+                                    if (m_skv == S_kv_t - 1) {
+                                        uint32_t s_kv_in_tile = S_kv_actual - (S_kv_t - 1) * 32;
+                                        if (mask_is_fp32) {
+                                            overlay_padding_mask<uint32_t, FP32_NEG_INF_BITS>(
+                                                cb_attn_mask, s_kv_in_tile);
+                                        } else {
+                                            overlay_padding_mask<uint16_t, BF16_NEG_INF_BITS>(
+                                                cb_attn_mask, s_kv_in_tile);
+                                        }
+                                    }
+                                }
+                                cb_push_back(cb_attn_mask, 1);
+                            }
+                        }
+                    } else if constexpr (has_kv_padding) {
+                        // Padding mask: no caller mask, but S_kv is not tile-aligned.
+                        for (uint32_t sq = 0; sq < B_q; sq++) {
+                            for (uint32_t skv = 0; skv < B_kv; skv++) {
+                                cb_reserve_back(cb_attn_mask, 1);
+                                uint32_t kv_tile_idx = kvb * B_kv + skv;
                                 if (kv_tile_idx == S_kv_t - 1) {
                                     uint32_t s_kv_in_tile = S_kv_actual - (S_kv_t - 1) * 32;
                                     if (mask_is_fp32) {
-                                        overlay_padding_mask<uint32_t, FP32_NEG_INF_BITS>(cb_attn_mask, s_kv_in_tile);
+                                        fill_padding_mask_tile<uint32_t, FP32_ZERO_BITS, FP32_NEG_INF_BITS>(
+                                            cb_attn_mask, s_kv_in_tile);
                                     } else {
-                                        overlay_padding_mask<uint16_t, BF16_NEG_INF_BITS>(cb_attn_mask, s_kv_in_tile);
+                                        fill_padding_mask_tile<uint16_t, BF16_ZERO_BITS, BF16_NEG_INF_BITS>(
+                                            cb_attn_mask, s_kv_in_tile);
                                     }
-                                }
-                            }
-                            cb_push_back(cb_attn_mask, 1);
-                        }
-                    }
-                } else if (has_mask) {
-                    // Custom mask: stream from DRAM, overlay padding on last KV tile
-                    for (uint32_t sq = 0; sq < B_q; sq++) {
-                        uint32_t m_sq = qb * B_q + sq;
-                        for (uint32_t skv = 0; skv < B_kv; skv++) {
-                            uint32_t m_skv = kvb * B_kv + skv;
-                            uint32_t tile_id = mask_tile_base + m_sq * S_kv_t + m_skv;
-                            cb_reserve_back(cb_attn_mask, 1);
-                            uint32_t l1_write_addr = get_write_ptr(cb_attn_mask);
-                            noc_async_read_tile(tile_id, mask_accessor, l1_write_addr);
-                            noc_async_read_barrier();
-                            // Overlay padding on last KV tile
-                            if constexpr (has_kv_padding) {
-                                if (m_skv == S_kv_t - 1) {
-                                    uint32_t s_kv_in_tile = S_kv_actual - (S_kv_t - 1) * 32;
+                                } else {
                                     if (mask_is_fp32) {
-                                        overlay_padding_mask<uint32_t, FP32_NEG_INF_BITS>(cb_attn_mask, s_kv_in_tile);
+                                        fill_constant_tile<uint32_t, FP32_ZERO_BITS>(cb_attn_mask);
                                     } else {
-                                        overlay_padding_mask<uint16_t, BF16_NEG_INF_BITS>(cb_attn_mask, s_kv_in_tile);
+                                        fill_constant_tile<uint16_t, BF16_ZERO_BITS>(cb_attn_mask);
                                     }
                                 }
+                                cb_push_back(cb_attn_mask, 1);
                             }
-                            cb_push_back(cb_attn_mask, 1);
                         }
                     }
-                } else if constexpr (has_kv_padding) {
-                    // Padding mask: no caller mask, but S_kv is not tile-aligned.
-                    // Generate a mask that masks out padded KV positions.
-                    for (uint32_t sq = 0; sq < B_q; sq++) {
-                        for (uint32_t skv = 0; skv < B_kv; skv++) {
-                            cb_reserve_back(cb_attn_mask, 1);
-                            uint32_t kv_tile_idx = kvb * B_kv + skv;
-                            if (kv_tile_idx == S_kv_t - 1) {
-                                // Last KV tile: partially filled
-                                uint32_t s_kv_in_tile = S_kv_actual - (S_kv_t - 1) * 32;
-                                if (mask_is_fp32) {
-                                    fill_padding_mask_tile<uint32_t, FP32_ZERO_BITS, FP32_NEG_INF_BITS>(
-                                        cb_attn_mask, s_kv_in_tile);
-                                } else {
-                                    fill_padding_mask_tile<uint16_t, BF16_ZERO_BITS, BF16_NEG_INF_BITS>(
-                                        cb_attn_mask, s_kv_in_tile);
-                                }
-                            } else {
-                                // Not the last tile: all zeros (attend everything)
-                                if (mask_is_fp32) {
-                                    fill_constant_tile<uint32_t, FP32_ZERO_BITS>(cb_attn_mask);
-                                } else {
-                                    fill_constant_tile<uint16_t, BF16_ZERO_BITS>(cb_attn_mask);
-                                }
-                            }
-                            cb_push_back(cb_attn_mask, 1);
-                        }
-                    }
-                }
 
-                // Push reduce scalers (2 tiles: MAX then SUM)
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                    cb_scaler,
-                    ckernel::PoolType::MAX,
-                    ckernel::ReduceDim::REDUCE_ROW>();
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                    cb_scaler,
-                    ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW>();
+                    // Push reduce scalers (2 tiles: MAX then SUM)
+                    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                        cb_scaler,
+                        ckernel::PoolType::MAX,
+                        ckernel::ReduceDim::REDUCE_ROW>();
+                    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                        cb_scaler,
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_ROW>();
+                }
             }
         }
     }

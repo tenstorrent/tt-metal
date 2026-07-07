@@ -250,30 +250,40 @@ def scaled_dot_product_attention(
     if compute_kernel_config is None:
         compute_kernel_config = default_compute_kernel_config()
 
-    # Pre-flight L1 budget check: estimate per-core CB footprint and refuse
-    # shapes that would OOM. This prevents the TT_THROW RuntimeError from
-    # crashing the shared module-scoped device in the golden test suite.
-    # OOM shapes are Refinement 6 territory (large head_dim L1 budget).
+    # Pre-flight L1 budget check: estimate per-core CB footprint using the
+    # D_CHUNK-bounded CB sizes. All CBs are now constant-bounded (D_CHUNK
+    # ≤ 8), so this check should pass for all supported shapes. If the
+    # shape is truly too large for L1 even with chunking, raise NotImplementedError.
     D_t = (D + 31) // 32  # ceildiv for non-aligned head_dim
+    # D_CHUNK: min(D_t, 8), reduced to largest divisor of D_t ≤ 8
+    MAX_D_CHUNK = 8
+    if D_t <= MAX_D_CHUNK:
+        D_CHUNK = D_t
+    else:
+        D_CHUNK = MAX_D_CHUNK
+        while D_t % D_CHUNK != 0:
+            D_CHUNK -= 1
     tile_bytes = ttnn.tile_size(query.dtype)
     fp32_dest = getattr(compute_kernel_config, "fp32_dest_acc_en", True)
     interm_bytes = ttnn.tile_size(ttnn.float32 if fp32_dest else ttnn.bfloat16)
     scaler_bytes = ttnn.tile_size(ttnn.bfloat16)  # scaler is always bf16
-    # Q/K/V/O CBs: 2 * D_t pages each (double-buffered, B_q=1)
-    input_cbs = 4 * (2 * D_t * tile_bytes)
-    # Intermediate CBs: scores(2), m(2), l(2), o(2*D_t), m_new(2), psum(2),
-    # pv(2), pv_out(2*D_t) — all use intermediate format
+    # Q/K/V CBs: 2 * D_CHUNK pages each (double-buffered, K-blocked/N-chunked)
+    input_cbs = 3 * (2 * D_CHUNK * tile_bytes)
+    # Output CB: 2 * D_CHUNK pages
+    output_cbs = 2 * D_CHUNK * tile_bytes
+    # Intermediate CBs: scores(2), m(2), l(2), o(D_CHUNK), m_new(2), psum(2),
+    # pv(2), pv_out(D_CHUNK), qk_partials(2) — all use intermediate format
     S_kv_t = (int(key.shape[2]) + 31) // 32  # ceildiv for non-aligned S_kv
-    interm_cbs = (2 + 2 + 2 + 2 * D_t + 2 + 2 + 2 + 2 * D_t) * interm_bytes
+    interm_cbs = (2 + 2 + 2 + D_CHUNK + 2 + 2 + 2 + D_CHUNK + 2) * interm_bytes
     # Scaler CB: 2 * num_kv_blocks pages, always bf16
     scaler_cbs = 2 * S_kv_t * scaler_bytes
-    estimated_l1 = input_cbs + interm_cbs + scaler_cbs
+    estimated_l1 = input_cbs + output_cbs + interm_cbs + scaler_cbs
     L1_BUDGET = 1_400_000  # Wormhole L1 is ~1.5MB; leave room for kernel/code
     if estimated_l1 > L1_BUDGET:
         raise NotImplementedError(
             f"scaled_dot_product_attention: L1 budget exceeded "
             f"({estimated_l1} > {L1_BUDGET} bytes) for D={D}, dtype={query.dtype}. "
-            f"Large head_dim + float32 dtype requires Refinement 6 (L1 budget)."
+            f"This should not happen with D_CHUNK={D_CHUNK} — please report."
         )
 
     output_tensor = ttnn.allocate_tensor_on_device(

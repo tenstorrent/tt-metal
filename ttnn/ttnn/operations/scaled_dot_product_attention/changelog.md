@@ -194,3 +194,28 @@
   - bfloat8_b + custom mask + non-aligned: writing raw BF16_NEG_INF_BITS into a bfloat8_b (block-float) tile produces garbage. Fixed by typecasting the mask tensor to `intermediate_format` on the host side before passing to the program descriptor, and forcing the mask CB to `intermediate_format` when `has_mask + has_kv_padding`.
   - Mask accessor tile size mismatch: after typecasting mask to fp32, the mask accessor still used Q's bf8b tile size (1088 bytes) instead of the mask CB's fp32 tile size (4096 bytes). Fixed by using `get_tile_size(cb_attn_mask)` for the mask accessor.
 - **Tests added**: test_sdpa_refinement5_non_aligned.py (44 tests covering w_non_aligned, h_non_aligned, both non-aligned, all mask modes, all dtypes, multi-head/batch, GQA/MQA, cross-attention, deterministic all-ones, sequential state-leak regression, golden INPUTS non-aligned shapes)
+
+## Refinement 6 — L1 budget fit for large head_dim
+- **Date**: 2026-07-07
+- **What was done**:
+  - Implemented D_CHUNK K-blocking + N-chunking to bound all per-core CB sizes to a constant (D_CHUNK ≤ 8), eliminating L1 OOM on large head_dim (D=512, D=1024).
+  - Program descriptor: added `D_CHUNK`, `num_k_blocks_qk`, `num_d_chunks` CT args to reader (args 15-17), writer (args 5-6), and compute (args 11-13) kernels. D_CHUNK = min(D_t, 8), reduced to largest divisor of D_t ≤ 8.
+  - Program descriptor: added `cb_qk_partials` CB (index 22) for QK^T K-block spill/reload intermediates. Sized to B_q×B_kv tiles (2 pages, double-buffered).
+  - Program descriptor: shrunk all D_t-scaling CBs to D_CHUNK-bounded: cb_q/cb_k (2×D_CHUNK, K-blocked), cb_v/cb_o/cb_pv_out/cb_output (D_CHUNK, N-chunked).
+  - Reader kernel: added D_CHUNK outer loop. For each D_CHUNK, replays all KV blocks. Q and K are pushed in K-blocks of D_CHUNK tiles (interleaved per K-block to avoid CB deadlock). V is pushed only for the current D_CHUNK (N-chunked). Q/K are re-read per D_CHUNK (weights restreaming trade).
+  - Compute kernel: added D_CHUNK outer loop. For each D_CHUNK: init m_i/l_i/O_i (D_CHUNK-sized), replay all KV blocks with K-blocked QK^T (num_k_blocks=D_t/D_CHUNK, spill/reload via cb_qk_partials) and N-chunked PV (N=D_CHUNK). O_i and output are D_CHUNK-sized.
+  - Compute kernel: QK^T matmul_block now uses `in0_block_k=D_CHUNK` and `num_k_blocks=D_t/D_CHUNK` with `interm_buf=cb_qk_partials` for software spill/reload (packer_l1_acc=false, compatible with fp32_dest_acc_en=True).
+  - Compute kernel: moved `cb_wait_front(cb_attn_mask)` and `cb_wait_front(cb_scaler)` to AFTER the QK^T matmul. Previously they were at the start of the KV block loop, causing deadlock when the reader is stuck pushing Q/K K-blocks (cb_q fills up before reader reaches mask/scaler push).
+  - Writer kernel: added D_CHUNK loop. Writes D_CHUNK tiles per Q block per chunk, with proper tile offset computation for the D_CHUNK striding within the D_t-wide output.
+  - Op file: updated pre-flight L1 budget check to use D_CHUNK-bounded CB sizes. All shapes now fit within the 1.4M L1 budget.
+  - Advisory deviation: the D_CHUNK outer loop recomputes QK^T and online softmax per D_CHUNK. This is the standard "weights restreaming" trade from the /memory-budget-metal skill (§7.2) — more DRAM traffic for fitting in L1. For D=1024, D_CHUNK=8: 4× QK^T recomputation, but QK^T is small for S=128 (4 KV blocks).
+- **Accuracy achieved**:
+  - bf16 + D=1024: PCC ≥ 0.99 (all mask modes, scale modes, fp32_dest_acc_en)
+  - fp32 + D=1024: PCC ≥ 0.99 (all mask modes, scale modes) — the 6 cells that previously OOM'd
+  - bf8b + D=1024: PCC ≥ 0.98 (all mask modes, scale modes, fp32_dest_acc_en)
+  - bf16 + D=512: PCC ≥ 0.99 (all dtypes, fp32_dest_acc_en)
+- **Golden test progress**: 1790 / 2269 passing (was 1784 / 2269 in prior phase). +6 new passing cells (float32 + D=1024 + fp32_dest_acc_en=True across mask_mode × scale_mode). 10 failures (all pre-existing: float32 + S≥4096 precision near-miss, PCC=0.9999, rms~0.029 > 0.02 target). 468 xfailed. Zero hangs. Full suite runs in ~171 seconds.
+- **Issues encountered**:
+  - CB deadlock #1: reader pushed ALL Q K-blocks before ANY K K-blocks. cb_q filled up (2×D_CHUNK=16 pages), reader blocked on reserve_back, compute blocked on wait_front(cb_k). Fixed by interleaving Q and K pushes per K-block.
+  - CB deadlock #2: compute waited for cb_attn_mask and cb_scaler at start of KV block, before QK^T. Reader was stuck pushing Q/K K-blocks (cb_q full), never reached mask/scaler push. Fixed by moving mask/scaler waits to after QK^T matmul (which consumes Q/K and frees cb_q space).
+- **Tests added**: test_sdpa_refinement6_l1_budget.py (45 tests covering D=1024 across all dtypes, mask modes, scale modes, multi-head, GQA/MQA, cross-attention, multi-batch, per-head mask, causal+explicit scale, deterministic all-ones, sequential state-leak regression, D=512 dtype cross-product)

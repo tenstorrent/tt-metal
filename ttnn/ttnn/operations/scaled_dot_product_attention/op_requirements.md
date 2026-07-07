@@ -120,7 +120,7 @@ Bullet 2 FAIL: acceptance/refinement tests failing:
 
 **Verifier notes**: The golden test INPUTS include non-aligned shapes (D=50, S=47, etc.). These currently xfail because the kernel assumes tile-aligned dimensions. Missing values: alignment={w_non_aligned, h_non_aligned}.
 
-### [ ] Refinement 6 — L1 budget fit for large head_dim
+### [x] Refinement 6 — L1 budget fit for large head_dim
 
 **Goal**: rewrite the reduction and streaming phases so the per-core L1 CB footprint is bounded by a constant (chunking on the head_dim and KV dimensions), so the op stops OOMing on the large head_dim shapes in `feature_spec.INPUTS` (D ∈ {512, 1024}). Phase 0 leaves these cells failing with `OOM`; this refinement moves them to passing.
 
