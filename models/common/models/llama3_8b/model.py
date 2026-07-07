@@ -1029,7 +1029,6 @@ def build_llama3_transformer_1d_config(
         return cache_path_root / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
 
     model_config = {
-        "DECODERS_OPTIMIZATIONS": decoder_precision,
         "SDPA_DECODE_PROGCFG": ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             exp_approx_mode=False,
@@ -1055,19 +1054,10 @@ def build_llama3_transformer_1d_config(
         ),
         "ATTN_ALL_GATHER_MATMUL_PROGCFG": decode_all_gather_matmul_program_config(),
         "ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG": decode_all_gather_matmul_output_mem_config(),
-        "ATTN_AGMM_CONFIG": {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2},
         "MLP_RS_CONFIG": {
-            "num_links": 1,
             "chunks_per_sync": 10,
             "num_workers_per_link": 2,
             "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-        },
-        "SAMPLING_AG_CONFIG": {
-            "allow_force_argmax": False,
-            "num_links": 1,
-            "chunks_per_sync": 10,
-            "num_workers_per_link": 2,
-            "topology": ttnn.Topology.Linear,
         },
     }
     model_config["DECODE_RESIDUAL_MEMCFG"] = decode_residual_mem_config()
@@ -1115,7 +1105,6 @@ def build_llama3_transformer_1d_config(
             head_dim=head_dim,
             device=mesh_device,
             use_qk_fused=True,
-            datatype=ttnn.bfloat16,
         )
 
     def norm_weight_name(layer_num: int | None, weight_key: str, state_dict_prefix: str | None = None) -> str:
@@ -1155,7 +1144,6 @@ def build_llama3_transformer_1d_config(
                 ),
             ),
             eps=norm_eps,
-            add_unit_offset=False,
             mesh_device=mesh_device,
             tt_ccl=tt_ccl_inst,
             max_batch_size=max_batch_size,
@@ -1243,7 +1231,6 @@ def build_llama3_transformer_1d_config(
                 ),
                 mesh_device=mesh_device,
                 eps=norm_eps,
-                add_unit_offset=False,
                 decode_in_sharded=False,
                 decode_out_sharded=False,
                 prefill_distributed=False,
@@ -1270,7 +1257,6 @@ def build_llama3_transformer_1d_config(
             )
 
         scale = query_pre_attn_scalar**-0.5 if query_pre_attn_scalar is not None else head_dim**-0.5
-        attn_agmm_cfg = model_config.get("ATTN_AGMM_CONFIG", {})
         return Attention1DConfig(
             wqkv=wqkv,
             wo=wo,
@@ -1297,22 +1283,13 @@ def build_llama3_transformer_1d_config(
             wqkv_dtype=wqkv_dtype,
             wo_dtype=wo_dtype,
             activation_dtype=activation_dtype,
-            decode_xqkv_prg_config=model_config.get("XQKV_DECODE_PROGCFG"),
             decode_sdpa_prg_config=model_config.get("SDPA_DECODE_PROGCFG"),
             decode_attn_output_prg_config=model_config.get("ATTN_OUTPUT_PROGCFG"),
             decode_residual_memcfg=model_config.get("DECODE_RESIDUAL_MEMCFG"),
             decode_create_qkv_head_memcfg=model_config.get("CREATE_QKV_DECODE_SHARD"),
-            decode_scores_memcfg=model_config.get("SCORES_BATCHED_MM_OUTPUT_MEMCFG"),
-            prefill_xqkv_prg_config=model_config.get("XQKV_PREFILL_PROGCFG"),
-            prefill_sdpa_prg_config=model_config.get("SDPA_PROGCFG"),
-            prefill_wo_prg_config=model_config.get("WO_PREFILL_PROGCFG"),
-            prefill_kv_memcfg=model_config.get("KV_PREFILL_MEM_CFG"),
             use_fused_all_gather_matmul=use_fused_all_gather_matmul,
             decode_all_gather_matmul_prg_config=model_config.get("ATTN_ALL_GATHER_MATMUL_PROGCFG"),
             decode_all_gather_matmul_memcfg=model_config.get("ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"),
-            decode_agmm_num_links=attn_agmm_cfg.get("num_links", 1),
-            decode_agmm_chunks_per_sync=attn_agmm_cfg.get("chunks_per_sync", 10),
-            decode_agmm_num_workers_per_link=attn_agmm_cfg.get("num_workers_per_link", 2),
             li_qkv_decode_compute_kernel_cfg=get_math_fidelity(layer_num, "li_qkv_decode"),
             sdpa_decode_compute_kernel_cfg=get_math_fidelity(layer_num, "sdpa_decode"),
             li_o_decode_compute_kernel_cfg=get_math_fidelity(layer_num, "li_o_decode"),
@@ -1403,7 +1380,6 @@ def build_llama3_transformer_1d_config(
             ff2_compute_kernel_cfg=get_math_fidelity(layer_num, "li_ff2"),
             decode_ff1_3_compute_kernel_cfg=get_math_fidelity(layer_num, "li_ff1_ff3"),
             decode_ff2_compute_kernel_cfg=get_math_fidelity(layer_num, "li_ff2"),
-            decode_spill_w1_to_dram_before_w3=False,
             prefill_len_cutoff=prefill_len_cutoff,
         )
 
@@ -1486,7 +1462,6 @@ def build_llama3_transformer_1d_config(
                 for split_size in split_sizes
             ],
             compute_kernel_config=_compute_kernel_config_hifi2(),
-            lm_head_dtype=ttnn.bfloat8_b,
             output_memcfg=ttnn.L1_MEMORY_CONFIG,
             input_memcfg=input_memcfg,
             weights_memcfgs=weights_memcfgs,
@@ -1497,30 +1472,12 @@ def build_llama3_transformer_1d_config(
         if vocab_size // sampling_splits > 64 * 1024:
             return None
 
-        num_gather_links = 1
-        if "GALAXY_NUM_LINKS" in model_config:
-            max_links = model_config["GALAXY_NUM_LINKS"]
-            max_top_k = 32
-            num_gather_links = min(max_top_k // 32, max_links) if max_top_k // 32 <= max_links else max_links
-
-        ag_cfg = model_config.get("SAMPLING_AG_CONFIG", {})
         return Sampling1DConfig(
             vocab_size=padded_vocab_size,
             valid_vocab_size=vocab_size,
             mesh_device=mesh_device,
             tt_ccl=tt_ccl_inst,
             max_batch_size=max_batch_size,
-            max_top_k=32,
-            sub_core_grids=None,
-            sub_core_grid_topk=None,
-            start_core=ttnn.CoreCoord(0, 0),
-            num_gather_links=num_gather_links,
-            sampling_memory_config=model_config.get("DECODE_SAMPLING_INPUT_MEMCFG", ttnn.DRAM_MEMORY_CONFIG),
-            allow_force_argmax=ag_cfg.get("allow_force_argmax", False),
-            num_argmax_gather_links=ag_cfg.get("num_links", num_gather_links),
-            ag_topology=ag_cfg.get("topology", ttnn.Topology.Linear),
-            argmax_chunks_per_sync=ag_cfg.get("chunks_per_sync", 10),
-            argmax_num_workers_per_link=1,
             pad_to_power_of_2=pad_logits_to_power_of_2,
         )
 
@@ -1557,7 +1514,6 @@ def build_llama3_transformer_1d_config(
                 ),
                 mlp_config=make_mlp_config(i),
                 decode_residual_memcfg=model_config["DECODE_RESIDUAL_MEMCFG"],
-                prefill_residual_memcfg=ttnn.DRAM_MEMORY_CONFIG,
                 activation_dtype=activation_dtypes[i],
             )
             for i in range(n_layers)
@@ -1572,7 +1528,6 @@ def build_llama3_transformer_1d_config(
         lm_head_config=make_lm_head_config(),
         sampling_config=make_sampling_config(),
         decode_residual_memcfg=model_config["DECODE_RESIDUAL_MEMCFG"],
-        prefill_residual_memcfg=ttnn.DRAM_MEMORY_CONFIG,
         activation_dtypes=activation_dtypes,
         tt_ccl=tt_ccl_inst,
         cache_path=str(weight_cache_path) if weight_cache_path else None,
