@@ -44,6 +44,7 @@ import numpy as np
 import torch
 
 import ttnn
+from models.tt_transformers.tt.load_checkpoints import permute_1d
 
 PCC_THRESHOLD = 0.97
 
@@ -252,6 +253,7 @@ def main():
             k_cache, v_cache = layer_kv
 
             tt_k = _gather_kv_cache(k_cache, mesh, real_len)  # [num_kv_heads, real_len, head_dim]
+            tt_k = permute_1d(tt_k)  # convert interleaved (Meta) → block (HF) format for comparison
             tt_v = _gather_kv_cache(v_cache, mesh, real_len)
 
             oracle_k = torch.tensor(
