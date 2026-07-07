@@ -2,7 +2,7 @@ from typing import Optional
 
 import ttnn
 
-from .common import DeepSeekV4Module, _HIFI4, rectangular_core_range_set
+from .common import DeepSeekV4Module, _HIFI4, rectangular_core_range_set, width_sharded_l1_config
 from .weight_cache import _load_weight, _materialize
 import torch
 
@@ -157,12 +157,12 @@ class LinearDecode(DeepSeekV4Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
+        m = x.shape[-2]
+        m_padded = ((m + 31) // 32) * 32
         if self.partial_width_sharded:
             # The partial layout reduces the K-partials onto n_blocks output cores, so shard the
             # output WIDTH_SHARDED across a rectangular grid of n_blocks cores (shard
             # [padded_m, N / n_blocks]).
-            m = x.shape[-2]
-            m_padded = ((m + 31) // 32) * 32
             output_core_range_set = rectangular_core_range_set(self.n_blocks, self.device)
             output_memory_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -174,10 +174,13 @@ class LinearDecode(DeepSeekV4Module):
                 ),
             )
         else:
-            output_memory_config = None
+            output_memory_config = width_sharded_l1_config(m_padded, self.N, self.device)
+        if not x.is_sharded():
+            x = ttnn.to_memory_config(x, self.get_input_memory_config(x.shape[-2], x.shape[-1]))
         result = ttnn.experimental.matmul_decode(
             x, l1_weights, partial_width_sharded=self.partial_width_sharded, output_mem_config=output_memory_config
         )
+        result = ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG)
         l1_weights.deallocate()
         return result
 

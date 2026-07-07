@@ -4,7 +4,7 @@ import ttnn
 import torch
 
 from .common import DeepSeekV4Module, _HIFI4, _HIFI4_SDPA, _MASK_NEG, _profile
-from .layers import DeepSeekV4RMSNorm, Linear, _rms_norm_unweighted
+from .layers import DeepSeekV4RMSNorm, Linear, LinearDecode, _rms_norm_unweighted
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
 
@@ -539,13 +539,39 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         cache = _as_cache(cache)
         print(f"weight_dtype: {weight_dtype}")
 
-        # self.q_a_proj = LinearDecode(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype, partial_width_sharded=True, k_blocks=2, n_blocks=32, N=1024)
-        self.q_a_proj = Linear(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype)
+        self.o_b_proj = LinearDecode(
+            weights["o_b_proj.weight"], device, cache.file("o_b_proj"), dtype=weight_dtype, K=8192, N=4096
+        )
+        self.kv_proj = LinearDecode(
+            weights["kv_proj.weight"],
+            device,
+            cache.file("kv_proj"),
+            dtype=weight_dtype,
+            partial_width_sharded=True,
+            k_blocks=4,
+            n_blocks=16,
+            N=512,
+            K=4096,
+        )
+        self.q_b_proj = LinearDecode(
+            weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype, n_blocks=64, K=1024, N=32768
+        )
+        self.q_a_proj = LinearDecode(
+            weights["q_a_proj.weight"],
+            device,
+            cache.file("q_a_proj"),
+            dtype=weight_dtype,
+            partial_width_sharded=True,
+            k_blocks=2,
+            n_blocks=32,
+            K=4096,
+            N=1024,
+        )
+        # self.q_a_proj = Linear(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype)
+        # self.q_b_proj = Linear(weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype)
+        # self.kv_proj = Linear(weights["kv_proj.weight"], device, cache.file("kv_proj"), dtype=weight_dtype)
         self.q_a_norm = DeepSeekV4RMSNorm(weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"))
-        self.q_b_proj = Linear(weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype)
-        self.kv_proj = Linear(weights["kv_proj.weight"], device, cache.file("kv_proj"), dtype=weight_dtype)
         self.kv_norm = DeepSeekV4RMSNorm(weights["kv_norm.weight"], self.eps, device, cache.file("kv_norm"))
-        self.o_b_proj = Linear(weights["o_b_proj.weight"], device, cache.file("o_b_proj"), dtype=weight_dtype)
 
         # Grouped output projection (``DeepseekV4GroupedLinear``): block-diagonal
         # over o_groups. Store the per-group weight as [g, in_per_group, out_per_group]
