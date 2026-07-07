@@ -723,6 +723,64 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
         if re.search(r"pytest\.xfail|mark\.xfail|pytest\.skip|assert\s+True\b", src):
             reasons.append(f"honesty: {p.name} contains pytest.xfail / pytest.skip / assert True")
 
+    # --- Enumerate any stubs still on torch fallback (static + runtime) --------
+    # Two complementary scans, both pure read-side, both silent when clean:
+    #   G1-static  — grep _stubs/*.py for `self._torch_module(...)` / `_get_torch_submodule(...)`
+    #                (the un-graduated scaffold shape). Wires up the previously-dead
+    #                _G1_TORCH_DELEGATION patterns from line 282 so operators see WHICH
+    #                stubs the LLM never rewrote, not just an aggregate count.
+    #   G1-runtime — read _runtime_fallbacks.json for components that fell back during
+    #                the pytest run just completed. Complements the static scan when a
+    #                stub looks native but its runtime except-branch fired (e.g. conv2d
+    #                CPU-fallback under an edge-case shape).
+    # When both scans return empty (fully graduated pipeline), no reason is appended
+    # and gate behavior is identical to before. Purely additive diagnostic on exit.
+    _stubs_dir = demo_dir / "_stubs"
+    _static_offenders: List[str] = []
+    if _stubs_dir.is_dir():
+        for _stub in sorted(_stubs_dir.glob("*.py")):
+            if _stub.name.startswith("_"):
+                continue
+            try:
+                _src = _stub.read_text(errors="ignore")
+            except Exception:
+                continue
+            for _pat in _G1_TORCH_DELEGATION:
+                if re.search(_pat, _src):
+                    _static_offenders.append(_stub.stem)
+                    break
+    if _static_offenders:
+        _shown = _static_offenders[:12]
+        _tail = f", +{len(_static_offenders) - 12} more" if len(_static_offenders) > 12 else ""
+        reasons.append(
+            f"G1-static: {len(_static_offenders)} stub(s) still route __call__ through torch "
+            f"(scaffold not yet graduated by LLM): {', '.join(_shown)}{_tail}"
+        )
+
+    _rt_offenders: List[str] = []
+    _rtj = demo_dir / "_runtime_fallbacks.json"
+    if _rtj.is_file():
+        try:
+            _rt = json.loads(_rtj.read_text())
+            if isinstance(_rt, dict):
+                for _comp, _info in sorted(_rt.items()):
+                    if not isinstance(_info, dict):
+                        continue
+                    _kinds = _info.get("kinds") or []
+                    _helpers = _info.get("helpers") or []
+                    if _helpers or _kinds:
+                        _kk = ",".join(sorted(set(_kinds))) if _kinds else "?"
+                        _rt_offenders.append(f"{_comp} ({_kk}, {len(_helpers)} call(s))")
+        except Exception:
+            pass
+    if _rt_offenders:
+        _shown = _rt_offenders[:8]
+        _tail = f"; +{len(_rt_offenders) - 8} more" if len(_rt_offenders) > 8 else ""
+        reasons.append(
+            f"G1-runtime: {len(_rt_offenders)} component(s) hit CPU fallback during pytest: "
+            f"{'; '.join(_shown)}{_tail}"
+        )
+
     _rt_off = os.environ.get("E2E_REQUIRE_TRACE", "1") == "0"
     _anno = os.environ.get("E2E_ALLOW_NO_TRACE") == "1"
     _ack = os.environ.get("E2E_I_KNOW_TRACE_IS_BROKEN") == "1"
