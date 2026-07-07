@@ -88,7 +88,7 @@ Bullet 3 FAIL: golden responsible cells 10/140 below majority threshold.
 
 **Verifier notes**: Should land after Refinement 1 — the multi-block fix is needed to verify dtypes on non-trivial shapes. The op already accepts `compute_kernel_config` and the `default_compute_kernel_config()` function is the single source of truth. The `fp32_dest_acc_en` axis is already in SUPPORTED. Missing values: dtype={FLOAT32, BFLOAT8_B}, fp32_dest_acc_en={False}. The `{"dtype": ttnn.float32, "fp32_dest_acc_en": False}` EXCLUSION from the design doc should be added when this refinement lands.
 
-### [ ] Refinement 3 — GQA / MQA head broadcasting
+### [x] Refinement 3 — GQA / MQA head broadcasting
 
 **Goal**: add `gqa` and `mqa` to `SUPPORTED["kv_heads_mode"]` by implementing head broadcasting in the reader kernel (replicating K/V tiles for H_kv < H_q) or in the work distribution (assigning the same K/V tile range to multiple Q head cores).
 

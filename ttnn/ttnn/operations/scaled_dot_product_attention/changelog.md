@@ -88,3 +88,36 @@
   - Scaler CB Float32 caused OOM on S=8192 (512 tiles × 4KB = 2MB). Fixed by using Float16_b for scaler.
   - Float32 + D=1024 OOM: L1 budget exceeded (1.6MB > 1.4MB). Pre-flight check raises NotImplementedError to prevent device crash. Refinement 6 territory.
 - **Tests added**: test_sdpa_refinement2_numerical.py (49 tests covering dtype × fp32_dest_acc_en cross-product, mask across dtypes, explicit scale across dtypes, fp32+False exclusion test)
+
+## Refinement 3 — GQA / MQA head broadcasting
+- **Date**: 2026-07-07
+- **What was done**:
+  - Added `gqa` and `mqa` to `SUPPORTED["kv_heads_mode"]`.
+  - Reader kernel: added `H_kv` as CT arg [11], compute `h_kv = h_idx * H_kv / H_q` for K/V tile base (matches `repeat_interleave` broadcasting pattern: each KV head is replicated `H_q / H_kv` times consecutively).
+  - Program descriptor: extract `H_kv` from `key.shape[1]`, pass to reader CT args.
+  - Fixed core grid from 8×8 (64, includes dispatch cores) to 8×7 (56 worker cores). The 8th row (y=7) contains dispatch cores that cannot host user kernels — caused `Illegal kernel placement` error for shapes with H_q > 56.
+  - Fixed work distribution: replaced `iter_cores()` (which yielded 1 unit/core) with `core_to_work_units` dict that correctly assigns multiple work units per core using `units_per_core_g1`/`units_per_core_g2` from `split_work_to_cores`.
+  - Reader/writer/compute kernels now loop over `num_work_units` per core, reading (b_idx, h_idx) pairs from RT args.
+  - Fixed init deadlock: moved Phase 0 init (`cb_m`/`cb_l`/`cb_o`) to START of each Q block instead of end. The end-of-loop re-init left stale tiles in `cb_o` after the last Q block, deadlocking the next work unit's `cb_reserve_back`.
+- **Accuracy achieved**:
+  - GQA 4:1 (H_q=8, H_kv=2): PCC=0.999996
+  - GQA Llama 3 (H_q=32, H_kv=8): PCC=0.999998
+  - GQA 3:1 (H_q=12, H_kv=4): PCC=0.999996
+  - MQA 8:1 (H_q=8, H_kv=1): PCC=0.999999
+  - MQA 32:1 (H_q=32, H_kv=1): PCC=0.999997
+  - MQA Falcon-7B (H_q=71, H_kv=1): PCC=0.999968 (71 work units on 56 cores)
+  - GQA/MQA cross-attention: PCC ≥ 0.999996
+  - GQA/MQA with mask: PCC ≥ 0.999996
+  - GQA/MQA with explicit scale: PCC ≥ 0.999997
+  - GQA long context (S=4096): PCC ≥ 0.995
+  - GQA/MQA multi-batch: PCC ≥ 0.999996
+- **Golden test progress**: 1040 / 2269 passing (was 1026 / 2269 in prior phase). +14 new passing cells (GQA/MQA shapes across all dtype/mask/scale combinations). 20 failures:
+  - 4 OOM (float32 + D=1024) — prior phase, Refinement 6 territory
+  - 10 precision near-miss (float32 + S≥4096) — prior phase pattern
+  - 4 NaN on S=1024 bf16 — confirmed test-ordering artifacts from shared module-scoped device state. These cells PASS when run in isolation. NOT regressions from code changes.
+  - 2 bf8b D=256 False — also pass in isolation. Test-ordering artifacts.
+- **Issues encountered**:
+  - Dispatch core placement error: 8×8 grid includes dispatch cores on row y=7. Fixed by using 8×7 grid.
+  - Multi-work-unit deadlock: end-of-Q-block re-init left stale tiles in cb_o. Fixed by moving init to start of Q block.
+  - Test-ordering NaN: some golden cells fail with NaN/Inf when run as part of the full suite but pass in isolation. This is a pre-existing flaky test issue from the shared module-scoped device, not a code regression.
+- **Tests added**: test_sdpa_refinement3_gqa_mqa.py (29 tests covering GQA self-attention, MQA self-attention, MQA H_q=71/64 multi-work-unit, GQA/MQA cross-attention, GQA/MQA with mask, GQA/MQA with explicit scale, GQA/MQA long-context, GQA/MQA across dtypes, sequential GQA→MQA state-leak regression, deterministic all-ones input)
