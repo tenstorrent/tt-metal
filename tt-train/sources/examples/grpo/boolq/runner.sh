@@ -4,11 +4,12 @@
 #
 # Launches the 2-rank GRPO BoolQ training example via tt-run.
 #
-# Topology (mirrors tests/weight_transfer/runner.sh):
-#   Rank 0 (TTML): owns one N300 board, opens a [1, 2] mesh, drives
+# Topology (mirrors tests/weight_transfer/runner.sh, 4->4 / local8):
+#   Rank 0 (TTML): owns two N300 boards, opens a [1, 4] DDP mesh, drives
 #                  training via ttml + GRPOTrainer.
-#   Rank 1 (TTT):  owns one N300 board, opens a [1, 1] mesh, hosts
-#                  the tt-transformers generation worker over RPC.
+#   Rank 1 (TTT):  owns two N300 boards, opens a [1, 4] parent mesh split
+#                  into four [1, 1] submeshes, one tt-transformers
+#                  generation worker per submesh, served over RPC.
 #
 # tt-run wraps mpirun:
 #   --rank-binding   maps each MPI rank to a (mesh_id, mesh_host_rank)
@@ -27,8 +28,8 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
 fi
 
 EX_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo/boolq"
-HOST_FILE="${EX_DIR}/configurations/local2/hosts.txt"
-RANK_BINDINGS_FILE="${EX_DIR}/configurations/local2/rank_bindings.yaml"
+HOST_FILE="${EX_DIR}/configurations/local8/hosts.txt"
+RANK_BINDINGS_FILE="${EX_DIR}/configurations/local8/rank_bindings.yaml"
 SCRIPT="${EX_DIR}/boolq_training_example.py"
 
 while [[ "$#" -gt 0 ]]; do
@@ -51,7 +52,7 @@ done
 # rank_bindings.yaml against (1) TT_METAL_HOME, (2) the launch
 # directory (cwd at tt-run invocation), and (3) cwd at resolution
 # time -- not against the rank_bindings file's own directory. cd into
-# the example dir so "configurations/local2/mgd.textproto" resolves
+# the example dir so "configurations/local8/mgd.textproto" resolves
 # here.
 cd "${EX_DIR}"
 
