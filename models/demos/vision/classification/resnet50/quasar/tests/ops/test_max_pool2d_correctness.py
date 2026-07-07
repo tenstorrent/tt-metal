@@ -6,9 +6,16 @@
 Quasar max_pool2d / avg_pool2d CORRECTNESS suite (LLK handoff).
 
 Unlike test_max_pool2d_dprint_debug.py (a DPRINT-coupled single-config repro), this is a clean,
-self-contained correctness test: it runs the PRODUCTION quasar kernels (no DEBUG_PRINT needed) and
-asserts on PCC vs a torch golden. It is backend-agnostic — grid-adaptive height sharding makes it run
-unchanged on the 2-core Quasar emulator, craq-sim, and a full Quasar/WH part.
+self-contained correctness test: it runs the PRODUCTION kernels (no DEBUG_PRINT needed) and asserts
+on PCC vs a torch golden. It is backend-agnostic — grid-adaptive height sharding makes it run
+unchanged on the 2-core Quasar emulator, craq-sim, and a full Quasar/WH/Blackhole part.
+
+ARCH-ADAPTIVE OP SELECTION:
+    Quasar (is_quasar() -> ttnn.get_arch_name() contains "quasar") runs the experimental op under
+    bring-up (ttnn.experimental.quasar.{max,avg}_pool2d); every other arch (Blackhole, Wormhole)
+    runs the production ttnn.{max,avg}_pool2d. Both share the same call surface, so the sharding /
+    golden / PCC harness is identical across backends — which is exactly what makes Blackhole a
+    usable reference for the Quasar bring-up.
 
 WHAT IT GUARDS AGAINST (the value-inflation bug):
     The quasar pool reduce over a PARTIAL FACE (face_r_dim < 16, e.g. a 3x3 window -> 9 rows) reads the
@@ -36,6 +43,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_quasar
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # (in_h, in_w, channels, kernel, stride, padding) — all sizes chosen so N*H*W is tile-aligned (multiple
@@ -52,6 +60,11 @@ POOL_CONFIGS = [
     # requires shard width == physical tile width (32); 16 < 32 fails tensor construction.
     # resnet50 maxpool is always 64ch, so this is not a real path.
     (64, 64, 64, (2, 2), (2, 2), (0, 0), "64_2x2_64c_nopad"),  # 2x2 window (face_r_dim=4), no padding
+    # 8x4 window = 32-element window -> the num_faces ternary picks 4 naturally (window_size_hw=32 >
+    # FACE_HEIGHT), i.e. a full-tile reduce with NO small-window 2-face path. Probes whether the baseline
+    # pool works for the geometry the reduce-col strided tilize actually supports (32x32), isolating the
+    # hang to the <32 small-window optimization.
+    (32, 32, 64, (8, 4), (8, 4), (0, 0), "8x4_64c_fulltile"),
 ]
 
 
@@ -105,10 +118,15 @@ def _run_pool(mesh_device, is_max, in_h, in_w, channels, kernel, stride, padding
     x = ttnn.from_torch(x_nhwc_flat, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     x = x.to(device, mem_config)
 
-    # max_pool2d and avg_pool2d have different signatures (avg takes output_layout/dtype/compute_kernel_config
-    # and NOT dilation), so build the call per pool type.
+    # Backend-adaptive op selection: Quasar uses the experimental op that is still under bring-up;
+    # every other arch (Blackhole, Wormhole) uses the production ttnn pool. Both share the same call
+    # surface (max takes dilation; avg takes output_layout/dtype/compute_kernel_config and NOT
+    # dilation), so only the op namespace differs — the sharding/golden/PCC harness is identical,
+    # which is what makes the two backends directly comparable.
+    max_pool2d = ttnn.experimental.quasar.max_pool2d if is_quasar() else ttnn.max_pool2d
+    avg_pool2d = ttnn.experimental.quasar.avg_pool2d if is_quasar() else ttnn.avg_pool2d
     if is_max:
-        out = ttnn.experimental.quasar.max_pool2d(
+        out = max_pool2d(
             input_tensor=x,
             batch_size=batch,
             input_h=in_h,
@@ -120,7 +138,7 @@ def _run_pool(mesh_device, is_max, in_h, in_w, channels, kernel, stride, padding
             dilation=list(dilation),
         )
     else:
-        out = ttnn.experimental.quasar.avg_pool2d(
+        out = avg_pool2d(
             input_tensor=x,
             batch_size=batch,
             input_h=in_h,
@@ -228,7 +246,8 @@ def test_quasar_avg_pool2d_global(mesh_device, batch):
     x = ttnn.from_torch(x_nhwc_flat, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     x = x.to(device, mem_config)
 
-    out = ttnn.experimental.quasar.avg_pool2d(
+    avg_pool2d = ttnn.experimental.quasar.avg_pool2d if is_quasar() else ttnn.avg_pool2d
+    out = avg_pool2d(
         input_tensor=x,
         batch_size=batch,
         input_h=input_h,
