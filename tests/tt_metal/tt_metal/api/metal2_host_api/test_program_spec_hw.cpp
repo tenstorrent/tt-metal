@@ -39,7 +39,9 @@ using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeMinimalWriterDMKernel;
 using test_helpers::MakeShardedTensorParameter;
 
 // ============================================================================
@@ -103,12 +105,12 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     spec.name = "dfb_accessor_loopback";
 
     // Producer: BRISC reads from DRAM → DFB
-    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto producer = MakeMinimalWriterDMKernel("producer");
     producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_producer.cpp";
     producer.advanced_options.num_runtime_varargs = 3;
 
     // Consumer: NCRISC reads DFB → DRAM
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
     consumer.advanced_options.num_runtime_varargs = 3;
 
@@ -238,7 +240,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
     // Producer: BRISC reads DRAM → DFB. 1 named RTA, 1 named CRTA, 2 named CTAs, 3 RTA
     // varargs, 1 CRTA vararg.
-    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto producer = MakeMinimalWriterDMKernel("producer");
     producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_producer.cpp";
     producer.runtime_arg_schema.runtime_arg_names = {"src_addr"};
     producer.runtime_arg_schema.common_runtime_arg_names = {"num_entries"};
@@ -248,7 +250,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     // Consumer: NCRISC reads DFB → DRAM. Uses default `args` namespace, 1 named RTA,
     // 1 named CRTA, 2 named CTAs, 2 RTA varargs (note: different count from producer —
     // this verifies the named_rta_words offset is baked per-kernel), 1 CRTA vararg.
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_consumer.cpp";
     consumer.runtime_arg_schema.runtime_arg_names = {"dst_addr"};
     consumer.runtime_arg_schema.common_runtime_arg_names = {"num_entries"};
@@ -373,7 +375,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
 
     // Consumer: NCRISC reads out_dfb → DRAM. Reuses dfb_accessor_loopback_consumer.cpp
     // verbatim (positional varargs only).
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
     consumer.advanced_options.num_runtime_varargs = 3;
 
@@ -471,14 +473,14 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
 
     // Producer (BRISC) reads DRAM → DFB. TT_KERNEL form: bank_id/entry_size are template params
     // (CTAs); src_addr (RTA) and num_entries (CRTA) are function params.
-    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto producer = MakeMinimalWriterDMKernel("producer");
     producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tt_kernel_named_args_producer.cpp";
     producer.runtime_arg_schema.runtime_arg_names = {"src_addr"};
     producer.runtime_arg_schema.common_runtime_arg_names = {"num_entries"};
     producer.compile_time_args = {{"bank_id", 0}, {"entry_size", entry_size}};
 
     // Consumer (NCRISC) reads DFB → DRAM. Same TT_KERNEL form with dst_addr.
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tt_kernel_named_args_consumer.cpp";
     consumer.runtime_arg_schema.runtime_arg_names = {"dst_addr"};
     consumer.runtime_arg_schema.common_runtime_arg_names = {"num_entries"};
@@ -566,7 +568,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
     compute.compile_time_args = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
 
     // Consumer: NCRISC reads out_dfb → DRAM. Reuses the existing positional-vararg consumer.
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
     consumer.advanced_options.num_runtime_varargs = 3;
 
@@ -748,12 +750,12 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     spec.name = "ta_binding_loopback";
 
     // Producer (BRISC): reads input tensor via TA binding, pushes to DFB
-    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto producer = MakeMinimalWriterDMKernel("producer");
     producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_producer.cpp";
     producer.advanced_options.num_runtime_varargs = 1;
 
     // Consumer (NCRISC): pops from DFB, writes output tensor via TA binding
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_consumer.cpp";
     consumer.advanced_options.num_runtime_varargs = 1;
 
@@ -881,7 +883,7 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     BindTensorParameterToKernel(compute, "local_t", "local_t");
 
     // Consumer (NCRISC): drains out_dfb → DRAM. Reuses dfb_accessor_loopback_consumer.cpp verbatim.
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
     consumer.advanced_options.num_runtime_varargs = 3;
 
@@ -1008,10 +1010,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
             {
                 .runtime_arg_names = {"report_addr"},
             },
-        .hw_config =
-            DataMovementGen1Config{
-                .processor = DataMovementProcessor::RISCV_0,
-            },
+        .hw_config = CreateWriterGen1DataMovementConfig(),
     };
     dm_kernel.scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
@@ -1136,7 +1135,7 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
     //   w[0]=named0 w[1]=named1 w[2]=tensor base w[3]=scratch base w[4]=vararg0 w[5]=vararg1 w[6]=page size
     // The page size is the binding's SECOND CRTA word (dynamic_tensor_shape); reading it exercises the
     // extra binding word directly, and its presence shifts the scratchpad + vararg offsets.
-    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto producer = MakeMinimalWriterDMKernel("producer");
     producer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
@@ -1165,7 +1164,7 @@ void kernel_main() {
     BindTensorParameterToKernel(producer, "io", "io");
 
     // Consumer (NCRISC): drain the staged entry to DRAM.
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     consumer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
@@ -1328,7 +1327,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadBaseReDeliveredAfterDfbResize) {
     spec.name = "scratchpad_base_redelivered_after_dfb_resize";
 
     // Producer (BRISC): write a pattern into the scratchpad, then stage its base address into the DFB.
-    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto producer = MakeMinimalWriterDMKernel("producer");
     producer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
@@ -1349,7 +1348,7 @@ void kernel_main() {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
     // Consumer (NCRISC): drain the staged entry to DRAM.
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     consumer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"

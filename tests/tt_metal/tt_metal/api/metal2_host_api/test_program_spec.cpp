@@ -3043,8 +3043,8 @@ TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {
     ProgramSpec spec;
     spec.name = "dm_only_program";
 
-    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto producer = MakeMinimalWriterDMKernel("producer");
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
 
     producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
@@ -3068,7 +3068,7 @@ TEST_F(ProgramSpecTestGen1, DMKernelSelfLoopOnGen1Succeeds) {
     ProgramSpec spec;
     spec.name = "dm_self_loop";
 
-    auto kernel = MakeMinimalGen1DMKernel("kernel", DataMovementProcessor::RISCV_0);
+    auto kernel = MakeMinimalGen1DMKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
     kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "c"));
@@ -3618,7 +3618,7 @@ TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
     compute.runtime_arg_schema.common_runtime_arg_names = {"num_tiles"};
     compute.compile_time_args = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
 
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);  // trivial drain kernel
+    auto consumer = MakeMinimalReaderDMKernel("consumer");  // trivial drain kernel
 
     auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, 4);
     out_dfb.data_format_metadata = tt::DataFormat::Float16_b;  // required for a compute DFB endpoint

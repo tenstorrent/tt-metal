@@ -24,9 +24,10 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
-using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
+using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeMinimalWriterDMKernel;
 
 constexpr CoreCoord kCore{0, 0};
 constexpr const char* kKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/kernel_thread_barrier.cpp";
@@ -100,15 +101,17 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
         kernel_configs.push_back({"dm_barrier_kernel", spec, make_layout(l1_base, kRounds)});
         work_unit_kernel_names = {"dm_barrier_kernel"};
     } else {
-        auto make_gen1 = [&](const std::string& name, tt::tt_metal::DataMovementProcessor proc, uint32_t layout_base) {
-            auto spec = MakeMinimalGen1DMKernel(name, proc);
+        auto make_gen1 = [&](const std::string& name, KernelSpec spec, uint32_t layout_base) {
             spec.source = kKernelPath;
             spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
-            return KernelConfig{name, spec, make_layout(layout_base, kRounds)};
+            return KernelConfig{name, std::move(spec), make_layout(layout_base, kRounds)};
         };
-        kernel_configs.push_back(make_gen1("brisc_barrier_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0, l1_base));
+        // BRISC (RISCV_0) uses the writer role; NCRISC (RISCV_1) uses the reader role.
+        kernel_configs.push_back(
+            make_gen1("brisc_barrier_kernel", MakeMinimalWriterDMKernel("brisc_barrier_kernel"), l1_base));
         uint32_t ncrisc_base = l1_base + kernel_configs[0].layout.total_words * sizeof(uint32_t);
-        kernel_configs.push_back(make_gen1("ncrisc_barrier_kernel", tt::tt_metal::DataMovementProcessor::RISCV_1, ncrisc_base));
+        kernel_configs.push_back(
+            make_gen1("ncrisc_barrier_kernel", MakeMinimalReaderDMKernel("ncrisc_barrier_kernel"), ncrisc_base));
         work_unit_kernel_names = {"brisc_barrier_kernel", "ncrisc_barrier_kernel"};
     }
 

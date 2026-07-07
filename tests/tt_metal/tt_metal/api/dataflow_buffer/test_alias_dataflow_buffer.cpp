@@ -118,8 +118,8 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
         producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
         consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
-        producer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-        consumer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1};
+        producer_cfg = CreateWriterGen1DataMovementConfig();
+        consumer_cfg = CreateReaderGen1DataMovementConfig();
     }
 
     DataflowBufferSpec dfb_a{
@@ -329,8 +329,8 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
         producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
         consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
-        producer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-        consumer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1};
+        producer_cfg = CreateWriterGen1DataMovementConfig();
+        consumer_cfg = CreateReaderGen1DataMovementConfig();
     }
 
     // dfb_borrowed: backed by ring_tensor (L1)

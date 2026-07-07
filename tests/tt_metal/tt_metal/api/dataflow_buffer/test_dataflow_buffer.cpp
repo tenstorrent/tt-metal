@@ -229,10 +229,8 @@ void run_single_dfb_program(
         dm_producer_cfg = experimental::DataMovementGen2Config{};
         dm_consumer_cfg = experimental::DataMovementGen2Config{};
     } else {
-        dm_producer_cfg =
-            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
-        dm_consumer_cfg =
-            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1};
+        dm_producer_cfg = experimental::CreateWriterGen1DataMovementConfig();
+        dm_consumer_cfg = experimental::CreateReaderGen1DataMovementConfig();
     }
 
     experimental::KernelSpec producer_spec;
@@ -1663,10 +1661,8 @@ static void run_dfb_size_override_test(
         dm_producer_cfg = experimental::DataMovementGen2Config{};
         dm_consumer_cfg = experimental::DataMovementGen2Config{};
     } else {
-        dm_producer_cfg =
-            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
-        dm_consumer_cfg =
-            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1};
+        dm_producer_cfg = experimental::CreateWriterGen1DataMovementConfig();
+        dm_consumer_cfg = experimental::CreateReaderGen1DataMovementConfig();
     }
 
     experimental::KernelSpec producer_spec{
