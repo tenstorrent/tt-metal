@@ -81,9 +81,15 @@ void kernel_main() {
     // face-row read applies; only the loop bound (and thus the resident tile count) grows.
     constexpr uint32_t weight_bcast_tiles = get_compile_time_arg_val(19);
     constexpr uint32_t bias_bcast_tiles = get_compile_time_arg_val(20);
+    // Batched RoPE (CT 21): per-batch stride into cos/sin, in tiles (== one batch's whole cos/sin
+    // block). 0 -> broadcast the same cos/sin to every input batch. The reader always indexes
+    // cos/sin by the WITHIN-batch seq row (global_row % rope_seqlen_tiles) and adds
+    // (global_row / rope_seqlen_tiles) * rope_batch_stride_tiles; at batch=1 both terms collapse
+    // to the original single-batch indexing.
+    constexpr uint32_t rope_batch_stride_tiles = get_compile_time_arg_val(21);
     // The WRITER always populates the reduce_scalar_* / epsilon / trans_mat CBs,
     // so the reader's first NoC op is the input read (starts streaming ASAP).
-    constexpr auto input_args = TensorAccessorArgs<21>();
+    constexpr auto input_args = TensorAccessorArgs<22>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
@@ -299,10 +305,17 @@ void kernel_main() {
             if (chunk_input_done) {
                 const uint32_t chunk_first = tile_row - pos_in_chunk;
                 for (uint32_t r = chunk_first; r <= tile_row; r++) {
+                    // Batched RoPE: fold the global row r into (batch b, within-batch seq row
+                    // r_seq) so each input batch reuses cos/sin at seq row r_seq. b selects the
+                    // per-batch cos/sin block via rope_batch_stride_tiles (0 => broadcast, all
+                    // batches share block 0). At batch=1: r_seq==r, rope_batch_off==0 (unchanged).
+                    const uint32_t r_seq = (rope_seqlen_tiles != 0) ? (r % rope_seqlen_tiles) : r;
+                    const uint32_t rope_batch_off =
+                        (rope_seqlen_tiles != 0) ? ((r / rope_seqlen_tiles) * rope_batch_stride_tiles) : 0u;
                     // Per-head RoPE: cos/sin shape [B, num_heads, N, head_dim] — all
-                    // heads' head_dim_tiles tiles for row r, idx
-                    // h*rope_seqlen_tiles*head_dim_tiles + r*head_dim_tiles + c.
-                    // Broadcast (per_head_rope=0): [B,1,N,head_dim], idx r*head_dim_tiles+c.
+                    // heads' head_dim_tiles tiles for row r_seq, idx (+ per-batch offset)
+                    // h*rope_seqlen_tiles*head_dim_tiles + r_seq*head_dim_tiles + c.
+                    // Broadcast (per_head_rope=0): [B,1,N,head_dim], idx r_seq*head_dim_tiles+c.
                     // This row's cos/sin tiles, laid out contiguously in the CB as
                     // [head0: head_dim_tiles, head1: ...] for per-head RoPE (total
                     // num_tile_cols), or head_dim_tiles for broadcast. Read them in
@@ -329,9 +342,10 @@ void kernel_main() {
                                 // tile t -> head (t / head_dim_tiles), within-head (t % head_dim_tiles)
                                 const uint32_t h = t / head_dim_tiles;
                                 const uint32_t within = t - h * head_dim_tiles;
-                                src_idx = h * rope_seqlen_tiles * head_dim_tiles + r * head_dim_tiles + within;
+                                src_idx = rope_batch_off + h * rope_seqlen_tiles * head_dim_tiles +
+                                          r_seq * head_dim_tiles + within;
                             } else {
-                                src_idx = r * head_dim_tiles + t;
+                                src_idx = rope_batch_off + r_seq * head_dim_tiles + t;
                             }
                             noc_async_read_tile(src_idx, rope_cos_accessor, rope_cos_wr_ptr);
                             noc_async_read_tile(src_idx, rope_sin_accessor, rope_sin_wr_ptr);

@@ -1071,6 +1071,77 @@ def test_layernorm_per_token_wide_corr(mesh_device, tp, topology, tp_axis, full_
     assert pcc >= 0.999, f"wide per-token affine LayerNorm pcc too low: {pcc}"
 
 
+@pytest.mark.parametrize("rope_mode", ["bcast", "perbatch"])
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "tp", "topology", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_LNBATCH_PARAMS, _LNBATCH_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_rmsnorm_batched_rope_corr(mesh_device, tp, topology, tp_axis, full_mesh, rope_mode):
+    """Batched RMSNorm + fused RoPE (Issue 3). The reader indexes cos/sin by the WITHIN-batch
+    seq row plus a per-batch offset, so cos/sin dim0 is either 1 (broadcast the same RoPE to every
+    input batch, rope_mode="bcast") or batch (each batch gets its own cos/sin, "perbatch").
+
+    Oracle = the already-trusted batch=1 RoPE path: run batched (batch=2), then run batch=1 for
+    each input batch with that batch's cos/sin; the batched output's batch-b seq slice must equal
+    the batch=1 result. This validates the reindex + the head-split-with-batch output layout
+    ([1, num_heads, batch*N, head_dim]) without a hand-derived RoPE reference."""
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    torch.manual_seed(0)
+    dim = 1024
+    head_dim = 128
+    batch = 2
+    rows = 64  # 2 tile-rows per batch
+    nh_dev = (dim // tp) // head_dim  # per-device whole heads (num_heads_per_device); 256/128 = 2
+    assert nh_dev > 1, "batched RoPE test wants head-split (num_heads_per_device>1)"
+    links = GALAXY_LINKS
+
+    x_t = torch.randn(1, batch, rows, dim, dtype=torch.bfloat16)
+    b_rope = 1 if rope_mode == "bcast" else batch
+    cos_raw = torch.randn(b_rope, rows, 1, head_dim // 2)
+    sin_raw = torch.randn(b_rope, rows, 1, head_dim // 2)
+    cos_f, sin_f = stack_cos_sin(cos_raw, sin_raw)  # (b_rope, rows, 1, head_dim)
+    cos_bhnd = cos_f.permute(0, 2, 1, 3)  # (b_rope, 1, rows, head_dim)
+    sin_bhnd = sin_f.permute(0, 2, 1, 3)
+
+    def _run(x_host, cos_host, sin_host):
+        x = bf16_tensor(x_host, device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+        cos = from_torch(cos_host, device=submesh, dtype=ttnn.float32)  # broadcast RoPE: replicated
+        sin = from_torch(sin_host, device=submesh, dtype=ttnn.float32)
+        trans = bf16_tensor(get_rot_transformation_mat(), device=submesh)
+        ccl = CCLManager(mesh_device=submesh, num_links=links, topology=topology)
+        sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
+        mk_pob = lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(  # noqa: E731
+            x, tp_axis, submesh, num_heads_per_device=nh_dev, num_links=links,
+            transformation_mat=trans, rope_cos=cos, rope_sin=sin,
+        )
+        pobs = [mk_pob() for _ in range(_PINGPONG)]
+        ttnn.synchronize_device(submesh)
+        outs = []
+        for k in range(3):  # ping-pong; 3 launches also checks determinism
+            o = ttnn.experimental.dit_fused_distributed_rmsnorm(
+                x, tp_axis, submesh, sems[k % _PINGPONG], topology=topology, epsilon=NORM_EPS,
+                num_heads_per_device=nh_dev, transformation_mat=trans, rope_cos=cos, rope_sin=sin,
+                persistent_output_buffer=pobs[k % _PINGPONG], num_preferred_links=links,
+            )
+            outs.append(_gather(o, tp_axis))  # head-split -> [seq, dim]
+        det = all(torch.equal(outs[0], g) for g in outs[1:])
+        return outs[0], det
+
+    batched_out, det = _run(x_t, cos_bhnd, sin_bhnd)  # [batch*rows, dim]
+    assert det, "batched RMSNorm+RoPE not deterministic across launches"
+
+    worst = 1.0
+    for b in range(batch):
+        cos_b = cos_bhnd[b : b + 1] if b_rope == batch else cos_bhnd  # [1,1,rows,head_dim]
+        sin_b = sin_bhnd[b : b + 1] if b_rope == batch else sin_bhnd
+        oracle, _ = _run(x_t[:, b : b + 1], cos_b, sin_b)  # [rows, dim]
+        pcc_b = _pcc(batched_out[b * rows : (b + 1) * rows], oracle)  # batch-major seq fold
+        worst = min(worst, pcc_b)
+        logger.info(f"ROPEB tp{tp}_{topology.name} {rope_mode} batch{b} vs batch=1 oracle pcc={pcc_b * 100:.4f}%")
+    assert worst >= 0.999, f"batched RoPE ({rope_mode}) diverged from batch=1 oracle: pcc={worst}"
+
+
 @pytest.mark.parametrize(
     ("mesh_device", "device_params", "model", "tp", "topology", "tp_axis", "full_mesh"),
     [pytest.param(*p, id=i) for p, i in zip(_LNMOD_PARAMS, _LNMOD_IDS)],

@@ -397,6 +397,14 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // Per-row RoPE push count: num_tile_cols for per-head (all heads' cos for
     // this row, packed contiguously), head_dim_tiles for broadcast.
     const uint32_t rope_tiles_per_row = per_head_rope ? num_tile_cols : head_dim_tiles;
+    // Batched RoPE: cos/sin dim0 is 1 (broadcast the same RoPE to every input batch) or `batch`
+    // (per-batch cos/sin). The reader indexes cos/sin by the within-batch seq row plus a per-batch
+    // offset of rope_batch_stride_tiles tiles (== one batch's whole cos/sin: num_heads_dim *
+    // rope_seqlen_tiles * head_dim_tiles). 0 for the broadcast case -> the offset collapses to 0.
+    const bool rope_per_batch = fuse_rope && batch > 1 && (rope_cos->logical_shape()[0] == batch);
+    const uint32_t rope_num_heads_dim = per_head_rope ? num_heads_per_device : 1u;
+    const uint32_t rope_batch_stride_tiles =
+        rope_per_batch ? (rope_num_heads_dim * rope_seqlen_tiles * head_dim_tiles) : 0u;
 
     // ------------------------------------------------------------------------
     // Ring topology: my position + forward/backward fabric neighbors.
@@ -1026,6 +1034,9 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // batch*num_tile_cols for per-batch adaLN [batch,1,H] (all batches read once, resident).
         weight_bcast_tiles,
         bias_bcast_tiles,
+        // CT 21: per-batch RoPE stride (tiles). 0 -> broadcast cos/sin across the input batch
+        // (reader reindexes by within-batch seq row); >0 -> each batch offsets by this many tiles.
+        rope_batch_stride_tiles,
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {

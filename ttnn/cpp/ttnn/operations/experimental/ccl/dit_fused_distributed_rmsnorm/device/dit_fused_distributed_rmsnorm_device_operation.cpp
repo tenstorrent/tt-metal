@@ -70,19 +70,27 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(shape.rank() == 4, "Input rank must be 4, got {}", shape.rank());
     // dim0 must be 1; dim1 is the batch dim (folded into the row count via
     // physical_volume/W, so each batch contributes N_pad/TILE_HEIGHT tile-rows).
-    // batch>1 output preserves batch at dim1 ([1, batch, N, H]), which collides
-    // with the head-split output layout (heads at dim1) — so batching requires
-    // num_heads_per_device==1 and no per_head_norm.
+    // Two batched output layouts (see compute_output_specs):
+    //   - num_heads_per_device==1: batch preserved at dim1 -> [1, batch, N, H] (Motif adaLN;
+    //     the caller's squeeze(0) recovers [batch, N, H]).
+    //   - num_heads_per_device>1 (head-split, e.g. batched QK-norm + RoPE): heads occupy dim1,
+    //     so batch is folded into the seq dim -> [1, num_heads, batch*N, head_dim]. This matches
+    //     the writer's flat (b*rows_per_batch + r)*head_dim_tiles layout; the caller reshapes the
+    //     seq dim back to (batch, N).
     TT_FATAL(shape[0] == 1, "Input dim0 must be 1 (shape [1, batch, N, H]); got {}", shape[0]);
     const uint32_t batch = shape[1];
     if (batch > 1) {
-        TT_FATAL(
-            args.num_heads_per_device == 1,
-            "Batched input (dim1={}) requires num_heads_per_device==1 (head-split output puts heads at "
-            "dim1, which collides with the preserved batch dim); got num_heads_per_device={}",
-            batch,
-            args.num_heads_per_device);
         TT_FATAL(!args.per_head_norm, "Batched input (dim1={}) does not support per_head_norm", batch);
+        // Per-token weight/bias ([.,N,H]) with batch>1 is untested: the per-token reader indexes
+        // weight/bias by the global folded row assuming a single batch's N rows. Reject up front
+        // (the per-batch [batch,1,H] adaLN path IS supported and has logical[-2]==1).
+        const bool pt_w = weight.has_value() && weight->logical_shape()[-2] > 1;
+        const bool pt_b = bias.has_value() && bias->logical_shape()[-2] > 1;
+        TT_FATAL(
+            !pt_w && !pt_b,
+            "Batched input (dim1={}) does not support per-token ([.,N,H]) weight/bias yet "
+            "(the per-token reader indexes by the global folded row)",
+            batch);
     }
     TT_FATAL(args.num_heads_per_device >= 1, "num_heads_per_device must be >= 1");
     TT_FATAL(
@@ -158,6 +166,29 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             "rope_cos dim 1 ({}) must be 1 (broadcast across heads) or num_heads_per_device ({})",
             cos_shape[1],
             args.num_heads_per_device);
+        // Batched RoPE: cos/sin dim 0 is either 1 (the same RoPE broadcast to every input batch)
+        // or `batch` (each input batch gets its own cos/sin slice). The reader indexes cos/sin by
+        // the WITHIN-batch seq row (global_row % rope_seqlen_tiles) plus a per-batch offset, so the
+        // cos/sin seq length must match the input's per-batch N and N must be tile-aligned (so the
+        // input fold gives an integer rope_seqlen_tiles rows per batch).
+        TT_FATAL(
+            cos_shape[0] == 1 || cos_shape[0] == batch,
+            "rope_cos dim 0 ({}) must be 1 (broadcast across the input batch) or the input batch ({})",
+            cos_shape[0],
+            batch);
+        TT_FATAL(
+            cos_shape[2] == shape[2],
+            "rope_cos seq dim ({}) must equal input N ({}) — the reader indexes cos/sin by the "
+            "within-batch seq row",
+            cos_shape[2],
+            shape[2]);
+        if (batch > 1) {
+            TT_FATAL(
+                shape[2] % TILE_HEIGHT == 0,
+                "Batched fused RoPE requires input N ({}) to be tile-aligned (multiple of {})",
+                shape[2],
+                TILE_HEIGHT);
+        }
     }
 
     TT_FATAL(args.ring_size >= 1, "ring_size must be >= 1");
@@ -234,14 +265,18 @@ DitFusedDistributedRmsnormDeviceOperation::compute_output_specs(
     specs.reserve(2);
 
     // Post-allgather output reshapes to [1, num_heads_per_device, N, H/num_heads_per_device].
-    // For batched input ([1, batch, N, H] with num_heads_per_device==1) we preserve batch
-    // at dim1 instead: the writer lays out all folded tile-rows flat as
-    // (b*rows_per_batch + r)*num_tile_cols + c, which is exactly the tile ordering of a
-    // [1, batch, N, H] TILE tensor — so the flat writer index lands each tile correctly and
-    // the caller's squeeze(0) recovers [batch, N, H]. batch>1 with head-split (nh>1) is
-    // rejected in validate (heads and batch both want dim1).
-    const uint32_t out_dim1 = (args.num_heads_per_device == 1) ? logical[1] : args.num_heads_per_device;
-    ttnn::Shape output_shape({1u, out_dim1, logical[2], logical[3] / args.num_heads_per_device});
+    // The writer lays out all folded tile-rows flat as
+    //   h * (batch*N/32) * head_dim_tiles + (b*rows_per_batch + r) * head_dim_tiles + c,
+    // so two batched layouts fall out of the same flat index:
+    //   - num_heads_per_device==1: batch stays at dim1 -> [1, batch, N, H]. Identical tile
+    //     ordering to [1,1,batch*N,H]; the caller's squeeze(0) recovers [batch, N, H] (Motif).
+    //   - num_heads_per_device>1 (head-split): heads occupy dim1, so batch folds into the seq
+    //     dim -> [1, num_heads, batch*N, head_dim]. batch==1 leaves this as [1, num_heads, N, hd]
+    //     (unchanged). The caller reshapes the seq dim back to (batch, N).
+    const uint32_t batch = logical[1];
+    const uint32_t out_dim1 = (args.num_heads_per_device == 1) ? batch : args.num_heads_per_device;
+    const uint32_t out_dim2 = (args.num_heads_per_device == 1) ? logical[2] : batch * logical[2];
+    ttnn::Shape output_shape({1u, out_dim1, out_dim2, logical[3] / args.num_heads_per_device});
     const auto out_dtype = args.dtype.value_or(input.dtype());
     specs.emplace_back(output_shape, TensorLayout(out_dtype, PageConfig(Layout::TILE), args.output_mem_config));
 
