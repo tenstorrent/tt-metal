@@ -34,12 +34,13 @@ from models.tt_transformers.tt.ccl import TT_CCL
 @pytest.mark.parametrize("bsz", [1])
 def test_janus_vision_model(
     mesh_device,
+    dummy_weights,
     reset_seeds,
     bsz,
 ):
     pcc_required = 0.95
     dtype = ttnn.bfloat16
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, dummy_weights=dummy_weights)
     state_dict = model_args.load_state_dict()
 
     # Wrapper composes "model.vision_model." and "model.aligner." internally.

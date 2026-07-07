@@ -49,13 +49,13 @@ def _round_up(x, m):
     ],
     indirect=True,
 )
-def test_e2e(mesh_device, reset_seeds, ensure_gc):
+def test_e2e(mesh_device, dummy_weights, reset_seeds, ensure_gc):
     pcc_required = 0.95
     dtype = ttnn.bfloat8_b  # decoder dtype (7B must fit); vision tower stays bf16 inside the model
 
     # ---- inputs: random image + a prompt with exactly num_image_tokens placeholders ----
     bsz = 1
-    model_args = ModelArgs(mesh_device, max_batch_size=1, max_seq_len=1024, cache_hf=True)
+    model_args = ModelArgs(mesh_device, max_batch_size=1, max_seq_len=1024, dummy_weights=dummy_weights, cache_hf=True)
     in_channels = model_args.vision_in_channels
     image_size = model_args.vision_chunk_size
     num_image_tokens = model_args.mm_tokens_per_image
