@@ -19,6 +19,10 @@ struct NpHaloArtifacts {
     tt::tt_metal::KernelHandle w_writer_kernel_id = 0;
     bool has_w_fabric = false;
     tt::tt_metal::CoreRangeSet fabric_core_range;  // all NP fabric cores (H + W)
+    // Padded-output fused mode: the concurrent interior-copy scatter kernel (0 if not padded mode).
+    bool has_scatter = false;
+    tt::tt_metal::KernelHandle scatter_kernel_id = 0;
+    tt::tt_metal::CoreRangeSet scatter_core_range;
 };
 
 struct NpHaloSharedVariables {

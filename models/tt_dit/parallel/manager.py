@@ -459,13 +459,18 @@ class CCLManager:
         padding_mode: str = "zeros",
         input_pad_h: int = 0,
         input_pad_w: int = 0,
+        padded_output: ttnn.Tensor = None,
     ) -> ttnn.Tensor:
         """Fill and return the compact [H-top|H-bot|W-left|W-right] halo buffer via the standalone
         neighbor_pad_halo op. Pair with ttnn.experimental.conv3d(halo_buffer=...) for the two-dispatch
         halo-aware path (no full-pad interior copy). Mirrors neighbor_pad_conv3d_fused's param derivation.
 
         input_pad_h/w > 0: `tensor` is a padded [.,H+2*ipad_h,W+2*ipad_w,C] buffer; exchange the halo of
-        its INTERIOR (copy-free path). The compact buffer is sized for the interior dims."""
+        its INTERIOR (copy-free path). The compact buffer is sized for the interior dims.
+
+        padded_output: fused mode — the op ALSO copies the interior (tensor -> padded_output) on free
+        cores CONCURRENTLY with the fabric exchange. Returns the compact buffer (still needed for the
+        border scatter); the padded interior is filled as a side effect."""
         barrier_sem = self.get_barrier_semaphore(axes[0])
         dim2 = dims[1] if len(dims) > 1 else None
         padding2 = pad_left[1] if dim2 is not None else 0
@@ -504,6 +509,7 @@ class CCLManager:
             padding_mode=padding_mode,
             input_pad_h=input_pad_h,
             input_pad_w=input_pad_w,
+            padded_output=padded_output,
         )
         return halo_buf
 
@@ -527,8 +533,28 @@ class CCLManager:
         + halo_scatter into one call.
 
         border_only: `tensor` already carries a padded interior (previous conv's padded output), so only
-        the border is written in place (copy-free). Otherwise the padded buffer is allocated and both
-        interior (from `tensor`) and border (from the exchange) are filled."""
+        the border is written in place (copy-free). Otherwise (repack) the padded buffer is allocated and
+        the interior copy is FUSED into the exchange op (runs concurrently on free cores), then the border
+        is scattered — overlapping the interior copy with the fabric transport instead of serializing it."""
+        pH = pad_left[0]
+        pW = pad_left[1] if len(pad_left) > 1 else 0
+        if border_only:
+            compact = self.neighbor_pad_halo_only(
+                tensor,
+                dims=dims,
+                pad_left=pad_left,
+                pad_right=pad_right,
+                axes=axes,
+                neighbor_sems=neighbor_sems,
+                num_links=num_links,
+                padding_mode=padding_mode,
+                input_pad_h=input_pad_h,
+                input_pad_w=input_pad_w,
+            )
+            return ttnn.experimental.halo_scatter(compact, tensor, np_padding_h=pH, np_padding_w=pW, border_only=True)
+
+        # Repack: allocate the padded output; the exchange op copies the interior into it concurrently.
+        padded = self.get_np_ping_pong_buffer(list(tensor.shape), dims, pad_left, pad_right, dtype=tensor.get_dtype())
         compact = self.neighbor_pad_halo_only(
             tensor,
             dims=dims,
@@ -540,12 +566,9 @@ class CCLManager:
             padding_mode=padding_mode,
             input_pad_h=input_pad_h,
             input_pad_w=input_pad_w,
+            padded_output=padded,
         )
-        pH = pad_left[0]
-        pW = pad_left[1] if len(pad_left) > 1 else 0
-        return ttnn.experimental.halo_scatter(
-            compact, tensor, np_padding_h=pH, np_padding_w=pW, border_only=border_only
-        )
+        return ttnn.experimental.halo_scatter(compact, padded, np_padding_h=pH, np_padding_w=pW, border_only=True)
 
     def get_barrier_semaphore(self, mesh_axis):
         """

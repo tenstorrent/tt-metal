@@ -1209,6 +1209,87 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         }  // end else (standard 1-worker W path)
     }
 
+    // ------------------------------------------------------------------------
+    // Padded-output fused mode: copy the INTERIOR (input -> padded output) on the free cores (columns
+    // x>=1; fabric uses column 0) CONCURRENTLY with the fabric exchange. The interior has no dependency
+    // on the exchange, so no barrier is needed — it just overlaps the fabric transport instead of being
+    // serialized after it (the old two-op flow). The caller fills the border afterward via
+    // halo_scatter(border_only), which reads the compact buffer this op wrote (op-level dependency).
+    // ------------------------------------------------------------------------
+    tt::tt_metal::KernelHandle scatter_kernel_id = 0;
+    CoreRangeSet scatter_core_range;
+    bool has_scatter = false;
+    if (op.output_padded && tensor_args.padded_output.has_value() && compute_grid_size.x > 1) {
+        Buffer* padded_buf = tensor_args.padded_output.value().buffer();
+        const uint32_t Hd_i = input_halo_dim_size;      // interior H (input is unpadded in repack mode)
+        const uint32_t Wd_i = num_sticks_per_halo_dim;  // interior W
+        const uint32_t Hp_i = Hd_i + 2 * op.np_padding_h;
+        const uint32_t Wp_i = Wd_i + 2 * op.np_padding_w;
+        const uint32_t n_int = outer_dim_size * Hd_i * Wd_i;
+        // Free cores = cols [1, grid.x) minus the NP sender workers (col 0 is fabric). The interior copy
+        // runs here, concurrent with the exchange (which uses col 0 + the worker cores).
+        const CoreRangeSet cols_ge1(CoreRange({1, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
+        const CoreRangeSet scatter_cores = cols_ge1.subtract(np_worker_core_ranges);
+        const uint32_t num_scatter = scatter_cores.num_cores();
+        if (n_int > 0 && num_scatter > 0) {
+            const uint32_t per_core = (n_int + num_scatter - 1) / num_scatter;
+
+            constexpr uint32_t sc_cb_id = tt::CBIndex::c_0;
+            constexpr uint32_t sc_pages = 8;
+            tt::DataFormat sc_df = datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
+            CircularBufferConfig sc_cb_cfg =
+                CircularBufferConfig(sc_pages * page_size, {{sc_cb_id, sc_df}}).set_page_size(sc_cb_id, page_size);
+            CreateCircularBuffer(program, scatter_cores, sc_cb_cfg);
+
+            std::vector<uint32_t> sc_ct = {
+                page_size,
+                outer_dim_size,
+                Hp_i,
+                Wp_i,
+                Hd_i,
+                Wd_i,
+                op.np_padding_h,
+                op.np_padding_w,
+                sc_cb_id,
+                sc_pages,
+                /*border_only=*/0u};
+            TensorAccessorArgs(*input_buffer).append_to(sc_ct);
+            TensorAccessorArgs(*halo_buffer).append_to(sc_ct);
+            TensorAccessorArgs(*padded_buf).append_to(sc_ct);
+            auto sc_cfg = WriterDataMovementConfig{};
+            sc_cfg.compile_args = sc_ct;
+            scatter_kernel_id = CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/"
+                "np_fused_scatter_writer.cpp",
+                scatter_cores,
+                sc_cfg);
+            scatter_core_range = scatter_cores;
+            has_scatter = true;
+
+            uint32_t assigned = 0;
+            for (const auto& cr : scatter_cores.ranges()) {
+                for (const auto& c : cr) {
+                    const uint32_t start = assigned;
+                    const uint32_t count = (start >= n_int) ? 0u : std::min(per_core, n_int - start);
+                    // Interior-only range [0,n_int): the kernel's exchange_done wait never triggers.
+                    SetRuntimeArgs(
+                        program,
+                        scatter_kernel_id,
+                        c,
+                        {input_buffer->address(),
+                         halo_buffer->address(),
+                         padded_buf->address(),
+                         start,
+                         count,
+                         /*exchange_done=*/0u,
+                         /*num_readers=*/0u});
+                    assigned += count;
+                }
+            }
+        }
+    }
+
     return cached_program_t{
         std::move(program),
         NpHaloSharedVariables{
@@ -1218,7 +1299,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                 w_reader_kernel_id,
                 w_writer_kernel_id,
                 /*has_w_fabric=*/true,
-                w_fabric_core_range}}};
+                w_fabric_core_range,
+                has_scatter,
+                scatter_kernel_id,
+                scatter_core_range}}};
 }
 
 // ============================================================================
@@ -1292,6 +1376,24 @@ void NpHaloMeshWorkloadFactory::override_runtime_arguments(
             ww[1] = halo_buffer_addr;
             ww[2] = w_sem_addr;
             ww[3] = h_sem_addr;
+        }
+
+        // --- Padded-output fused interior-copy scatter kernel: refresh per-core [input, compact, padded]. ---
+        if (shared_vars.np_artifacts.has_scatter && tensor_args.padded_output.has_value()) {
+            const uint32_t padded_addr = tensor_args.padded_output.value().buffer()->address();
+            auto& sc_args_by_core = GetRuntimeArgs(program, shared_vars.np_artifacts.scatter_kernel_id);
+            for (const auto& cr : shared_vars.np_artifacts.scatter_core_range.ranges()) {
+                for (uint32_t x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
+                    for (uint32_t y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
+                        auto& a = sc_args_by_core[x][y];
+                        if (a.size() >= 3) {
+                            a[0] = input_addr;
+                            a[1] = halo_buffer_addr;
+                            a[2] = padded_addr;
+                        }
+                    }
+                }
+            }
         }
     }
 }
