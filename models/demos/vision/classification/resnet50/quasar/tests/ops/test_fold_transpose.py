@@ -52,13 +52,28 @@ def _fit_cores(total_rows, device):
 
 
 # (n, c, h, w, dim0, dim1, id) -- the fold's transpose intermediates, batch 1 and 2.
+# NARROW-ROW HYPOTHESIS: narrow-row transpose is unsupported on Quasar (pack_untilize_dest_init
+# LLK_ASSERT(narrow_row==false)); the op reroutes to the interleaved transpose_wh_rm.cpp which packs
+# with narrow_row=false hardcoded. If a transpose's untilize output row is narrow (< TILE_WIDTH=32)
+# the forced full-row pack corrupts it. The fold carries a narrow channel dim (C=4->8->16) through
+# the chain, so the transposes that move that narrow dim into the last (row) position are the ones
+# most likely to fail. The tile-aligned configs below are the CONTROL (should pass); the *_narrow
+# configs (last dim 8/16 < 32) directly test the narrow-row hypothesis (expected to fail if that's
+# the cause).
 TRANSPOSE_CONFIGS = [
+    # --- tile-aligned control: last dim is a multiple of 32 (no narrow-row path) ---
     # First fold transpose: padded input [n, C=4, padded_h32=256, w=224], transpose(2,3) -> [n,4,224,256].
-    # This is transpose_wh (TransposeWHShardedRMProgramFactory) -- the craq-sim hang site.
-    (1, 4, 256, 224, 2, 3, "b1_wh_4x256x224"),
-    (2, 4, 256, 224, 2, 3, "b2_wh_4x256x224"),
-    # C<->H transpose the fold also uses: [n, 4, 224, 256], transpose(1,2) -> [n,224,4,256].
-    (1, 4, 224, 256, 1, 2, "b1_hc_4x224x256"),
+    (1, 4, 256, 224, 2, 3, "b1_wh_4x256x224_aligned"),
+    (2, 4, 256, 224, 2, 3, "b2_wh_4x256x224_aligned"),
+    (1, 4, 224, 256, 1, 2, "b1_hc_4x224x256_aligned"),
+    # --- narrow-row: transpose(2,3) output last dim = input h, so a small h yields a narrow untilize
+    # output row (< 32) while the input width w=256 stays tile-aligned (safe from_torch). This is the
+    # pack_untilize narrow_row path the interleaved kernel forces to narrow_row=false -> corruption.
+    # Mirrors the fold's C=8/16 dim landing in the last position.
+    # transpose(2,3) on [n,128,16,256] -> [n,128,256,16]: output row = 16 (narrow); the fold's 16-ch width.
+    (1, 128, 16, 256, 2, 3, "b1_wh_out16_narrow"),
+    # transpose(2,3) on [n,128,8,256] -> [n,128,256,8]: output row = 8 (narrow).
+    (1, 128, 8, 256, 2, 3, "b1_wh_out8_narrow"),
 ]
 
 
