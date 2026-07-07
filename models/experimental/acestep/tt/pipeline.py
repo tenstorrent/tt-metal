@@ -454,7 +454,23 @@ class AceStepPipeline:
             noise_tt, context_tt, enc_hs, infer_steps=infer_steps, shift=shift, use_trace=use_trace,
             guidance_scale=guidance_scale, uncond_encoder_hidden_states=uncond_hs,
         )
-        return self.decode(latents)
+        wav = self.decode(latents)
+        return self._normalize_audio(wav)
+
+    @staticmethod
+    def _normalize_audio(wav):
+        """Two-stage output normalization matching the diffusers AceStepPipeline reference: (1) hard
+        anti-clip (divide by peak if peak>1), then (2) peak-normalize to -1 dBFS (~0.891) for
+        consistent loudness. Raw VAE output can exceed [-1,1] (clips on save) and is ~1.12x louder
+        than the reference; this fixes both. Applied only at the customer-facing generate_song
+        boundary (the internal decode() stays raw so per-stage PCC tests are unaffected)."""
+        wav = wav.float()
+        peak = wav.abs().amax(dim=[1, 2], keepdim=True)
+        if torch.any(peak > 1.0):
+            wav = wav / peak.clamp(min=1.0)
+        target_amp = 10.0 ** (-1.0 / 20.0)  # -1 dBFS
+        peak = wav.abs().amax(dim=[1, 2], keepdim=True).clamp(min=1e-6)
+        return wav * (target_amp / peak)
 
     def _latent_len(self, seconds: float) -> int:
         n = max(2, int(round(seconds * self.LATENT_HZ)))

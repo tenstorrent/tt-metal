@@ -45,4 +45,8 @@ def test_generate_song_api(device):
     assert wav.shape[-1] == expected_samples, f"expected {expected_samples} samples, got {wav.shape[-1]}"
     assert torch.isfinite(wav).all(), "waveform has non-finite samples"
     assert wav.abs().max() > 0, "waveform is silent"
+    # generate_song peak-normalizes to -1 dBFS (~0.891) matching the reference: never clips (<=1.0)
+    # and has consistent loudness. Guards the output-normalization step.
+    assert wav.abs().max() <= 1.0, f"waveform clips (peak {wav.abs().max():.3f} > 1.0); normalization missing"
+    assert abs(float(wav.abs().max()) - 0.8913) < 0.05, f"peak {wav.abs().max():.3f} not near -1 dBFS (0.891)"
     print(f"GENERATE_SONG ok: {tuple(wav.shape)} = {wav.shape[-1] / 48000:.2f}s @ 48kHz, peak={wav.abs().max():.3f}")
