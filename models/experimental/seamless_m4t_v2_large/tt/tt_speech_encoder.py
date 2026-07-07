@@ -58,6 +58,9 @@ _SINGLE_DEVICE_DRAM_ACT_THRESHOLD = 256
 # route everything larger through chunking. (Was 3072, which wrongly kept S=2048 on the full path.)
 _ATTN_QUERY_CHUNK_THRESHOLD = 1024
 _ATTN_QUERY_CHUNK = 512
+# Fused SDPA chunked rel-attn is better through ~mel 2048 (S≈2048); explicit matmul+softmax
+# matches HF at mel 4096 (S≈4096) where fused SDPA drifts (~0.952 PCC on 1×1).
+_ATTN_QUERY_CHUNK_MATMUL_THRESHOLD = 3072
 # Adapter self-attn (non-relative fused SDPA): smaller chunks above this seq avoid L1 CB clash
 # with decode-trace reservation at ~512 subsampled frames (input ≈4096 mel).
 _ADAPTER_FUSED_SDPA_COMPACT_THRESHOLD = 256
@@ -1299,7 +1302,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(q_scores)
         return rel
 
-    def _chunked_relative_attention(
+    def _chunked_relative_attention_matmul(
         self,
         q: ttnn.Tensor,
         k: ttnn.Tensor,
@@ -1311,29 +1314,92 @@ class TTSeamlessM4Tv2SpeechEncoder:
         num_heads: int,
         seq_len: int,
     ) -> ttnn.Tensor:
-        """Query-block conformer relative attention for long mel seq (> ``_ATTN_QUERY_CHUNK_THRESHOLD``).
-
-        Two-level chunking so peak memory is O(Qc·S) and the softmax CB is O(k_chunk), lifting the
-        full path's [B,H,S,S]/[S,S,D] L1-clash + OOM ceiling:
-          * QUERY blocks of ``_ATTN_QUERY_CHUNK`` rows — only a ``[Qc,S,D]`` rel-pos table slice and a
-            ``[B,H,Qc,S]`` rel-logit bias are built per block, never the full ``[S,S,D]``/``[S,S]``.
-          * the per-block attention is the FUSED SDPA (flash: chunks keys with an online softmax →
-            no S-wide softmax CB), with the rel logits (+ padding/chunk mask) passed as ``attn_mask``
-            and ``scale=1.0`` (``q`` is pre-scaled by 1/√head_dim). This is the PCC-exact
-            fused-SDPA-with-rel-bias form. Each query's attention is independent, so this matches the
-            full path's result.
-        ``k`` arrives ``[B,H,D,S]`` (transposed for the full path); SDPA wants ``[B,H,S,D]``.
-        """
+        """Explicit bf16 matmul+softmax blocks — best PCC on 1×1 at S≈4096 (mel 4096)."""
         head_dim = int(q.shape[-1])
         dist_w = attn_module.distance_embedding.weight
         left_max = int(attn_module.left_max_position_embeddings)
         right_max = int(attn_module.right_max_position_embeddings)
-        mc = ttnn.DRAM_MEMORY_CONFIG
-        k_sdpa = ttnn.permute(k, (0, 1, 3, 2), memory_config=mc)  # [B,H,D,S] -> [B,H,S,D]
-        ttnn.deallocate(k)
+        mc = self._mc_act(seq_len=seq_len)
         out_blocks: list[ttnn.Tensor] = []
         for q0 in range(0, seq_len, _ATTN_QUERY_CHUNK):
             q1 = min(q0 + _ATTN_QUERY_CHUNK, seq_len)
+            qc = q1 - q0
+            q_blk = ttnn.slice(q, [0, 0, q0, 0], [batch, num_heads, q1, head_dim], [1, 1, 1, 1], memory_config=mc)
+            scores = ttnn.matmul(
+                q_blk,
+                k,
+                memory_config=mc,
+                compute_kernel_config=self._attn_compute_cfg,
+            )
+            idx_blk = self._relative_block_position_index_device(
+                q0, q1, seq_len, left_max=left_max, right_max=right_max
+            )
+            rel_blk = self._relative_logits_fused(
+                q_blk,
+                idx_dev=idx_blk,
+                distance_weight=dist_w,
+                batch=batch,
+                num_heads=num_heads,
+                q_rows=qc,
+                seq_len=seq_len,
+                memory_config=mc,
+                compute_kernel_config=self._linear_compute_cfg,
+            )
+            ttnn.deallocate(q_blk)
+            scores = ttnn.add(scores, rel_blk, memory_config=mc)
+            ttnn.deallocate(rel_blk)
+            if attention_mask_4d is not None:
+                mask_blk = ttnn.slice(
+                    attention_mask_4d,
+                    [0, 0, q0, 0],
+                    [int(attention_mask_4d.shape[0]), int(attention_mask_4d.shape[1]), q1, seq_len],
+                    [1, 1, 1, 1],
+                    memory_config=mc,
+                )
+                scores = ttnn.add(scores, mask_blk, memory_config=mc)
+                ttnn.deallocate(mask_blk)
+            probs = ttnn.softmax(scores, dim=-1, numeric_stable=True, memory_config=mc)
+            ttnn.deallocate(scores)
+            out_blk = ttnn.matmul(
+                probs,
+                v,
+                memory_config=mc,
+                compute_kernel_config=self._attn_compute_cfg,
+            )
+            ttnn.deallocate(probs)
+            out_blocks.append(out_blk)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+        attn_out = ttnn.concat(out_blocks, dim=2, memory_config=mc)
+        for o in out_blocks:
+            ttnn.deallocate(o)
+        return attn_out
+
+    def _chunked_relative_attention_matmul_f32_softmax(
+        self,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        v: ttnn.Tensor,
+        attention_mask_4d: Optional[ttnn.Tensor],
+        *,
+        attn_module: Any,
+        batch: int,
+        num_heads: int,
+        seq_len: int,
+    ) -> ttnn.Tensor:
+        """Matmul blocks with float32 QK/softmax — 1×1 mel 2048 (S≈2048) path."""
+        head_dim = int(q.shape[-1])
+        dist_w = attn_module.distance_embedding.weight
+        left_max = int(attn_module.left_max_position_embeddings)
+        right_max = int(attn_module.right_max_position_embeddings)
+        mc = self._mc_act(seq_len=seq_len)
+        query_chunk = 256 if seq_len < _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD else _ATTN_QUERY_CHUNK
+        k_f32 = ttnn.typecast(k, ttnn.float32)
+        ttnn.deallocate(k)
+        out_blocks: list[ttnn.Tensor] = []
+        for q0 in range(0, seq_len, query_chunk):
+            q1 = min(q0 + query_chunk, seq_len)
             qc = q1 - q0
             q_blk = ttnn.slice(q, [0, 0, q0, 0], [batch, num_heads, q1, head_dim], [1, 1, 1, 1], memory_config=mc)
             idx_blk = self._relative_block_position_index_device(
@@ -1349,7 +1415,20 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 seq_len=seq_len,
                 memory_config=mc,
                 compute_kernel_config=self._linear_compute_cfg,
-            )  # [B,H,Qc,S] — the additive rel-pos bias
+            )
+            q_f32 = ttnn.typecast(q_blk, ttnn.float32)
+            ttnn.deallocate(q_blk)
+            scores_f32 = ttnn.matmul(
+                q_f32,
+                k_f32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self._attn_compute_cfg,
+            )
+            ttnn.deallocate(q_f32)
+            rel_f32 = ttnn.typecast(rel_blk, ttnn.float32)
+            ttnn.deallocate(rel_blk)
+            scores_f32 = ttnn.add(scores_f32, rel_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(rel_f32)
             if attention_mask_4d is not None:
                 mask_blk = ttnn.slice(
                     attention_mask_4d,
@@ -1358,29 +1437,57 @@ class TTSeamlessM4Tv2SpeechEncoder:
                     [1, 1, 1, 1],
                     memory_config=mc,
                 )
-                rel_blk = ttnn.add(rel_blk, mask_blk, memory_config=mc)  # broadcasts over heads
+                mask_f32 = ttnn.typecast(mask_blk, ttnn.float32)
                 ttnn.deallocate(mask_blk)
-            out_blk = ttnn.transformer.scaled_dot_product_attention(
-                q_blk,
-                k_sdpa,
+                scores_f32 = ttnn.add(scores_f32, mask_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(mask_f32)
+            probs_f32 = ttnn.softmax(scores_f32, dim=-1, numeric_stable=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(scores_f32)
+            probs = ttnn.typecast(probs_f32, ttnn.bfloat16)
+            ttnn.deallocate(probs_f32)
+            out_blk = ttnn.matmul(
+                probs,
                 v,
-                attn_mask=rel_blk,
-                is_causal=False,
-                scale=1.0,
-                program_config=self._sdpa_program_config(qc, seq_len),
-                compute_kernel_config=self._sdpa_compute_cfg,
                 memory_config=mc,
-            )  # [B,H,Qc,D]
-            ttnn.deallocate(q_blk)
-            ttnn.deallocate(rel_blk)
+                compute_kernel_config=self._attn_compute_cfg,
+            )
+            ttnn.deallocate(probs)
             out_blocks.append(out_blk)
         ttnn.deallocate(q)
-        ttnn.deallocate(k_sdpa)
+        ttnn.deallocate(k_f32)
         ttnn.deallocate(v)
-        attn_out = ttnn.concat(out_blocks, dim=2, memory_config=self._mc_act(seq_len=seq_len))
+        attn_out = ttnn.concat(out_blocks, dim=2, memory_config=mc)
         for o in out_blocks:
             ttnn.deallocate(o)
         return attn_out
+
+    def _chunked_relative_attention(
+        self,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        v: ttnn.Tensor,
+        attention_mask_4d: Optional[ttnn.Tensor],
+        *,
+        attn_module: Any,
+        batch: int,
+        num_heads: int,
+        seq_len: int,
+    ) -> ttnn.Tensor:
+        """Query-block conformer relative attention for long mel seq (> ``_ATTN_QUERY_CHUNK_THRESHOLD``)."""
+        if seq_len >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD:
+            impl = self._chunked_relative_attention_matmul
+        else:
+            impl = self._chunked_relative_attention_matmul_f32_softmax
+        return impl(
+            q,
+            k,
+            v,
+            attention_mask_4d,
+            attn_module=attn_module,
+            batch=batch,
+            num_heads=num_heads,
+            seq_len=seq_len,
+        )
 
     def _mh_attention(
         self,

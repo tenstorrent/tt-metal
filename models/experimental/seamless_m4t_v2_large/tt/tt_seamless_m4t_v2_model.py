@@ -56,9 +56,10 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, me
 # extra (masked) frames — and the encoder's O(S^2) attention overhead — small (≤256, ~2-5% typical).
 _SPEECH_ENC_SEQ_BUCKET = 256
 # Dummy ``_encode_speech`` prewarm poisons persistent L1 only on this JIT bucket band (2048 mel
-# collapse). Longer buckets (e.g. 4096) still need the dummy forward for S2ST L1 layout.
+# collapse). JIT the dummy forward on a longer proxy bucket instead of skipping it entirely.
 _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN = 1920
 _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX = 2560
+_SPEECH_ENC_PREWARM_JIT_PROXY_BUCKET = 3072
 
 # ---------------------------------------------------------------------------
 # Output dataclasses
@@ -645,9 +646,9 @@ class TTSeamlessM4Tv2Model:
         """Warm speech-encoder JIT for bucketed mel lengths.
 
         Short buckets and long buckets (e.g. 4096) use a dummy ``_encode_speech`` forward for
-        kernel JIT. Only the 1920–2560 mel JIT band skips the dummy forward (cache-only
-        ``pre_warm``): a dummy forward there left bad persistent L1 / LN state and collapsed
-        S2TT/S2ST/ASR at 2048 mel to 1–2 tokens.
+        kernel JIT. The 1920–2560 mel bucket band cannot use a dummy forward *at that length*
+        (bad persistent L1 / LN state collapses S2TT/S2ST/ASR at 2048 mel); those buckets still
+        ``pre_warm`` shape caches locally and JIT via a proxy dummy forward at 3072 mel.
         """
         n_mels = self.feature_projection_input_dim
         for sl in mel_seq_lens:
@@ -660,19 +661,23 @@ class TTSeamlessM4Tv2Model:
             self._speech_prewarmed_buckets.add(bucket)
             self.speech_encoder.pre_warm(batch=1, seq_len=bucket)
             if _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN <= bucket <= _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX:
-                continue
+                jit_bucket = _SPEECH_ENC_PREWARM_JIT_PROXY_BUCKET
+            else:
+                jit_bucket = bucket
+            if jit_bucket != bucket:
+                self.speech_encoder.pre_warm(batch=1, seq_len=jit_bucket)
             import torch as _torch
 
             feats = ttnn.from_torch(
-                _torch.zeros(1, bucket, n_mels, dtype=_torch.bfloat16),
+                _torch.zeros(1, jit_bucket, n_mels, dtype=_torch.bfloat16),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
             )
-            mask_host = _torch.zeros(1, bucket, dtype=_torch.int32)
-            mask_host[0, :sl] = 1
+            mask_host = _torch.zeros(1, jit_bucket, dtype=_torch.int32)
+            mask_host[0, : min(sl, jit_bucket)] = 1
             mask = ttnn.from_torch(
                 mask_host,
                 dtype=ttnn.uint32,
@@ -885,29 +890,21 @@ class TTSeamlessM4Tv2Model:
     def _decode_argmax_token(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """On-device greedy argmax for a single-token decode step ``logits`` ``[1, 1, V]``.
 
-                Returns ``(local_idx, chunk_max)``, each ``[1, 1, 32]``: the vocab is reshaped into 32 contiguous
-                chunks, and per chunk we keep the in-chunk argmax index and the in-chunk max value. The host
-                combine (cheap, 64 scalars) picks the winning chunk ``c = argmax(chunk_max)`` then the global token
-                ``c * chunk_width + local_idx[c]`` (see ``_greedy_next_token_id``).
+        Returns ``(local_idx, chunk_max)``, each ``[1, 1, 32]``: the vocab is reshaped into 32 contiguous
+        chunks, and per chunk we keep the in-chunk argmax index and the in-chunk max value. The host
+        combine (cheap, 64 scalars) picks the winning chunk ``c = argmax(chunk_max)`` then the global token
+        ``c * chunk_width + local_idx[c]`` (see ``_greedy_next_token_id``).
 
-        <<<<<<< Updated upstream
-                On-device ``ttnn.argmax`` is far faster than the 256k-vocab host readback but has two
-                alignment traps that both return *silent garbage*: (1) the dim before the reduced vocab dim must be
-                tile-aligned (32); (2) the multicore kernel reduces over the *physical* (tile-padded) width, so the
-                reduced dim must also be a multiple of 32. The natural ``[1, 1, 1, V]`` shape pads the height to 32
-                physically, so untilize/argmax churn ``32 × V`` elements for one real row. Reshaping to
-        =======
-                ``ttnn.argmax`` is far faster than the 256k-vocab host readback but has two alignment traps that
-                both return *silent garbage*: (1) the dim before the reduced vocab dim must be tile-aligned (32);
-                (2) the kernel reduces over the *physical* (tile-padded) width, so the reduced dim must also be a
-                multiple of 32. The natural ``[1, 1, 1, V]`` shape pads the height to 32 physically, so
-                untilize/argmax churn ``32 × V`` elements for one real row. Reshaping to
-        >>>>>>> Stashed changes
-                ``[1, 1, 32, chunk_width]`` instead makes the 32 the *chunk count* (free tile alignment) and keeps
-                the physical work at ``32 × chunk_width ≈ V`` — ~3× faster than padding the row dim to 32. Pad V up
-                to ``32 * chunk_width`` with ``-1e9`` so the padding columns can never win. ``ttnn.max`` runs on the
-                TILE tensor directly; argmax needs ROW_MAJOR so untilize first. Both are used in the
-                compile-outside-trace step and inside the trace capture so the trace itself outputs the token.
+        On-device ``ttnn.argmax`` is far faster than the 256k-vocab host readback but has two alignment
+        traps that both return *silent garbage*: (1) the dim before the reduced vocab dim must be
+        tile-aligned (32); (2) the multicore kernel reduces over the *physical* (tile-padded) width, so
+        the reduced dim must also be a multiple of 32. The natural ``[1, 1, 1, V]`` shape pads the height
+        to 32 physically, so untilize/argmax churn ``32 × V`` elements for one real row. Reshaping to
+        ``[1, 1, 32, chunk_width]`` instead makes the 32 the *chunk count* (free tile alignment) and
+        keeps the physical work at ``32 × chunk_width ≈ V`` — ~3× faster than padding the row dim to 32.
+        Pad V up to ``32 * chunk_width`` with ``-1e9`` so the padding columns can never win. ``ttnn.max``
+        runs on the TILE tensor directly; argmax needs ROW_MAJOR so untilize first. Both are used in the
+        compile-outside-trace step and inside the trace capture so the trace itself outputs the token.
         """
         v = int(logits.shape[-1])
         nch = self._ARGMAX_CHUNKS
