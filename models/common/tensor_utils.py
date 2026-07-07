@@ -6,6 +6,7 @@ Tensor utility functions for TTTv2 modules.
 """
 
 import json
+import math
 import re
 
 import torch
@@ -14,6 +15,38 @@ import ttnn
 
 # Standard tile size - hardware constant
 TILE_SIZE = ttnn.TILE_SIZE  # 32
+
+
+def nearest_multiple(value: int, multiple: int) -> int:
+    return math.ceil(value / multiple) * multiple
+
+
+def nearest_32(value: int) -> int:
+    return nearest_multiple(value, TILE_SIZE)
+
+
+def num_to_core_range_set(num_cores: int):
+    assert num_cores < 8 or num_cores % 8 == 0
+    num_x = min(num_cores, 8)
+    num_y = num_cores // num_x
+    assert num_x * num_y == num_cores
+    return ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(num_x - 1, num_y - 1),
+            )
+        }
+    )
+
+
+def get_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
+    out_subblock_w = 4
+    while out_subblock_w > 1:
+        if out_subblock_w * out_subblock_h <= 4 and per_core_n % out_subblock_w == 0:
+            break
+        out_subblock_w -= 1
+    return out_subblock_w
 
 
 def get_rot_transformation_mat(dhead: int = TILE_SIZE) -> torch.Tensor:

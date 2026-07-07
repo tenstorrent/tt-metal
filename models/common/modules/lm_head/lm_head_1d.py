@@ -24,6 +24,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.tensor_utils import TILE_SIZE
+from models.common.tensor_utils import nearest_32 as _nearest_32
 
 # =============================================================================
 # Config dataclass
@@ -239,9 +240,9 @@ class LMHead1D(LightweightModule):
                     ),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=mem_cfg,
-                    cache_dir_weight_name=(cache_dir, f"output_split_{i}_{combined_split.shape[-1]}")
-                    if cache_dir
-                    else None,
+                    cache_dir_weight_name=(
+                        (cache_dir, f"output_split_{i}_{combined_split.shape[-1]}") if cache_dir else None
+                    ),
                 )
             )
 
@@ -385,10 +386,6 @@ def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: LMHead1DConfi
 # =============================================================================
 # Config helper functions (adapted from TTTv1 model_config.py)
 # =============================================================================
-
-
-def _nearest_32(x: int) -> int:
-    return math.ceil(x / 32) * 32
 
 
 def _compute_kernel_config_hifi2() -> ttnn.WormholeComputeKernelConfig:

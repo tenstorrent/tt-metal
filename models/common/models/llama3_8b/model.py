@@ -33,6 +33,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.common.device_utils import get_device_name
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig
 from models.common.modules.embedding.embedding_1d import Embedding1D, Embedding1DConfig
@@ -43,7 +44,7 @@ from models.common.modules.rmsnorm.rmsnorm_1d import SHARD_HEIGHT, RMSNorm1D, RM
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
 from models.common.modules.tt_ccl import TT_CCL, default_topology, get_tt_ccl
-from models.common.tensor_utils import TILE_SIZE, pad_dim_to_size
+from models.common.tensor_utils import TILE_SIZE, get_out_subblock_w, nearest_32, num_to_core_range_set, pad_dim_to_size
 
 # =============================================================================
 # Runtime Config
@@ -189,54 +190,6 @@ class Llama31DecoderPrecision:
             f"Decoder {decoder_id}: precision_cfg = {self._tensor_precision[decoder_id]}, fidelity_cfg = {self._op_fidelity[decoder_id]}"
             for decoder_id in self._tensor_precision
         )
-
-
-def _nearest_multiple(value: int, multiple: int) -> int:
-    return math.ceil(value / multiple) * multiple
-
-
-def _nearest_32(value: int) -> int:
-    return _nearest_multiple(value, 32)
-
-
-def _num_to_core_range_set(num_cores: int):
-    assert num_cores < 8 or num_cores % 8 == 0
-    num_x = min(num_cores, 8)
-    num_y = num_cores // num_x
-    assert num_x * num_y == num_cores
-    return ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(num_x - 1, num_y - 1),
-            )
-        }
-    )
-
-
-def _get_out_subblock_w(per_core_n: int, out_subblock_h: int):
-    out_subblock_w = 4
-    while out_subblock_w > 1:
-        if out_subblock_w * out_subblock_h <= 4 and per_core_n % out_subblock_w == 0:
-            break
-        out_subblock_w -= 1
-    return out_subblock_w
-
-
-def _device_name(mesh_device) -> str:
-    num_devices = mesh_device.get_num_devices()
-    dram_grid_size = mesh_device.dram_grid_size()
-    if ttnn.device.is_blackhole(mesh_device):
-        return {
-            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",
-            2: "P300",
-            4: "P150x4",
-            8: "P150x8",
-            32: "BHGLX",
-        }[num_devices]
-    if ttnn.device.is_wormhole_b0(mesh_device):
-        return {1: "N150", 2: "N300", 4: "N150x4", 8: "T3K", 32: "TG"}[num_devices]
-    raise ValueError(f"Unsupported architecture: {ttnn.get_arch_name()}")
 
 
 def _base_model_name(model_name: str) -> str:
@@ -703,7 +656,7 @@ def build_llama3_transformer_1d_config(
     """Build explicit TTTv2 module configs from Llama-3.1-8B construction data."""
     num_devices = mesh_device.get_num_devices()
     dram_grid_size = mesh_device.dram_grid_size()
-    device_name = _device_name(mesh_device)
+    device_name = get_device_name(mesh_device)
     cluster_shape = list(mesh_device.shape)
     cluster_type = ttnn.cluster.get_cluster_type()
     is_galaxy_cluster = cluster_type in (
@@ -901,7 +854,7 @@ def build_llama3_transformer_1d_config(
             compute_with_storage_grid_size=do_core_grid_size,
             in0_block_w=dim // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1]),
             out_subblock_h=1,
-            out_subblock_w=_get_out_subblock_w(do_per_core_n, out_subblock_h=1),
+            out_subblock_w=get_out_subblock_w(do_per_core_n, out_subblock_h=1),
             per_core_M=tile_padded_batch_rows // ttnn.TILE_SIZE,
             per_core_N=do_per_core_n,
             fuse_batch=True,
@@ -914,7 +867,7 @@ def build_llama3_transformer_1d_config(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                _num_to_core_range_set(num_devices),
+                num_to_core_range_set(num_devices),
                 [tile_padded_batch_rows, dim // num_devices],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -967,7 +920,7 @@ def build_llama3_transformer_1d_config(
         elif norm_type == "lm_head":
             grid = lm_head_core_grid
             mem = ttnn.create_sharded_memory_config(
-                (tile_padded_batch_rows, _nearest_32(dim // grid.num_cores)),
+                (tile_padded_batch_rows, nearest_32(dim // grid.num_cores)),
                 grid,
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
@@ -1435,9 +1388,9 @@ def build_llama3_transformer_1d_config(
                     mesh_mapper_config=mesh_shard(-1),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=mem_cfg,
-                    cache_dir_weight_name=(cache_dir, f"output_split_{split_idx}_{combined_split.shape[-1]}")
-                    if cache_dir
-                    else None,
+                    cache_dir_weight_name=(
+                        (cache_dir, f"output_split_{split_idx}_{combined_split.shape[-1]}") if cache_dir else None
+                    ),
                 )
             )
 

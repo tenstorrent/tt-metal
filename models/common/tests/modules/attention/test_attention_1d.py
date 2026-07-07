@@ -41,9 +41,14 @@ from models.common.modules.attention.attention_1d import Attention1D, Attention1
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1DConfig
 from models.common.modules.tt_ccl import TT_CCL
-from models.common.tensor_utils import get_rot_transformation_mat, zeros_like_kv_cache, zeros_like_paged_cache
+from models.common.tensor_utils import (
+    get_rot_transformation_mat,
+    nearest_32,
+    zeros_like_kv_cache,
+    zeros_like_paged_cache,
+)
 from models.common.tests.utils import stable_model_seed
-from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.common.utility_functions import comp_allclose, comp_pcc
 
 # =============================================================================
 # RoPE Helper Functions (replaces TTTv1 rope imports)

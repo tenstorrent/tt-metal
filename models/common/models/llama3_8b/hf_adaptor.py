@@ -16,10 +16,8 @@ from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
-
-
-def nearest_multiple(value: int, multiple: int) -> int:
-    return math.ceil(value / multiple) * multiple
+from models.common.device_utils import get_device_name
+from models.common.tensor_utils import nearest_multiple
 
 
 @dataclass(frozen=True)
@@ -469,34 +467,18 @@ def load_converted_state_dict(
     return state_dict, fuse_qkv, fuse_mlp
 
 
-def _device_name(mesh_device) -> str:
-    num_devices = mesh_device.get_num_devices()
-    dram_grid_size = mesh_device.dram_grid_size()
-    if ttnn.device.is_blackhole(mesh_device):
-        return {
-            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",
-            2: "P300",
-            4: "P150x4",
-            8: "P150x8",
-            32: "BHGLX",
-        }[num_devices]
-    if ttnn.device.is_wormhole_b0(mesh_device):
-        return {1: "N150", 2: "N300", 4: "N150x4", 8: "T3K", 32: "TG"}[num_devices]
-    raise ValueError(f"Unsupported architecture: {ttnn.get_arch_name()}")
-
-
 def _model_cache_path(hf_model: str, mesh_device) -> Path:
     cache_path = os.getenv("TT_CACHE_PATH")
     if cache_path:
-        return Path(cache_path) / _device_name(mesh_device)
-    return Path("model_cache") / hf_model / _device_name(mesh_device)
+        return Path(cache_path) / get_device_name(mesh_device)
+    return Path("model_cache") / hf_model / get_device_name(mesh_device)
 
 
 def _max_prefill_chunk_size(mesh_device) -> int:
     override = os.getenv("MAX_PREFILL_CHUNK_SIZE")
     if override is not None:
         return int(override) * 1024
-    return {"N150": 4, "N300": 64, "T3K": 128}.get(_device_name(mesh_device), 128) * 1024
+    return {"N150": 4, "N300": 64, "T3K": 128}.get(get_device_name(mesh_device), 128) * 1024
 
 
 def _weight_cache_path(model_cache_path: Path, *, instruct: bool, dtype):

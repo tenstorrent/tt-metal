@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import ttnn
+from models.common.device_utils import is_blackhole
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
@@ -53,11 +54,12 @@ from models.common.modules.tt_ccl import (
 )
 from models.common.tensor_utils import (
     TILE_SIZE,
+    get_out_subblock_w,
     get_rot_transformation_mat,
+    nearest_32,
     zeros_like_kv_cache,
     zeros_like_paged_cache,
 )
-from models.common.utility_functions import is_blackhole, nearest_32
 
 # =============================================================================
 # Constants
@@ -1742,7 +1744,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             compute_with_storage_grid_size=do_core_grid_size,
             in0_block_w=dim // tile_size // (do_core_grid_size[0] * do_core_grid_size[1]),
             out_subblock_h=1,
-            out_subblock_w=_get_out_subblock_w(do_per_core_N, out_subblock_h=1),
+            out_subblock_w=get_out_subblock_w(do_per_core_N, out_subblock_h=1),
             per_core_M=tile_padded_batch_rows // tile_size,
             per_core_N=do_per_core_N,
             fuse_batch=True,
@@ -2052,16 +2054,6 @@ def _find_prefill_grid(row_tiles: int, col_tiles: int, max_rows: int = 8, max_co
     return rows, cols
 
 
-def _get_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
-    """Get output subblock width that divides per_core_n and satisfies constraints."""
-    out_subblock_w = 4
-    while out_subblock_w > 1:
-        if out_subblock_w * out_subblock_h <= 4 and per_core_n % out_subblock_w == 0:
-            break
-        out_subblock_w -= 1
-    return out_subblock_w
-
-
 def _dram_shard_core_grid(k: int, tile_size: int = TILE_SIZE) -> ttnn.CoreGrid:
     """Get core grid for DRAM sharding based on K dimension."""
     rows, cols = _find_grid(k // tile_size)
@@ -2099,7 +2091,7 @@ def _matmul_config(
         per_core_n = math.ceil(n / (tile_size * grid_size[0]))
 
     out_subblock_h = 1
-    out_subblock_w = _get_out_subblock_w(per_core_n, out_subblock_h)
+    out_subblock_w = get_out_subblock_w(per_core_n, out_subblock_h)
 
     if in0_block_w is None:
         in0_block_w = _find_largest_divisor(k // (tile_size * grid_size[1]))

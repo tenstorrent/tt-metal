@@ -28,6 +28,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.device_utils import get_device_name
 from models.common.models.executor import run_perf_benchmark, run_teacher_forcing
 from models.common.models.llama3_8b.executor import EagerLlamaExecutor, TracedLlamaExecutor
 from models.common.models.llama3_8b.hf_adaptor import from_pretrained
@@ -63,18 +64,6 @@ DEMO_DIR = Path(__file__).parent
 # =============================================================================
 # Helpers
 # =============================================================================
-
-
-def get_device_name(mesh_device):
-    """Detect device topology from mesh shape."""
-    num_devices = mesh_device.get_num_devices()
-    if num_devices == 1:
-        return "N150"
-    elif num_devices == 2:
-        return "N300"
-    elif num_devices == 8:
-        return "T3K"
-    return f"{num_devices}dev"
 
 
 def load_reference_data(model_name: str):
