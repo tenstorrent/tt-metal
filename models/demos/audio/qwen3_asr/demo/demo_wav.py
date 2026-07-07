@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Raw-wav, language-AUTO end-to-end on TT, vs the existing CPU Qwen3-ASR solution.
 
 Consumes the npz produced by reference/prep_wav.py (input_ids built with NO forced

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Phase-1 reference dump for the Qwen3-ASR-1.7B TT port.
 
 Runs the HF CPU model on a short clip and captures per-stage intermediate

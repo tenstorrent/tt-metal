@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Reproducible setup for the Qwen3-ASR TT server inside the dev container.
 # The dev image's /opt/venv + a manually-copied qwen_asr processor are ephemeral
 # (lost on container recreate), so this script re-establishes them.

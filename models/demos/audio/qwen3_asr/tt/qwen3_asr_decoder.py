@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """ttnn Qwen3-1.7B decoder for Qwen3-ASR, built on tt_transformers.
 
 The text decoder is a standard Qwen3 (validated: extracted checkpoint reproduces

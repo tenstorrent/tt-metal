@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """End-to-end Qwen3-ASR on Tenstorrent: TT AuT audio encoder -> splice audio embeds
 into the prompt -> TT Qwen3-1.7B decoder -> transcription. Both models on one P150.
 
