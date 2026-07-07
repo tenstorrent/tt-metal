@@ -1,0 +1,121 @@
+# Simplified SDPA inner loop for Quasar.
+# Exercises: multi-stage reconfigs, reduce with MAX pooling and reduce_to_tile,
+# datacopy+SFPU fusion, matmul, eltwise multiply.
+
+# dest_acc: true
+
+operands:
+  # Q: query tile
+  - name: "Q"
+    dims: [32, 64]
+    format: "Float16_b"
+  # KT: key transposed
+  - name: "KT"
+    dims: [64, 64]
+    format: "Float16_b"
+    const_value: 0.01
+  # V: value matrix
+  - name: "V"
+    dims: [64, 64]
+    format: "Float16_b"
+  # identity_scale: all-ones for reduce
+  - name: "identity_scale"
+    dims: [64, 64]
+    format: "Float16_b"
+    const_value: 1.0
+  # norm scale: column vector for broadcast normalize
+  - name: "norm_scale"
+    dims: [32, 32]
+    format: "Float16_b"
+    const_value: 0.5
+  # intermediates and outputs
+  - name: "qkt"
+    dims: [32, 64]
+    format: "Float16_b"
+  - name: "row_max"
+    dims: [32, 64]
+    format: "Float16_b"
+  - name: "exp_out"
+    dims: [32, 64]
+    format: "Float16_b"
+  - name: "norm_out"
+    dims: [32, 64]
+    format: "Float16_b"
+  - name: "attn_v"
+    dims: [32, 64]
+    format: "Float16_b"
+
+operations:
+  # Step 1: QKT = Q[32,64] x KT[64,64] -> [32,64]
+  - math:
+      - type: "Fpu"
+        src_a: "Q"
+        src_b: "KT"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [32, 64]
+    pack:
+      - output: "qkt"
+        packer: "Packer"
+
+  # Step 2: row_max = reduce_max_row(qkt) with reduce_to_tile
+  - math:
+      - type: "Fpu"
+        src_a: "qkt"
+        src_b: "identity_scale"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_ROW"
+        reduce_pool: "MAX"
+        reduce_to_tile: true
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [32, 64]
+    pack:
+      - output: "row_max"
+        packer: "Packer"
+
+  # Step 3: exp_out = exp(datacopy(qkt))
+  # Datacopy loads qkt into DEST, then SFPU Exp
+  - math:
+      - type: "Fpu"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+        src_a: "qkt"
+        src_b: "identity_scale"
+      - type: "UnarySfpu"
+        operation: "Exp"
+        approximation_mode: true
+        iterations: 32
+    block_size: [32, 64]
+    pack:
+      - output: "exp_out"
+        packer: "Packer"
+
+  # Step 4: norm_out = exp_out * norm_scale (COL broadcast)
+  - math:
+      - type: "Fpu"
+        src_a: "exp_out"
+        src_b: "norm_scale"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "COL"
+        math_fidelity: "HiFi2"
+    block_size: [32, 64]
+    pack:
+      - output: "norm_out"
+        packer: "Packer"
+
+  # Step 5: attn_v = norm_out[32,64] x V[64,64] -> [32,64]
+  - math:
+      - type: "Fpu"
+        src_a: "norm_out"
+        src_b: "V"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [32, 64]
+    pack:
+      - output: "attn_v"
+        packer: "Packer"

@@ -191,7 +191,7 @@ class ComputePipeline:
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> str:
-        return unpack_common.sync_with_packer(operation.stage_id)
+        return unpack_common.sync_with_packer(operation.needs_pack_sync)
 
     def unpack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         unpack_ops = [
@@ -374,9 +374,7 @@ class ComputePipeline:
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> str:
-        return pack_common.packer_sync_with_unpacker(
-            operation.stage_id, operation.num_stages
-        )
+        return pack_common.packer_sync_with_unpacker(operation.has_pack_consumer)
 
     def _all_same_pack_formats(self) -> bool:
         pack_only = self._get_pack_nodes()

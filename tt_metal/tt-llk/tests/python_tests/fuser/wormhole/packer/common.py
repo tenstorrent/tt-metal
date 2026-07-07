@@ -55,7 +55,7 @@ def packer_dest_section_done(dest_sync: str, dest_acc: str) -> str:
     return f"_llk_pack_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
 
 
-def packer_sync_with_unpacker(stage_id: int, num_stages: int) -> str:
-    if stage_id < num_stages:
+def packer_sync_with_unpacker(has_pack_consumer: bool) -> str:
+    if has_pack_consumer:
         return "t6_semaphore_post<>(semaphore::PACK_DONE);\n\n"
     return ""

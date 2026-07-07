@@ -66,7 +66,6 @@ class PackNode:
         config: "GlobalConfig",
         block: BlockData,
     ) -> str:
-        config.sentinel.ensure_pack_buf_desc_id(self)
         code = self.packer.init(self, operation, config, block)
         code += self._relu_config(config)
         code += self._l1_accumulation_config(config)

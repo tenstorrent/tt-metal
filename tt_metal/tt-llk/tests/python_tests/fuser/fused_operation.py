@@ -27,6 +27,8 @@ class FusedOperation:
     )
     stage_id: int = 0
     num_stages: int = 1
+    needs_pack_sync: bool = False
+    has_pack_consumer: bool = False
     throttle: int = 0
     stochastic_rnd: StochasticRounding = StochasticRounding.No
     tiny_tiles: bool = False

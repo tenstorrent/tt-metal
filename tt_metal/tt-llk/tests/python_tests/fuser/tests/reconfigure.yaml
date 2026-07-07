@@ -1,8 +1,6 @@
 # Three stages that each use different data formats, forcing the unpack, math,
 # and pack pipelines to reconfigure between every stage. Goes from Float16_b
-# through Bfp8_b to Float32.
-
-supported_archs: ["wormhole", "blackhole"]
+# through Float16 to Float32.
 
 dest_acc: true
 
@@ -25,11 +23,11 @@ operands:
     format: "Float16_b"
   - name: "output_B"
     dims: [32, 32]
-    format: "Bfp8_b"
+    format: "Float16"
 
   - name: "input_E"
     dims: [32, 32]
-    format: "Bfp8_b"
+    format: "Float16"
   - name: "output_C"
     dims: [32, 32]
     format: "Float32"
@@ -48,7 +46,7 @@ operations:
         iterations: 32
         dst_dest_tile_index: 0
       - type: "UnarySfpu"
-        operation: "Log1p"
+        operation: "Square"
         approximation_mode: false
         iterations: 32
         dst_dest_tile_index: 0

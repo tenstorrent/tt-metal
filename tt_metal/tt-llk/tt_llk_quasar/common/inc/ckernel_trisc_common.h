@@ -273,6 +273,7 @@ struct semaphore
     // - MATH_PACK = math->pack
     // - UNPACK_MATH = unpack->math
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
+    constexpr static std::uint32_t PACK_DONE   = 2;
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
@@ -404,8 +405,8 @@ inline tdma_descriptor_t construct_tdma_desc(
     {
         buf_desc.f.z_dim = static_cast<std::uint8_t>(compute_square_of_min(tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim));
     }
-    buf_desc.f.l1_addr_16B  = base_l1_16B;
-    buf_desc.f.format       = static_cast<std::uint8_t>(data_format);
+    buf_desc.f.l1_addr_16B = base_l1_16B;
+    buf_desc.f.format      = static_cast<std::uint8_t>(data_format);
 
     tdma_descriptor_t tdma_desc = {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
 

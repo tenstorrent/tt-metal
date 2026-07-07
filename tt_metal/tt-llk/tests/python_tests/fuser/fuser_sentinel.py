@@ -5,7 +5,6 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
-from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import (
     infer_math_format,
     infer_pack_in,
@@ -46,32 +45,10 @@ class FuserSentinel:
 
     _pack_src: Optional[DataFormat] = field(default=None, repr=False)
     _pack_dst: Optional[DataFormat] = field(default=None, repr=False)
+    _pack_buf_desc_id: Optional[int] = field(default=None, repr=False)
 
     golden_math_format: Optional[DataFormat] = field(default=None, repr=False)
     golden_pack_src: Optional[DataFormat] = field(default=None, repr=False)
-
-    _next_unpack_buf_desc_id: int = field(default=0, repr=False)
-    _next_pack_buf_desc_id: int = field(default=8, repr=False)
-
-    def _alloc_unpack_buf_desc_id(self) -> int:
-        bid = self._next_unpack_buf_desc_id
-        self._next_unpack_buf_desc_id += 1
-        return bid
-
-    def _alloc_pack_buf_desc_id(self) -> int:
-        bid = self._next_pack_buf_desc_id
-        self._next_pack_buf_desc_id += 1
-        return bid
-
-    def ensure_unpack_buf_desc_ids(self, compute_node: "FpuNode") -> None:
-        if compute_node.src_a is not None and compute_node.src_a.buf_desc_id is None:
-            compute_node.src_a.buf_desc_id = self._alloc_unpack_buf_desc_id()
-        if compute_node.src_b is not None and compute_node.src_b.buf_desc_id is None:
-            compute_node.src_b.buf_desc_id = self._alloc_unpack_buf_desc_id()
-
-    def ensure_pack_buf_desc_id(self, pack_node: "PackNode") -> None:
-        if pack_node.output is not None and pack_node.output.buf_desc_id is None:
-            pack_node.output.buf_desc_id = self._alloc_pack_buf_desc_id()
 
     def reset_unpack_formats(self):
         self._unpack_A_src = None
@@ -89,6 +66,7 @@ class FuserSentinel:
     def reset_pack_formats(self):
         self._pack_src = None
         self._pack_dst = None
+        self._pack_buf_desc_id = None
 
     @staticmethod
     def _find_format_node(
@@ -292,8 +270,6 @@ class FuserSentinel:
             self._unpack_face_r_dim_b = self._unpack_face_r_dim_a
             self._unpack_num_faces_b = self._unpack_num_faces_a
 
-        self.ensure_unpack_buf_desc_ids(compute_node)
-
         return unpack_common.hw_configure_unpack(
             compute_node,
             config.dest_acc.cpp_enum_value,
@@ -349,18 +325,7 @@ class FuserSentinel:
         srca_changed = srca_fmt_changed or srca_tile_changed
         srcb_changed = srcb_fmt_changed or srcb_tile_changed
 
-        if config.architecture == ChipArchitecture.QUASAR:
-            is_unary = unpack_common.is_unary_unpacker(compute_node)
-            needs_buf_desc = compute_node.src_a.buf_desc_id is None
-            if not is_unary:
-                needs_buf_desc = needs_buf_desc or (
-                    compute_node.src_b is not None
-                    and compute_node.src_b.buf_desc_id is None
-                )
-            if not (srca_changed or srcb_changed or needs_buf_desc):
-                return ""
-            self.ensure_unpack_buf_desc_ids(compute_node)
-        elif not (srca_changed or srcb_changed):
+        if not (srca_changed or srcb_changed):
             return ""
 
         code = unpack_common.configure_unpack(
@@ -461,8 +426,6 @@ class FuserSentinel:
         first = pack_nodes[0]
         pack_src, pack_dst = self._resolve_pack_formats(config, operation, first)
 
-        self.ensure_pack_buf_desc_id(first)
-
         code = pack_common.hw_configure_pack(
             first.output,
             config.dest_acc.cpp_enum_value,
@@ -473,6 +436,7 @@ class FuserSentinel:
 
         self._pack_src = pack_src
         self._pack_dst = pack_dst
+        self._pack_buf_desc_id = first.output.buf_desc_id
 
         return code
 
@@ -489,10 +453,11 @@ class FuserSentinel:
         """
         pack_src, pack_dst = self._resolve_pack_formats(config, operation, pack_node)
 
-        if self._pack_src == pack_src and self._pack_dst == pack_dst:
-            return ""
+        buf_desc_changed = self._pack_buf_desc_id != pack_node.output.buf_desc_id
+        format_changed = self._pack_src != pack_src or self._pack_dst != pack_dst
 
-        self.ensure_pack_buf_desc_id(pack_node)
+        if not format_changed and not buf_desc_changed:
+            return ""
 
         code = pack_common.configure_pack(
             pack_node.output,
@@ -503,6 +468,7 @@ class FuserSentinel:
 
         self._pack_src = pack_src
         self._pack_dst = pack_dst
+        self._pack_buf_desc_id = pack_node.output.buf_desc_id
         return code
 
     def configure_golden(

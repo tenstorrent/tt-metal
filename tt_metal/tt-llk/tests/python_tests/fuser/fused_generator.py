@@ -10,6 +10,7 @@ from typing import Dict
 
 from helpers.chip_architecture import ChipArchitecture
 
+from .fused_operand import OperandRegistry
 from .fuser_config import FuserConfig
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
@@ -38,6 +39,11 @@ class UnpackKernelGenerator:
             [op.unpack(self.config.global_config) for op in self.config.pipeline]
         )
 
+        buf_desc_init = ""
+        if self.config.global_config.architecture == ChipArchitecture.QUASAR:
+            reg = self.config.operand_registry
+            buf_desc_init = OperandRegistry.emit_operand_init(reg.get_all_inputs())
+
         code = (
             f"\n"
             f"#ifdef LLK_TRISC_UNPACK\n"
@@ -46,6 +52,7 @@ class UnpackKernelGenerator:
             f"\n"
             f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
             f"{{\n"
+            f"{buf_desc_init}"
             f"{unpack_calls}"
             f"}}\n"
             f"\n"
@@ -130,6 +137,11 @@ class PackKernelGenerator:
             [op.pack(self.config.global_config) for op in self.config.pipeline]
         )
 
+        buf_desc_init = ""
+        if self.config.global_config.architecture == ChipArchitecture.QUASAR:
+            reg = self.config.operand_registry
+            buf_desc_init = OperandRegistry.emit_operand_init(reg.get_all_outputs())
+
         code = (
             f"\n"
             f"#ifdef LLK_TRISC_PACK\n"
@@ -138,6 +150,7 @@ class PackKernelGenerator:
             f"\n"
             f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
             f"{{\n"
+            f"{buf_desc_init}"
             f"{pack_calls}"
             f"}}\n"
             f"\n"
@@ -174,8 +187,17 @@ class FusedKernelGenerator:
             profiler_include += '#include "profiler.h"\n'
             profiler_include += '#include "perf.h"\n'
 
-        operands = self.config.operand_registry.generate_cpp(
-            self.config.global_config.dest_acc.value
+        if self.config.global_config.architecture == ChipArchitecture.QUASAR:
+            operands = ""
+        else:
+            operands = self.config.operand_registry.generate_cpp(
+                self.config.global_config.dest_acc.value
+            )
+
+        operand_include = (
+            ""
+            if self.config.global_config.architecture == ChipArchitecture.QUASAR
+            else '#include "operand.h"\n'
         )
 
         combined = (
@@ -185,7 +207,7 @@ class FusedKernelGenerator:
             f'#include "ckernel_defs.h"\n'
             f'#include "ckernel_sfpu.h"\n'
             f'#include "tensix_types.h"\n'
-            f'#include "operand.h"\n'
+            f"{operand_include}"
             f"{profiler_include}"
             f"\n"
             f"std::uint32_t unp_cfg_context          = 0;\n"
