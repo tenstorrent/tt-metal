@@ -33,6 +33,10 @@ struct TargetRecipe {
     std::string weakened_firmware_name;
     bool firmware_is_kernel_object = false;
     std::string linker_opt_level;
+
+    // Hash of the effective build parameters (JitBuildState::build_state_hash_), used by an
+    // out-of-process prewarm to write the .build_state gate file. 0 when not captured.
+    std::uint64_t build_state_hash = 0;
 };
 
 }  // namespace tt::jit_build
