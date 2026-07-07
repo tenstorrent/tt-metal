@@ -340,8 +340,8 @@ def clear_sku_config_cache():
             ["P300-viommu", "arch-blackhole", "in-service", "pipeline-yyz2-lfc"],
             "bh_p300",
         ),
-        (["P300-viommu", "in-service", "pipeline-yyz2-lfc"], "bh_p300_viommu"),
-        (["tt-ubuntu-2204-N300-viommu-stable"], "wh_n300_civ2"),
+        (["P300-viommu", "in-service", "pipeline-yyz2-lfc"], "bh_p300"),
+        (["tt-ubuntu-2204-N300-viommu-stable"], "wh_n300"),
         (
             ["P150", "arch-blackhole", "in-service", "pipeline-functional"],
             "bh_p150",
@@ -353,7 +353,7 @@ def clear_sku_config_cache():
         ),
         (
             ["arch-wormhole_b0", "topology-6u", "in-service", "pipeline-perf"],
-            "wh_galaxy_perf",
+            "wh_galaxy",
         ),
         # tm-fabric-style runs_on: strict match fails, label fallback applies
         (["P300-viommu", "arch-blackhole", "in-service"], "bh_p300"),
@@ -362,19 +362,20 @@ def clear_sku_config_cache():
         # legacy partial wh_n300 labels
         (["N300", "in-service"], "wh_n300"),
         (["build", "in-service"], None),
-        (["ubuntu-latest"], None),
+        (["ubuntu-latest"], "ubuntu-latest"),
+        (["tt-ubuntu-2204-large-stable"], "tt-ubuntu-2204-large-stable"),
     ],
 )
 def test_card_type_from_job_labels(labels, expected_card_type):
     assert _card_type_from_job_labels(labels) == expected_card_type
 
 
-def test_card_type_groups_p300_variants_under_root_sku_when_multiple_match():
+def test_card_type_groups_p300_variants_under_root_sku():
     labels = ["P300-viommu", "arch-blackhole", "in-service", "pipeline-yyz2-lfc"]
     assert _card_type_from_job_labels(labels) == "bh_p300"
 
     viommu_only_labels = ["P300-viommu", "in-service", "pipeline-yyz2-lfc"]
-    assert _card_type_from_job_labels(viommu_only_labels) == "bh_p300_viommu"
+    assert _card_type_from_job_labels(viommu_only_labels) == "bh_p300"
 
 
 def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_environment):

@@ -371,10 +371,65 @@ def _is_sku_name_prefix(prefix: str, sku_name: str) -> bool:
     return sku_name[len(prefix)] in "_-"
 
 
+# Generic runner pools: store the runner label itself as card_type (not a SKU name).
+_GENERIC_RUNNER_LABELS: frozenset[str] = frozenset(
+    {
+        "ubuntu-latest",
+        "tt-ubuntu-2204-large-stable",
+    }
+)
+
+# Longest-first suffixes stripped when promoting a variant SKU to its root name.
+_CARD_TYPE_ROOT_SUFFIXES: tuple[str, ...] = (
+    "_civ2_viommu_prio",
+    "_civ2_viommu",
+    "_civ2_prio",
+    "_merge_gate",
+    "_civ2",
+    "_viommu",
+    "_perf",
+    "_prio",
+    "_iommu",
+    "-blitz",
+    "-mgd",
+)
+
+
+def _uses_generic_runner_labels(label_set: set[str]) -> bool:
+    return bool(label_set) and label_set <= _GENERIC_RUNNER_LABELS
+
+
+def _card_type_from_generic_runner_labels(label_set: set[str]) -> Optional[str]:
+    if not _uses_generic_runner_labels(label_set):
+        return None
+    return sorted(label_set)[0]
+
+
 @functools.lru_cache(maxsize=128)
 def _root_sku_for(sku_name: str) -> str:
-    candidates = [name for name in _sku_config_sku_names() if _is_sku_name_prefix(name, sku_name)]
-    return min(candidates, key=lambda name: (len(name), name))
+    known_skus = set(_sku_config_sku_names())
+    candidate = sku_name
+
+    while True:
+        promoted = False
+        for suffix in _CARD_TYPE_ROOT_SUFFIXES:
+            if not candidate.endswith(suffix):
+                continue
+            stripped = candidate[: -len(suffix)]
+            if stripped in known_skus:
+                candidate = stripped
+                promoted = True
+                break
+        if not promoted:
+            break
+
+    if candidate in known_skus:
+        return candidate
+
+    candidates = [name for name in known_skus if _is_sku_name_prefix(name, sku_name)]
+    if candidates:
+        return min(candidates, key=lambda name: (len(name), name))
+    return sku_name
 
 
 # Runner labels checked in order when strict sku_config matching fails.
@@ -393,9 +448,8 @@ def _card_type_from_sku_config(labels: list[str]) -> Optional[str]:
     Match job labels to a pipeline SKU from sku_config.yaml.
 
     Every SKU whose runs_on labels are present on the job is a match (sim_* SKUs are
-    skipped). When exactly one SKU matches, that SKU name is returned. When multiple
-    SKUs match, each is mapped to its root SKU and the first root alphabetically is
-    returned.
+    skipped). Matches are promoted to their root SKU via suffix stripping / sku_config
+    prefix lookup.
     """
     label_set = set(labels)
     matching_skus: list[str] = []
@@ -413,9 +467,6 @@ def _card_type_from_sku_config(labels: list[str]) -> Optional[str]:
 
     if not matching_skus:
         return None
-
-    if len(matching_skus) == 1:
-        return matching_skus[0]
 
     roots = {_root_sku_for(sku_name) for sku_name in matching_skus}
     return sorted(roots)[0]
@@ -435,6 +486,13 @@ def _card_type_fallback_from_job_labels(labels: list[str]) -> Optional[str]:
 
 
 def _card_type_from_job_labels(labels: list[str]) -> Optional[str]:
+    label_set = set(labels)
+
+    card_type = _card_type_from_generic_runner_labels(label_set)
+    if card_type is not None:
+        logger.info(f"Matched job labels to generic runner label {card_type!r}")
+        return card_type
+
     card_type = _card_type_from_sku_config(labels)
     if card_type is None:
         card_type = _card_type_fallback_from_job_labels(labels)
