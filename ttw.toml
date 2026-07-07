@@ -1,0 +1,68 @@
+# tt-workflows config — LTX 3s opt loop. Flat key=value; [sections] decorative.
+# Device execution is BROKER-NATIVE (tt-device-mcp), not devrun/ssh — the supervisor
+# drives jobs via the broker MCP. These keys configure the device-independent
+# machinery (loopd status snapshot, iterlog, report, done gate).
+
+[project]
+name = "ltx-3s"
+knowledge_dir = "opt/ttw/knowledge"
+context_doc = "opt/ttw/knowledge/context.md"
+
+[host]
+# Empty device_host => devrun local-mode; but we run broker-native, so devrun is
+# unused. Kept for scripts that read these keys.
+device_host = ""
+remote_root = "/home/smarton/tt-metal/.claude/worktrees/ltx-perf-clean"
+remote_scratch = "/home/smarton/tt-metal/.claude/worktrees/ltx-perf-clean/tmp"
+
+[build]
+cpp_build_cmd = "bash build_metal.sh"
+data_build_cmd = "true"
+cpp_paths = "tt_metal/ ttnn/ *.cpp *.hpp *.cmake"
+
+[run]
+# Reference only — the supervisor launches this through the broker, not devrun.
+preflight_cmd = ""
+verify_cmd = "bash tmp/run_ltx.sh"
+worry_threshold_s = 1200
+timeout_s = 2400
+
+[gate]
+# qgate = decoded-frame PCC vs the fixed 11-step bf16 reference (compare_videos.py).
+metric_name = "qgate"
+metric_threshold = 0.85
+metric_lower = 0
+require_timings = 1
+require_screenshot = 0
+require_report = 1
+require_commit = 1
+screenshot_glob = "opt/screenshots/*_after.png"
+screenshot_dir = "opt/screenshots"
+screenshot_name = "after.png"
+screenshot_diff_name = ""
+
+[report]
+report_cmd = ""
+report_html = "opt/REPORT.html"
+report_set_inflight_cmd = ""
+report_clear_inflight_cmd = ""
+report_validate_cmd = ""
+
+[workspace]
+tmp_dir = "tmp"
+require_clean_workspace = 0
+
+[log]
+iters_jsonl = "opt/iters.jsonl"
+
+[loop]
+push_remote = "origin"
+stuck_after = 4
+min_improvement = 0.02
+stop_file = "STOP"
+worker_model = ""
+fallback_model = "composer-2.5"
+heartbeat_s = 1200
+# ms_view (summed TTW_TIMING) is lower-better; goal = 3.0s.
+goal_metric = "ms_view"
+goal_value = 3000

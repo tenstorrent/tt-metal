@@ -352,7 +352,7 @@ class LTXTransformerBlock(Module):
 
         # Audio path (has_audio=True from here)
         shifted_a = self.audio_scale_shift_table.data + audio_temb
-        a_chunks = ttnn.chunk(shifted_a, self.adaln_coeff, dim=0)
+        a_chunks = _tile_preserving_chunk0(shifted_a, self.adaln_coeff)
         a_shift_sa, a_scale_sa_p1, a_gate_sa = a_chunks[0], a_chunks[1], a_chunks[2]
         a_shift_ff, a_scale_ff_p1, a_gate_ff = a_chunks[3], a_chunks[4], a_chunks[5]
         if self.cross_attention_adaln:
@@ -378,7 +378,7 @@ class LTXTransformerBlock(Module):
             audio_ca_input = ttnn.addcmul(a_shift_ca, self.audio_norm2(audio_1BND), a_scale_ca_p1)
             if audio_prompt_temb is not None:
                 shifted_prompt_a = self.audio_prompt_scale_shift_table.data + audio_prompt_temb
-                a_kv_shift, a_kv_scale_p1 = ttnn.chunk(shifted_prompt_a, 2, dim=0)
+                a_kv_shift, a_kv_scale_p1 = _tile_preserving_chunk0(shifted_prompt_a, 2)
                 audio_prompt_mod = ttnn.addcmul(a_kv_shift, audio_prompt, a_kv_scale_p1)
             else:
                 audio_prompt_mod = audio_prompt
@@ -397,10 +397,12 @@ class LTXTransformerBlock(Module):
         if not skip_cross_attn:
             # Chunk layout [scale, shift, scale, shift, gate]: scale slots (idx 0, 2) have +1 baked in.
             shifted_av = self.scale_shift_table_a2v_ca_video.data + av_ca_temb
-            v_ca_scale_p1, v_ca_shift, a_ca_scale_v_p1, a_ca_shift_v, v_ca_gate = ttnn.chunk(shifted_av, 5, dim=0)
+            v_ca_scale_p1, v_ca_shift, a_ca_scale_v_p1, a_ca_shift_v, v_ca_gate = _tile_preserving_chunk0(shifted_av, 5)
 
             shifted_av_a = self.scale_shift_table_a2v_ca_audio.data + av_ca_audio_temb
-            a_scale_a2v_p1, a_shift_a2v, a_scale_v2a_p1, a_shift_v2a, a_ca_gate = ttnn.chunk(shifted_av_a, 5, dim=0)
+            a_scale_a2v_p1, a_shift_a2v, a_scale_v2a_p1, a_shift_v2a, a_ca_gate = _tile_preserving_chunk0(
+                shifted_av_a, 5
+            )
 
             video_normed_xattn = self.norm3(video_1BND)
             audio_normed_xattn = self.audio_norm3(audio_1BND)
