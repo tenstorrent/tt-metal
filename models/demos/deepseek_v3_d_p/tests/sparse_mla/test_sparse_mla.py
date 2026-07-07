@@ -28,7 +28,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import (
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
-from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
@@ -141,6 +141,21 @@ def _topology_from_device_params(device_params):
         ttnn.Topology.Ring
         if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_1D_RING
         else ttnn.Topology.Linear
+    )
+
+
+def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=1):
+    """Block-cyclic indexer key cache, allocated OUTSIDE ttMLA (mirrors tt_kvpe_cache) and passed into
+    ttMLA.forward(index_kv_cache=...) every call. BF8 (matches BF16 top-k within bf16 noise, half the memory)."""
+    return init_kvpe_cache(
+        kvpe_cache_head_dim=getattr(config, "index_head_dim", 128),
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        num_users=slot_num,
+        dtype=ttnn.bfloat8_b,
     )
 
 
@@ -310,6 +325,7 @@ def run_sparse_mla_chunked_case(
         num_kvpe_cache_layers=1,
     )
 
+    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis)
     logger.debug(f"[{variant.name}] sparse MLA chunked: constructing TT module and indexed RoPE tensors")
     mla_tt = ttMLA(
         config,
@@ -343,7 +359,7 @@ def run_sparse_mla_chunked_case(
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
         )
-        out = mla_tt.forward(tt_x, rope_tensors, tt_kvpe_cache, actual_start=s)
+        out = mla_tt.forward(tt_x, rope_tensors, tt_kvpe_cache, actual_start=s, index_kv_cache=tt_index_kv_cache)
         outs.append(
             ttnn.to_torch(
                 out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
@@ -376,6 +392,136 @@ def run_sparse_mla_chunked_case(
     logger.info(f"[{variant.name}] Chunked output PCC: {pcc_message}")
     ttnn.synchronize_device(mesh_device)
     logger.info(f"[{variant.name}] sparse MLA chunked complete")
+
+
+def run_sparse_mla_rotated_case(
+    variant, config, mesh_device, iters_isl, chunk_size_global, ds_layer, ds_checkpoint, ds_repo
+):
+    """Rotation/padding scenario (sparse analogue of test_mla._run_chunked_prefill): one DENSE sequence
+    chunked VARIABLY by iters_isl (per-iter valid token counts). Each iter's real tokens are rotated to
+    start at the previous iter's real end (actual_start=kv_actual, tile-aligned); the fixed-width chunk's
+    non-valid rows are zeroed. This exercises: partial chunks, rotated (mid-slab) chunk_start, and — the
+    thing under test — that a later iter never attends the pad a partial earlier iter left in the cache
+    (the next iter's write overwrites it before scoring; causal masks the tail). Ground truth is the
+    single-shot sparse reference over the whole dense sequence; we compare each iter's valid region."""
+    seed = 42
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+    sp = mesh_shape[sp_axis]
+    tile = ttnn.TILE_SIZE
+    chunk_local = chunk_size_global // sp
+    for v in iters_isl:
+        assert 0 < v <= chunk_size_global and v % tile == 0, f"iter isl {v}: tile-aligned, <= {chunk_size_global}"
+    total_len = sum(iters_isl)
+
+    weights, src_tag = build_weights(
+        variant, config, seed=seed, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo
+    )
+    max_window = max(sum(iters_isl[:i]) + chunk_size_global for i in range(len(iters_isl)))
+    seq_len_cache = ((max_window + chunk_size_global - 1) // chunk_size_global) * chunk_size_global
+    config.max_seq_len = seq_len_cache
+    logger.info(
+        f"[{variant.name}] rotated: iters={iters_isl} total={total_len} chunk={chunk_size_global} cache={seq_len_cache} mesh={tuple(mesh_device.shape)}"
+    )
+
+    hidden = make_hidden(total_len, config.hidden_size, seed)[0]  # [total_len, H]
+    cache_dir = cpu_ref_cache_dir(variant)
+    ref_output, ref_kvpe = run_cpu_reference(
+        config, weights, hidden.unsqueeze(0), total_len, cache_dir, cache_tag=f"{src_tag}_rot{total_len}_funcidx"
+    )
+    ref_output = ref_output[0]  # [total_len, out_dim]
+    out_dim = ref_output.shape[-1]
+    ref_kvpe = ref_kvpe.reshape(-1, ref_kvpe.shape[-1])  # [total_len, kvpe_dim]
+
+    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len_cache, mesh_shape, sp_axis, slot_num=1)
+    mla_tt = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=seq_len_cache,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_chunked=True,
+        slot_num=1,
+        layer_num=1,
+    )
+    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_tensors = rope.get_rope_tensors_indexed(
+        cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
+    )
+    tt_kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_len_cache,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+    )
+    shard_dims = [None, None]
+    shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
+
+    out_accum = torch.zeros(total_len, out_dim, dtype=torch.bfloat16)
+    for i, isl in enumerate(iters_isl):
+        kv_actual = sum(iters_isl[:i])
+        valid_end = kv_actual + isl
+        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+        flat = [positions[c][r] for c in range(sp) for r in range(chunk_local)]
+        gather_idx = torch.tensor([min(gp, total_len - 1) for gp in flat], dtype=torch.long)
+        chunk_in = hidden[gather_idx].clone()
+        chunk_in[torch.tensor([gp >= valid_end for gp in flat])] = 0.0
+        tt_h = ttnn.from_torch(
+            chunk_in.reshape(1, 1, chunk_size_global, config.hidden_size),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        )
+        tt_out = mla_tt.forward(
+            tt_h, rope_tensors, tt_kvpe_cache, actual_start=kv_actual, cache_user_id=0, index_kv_cache=tt_index_kv_cache
+        )
+        out_flat = ttnn.to_torch(
+            tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).to(torch.bfloat16)[0, 0]
+        valid_pairs = [(row, gp) for row, gp in enumerate(flat) if gp < valid_end]
+        out_accum[torch.tensor([gp for _, gp in valid_pairs])] = out_flat[torch.tensor([row for row, _ in valid_pairs])]
+        rot = "rotated" if kv_actual % chunk_size_global != 0 else "aligned"
+        _, m = comp_pcc(ref_output[kv_actual:valid_end], out_accum[kv_actual:valid_end], 0)
+        logger.info(f"[{variant.name}] iter {i} (kv_actual={kv_actual} isl={isl} {rot}): valid-region PCC {m}")
+
+    # ISOLATION: is the block-cyclic WRITE correct under rotation? Un-rotate the final KVPE cache and
+    # compare per-iter region + full to the reference. If cache matches but output above diverged, the
+    # bug is in SCORING (indexer top-k / sparse_sdpa), not the write.
+    cache_sr = ttnn.to_torch(
+        tt_kvpe_cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+    ).to(torch.bfloat16)[:, :1]
+    p = blockcyclic_positions(sp, chunk_size_global, cache_sr.shape[2])
+    nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
+    nat[p] = cache_sr[0, 0]
+    for i, isl in enumerate(iters_isl):
+        s = sum(iters_isl[:i])
+        _, m = comp_pcc(ref_kvpe[s : s + isl], nat[s : s + isl], 0)
+        logger.info(f"[{variant.name}] KVPE cache region iter {i} [{s}:{s + isl}]: {m}")
+    _, mk = comp_pcc(ref_kvpe[:total_len], nat[:total_len], 0)
+    logger.info(f"[{variant.name}] KVPE cache full PCC: {mk}")
+
+    _, msg = assert_with_pcc(
+        ref_output.reshape(1, 1, total_len, out_dim), out_accum.reshape(1, 1, total_len, out_dim), SPARSE_OUTPUT_PCC
+    )
+    logger.info(f"[{variant.name}] rotated full PCC: {msg}")
+    ttnn.synchronize_device(mesh_device)
+
+
+@pytest.mark.parametrize("variant, mesh_device, seq_len", SPARSE_ANCHOR_CASES, indirect=["variant", "mesh_device"])
+@pytest.mark.parametrize("device_params", SPARSE_DEVICE_PARAMS, ids=SPARSE_DEVICE_IDS, indirect=True)
+@pytest.mark.parametrize("iters_isl", [[2560, 2592, 5120]], ids=["maxedge"])
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_rotated(
+    mesh_device, seq_len, iters_isl, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+):
+    run_sparse_mla_rotated_case(variant, config_only, mesh_device, iters_isl, seq_len, ds_layer, ds_checkpoint, ds_repo)
 
 
 # One combined parametrization (variant, mesh_device, seq_len) instead of three independent axes: the
