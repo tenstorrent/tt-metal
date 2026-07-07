@@ -4,6 +4,7 @@
 
 #include "common_tensor_test_utils.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <vector>
 
@@ -39,11 +40,10 @@ void test_tensor_on_device(
     enqueue_write_tensor(cq, host_data.data(), tensor);
     enqueue_read_tensor(cq, tensor, readback_data.data());
 
-    for (size_t i = 0; i < input_buf_size; i++) {
-        EXPECT_EQ(host_data[i], readback_data[i]);
-        if (host_data[i] != readback_data[i]) {
-            break;
-        }
+    auto it = std::mismatch(host_data.begin(), host_data.end(), readback_data.begin());
+    if (it.first != host_data.end()) {
+        const size_t i = static_cast<size_t>(it.first - host_data.begin());
+        EXPECT_EQ(*it.first, *it.second) << "First mismatch at index " << i;
     }
 
     EXPECT_EQ(tensor.padded_shape(), layout.compute_padded_shape(input_shape));

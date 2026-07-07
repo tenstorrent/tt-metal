@@ -134,9 +134,8 @@ thread_local const uint64_t* __emule_l1_padding_ranges = nullptr;
 thread_local uint32_t __emule_l1_padding_ranges_count = 0;
 thread_local const uint64_t* __emule_l1_host_ranges = nullptr;
 thread_local uint32_t __emule_l1_host_ranges_count = 0;
-thread_local uint64_t* __emule_l1_resolved_ranges = nullptr;
-thread_local uint32_t* __emule_l1_resolved_ranges_count = nullptr;
-thread_local uint32_t __emule_l1_resolved_ranges_capacity = 0;
+// Object-Intent resolved-range log now lives in the fiber ctx (ThreadCommonCtx::
+// san_resolved_*), reached via __emule_self — no thread-local. See tt-emule #241.
 thread_local uint32_t __emule_cb_reserved_pages[32] = {};
 thread_local uint32_t __emule_cb_waited_pages[32] = {};
 // Dirty-CB leak flags: set by reserve/wait, cleared by push/pop; still-set at
@@ -3054,6 +3053,14 @@ static void launch_cores(
     std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>> dfb_keepalive;
     dfb_keepalive.reserve(core_setups.size());
 
+    // Object-Intent (ASAN §12): one tracker per core, owned here so it outlives the fiber
+    // run (run_until_idle below, for the non-deferred single-device path). The deferred
+    // mesh path skips OI — per-fiber ASAN state is single-device-scoped (see the ASAN note
+    // in the spawn lambda) and the trackers must not outlive this frame across a deferred
+    // run_mesh_dispatch. Empty (no snapshot/verify cost) when ASAN is off. See tt-emule #241.
+    std::vector<std::unique_ptr<ObjectIntentTracker>> intent_trackers;
+    const bool object_intent_active = !defer_run && oob_state.object_intent_strict;
+
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
         auto& cs = core_setups[core_idx];
         auto* core = cs.core;
@@ -3073,6 +3080,25 @@ static void launch_cores(
         std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> per_thread_dfbs;
         if (cs.has_dfbs) {
             per_thread_dfbs = build_per_thread_dfb_interfaces(*cs.ki_list, cs.dfb_allocs);
+        }
+
+        // Object-Intent: snapshot this core's non-I/O live buffers BEFORE its kernel runs
+        // (on the dispatch thread, so L1 still holds the pre-kernel bytes). Self-gates to a
+        // no-op unless ASAN is on and this is a single-kernel core; the fiber(s) below then
+        // record resolved extents and verify at exit. See tt-emule #241 and ObjectIntentTracker.
+        ObjectIntentTracker* intent_tracker = nullptr;
+        if (object_intent_active) {
+            intent_trackers.push_back(std::make_unique<ObjectIntentTracker>());
+            intent_tracker = intent_trackers.back().get();
+            static const std::vector<uint32_t> kEmptyRtArgs;
+            intent_tracker->pre_launch_snapshot(
+                oob_state,
+                cs.ki_list->size(),
+                cs.ki_list->size() == 1 ? (*cs.ki_list)[0].rt_arg_values : kEmptyRtArgs,
+                l1_data,
+                cs.persistent_cb_ranges,
+                lx,
+                ly);
         }
 
         for (size_t kidx = 0; kidx < cs.ki_list->size(); ++kidx) {
@@ -3124,11 +3150,14 @@ static void launch_cores(
             // sweep_per_kernel_dirty_cbs / clear (+ the identity globals the sanitizer .cpp reads,
             // mirroring the ctx). All inert when TT_METAL_EMULE_ASAN is off — set_sanitizer_thread_locals
             // early-returns, so the by-value oob_state view (owned by dispatch_to_device's OobStateOwner)
-            // is never dereferenced. Under the fiber engine these worker-thread-locals are best-effort
-            // (shared across parked fibers on a worker); per-fiber ASAN state + the per-core ObjectIntent
-            // snapshot/verify are a follow-up, so ASAN is aimed at single-device runs.
+            // is never dereferenced. The range thread-locals are program-uniform, so a peer fiber
+            // re-arming them on a shared worker is harmless. The Object-Intent resolved-range log is
+            // per-fiber, so it lives in the fiber ctx (__emule_self->san_resolved_*) and needs no
+            // thread-local / swap-in restore. Object-Intent snapshot/verify run per single-kernel core
+            // on the non-deferred (single-device) path; deferred mesh runs skip OI. See tt-emule #241.
             sched.spawn(
-                [ki_ptr, lx, ly, cb_array, oob_state, sem_base = cs.sem_base, sem_size = cs.sem_size]() {
+                [ki_ptr, lx, ly, cb_array, l1_data, intent_tracker, oob_state, sem_base = cs.sem_base,
+                 sem_size = cs.sem_size]() {
                     auto& ki = *ki_ptr;
                     __processor_id = ki.processor_id;
                     __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
@@ -3136,6 +3165,14 @@ static void launch_cores(
                     __emule_kernel_name = ki.kernel_name.empty() ? nullptr : ki.kernel_name.c_str();
                     __emule_pending_noc_reads = 0;
                     set_sanitizer_thread_locals(oob_state, sem_base, sem_size);
+
+                    // Arm the Object-Intent resolved-range log in this fiber's ctx (reset count,
+                    // enable recording). The kernel-side OOB check appends resolved extents to
+                    // __emule_self->san_resolved_log; teardown accumulates and verify diffs them.
+                    if (intent_tracker != nullptr) {
+                        __emule_self->san_resolved_active = true;
+                        __emule_self->san_resolved_count = 0;
+                    }
                     try {
                         for (size_t t = 0; t < ki.variants.size(); ++t) {
                             if (ki.run_all_variants) {
@@ -3146,10 +3183,24 @@ static void launch_cores(
                         }
                         sweep_per_kernel_dirty_cbs(oob_state, cb_array, ki.processor_id, lx, ly);
                     } catch (...) {
+                        if (intent_tracker != nullptr) {
+                            intent_tracker->accumulate_resolved(
+                                oob_state, __emule_self->san_resolved_log, __emule_self->san_resolved_count);
+                            __emule_self->san_resolved_active = false;
+                        }
                         clear_sanitizer_thread_locals();
                         std::throw_with_nested(std::runtime_error(
                             "EMULE: kernel on core (" + std::to_string(lx) + "," + std::to_string(ly) +
                             ") failed"));
+                    }
+                    if (intent_tracker != nullptr) {
+                        // Accumulate this kernel's resolved extents, then verify: any non-I/O
+                        // buffer whose bytes changed but was never resolved is an Object-Intent
+                        // violation (aborts). No-op for multi-kernel cores (nothing snapshotted).
+                        intent_tracker->accumulate_resolved(
+                            oob_state, __emule_self->san_resolved_log, __emule_self->san_resolved_count);
+                        __emule_self->san_resolved_active = false;
+                        intent_tracker->verify_post_launch(l1_data, lx, ly, __emule_kernel_name);
                     }
                     __emule_kernel_name = nullptr;
                     __emule_pending_noc_reads = 0;

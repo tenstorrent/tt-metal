@@ -6,6 +6,7 @@
 #include "device/prod_op_all.hpp"
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -109,6 +110,14 @@ Tensor prod_impl(
         return result;
     }
 
+    // bfloat4_b is not supported on the dim path: the reduction dim may be repositioned with
+    // ttnn::permute, which re-quantizes bfloat4_b. Permute has a bf16 fallback for bfloat8_b but
+    // not bfloat4_b, see issue #48813. The full-product path above still supports bfloat4_b.
+    TT_FATAL(
+        input_a_padded.dtype() != tt::tt_metal::DataType::BFLOAT4_B,
+        "ttnn.prod with a dim argument does not support bfloat4_b");
+    const Tensor& dim_input = input_a_padded;
+
     // For higher dimension Tensors, we need to squeeze to 4D to perform the reduction
     if (old_rank > 4) {
         // Bring dim into range [0, old_rank - 1]
@@ -129,7 +138,7 @@ Tensor prod_impl(
 
         // Tensor with target reduction dim at third last position
         ttnn::Tensor permuted =
-            permute_required ? ttnn::permute(input_a_padded, post_permute_dims, output_mem_config) : input_a_padded;
+            permute_required ? ttnn::permute(dim_input, post_permute_dims, output_mem_config) : dim_input;
 
         // Now squeeze to 4D and do the 4D prod.
         // Dim0 grows to include the rest of the dimensions, and our "third last" dim moves into dim1, which is our 4D
@@ -156,7 +165,7 @@ Tensor prod_impl(
     }
     // 4D or lower dimension Tensors
     // For lower dimension Tensors, we need to unsqueeze to 4D
-    auto input_tensor_4d = ttnn::unsqueeze_to_4D(input_a_padded);
+    auto input_tensor_4d = ttnn::unsqueeze_to_4D(dim_input);
 
     // Update the dim because we unsqueezed input to 4d
     // If dim is negative, counting from the back is not impacted by the unsqueeze
@@ -220,7 +229,13 @@ namespace ttnn {
 
 Tensor prod(
     const Tensor& input, std::optional<int64_t> dim, bool keepdim, const std::optional<MemoryConfig>& memory_config) {
-    return operations::reduction::prod_impl(input, dim, keepdim, memory_config);
+    Tensor result = operations::reduction::prod_impl(input, dim, keepdim, memory_config);
+    // Block-float is computed in FLOAT32; return the result in the input dtype to match it
+    if ((input.dtype() == tt::tt_metal::DataType::BFLOAT8_B || input.dtype() == tt::tt_metal::DataType::BFLOAT4_B) &&
+        result.dtype() != input.dtype()) {
+        result = ttnn::typecast(result, input.dtype());
+    }
+    return result;
 }
 
 Tensor prod(
