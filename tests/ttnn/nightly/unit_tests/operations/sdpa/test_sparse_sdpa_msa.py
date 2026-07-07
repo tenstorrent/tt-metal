@@ -571,3 +571,62 @@ def test_msa_native_determinism(device, q_dtype, kv_dtype):
             marker = m if marker is None else ttnn.maximum(marker, m)
     mismatch = float(ttnn.to_torch(ttnn.from_device(marker)).max())  # one scalar to host, once
     assert mismatch == 0.0, "sparse_sdpa_msa output is not deterministic across repeated runs"
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((8, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D})],
+    indirect=True,
+)
+@run_for_blackhole()
+def test_msa_native_causal_per_rank_sp(mesh_device):
+    """Multi-device (8x4): q/indices are sharded on the sequence axis across the SP (row) axis and replicated
+    across the TP (col) axis, so SP rank r owns global query positions [r*s_local, (r+1)*s_local). The op must
+    derive its causal chunk_start from each device's mesh coordinate (device_index = rank along cluster_axis 0);
+    otherwise rank>0 masks against a local position, its diagonal block isn't in the selected set, and it
+    attends future tokens. K/V are the full context, replicated. Gathering col 0 of each SP row must match one
+    global-causal reference. Needs 32 devices (skips otherwise)."""
+    rows, cols = tuple(mesh_device.shape)  # SP rows (cluster_axis 0) x TP cols
+    d, H, n_kv, nblk = 128, 16, 1, 16
+    s_local = 128
+    S = rows * s_local
+    T = nblk * BLK_KV
+    scale = d**-0.5
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk=nblk, d=d, causal=True, seed=31)
+    gold = sparse_attention_ref_msa(q, k, v, indices, scale, causal=True)
+
+    def shard_seq_rm(t, dt):  # row-major q/indices: seq sharded on the SP (row) axis, replicated on TP (col)
+        return ttnn.from_torch(
+            t,
+            dtype=dt,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(2, None), mesh_shape=(rows, cols)),
+        )
+
+    def repl_tile(t, dt):  # pre-tiled K/V full context, replicated to every device
+        return ttnn.from_torch(
+            t.to(torch.bfloat16),
+            dtype=dt,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    tt_out = ttnn.transformer.sparse_sdpa_msa(
+        shard_seq_rm(q.to(torch.float32), ttnn.bfloat16),
+        repl_tile(k, ttnn.bfloat16),
+        repl_tile(v, ttnn.bfloat16),
+        shard_seq_rm(indices.to(torch.int32), ttnn.uint32),
+        scale=scale,
+        block_size=BLK_KV,
+        chunk_start_idx=0,  # base 0; each device adds rank*s_local from its coordinate along cluster_axis 0
+        cluster_axis=0,
+    )
+    # seq is sharded across SP rows and replicated across TP cols -> take col 0 of each row, concat on seq.
+    dts = ttnn.get_device_tensors(tt_out)
+    out = torch.cat([ttnn.to_torch(dts[r * cols]).float()[:, :H] for r in range(rows)], dim=2)
+    p = pcc(out, gold)
+    assert p > 0.99, f"per-rank SP causal PCC {p}"

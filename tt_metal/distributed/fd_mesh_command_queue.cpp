@@ -609,6 +609,15 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
         return;
     }
 
+    if (tt::IsProgramRealtimeProfilerActive()) {
+        for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
+            const uint32_t wait_count = expected_num_workers_completed_[*sub_device_id];
+            for (auto* device : mesh_device_->get_devices()) {
+                write_rt_profiler_flush(id_, sub_device_id, device->sysmem_manager(), wait_count);
+            }
+        }
+    }
+
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
