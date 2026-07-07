@@ -1,8 +1,4 @@
-# Four-chip DDP variant of grpo_boolq_llama_2dev_ddp_gas_4.yaml, used by the
-# DDP -> per-submesh weight transfer test (tt-train/sources/examples/grpo/
-# tests/weight_transfer/test_ddp_submesh_transfer.py): the ttml rank opens a
-# [1, 4] mesh so weight parameters are replicated across all four devices
-# under DDP, then exports them for transfer to the four TTT submeshes.
+# Four-chip DDP Llama-3.2-1B GRPO, 2 N300 boards.
 
 training_config:
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama3_2_1B.yaml"
@@ -19,8 +15,7 @@ training_config:
 
   grpo_config:
     epsilon: 0.2
-    batch_size: 4
-    micro_batch_size: 4
+    per_device_train_batch_size: 4
     num_iterations: 1
     gradient_accumulation_steps: 4
     logging_steps: 1

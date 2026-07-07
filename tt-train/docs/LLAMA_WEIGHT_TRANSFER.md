@@ -215,7 +215,7 @@ embedding `(V, H)` / gamma `(H,)` shapes from §2 exactly.
   `WeightBridge._validate_source_tensor` for the cross-rank path. This
   is independent of the *sender's* mesh shape: a DDP-only `[1, N]`
   mesh (e.g. `mesh_shape: [1, 2], enable_ddp: true` from
-  [`grpo_boolq_llama_2dev_ddp_gas_4.yaml`](../configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_4.yaml))
+  [`grpo_boolq_llama_1b_ddp_2dev.yaml`](../configs/training_configs/grpo_boolq_llama_1b_ddp_2dev.yaml))
   produces replicated weights and is supported. TP / CP / sharded
   weights are **not**: callers would need to compose shards back to a
   replicated view on host before exporting (not yet implemented).
