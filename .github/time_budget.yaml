@@ -152,6 +152,7 @@ train:
     wh_n300_civ2: 160
     bh_p100: 160
     bh_p150b_civ2: 400
+    bh_galaxy_perf: 180
 
 ttsim:
   unit:
