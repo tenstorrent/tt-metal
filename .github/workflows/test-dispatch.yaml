@@ -81,7 +81,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     container:
       image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
@@ -141,7 +141,7 @@ jobs:
       - name: Run regression in loop
         env:
           SHARD: ${{ matrix.shard }}
-          SHARD_TOTAL: "5"
+          SHARD_TOTAL: "10"
         run: |
           uv pip install pytest-repeat
           ${{ inputs.command }}
