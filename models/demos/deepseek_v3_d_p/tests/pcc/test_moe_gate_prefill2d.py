@@ -16,6 +16,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as Refe
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_fabric_router_config,
@@ -43,6 +44,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBO
 GATE_MODELS = {
     "deepseek_v3": DeepSeekV3Config,
     "kimi": KimiK26Config,
+    "glm_5_1": GLM51Config,
     "dsv4_pro": DeepSeekV4ProConfig,
     "dsv4_flash": DeepSeekV4FlashConfig,
 }
@@ -179,6 +181,8 @@ REGULAR_GATE_CASES = [
     pytest.param("deepseek_v3", GateComputeMode.DEVICE_FP32, id="deepseek_v3-device_fp32"),
     pytest.param("kimi", GateComputeMode.HOST_ALL, id="kimi-host_all"),
     pytest.param("kimi", GateComputeMode.DEVICE_FP32, id="kimi-device_fp32"),
+    pytest.param("glm_5_1", GateComputeMode.HOST_ALL, id="glm_5_1-host_all"),
+    pytest.param("glm_5_1", GateComputeMode.DEVICE_FP32, id="glm_5_1-device_fp32"),
     pytest.param("dsv4_pro", GateComputeMode.DEVICE_FP32, id="dsv4_pro-device_fp32"),
     pytest.param("dsv4_flash", GateComputeMode.DEVICE_FP32, id="dsv4_flash-device_fp32"),
 ]
@@ -308,7 +312,7 @@ def test_forward_pass(
 
     # Real DeepSeek gate weights/input (V3, 256 experts, sigmoid) can't be reshaped to other expert
     # counts or activations, so only attempt the real load for the 256-expert sigmoid path.
-    use_real = config.n_routed_experts == 256 and config.score_func == "sigmoid"
+    use_real = gate_model == "deepseek_v3" and config.n_routed_experts == 256 and config.score_func == "sigmoid"
     gate_w = _try_load_real_gate_weights(config.n_routed_experts, config.dim) if use_real else None
     if gate_w is None:
         gate_w = create_gate_weights(config.n_routed_experts, config.dim)
