@@ -159,6 +159,15 @@ class PrefillModelAdapter(ABC):
     moe_pcc_threshold: float = 0.999
     mla_pcc_threshold: float = 0.999
     supports_pretrained: bool = True
+    # Whether the tokenizer needs trust_remote_code=True (custom tokenizer code shipped in the repo,
+    # e.g. Kimi's tiktoken-backed BBPE). DeepSeek-V3 uses a stock fast tokenizer, so it turns this off
+    # to avoid the flat-config trust_remote_code import path that otherwise breaks its load.
+    tokenizer_trust_remote_code: bool = True
+    # Whether config/tokenizer resolution must copy the HF snapshot into a flat dir of real files.
+    # Only needed when loading with trust_remote_code=True (transformers resolves the remote module to
+    # its blobs/ realpath and then can't find relative-import siblings by name). Variants that load
+    # stock config/tokenizers (trust_remote_code=False) use the snapshot dir directly and set this off.
+    needs_flat_config_dir: bool = True
     # Hand-built HF-attribute config factory (zero-arg callable) for models whose
     # ``model_type`` transformers can't load via AutoConfig (unregistered, e.g. DeepSeek-V3.2's
     # ``deepseek_v32`` / GLM's ``glm_moe_dsa``). None → resolve the config the normal way

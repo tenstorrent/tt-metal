@@ -90,8 +90,8 @@ std::vector<SubDeviceId> from_flatbuffer(const flatbuffers::Vector<uint8_t>* fb_
 
     std::vector<SubDeviceId> sub_device_ids;
     sub_device_ids.reserve(fb_sub_device_ids->size());
-    for (size_t i = 0; i < sub_device_ids.size(); ++i) {
-        sub_device_ids.push_back(SubDeviceId{(*fb_sub_device_ids)[i]});
+    for (unsigned char fb_sub_device_id : *fb_sub_device_ids) {
+        sub_device_ids.push_back(SubDeviceId{fb_sub_device_id});
     }
 
     return sub_device_ids;
@@ -101,7 +101,8 @@ std::vector<CoreCoord> from_flatbuffer(
     const flatbuffers::Vector<flatbuffers::Offset<flatbuffer::CoreCoord>>* core_spec_fbs) {
     TT_FATAL(core_spec_fbs, "Invalid Vector of CoreCoord data from flatbuffer.");
 
-    std::vector<CoreCoord> core_spec(core_spec_fbs->size());
+    std::vector<CoreCoord> core_spec;
+    core_spec.reserve(core_spec_fbs->size());
     for (const auto* coord_fbs : *core_spec_fbs) {
         core_spec.emplace_back(coord_fbs->x(), coord_fbs->y());
     }
@@ -112,7 +113,8 @@ std::vector<std::vector<uint32_t>> from_flatbuffer(
     const flatbuffers::Vector<flatbuffers::Offset<flatbuffer::UInt32Vector>>* vec_of_vec_fbs) {
     TT_FATAL(vec_of_vec_fbs, "Invalid FlatBuffer data: expected a vector of vector of uint32_t.");
 
-    std::vector<std::vector<uint32_t>> result(vec_of_vec_fbs->size());
+    std::vector<std::vector<uint32_t>> result;
+    result.reserve(vec_of_vec_fbs->size());
     for (const auto* sub_vector_fbs : *vec_of_vec_fbs) {
         std::vector<uint32_t> sub_vector(sub_vector_fbs->values()->begin(), sub_vector_fbs->values()->end());
         result.push_back(std::move(sub_vector));

@@ -2075,7 +2075,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     /* in2 */
     uint32_t in2_single_tile_size = in0_single_tile_size;
     uint32_t in2_CB_tiles = (ring_size - 1) * in0_CB_tiles;  // All shards except local
-    uint32_t in2_CB_size = in2_CB_tiles * in2_single_tile_size;
+    uint32_t in2_CB_size = std::max(in2_CB_tiles, 1u) * in2_single_tile_size;
 
     /* out */
     uint32_t out_block_tiles = per_core_M * per_core_N;
