@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from filelock import FileLock
 
-from .format_config import DataFormat, FormatConfig
+from .format_config import MX_FP_SPECS, MX_INT_SPECS, DataFormat, FormatConfig
 from .llk_params import format_dict
 from .logger import logger
 from .tile_constants import (
@@ -323,19 +323,6 @@ def _bfp_block_aware_compare(
     return is_valid
 
 
-# Per-format params for _mxint_block_aware_compare: (elem_scale, max_ulp_steps).
-#   elem_scale  = 2^(fractional bits) of the S1.k element -> ULP = block_scale / elem_scale.
-#   max_ulp_steps = accepted lattice steps. 1 ULP covers the spec-legal power-of-2
-#     block-exponent boundary; finer formats add a 2nd ULP for fidelity-dependent
-#     matmul accumulation drift. Sign flips and gross jumps still fail.
-_MXINT_COMPARE_PARAMS = {
-    DataFormat.MxInt2: (1, 1),  # S1.0: 3-level lattice, ULP == block scale
-    DataFormat.MxInt4: (4, 2),  # S1.2: ULP == block scale / 4
-    DataFormat.MxInt8: (64, 3),  # S1.6: ULP == block scale / 64 (finest); 3 ULP
-    #   covers the LoFi accumulation tail (measured worst 2.5 ULP, over3==0 across the sweep).
-}
-
-
 def _mxint_block_aware_compare(
     golden: torch.Tensor,
     result: torch.Tensor,
@@ -425,23 +412,6 @@ def _mxint_block_aware_compare(
 
 
 _RECORD_TEST_ORDER: bool = False
-
-# Per-format params for _mxfp_block_aware_compare:
-#   (mantissa_bits, max_steps, exp_min_unbiased, exp_max_unbiased).
-#   mantissa_bits of the SxEyMz element. max_steps = accepted adjacent-
-#     representable steps (same role as MxInt's max_ulp_steps).
-#   exp_min_unbiased / exp_max_unbiased = the element format's min-normal and
-#     max-normal unbiased exponents, used to clamp the per-element lattice step
-#     at the block's subnormal floor (see _mxfp_block_aware_compare). Without
-#     this clamp the naive 2^(floor(log2|v|)-mantissa_bits) step keeps halving
-#     below the min normal and rejects spec-legal adjacent subnormals.
-_MXFP_COMPARE_PARAMS = {
-    DataFormat.MxFp4: (1, 2, 0, 2),  # E2M1
-    DataFormat.MxFp8R: (2, 2, -14, 15),  # E5M2
-    DataFormat.MxFp8P: (3, 2, -6, 8),  # E4M3
-    DataFormat.MxFp6R: (2, 2, -2, 4),  # E3M2
-    DataFormat.MxFp6P: (3, 2, 0, 2),  # E2M3
-}
 
 
 def _mxfp_block_aware_compare(
@@ -586,29 +556,26 @@ def passed_test(
         # Uniform integer lattice per block: ULP = block_scale / elem_scale.
         # Replaces the loose torch.isclose(rtol=0.35) + count-based mismatch
         # fallback with a principled per-block lattice-step check; the per-format
-        # (elem_scale, max_ulp_steps) live in _MXINT_COMPARE_PARAMS.
-        elem_scale, max_ulp_steps = _MXINT_COMPARE_PARAMS[output_data_format]
+        # element params come from MX_INT_SPECS.
+        spec = MX_INT_SPECS[output_data_format]
         is_valid = _mxint_block_aware_compare(
             golden_tensor,
             res_tensor,
-            elem_scale=elem_scale,
-            max_ulp_steps=max_ulp_steps,
+            elem_scale=spec.elem_scale,
+            max_ulp_steps=spec.max_ulp_steps,
         )
     elif output_data_format.is_mx_fp_format():
-        # Non-uniform float lattice (E2M1 / E5M2 / E4M3): per-element adjacency
-        # check instead of a fixed ULP. Replaces the loose torch.isclose +
-        # count fallback; per-format (mantissa_bits, max_steps) in
-        # _MXFP_COMPARE_PARAMS.
-        mantissa_bits, max_steps, exp_min_unbiased, exp_max_unbiased = (
-            _MXFP_COMPARE_PARAMS[output_data_format]
-        )
+        # Non-uniform float lattice (E2M1 / E5M2 / E4M3 / E3M2 / E2M3): per-element
+        # adjacency check instead of a fixed ULP. Replaces the loose torch.isclose
+        # + count fallback; per-format element params come from MX_FP_SPECS.
+        spec = MX_FP_SPECS[output_data_format]
         is_valid = _mxfp_block_aware_compare(
             golden_tensor,
             res_tensor,
-            mantissa_bits=mantissa_bits,
-            max_steps=max_steps,
-            exp_min_unbiased=exp_min_unbiased,
-            exp_max_unbiased=exp_max_unbiased,
+            mantissa_bits=spec.man_bits,
+            max_steps=spec.max_compare_steps,
+            exp_min_unbiased=spec.exp_min_unbiased,
+            exp_max_unbiased=spec.exp_max_unbiased,
         )
     else:
         is_close = torch.isclose(

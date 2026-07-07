@@ -10,6 +10,8 @@ import torch
 from .format_config import (
     MX_FORMAT_BLOCK_SIZE,
     MX_FORMAT_MAX_NORMAL,
+    MX_FP_SPECS,
+    MX_INT_SPECS,
     DataFormat,
     l1_align,
 )
@@ -350,33 +352,34 @@ def _pad_to_l1_alignment(data: list[int]) -> list[int]:
     return data if pad == 0 else data + [0] * pad
 
 
-# MX-FP8 element parameters (per the Tensix Formats doc). Stored 1 byte/element.
-#   MxFp8R = E5M2: exp_bias=15, max normal 2^15 * 1.75 = 28672*2 = 57344; Inf + NaN
-#                  representable, so the whole exp=all-ones block is reserved and
-#                  man_max is the full 2-bit field.
-#   MxFp8P = E4M3: exp_bias=7,  max normal 2^8 * 1.75 = 448; NaN only (no Inf), and
-#                  {exp=all-ones, man=all-ones} is reserved for NaN, so man_max is
-#                  6 (not 7). NaN code = {0, 1111, 111} = 0x7F.
-_MXFP8_PARAMS = {
-    "r": dict(
-        exp_bits=5,
-        man_bits=2,
-        exp_bias=15,
-        exp_max_unbiased=15,
-        exp_min_unbiased=-14,
-        man_max=3,
-        nan_code=0x7F,
-    ),
-    "p": dict(
-        exp_bits=4,
-        man_bits=3,
-        exp_bias=7,
-        exp_max_unbiased=8,
-        exp_min_unbiased=-6,
-        man_max=6,
-        nan_code=0x7F,
-    ),
-}
+def _prepare_mx_blocks(
+    tensor, *, num_faces, face_r_dim, data_format: DataFormat
+) -> np.ndarray:
+    """Flatten a tensor to fp32 and reshape into (num_blocks, MX_FORMAT_BLOCK_SIZE).
+
+    Shared front-end for the MX-float pack paths (MxFp4/MxFp6/MxFp8). Validates
+    that the requested geometry spans a whole number of 32-element OCP blocks and
+    that the tensor holds enough elements, then returns the block-reshaped fp32
+    view (NaN/Inf preserved for the block-scale / element quantizers).
+    """
+    fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
+    elements_to_pack = face_r_dim * FACE_C_DIM * num_faces
+    if len(fp32_array) < elements_to_pack:
+        raise ValueError(
+            f"{data_format}: tensor has {len(fp32_array)} elements, need "
+            f"{elements_to_pack} for {num_faces} face(s)"
+        )
+    if elements_to_pack % MX_FORMAT_BLOCK_SIZE != 0:
+        raise ValueError(
+            f"{data_format} requires a block-aligned geometry: "
+            f"elements_to_pack={elements_to_pack} is not a multiple of "
+            f"MX_FORMAT_BLOCK_SIZE={MX_FORMAT_BLOCK_SIZE} "
+            f"(face_r_dim={face_r_dim}, num_faces={num_faces})"
+        )
+
+    fp32_array = fp32_array[:elements_to_pack]
+    num_blocks = elements_to_pack // MX_FORMAT_BLOCK_SIZE
+    return fp32_array.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
 
 
 def _pack_mxfp8_srcs(tensor, fp8_dtype, element_max_normal, dest_acc: bool = False):
@@ -450,12 +453,13 @@ def _pack_mxfp8_srcs(tensor, fp8_dtype, element_max_normal, dest_acc: bool = Fal
     return out
 
 
-def _pack_mxfp8(tensor, *, variant, num_faces=4, face_r_dim=16, exp_rnd_en=False):
+def _pack_mxfp8(tensor, *, data_format, num_faces=4, face_r_dim=16, exp_rnd_en=False):
     """Pack a full MXFP8R/MXFP8P tile with FULLY SEPARATED layout: [scales][elements].
 
     MXFP8 uses 32-element OCP blocks, each with one shared E8M0 scale and 32
-    eight-bit elements (1 byte/element in L1). ``variant`` is "r" (E5M2) or
-    "p" (E4M3). Shares the block-scale and element-quantization model with
+    eight-bit elements (1 byte/element in L1). ``data_format`` selects the
+    element format: ``DataFormat.MxFp8R`` (E5M2) or ``DataFormat.MxFp8P``
+    (E4M3). Shares the block-scale and element-quantization model with
     MXFP6/MXFP4 (floor block exp with optional round-to-inf, RNE elements,
     saturate on overflow). E5M2/E4M3 additionally represent NaN (-> NaN);
     overflow resolves to the format max-normal (the OCP saturation default,
@@ -465,31 +469,21 @@ def _pack_mxfp8(tensor, *, variant, num_faces=4, face_r_dim=16, exp_rnd_en=False
     full tile. Element count must be a multiple of MX_FORMAT_BLOCK_SIZE (32).
     (The SrcS path keeps a separate legacy implementation, ``_pack_mxfp8_srcs``.)
     """
-    params = _MXFP8_PARAMS[variant]
-    fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
-
-    elements_per_face = face_r_dim * FACE_C_DIM
-    elements_to_pack = elements_per_face * num_faces
-    assert (
-        len(fp32_array) >= elements_to_pack
-    ), f"Tensor has {len(fp32_array)} elements, need {elements_to_pack} for {num_faces} face(s)"
-    assert elements_to_pack % MX_FORMAT_BLOCK_SIZE == 0, (
-        f"Element count ({elements_to_pack}) must be a multiple of "
-        f"MX_FORMAT_BLOCK_SIZE ({MX_FORMAT_BLOCK_SIZE})"
+    spec = MX_FP_SPECS[data_format]
+    blocks_raw = _prepare_mx_blocks(
+        tensor, num_faces=num_faces, face_r_dim=face_r_dim, data_format=data_format
     )
-
-    fp32_array = fp32_array[:elements_to_pack]
-    num_blocks = len(fp32_array) // MX_FORMAT_BLOCK_SIZE
-    blocks_raw = fp32_array.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
 
     scales_e8m0, scaled_blocks = _mxfp_block_scales(
         blocks_raw,
-        elem_exp_max_unbiased=params["exp_max_unbiased"],
+        elem_exp_max_unbiased=spec.exp_max_unbiased,
         exp_rnd_en=exp_rnd_en,
     )
 
     # E5M2/E4M3 element codes are a full byte each, stored directly in L1.
-    elem_codes = _quantize_to_mx_fp_element_codes(scaled_blocks, **params)
+    elem_codes = _quantize_to_mx_fp_element_codes(
+        scaled_blocks, **spec.element_quantizer_kwargs()
+    )
 
     return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(elem_codes.tolist())
 
@@ -539,7 +533,7 @@ def pack_mxfp8r(
         )
     return _pack_mxfp8(
         tensor,
-        variant="r",
+        data_format=DataFormat.MxFp8R,
         num_faces=num_faces,
         face_r_dim=face_r_dim,
         exp_rnd_en=exp_rnd_en,
@@ -591,7 +585,7 @@ def pack_mxfp8p(
         )
     return _pack_mxfp8(
         tensor,
-        variant="p",
+        data_format=DataFormat.MxFp8P,
         num_faces=num_faces,
         face_r_dim=face_r_dim,
         exp_rnd_en=exp_rnd_en,
@@ -644,42 +638,21 @@ def pack_mxfp4(
     if use_srcs:
         raise NotImplementedError("use_srcs=True not yet implemented for pack_mxfp4")
 
-    # Convert to numpy and prepare data
-    fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
+    # Convert to numpy and reshape into (num_blocks, 32) blocks.
+    blocks_raw = _prepare_mx_blocks(
+        tensor, num_faces=num_faces, face_r_dim=face_r_dim, data_format=DataFormat.MxFp4
+    )
 
-    # Calculate elements per face based on face_r_dim
-    elements_per_face = face_r_dim * FACE_C_DIM
-    elements_to_pack = elements_per_face * num_faces
-    assert (
-        len(fp32_array) >= elements_to_pack
-    ), f"Tensor has {len(fp32_array)} elements, need {elements_to_pack} for {num_faces} face(s)"
-    if elements_to_pack % MX_FORMAT_BLOCK_SIZE != 0:
-        raise ValueError(
-            "pack_mxfp4 requires a block-aligned geometry: "
-            f"elements_to_pack={elements_to_pack} is not a multiple of "
-            f"MX_FORMAT_BLOCK_SIZE={MX_FORMAT_BLOCK_SIZE} "
-            f"(face_r_dim={face_r_dim}, num_faces={num_faces})"
-        )
-
-    fp32_array = fp32_array[:elements_to_pack]
-
-    # Reshape into blocks: (num_blocks, 32)
-    num_blocks = len(fp32_array) // MX_FORMAT_BLOCK_SIZE
-    blocks_raw = fp32_array.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+    spec = MX_FP_SPECS[DataFormat.MxFp4]
 
     # Shared block scale (E8M0); elem_exp_max_unbiased is 2 for E2M1.
     scales_e8m0, scaled_blocks = _mxfp_block_scales(
-        blocks_raw, elem_exp_max_unbiased=2, exp_rnd_en=exp_rnd_en
+        blocks_raw, elem_exp_max_unbiased=spec.exp_max_unbiased, exp_rnd_en=exp_rnd_en
     )
 
     # Convert to FP4 (E2M1) element codes.
     fp4_nibbles = _quantize_to_mx_fp_element_codes(
-        scaled_blocks,
-        exp_bits=2,
-        man_bits=1,
-        exp_bias=1,
-        exp_max_unbiased=2,
-        exp_min_unbiased=0,
+        scaled_blocks, **spec.element_quantizer_kwargs()
     )
 
     # Pack FP4 elements: 2 per byte (low nibble = element 0)
@@ -879,22 +852,7 @@ def _quantize_to_mx_fp_element_codes(
     return out
 
 
-# MX-FP6 element parameters (per the Tensix Formats doc).
-# Stored in L1 as an 8-bit container holding the 6-bit code in the upper bits:
-# {1b sign, exp, man, 2'b0}, i.e. byte = code << 2.
-#   MxFp6R = E3M2: exp_bias=3, max normal 2^4 * 1.75 = 28.0
-#   MxFp6P = E2M3: exp_bias=1, max normal 2^2 * 1.875 = 7.5
-_MXFP6_PARAMS = {
-    "r": dict(
-        exp_bits=3, man_bits=2, exp_bias=3, exp_max_unbiased=4, exp_min_unbiased=-2
-    ),
-    "p": dict(
-        exp_bits=2, man_bits=3, exp_bias=1, exp_max_unbiased=2, exp_min_unbiased=0
-    ),
-}
-
-
-def _pack_mxfp6(tensor, *, variant, num_faces=4, face_r_dim=16, exp_rnd_en=False):
+def _pack_mxfp6(tensor, *, data_format, num_faces=4, face_r_dim=16, exp_rnd_en=False):
     """Pack MXFP6R/MXFP6P with FULLY SEPARATED layout: [scales][elements].
 
     MXFP6 uses 32-element OCP blocks, each with one shared E8M0 scale and 32
@@ -903,35 +861,23 @@ def _pack_mxfp6(tensor, *, variant, num_faces=4, face_r_dim=16, exp_rnd_en=False
     geometry matches MXFP8 (1 byte/element):
       - Full tile: 32 scales (32 B, aligned) + 1024 elements (aligned) -> 1056 B.
 
-    ``variant`` is "r" (E3M2) or "p" (E2M3).
+    ``data_format`` selects the element format: ``DataFormat.MxFp6R`` (E3M2) or
+    ``DataFormat.MxFp6P`` (E2M3).
     """
-    params = _MXFP6_PARAMS[variant]
-    fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
-
-    elements_per_face = face_r_dim * FACE_C_DIM
-    elements_to_pack = elements_per_face * num_faces
-    assert (
-        len(fp32_array) >= elements_to_pack
-    ), f"Tensor has {len(fp32_array)} elements, need {elements_to_pack} for {num_faces} face(s)"
-    if elements_to_pack % MX_FORMAT_BLOCK_SIZE != 0:
-        raise ValueError(
-            "pack_mxfp6 requires a block-aligned geometry: "
-            f"elements_to_pack={elements_to_pack} is not a multiple of "
-            f"MX_FORMAT_BLOCK_SIZE={MX_FORMAT_BLOCK_SIZE} "
-            f"(face_r_dim={face_r_dim}, num_faces={num_faces})"
-        )
-
-    fp32_array = fp32_array[:elements_to_pack]
-    num_blocks = len(fp32_array) // MX_FORMAT_BLOCK_SIZE
-    blocks_raw = fp32_array.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+    spec = MX_FP_SPECS[data_format]
+    blocks_raw = _prepare_mx_blocks(
+        tensor, num_faces=num_faces, face_r_dim=face_r_dim, data_format=data_format
+    )
 
     scales_e8m0, scaled_blocks = _mxfp_block_scales(
         blocks_raw,
-        elem_exp_max_unbiased=params["exp_max_unbiased"],
+        elem_exp_max_unbiased=spec.exp_max_unbiased,
         exp_rnd_en=exp_rnd_en,
     )
 
-    elem_codes = _quantize_to_mx_fp_element_codes(scaled_blocks, **params)
+    elem_codes = _quantize_to_mx_fp_element_codes(
+        scaled_blocks, **spec.element_quantizer_kwargs()
+    )
 
     # Each 6-bit element is stored in its own byte, shifted into the upper bits.
     elem_bytes = (elem_codes & 0x3F) << 2
@@ -939,7 +885,7 @@ def _pack_mxfp6(tensor, *, variant, num_faces=4, face_r_dim=16, exp_rnd_en=False
     return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(elem_bytes.tolist())
 
 
-def _pack_mxfp6_srcs(tensor, *, variant, exp_rnd_en=False, dest_acc: bool = False):
+def _pack_mxfp6_srcs(tensor, *, data_format, exp_rnd_en=False, dest_acc: bool = False):
     """Pack a tensor into per-slice SrcS blocks for MXFP6 (mirrors _pack_mxfp8_srcs)."""
     if dest_acc:
         slice_elem_count = SRCS_SLICE_32B_ELEMENT_COUNT
@@ -955,7 +901,7 @@ def _pack_mxfp6_srcs(tensor, *, variant, exp_rnd_en=False, dest_acc: bool = Fals
         out.extend(
             _pack_mxfp6(
                 flat[i : i + slice_elem_count],
-                variant=variant,
+                data_format=data_format,
                 num_faces=1,
                 face_r_dim=slice_row_dim,
                 exp_rnd_en=exp_rnd_en,
@@ -991,11 +937,14 @@ def pack_mxfp6r(
     )
     if use_srcs:
         return _pack_mxfp6_srcs(
-            tensor, variant="r", exp_rnd_en=exp_rnd_en, dest_acc=dest_acc
+            tensor,
+            data_format=DataFormat.MxFp6R,
+            exp_rnd_en=exp_rnd_en,
+            dest_acc=dest_acc,
         )
     return _pack_mxfp6(
         tensor,
-        variant="r",
+        data_format=DataFormat.MxFp6R,
         num_faces=num_faces,
         face_r_dim=face_r_dim,
         exp_rnd_en=exp_rnd_en,
@@ -1029,11 +978,14 @@ def pack_mxfp6p(
     )
     if use_srcs:
         return _pack_mxfp6_srcs(
-            tensor, variant="p", exp_rnd_en=exp_rnd_en, dest_acc=dest_acc
+            tensor,
+            data_format=DataFormat.MxFp6P,
+            exp_rnd_en=exp_rnd_en,
+            dest_acc=dest_acc,
         )
     return _pack_mxfp6(
         tensor,
-        variant="p",
+        data_format=DataFormat.MxFp6P,
         num_faces=num_faces,
         face_r_dim=face_r_dim,
         exp_rnd_en=exp_rnd_en,
@@ -1041,7 +993,11 @@ def pack_mxfp6p(
 
 
 def _mxint_block_scale_and_quantize(
-    tensor, num_faces, face_r_dim, *, elem_scale: int, elem_max: int, fmt_name: str
+    tensor,
+    num_faces,
+    face_r_dim,
+    *,
+    data_format: DataFormat,
 ):
     """
     Shared block-scale + symmetric quantization for MxInt formats.
@@ -1051,16 +1007,18 @@ def _mxint_block_scale_and_quantize(
     range via `elem_max` and reuse the int8 storage as a sign-extended carrier
     until the caller packs them at the actual bit width).
 
-    Args:
-      elem_scale: integer factor in `round(scaled * elem_scale)`. Reflects the
-                  format's implicit 2^-k scale (64 for MxInt8's 2^-6;
-                  4 for MxInt4's 2^-2; 1 for MxInt2's 2^0).
+    ``data_format`` selects the MxInt element parameters from ``MX_INT_SPECS``:
+      elem_scale: integer factor in `round(scaled * elem_scale)`, the format's
+                  implicit 2^-k scale (64 for MxInt8's 2^-6; 4 for MxInt4's
+                  2^-2; 1 for MxInt2's 2^0).
       elem_max:   symmetric clamp magnitude (127 for MxInt8; 7 for MxInt4;
                   1 for MxInt2).
-      fmt_name:   for error messages only.
 
     Returns: (scales_e8m0 as list[int], int_values as np.int8 array, shape (num_blocks, 32)).
     """
+    spec = MX_INT_SPECS[data_format]
+    elem_scale = spec.elem_scale
+    elem_max = spec.elem_max
     fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
     elements_per_face = face_r_dim * FACE_C_DIM
     elements_to_pack = elements_per_face * num_faces
@@ -1070,7 +1028,7 @@ def _mxint_block_scale_and_quantize(
     )
     if elements_to_pack % MX_FORMAT_BLOCK_SIZE != 0:
         raise ValueError(
-            f"{fmt_name} requires a block-aligned geometry: "
+            f"{data_format} requires a block-aligned geometry: "
             f"elements_to_pack={elements_to_pack} is not a multiple of "
             f"MX_FORMAT_BLOCK_SIZE={MX_FORMAT_BLOCK_SIZE} "
             f"(face_r_dim={face_r_dim}, num_faces={num_faces})"
@@ -1155,9 +1113,7 @@ def pack_mxint8(
         tensor,
         num_faces,
         face_r_dim,
-        elem_scale=64,
-        elem_max=127,
-        fmt_name="pack_mxint8",
+        data_format=DataFormat.MxInt8,
     )
 
     # Layout: [scales padded to 16B][int8 elements padded to 16B].
@@ -1195,9 +1151,7 @@ def pack_mxint4(
         tensor,
         num_faces,
         face_r_dim,
-        elem_scale=4,
-        elem_max=7,
-        fmt_name="pack_mxint4",
+        data_format=DataFormat.MxInt4,
     )
 
     # Pack 2 nibbles per byte: low nibble = even index, high nibble = odd index.
@@ -1241,9 +1195,7 @@ def pack_mxint2(
         tensor,
         num_faces,
         face_r_dim,
-        elem_scale=1,
-        elem_max=1,
-        fmt_name="pack_mxint2",
+        data_format=DataFormat.MxInt2,
     )
 
     # Pack 4 crumbs per byte: bits[1:0]=i, [3:2]=i+1, [5:4]=i+2, [7:6]=i+3.

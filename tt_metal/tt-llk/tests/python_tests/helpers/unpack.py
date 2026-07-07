@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from helpers.format_config import (
     MX_FORMAT_BLOCK_SIZE,
+    MX_FP_SPECS,
     MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN,
     MXFP8_SRCS_SLICE_PACKED_BYTE_LEN,
     DataFormat,
@@ -374,9 +375,10 @@ def unpack_mxfp8r(
     Returns:
         torch.Tensor of bfloat16 values
     """
+    fp8_dtype = MX_FP_SPECS[DataFormat.MxFp8R].ml_dtype
     if use_srcs:
-        return _unpack_mxfp8_srcs(packed_bytes, ml_dtypes.float8_e5m2, dest_acc)
-    return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e5m2, num_faces, face_r_dim)
+        return _unpack_mxfp8_srcs(packed_bytes, fp8_dtype, dest_acc)
+    return _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces, face_r_dim)
 
 
 def unpack_mxfp8p(
@@ -401,9 +403,10 @@ def unpack_mxfp8p(
     Returns:
         torch.Tensor of bfloat16 values
     """
+    fp8_dtype = MX_FP_SPECS[DataFormat.MxFp8P].ml_dtype
     if use_srcs:
-        return _unpack_mxfp8_srcs(packed_bytes, ml_dtypes.float8_e4m3fn, dest_acc)
-    return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e4m3fn, num_faces, face_r_dim)
+        return _unpack_mxfp8_srcs(packed_bytes, fp8_dtype, dest_acc)
+    return _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces, face_r_dim)
 
 
 def unpack_mxfp4(
@@ -464,7 +467,9 @@ def unpack_mxfp4(
     nibbles_u8[1::2] = packed_u8 >> 4
 
     fp4_f32 = (
-        nibbles_u8.view(ml_dtypes.float4_e2m1fn)[: num_blocks * block_size]
+        nibbles_u8.view(MX_FP_SPECS[DataFormat.MxFp4].ml_dtype)[
+            : num_blocks * block_size
+        ]
         .reshape(num_blocks, block_size)
         .astype(np.float32)
     )
@@ -480,15 +485,7 @@ def unpack_mxfp4(
     return _apply_mx_block_scale(scales_u8, fp4_f32, unit_exp_unbiased)
 
 
-# MX-FP6 element parameters (must match pack._MXFP6_PARAMS). ml_dtype decodes the
-# 6-bit element code directly (bit-identical to a manual E3M2/E2M3 decode).
-_MXFP6_PARAMS = {
-    "r": dict(exp_bits=3, man_bits=2, exp_bias=3, ml_dtype=ml_dtypes.float6_e3m2fn),
-    "p": dict(exp_bits=2, man_bits=3, exp_bias=1, ml_dtype=ml_dtypes.float6_e2m3fn),
-}
-
-
-def _unpack_mxfp6(packed_bytes, *, variant, num_faces=4, face_r_dim=MAX_FACE_R_DIM):
+def _unpack_mxfp6(packed_bytes, *, data_format, num_faces=4, face_r_dim=MAX_FACE_R_DIM):
     """
     Unpack MXFP6R/MXFP6P (E3M2 / E2M3) to a bfloat16 tensor.
 
@@ -496,13 +493,16 @@ def _unpack_mxfp6(packed_bytes, *, variant, num_faces=4, face_r_dim=MAX_FACE_R_D
     per 32-element block and one 8-bit container per element. The 6-bit element
     code lives in the upper bits of each byte (byte >> 2 == code).
 
+    ``data_format`` selects the element format: ``DataFormat.MxFp6R`` (E3M2) or
+    ``DataFormat.MxFp6P`` (E2M3).
+
     Block scale 0xFF -> NaN block; combined (block + element) exponent >= 128 ->
     ±Inf; < -127 -> 0 (handled by _apply_mx_block_scale).
     """
-    params = _MXFP6_PARAMS[variant]
-    exp_bits = params["exp_bits"]
-    man_bits = params["man_bits"]
-    exp_bias = params["exp_bias"]
+    spec = MX_FP_SPECS[data_format]
+    exp_bits = spec.exp_bits
+    man_bits = spec.man_bits
+    exp_bias = spec.exp_bias
 
     block_size = MX_FORMAT_BLOCK_SIZE
     num_elements = face_r_dim * FACE_C_DIM * num_faces
@@ -524,7 +524,7 @@ def _unpack_mxfp6(packed_bytes, *, variant, num_faces=4, face_r_dim=MAX_FACE_R_D
     # via ml_dtypes; the unbiased element exponent feeds the combined-exp rules.
     code = (elem_u8 >> 2).astype(np.uint8)
     elem_val = (
-        code.view(params["ml_dtype"]).astype(np.float32).reshape(num_blocks, block_size)
+        code.view(spec.ml_dtype).astype(np.float32).reshape(num_blocks, block_size)
     )
 
     exp_field = (code.astype(np.int32) >> man_bits) & ((1 << exp_bits) - 1)
@@ -536,7 +536,7 @@ def _unpack_mxfp6(packed_bytes, *, variant, num_faces=4, face_r_dim=MAX_FACE_R_D
     return _apply_mx_block_scale(scales_u8, elem_val, unit_exp_unbiased)
 
 
-def _unpack_mxfp6_srcs(packed_bytes, *, variant, dest_acc: bool = False):
+def _unpack_mxfp6_srcs(packed_bytes, *, data_format, dest_acc: bool = False):
     """Unpack sequential SrcS slices for MXFP6 (mirrors _unpack_mxfp8_srcs)."""
     if dest_acc:
         slice_len = MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN
@@ -557,7 +557,7 @@ def _unpack_mxfp6_srcs(packed_bytes, *, variant, dest_acc: bool = False):
         out.append(
             _unpack_mxfp6(
                 packed_bytes[i : i + slice_len],
-                variant=variant,
+                data_format=data_format,
                 num_faces=1,
                 face_r_dim=slice_row_dim,
             )
@@ -574,9 +574,14 @@ def unpack_mxfp6r(
 ):
     """Unpack MXFP6R format (E3M2 variant) to a bfloat16 tensor."""
     if use_srcs:
-        return _unpack_mxfp6_srcs(packed_bytes, variant="r", dest_acc=dest_acc)
+        return _unpack_mxfp6_srcs(
+            packed_bytes, data_format=DataFormat.MxFp6R, dest_acc=dest_acc
+        )
     return _unpack_mxfp6(
-        packed_bytes, variant="r", num_faces=num_faces, face_r_dim=face_r_dim
+        packed_bytes,
+        data_format=DataFormat.MxFp6R,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
     )
 
 
@@ -589,9 +594,14 @@ def unpack_mxfp6p(
 ):
     """Unpack MXFP6P format (E2M3 variant) to a bfloat16 tensor."""
     if use_srcs:
-        return _unpack_mxfp6_srcs(packed_bytes, variant="p", dest_acc=dest_acc)
+        return _unpack_mxfp6_srcs(
+            packed_bytes, data_format=DataFormat.MxFp6P, dest_acc=dest_acc
+        )
     return _unpack_mxfp6(
-        packed_bytes, variant="p", num_faces=num_faces, face_r_dim=face_r_dim
+        packed_bytes,
+        data_format=DataFormat.MxFp6P,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
     )
 
 
