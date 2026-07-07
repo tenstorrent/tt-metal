@@ -82,12 +82,20 @@ void kernel_main() {
                             (is_even_chunk && reduce_even_chunks) || (!is_even_chunk && reduce_odd_chunks);
 
                         if (reduce_interm) {
+                            // DETERMINISM: reserve the output slot BEFORE the reduce and pop the input
+                            // slots AFTER the pack (the original popped inputs before packing and
+                            // reserved the output after). This pins the compute<->reader/writer CB
+                            // handshake so the cross-device partials are consumed in a fixed order,
+                            // making the ring reduce run-to-run deterministic. Without it the near-tie
+                            // Llama-70B greedy logits flip (test_topk/test_seeding nondeterminism); the
+                            // reduce is scheduling/accumulation-order sensitive, not a precision issue.
                             // If reduce_output, add 3 tensors. Else add 2 tensors.
                             if (reduce_output) {
                                 cb_interm2.wait_front(tile_granularity);
                             }
                             cb_input.wait_front(tile_granularity);
                             cb_interm.wait_front(tile_granularity);
+                            cb_compute_output.reserve_back(tile_granularity);
 
                             tile_regs_acquire();  // acquire DST registers for MATH thread, resets DST to 0
                             if (reduce_output) {
@@ -104,19 +112,18 @@ void kernel_main() {
                             }
                             tile_regs_commit();  // release lock on DST by MATH thread, signal the PACK thread
 
-                            if (reduce_output) {
-                                cb_interm2.pop_front(tile_granularity);
-                            }
-                            cb_input.pop_front(tile_granularity);
-                            cb_interm.pop_front(tile_granularity);
-
-                            cb_compute_output.reserve_back(tile_granularity);
                             tile_regs_wait();  // acquire lock on DST for PACK thread
                             for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
                                 pack_tile(tile_id, cb_compute_output_id, tile_id);  // pack results from DST registers
                                                                                     // to output circular buffers
                             }
                             tile_regs_release();  // release lock on DST by PACK thread
+
+                            if (reduce_output) {
+                                cb_interm2.pop_front(tile_granularity);
+                            }
+                            cb_input.pop_front(tile_granularity);
+                            cb_interm.pop_front(tile_granularity);
                             cb_compute_output.push_back(tile_granularity);
                         }
                         tiles_read += tiles_to_read;
