@@ -80,21 +80,27 @@ def test_e2e_wav_transcription(device, snap_dir, text_decoder_ckpt):
     # --- processor: prompt (auto language) + mel ---
     proc = Qwen3ASRProcessor.from_pretrained(snap_dir, fix_mistral_regex=True)
     prompt = proc.apply_chat_template(
-        [{"role": "system", "content": ""},
-         {"role": "user", "content": [{"type": "audio", "audio": ""}]}],
-        add_generation_prompt=True, tokenize=False,
+        [{"role": "system", "content": ""}, {"role": "user", "content": [{"type": "audio", "audio": ""}]}],
+        add_generation_prompt=True,
+        tokenize=False,
     )
     inputs = proc(text=[prompt], audio=[wav], return_tensors="pt", padding=True)
     input_ids = inputs["input_ids"][0].long()
-    mel = inputs["input_features"][0].float() if inputs["input_features"].dim() == 3 else inputs["input_features"].float()
+    mel = (
+        inputs["input_features"][0].float() if inputs["input_features"].dim() == 3 else inputs["input_features"].float()
+    )
 
     # --- build the real TT encoder + decoder ---
     w = ref.load_audio_tower_weights(snap_dir=snap_dir, dtype=torch.float32)
     enc_params = tt_enc.preprocess_weights(w, device)
     args = ModelArgs(device, max_batch_size=1, max_seq_len=2048)
     model = Qwen3ASRDecoder(
-        args, ttnn.bfloat16, device, args.load_state_dict(),
-        args.weight_cache_path(ttnn.bfloat16), use_paged_kv_cache=False,
+        args,
+        ttnn.bfloat16,
+        device,
+        args.load_state_dict(),
+        args.weight_cache_path(ttnn.bfloat16),
+        use_paged_kv_cache=False,
     )
     from safetensors import safe_open
 
@@ -120,6 +126,6 @@ def test_e2e_wav_transcription(device, snap_dir, text_decoder_ckpt):
     print(f"\n[e2e] lang={lang!r} text={text!r}")
 
     assert text, "e2e produced an empty transcript"
-    assert _normalize(expected) in _normalize(text), (
-        f"expected substring not found.\n  expected ~ {expected!r}\n  got        {text!r}"
-    )
+    assert _normalize(expected) in _normalize(
+        text
+    ), f"expected substring not found.\n  expected ~ {expected!r}\n  got        {text!r}"

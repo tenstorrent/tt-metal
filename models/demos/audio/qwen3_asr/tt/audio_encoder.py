@@ -12,8 +12,9 @@ so its L1_SMALL working set doesn't accumulate across server requests.
 
 TODO(perf): trace-capture the static-shape encoder; fold proj1/2 into the decoder embed splice."""
 import torch
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
+
 import ttnn
-from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
 
 # Qwen3-ASR-1.7B audio_config
 D_MODEL = 1024
@@ -38,12 +39,14 @@ def preprocess_conv_weights(w, device):
     """Conv2d frontend weights (kept on host as ttnn tensors; ttnn.conv2d folds them in)."""
     cp = {}
     for name in ("conv2d1", "conv2d2", "conv2d3"):
-        cw = w[f"{name}.weight"]                       # (480, Cin, 3, 3)
-        cb = w[f"{name}.bias"].reshape(1, 1, 1, -1)    # (1,1,1,480)
+        cw = w[f"{name}.weight"]  # (480, Cin, 3, 3)
+        cb = w[f"{name}.bias"].reshape(1, 1, 1, -1)  # (1,1,1,480)
         cp[name] = dict(
             weight=ttnn.from_torch(cw, ttnn.float32),
             bias=ttnn.from_torch(cb, ttnn.float32),
-            in_ch=cw.shape[1], out_ch=cw.shape[0], k=(cw.shape[2], cw.shape[3]),
+            in_ch=cw.shape[1],
+            out_ch=cw.shape[0],
+            k=(cw.shape[2], cw.shape[3]),
         )
     return cp
 
@@ -56,11 +59,11 @@ def conv_frontend_tt(mel, conv_w, conv_out_w, conv_out_b, device):
     n = (T + chunk - 1) // chunk
     pieces = []
     for i in range(n):
-        seg = mel[:, i * chunk:(i + 1) * chunk]
+        seg = mel[:, i * chunk : (i + 1) * chunk]
         if seg.shape[1] < chunk:
             seg = torch.nn.functional.pad(seg, (0, chunk - seg.shape[1]))
         pieces.append(seg)
-    x = torch.stack(pieces, 0).unsqueeze(1)            # (n,1,128,100)  NCHW
+    x = torch.stack(pieces, 0).unsqueeze(1)  # (n,1,128,100)  NCHW
     # NHWC flattened -> (1,1,n*H*W, C=1)
     H, W = nm, chunk
     xh = x.permute(0, 2, 3, 1).reshape(1, 1, n * H * W, 1).contiguous()
@@ -68,22 +71,34 @@ def conv_frontend_tt(mel, conv_w, conv_out_w, conv_out_b, device):
     # config_tensors_in_dram: keep conv's persistent config tensors off the small (32-64 KB)
     # L1_SMALL region, which otherwise fills across requests -> bank_manager OOM.
     # deallocate_activation: free the conv input activation inside the op.
-    conv_cfg = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16, config_tensors_in_dram=True,
-                                 deallocate_activation=True)
+    conv_cfg = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16, config_tensors_in_dram=True, deallocate_activation=True)
     compute_cfg = ttnn.init_device_compute_kernel_config(
-        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+    )
     for name in ("conv2d1", "conv2d2", "conv2d3"):
         c = conv_w[name]
         conv_out, [H, W], [c["weight"], c["bias"]] = ttnn.conv2d(
-            input_tensor=xt, weight_tensor=c["weight"], bias_tensor=c["bias"],
-            in_channels=c["in_ch"], out_channels=c["out_ch"], device=device,
-            kernel_size=c["k"], stride=(2, 2), padding=(1, 1), dilation=(1, 1),
-            batch_size=n, input_height=H, input_width=W,
-            conv_config=conv_cfg, compute_config=compute_cfg,
-            return_output_dim=True, return_weights_and_bias=True, dtype=ttnn.bfloat16,
+            input_tensor=xt,
+            weight_tensor=c["weight"],
+            bias_tensor=c["bias"],
+            in_channels=c["in_ch"],
+            out_channels=c["out_ch"],
+            device=device,
+            kernel_size=c["k"],
+            stride=(2, 2),
+            padding=(1, 1),
+            dilation=(1, 1),
+            batch_size=n,
+            input_height=H,
+            input_width=W,
+            conv_config=conv_cfg,
+            compute_config=compute_cfg,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+            dtype=ttnn.bfloat16,
         )
         # conv frees its input activation internally (deallocate_activation=True)
-        xt = ttnn.gelu(conv_out)                        # (1,1,n*H*W,480) NHWC
+        xt = ttnn.gelu(conv_out)  # (1,1,n*H*W,480) NHWC
         ttnn.deallocate(conv_out)
     C = DS_HIDDEN
     # NHWC (n,H,W,C) -> reference wants (n, W, C, H) flattened to (n, W, C*H)
@@ -106,8 +121,8 @@ def preprocess_weights(w, device):
         # fuse q,k,v -> one (3*D, D) weight, (3*D,) bias
         qw, kw, vw = (w[pre + f"self_attn.{x}_proj.weight"] for x in "qkv")
         qb, kb, vb = (w[pre + f"self_attn.{x}_proj.bias"] for x in "qkv")
-        fused_w = torch.cat([qw, kw, vw], dim=0)   # (3D, D)
-        fused_b = torch.cat([qb, kb, vb], dim=0)   # (3D,)
+        fused_w = torch.cat([qw, kw, vw], dim=0)  # (3D, D)
+        fused_b = torch.cat([qb, kb, vb], dim=0)  # (3D,)
         lp = {
             "ln1_w": _to_dev(w[pre + "self_attn_layer_norm.weight"], device),
             "ln1_b": _to_dev(w[pre + "self_attn_layer_norm.bias"], device),
@@ -148,6 +163,7 @@ def encode_mel(mel, params, device):
     if per_chunk not in _PE_CACHE:
         # sinusoidal PE[:13] (matches reference.sinusoids)
         import math
+
         ch = D_MODEL
         log_inc = math.log(10000.0) / (ch // 2 - 1)
         inv = torch.exp(-log_inc * torch.arange(ch // 2).float())
@@ -160,37 +176,60 @@ def encode_mel(mel, params, device):
 
 
 def _layer(x, lp, device):
-    core = ttnn.CoreGrid(y=device.compute_with_storage_grid_size().y,
-                         x=device.compute_with_storage_grid_size().x)
+    core = ttnn.CoreGrid(y=device.compute_with_storage_grid_size().y, x=device.compute_with_storage_grid_size().x)
     residual = x  # (1,1,S,D)
     h = ttnn.layer_norm(x, weight=lp["ln1_w"], bias=lp["ln1_b"], epsilon=LN_EPS, compute_kernel_config=HIFI4)
     qkv = ttnn.linear(h, lp["qkv_w"], bias=lp["qkv_b"], core_grid=core, compute_kernel_config=HIFI4)  # (1,1,S,3D)
     ttnn.deallocate(h)
     q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-        qkv, num_heads=N_HEADS, num_kv_heads=N_HEADS, transpose_k_heads=False,
+        qkv,
+        num_heads=N_HEADS,
+        num_kv_heads=N_HEADS,
+        transpose_k_heads=False,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn.deallocate(qkv)
     attn = ttnn.transformer.scaled_dot_product_attention(
-        q, k, v, is_causal=False, scale=HEAD_DIM ** -0.5,
+        q,
+        k,
+        v,
+        is_causal=False,
+        scale=HEAD_DIM**-0.5,
     )
-    ttnn.deallocate(q); ttnn.deallocate(k); ttnn.deallocate(v)
+    ttnn.deallocate(q)
+    ttnn.deallocate(k)
+    ttnn.deallocate(v)
     concat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
-    ttnn.deallocate(attn)                              # free the SDPA output (don't rely on GC)
+    ttnn.deallocate(attn)  # free the SDPA output (don't rely on GC)
     o = ttnn.linear(concat, lp["o_w"], bias=lp["o_b"], core_grid=core, compute_kernel_config=HIFI4)
     ttnn.deallocate(concat)
     x = ttnn.add(residual, o)
-    ttnn.deallocate(o); ttnn.deallocate(residual)
+    ttnn.deallocate(o)
+    ttnn.deallocate(residual)
 
     residual = x
     h = ttnn.layer_norm(x, weight=lp["ln2_w"], bias=lp["ln2_b"], epsilon=LN_EPS, compute_kernel_config=HIFI4)
     h = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG)
-    h = ttnn.linear(h, lp["fc1_w"], bias=lp["fc1_b"], activation="gelu", core_grid=core,
-                    memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=HIFI4)
-    h = ttnn.linear(h, lp["fc2_w"], bias=lp["fc2_b"], core_grid=core,
-                    memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=HIFI4)
+    h = ttnn.linear(
+        h,
+        lp["fc1_w"],
+        bias=lp["fc1_b"],
+        activation="gelu",
+        core_grid=core,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=HIFI4,
+    )
+    h = ttnn.linear(
+        h,
+        lp["fc2_w"],
+        bias=lp["fc2_b"],
+        core_grid=core,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=HIFI4,
+    )
     x = ttnn.add(residual, h)
-    ttnn.deallocate(h); ttnn.deallocate(residual)
+    ttnn.deallocate(h)
+    ttnn.deallocate(residual)
     return x
 
 
@@ -198,16 +237,22 @@ def encode(x_host, params, device):
     """x_host: (S, D_MODEL) torch tensor = conv frontend output WITH positional embedding
     already added (done on host, see reference.conv_frontend + sinusoids). Returns (S, output_dim) torch."""
     S = x_host.shape[0]
-    x = ttnn.from_torch(x_host.unsqueeze(0).unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                        device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # (1,1,S,D)
+    x = ttnn.from_torch(
+        x_host.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )  # (1,1,S,D)
     for lp in params["layers"]:
         x = _layer(x, lp, device)
-    x = ttnn.layer_norm(x, weight=params["lnpost_w"], bias=params["lnpost_b"], epsilon=LN_EPS,
-                        compute_kernel_config=HIFI4)
-    core = ttnn.CoreGrid(y=device.compute_with_storage_grid_size().y,
-                         x=device.compute_with_storage_grid_size().x)
-    x = ttnn.linear(x, params["proj1_w"], bias=params["proj1_b"], activation="gelu",
-                    core_grid=core, compute_kernel_config=HIFI4)
+    x = ttnn.layer_norm(
+        x, weight=params["lnpost_w"], bias=params["lnpost_b"], epsilon=LN_EPS, compute_kernel_config=HIFI4
+    )
+    core = ttnn.CoreGrid(y=device.compute_with_storage_grid_size().y, x=device.compute_with_storage_grid_size().x)
+    x = ttnn.linear(
+        x, params["proj1_w"], bias=params["proj1_b"], activation="gelu", core_grid=core, compute_kernel_config=HIFI4
+    )
     x = ttnn.linear(x, params["proj2_w"], bias=params["proj2_b"], core_grid=core, compute_kernel_config=HIFI4)
     out = ttnn.to_torch(x).reshape(-1, OUTPUT_DIM)[:S].float()
     ttnn.deallocate(x)

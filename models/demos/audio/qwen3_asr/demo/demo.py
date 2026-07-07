@@ -14,18 +14,22 @@ Run inside the dev container (chip 3 = fake P150):
     'source /opt/venv/bin/activate && cd /work && \
      python3 models/demos/audio/qwen3_asr/demo/demo.py'
 """
-import os, sys, time
+import os
+import sys
+import time
+
 import numpy as np
 import torch
-import ttnn
 from transformers import AutoTokenizer
+
+import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "reference"))
 sys.path.insert(0, os.path.join(ROOT, "tt"))
-import audio_encoder_ref as ref          # noqa: E402
-import audio_encoder as tt_enc           # noqa: E402
+import audio_encoder as tt_enc  # noqa: E402
+import audio_encoder_ref as ref  # noqa: E402
 from qwen3_asr_decoder import Qwen3ASRDecoder  # noqa: E402
 
 GOLDEN = os.environ.get("GOLDEN_DIR", "/golden")
@@ -42,17 +46,17 @@ def main():
     # host: mel -> conv frontend + PE
     mel = torch.from_numpy(np.load(f"{GOLDEN}/input_features.npy")).float()
     conv = ref.conv_frontend(mel, w)
-    pe = ref.sinusoids(1500, 1024)[:conv.shape[1]]
-    x_host = (conv + pe.unsqueeze(0)).reshape(-1, 1024)            # (S_aud, 1024)
+    pe = ref.sinusoids(1500, 1024)[: conv.shape[1]]
+    x_host = (conv + pe.unsqueeze(0)).reshape(-1, 1024)  # (S_aud, 1024)
 
     # golden merged embeds + locate audio rows (== golden audio_tower output rows)
-    ie = torch.from_numpy(np.load(f"{GOLDEN}/inputs_embeds.npy")).float()   # (174, 2048)
+    ie = torch.from_numpy(np.load(f"{GOLDEN}/inputs_embeds.npy")).float()  # (174, 2048)
     audio_gold = torch.from_numpy(np.load(f"{GOLDEN}/audio_tower.npy")).float()  # (156, 2048)
     # find the contiguous block of audio rows
     n_aud = audio_gold.shape[0]
     start = None
     for i in range(ie.shape[0] - n_aud + 1):
-        if torch.allclose(ie[i:i + n_aud], audio_gold, atol=1e-3):
+        if torch.allclose(ie[i : i + n_aud], audio_gold, atol=1e-3):
             start = i
             break
     assert start is not None, "could not locate audio block in inputs_embeds"
@@ -65,14 +69,15 @@ def main():
         enc_params = tt_enc.preprocess_weights(w, dev)
         args = ModelArgs(dev, max_batch_size=1, max_seq_len=1024)
         sd = args.load_state_dict()
-        model = Qwen3ASRDecoder(args, ttnn.bfloat16, dev, sd,
-                                args.weight_cache_path(ttnn.bfloat16), use_paged_kv_cache=False)
+        model = Qwen3ASRDecoder(
+            args, ttnn.bfloat16, dev, sd, args.weight_cache_path(ttnn.bfloat16), use_paged_kv_cache=False
+        )
         t_setup = time.time() - t0
 
         def run_once():
-            ae = tt_enc.encode(x_host, enc_params, dev)            # (156,2048)
+            ae = tt_enc.encode(x_host, enc_params, dev)  # (156,2048)
             merged = ie.clone()
-            merged[start:start + n_aud] = ae.float()
+            merged[start : start + n_aud] = ae.float()
             te = time.time()
             out = model.generate(merged.unsqueeze(0), max_new_tokens=64)
             return out, te

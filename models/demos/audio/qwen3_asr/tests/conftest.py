@@ -24,12 +24,8 @@ import pytest
 import torch
 
 GOLDEN_DIR = os.environ.get("QWEN3ASR_GOLDEN_DIR", os.environ.get("GOLDEN_DIR", "/golden"))
-SNAP_ROOT = os.environ.get(
-    "QWEN3ASR_SNAP", "/root/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots"
-)
-TEXT_DECODER = os.environ.get(
-    "QWEN3ASR_TEXT_DECODER", os.environ.get("HF_MODEL", "/models/qwen3_asr_text_decoder")
-)
+SNAP_ROOT = os.environ.get("QWEN3ASR_SNAP", "/root/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots")
+TEXT_DECODER = os.environ.get("QWEN3ASR_TEXT_DECODER", os.environ.get("HF_MODEL", "/models/qwen3_asr_text_decoder"))
 
 
 def _load_golden(name):

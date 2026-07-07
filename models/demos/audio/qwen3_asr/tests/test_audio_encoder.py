@@ -18,7 +18,6 @@ Run on a P150 (single Blackhole) box that has them staged, e.g.:
   pytest models/demos/audio/qwen3_asr/tests/test_audio_encoder.py \
     --device-params '{"l1_small_size": 32768}'   # or via the parametrize below
 """
-import numpy as np
 import pytest
 import torch
 
