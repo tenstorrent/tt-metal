@@ -116,6 +116,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             dfb_interface.entry_size = static_cast<uint16_t>(init_ptr->entry_size >> cb_addr_shift);
             dfb_interface.stride_size = static_cast<uint16_t>(
                 static_cast<uint32_t>(dfb_interface.entry_size) * static_cast<uint32_t>(init_ptr->stride_in_entries));
+            dfb_interface.num_entries = init_ptr->num_entries;
             dfb_interface.stride_size_tiles = static_cast<uint8_t>(init_ptr->stride_in_entries);
 #if defined(UCK_CHLKC_PACK)
             dfb_interface.wr_entry_ptr = 0;
@@ -125,6 +126,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #else
             dfb_interface.entry_size = init_ptr->entry_size >> cb_addr_shift;
             dfb_interface.stride_size = dfb_interface.entry_size * init_ptr->stride_in_entries;
+            dfb_interface.num_entries = init_ptr->num_entries;
 #endif
 
             for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
