@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
@@ -445,6 +446,12 @@ def run_model(
 
     # --- Create external KVPE cache ---
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    # Sparse MLA (DSA: v3.2 / GLM) reads the KVPE cache natively in sparse_sdpa and requires it
+    # uncompressed (bf16 ROW_MAJOR — mla.py asserts); dense MLA keeps the bfloat8_b/TILE cache the
+    # disaggregation layout assumes. The disaggregation chunk size follows the cache dtype.
+    has_indexer = resolve_has_indexer(config)
+    kvpe_dtype = ttnn.bfloat16 if has_indexer else ttnn.bfloat8_b
+    kvpe_layout = ttnn.ROW_MAJOR_LAYOUT if has_indexer else ttnn.TILE_LAYOUT
     tt_kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=kvpe_cache_head_dim,
         mesh_device=mesh_device,
@@ -452,10 +459,13 @@ def run_model(
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
+        dtype=kvpe_dtype,
+        layout=kvpe_layout,
     )
 
-    # create kv_cache dissagregation table
-    CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
+    # create kv_cache dissagregation table. Chunk bytes = 32 tokens x kvpe_cache_head_dim per the cache
+    # dtype: bf16 x2 (sparse), bfp8_b x1.0625 (dense = [1,1,32,576] -> 19584).
+    CHUNK_SIZE_BYTES = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK * kvpe_cache_head_dim * 2 if has_indexer else 19584
     lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
     lookup_table_config.num_layers = num_layers
     lookup_table_config.max_sequence_length = isl_total
