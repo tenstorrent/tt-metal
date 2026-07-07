@@ -282,6 +282,10 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
 
     if constexpr (is_fp32_dest_acc_en)
     {
+        // Drain the FPU/SFPU before rewriting the SrcA ALU format + zero-substitution flag: the column-reduce
+        // MOP issued just above samples these at execute time, so a config write with no preceding stall would
+        // race an in-flight pool op. Mirrors _llk_math_set_fp32_dest_acc_ / mainline reduce. tt-llk #1658 (point 5).
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
@@ -292,6 +296,8 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
 
     if constexpr (is_fp32_dest_acc_en)
     {
+        // Drain the transpose replay (MOVD2B/TRNSPSRCB/MOVB2D) before restoring the format/flag it reads.
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
     }

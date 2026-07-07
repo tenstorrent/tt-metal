@@ -137,6 +137,11 @@ inline void _llk_unpack_fast_untilize_bfp_block_(const std::uint32_t address, co
 
         if (tile + 1 < unit_dim)
         {
+            // Drain the unpacker before shifting the base-address register: the current tile's UNPACR MOP
+            // (issued just above) reads THCON_SEC0_REG3_Base_address at execute time, so the CFGSHIFTMASK
+            // below must not overwrite it while that UNPACR is still in flight. A NOP bubble alone does not
+            // retire the in-flight UNPACR. tt-llk #1658 (point 5). ISA: CFGSHIFTMASK.md.
+            TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK0);
             if (use_context_0)
             {
                 TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
