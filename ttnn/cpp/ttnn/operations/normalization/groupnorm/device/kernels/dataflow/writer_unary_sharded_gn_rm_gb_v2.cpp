@@ -24,10 +24,9 @@ void generate_tile_with_packed_bfloat16_values(uint32_t cb_id, uint32_t packed_b
     cb.push_back(1);
 }
 
-// Load one row-major gamma/beta stick (TILE_WIDTH datums) as the first row of a tile's two faces.
-// Byte offsets scale with the datum size (2B bf16, 4B fp32):
-//   face_bytes = one 16x16 face      = FACE_HW datums (face 1 starts here within the tile)
-//   half_row   = first FACE_WIDTH datums of the row (one face-row; the face boundary in the RM stick)
+// Load one row-major gamma/beta stick (TILE_WIDTH datums) into the first row of a tile's two 16x16 faces;
+// byte offsets scale with datum size (2B bf16 / 4B fp32). Blackhole (64B-granular DRAM reads): read the full
+// row into face 0 then L1->L1-copy its second half-row into face 1; else two direct reads, one per face.
 template <typename AccessorType>
 void async_read_row_to_tile(
     const Noc& noc, const AccessorType& accessor, uint32_t page_id, uint32_t l1_dst_addr, uint32_t element_bytes) {

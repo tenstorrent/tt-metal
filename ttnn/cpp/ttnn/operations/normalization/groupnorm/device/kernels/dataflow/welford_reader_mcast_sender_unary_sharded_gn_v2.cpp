@@ -29,8 +29,8 @@ void kernel_main() {
     constexpr uint32_t block_hw = get_compile_time_arg_val(10);
     constexpr uint32_t num_groups = get_compile_time_arg_val(11);
     constexpr uint32_t tile_width = get_compile_time_arg_val(12);
-    // When true, the {mean, variance} stats CBs hold fp32 values (welford + fp32 DEST); the Welford
-    // combine below must read/write them as float, and the cross-core stride is in fp32 elements.
+    // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16, and the cross-core stride
+    // is in fp32 elements.
     constexpr bool stats_is_fp32 = get_compile_time_arg_val(13) != 0;
 
     const bool has_mcast_first_group = get_arg_val<uint32_t>(0);
@@ -126,12 +126,10 @@ void kernel_main() {
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     // This is the stride between two consecutive local means/variances in the cb_ex_partial
     constexpr uint32_t local_stride = 2;
-    // Cross-core stats are packed at NOC_L1_READ_ALIGNMENT_BYTES byte offsets; the combine reads
-    // them through an element-typed pointer, so the element stride is the byte gap / element size.
+    // Cross-core stats packed at NOC alignment; element stride = byte gap / element size.
     constexpr uint32_t stats_elem_size = stats_is_fp32 ? 4 : 2;
     constexpr uint32_t global_stride = NOC_L1_READ_ALIGNMENT_BYTES / stats_elem_size;
-    // Element types for reading/writing the stats CBs. The combine overload is selected by pointer
-    // type: const float* -> fp32 combine, volatile uint16_t* -> bf16 combine.
+    // Combine overload picked by pointer type: const float* -> fp32 combine, volatile uint16_t* -> bf16.
     using stats_read_t = std::conditional_t<stats_is_fp32, const float, volatile uint16_t>;
     using stats_write_t = std::conditional_t<stats_is_fp32, float, uint16_t>;
     constexpr uint32_t single_row_size_bytes = single_tile_size_bytes / tile_height;
@@ -207,9 +205,8 @@ void kernel_main() {
                 noc.async_read_barrier();
             }
 
-            // Read mean and variance arrays from cb_ex_global, then combine using Welford. Read
-            // through read-typed (const/volatile) views; the writes below reuse the write-typed
-            // pointers. Both views alias the same L1 addresses.
+            // Read cb_ex_global through read-typed views; the writes below reuse the write-typed pointers (same L1
+            // addresses).
             auto p_global_means_read = reinterpret_cast<stats_read_t*>(global_means_ptr);
             auto p_global_vars_read = reinterpret_cast<stats_read_t*>(global_vars_ptr);
             auto global_result =

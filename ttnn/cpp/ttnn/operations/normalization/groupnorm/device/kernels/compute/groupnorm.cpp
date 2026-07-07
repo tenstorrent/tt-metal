@@ -393,8 +393,8 @@ void kernel_main() {
                 cb_in0.wait_front(out_block_hw_normal);
                 // x - E[x]
                 sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
-                // fp32: previous reduce steps use bf16 scaler CBs. Reset both sources so the
-                // fp32 input and mean tiles are not read through stale bf16 source formats.
+                // fp32: reset both srcs so fp32 input/mean aren't read through the stale bf16 scaler format; no-op for
+                // bf16.
                 reconfig_data_format_srca(cb_in0_id);
                 reconfig_data_format_srcb(cb_ex_global_id);
 
@@ -519,8 +519,7 @@ void kernel_main() {
             // (Var + eps)
             tile_regs_acquire();
             add_tiles_init(cb_ex2_global_id, cb_eps_id);
-            // fp32 variance plus bf16 eps: reset both source formats after the preceding fp32
-            // square/reduce path, otherwise eps or variance can be interpreted with a stale format.
+            // fp32: reset both srcs so fp32 variance / bf16 eps aren't read through the stale square/reduce format.
             reconfig_data_format_srca(cb_ex2_global_id);
             reconfig_data_format_srcb(cb_eps_id);
             add_tiles(cb_ex2_global_id, cb_eps_id, 0, 0, dst0);
@@ -555,8 +554,7 @@ void kernel_main() {
                 cb_in0.wait_front(out_block_hw_normal);
                 // x - E[x]
                 sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
-                // fp32: previous rsqrt/eps steps leave source-format state that is not valid for
-                // reading fp32 input and mean tiles.
+                // fp32: reset both srcs so fp32 input/mean aren't read through the stale rsqrt/eps format.
                 reconfig_data_format_srca(cb_in0_id);
                 reconfig_data_format_srcb(cb_ex_global_id);
                 cb_xmm.reserve_back(out_block_hw_normal);
@@ -617,8 +615,7 @@ void kernel_main() {
                 // (x - Ex) * 1/[sqrt(Var + eps)]
                 index_h_offset = 0;
                 mul_tiles_bcast_scalar_init_short(cb_x_id, cb_ex2pe_id);
-                // fp32: cb_x and rstd are fp32 while the prior mask/eps stages used non-fp32
-                // SrcB formats. Reset both before the broadcast multiply.
+                // fp32: reset both srcs so fp32 x/rstd aren't read through the stale mask/eps format.
                 reconfig_data_format_srca(cb_x_id);
                 reconfig_data_format_srcb(cb_ex2pe_id);
                 cb_xmm.reserve_back(out_block_hw_normal);
@@ -720,9 +717,8 @@ void kernel_main() {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
                             if (apply_gamma_beta[j]) {
                                 mul_bcast_rows_init_short(cb_reread_write_out_id, cb_gamma_id);
-                                // fp32: the reread stage left SrcB bound to a fp32 CB (cb_xmm);
-                                // cb_gamma is bf16. Reset both src formats so the bf16 gamma tile
-                                // isn't misread as fp32. (bf16 path: no-op.)
+                                // fp32: reset both srcs so bf16 gamma isn't read through the reread stage's fp32
+                                // format.
                                 reconfig_data_format_srca(cb_reread_write_out_id);
                                 reconfig_data_format_srcb(cb_gamma_id);
                             } else {
@@ -758,9 +754,7 @@ void kernel_main() {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
                             if (apply_gamma_beta[j]) {
                                 add_bcast_rows_init_short(cb_inbeta_id, cb_beta_id);
-                                // fp32: mirror the sharded kernel — cb_inbeta is fp32 but cb_beta is
-                                // bf16; reset both src formats so the bf16 beta tile isn't misread as
-                                // fp32. (bf16 path: no-op.)
+                                // fp32: reset both srcs so bf16 beta isn't read through the fp32 cb_inbeta format.
                                 reconfig_data_format_srca(cb_inbeta_id);
                                 reconfig_data_format_srcb(cb_beta_id);
                             } else {

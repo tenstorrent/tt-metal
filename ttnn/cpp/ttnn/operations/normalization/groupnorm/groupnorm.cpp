@@ -231,15 +231,12 @@ Tensor group_norm(
     const auto arch = input_tensor.device()->arch();
     const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;
-    // Legacy (non-welford) fp32 mirrors LayerNorm: fp32 input accumulates in the fp32 DEST
-    // register. Welford already forces fp32 acc. A user-supplied compute_kernel_config still
-    // overrides this default.
+    // fp32 input accumulates in the fp32 DEST (like LayerNorm); welford already forces it. A
+    // user-supplied compute_kernel_config still overrides this default.
     const auto fp32_acc = use_welford || (input_tensor.dtype() == DataType::FLOAT32);
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
-    // Resolved DEST accumulation width. The welford interleaved factories mirror LayerNorm
-    // (cb_data_format = fp32_dest_acc_en ? Float32 : Float16_b): when DEST is fp32 we keep the
-    // stats/intermediate CBs in fp32 rather than round-tripping mean/variance through bf16.
+    // When DEST is fp32, keep the stats/intermediate CBs fp32 instead of round-tripping through bf16.
     const bool fp32_dest_acc_en = get_fp32_dest_acc_en(kernel_config_val);
 
     // Reciprocals must be sharded to L1 via the legacy ShardSpec representation:
@@ -360,10 +357,8 @@ Tensor group_norm(
     if (input_tensor.is_sharded()) {
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-            // fp32 intermediates/stats when the fp32 intake path is active (LayerNorm cb_data_format
-            // mirror): legacy fp32 always, and welford fp32 input with fp32 DEST (matches
-            // welford_fp32_alias in the factory). bf16 input keeps bf16 stats — bf16-input +
-            // fp32-stats needs a reconfig retune in welford_groupnorm_sharded_v2.cpp.
+            // fp32 stats when the fp32 intake path is active: legacy fp32 always, welford fp32-input
+            // with fp32 DEST. bf16 input keeps bf16 stats (bf16-input + fp32-stats needs a retune).
             .im_data_format = (input_tensor.dtype() == DataType::FLOAT32 && (!use_welford || fp32_dest_acc_en))
                                   ? DataType::FLOAT32
                                   : DataType::BFLOAT16,
@@ -389,10 +384,8 @@ Tensor group_norm(
     // Otherwise honor the explicit num_out_blocks (defaulting to 1 = no chunking).
     const ttnn::prim::GroupNormMultiCoreProgramConfig program_config = {
         .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-        // fp32 intermediates/stats when the fp32 intake path is active (mirrors the sharded branch
-        // and LayerNorm cb_data_format): legacy fp32 always, and welford fp32 input with fp32 DEST
-        // (matches welford_unpack_fp32_active in the factories). bf16 input keeps bf16 stats because
-        // bf16-input + fp32-stats needs a separate reconfig retune.
+        // fp32 stats when the fp32 intake path is active (mirrors the sharded branch): legacy fp32
+        // always, welford fp32-input with fp32 DEST. bf16 input keeps bf16 stats (fp32-stats needs a retune).
         .im_data_format = (input_tensor.dtype() == DataType::FLOAT32 && (!use_welford || fp32_dest_acc_en))
                               ? DataType::FLOAT32
                               : DataType::BFLOAT16,

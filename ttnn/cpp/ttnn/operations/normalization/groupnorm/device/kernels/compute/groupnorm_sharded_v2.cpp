@@ -297,9 +297,8 @@ void kernel_main() {
             }
             // x - E[x]
             sub_tiles_bcast_scalar_init_short(cb_x_id, cb_ex_global_id);
-            // fp32: cb_x/cb_ex_global are fp32 while the prior partial-E[x] accumulate left SrcB as
-            // bf16 (cb_ones). Reset both unconditionally (1-arg); the 2-arg form would mis-track and
-            // read the fp32 mean tile as bf16 -> garbage. (bf16 path: no-op.)
+            // fp32: reset both srcs (1-arg) so fp32 x/mean aren't read through the partial-E[x] bf16 cb_ones format;
+            // no-op for bf16.
             reconfig_data_format_srca(cb_x_id);
             reconfig_data_format_srcb(cb_ex_global_id);
 
@@ -414,9 +413,7 @@ void kernel_main() {
             // (Var + eps)
             tile_regs_acquire();
             add_tiles_init(cb_ex_global_id, cb_eps_id);
-            // fp32: cb_ex_global (variance) is fp32 but cb_eps is bf16, and the prior (x-Ex)^2 step
-            // left SrcB pointing at fp32 (cb_x). Without resetting SrcB to cb_eps, the bf16 eps tile
-            // is read as fp32 -> garbage (var+eps) -> garbage rsqrt -> garbage output. (bf16: no-op.)
+            // fp32: reset both srcs so bf16 eps isn't read through the (x-Ex)^2 fp32 format (else garbage var+eps).
             reconfig_data_format_srca(cb_ex_global_id);
             reconfig_data_format_srcb(cb_eps_id);
             add_tiles(cb_ex_global_id, cb_eps_id, 0, 0, dst0);
@@ -432,8 +429,7 @@ void kernel_main() {
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;
             mul_tiles_bcast_scalar_init_short(cb_x_id, cb_ex2pe_id);
-            // fp32: the prior (var+eps) step left SrcB as bf16 (cb_eps); cb_x/cb_ex2pe are fp32.
-            // Reset both so the fp32 rstd tile isn't read as bf16. (bf16 path: no-op.)
+            // fp32: reset both srcs so fp32 x/rstd aren't read through the (var+eps) bf16 cb_eps format.
             reconfig_data_format_srca(cb_x_id);
             reconfig_data_format_srcb(cb_ex2pe_id);
 
@@ -614,8 +610,7 @@ void kernel_main() {
         index_h_offset = 0;
         if constexpr (use_negative_mask == false) {
             mul_bcast_rows_init_short(cb_out_id, cb_gamma_id);
-            // fp32: cb_out is fp32 but cb_gamma is bf16, and the normalization loop left SrcB as
-            // fp32. Reset both so the bf16 gamma tile isn't read as fp32. (bf16 path: no-op.)
+            // fp32: reset both srcs so bf16 gamma isn't read through the normalization loop's fp32 format.
             reconfig_data_format_srca(cb_out_id);
             reconfig_data_format_srcb(cb_gamma_id);
             cb_outgamma.reserve_back(per_core_MN);
@@ -639,7 +634,7 @@ void kernel_main() {
         } else {
             // cb in has data required for gamma, so we do it inplace
             mul_bcast_rows_init_short(cb_in_id, cb_gamma_id);
-            // fp32: see non-negative-mask branch above. (bf16 path: no-op.)
+            // fp32: see non-negative-mask branch above.
             reconfig_data_format_srca(cb_in_id);
             reconfig_data_format_srcb(cb_gamma_id);
             cb_gamma.wait_front(per_core_N);
@@ -664,8 +659,7 @@ void kernel_main() {
         if constexpr (use_negative_mask == false) {
             index_h_offset = 0;
             add_bcast_rows_init_short(cb_inbeta_id, cb_beta_id);
-            // fp32: cb_inbeta is fp32 but cb_beta is bf16; reset both so the bf16 beta tile isn't
-            // read as fp32 (matters especially when do_gamma=false). (bf16 path: no-op.)
+            // fp32: reset both srcs so bf16 beta isn't read as fp32 (matters especially when do_gamma=false).
             reconfig_data_format_srca(cb_inbeta_id);
             reconfig_data_format_srcb(cb_beta_id);
             cb_outbeta.reserve_back(per_core_MN);
@@ -688,7 +682,7 @@ void kernel_main() {
         } else {
             // cb_in_id has data required for beta, so we do it inplace
             add_bcast_rows_init_short(cb_in_id, cb_beta_id);
-            // fp32: see non-negative-mask branch above. (bf16 path: no-op.)
+            // fp32: see non-negative-mask branch above.
             reconfig_data_format_srca(cb_in_id);
             reconfig_data_format_srcb(cb_beta_id);
             cb_beta.wait_front(per_core_N);

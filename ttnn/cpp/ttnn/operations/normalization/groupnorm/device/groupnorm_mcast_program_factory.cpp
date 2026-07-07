@@ -78,8 +78,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(im_data_format);
-    // When the intermediate/stats CBs are fp32 (welford + fp32 DEST), the reader kernels must
-    // combine mean/variance as fp32 rather than bf16 (see welford_reader_*_gn.cpp).
+    // fp32 stats CBs (welford + fp32 DEST): reader kernels combine mean/variance as fp32, not bf16.
     const bool stats_is_fp32 = cb_data_format == tt::DataFormat::Float32;
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat reciprocal_cb_data_format =
@@ -99,8 +98,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         "input: {} and output: {} must be the same data format",
         in_data_format,
         out_data_format);
-    // output datum size (out==in format, enforced above) — must follow the dtype, not a bf16
-    // hardcode, or FP32 output byte strides (page_size / per_core_N_bytes) would be halved.
+    // datum size follows the dtype (out==in, enforced above); a bf16 hardcode would halve fp32 strides.
     uint32_t datum_size_bytes = output.element_size();
 
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
@@ -108,9 +106,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t gamma_beta_single_tile_size = tt::tile_size(gamma_beta_cb_data_format);
     uint32_t in_mask_single_tile_size = tt::tile_size(in_mask_cb_data_format);
-    // eps is always delivered as a bf16 scalar by the writer (generate_bcast_col_scalar packs the
-    // top 16 bits of the fp32 eps). Its CB must therefore stay bf16 even when the stats CBs are
-    // fp32; the compute add_tiles(cb_ex_global, cb_eps) then runs mixed fp32/bf16, as in LayerNorm.
+    // eps is delivered as a bf16 scalar (generate_bcast_col_scalar packs the top 16 bits), so its CB
+    // stays bf16 even with fp32 stats; add_tiles(cb_ex_global, cb_eps) then runs mixed fp32/bf16.
     const tt::DataFormat eps_cb_data_format = tt::DataFormat::Float16_b;
     const uint32_t eps_single_tile_size = tt::tile_size(eps_cb_data_format);
 

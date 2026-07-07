@@ -249,11 +249,7 @@ void kernel_main() {
 
                         for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                             for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                                // Mirror the writer's bounds guard: it only writes tiles with
-                                // (index_g_offset + nt) < per_core_N, so tiles past that were never
-                                // written. Rereading them pulls out-of-bounds/uninitialized DRAM
-                                // (fp32: ~3.4e38 garbage, PCC collapse). Skip them, matching the writer;
-                                // keep advancing l1_write_addr so the tile layout stays aligned.
+                                // Skip tiles the writer never wrote; rereading them pulls uninitialized DRAM (fp32 = huge garbage). Keep advancing l1_write_addr to stay aligned.
                                 if ((index_g_offset + nt) < per_core_N) {
                                     noc.async_read(
                                         dst_a,

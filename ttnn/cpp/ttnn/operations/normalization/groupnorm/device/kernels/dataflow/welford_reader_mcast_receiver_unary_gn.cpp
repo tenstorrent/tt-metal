@@ -61,8 +61,7 @@ void kernel_main() {
     // == cb_in0_id and the gated pushes below are skipped.
     constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    // When true, the {mean, variance} stats CBs hold fp32 values (welford + fp32 DEST); the
-    // Welford combine below must read/write them as float instead of bf16. See groupnorm.cpp.
+    // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16.
     constexpr bool stats_is_fp32 = get_named_compile_time_arg_val("stats_is_fp32") != 0;
 
     Noc noc;
@@ -84,8 +83,7 @@ void kernel_main() {
     constexpr uint32_t single_row_size_bytes = single_tile_size_bytes / tile_height;
     constexpr uint32_t local_stride_per_group = local_stride * single_row_size_bytes;
 
-    // Element types for reading/writing the stats CBs. The combine overload is selected by
-    // pointer type: const float* -> fp32 combine, volatile uint16_t* -> bf16 combine.
+    // Combine overload picked by pointer type: const float* -> fp32 combine, volatile uint16_t* -> bf16.
     using stats_read_t = std::conditional_t<stats_is_fp32, const float, volatile uint16_t>;
     using stats_write_t = std::conditional_t<stats_is_fp32, float, uint16_t>;
 

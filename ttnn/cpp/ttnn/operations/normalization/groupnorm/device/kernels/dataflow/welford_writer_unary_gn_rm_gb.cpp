@@ -13,13 +13,9 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 
-// Load one row-major gamma/beta stick (TILE_WIDTH datums) as the first row of a tile's two faces.
-// Byte offsets scale with the datum size (2B bf16, 4B fp32):
-//   row_bytes  = full tile-width row = TILE_WIDTH datums (read at 64B granularity for Blackhole DRAM reads)
-//   face_bytes = one 16x16 face      = FACE_HW datums (face 1 starts here within the tile)
-//   half_row   = first FACE_WIDTH datums of the row (the face boundary inside the row-major stick)
-// We read the full row into face 0, then rearrange the second half-row into face 0's neighbour (face 1)
-// with an L1->L1 copy (legal at 16B alignment on BH once the data is resident in L1).
+// Load one row-major gamma/beta stick (TILE_WIDTH datums) into the first row of a tile's two 16x16 faces;
+// byte offsets scale with datum size (2B bf16 / 4B fp32). Read the full row into face 0 (Blackhole DRAM
+// needs 64B-granular reads), then L1->L1-copy its second half-row into face 1.
 template <typename AccessorType>
 void async_read_row_to_tile(
     const Noc& noc, const AccessorType& accessor, uint32_t page_id, uint32_t l1_dst_addr, uint32_t element_bytes) {
