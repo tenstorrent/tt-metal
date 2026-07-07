@@ -10,14 +10,16 @@ Launched under ``tt-run`` with world_size == 2 (see :file:`runner.sh`).
 Topology
 ========
 
-* Rank 0 (TTML) opens the full ``[1, 2]`` mesh declared by
-  ``configurations/local2/mgd.textproto`` (one N300 board, two chips).
+* Rank 0 (TTML) opens the full ``[1, 4]`` DDP mesh declared by
+  ``configurations/local8/mgd.textproto`` (two N300 boards, four chips).
   It owns the policy ttml ``Llama`` model and drives training via
   :class:`ttml.trainers.GRPOTrainer`.
-* Rank 1 (TTT) opens a ``[1, 1]`` mesh on its own board. It hosts a
-  ``tt-transformers`` ``Transformer`` via
-  :class:`utils.ttt_generation_worker.TttGenerationWorker` and serves
-  generate / weight-transfer RPCs to the ttml rank.
+* Rank 1 (TTT) opens a ``[1, 4]`` parent mesh (its own two boards) and
+  splits it into four ``[1, 1]`` submeshes, one
+  :class:`utils.ttt_generation_worker.TttGenerationWorker` per submesh.
+  The weight bridge replicates each freshly-synced policy onto all four
+  submeshes; generate RPCs are served by submesh 0. Mirrors the 4->4
+  topology in ``tests/weight_transfer/test_weight_transfer.py``.
 
 The :class:`utils.mpi_rollout.MPIRolloutClient` constructor on
 the ttml side and the :class:`utils.mpi_rollout.MPIRolloutServer`
@@ -47,17 +49,19 @@ Lifecycle (TTML rank)
 Lifecycle (TTT rank)
 ====================
 
-1. Initialise ttnn distributed context, open a ``[1, 1]`` submesh.
+1. Initialise ttnn distributed context, open a ``[1, 4]`` parent mesh
+   and split it into four ``[1, 1]`` submeshes.
 2. Resolve stop / pad token IDs by briefly loading the HF tokenizer
    for ``MODEL_ID`` (see
    :func:`utils.llama_ttt_presets.llama_stop_and_pad`). The tokenizer
    is dropped immediately; the worker never holds one.
-3. Build :class:`TttGenerationWorker` -- ``dummy_weights=True`` plus
-   ``disable_disk_cache=True`` so boot is fast and the asymmetric
-   ``[1, 2] -> [1, 1]`` mesh handshake does not trip the disk-cache
-   collective.
-4. Build :class:`MPIRolloutServer` with the worker's ``generate`` and
-   ``update_weights`` as the two callbacks.
+3. Build one :class:`TttGenerationWorker` per submesh --
+   ``dummy_weights=True`` plus ``disable_disk_cache=True`` so boot is
+   fast and the asymmetric ``[1, 4] -> [1, 1]`` mesh handshake does not
+   trip the disk-cache collective.
+4. Build :class:`MPIRolloutServer`: ``generate`` is served by submesh
+   0's worker, and each transferred weight dict is applied to its own
+   submesh worker (the bridge replicates the same policy onto all four).
 5. ``server.serve_forever()`` until ``OP_SHUTDOWN``.
 
 Self-skips with a clear error if launched outside ``tt-run`` (world
@@ -107,8 +111,9 @@ ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 from utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
-TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_4.yaml"
-TTT_MESH_SHAPE = (1, 1)
+TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_4dev_ddp.yaml"
+TTT_PARENT_MESH_SHAPE = (1, 4)
+NUM_SUBMESHES = 4
 
 TTT_MAX_BATCH_SIZE = 32
 TTT_MAX_SEQ_LEN = 2048
@@ -317,10 +322,13 @@ def _ttt_main() -> None:
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
 
-    mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(*TTT_MESH_SHAPE),
+    parent_mesh = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(*TTT_PARENT_MESH_SHAPE),
         offset=ttnn.MeshCoordinate(0, 0),
     )
+    # One [1, 1] submesh per chip; submeshes[i] is parent coord (0, i).
+    submeshes = parent_mesh.create_submeshes(ttnn.MeshShape(1, 1))
+    assert len(submeshes) == NUM_SUBMESHES, f"expected {NUM_SUBMESHES} submeshes, got {len(submeshes)}"
 
     # Read the same yaml as the ttml rank to pick up the GRPO sampling
     # temperature. The worker bakes (temperature, top_k, top_p, seed) into
@@ -330,43 +338,52 @@ def _ttt_main() -> None:
     raw = load_config(os.path.join(str(REPO_ROOT), TTML_DEVICE_CONFIG_REL))
     grpo_temperature = float(raw["training_config"]["grpo_config"]["temperature"])
 
-    worker: Any = None
+    workers: list[Any] = []
     server: Any = None
     try:
         # Tokenizer load is launcher-local: we extract stop/pad IDs and
-        # drop the reference before the worker is built.
+        # drop the reference before the workers are built.
         stop_token_ids, pad_token_id = llama_stop_and_pad(MODEL_ID)
 
-        worker = TttGenerationWorker(
-            mesh_device=mesh_device,
-            model_source=MODEL_ID,
-            max_batch_size=TTT_MAX_BATCH_SIZE,
-            max_seq_len=TTT_MAX_SEQ_LEN,
-            instruct=True,
-            optimizations=bf16_attn_bfp8_mlp_optimizations,
-            stop_token_ids=stop_token_ids,
-            pad_token_id=pad_token_id,
-            temperature=grpo_temperature,
-            top_k=0,
-            top_p=1.0,
-            seed=None,
-        )
+        for submesh in submeshes:
+            workers.append(
+                TttGenerationWorker(
+                    mesh_device=submesh,
+                    model_source=MODEL_ID,
+                    max_batch_size=TTT_MAX_BATCH_SIZE,
+                    max_seq_len=TTT_MAX_SEQ_LEN,
+                    instruct=True,
+                    optimizations=bf16_attn_bfp8_mlp_optimizations,
+                    stop_token_ids=stop_token_ids,
+                    pad_token_id=pad_token_id,
+                    temperature=grpo_temperature,
+                    top_k=0,
+                    top_p=1.0,
+                    seed=None,
+                )
+            )
 
-        # Single [1, 1] receiver: the mesh is its own sole submesh target, so
-        # receive_weights() returns a length-1 list applied to the one worker.
-        bridge = HostWeightBridge.init_receiver(mesh=mesh_device, peer_rank=TTML_RANK, submeshes=[mesh_device])
+        # The bridge replicates each transferred policy onto every submesh, so
+        # receive_weights() returns one dict per submesh; apply each to its own
+        # worker. Generate RPCs are served by submesh 0's worker.
+        bridge = HostWeightBridge.init_receiver(mesh=parent_mesh, peer_rank=TTML_RANK, submeshes=submeshes)
+
+        def _on_weights_received(per_submesh: list) -> None:
+            for worker, hf_dict in zip(workers, per_submesh):
+                worker.update_weights(hf_dict)
+
         server = MPIRolloutServer(
             peer_rank=TTML_RANK,
             bridge=bridge,
-            generate_fn=worker.generate,
-            on_weights_received=lambda per_submesh: worker.update_weights(per_submesh[0]),
+            generate_fn=workers[0].generate,
+            on_weights_received=_on_weights_received,
         )
         server.serve_forever()
     finally:
-        worker = None
+        workers = []
         server = None
         gc.collect()
-        ttnn.close_mesh_device(mesh_device)
+        ttnn.close_mesh_device(parent_mesh)
 
 
 # ---------------------------------------------------------------------------
