@@ -14,6 +14,7 @@ Compares the FINAL audio (DiT CFG denoise -> VAE decode) vs the reference's CFG 
 
 import pytest
 import torch
+import ttnn
 
 from loguru import logger
 from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
@@ -109,3 +110,51 @@ def test_cfg_guidance_e2e(device):
     logger.info(f"CFG e2e audio: ref={ref_wav.shape[-1]} tt={tt_wav.shape[-1]} gs={GUIDANCE_SCALE}")
     print(f"CFG_E2E_PCC: {msg}")
     assert passing, f"CFG e2e audio PCC {msg} < 0.95"
+
+
+@pytest.mark.skipif(not have_pipeline(), reason="ACE-Step pipeline not downloaded")
+def test_cfg_guidance_traced_matches_eager(device):
+    """The traced CFG denoise loop (generate(use_trace=True) under CFG) must be numerically identical
+    to the eager CFG loop. CFG is stateful (the APG momentum running-average), so tracing carries it
+    across replays via the tracer input read-back pattern; this test guards that the state plumbing
+    stays correct (a plain in-place buffer regresses to ~0.8 PCC). No reference/VAE needed — pure
+    TT eager-vs-traced on the DiT latents, so it is fast."""
+    require_single_device(device)
+
+    args = AceStepModelConfig.from_hf(num_hidden_layers=NUM_DIT_LAYERS)
+    sd = load_state_dict()
+    null_emb = sd.get("null_condition_emb", sd.get("decoder.null_condition_emb")).float()
+
+    seq_len = 128
+    pipe = create_tt_pipeline(args, device, with_vae=False, with_encoders=False)
+    pipe._null_condition_emb = null_emb
+
+    def _fresh_inputs():
+        # Fresh device tensors per call: the Tracer holds refs to its inputs and overwrites them, so
+        # reusing the same handles across eager then traced calls corrupts the eager result.
+        torch.manual_seed(0)
+        noise = torch.randn(1, 1, seq_len, HIDDEN_CH)
+        context = torch.randn(1, 1, seq_len, CONTEXT_CH)
+        encoder = torch.randn(1, 1, 96, args.hidden_size)
+        noise_tt = to_ttnn_tensor(noise, device)
+        context_tt = to_ttnn_tensor(context, device)
+        enc_tt = to_ttnn_tensor(encoder, device)
+        return noise_tt, context_tt, enc_tt, pipe._uncond_context(enc_tt)
+
+    nt, ct, et, uh = _fresh_inputs()
+    eager = pipe.generate(
+        nt, ct, et, infer_steps=INFER_STEPS, guidance_scale=GUIDANCE_SCALE,
+        uncond_encoder_hidden_states=uh,
+    )
+    eager_t = ttnn.to_torch(eager).float().reshape(1, seq_len, HIDDEN_CH)
+
+    nt, ct, et, uh = _fresh_inputs()
+    traced = pipe.generate(
+        nt, ct, et, infer_steps=INFER_STEPS, guidance_scale=GUIDANCE_SCALE,
+        uncond_encoder_hidden_states=uh, use_trace=True,
+    )
+    traced_t = ttnn.to_torch(traced).float().reshape(1, seq_len, HIDDEN_CH)
+
+    passing, msg = comp_pcc(eager_t, traced_t, 0.999)
+    print(f"CFG_TRACED_VS_EAGER_PCC: {msg}")
+    assert passing, f"traced CFG latents diverge from eager CFG: {msg} < 0.999"
