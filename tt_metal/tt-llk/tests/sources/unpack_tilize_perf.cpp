@@ -45,20 +45,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t FULL_RT_DIM  = params.FULL_RT_DIM;
     const std::uint32_t BLOCK_CT_DIM = params.BLOCK_CT_DIM;
     const std::uint32_t BLOCK_RT_DIM = params.BLOCK_RT_DIM;
+    const std::uint32_t num_faces    = params.num_faces;
 #endif
+    // SPEED_OF_LIGHT: num_faces is a compile-time constant from NUM_FACES in params.h.
     LLK_ASSERT(FULL_RT_DIM * FULL_CT_DIM == TILE_CNT, "FULL_RT_DIM * FULL_CT_DIM must be equal to TILE_CNT");
     constexpr std::uint32_t src = 0x65000;
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src,
-            formats.unpack_B_src,
-            formats.unpack_A_dst,
-            formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            4 /* num_faces */,
-            4 /* num_faces */);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
         _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
         PROFILER_SYNC();
     }
@@ -78,14 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
                 {
                     _llk_unpack_tilize_wrapper_(
-                        tile_row_addr,
-                        j,
-                        formats.unpack_A_src,
-                        formats.unpack_A_dst,
-                        0 /* block_ct_dim */,
-                        FACE_R_DIM,
-                        4 /* num_faces */,
-                        false /* narrow_tile */);
+                        tile_row_addr, j, formats.unpack_A_src, formats.unpack_A_dst, 0 /* block_ct_dim */, FACE_R_DIM, num_faces, false /* narrow_tile */);
                 }
             }
         }
@@ -113,7 +101,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const std::uint32_t num_faces   = params.num_faces;
 #endif
+    // SPEED_OF_LIGHT: num_faces is a compile-time constant from NUM_FACES in params.h.
     const bool is_int_fpu_en = false;
 
     {
@@ -124,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             is_int_fpu_en,
-            llk_test_pack_mode_v<false, TILIZE>>(4 /* num_faces */, formats.math);
+            llk_test_pack_mode_v<false, TILIZE>>(num_faces, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         PROFILER_SYNC();

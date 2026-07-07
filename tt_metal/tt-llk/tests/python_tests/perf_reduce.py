@@ -18,8 +18,10 @@ from helpers.param_config import (
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    MATH_FIDELITY,
     MATH_OP,
     REDUCE_POOL_TYPE,
+    REDUCE_TO_ONE,
     TILE_COUNT,
 )
 
@@ -43,9 +45,8 @@ REDUCE_MATHOP = {
     dest_acc=[DestAccumulation.No],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
-    math_fidelity=[MathFidelity.LoFi],
+    math_fidelity=[MathFidelity.HiFi4],
     is_reduce_to_one=[False],
-    tile_dimensions=[[4, 32]],
 )
 def test_perf_reduce(
     perf_report,
@@ -55,8 +56,8 @@ def test_perf_reduce(
     pool_type,
     math_fidelity,
     is_reduce_to_one,
-    tile_dimensions,
 ):
+    assert is_reduce_to_one is False
 
     tile_count = 16
     configuration = PerfConfig(
@@ -72,8 +73,9 @@ def test_perf_reduce(
         templates=[
             MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
             REDUCE_POOL_TYPE(pool_type),
+            MATH_FIDELITY(math_fidelity),
         ],
-        runtimes=[TILE_COUNT(tile_count)],
+        runtimes=[TILE_COUNT(tile_count), REDUCE_TO_ONE(is_reduce_to_one)],
         variant_stimuli=StimuliConfig(
             None,
             formats.input_format,

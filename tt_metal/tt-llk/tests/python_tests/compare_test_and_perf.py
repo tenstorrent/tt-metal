@@ -21,12 +21,13 @@ comparison over each matched pair. Use ``--dir`` to sweep a different folder
 This is a standalone diagnostic script, not a pytest test: it introspects the
 ``parametrize`` mark left on each function by the custom ``@parametrize``
 decorator, so it needs neither a pytest run, the conftest, nor the simulator.
+It is not named ``test_*.py`` so pytest does not collect it.
 
 Usage (run from the python_tests folder):
-    python test_perf_comparison.py                         # sweep this folder
-    python test_perf_comparison.py --full                  # no value-list truncation
-    python test_perf_comparison.py --dir quasar            # sweep a subfolder
-    python test_perf_comparison.py <functional.py> <perf.py>   # single explicit pair
+    python compare_test_and_perf.py                         # sweep this folder
+    python compare_test_and_perf.py --full                  # no value-list truncation
+    python compare_test_and_perf.py --dir quasar            # sweep a subfolder
+    python compare_test_and_perf.py <functional.py> <perf.py>   # single explicit pair
 """
 from __future__ import annotations
 

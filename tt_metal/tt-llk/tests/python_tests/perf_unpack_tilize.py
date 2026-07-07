@@ -9,6 +9,7 @@ from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
+    NUM_FACES,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -45,6 +46,8 @@ def test_perf_unpack_tilize_float(
     _perf_unpack_tilize(
         perf_report,
         formats,
+        num_faces,
+        input_dimensions,
         rt_dim,
         ct_dim,
     )
@@ -68,6 +71,8 @@ def test_perf_unpack_tilize_int(
     _perf_unpack_tilize(
         perf_report,
         formats,
+        num_faces,
+        input_dimensions,
         rt_dim,
         ct_dim,
     )
@@ -76,11 +81,13 @@ def test_perf_unpack_tilize_int(
 def _perf_unpack_tilize(
     perf_report,
     formats,
+    num_faces,
+    input_dimensions,
     rt_dim,
     ct_dim,
 ):
+    assert input_dimensions == [rt_dim * 32, ct_dim * 32]
     tile_count = rt_dim * ct_dim
-    dimensions = [rt_dim * 32, ct_dim * 32]
 
     configuration = PerfConfig(
         "sources/unpack_tilize_perf.cpp",
@@ -93,9 +100,10 @@ def _perf_unpack_tilize(
         ],
         templates=[],
         runtimes=[
-            generate_input_dim(dimensions, dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),
             LOOP_FACTOR(4),
+            NUM_FACES(num_faces),
         ],
         variant_stimuli=StimuliConfig(
             None,

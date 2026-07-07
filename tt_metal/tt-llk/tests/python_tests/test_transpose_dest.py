@@ -95,6 +95,14 @@ def generate_transpose_dest_float_combinations(formats_list):
     return combinations
 
 
+def _default_unpack_transpose_faces(dest_acc, math_transpose_faces):
+    return (
+        Transpose.Yes
+        if (dest_acc == DestAccumulation.Yes and math_transpose_faces == Transpose.No)
+        else Transpose.No
+    )
+
+
 _TRANSPOSE_DEST_FLOAT_COMBOS = generate_transpose_dest_float_combinations(
     TRANSPOSE_DEST_FLOAT_FORMATS
 )
@@ -107,14 +115,7 @@ _TRANSPOSE_DEST_FLOAT_COMBOS = generate_transpose_dest_float_combinations(
     math_transpose_faces=lambda combo_idx: [_TRANSPOSE_DEST_FLOAT_COMBOS[combo_idx][2]],
     unpack_to_dest=lambda combo_idx: [_TRANSPOSE_DEST_FLOAT_COMBOS[combo_idx][3]],
     unpack_transpose_faces=lambda dest_acc, math_transpose_faces: [
-        (
-            Transpose.Yes
-            if (
-                dest_acc == DestAccumulation.Yes
-                and math_transpose_faces == Transpose.No
-            )
-            else Transpose.No
-        )
+        _default_unpack_transpose_faces(dest_acc, math_transpose_faces)
     ],
 )
 def test_transpose_dest_float(
@@ -283,13 +284,8 @@ def transpose_dest(
     unpack_transpose_faces=None,
 ):
     if unpack_transpose_faces is None:
-        unpack_transpose_faces = (
-            Transpose.Yes
-            if (
-                dest_acc == DestAccumulation.Yes
-                and math_transpose_faces == Transpose.No
-            )
-            else Transpose.No
+        unpack_transpose_faces = _default_unpack_transpose_faces(
+            dest_acc, math_transpose_faces
         )
 
     input_dimensions = [64, 64]

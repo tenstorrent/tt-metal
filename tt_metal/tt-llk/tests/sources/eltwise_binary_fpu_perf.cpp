@@ -96,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MATH_FIDELITY>(DEFAULT_TENSOR_SHAPE, 0 /* acc_to_dest */);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(DEFAULT_TENSOR_SHAPE, 0 /* acc_to_dest */);
         PROFILER_SYNC();
     }
     {
@@ -118,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                 {
-                    _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY>(
+                    _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY>(
                         DEFAULT_TENSOR_SHAPE, block_tile, false);
                 }
             }
@@ -132,7 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
                 for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                 {
-                    _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY>(
+                    _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY>(
                         DEFAULT_TENSOR_SHAPE, block_tile, false);
                 }
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

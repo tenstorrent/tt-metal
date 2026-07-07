@@ -76,7 +76,9 @@ def get_valid_num_faces_datacopy(tilize):
     num_faces=4,
     tilize=[Tilize.No],
     dest_index=0,
-    input_dimensions=[[128, 256]],
+    input_dimensions=lambda num_blocks, num_tiles_in_block: [
+        [32, num_blocks * num_tiles_in_block * 32]
+    ],
     num_blocks=[1, 2],
     num_tiles_in_block=[4, 8],
     loop_factor=[1, 16, 64],
@@ -100,6 +102,7 @@ def test_perf_pack_dest_bank(
         )
 
     tile_cnt = num_blocks * num_tiles_in_block
+    assert input_dimensions == [32, tile_cnt * 32]
 
     src_A = torch.ones(tile_cnt * 1024, dtype=torch.bfloat16)
 

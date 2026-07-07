@@ -37,6 +37,8 @@ from helpers.test_variant_parameters import (
 def test_perf_fast_untilize(
     perf_report, formats, dest_acc, dimensions, dest_sync, stimulus_kind, loop_factor
 ):
+    assert stimulus_kind == "random"
+
     rt_dim, ct_dim = dimensions
     tile_count = rt_dim * ct_dim
     dimensions = (rt_dim * FAST_UNTILIZE_TILE_R, ct_dim * FAST_UNTILIZE_TILE_C)

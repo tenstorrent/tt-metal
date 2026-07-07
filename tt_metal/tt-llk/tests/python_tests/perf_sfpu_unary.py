@@ -210,11 +210,15 @@ _INT32_UNARY_OPS = [
 ]
 
 
-def _run_math_isolate(formats, mathop, input_dimensions):
+def _run_math_isolate(
+    formats, math_op, input_dimensions, approx_mode, fast_mode, dest_acc
+):
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
-    unpack_to_dest = formats.input_format.is_32_bit()
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
+    )
 
     return PerfConfig(
         "sources/eltwise_unary_sfpu_perf.cpp",
@@ -222,9 +226,9 @@ def _run_math_isolate(formats, mathop, input_dimensions):
         run_types=[PerfRunType.MATH_ISOLATE],
         templates=[
             MATH_OP(mathop=math_op),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(approx_mode),
             ITERATIONS(32),
-            FAST_MODE(FastMode.No),
+            FAST_MODE(fast_mode),
             STABLE_SORT(StableSort.No),
         ],
         runtimes=[
@@ -245,7 +249,7 @@ def _run_math_isolate(formats, mathop, input_dimensions):
             tile_count_res=tile_count_A,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=DestAccumulation.No,
+        dest_acc=dest_acc,
     )
 
 
@@ -267,4 +271,6 @@ def test_perf_eltwise_unary_sfpu_int(
     dest_acc,
     input_dimensions,
 ):
-    _run_math_isolate(formats, math_op, input_dimensions).run(perf_report)
+    _run_math_isolate(
+        formats, math_op, input_dimensions, approx_mode, fast_mode, dest_acc
+    ).run(perf_report)

@@ -125,7 +125,10 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
     transpose_srca=[Transpose.Yes, Transpose.No],
     input_dimensions=[[256, 32]],
-    tile_count=[16],
+    tile_count=lambda input_dimensions, tile_dimensions: [
+        (input_dimensions[0] // tile_dimensions[0])
+        * (input_dimensions[1] // tile_dimensions[1])
+    ],
     tile_dimensions=lambda transpose_srca, broadcast_type: _get_valid_tile_dimensions(
         transpose_srca, broadcast_type
     ),
@@ -149,6 +152,7 @@ def test_eltwise_binary(
 
     tile_rows, tile_cols = tile_dimensions
     tile_cnt_A = (input_dimensions[0] // tile_rows) * (input_dimensions[1] // tile_cols)
+    assert tile_count == tile_cnt_A
     tile_cnt_B = tile_cnt_A
 
     # Generate stimuli with correct face dimensions for smaller tiles

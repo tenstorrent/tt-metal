@@ -47,7 +47,7 @@ from helpers.test_variant_parameters import (
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", 2.0))[0]
 
 
-def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
+def _run(formats, math_op, dest_acc, loop_factor, iterations, input_dimensions):
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
     )
@@ -64,7 +64,7 @@ def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
         # kernel has no runtime-parameter reads. These sweep values are single-valued,
         # so making them templates does not expand the build matrix.
         templates=[
-            SFPU_TERNARY_OP(mathop),
+            SFPU_TERNARY_OP(math_op),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
             APPROX_MODE(ApproximationMode.No),
             ITERATIONS(iterations),
