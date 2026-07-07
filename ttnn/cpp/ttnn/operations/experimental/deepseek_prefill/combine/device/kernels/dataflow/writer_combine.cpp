@@ -172,7 +172,20 @@ void kernel_main() {
     // 10ms=13500000.
     [[maybe_unused]] uint64_t hist_last_ts = 0;
     [[maybe_unused]] uint32_t hist_buckets[7] = {0, 0, 0, 0, 0, 0, 0};
-    [[maybe_unused]] auto hist_record = [&hist_last_ts, &hist_buckets](uint64_t now) {
+
+    // [debug] Outlier token capture. The handful of tokens whose per-token gap lands in the 1-10ms
+    // bucket or higher (d >= 1ms = 1350000 cycles @ 1.35 GHz, i.e. hist_buckets[5] or [6]) dominate the
+    // total send time and thus dictate achieved BW, so record which tokens they are to probe them.
+    // We keep only the first MAX_OUTLIERS such indices. hist_token_idx is the running per-token counter
+    // (incremented once per real token in the send loop). Token index 0 is skipped: its gap is measured
+    // against the uninitialized hist_last_ts=0 baseline, so it is a fixed artifact, not a real stall.
+    static constexpr uint32_t MAX_OUTLIERS = 10;
+    [[maybe_unused]] uint32_t hist_token_idx = 0;
+    [[maybe_unused]] uint32_t outlier_token_indices[MAX_OUTLIERS] = {0};
+    [[maybe_unused]] uint32_t outlier_count = 0;
+
+    [[maybe_unused]] auto hist_record = [&hist_last_ts, &hist_buckets, &outlier_token_indices, &outlier_count](
+                                            uint64_t now, uint32_t token_idx) {
         const uint64_t d = now - hist_last_ts;
         hist_last_ts = now;
         if (d < 135ULL) {
@@ -189,6 +202,11 @@ void kernel_main() {
             hist_buckets[5]++;
         } else {
             hist_buckets[6]++;
+        }
+        // [debug] gap >= 1ms → 1-10ms bucket ([5]) or higher ([6]); stash the token index. Skip
+        // token 0 (baseline artifact) and stop after the first MAX_OUTLIERS.
+        if (d >= 1350000ULL && token_idx != 0 && outlier_count < MAX_OUTLIERS) {
+            outlier_token_indices[outlier_count++] = token_idx;
         }
     };
 
@@ -353,7 +371,10 @@ void kernel_main() {
             }
             // [debug] Snapshot the wall clock once per token and bin the gap since the previous
             // token's send. Placed after the sentinel check so only real tokens are counted.
-            hist_record(get_timestamp());
+            // hist_token_idx identifies the token in the send stream; hist_record uses it to log
+            // which tokens are the >=1ms outliers.
+            hist_record(get_timestamp(), hist_token_idx);
+            hist_token_idx++;
 
             uint32_t distance = route_info[1];
             uint32_t output_page_idx = route_info[2];
@@ -489,4 +510,13 @@ void kernel_main() {
         hist_buckets[4],
         hist_buckets[5],
         hist_buckets[6]);
+
+    // [debug] Dump the token indices of the outliers captured above (per-token gap >= 1ms, i.e. the
+    // 1-10ms bucket or higher). Up to the first MAX_OUTLIERS; token index 0 is excluded (its gap is
+    // measured against an uninitialized baseline, so it is not a real measurement). These are the
+    // tokens to probe next.
+    DPRINT("[combine-hist] outlier tokens (per-token gap>=1ms), count={}:\n", outlier_count);
+    for (uint32_t i = 0; i < outlier_count; i++) {
+        DPRINT("  outlier[{}] token_idx={}\n", i, outlier_token_indices[i]);
+    }
 }
