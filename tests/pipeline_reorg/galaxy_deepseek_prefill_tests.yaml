@@ -137,7 +137,7 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 10
+      timeout: 5
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
 
@@ -150,7 +150,7 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 20
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
 
@@ -164,12 +164,12 @@
     # Fused GLM decoder block (sparse-SDPA MLA + norm/residual + dense/MoE FFN, layers 0 and 3) vs the
     # composed CPU reference (reference.glm_5_1). Real weights via the prebuilt ttnn cache when present
     # (loaded, like the transformer tests); random fallback otherwise. Never rebuilds the cache.
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and mesh-8x4" -vvv --tb=short --timeout=1800
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and mesh-8x4" -vvv --tb=short --timeout=300
   test_type: glm_prefill_block
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 5
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
 
