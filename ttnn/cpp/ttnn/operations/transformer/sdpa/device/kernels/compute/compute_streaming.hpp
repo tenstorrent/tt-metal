@@ -490,7 +490,7 @@ void sub_exp_block_bcast_cols(
 
     tile_regs_acquire();
     {
-        MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
+        MaybeDeviceZoneScopedN(profiling_enabled, "SUB_MAX");
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base;

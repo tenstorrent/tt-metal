@@ -875,7 +875,19 @@ def test_ltx_transformer_block(
             video_padding_mask=v_pad_sp,
         )
 
+    # Bracket the block forward with signposts so a profiled run measures only the
+    # block's device time, excluding the test's input-prep/output-gather ops. Isolate with:
+    # tt-perf-report --start-signpost start --end-signpost stop <csv>. Device kernel
+    # durations are identical warm or cold, so no warm-up is needed. No-op off-profiler.
+    try:
+        from tracy import signpost
+    except ImportError:
+        signpost = lambda *a, **k: None
+
+    signpost("start")
     tt_out = tt_block(**forward_kwargs)
+    ttnn.synchronize_device(mesh_device)
+    signpost("stop")
     if has_audio:
         tt_v, tt_a = tt_out
     else:
