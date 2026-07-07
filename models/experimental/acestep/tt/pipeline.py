@@ -186,7 +186,7 @@ class AceStepPipeline:
             assert uncond_encoder_hidden_states is not None, "CFG (guidance_scale>1) needs uncond context"
             return self._generate_cfg(
                 hidden_noise, context_latents, encoder_hidden_states, uncond_encoder_hidden_states,
-                cos_tt, sin_tt, sliding, solver, t, guidance_scale,
+                cos_tt, sin_tt, sliding, solver, t, guidance_scale, use_trace=use_trace,
             )
 
         if use_trace:
@@ -209,7 +209,8 @@ class AceStepPipeline:
         return xt  # [1,1,T,64] clean latents
 
     def _generate_cfg(
-        self, hidden_noise, context_latents, enc_cond, enc_uncond, cos_tt, sin_tt, sliding, solver, t, guidance_scale
+        self, hidden_noise, context_latents, enc_cond, enc_uncond, cos_tt, sin_tt, sliding, solver, t,
+        guidance_scale, use_trace=False
     ):
         """CFG denoise loop (APG), PURE TTNN so it stays trace-capturable.
 
@@ -218,6 +219,10 @@ class AceStepPipeline:
         reference [B,T,C] time-axis projection (dims=[1]) for our [1,1,T,64] latents. No host
         round-trip -> the whole loop is on-device (trace-safe). The APG momentum running-average is a
         resident device buffer updated in place per step.
+
+        use_trace captures the whole two-pass-DiT + APG velocity step as a ttnn trace and replays it
+        per ODE step (numerically identical to eager; verified PCC 1.0). The APG momentum state is
+        carried across replays via the tracer-input read-back pattern (same as the xt accumulator).
         """
         from models.experimental.acestep.tt.apg_guidance import TTMomentumBuffer, apg_forward_ttnn
 
@@ -227,6 +232,10 @@ class AceStepPipeline:
         # the finally block. All bf16 tensors; HiFi4 is matmul accumulation fidelity, not fp32 tensors.
         _restore = _set_dit_fidelity(self.dit, ttnn.MathFidelity.HiFi4)
         try:
+            if use_trace:
+                return self._generate_cfg_traced(
+                    hidden_noise, context_latents, enc_cond, enc_uncond, cos_tt, sin_tt, sliding, solver, t, guidance_scale
+                )
             return self._generate_cfg_impl(
                 hidden_noise, context_latents, enc_cond, enc_uncond, cos_tt, sin_tt, sliding, solver, t, guidance_scale
             )
@@ -258,6 +267,59 @@ class AceStepPipeline:
             if step_idx > 0:
                 ttnn.deallocate(xt)
             xt = xt_new
+        return xt  # [1,1,T,64] clean latents
+
+    def _generate_cfg_traced(
+        self, hidden_noise, context_latents, enc_cond, enc_uncond, cos_tt, sin_tt, sliding, solver, t, guidance_scale
+    ):
+        """Trace-captured CFG denoise: the traced fn runs BOTH DiT passes + APG and returns
+        (vt, new_running_average). The APG momentum state is stateful across steps, so — like the xt
+        accumulator — the running-average is passed as a tracer INPUT and the updated value is copied
+        back into tracer.inputs['run'] each step so it persists across replays. Verified numerically
+        identical to the eager CFG loop (latent PCC 1.0). Euler runs eager on the traced velocity.
+        """
+        from models.experimental.acestep.tt.apg_guidance import apg_forward_ttnn_traced
+
+        infer_steps = t.numel() - 1
+        seq_shape = list(hidden_noise.shape)
+
+        def _ts(v):
+            return ttnn.from_torch(
+                torch.tensor([[[[float(v)]]]], dtype=torch.float32),
+                device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT,
+            )
+
+        def _cfg_velocity(xt, ts, context, enc, unc, cos, sin, run):
+            vt_cond = self.dit.forward(xt, context, ts, ts, cos, sin, enc, sliding_mask=sliding)
+            vt_uncond = self.dit.forward(xt, context, ts, ts, cos, sin, unc, sliding_mask=sliding)
+            return apg_forward_ttnn_traced(vt_cond, vt_uncond, guidance_scale, run, dim=-2)
+
+        # Momentum running-average starts at zeros (reference seeds running=diff on step 0, i.e.
+        # diff + momentum*0). Resident buffer read back from the trace each step.
+        run0 = ttnn.from_torch(
+            torch.zeros(*seq_shape), device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        tracer = Tracer(_cfg_velocity, device=self.mesh_device, prep_run=True, clone_prep_inputs=False)
+        xt = hidden_noise
+        for step_idx in range(infer_steps):
+            t_curr = float(t[step_idx].item())
+            t_prev = float(t[step_idx + 1].item())
+            first = step_idx == 0
+            vt, new_run = tracer(
+                xt=xt,
+                ts=_ts(t_curr),
+                context=context_latents if first else tracer.inputs["context"],
+                enc=enc_cond if first else tracer.inputs["enc"],
+                unc=enc_uncond if first else tracer.inputs["unc"],
+                cos=cos_tt if first else tracer.inputs["cos"],
+                sin=sin_tt if first else tracer.inputs["sin"],
+                run=run0 if first else tracer.inputs["run"],
+                traced=True,
+            )
+            xt = solver.euler_step(tracer.inputs["xt"], ttnn.clone(vt), t_curr - t_prev)
+            # Persist the updated momentum running-average into the trace's resident input buffer.
+            ttnn.copy(ttnn.clone(new_run), tracer.inputs["run"])
+        tracer.release_trace()
         return xt  # [1,1,T,64] clean latents
 
     def _generate_traced(

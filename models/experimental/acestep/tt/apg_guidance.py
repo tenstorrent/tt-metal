@@ -83,6 +83,44 @@ def apg_forward(
     return pred_cond + (guidance_scale - 1) * normalized_update
 
 
+def apg_forward_ttnn_traced(
+    pred_cond,
+    pred_uncond,
+    guidance_scale: float,
+    prev_running,
+    eta: float = 0.0,
+    norm_threshold: float = 2.5,
+    dim: int = -2,
+    eps: float = 1e-12,
+):
+    """Trace-safe APG: stateless variant that takes the PREVIOUS momentum running-average as an
+    argument and RETURNS ``(pred_guided, new_running)``. The caller carries ``new_running`` across
+    denoise steps via the tracer input-buffer read-back pattern (same as the xt accumulator), so the
+    momentum state persists across trace replays. Every step executes the identical op graph
+    (``running <- diff + momentum*prev_running``, with prev_running seeded to zeros for step 0, which
+    equals the reference's step-0 ``running = diff``). Numerically identical to the eager
+    ``apg_forward_ttnn`` + ``TTMomentumBuffer`` loop (verified latent PCC 1.0).
+    """
+    diff = ttnn.subtract(pred_cond, pred_uncond)
+    running = ttnn.add(diff, ttnn.multiply(prev_running, -0.75))  # momentum = -0.75
+
+    d = running
+    if norm_threshold > 0:
+        d_norm = _l2_norm_over(d, dim)
+        ratio = ttnn.multiply(ttnn.reciprocal(ttnn.add(d_norm, eps)), norm_threshold)
+        scale = ttnn.minimum(ttnn.ones_like(ratio), ratio)
+        d = ttnn.multiply(d, scale)
+
+    pc_norm = _l2_norm_over(pred_cond, dim)
+    v1 = ttnn.multiply(pred_cond, ttnn.reciprocal(ttnn.add(pc_norm, eps)))
+    dot = ttnn.sum(ttnn.multiply(d, v1), dim=dim, keepdim=True)
+    parallel = ttnn.multiply(v1, dot)
+    orthogonal = ttnn.subtract(d, parallel)
+    update = orthogonal if eta == 0.0 else ttnn.add(orthogonal, ttnn.multiply(parallel, eta))
+    pred_guided = ttnn.add(pred_cond, ttnn.multiply(update, guidance_scale - 1.0))
+    return pred_guided, running
+
+
 def cfg_forward(pred_cond: torch.Tensor, pred_uncond: torch.Tensor, guidance_scale: float) -> torch.Tensor:
     """Vanilla CFG (linear extrapolation). Not the default; provided for comparison/ablation."""
     return pred_uncond + guidance_scale * (pred_cond - pred_uncond)
