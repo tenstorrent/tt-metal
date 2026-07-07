@@ -27,6 +27,24 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
+# Optional Tracy signposts to bucket per-op device time into forward_prefill's
+# logical data-flow stages. Enabled only when GDN_PROFILE is set; a no-op
+# otherwise (and when tracy is not importable), so product paths are unaffected.
+try:
+    from tracy import signpost as _tracy_signpost
+except Exception:  # tracy not built / not importable
+
+    def _tracy_signpost(*_args, **_kwargs):
+        pass
+
+
+_GDN_PROFILE = os.environ.get("GDN_PROFILE")
+
+
+def _sp(name):
+    if _GDN_PROFILE:
+        _tracy_signpost(name)
+
 
 def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     """Shard one GDN layer's RAW linear_attn.* weights across the mesh.
@@ -247,6 +265,7 @@ class TPGatedDeltaNet:
         if carry and self.conv_carry is None:
             self.reset_state()
 
+        _sp("PF_proj")
         qkvz = ttnn.linear(x, tw["qkvz"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         qkv = ttnn.slice(qkvz, (0, 0, 0), (1, T, self.qkv_dim_tp))
         z = ttnn.slice(qkvz, (0, 0, self.qkv_dim_tp), (1, T, self.qkvz_dim_tp))
@@ -259,6 +278,7 @@ class TPGatedDeltaNet:
         # FIR causal conv1d + SiLU over the sequence. conv_state = the carried last K-1 conv
         # inputs of the previous chunk (left context); zero == None for a from-scratch pass.
         # valid_len makes new_state capture the last K-1 REAL tokens (not padding).
+        _sp("PF_conv")
         conv, conv_new_state = _causal_conv1d_fir(
             qkv,
             None,
@@ -287,6 +307,7 @@ class TPGatedDeltaNet:
         g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"]))), (1, T, Nv))
         ttnn.deallocate(a)
 
+        _sp("PF_gdn_core")
         o, final_state = chunk_gated_delta_rule_seq_adapter(
             q,
             k,
@@ -300,6 +321,7 @@ class TPGatedDeltaNet:
             cached_masks=self.chunk_seq_masks,
             valid_len=valid_len,
         )
+        _sp("PF_state_carry")
         B, D = 1, self.qkv_dim_tp
         # ---- Carry recurrent + conv state for the NEXT chunk (chunk-outer prefill). ----
         # In place (ttnn.copy) when _stable_state so the addresses the prefill/decode traces
@@ -333,6 +355,7 @@ class TPGatedDeltaNet:
                 ttnn.copy(src, self.conv_states[j + 1])
         ttnn.deallocate(conv_new_state)
         # o: [1, T, Nv, Dv] -> gated RMSNorm over Dv + SiLU(z) gate
+        _sp("PF_gate_norm")
         out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
         ttnn.deallocate(o)
         out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp))
@@ -340,9 +363,11 @@ class TPGatedDeltaNet:
         gated = ttnn.multiply(out_f, ttnn.silu(z))
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
+        _sp("PF_out_proj")
         partial = ttnn.linear(gated, tw["out"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
+        _sp("PF_all_reduce")
         return tt_all_reduce(
             partial,
             self.mesh,
