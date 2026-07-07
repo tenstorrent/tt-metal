@@ -209,10 +209,16 @@ class Cosmos3OmniTransformer(Module):
             trunk_tag = f"trunk{id(self) & 0xFFFFFF:06x}"
             self._dump_layer_tensor(gen_seq, f"{per_layer_dir}/{trunk_tag}_layer_pre.pt")
 
+        _profile_flush_every = int(_os.environ.get("TT_COSMOS3_PROFILE_FLUSH_EVERY", "0"))
+
         for i, layer in enumerate(self.layers):
             und_seq, gen_seq = layer(und_seq, gen_seq, cos_und, sin_und, cos_gen, sin_gen, logical_n_gen=logical_n_gen)
             if do_dump:
                 self._dump_layer_tensor(gen_seq, f"{per_layer_dir}/{trunk_tag}_layer_{i:02d}.pt")
+            # drain device profiler ring mid-trunk to prevent overflow on long captures;
+            # each drain adds a host sync — no-op in production (env unset → 0)
+            if _profile_flush_every and (i + 1) % _profile_flush_every == 0:
+                ttnn.ReadDeviceProfilerResults(self.mesh_device)
 
         und_out = self.norm(und_seq)
         gen_out = self.norm_moe_gen(gen_seq)
