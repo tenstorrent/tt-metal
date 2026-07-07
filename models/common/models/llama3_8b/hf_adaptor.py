@@ -408,6 +408,63 @@ def _model_cache_path(hf_model: str, mesh_device) -> Path:
     return Path("model_cache") / hf_model / _device_name(mesh_device)
 
 
+@dataclass
+class HFLlama3RuntimeContext:
+    """HF/demo runtime metadata kept outside the TTTv2 model construction path."""
+
+    model_name: str
+    model_cache_path: Path
+    model_info: dict
+    tokenizer: object
+    instruct: bool
+    max_batch_size: int
+    max_seq_len: int
+    n_layers: int
+    cluster_shape: list[int]
+    max_prefill_chunk_size: int
+    paged_attention_config: object | None = None
+
+    def __getattr__(self, name):
+        try:
+            return self.model_info[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
+        return encode_prompt(self.tokenizer, prompt_text, system_prompt_text, instruct=instruct)
+
+    def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
+        return (
+            prefill_seq_len in self.trace_prefill_supported_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
+
+    @property
+    def trace_prefill_supported_seq_lens(self):
+        capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
+        return [seq_len for seq_len in (128, 1024) if seq_len <= capped_warmup_seq_len]
+
+
+def _max_prefill_chunk_size(mesh_device) -> int:
+    override = os.getenv("MAX_PREFILL_CHUNK_SIZE")
+    if override is not None:
+        return int(override) * 1024
+    return {"N150": 4, "N300": 64, "T3K": 128}.get(_device_name(mesh_device), 128) * 1024
+
+
+def _weight_cache_path(model_cache_path: Path, *, instruct: bool, dtype):
+    if instruct:
+        return (
+            model_cache_path
+            / {
+                ttnn.bfloat16: "tensor_cache_instruct_bf16",
+                ttnn.bfloat8_b: "tensor_cache_instruct_bfp8",
+            }[dtype]
+        )
+    return model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
+
+
 def from_pretrained(
     mesh_device,
     *,
@@ -421,11 +478,7 @@ def from_pretrained(
     paged_attention_config=None,
 ):
     """Build a TTTv2 Llama-3.1-8B model from an HF checkpoint."""
-    from models.common.models.llama3_8b.model import (
-        Llama3Transformer1D,
-        build_llama3_transformer_1d_config,
-        create_llama31_runtime_args,
-    )
+    from models.common.models.llama3_8b.model import Llama3Transformer1D, build_llama3_transformer_1d_config
 
     hf_model = resolve_hf_model_id(hf_model)
     if instruct is None:
@@ -462,43 +515,44 @@ def from_pretrained(
     }
     model_info["rope_cos"] = rope_cos
     model_info["rope_sin"] = rope_sin
+    effective_n_layers = n_layers or model_info["n_layers"]
+    model_cache_path = _model_cache_path(hf_model, mesh_device)
 
-    def state_dict_loader(args):
-        return load_converted_state_dict(
-            hf_model,
-            head_dim=args.head_dim,
-            n_heads=args.n_heads,
-            n_kv_heads=args.n_kv_heads,
-            n_layers=args.n_layers,
-        )
-
-    def prompt_encoder(prompt_text, system_prompt_text=None, *, instruct=True):
-        return encode_prompt(tokenizer, prompt_text, system_prompt_text, instruct=instruct)
-
-    model_args = create_llama31_runtime_args(
+    state_dict, _, _ = load_converted_state_dict(
+        hf_model,
+        head_dim=model_info["head_dim"],
+        n_heads=model_info["n_heads"],
+        n_kv_heads=model_info["n_kv_heads"],
+        n_layers=effective_n_layers,
+    )
+    # todo)) model_info is over-engineer as well...
+    model_config = build_llama3_transformer_1d_config(
         mesh_device=mesh_device,
         instruct=instruct,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
         model_name=model_name,
         model_info=model_info,
-        model_cache_path=_model_cache_path(hf_model, mesh_device),
+        model_cache_path=model_cache_path,
+        state_dict=state_dict,
         optimizations=optimizations,
         n_layers=n_layers,
-        tokenizer=tokenizer,
-        prompt_encoder=prompt_encoder,
-        state_dict_loader=state_dict_loader,
-    )
-    if paged_attention_config is not None:
-        model_args.paged_attention_config = paged_attention_config
-
-    state_dict = model_args.load_state_dict()
-    model_config = build_llama3_transformer_1d_config(
-        mesh_device=mesh_device,
-        args=model_args,
-        state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
+        weight_cache_path=_weight_cache_path(model_cache_path, instruct=instruct, dtype=dtype),
         dtype=dtype,
         paged_attention_config=paged_attention_config,
     )
-    return Llama3Transformer1D(model_config), model_args
+    # todo)) the only unique piece of info in HFLlama3RuntimeContext is tokenizer and max_prefill_chunk_size. everything else is already in model_config...
+    runtime_context = HFLlama3RuntimeContext(
+        model_name=model_name,
+        model_cache_path=model_cache_path,
+        model_info=model_info,
+        tokenizer=tokenizer,
+        instruct=instruct,
+        max_batch_size=max_batch_size,
+        max_seq_len=max_seq_len,
+        n_layers=effective_n_layers,
+        cluster_shape=list(mesh_device.shape),
+        max_prefill_chunk_size=_max_prefill_chunk_size(mesh_device),
+        paged_attention_config=paged_attention_config,
+    )
+    return Llama3Transformer1D(model_config), runtime_context

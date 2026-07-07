@@ -29,8 +29,9 @@ from loguru import logger
 
 import ttnn
 from models.common.models.executor import run_perf_benchmark, run_teacher_forcing
+from models.common.models.llama3_8b.executor import EagerLlamaExecutor, TracedLlamaExecutor
 from models.common.models.llama3_8b.hf_adaptor import from_pretrained
-from models.common.models.llama3_8b.model import EagerLlamaExecutor, Llama31_8BPagedAttentionConfig, TracedLlamaExecutor
+from models.common.models.llama3_8b.model import Llama31_8BPagedAttentionConfig
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.common.tests.demos.llama3_8b.demo_utils import load_input_prompts, preprocess_llama3_8b_chat_prompts
@@ -118,8 +119,8 @@ def log_teacher_forcing_text(prompt_tokens, predicted_tokens_per_user, reference
         )
 
 
-def create_model_and_args(mesh_device, optimizations="performance", max_batch_size=32):
-    """Create Llama3Transformer1D and runtime args for testing."""
+def create_model_and_context(mesh_device, optimizations="performance", max_batch_size=32):
+    """Create Llama3Transformer1D and HF/demo runtime context for testing."""
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
     instruct = "Instruct" in hf_model
 
@@ -129,7 +130,7 @@ def create_model_and_args(mesh_device, optimizations="performance", max_batch_si
     max_num_blocks = 1024
     paged_attention_config = Llama31_8BPagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
 
-    model, model_args = from_pretrained(
+    model, runtime_context = from_pretrained(
         mesh_device=mesh_device,
         hf_model=hf_model,
         instruct=instruct,
@@ -140,7 +141,7 @@ def create_model_and_args(mesh_device, optimizations="performance", max_batch_si
         paged_attention_config=paged_attention_config,
     )
 
-    return model, model_args
+    return model, runtime_context
 
 
 # =============================================================================
@@ -179,18 +180,23 @@ def test_llama3_8b(test_config, ttnn_mesh_device, optimizations):
 
     try:
         batch_size = 32 if test_config == "batch-32" else 1
-        model, model_args = create_model_and_args(ttnn_mesh_device, optimizations, max_batch_size=batch_size)
+        model, runtime_context = create_model_and_context(ttnn_mesh_device, optimizations, max_batch_size=batch_size)
 
         if test_config == "token-accuracy":
-            _run_token_accuracy(model, model_args, ttnn_mesh_device, expected)
+            _run_token_accuracy(model, runtime_context, ttnn_mesh_device, expected)
         elif test_config == "batch-1":
             _run_perf_benchmark(
-                model, model_args, ttnn_mesh_device, expected, batch_size=1, case_name=f"{optimizations}/{test_config}"
+                model,
+                runtime_context,
+                ttnn_mesh_device,
+                expected,
+                batch_size=1,
+                case_name=f"{optimizations}/{test_config}",
             )
         elif test_config == "batch-32":
             _run_perf_benchmark(
                 model,
-                model_args,
+                runtime_context,
                 ttnn_mesh_device,
                 expected,
                 batch_size=32,
@@ -205,9 +211,9 @@ def test_llama3_8b(test_config, ttnn_mesh_device, optimizations):
 # =============================================================================
 
 
-def _run_token_accuracy(model, model_args, mesh_device, expected):
+def _run_token_accuracy(model, runtime_context, mesh_device, expected):
     """Run teacher-forcing token accuracy test."""
-    model_name = model_args.model_name
+    model_name = runtime_context.model_name
     reference_tokens, top5_tokens = load_reference_data(model_name)
 
     # Ensure reference_tokens is 1D for slicing
@@ -217,21 +223,21 @@ def _run_token_accuracy(model, model_args, mesh_device, expected):
     half = len(reference_tokens) // 2
     prompt_tokens = reference_tokens[:half].unsqueeze(0)  # [1, half]
 
-    executor = EagerLlamaExecutor(model, mesh_device, model_args=model_args)
+    executor = EagerLlamaExecutor(model, mesh_device, model_args=runtime_context)
 
-    max_batch_size = model_args.max_batch_size
+    max_batch_size = runtime_context.max_batch_size
     prompt_tokens = prompt_tokens.repeat(max_batch_size, 1)
     block_size = 32
-    max_num_blocks = model_args.paged_attention_config.max_num_blocks
+    max_num_blocks = runtime_context.paged_attention_config.max_num_blocks
     max_num_blocks_per_user = max_num_blocks // max_batch_size
 
     kv_cache_shape = (
         max_num_blocks,
-        model_args.n_kv_heads // mesh_device.get_num_devices(),
+        runtime_context.n_kv_heads // mesh_device.get_num_devices(),
         block_size,
-        model_args.head_dim,
+        runtime_context.head_dim,
     )
-    kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, model_args.n_layers)
+    kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, runtime_context.n_layers)
     page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
     target_top5 = top5_tokens[half - 1 :] if top5_tokens.shape[0] < len(reference_tokens) else top5_tokens[half:]
@@ -250,7 +256,7 @@ def _run_token_accuracy(model, model_args, mesh_device, expected):
 
     logger.info(f"Token accuracy — top1: {top1:.1f}%, top5: {top5:.1f}%")
     log_teacher_forcing_text(
-        prompt_tokens, result.predicted_tokens_per_user, reference_tokens[half:], model_args.tokenizer
+        prompt_tokens, result.predicted_tokens_per_user, reference_tokens[half:], runtime_context.tokenizer
     )
 
     if "top1" in expected:
@@ -268,30 +274,30 @@ def _run_token_accuracy(model, model_args, mesh_device, expected):
 # =============================================================================
 
 
-def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size, case_name):
+def _run_perf_benchmark(model, runtime_context, mesh_device, expected, batch_size, case_name):
     """Run performance benchmark (TTFT + tok/s/u)."""
-    traced_executor = TracedLlamaExecutor(model, mesh_device, model_args=model_args)
+    traced_executor = TracedLlamaExecutor(model, mesh_device, model_args=runtime_context)
     try:
         block_size = 32
-        max_batch_size = model_args.max_batch_size
-        max_num_blocks = model_args.paged_attention_config.max_num_blocks
+        max_batch_size = runtime_context.max_batch_size
+        max_num_blocks = runtime_context.paged_attention_config.max_num_blocks
         max_num_blocks_per_user = max_num_blocks // max_batch_size
 
         kv_cache_shape = (
             max_num_blocks,
-            model_args.n_kv_heads // mesh_device.get_num_devices(),
+            runtime_context.n_kv_heads // mesh_device.get_num_devices(),
             block_size,
-            model_args.head_dim,
+            runtime_context.head_dim,
         )
-        kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, model_args.n_layers)
+        kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, runtime_context.n_layers)
         page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
         prompts_path = DEMO_DIR / "sample_prompts" / "input_data_questions_prefill_128.json"
         prompts = load_input_prompts(prompts_path, batch_size)
-        tokenizer = model_args.tokenizer
+        tokenizer = runtime_context.tokenizer
         input_tokens, prompt_lens = preprocess_llama3_8b_chat_prompts(
             prompts,
-            model_args,
+            runtime_context,
             reserve_decode_tokens=128,
         )
 
