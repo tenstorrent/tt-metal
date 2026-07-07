@@ -45,6 +45,25 @@ bool capture_needed(std::uint64_t build_key, const std::string& kernel_name);
 // pool threads during ProgramImpl::compile, gated by capture_needed().
 void append_manifest_entry(const jit_server::CompileRequest& request);
 
+// True iff capture-only mode is active. In this mode ProgramImpl::compile generates a kernel's
+// genfiles and captures its manifest recipe but SKIPS the gcc compile/link, and EnqueueMeshWorkload
+// skips dispatch. A pipeline run under this flag thus records the full manifest with only a brief
+// device touch (device-init kernels still compile); the ~500s of model-kernel gcc then happens
+// off-device via prewarm_manifest_offline before the real run. Capture is superset-safe (a missed
+// kernel just compiles cold on the real run), so partial traversal degrades gracefully. Initial value
+// is TT_METAL_KERNEL_CAPTURE_ONLY; set_capture_only() flips it at runtime so a single process can run
+// a capture warmup, batch-compile, then a warm real run (the in-process cold-start).
+bool capture_only();
+
+// Flip capture_only() at runtime. Used by the in-process cold-start: enable for the capture warmup
+// pass, disable before the batch compile and the real run.
+void set_capture_only(bool enabled);
+
+// True iff capture_only() AND |kernel_base_name| (Kernel::name()) is NOT a device-init (cq_/fabric)
+// kernel. Device-init kernels always compile for real (the device can't come up otherwise); only
+// model kernels are captured-not-compiled. Use this to gate the gcc skip in ProgramImpl::compile.
+bool capture_only_skip_gcc(const std::string& kernel_base_name);
+
 // Prewarm: unless TT_METAL_KERNEL_PREWARM=0, resolve the manifest path (from |out_kernel_root|'s
 // cache root, or the env override), enable capture, and -- if the manifest already holds entries for
 // |build_key| -- spawn (at most once per process) a background thread that batch-builds them into the
@@ -65,6 +84,15 @@ void maybe_launch_prewarm(
 // device-init (cq_/fabric) kernels, so a subsequent real run holds the device only for device work,
 // not compilation. Returns targets built. Run before a device/broker job.
 std::size_t prewarm_manifest_offline(const std::string& out_root, const std::string& root_dir);
+
+// True iff this process should run the in-process cold-start (capture warmup -> off-device batch
+// compile -> real warmup) instead of compiling op-by-op inside the reserved window. That is: capture
+// is armed (prewarm not globally disabled), no in-run batch was launched for this build_key (a cold
+// cache, or a build_key the on-disk manifest does not cover), and we are not already inside an
+// external capture-only pass. A warm build_key (batch launched) is served by the in-run prewarm; an
+// externally forced capture_only pass captures the whole process itself, so both return false here.
+// Query after device init, before the pipeline's warmup.
+bool cold_start_needed();
 
 // Prewarm: block until an in-flight prewarm batch finishes (no-op if none).
 // Used to gate the op-by-op path so it observes a fully warm cache before issuing

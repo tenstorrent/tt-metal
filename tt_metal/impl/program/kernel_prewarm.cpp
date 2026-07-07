@@ -60,6 +60,10 @@ bool prewarm_globally_disabled() {
     return s == "0" || s == "false" || s == "off";
 }
 
+// Runtime-settable so one process can flip capture-only ON for a manifest-capture warmup pass and OFF
+// for the batch compile + real run (the in-process cold-start). Initial value is the env flag.
+std::atomic<bool> g_capture_only{env_or_null("TT_METAL_KERNEL_CAPTURE_ONLY") != nullptr};
+
 // out_kernel_root is "<cache_root>/<build_key>/kernels/"; the manifest lives at the cache root so a
 // single file serves every build_key (arch + compile config) on this machine -- entries are
 // build_key-tagged and filtered on read. The cache root already moves with TT_METAL_CACHE, so this is
@@ -559,6 +563,18 @@ bool capture_needed(std::uint64_t build_key, const std::string& kernel_name) {
     return g_captured_keys.insert(std::to_string(build_key) + "/" + kernel_name).second;
 }
 
+bool capture_only() { return g_capture_only.load(std::memory_order_acquire); }
+
+void set_capture_only(bool enabled) { g_capture_only.store(enabled, std::memory_order_release); }
+
+bool capture_only_skip_gcc(const std::string& kernel_base_name) {
+    // Device-init (cq_/fabric) kernels are compiled + loaded during CreateDevice/fabric bring-up via
+    // the slow-dispatch configure() path, before any pipeline op; they MUST have real binaries or the
+    // device never comes up. Only model kernels (compiled later, op-by-op) are skipped and left to the
+    // off-device prewarm.
+    return capture_only() && !is_device_init_kernel(kernel_base_name);
+}
+
 void append_manifest_entry(const jit_server::CompileRequest& request) {
     const char* path = manifest_write_path();
     if (path == nullptr) {
@@ -721,6 +737,14 @@ void wait_for_prewarm() {
 }
 
 bool prewarm_enabled() { return g_batch_launched.load(std::memory_order_acquire); }
+
+bool cold_start_needed() {
+    // manifest_write_path() != nullptr means capture is armed (maybe_launch_prewarm ran and prewarm is
+    // not globally disabled). !prewarm_enabled() means no batch was launched for this build_key -- cold
+    // cache or a build_key the manifest does not cover -- so the real run would compile op-by-op.
+    // !capture_only() excludes an externally forced capture pass (which captures the whole process).
+    return manifest_write_path() != nullptr && !prewarm_enabled() && !capture_only();
+}
 
 bool prewarm_warms_kernel(const std::string& kernel_name) {
     if (!g_prewarm_names_ready.load(std::memory_order_acquire)) {

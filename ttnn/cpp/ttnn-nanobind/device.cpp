@@ -40,6 +40,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_prewarm_control.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
@@ -315,6 +316,33 @@ void device_module(nb::module_& m_device) {
         Example:
             >>> ttnn.device.SetRootDir("/path/to/tt_metal_home")
     )doc");
+
+    m_device.def(
+        "kernel_prewarm_set_capture_only",
+        &tt::tt_metal::KernelPrewarmSetCaptureOnly,
+        nb::arg("enabled"),
+        R"doc(
+            Flip kernel-prewarm capture-only mode at runtime: a pipeline run generates each model
+            kernel's genfiles and records its manifest recipe but skips the gcc compile and dispatch.
+            Used by the in-process cold-start to capture the manifest without holding the device for
+            the compile.
+        )doc");
+
+    m_device.def(
+        "kernel_prewarm_cold_start_needed",
+        &tt::tt_metal::KernelPrewarmColdStartNeeded,
+        R"doc(
+            True iff the in-process cold-start (capture warmup -> off-device batch compile -> real
+            warmup) is worth running for the current build_key. Query after device init, before warmup.
+        )doc");
+
+    m_device.def(
+        "kernel_prewarm_offline_compile",
+        &tt::tt_metal::KernelPrewarmOfflineCompile,
+        R"doc(
+            Compile every captured kernel-manifest recipe into the JIT cache without opening a device;
+            returns the number of targets built. Run after a capture-only warmup, before the real run.
+        )doc");
 
     m_device.def(  // afuller
         "SetDefaultDevice",

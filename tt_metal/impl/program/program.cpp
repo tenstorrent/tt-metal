@@ -1767,6 +1767,11 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().is_mock_or_emulated()) {
         return;
     }
+    // Capture-only pass: kernels have no binaries (gcc was skipped), and we never dispatch. Packing
+    // binary transfer info here reads kernel->binaries() and would fail; the transfer info is unused.
+    if (kernel_prewarm::capture_only()) {
+        return;
+    }
 
     auto extract_dst_noc_unicast_info =
         [&device](
@@ -2228,6 +2233,21 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
+                        if (kernel_prewarm::capture_only_skip_gcc(kernel->name())) {
+                            // Generate genfiles (no compiler) so the recipe is complete, capture, and
+                            // skip the gcc compile + binary read. The model-kernel gcc runs off-device
+                            // (prewarm_manifest_offline) before the real run, so the capture pass holds
+                            // the device only for device-init + program construction. jit_build_once
+                            // dedups the genfile write for kernels shared across programs.
+                            jit_build_once(
+                                kernel_hash, [&] { generate_kernel_source_files(device, build_options, kernel); });
+                            if (kernel_prewarm::capture_needed(
+                                    build_env.build_key(), kernel->name() + "/" + std::to_string(kernel_hash))) {
+                                kernel_prewarm::append_manifest_entry(
+                                    build_kernel_descriptor(device, kernel, build_options, kernel_hash).request);
+                            }
+                            return;
+                        }
                         const std::string binary_root =
                             ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
                         kernel->read_binaries(device, binary_root);

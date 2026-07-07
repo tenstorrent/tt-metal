@@ -16,8 +16,9 @@ from loguru import logger
 import ttnn
 
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
-from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
+from ...models.transformers.ltx.transformer_ltx import LTX_DIT_PREP_RUN, LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.vae.vae_ltx import upsample_latent
+from ...utils import walltime
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.video import export_video_audio
@@ -170,18 +171,46 @@ class LTXDistilledPipeline(LTXPipeline):
         width: int,
         num_inference_steps: int = 2,
         stages: tuple[str, ...] = ("s1", "s2"),
+        capture_all: bool = False,
+        in_capture_pass: bool = False,
     ) -> None:
         """Compile both stages' programs. Both stages use variant 0 (distilled doesn't
-        swap weights — only the sequence length differs); ``stages=("s1",)`` skips s2."""
+        swap weights — only the sequence length differs); ``stages=("s1",)`` skips s2.
+
+        ``capture_all`` forces a COMPLETE warmup (all eager warmups + the s1/s2 denoise), overriding
+        the iter_fast / prep_run skips, so the cold-start capture pass records every kernel the real
+        run will use — otherwise a deferred kernel compiles cold in gen#0.
+
+        ``in_capture_pass`` marks the kernel-prewarm capture pass (running under capture-only, dispatch
+        skipped). The audio vocoder captures its trace with prep_run=False and lazily initializes device
+        statics on first dispatch; a dispatch-skipped capture-only run would leave it half-initialized
+        and crash the real run. So skip audio decode here — the real warmup initializes and captures it
+        cleanly, its small kernel set compiling in-window."""
         assert height % 64 == 0 and width % 64 == 0, f"H/W must be div by 64 (got {height}x{width})"
         assert num_frames > 0, f"num_frames must be > 0 (got {num_frames})"
         valid = {"s1", "s2"}
         assert set(stages).issubset(valid), f"stages must be subset of {valid} (got {stages})"
 
+        # LTX_ITER_FAST=1 runs a single real generate, so warmup only needs to warm each stage's
+        # inner_step kernels + graph state once for the trace capture: one step exercises the same
+        # inner_step/Euler ops as two. The eager upsample/VAE/audio warmups are dropped there too
+        # since gen#0 compiles them on its lone real use (warming would just run them twice). Full
+        # (multi-gen) runs keep the wider warmup so every gen replays a warm set.
+        #
+        # LTX_DIT_PREP_RUN (inner_step captured with prep_run=True, set when LTX_ITER_FAST is in the
+        # env at import time) makes gen#0's first traced step self-warm — its eager prep forward
+        # compiles the s1/s2 kernels + builds graph state using gen#0's own persistent statics. The
+        # s1/s2 mini-denoise below then does nothing gen#0 doesn't already do, so skip it entirely
+        # and keep only the prealloc trace-io + stage statics that gen#0 reuses. When prep_run is off
+        # (CI / quality runs), keep the mini-denoise so the prep_run=False capture finds warm kernels.
+        iter_fast = (not capture_all) and os.environ.get("LTX_ITER_FAST", "0") in ("1", "true", "True")
+        warmup_steps = 1 if iter_fast else num_inference_steps
+        skip_dit_warmup = LTX_DIT_PREP_RUN and not capture_all
+
         t0 = time.time()
         logger.info(
             f"warmup (distilled 2-stage): {num_frames}f@{height}x{width}, "
-            f"stages={stages}, {num_inference_steps} steps/stage"
+            f"stages={stages}, {warmup_steps} steps/stage"
         )
 
         # Zeros at the real shapes compile the shape-driven kernels; the encoder is warmed
@@ -202,27 +231,33 @@ class LTXDistilledPipeline(LTXPipeline):
             self.encode_prompts(["warmup"], use_cache=False)
 
         # Real distilled sigmas so warmup hits the same branches (incl. sigma_next == 0 final step).
-        s1_sigmas = list(DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
-        s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
+        s1_sigmas = list(DISTILLED_SIGMA_VALUES)[:warmup_steps] + [0.0]
+        s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES)[:warmup_steps] + [0.0]
 
-        if "s1" in stages:
+        if "s1" in stages and not skip_dit_warmup:
             s1_h, s1_w = height // 2, width // 2
 
             logger.info(f"warmup stage 1: {s1_h}x{s1_w}, σ={s1_sigmas}")
-            self._denoise_no_guidance(
-                v_p,
-                a_p,
-                num_frames=num_frames,
-                height=s1_h,
-                width=s1_w,
-                sigma_values=s1_sigmas,
-                seed=0,
-            )
+            # Cold kernel compile for the stage-1 denoise — a dominant, otherwise-untracked
+            # slice of warmup wall time.
+            with walltime.timed("warmup", "stage1 build"):
+                self._denoise_no_guidance(
+                    v_p,
+                    a_p,
+                    num_frames=num_frames,
+                    height=s1_h,
+                    width=s1_w,
+                    sigma_values=s1_sigmas,
+                    seed=0,
+                )
+        elif skip_dit_warmup:
+            logger.info("LTX_DIT_PREP_RUN: skipping stage-1 warmup denoise (gen#0 self-warms via prep_run)")
 
         if "s2" in stages:
             # Upsample runs between stage 1 and stage 2; compile its kernels here.
-            logger.info(f"warmup upsample → {height}x{width}")
-            self._warmup_upsample(num_frames, height, width)
+            if not iter_fast:
+                logger.info(f"warmup upsample → {height}x{width}")
+                self._warmup_upsample(num_frames, height, width)
 
             # Zero-dummies at the exact shapes the real stage-2 call uses.
             latent_frames, full_lh, full_lw = latent_grid(num_frames, height, width)
@@ -232,50 +267,74 @@ class LTXDistilledPipeline(LTXPipeline):
             )
             dummy_a_init = torch.zeros(1, als.frames, self.in_channels)
 
-            logger.info(f"warmup stage 2: {height}x{width}, σ={s2_sigmas}")
-            self._denoise_no_guidance(
-                v_p,
-                a_p,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                sigma_values=s2_sigmas,
-                seed=0,
-                initial_video_latent=dummy_v_init,
-                initial_audio_latent=dummy_a_init,
-            )
+            if skip_dit_warmup:
+                logger.info("LTX_DIT_PREP_RUN: skipping stage-2 warmup denoise (gen#0 self-warms via prep_run)")
+            else:
+                logger.info(f"warmup stage 2: {height}x{width}, σ={s2_sigmas}")
+                # Cold kernel compile for the stage-2 denoise (full-res) — the other dominant
+                # warmup slice.
+                with walltime.timed("warmup", "stage2 build"):
+                    self._denoise_no_guidance(
+                        v_p,
+                        a_p,
+                        num_frames=num_frames,
+                        height=height,
+                        width=width,
+                        sigma_values=s2_sigmas,
+                        seed=0,
+                        initial_video_latent=dummy_v_init,
+                        initial_audio_latent=dummy_a_init,
+                    )
 
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
-            self._warmup_decode(num_frames, height, width)
+            if not iter_fast:
+                self._warmup_decode(num_frames, height, width)
 
-            # JIT-compile on-device audio decode at the real latent shape so the first real decode
-            # loads from cache instead of building from the checkpoint (cold ~64s).
-            logger.info("warmup audio decode (on-device)")
-            self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
-            # The BWE trace captures on the first POST-cold decode (not the cold one above), and that
-            # capturing pass emits clipped audio. A second warmup decode absorbs the capture so the
-            # first real generate is a clean replay.
-            if self._traced:
+            # Build + JIT-compile the on-device audio decode on the exact latent
+            # shape generate() produces, so the first real audio decode loads
+            # from cache instead of building from the checkpoint (cold ~64s).
+            # The single-generate eager decode is bit-identical to the replay, so the AV mp4 is
+            # unchanged; multi-gen runs keep the warmup capture so every real decode replays (else
+            # gen#1 would decode into the garbage-emitting capture pass).
+            if in_capture_pass:
+                logger.info("capture pass: skipping audio decode (vocoder prep_run=False; real warmup inits it)")
+            elif iter_fast:
+                logger.info("LTX_ITER_FAST=1: skipping warmup audio decode (gen#0 decodes eagerly)")
+            else:
+                logger.info("warmup audio decode (on-device)")
                 self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
+                # The vocoder trace captures on the first POST-cold decode (not the cold one above),
+                # and that capturing pass emits clipped audio. A second warmup decode absorbs the
+                # capture so the first real generate is a clean replay.
+                if self._traced:
+                    self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
 
-            self._prepare_transformer(0)
+        # Warm the encoders last: they coresident-evict the VAE decoder (which already evicted the
+        # DiT), so they never disturb the denoise/decode kernels compiled above.
+        # The VAE image encoder is warmed here (not before the denoise warmups) because running it
+        # evicts the transformer weights, which the denoise steps above still need resident.
+        # Warming whenever the checkpoint has an encoder (not only when an I2V image is staged) keeps
+        # a post-capture I2V request from loading the encoder for the first time, which would evict
+        # the DiT and clobber the already-captured traces' activation regions — corrupting every
+        # subsequent gen to static.
+        # LTX_WARMUP_ENCODERS=0 skips both encoder warmups for the steady-state t2v iteration loop:
+        # the image encoder is never exercised without an I2V request, and a t2v prompt whose device
+        # embeddings are disk-cached never runs the Gemma encoder in generate(). Neither encoder is
+        # loaded after capture in that loop, so skipping their warmup compiles is safe there; leave it
+        # at the default (warm) for I2V or uncached-prompt runs that load an encoder post-capture.
+        if os.environ.get("LTX_WARMUP_ENCODERS", "1") in ("1", "true", "True"):
+            if self.vae_encoder is not None:
+                logger.info(f"warmup image encoder: {height // 2}x{width // 2} + {height}x{width}")
+                self._warmup_encode(height // 2, width // 2)
+                self._warmup_encode(height, width)
 
-        # Warm the encoders last: they coresident-evict the DiT/VAE, so gen #0 then re-loads the DiT.
-        # The VAE image encoder is warmed here (not before the denoise warmups) for the same reason:
-        # running it evicts the transformer weights, which the denoise steps above still need resident.
-        # Warm whenever the checkpoint has an encoder, not only when an I2V image is staged: the first
-        # I2V request can arrive after capture, and loading the encoder then evicts the DiT and clobbers
-        # the already-captured traces' activation regions — corrupting every subsequent gen to static.
-        if self.vae_encoder is not None:
-            logger.info(f"warmup image encoder: {height // 2}x{width // 2} + {height}x{width}")
-            self._warmup_encode(height // 2, width // 2)
-            self._warmup_encode(height, width)
-
-        # use_cache=False forces a real encode so the Gemma/connector kernels compile. traced-static
-        # already warmed before capture (above); dynamic_load / untraced warm last.
-        if self.dynamic_load or not self._traced:
-            self.gemma_encoder_pair.ensure_loaded()
-            self.encode_prompts(["warmup"], use_cache=False)
+            # use_cache=False forces a real encode so the Gemma/connector kernels compile. traced-static
+            # already warmed before capture (above); dynamic_load / untraced warm last.
+            if self.dynamic_load or not self._traced:
+                self.gemma_encoder_pair.ensure_loaded()
+                self.encode_prompts(["warmup"], use_cache=False)
+        else:
+            logger.info("LTX_WARMUP_ENCODERS=0: skipping image + gemma encoder warmup")
 
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 
@@ -669,6 +728,30 @@ class LTXDistilledPipeline(LTXPipeline):
         s1_height = height // 2
         s1_width = width // 2
 
+        # Per-stage eager override. The DiT trace-capture cost is a FIXED ~2 forwards per stage
+        # (one prep_run compile/alloc forward + one record forward — see @traced_function/Tracer),
+        # independent of step count, so for a single-generate run a stage with few denoise steps can
+        # be faster run EAGER than traced: the capture overhead isn't amortized over enough replays.
+        # Stage 2 (3 steps, the large full-res forward) is the prime case; stage 1 (8 steps) still
+        # amortizes. Eager runs the identical op sequence the trace records+replays, so output is
+        # BYTE-IDENTICAL; only the dispatch mechanism differs. Mirrors the BWE/VAE trace default-OFF
+        # policy for device-compute-bound, few-iteration ops.
+        #
+        # DEFAULT: under LTX_ITER_FAST (single-generate dev iteration — the test skips gen#1, so the
+        # s2 trace is never replayed) default stage 2 to eager. Measured byte-identical (md5==golden)
+        # and faster: job 112435-42 vs 080535-41 — Stage-2 denoise 21.6->17.5s, gen 34.6->30.2s,
+        # broker ~98.5->93.2s. Full multi-gen runs (LTX_ITER_FAST unset — CI / VBench / CLIP quality)
+        # default to all-traced so gen#1 stays a pure replay: byte-identical to the pre-existing path.
+        # Override explicitly via LTX_GEN_EAGER_STAGES (e.g. "" forces all-traced; "s1,s2" eagers both).
+        _iter_fast = os.environ.get("LTX_ITER_FAST", "0") in ("1", "true", "True")
+        eager_stages = {
+            s.strip()
+            for s in os.environ.get("LTX_GEN_EAGER_STAGES", "s2" if _iter_fast else "").split(",")
+            if s.strip()
+        }
+        if eager_stages:
+            logger.info(f"LTX gen: running stages {sorted(eager_stages)} eager (untraced, byte-identical)")
+
         # (label, seconds) rows counted toward the total; prepares and export are excluded.
         timings: list[tuple[str, float]] = []
 
@@ -745,7 +828,7 @@ class LTXDistilledPipeline(LTXPipeline):
             sigma_values=DISTILLED_SIGMA_VALUES,
             seed=seed,
             image_conds=s1_image_conds,
-            traced=self._traced,
+            traced=self._traced and "s1" not in eager_stages,
             trace_key="s1",
         )
         t_stage1 = time.time() - t0
@@ -778,7 +861,7 @@ class LTXDistilledPipeline(LTXPipeline):
             initial_video_latent=upsampled_flat,
             initial_audio_latent=s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio,
             image_conds=full_image_conds,
-            traced=self._traced,
+            traced=self._traced and "s2" not in eager_stages,
             trace_key="s2",
         )
         t_stage2 = time.time() - t0
@@ -806,6 +889,11 @@ class LTXDistilledPipeline(LTXPipeline):
         logger.info(f"Audio decode: {t_audio_decode:.1f}s")
 
         self.last_timings = list(timings)
+        # The denoise stages are the generation cost with no Watchdog of their own; surface
+        # them from the timings already collected (vae/upsample/audio are tracked elsewhere).
+        for _label, _secs in timings:
+            if "denoise" in _label.lower():
+                walltime.record("gen", _label, _secs)
         if output_path is None:
             logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | frames={tuple(video_pixels.shape)}")
             return video_pixels, audio_obj

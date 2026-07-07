@@ -63,6 +63,8 @@ class LTXTwoStagesPipeline(LTXPipeline):
         height: int,
         width: int,
         num_inference_steps: int = 2,
+        capture_all: bool = False,  # accepted for the shared cold-start dance; this warmup is already complete
+        in_capture_pass: bool = False,  # accepted for the shared cold-start dance; no prep_run=False decoder here
     ) -> None:
         """Compile both stages' programs (s2 skipped if no ``distilled_lora_path``)."""
         assert height % 64 == 0 and width % 64 == 0, f"H/W must be div by 64 (got {height}x{width})"

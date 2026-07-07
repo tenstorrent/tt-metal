@@ -25,18 +25,42 @@ the pre-prewarm behavior).
   device so the reservation does no compilation at all. It also builds the
   device-init (cq_/fabric) kernels, which the in-run batch skips.
 
-## Using it from a run
+## Using it from a run (the 3-stage wrapper)
 
 ```bash
-# Warm the cache off-device, then submit the real job to the broker.
+# Cold build_key (fresh cache, or dprint/watcher/compiler change): 3 stages, device freed between each.
 tt_metal/tools/kernel_prewarm/prewarm_and_submit.sh \
-    -e <env.yaml> -w <workspace> -- <command...>
+    -e <env.yaml> -w <workspace> -c -- <command...>
 ```
 
-`prewarm_and_submit.sh` runs `build_Release/tools/kernel_prewarm` (reading
-`TT_METAL_CACHE`/`TT_METAL_HOME` from the env yaml) before the broker
-reservation. Warm cache => sub-second no-op. After a kernel/header edit =>
-rebuilds the working set off-device (~20s here) instead of on-device.
+`prewarm_and_submit.sh` orchestrates the split flow, releasing the device between stages:
+
+1. **capture** (device, brief) — only when cold (no manifest, or `-c`): runs the command once with
+   `TT_METAL_KERNEL_CAPTURE_ONLY=1` to record the full manifest. Because this is a *separate process*
+   from the real run, it captures every kernel — including the audio path the in-process cold-start
+   can't (see below) — with no shared state to corrupt.
+2. **compile** (host, device FREE): `build_Release/tools/kernel_prewarm` batch-compiles the whole
+   manifest off-device.
+3. **run** (device): submits the real job, now warm — zero compilation in the reservation.
+
+`-c` forces the capture stage when the cache already holds *other* build_keys (e.g. after toggling
+dprint) — the manifest exists but not for this run's build_key. Omit it on a fresh cache (auto-detected)
+or a warm one (capture skipped; the offline stage is a sub-second dephash no-op, safe to prepend to
+every run). Reads `TT_METAL_CACHE`/`TT_METAL_HOME` from the env yaml so every stage hits the run's cache.
+
+**Measured device-held (LTX distilled bh_2x4sp1tp0), lower is better:**
+
+| Path | cold | dprint (new build_key) | output |
+|---|---:|---:|---|
+| all-on-device (no prewarm) | 531s | 578s | — |
+| in-process cold-start (automatic fallback) | ~235s | ~310s | byte-identical |
+| **3-stage wrapper (this script)** | **~166s** | **~172s** | byte-identical |
+
+The 3-stage wins because the off-device compile runs while the device is unreserved, and its separate
+capture process warms the whole kernel set (incl. audio) that the in-process path leaves to compile
+in-window. Use it for a known cold/new build_key; if an agent forgets, the automatic in-process
+cold-start still lands ~235–310s. (Watcher is a separate story — it crashes fabric bring-up on this
+box, so no run completes under it, prewarmed or not.)
 
 Or invoke the tool directly (warms the cache for a later run):
 
@@ -72,11 +96,65 @@ correct recompile, never a wrong binary.
 The 2436 kernels compile off-device in ~1–60s of host CPU (cold vs incremental);
 the reserved run's in-run prewarm is then a ~0.5s warm no-op.
 
+## Capture-only mode: warm even the FIRST run of a new build_key
+
+The manifest is normally a byproduct of a real run, so the first run on a fresh
+cache (or after a `build_key` change — see below) has nothing to prewarm from and
+compiles on-device. `TT_METAL_KERNEL_CAPTURE_ONLY=1` breaks that: the pipeline
+run generates each model kernel's genfiles and records its manifest recipe but
+**skips the gcc compile and skips dispatch** (device-init cq_/fabric kernels still
+compile — the device must come up). A fixed-schedule pipeline traverses on garbage
+tensors and records the full manifest with only a brief device touch; then the
+off-device tool compiles it, and the real run is warm.
+
+```bash
+# 1. capture pass: full manifest, no model gcc, no dispatch (device held briefly)
+TT_METAL_KERNEL_CAPTURE_ONLY=1  <run the pipeline once, e.g. via the broker>
+# 2. off-device compile (host, device free)
+TT_METAL_CACHE=<cache> TT_METAL_HOME=<root> build_Release/tools/kernel_prewarm
+# 3. real run: warm
+```
+
+Measured on the LTX first run of a new build_key (device-held): **531s all-on-device
+→ ~166s** (75.6s capture + 90.2s warm; 52s compile off-device), output byte-identical.
+Works for a freshly-toggled dprint build_key too (577.9s → ~176s), with no manifest
+shipped ahead of time. Correctness is unchanged: recipes are content-addressed, and
+the model gcc is byte-identical whether run in-line or off-device. The capture pass
+still holds the device for its traversal (host genfile-gen while the device idles) —
+it removes the ~500s compile from the reservation, not the traversal.
+
+## In-process cold-start (automatic, no wrapper)
+
+The capture-only + off-device-compile flow above is a three-step recipe an agent
+must remember. The LTX pipeline does it **automatically in one run**: on a cold
+build_key (detected via `KernelPrewarmColdStartNeeded()` — capture armed, no in-run
+batch launched) it runs one capture-only warmup, batch-compiles the manifest
+off-device **in-process** (`KernelPrewarmOfflineCompile()`), resets the poisoned
+in-memory state (program cache + tracers), then runs warm. No wrapper, no manual
+capture pass, nothing to forget. Controls are bound to `ttnn._ttnn.device`
+(`kernel_prewarm_cold_start_needed` / `_set_capture_only` / `_offline_compile`),
+declared in `<tt-metalium/kernel_prewarm_control.hpp>`.
+
+Measured (LTX distilled `bh_2x4sp1tp0`): **531s → 235s device-held, output
+byte-identical**. One reservation held continuously (the off-device compile runs
+while the device sits idle-but-reserved), so it trades ~40-70s more device-held
+than the split three-phase for being foolproof and automatic.
+
+**Limitation — the audio path.** Components that lazily initialize device statics
+on first dispatch and capture traces with `prep_run=False` (the LTX vocoder) can't
+be captured under capture-only: dispatch is skipped, so their statics are left
+corrupted (wrong output) or half-warmed (crash). The pipeline **skips audio decode
+in the capture pass** and lets it compile op-by-op in the warm real warmup. On a
+warm ccache that's fast (the 235s above); on a **new** build_key (e.g. toggling
+dprint) that audio compile is cold-ccache serial and pushes device-held to ~310s.
+For a strict <250s on a new build_key, use the split three-phase (offloads the
+audio compile off-device too).
+
 ## What it costs / when it does NOT help
 
 The manifest is a byproduct of a real run. So the first run on a **fresh cache
-with no manifest** still compiles on-device — nothing to prewarm from yet.
-Prewarm only helps run #2 onward for a given cache.
+with no manifest** still compiles on-device — unless you run the capture-only pass
+above. Otherwise prewarm only helps run #2 onward for a given cache.
 
 A prewarm miss (full on-device recompile) happens when the **`build_key`
 changes**, because prewarm only warms the current build_key. `build_key` folds

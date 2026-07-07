@@ -42,12 +42,21 @@ from ...parallel.config import (
 )
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
+from ...utils import walltime
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.fuse_loras import LoraSpec, fuse_loras_into
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.mochi import get_rot_transformation_mat
-from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
-from ...utils.tensor import bf16_tensor
+from ...utils.patchifiers import (
+    AudioLatentShape,
+    VideoLatentShape,
+    VideoPixelShape,
+    audio_get_patch_grid_bounds,
+    get_pixel_coords,
+    video_get_patch_grid_bounds,
+)
+from ...utils.progress import Watchdog
+from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ...utils.tracing import StateTensor
 from ...utils.video import Audio
 
@@ -385,7 +394,50 @@ class LTXPipeline:
             if (run_warmup or traced) and valid_shape and not audio_only:
                 if traced and not run_warmup:
                     logger.info("traced=True: forcing warmup (trace capture requires precompiled kernels)")
-                self.warmup_buffers(num_frames=num_frames, height=height, width=width)
+                # In-process cold-start: on a cold build_key, run one capture-only warmup to record the
+                # kernel manifest (genfiles only, no gcc, no dispatch), batch-compile it off-device
+                # in-process, then let the real warmup below hit a warm cache -- so the reserved window
+                # never holds the device for the ~500s op-by-op compile. Warm build_keys (in-run prewarm
+                # already handling them) skip straight to the real warmup. Tracing is suppressed for the
+                # capture pass: capture-only skips dispatch, so trace capture must wait for the real pass.
+                _kp = ttnn._ttnn.device
+                _cold = _kp.kernel_prewarm_cold_start_needed()
+                if _cold:
+                    logger.info("cold build_key: capturing kernel manifest for off-device batch compile")
+                    _kp.kernel_prewarm_set_capture_only(True)
+                    _saved_traced, self._traced = self._traced, False
+                    try:
+                        # capture_all records every kernel the real run uses (even ones iter_fast /
+                        # prep_run defers to gen#0). in_capture_pass skips the audio decode: its mel-VAE /
+                        # BWE / vocoder lazily warm persistent device state on first dispatch, which a
+                        # capture-only (dispatch-skipped) run leaves corrupted -- capturing it produces
+                        # wrong audio. The audio path (~small) instead compiles op-by-op in the warm real
+                        # warmup; the DiT/VAE bulk is what the off-device batch buys back.
+                        self.warmup_buffers(
+                            num_frames=num_frames,
+                            height=height,
+                            width=width,
+                            capture_all=True,
+                            in_capture_pass=True,
+                        )
+                    finally:
+                        self._traced = _saved_traced
+                        _kp.kernel_prewarm_set_capture_only(False)
+                    _built = _kp.kernel_prewarm_offline_compile()
+                    logger.info(f"cold build_key: batch-compiled {_built} kernels off-device in-process")
+                    # The capture pass ran the pipeline under capture-only (no gcc, no dispatch), leaving
+                    # in-memory state the real run must NOT reuse: binary-less programs in the program
+                    # cache (Kernel::binaries() would assert empty) and per-component trace/tracer state
+                    # left half-initialized because dispatch was skipped. Reset both so the real warmup
+                    # rebuilds cleanly from the freshly batch-compiled on-disk binaries. Separate
+                    # processes never shared this state; one process must reset it.
+                    self.release_traces()
+                    self.mesh_device.clear_program_cache()
+                # On cold-start the real warmup runs capture_all so it dispatches AND trace-captures every
+                # component (denoise/VAE/vocoder) while warm -- gen then replays instead of doing a
+                # first-time capture that would write device statics an iter_fast warmup never initialized
+                # (vocoder prep_run=False). Warm runs keep the normal iter_fast warmup.
+                self.warmup_buffers(num_frames=num_frames, height=height, width=width, capture_all=_cold)
             elif traced:
                 logger.warning(
                     f"traced=True but invalid shape ({num_frames=}, {height=}, {width=}); "
@@ -512,6 +564,14 @@ class LTXPipeline:
         tp_axis = tp_axis if tp_axis is not None else defaults["tp_axis"]
         num_links = num_links if num_links is not None else defaults["num_links"]
         dynamic_load = dynamic_load if dynamic_load is not None else defaults["dynamic_load"]
+        # LTX_ITER_DIT_RESIDENT=1 (opt-in, dev iteration): force models resident (disable dynamic
+        # eviction) so the DiT is loaded once and reused across passes instead of being evicted by
+        # the VAE/audio loads and reloaded (~12s each). Trades device memory for reloads; may OOM on
+        # small meshes (the 2x4 BH default is dynamic_load=True precisely because memory is tight),
+        # so default OFF => default behavior unchanged. Validated by md5 before being kept.
+        if os.environ.get("LTX_ITER_DIT_RESIDENT", "0") in ("1", "true", "True"):
+            logger.info("LTX_ITER_DIT_RESIDENT=1: forcing dynamic_load=False (models stay resident)")
+            dynamic_load = False
         topology = topology if topology is not None else defaults["topology"]
         is_fsdp = is_fsdp if is_fsdp is not None else defaults["is_fsdp"]
 
@@ -854,7 +914,8 @@ class LTXPipeline:
             logger.info(f"Loading cached device embeddings from {cache_path}")
             return torch.load(cache_path, weights_only=False)
 
-        results = self.gemma_encoder_pair.encode(prompts)
+        with Watchdog("gemma text-encode"):
+            results = self.gemma_encoder_pair.encode(prompts)
 
         if use_cache:
             torch.save(results, cache_path)
@@ -1106,7 +1167,8 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
-        video = self.vae_decoder(latent_spatial, output_type=output_type)
+        with Watchdog("vae decode"):
+            video = self.vae_decoder(latent_spatial, output_type=output_type)
         if output_type != "float":
             return video.numpy()
         return video
@@ -1858,9 +1920,14 @@ class LTXPipeline:
             logger.info(
                 f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms " f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
             )
+            # The vocoder+BWE first touch is a cold build (~3 min); record both audio stages
+            # so this large, otherwise-untracked cost is visible in the wall-time ledger.
+            walltime.record("audio", "mel_vae", _t_vae - _t0)
+            walltime.record("audio", "vocoder+bwe", _t_voc - _t_vae)
         else:
-            mel = self._decode_mel(audio_spatial)
-            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+            with Watchdog("audio decode (mel-VAE + vocoder)"):
+                mel = self._decode_mel(audio_spatial)
+                waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
         sampling_rate = self.tt_vocoder_with_bwe.output_sampling_rate
 
         # Trim to video duration.
