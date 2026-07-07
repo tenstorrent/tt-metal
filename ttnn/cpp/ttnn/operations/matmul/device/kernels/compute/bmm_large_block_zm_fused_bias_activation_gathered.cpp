@@ -231,8 +231,23 @@ void kernel_main() {
     constexpr bool in1_is_dram = in1_is_dram_interleaved || in1_is_dram_sharded;
 
 #ifdef STREAMING_IN1
-    // Streaming consumes in1 through the standard in1_cb wait_front/pop_front API, so the
-    // batched-only sync2 channel and the manual block-stride bytes are unused on this path.
+    constexpr bool streaming_in1 = true;
+#else
+    constexpr bool streaming_in1 = false;
+#endif
+    // The DRAM path and the streaming (GCB-aligned) path both consume in1 through the standard
+    // in1_cb wait_front/pop_front cycle, so they share one gate. DRAM: the reader pushes one block
+    // of credit per landed block. Streaming: the prefetcher delivers blocks in ring-rotated FIFO
+    // order and the in1 CB is aligned to the GCB ring, so the same front/pop cycle drives it
+    // (in1_index_subblock_offset is 0 for the GCB path). llk_pop_tiles publishes this CB's consumer
+    // ack only after the unpacker HW has drained the block, so the reader frees the GCB slot off
+    // that engine-accurate ack (pages_reservable_at_back) — a hand-rolled done-semaphore isn't tied
+    // to the unpacker drain, so it is neither needed nor safe as the recycle gate.
+    constexpr bool consume_in1_cb = in1_is_dram || streaming_in1;
+
+#ifdef STREAMING_IN1
+    // Streaming consumes in1 through the standard in1_cb API, so the batched-only sync2 channel and
+    // the manual block-stride bytes are unused on this path.
     (void)sync2_buf;
     (void)in1_block_size_bytes;
 #endif
@@ -307,18 +322,11 @@ void kernel_main() {
             const uint32_t curr_ring_idx = (ring_idx + block) % ring_size;
             uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
 
-            // Wait for in1 block
-#ifdef STREAMING_IN1
-            // Streaming: in1 lives in the GCB (the in1 CB is aligned to the GCB ring) and the
-            // prefetcher delivers blocks in ring-rotated FIFO order, so consume the CB with the
-            // standard API — the reader pushes one block of credit per landed block and we read it
-            // at the CB front (in1_index_subblock_offset is 0 for the GCB path). No manual rd_ptr.
-            in1_cb.wait_front(in1_block_num_tiles);
-#else
-            if constexpr (in1_is_dram) {
+            // Wait for in1 block (DRAM and streaming both drive the standard CB cycle; see
+            // consume_in1_cb). in1_index_subblock_offset is 0 for both, so no manual rd_ptr here.
+            if constexpr (consume_in1_cb) {
                 in1_cb.wait_front(in1_block_num_tiles);
             }
-#endif
 
             const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
             CircularBuffer input0_cb(input0_cb_id);
@@ -483,22 +491,16 @@ void kernel_main() {
 #endif
 
             input0_cb.pop_front(in0_block_num_tiles);
-            if constexpr (in1_is_dram) {
+            // Pop the consumed in1 block with the standard API (advances rd_ptr to the next FIFO
+            // block, wrapping at the fifo limit). Both DRAM and streaming take this path; streaming
+            // relies on llk_pop_tiles publishing the consumer ack only after the unpacker drains the
+            // block, which is what lets the reader recycle the GCB slot (see consume_in1_cb).
+            if constexpr (consume_in1_cb) {
                 in1_cb.pop_front(in1_block_num_tiles);
             }
 #if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
             curr_in1_block_index = next_in1_block_index;
             UNPACK((update_local_cb_rd_ptr(in1_cb_id, next_in1_rd_ptr_addr)));
-#endif
-#ifdef STREAMING_IN1
-            // Streaming: pop the consumed block off the GCB-aligned in1 CB with the standard API
-            // (advances rd_ptr to the next FIFO block and wraps at the fifo limit). No explicit
-            // reader signal: llk_pop_tiles publishes this CB's consumer ack only after
-            // STALLWAIT(UNPACK), i.e. after the unpacker HW has drained the block, so the reader
-            // frees the GCB slot by polling that engine-accurate ack (pages_reservable_at_back). A
-            // hand-rolled done-semaphore isn't tied to the unpacker drain, so it is neither needed
-            // nor safe as the recycle gate.
-            in1_cb.pop_front(in1_block_num_tiles);
 #endif
         }
 
