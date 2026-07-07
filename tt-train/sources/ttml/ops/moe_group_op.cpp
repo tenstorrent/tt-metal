@@ -74,8 +74,8 @@ MoEGroupOutputs moe_group_op(
             }
             auto d_grouped_scores = grouped_scores_out->get_grad();
 
-            // ttnn::eq doesn't accept uint16 — widen k_slot to uint32. Then
-            // route to TILE [1,1,T_cap,1] via transpose rather than RM reshape
+            // Widen k_slot to uint32 to match arange_K below, then route to
+            // TILE [1,1,T_cap,1] via transpose rather than RM reshape
             // (RM→RM reshape repaginates across DRAM banks; TILE transpose is
             // a per-tile swap).
             auto k_slot_u32_rm = ttnn::typecast(k_slot, ttnn::DataType::UINT32);
