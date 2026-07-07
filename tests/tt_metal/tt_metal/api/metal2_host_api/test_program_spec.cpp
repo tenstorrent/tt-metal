@@ -1749,7 +1749,7 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithUnpackToDestFp32ModeSucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.accumulator_width = experimental::AccumulatorWidth::Wide;
+            config.fp32_dest_acc_en = true;
             config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
         }
     }
@@ -1767,7 +1767,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.accumulator_width = experimental::AccumulatorWidth::Wide;
+            config.fp32_dest_acc_en = true;
         }
     }
     // Compute kernel intentionally has no unpack_to_dest_mode entry.
@@ -1802,7 +1802,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
 
     auto producer_compute = MakeMinimalComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(producer_compute.hw_config));
-    producer_config.accumulator_width = experimental::AccumulatorWidth::Wide;
+    producer_config.fp32_dest_acc_en = true;
 
     auto consumer_dm = MakeMinimalGen2DMKernel("consumer_dm");
 
@@ -1830,7 +1830,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
 
     auto producer_compute = MakeMinimalComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(producer_compute.hw_config));
-    producer_config.accumulator_width = experimental::AccumulatorWidth::Wide;
+    producer_config.fp32_dest_acc_en = true;
     producer_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
 
     auto consumer_dm = MakeMinimalGen2DMKernel("consumer_dm");
@@ -1881,7 +1881,7 @@ TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.accumulator_width = experimental::AccumulatorWidth::Wide;
+            config.fp32_dest_acc_en = true;
             config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
         }
     }
@@ -2393,7 +2393,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigMathFidelitySucceeds) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
             config.math_fidelity = MathFidelity::LoFi;
-            config.accumulator_width = experimental::AccumulatorWidth::Wide;
+            config.fp32_dest_acc_en = true;
             config.math_approx_mode = true;
         }
     }
@@ -2414,7 +2414,7 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.accumulator_width = experimental::AccumulatorWidth::Wide;
+            config.fp32_dest_acc_en = true;
             config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
         }
     }
@@ -2448,7 +2448,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "in1"));
 
     auto& compute_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(consumer.hw_config));
-    compute_config.accumulator_width = experimental::AccumulatorWidth::Wide;
+    compute_config.fp32_dest_acc_en = true;
     compute_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_1"}, UnpackToDestMode::UnpackToDestFp32}};
 
     spec.kernels = {producer, consumer};
@@ -2798,7 +2798,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
             ComputeHardwareConfig{
                 ComputeGen2Config{
                     .math_fidelity = MathFidelity::LoFi,
-                    .accumulator_width = experimental::AccumulatorWidth::Wide,
+                    .fp32_dest_acc_en = true,
                 },
             },
     };
