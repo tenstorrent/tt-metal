@@ -101,18 +101,18 @@ def tokenize_prompts_to_batch(
 
 def preprocess_llama3_8b_chat_prompts(
     prompts: Sequence[str],
-    runtime_context,
+    llm,
     *,
     reserve_decode_tokens: int = 128,
     pad_id: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     return tokenize_prompts_to_batch(
         prompts,
-        encode_fn=lambda prompt, instruct: runtime_context.encode_prompt(prompt, instruct=instruct),
-        decode_fn=runtime_context.tokenizer.decode,
-        instruct=runtime_context.instruct,
-        max_seq_len=runtime_context.max_seq_len,
-        max_context_len=runtime_context.max_context_len,
+        encode_fn=lambda prompt, instruct: llm.encode_prompt(prompt, instruct=instruct),
+        decode_fn=llm.tokenizer.decode,
+        instruct=llm.instruct,
+        max_seq_len=llm.max_seq_len,
+        max_context_len=llm.max_context_len,
         reserve_decode_tokens=reserve_decode_tokens,
         pad_id=pad_id,
     )

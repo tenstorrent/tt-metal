@@ -25,10 +25,10 @@ class Llama3Generator:
 
     model_capabilities = {"supports_prefix_caching": True}
 
-    def __init__(self, executor: EagerLlamaExecutor | TracedLlamaExecutor, model_args=None):
+    def __init__(self, executor: EagerLlamaExecutor | TracedLlamaExecutor):
         self.executor = executor
         self.model = executor.model
-        self.model_args = model_args
+        self.model_args = executor.model_args
         self.mesh_device = executor.mesh_device
 
     @classmethod
@@ -48,7 +48,7 @@ class Llama3Generator:
         hf_model_name = hf_config._name_or_path
         instruct = "Instruct" in hf_model_name
 
-        model, model_args = from_pretrained(
+        llm = from_pretrained(
             mesh_device=mesh_device,
             hf_model=hf_model_name,
             instruct=instruct,
@@ -59,8 +59,8 @@ class Llama3Generator:
             dtype=ttnn.bfloat8_b,
         )
 
-        executor = TracedLlamaExecutor(model, mesh_device, model_args=model_args)
-        return cls(executor, model_args=model_args)
+        executor = TracedLlamaExecutor(llm.model, mesh_device, model_args=llm.runtime_config)
+        return cls(executor)
 
     def prefill_forward(self, *args, **kwargs):
         return self.executor.prefill_forward(*args, **kwargs)

@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
@@ -243,40 +243,6 @@ def convert_hf_state_dict_to_meta(state_dict, *, head_dim: int, n_heads: int, n_
     return _map_hf_to_meta_keys(state_dict)
 
 
-def _chat_template_ids(encoded):
-    if hasattr(encoded, "keys") and "input_ids" in encoded:
-        encoded = encoded["input_ids"]
-    if hasattr(encoded, "ids"):
-        return list(encoded.ids)
-    if hasattr(encoded, "tolist"):
-        encoded = encoded.tolist()
-    if isinstance(encoded, (list, tuple)) and len(encoded) == 1 and isinstance(encoded[0], (list, tuple)):
-        encoded = encoded[0]
-    return list(encoded)
-
-
-def _encode_prompt_with_chat_template(tokenizer, prompt_text, system_prompt_text=None):
-    chat = []
-    if isinstance(prompt_text, str):
-        if system_prompt_text:
-            chat.append({"role": "system", "content": system_prompt_text})
-        if prompt_text:
-            chat.append({"role": "user", "content": prompt_text})
-        encoded = tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
-    else:
-        encoded = tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
-    return _chat_template_ids(encoded)
-
-
-def encode_prompt(tokenizer, prompt_text, system_prompt_text=None, *, instruct=True):
-    if instruct:
-        try:
-            return _encode_prompt_with_chat_template(tokenizer, prompt_text, system_prompt_text)
-        except ValueError as exc:
-            logger.warning(f"Failed to encode chat prompt, falling back to base encoding: {exc}")
-    return tokenizer.encode(prompt_text, add_special_tokens=False)
-
-
 def load_hf_model_info(
     hf_model: str,
     *,
@@ -352,6 +318,124 @@ def load_tokenizer(hf_model: str, *, trust_remote_code: bool = False):
     return tokenizer
 
 
+@dataclass(frozen=True)
+class Llama3GenerationConfig:
+    """Text-generation defaults for the Llama 3.1-8B product model."""
+
+    max_decode_tokens: int = 128
+    temperature: float = 0.0
+    top_k: int = 32
+    top_p: float = 0.08
+    stop_token_ids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class Llama3RuntimeConfig:
+    """Executor/runtime metadata kept outside the tensor graph config."""
+
+    model_name: str
+    model_cache_path: Path
+    cluster_shape: list[int]
+    max_batch_size: int
+    max_seq_len: int
+    max_prefill_chunk_size: int
+    max_context_len: int
+    paged_attention_config: object | None = None
+    trace_prefill_supported_seq_lens: tuple[int, ...] = (128, 1024)
+
+    def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
+        return (
+            num_cached_tokens == 0
+            and prefill_seq_len in self.trace_prefill_supported_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+        )
+
+
+def _chat_template_ids(encoded):
+    if hasattr(encoded, "keys") and "input_ids" in encoded:
+        encoded = encoded["input_ids"]
+    if hasattr(encoded, "ids"):
+        return list(encoded.ids)
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+    if isinstance(encoded, (list, tuple)) and len(encoded) == 1 and isinstance(encoded[0], (list, tuple)):
+        encoded = encoded[0]
+    return list(encoded)
+
+
+def _encode_prompt_with_chat_template(tokenizer, prompt_text, system_prompt_text=None):
+    chat = []
+    if isinstance(prompt_text, str):
+        if system_prompt_text:
+            chat.append({"role": "system", "content": system_prompt_text})
+        if prompt_text:
+            chat.append({"role": "user", "content": prompt_text})
+        encoded = tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+    else:
+        encoded = tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+    return _chat_template_ids(encoded)
+
+
+def encode_prompt(tokenizer, prompt_text, system_prompt_text=None, *, instruct=True):
+    if instruct:
+        try:
+            return _encode_prompt_with_chat_template(tokenizer, prompt_text, system_prompt_text)
+        except ValueError as exc:
+            logger.warning(f"Failed to encode chat prompt, falling back to base encoding: {exc}")
+    return tokenizer.encode(prompt_text, add_special_tokens=False)
+
+
+@dataclass
+class Llama3ForCausalLM:
+    """Usable Llama 3.1-8B model product: tokenizer plus TT tensor model.
+
+    The tokenizer interface is intentionally documented rather than enforced
+    through a Protocol for now. The object must provide encode/decode behavior,
+    EOS/stop token IDs, and chat-template application for instruct models.
+    """
+
+    model: object
+    tokenizer: object
+    runtime_config: Llama3RuntimeConfig
+    instruct: bool
+    generation_config: Llama3GenerationConfig = field(default_factory=Llama3GenerationConfig)
+
+    def __post_init__(self):
+        self.model.model_args = self.runtime_config
+        if not self.generation_config.stop_token_ids:
+            stop_tokens = tuple(getattr(self.tokenizer, "stop_tokens", []) or [])
+            self.generation_config = Llama3GenerationConfig(
+                max_decode_tokens=self.generation_config.max_decode_tokens,
+                temperature=self.generation_config.temperature,
+                top_k=self.generation_config.top_k,
+                top_p=self.generation_config.top_p,
+                stop_token_ids=stop_tokens,
+            )
+
+    @property
+    def model_name(self):
+        return self.runtime_config.model_name
+
+    @property
+    def model_cache_path(self):
+        return self.runtime_config.model_cache_path
+
+    @property
+    def max_seq_len(self):
+        return self.model.config.max_seq_len
+
+    @property
+    def max_context_len(self):
+        return self.runtime_config.max_context_len
+
+    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=None):
+        use_instruct = self.instruct if instruct is None else instruct
+        return encode_prompt(self.tokenizer, prompt_text, system_prompt_text, instruct=use_instruct)
+
+    def encode_chat(self, messages):
+        return self.encode_prompt(messages, instruct=True)
+
+
 def load_converted_state_dict(
     hf_model: str,
     *,
@@ -408,44 +492,6 @@ def _model_cache_path(hf_model: str, mesh_device) -> Path:
     return Path("model_cache") / hf_model / _device_name(mesh_device)
 
 
-@dataclass
-class HFLlama3RuntimeContext:
-    """HF/demo runtime metadata kept outside the TTTv2 model construction path."""
-
-    model_name: str
-    model_cache_path: Path
-    model_info: dict
-    tokenizer: object
-    instruct: bool
-    max_batch_size: int
-    max_seq_len: int
-    n_layers: int
-    cluster_shape: list[int]
-    max_prefill_chunk_size: int
-    paged_attention_config: object | None = None
-
-    def __getattr__(self, name):
-        try:
-            return self.model_info[name]
-        except KeyError:
-            raise AttributeError(name) from None
-
-    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
-        return encode_prompt(self.tokenizer, prompt_text, system_prompt_text, instruct=instruct)
-
-    def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
-        return (
-            prefill_seq_len in self.trace_prefill_supported_seq_lens
-            and prefill_seq_len <= self.max_prefill_chunk_size
-            and prefill_seq_len <= self.max_seq_len
-        )
-
-    @property
-    def trace_prefill_supported_seq_lens(self):
-        capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
-        return [seq_len for seq_len in (128, 1024) if seq_len <= capped_warmup_seq_len]
-
-
 def _max_prefill_chunk_size(mesh_device) -> int:
     override = os.getenv("MAX_PREFILL_CHUNK_SIZE")
     if override is not None:
@@ -477,7 +523,7 @@ def from_pretrained(
     dtype=ttnn.bfloat8_b,
     paged_attention_config=None,
 ):
-    """Build a TTTv2 Llama-3.1-8B model from an HF checkpoint."""
+    """Build a product-level TTTv2 Llama-3.1-8B model from an HF checkpoint."""
     from models.common.models.llama3_8b.model import Llama3Transformer1D, build_llama3_transformer_1d_config
 
     hf_model = resolve_hf_model_id(hf_model)
@@ -541,18 +587,24 @@ def from_pretrained(
         dtype=dtype,
         paged_attention_config=paged_attention_config,
     )
-    # todo)) the only unique piece of info in HFLlama3RuntimeContext is tokenizer and max_prefill_chunk_size. everything else is already in model_config...
-    runtime_context = HFLlama3RuntimeContext(
+    max_prefill_chunk_size = _max_prefill_chunk_size(mesh_device)
+    trace_prefill_supported_seq_lens = tuple(
+        seq_len for seq_len in (128, 1024) if seq_len <= min(max_prefill_chunk_size, max_seq_len)
+    )
+    runtime_config = Llama3RuntimeConfig(
         model_name=model_name,
         model_cache_path=model_cache_path,
-        model_info=model_info,
-        tokenizer=tokenizer,
-        instruct=instruct,
+        cluster_shape=list(mesh_device.shape),
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
-        n_layers=effective_n_layers,
-        cluster_shape=list(mesh_device.shape),
-        max_prefill_chunk_size=_max_prefill_chunk_size(mesh_device),
+        max_prefill_chunk_size=max_prefill_chunk_size,
+        max_context_len=model_info["max_context_len"],
         paged_attention_config=paged_attention_config,
+        trace_prefill_supported_seq_lens=trace_prefill_supported_seq_lens,
     )
-    return Llama3Transformer1D(model_config), runtime_context
+    return Llama3ForCausalLM(
+        model=Llama3Transformer1D(model_config),
+        tokenizer=tokenizer,
+        runtime_config=runtime_config,
+        instruct=instruct,
+    )
