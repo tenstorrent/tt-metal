@@ -9,13 +9,8 @@ Just signature adaptation for TTModelRunner.
 """
 
 import ttnn
-from models.common.models.llama3_8b.model import (
-    EagerLlamaExecutor,
-    Llama3Transformer1D,
-    TracedLlamaExecutor,
-    build_llama3_transformer_1d_config,
-)
-from models.common.models.llama3_8b.runtime_args import create_llama31_runtime_args
+from models.common.models.llama3_8b.hf_adaptor import from_pretrained
+from models.common.models.llama3_8b.model import EagerLlamaExecutor, TracedLlamaExecutor
 
 
 class Llama3Generator:
@@ -53,26 +48,16 @@ class Llama3Generator:
         hf_model_name = hf_config._name_or_path
         instruct = "Instruct" in hf_model_name
 
-        model_args = create_llama31_runtime_args(
+        model, model_args = from_pretrained(
             mesh_device=mesh_device,
+            hf_model=hf_model_name,
             instruct=instruct,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
             optimizations=optimizations,
             n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
         )
-
-        state_dict = model_args.load_state_dict()
-        dtype = ttnn.bfloat8_b
-
-        model_config = build_llama3_transformer_1d_config(
-            mesh_device=mesh_device,
-            args=model_args,
-            state_dict=state_dict,
-            weight_cache_path=model_args.weight_cache_path(dtype),
-            dtype=dtype,
-        )
-        model = Llama3Transformer1D(model_config)
 
         executor = TracedLlamaExecutor(model, mesh_device, model_args=model_args)
         return cls(executor, model_args=model_args)

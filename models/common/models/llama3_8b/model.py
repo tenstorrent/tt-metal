@@ -29,15 +29,16 @@ models/common/models/executor.py.
 """
 
 import math
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.models.executor import EagerLLMExecutor, TracedLLMExecutor
-from models.common.models.llama3_8b.rope import compute_gather_cos_sin, rope_scaling_model_factory
 from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig
 from models.common.modules.embedding.embedding_1d import Embedding1D, Embedding1DConfig
 from models.common.modules.lazy_weight import LazyWeight
@@ -48,6 +49,681 @@ from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
 from models.common.modules.tt_ccl import TT_CCL, default_topology, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE, pad_dim_to_size
+
+# =============================================================================
+# Runtime Config
+# =============================================================================
+
+
+class Llama31DecoderPrecision:
+    """Per-decoder tensor dtype and math-fidelity selection."""
+
+    _DTYPES = {
+        "bfp4": ttnn.bfloat4_b,
+        "bfp8": ttnn.bfloat8_b,
+        "bf16": ttnn.bfloat16,
+        None: None,
+    }
+
+    @classmethod
+    def from_string(cls, optimizations: str):
+        if optimizations == "performance":
+            return cls.performance
+        if optimizations == "accuracy":
+            return cls.accuracy
+        raise ValueError(
+            f"Invalid optimization configuration: {optimizations}. Allowed values are 'performance' or 'accuracy'"
+        )
+
+    @classmethod
+    def performance(cls, num_decoders: int, model_name: str):
+        inst = cls(num_decoders, model_name, cls._performance_settings(model_name))
+        if model_name == "Llama-3.1-8B-Instruct" and num_decoders > 31:
+            inst._tensor_precision[31]["ff1_ff3"] = "bfp8"
+            inst._op_fidelity[31]["li_ff1_ff3"] = "hifi2fp16"
+            inst._update_full_name()
+        inst.__name__ = "performance"
+        return inst
+
+    @classmethod
+    def accuracy(cls, num_decoders: int, model_name: str):
+        inst = cls(num_decoders, model_name, cls._accuracy_settings(model_name))
+        inst.__name__ = "accuracy"
+        return inst
+
+    def __init__(self, num_decoders: int, model_name: str, settings: dict | None = None):
+        self.model_name = model_name
+        default_tensor_precision, default_op_fidelity = self._default_settings()
+        settings = settings or {}
+        default_tensor_precision.update(settings.get("tensor_precision", {}))
+        default_op_fidelity.update(settings.get("op_fidelity", {}))
+        self._tensor_precision = {decoder_id: dict(default_tensor_precision) for decoder_id in range(num_decoders)}
+        self._op_fidelity = {decoder_id: dict(default_op_fidelity) for decoder_id in range(num_decoders)}
+        self._update_full_name()
+
+    @staticmethod
+    def _base_model_name(model_name: str):
+        for suffix in ("-Instruct", "-instruct"):
+            if model_name.endswith(suffix):
+                return model_name[: -len(suffix)]
+        return model_name
+
+    @classmethod
+    def _accuracy_settings(cls, model_name: str):
+        base_model_name = cls._base_model_name(model_name)
+        if base_model_name.startswith("Llama-3") or base_model_name.startswith("Meta-Llama-3"):
+            return {
+                "tensor_precision": {
+                    "wqkv": "bfp8",
+                    "kv_cache": "bfp8",
+                    "wo": "bfp8",
+                },
+                "op_fidelity": {
+                    "li_ff1_ff3": "hifi2fp16",
+                    "li_ff2": "hifi2fp16",
+                },
+            }
+        return {
+            "tensor_precision": {
+                "wqkv": "bf16",
+                "kv_cache": "bf16",
+                "wo": "bf16",
+            },
+            "op_fidelity": {
+                "li_qkv_decode": "hifi4",
+                "li_qkv_prefill": "hifi4",
+                "sdpa_decode": "hifi4",
+                "sdpa_prefill": "hifi4",
+                "li_o_decode": "hifi4",
+                "li_o_prefill": "hifi4",
+            },
+        }
+
+    @classmethod
+    def _performance_settings(cls, model_name: str):
+        return {
+            "tensor_precision": {"ff1_ff3": "bfp4"},
+            "op_fidelity": {"li_ff1_ff3": "lofi"},
+        }
+
+    @staticmethod
+    def _default_settings():
+        return (
+            {
+                "ff1_ff3": "bfp8",
+                "ff2": "bfp8",
+                "wqkv": "bfp8",
+                "wo": "bfp8",
+                "kv_cache": "bfp8",
+                "activation": None,
+            },
+            {
+                "li_ff1_ff3": "hifi2fp16",
+                "li_ff2": "hifi2fp16",
+                "li_qkv_decode": "hifi2",
+                "sdpa_decode": "hifi2",
+                "li_o_decode": "hifi2",
+                "li_qkv_prefill": "hifi2",
+                "sdpa_prefill": "hifi4",
+                "li_o_prefill": "hifi2",
+                "accuracy": "hifi4fp32",
+            },
+        )
+
+    def get_tensor_dtype(self, decoder_id: int, tensor: str, prefetcher: bool = False):
+        effective_decoder_id = 0 if prefetcher else decoder_id
+        value = self._tensor_precision.get(effective_decoder_id, {}).get(tensor)
+        if prefetcher and value is None and tensor != "activation":
+            return ttnn.bfloat8_b
+        return self._DTYPES.get(value)
+
+    def get_math_fidelity(self, decoder_id: int, op: str, configuration):
+        kernel_lookup = {
+            "lofi": configuration.compute_kernel_config_lofi,
+            "hifi2": configuration.compute_kernel_config_hifi2,
+            "hifi2na": configuration.compute_kernel_config_hifi2_na,
+            "hifi2fp16": configuration.compute_kernel_config_hifi2_fp16,
+            "hifi2nol1acc": configuration.compute_kernel_config_hifi2_nol1acc,
+            "hifi4": configuration.compute_kernel_config_hifi4,
+            "hifi4fp32": configuration.compute_kernel_config_hifi4_fp32,
+        }
+        return kernel_lookup[self._op_fidelity[decoder_id][op]]
+
+    def _update_full_name(self):
+        self._full_name = " | ".join(
+            f"Decoder {decoder_id}: precision_cfg = {self._tensor_precision[decoder_id]}, fidelity_cfg = {self._op_fidelity[decoder_id]}"
+            for decoder_id in self._tensor_precision
+        )
+
+
+def _nearest_multiple(value: int, multiple: int) -> int:
+    return math.ceil(value / multiple) * multiple
+
+
+def _nearest_32(value: int) -> int:
+    return _nearest_multiple(value, 32)
+
+
+def _num_to_core_range_set(num_cores: int):
+    assert num_cores < 8 or num_cores % 8 == 0
+    num_x = min(num_cores, 8)
+    num_y = num_cores // num_x
+    assert num_x * num_y == num_cores
+    return ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(num_x - 1, num_y - 1),
+            )
+        }
+    )
+
+
+def _get_out_subblock_w(per_core_n: int, out_subblock_h: int):
+    out_subblock_w = 4
+    while out_subblock_w > 1:
+        if out_subblock_w * out_subblock_h <= 4 and per_core_n % out_subblock_w == 0:
+            break
+        out_subblock_w -= 1
+    return out_subblock_w
+
+
+def _device_name(mesh_device) -> str:
+    num_devices = mesh_device.get_num_devices()
+    dram_grid_size = mesh_device.dram_grid_size()
+    if ttnn.device.is_blackhole(mesh_device):
+        return {
+            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",
+            2: "P300",
+            4: "P150x4",
+            8: "P150x8",
+            32: "BHGLX",
+        }[num_devices]
+    if ttnn.device.is_wormhole_b0(mesh_device):
+        return {1: "N150", 2: "N300", 4: "N150x4", 8: "T3K", 32: "TG"}[num_devices]
+    raise ValueError(f"Unsupported architecture: {ttnn.get_arch_name()}")
+
+
+def _base_model_name(model_name: str) -> str:
+    for suffix in ("-Instruct", "-instruct"):
+        if model_name.endswith(suffix):
+            return model_name[: -len(suffix)]
+    return model_name
+
+
+class Llama31RuntimeArgs:
+    """TTTv2 runtime/config object for the Llama-3.1-8B 1D path."""
+
+    def __init__(
+        self,
+        mesh_device,
+        *,
+        instruct: bool,
+        max_batch_size: int,
+        max_seq_len: int,
+        model_name: str,
+        model_info: dict,
+        model_cache_path: str | Path,
+        optimizations="performance",
+        n_layers: int | None = None,
+        tokenizer=None,
+        prompt_encoder: Callable | None = None,
+        state_dict_loader: Callable | None = None,
+    ):
+        self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
+        self.dram_grid_size = mesh_device.dram_grid_size()
+        self.device_name = _device_name(mesh_device)
+        self.cluster_shape = list(mesh_device.shape)
+        self.cluster_type = ttnn.cluster.get_cluster_type()
+        self.is_galaxy_cluster = self.cluster_type in (
+            ttnn.cluster.ClusterType.GALAXY,
+            ttnn.cluster.ClusterType.TG,
+            ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+        )
+        self.is_galaxy = self.num_devices == 32
+        if self.is_galaxy:
+            raise ValueError("Llama31RuntimeArgs only supports 1D non-Galaxy meshes.")
+
+        self.max_seq_len = max_seq_len
+        self.max_batch_size = max_batch_size
+        self.batch_size_per_device_group = max_batch_size
+        self.tile_size = ttnn.TILE_SIZE
+        self.dummy_weights = False
+        self.rms_norm_add_unit_offset = False
+        self.embed_scale = None
+        self.prefetcher = None
+        self.prefill_len_cutoff = 512 if ttnn.device.is_blackhole(mesh_device) else 1024
+        self.instruct = instruct
+
+        self.model_name = model_name
+        self.model_cache_path = Path(model_cache_path)
+        self.tokenizer = tokenizer
+        self._prompt_encoder = prompt_encoder
+        self._state_dict_loader = state_dict_loader
+        self._set_model_params(model_info)
+        if n_layers is not None:
+            self.n_layers = n_layers
+        self.full_model_n_layers = getattr(self, "full_model_n_layers", self.n_layers)
+        self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
+        self.disable_batched_prefill = self.base_model_name == "Llama-3.1-8B" and self.device_name in (
+            "P150",
+            "P300",
+            "P150x4",
+            "P150x8",
+        )
+        if self.base_model_name == "Llama-3.1-8B" and self.device_name in ("N150",):
+            self.prefill_len_cutoff = 512
+
+        if optimizations is None:
+            self.optimizations = Llama31DecoderPrecision.performance(self.n_layers, self.model_name)
+        elif isinstance(optimizations, str):
+            self.optimizations = Llama31DecoderPrecision.from_string(optimizations)(self.n_layers, self.model_name)
+        else:
+            self.optimizations = optimizations
+
+        self.tile_padded_batch_rows = ttnn.TILE_SIZE * int(math.ceil(self.max_batch_size / ttnn.TILE_SIZE))
+        self.di_dt_workaround = os.getenv("DISABLE_DI_DT_WORKAROUND") != "1"
+        self.model_config = {}
+        self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
+        self.processor = None
+        self.use_qk_fused = True
+
+        assert self.n_heads % self.cluster_shape[1] == 0
+        assert self.n_kv_heads % self.cluster_shape[1] == 0
+        self.n_local_heads = self.n_heads // self.cluster_shape[1]
+        self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
+        self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+
+        self._use_t3k_fused_agmm_config = not self.is_galaxy_cluster
+        self._use_fused_all_gather_matmul = (
+            self.num_devices == 8
+            and self._use_t3k_fused_agmm_config
+            and (self.dim // ttnn.TILE_SIZE // self.num_devices) % self.num_devices == 0
+            and self.num_devices > 1
+            and self.ccl_topology() == ttnn.Topology.Ring
+        )
+        self.dram_shard_grid_width = 8 if ttnn.device.is_wormhole_b0(mesh_device) else self.dram_grid_size.x
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
+        self.dram_weight_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.dram_grid_size.x - 1, self.dram_grid_size.y - 1))}
+        )
+        lm_head_num_rows = 8
+        lm_head_cores_per_row = 8
+        while self.dim % (ttnn.TILE_SIZE * lm_head_num_rows * lm_head_cores_per_row) != 0:
+            lm_head_num_rows -= 1
+            if lm_head_num_rows == 0:
+                lm_head_cores_per_row -= 1
+                if lm_head_cores_per_row == 0:
+                    raise ValueError("Could not find a valid LM head core grid")
+                lm_head_num_rows = 8
+        self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
+        self.max_columns_per_device_lm_head = 668 * self.lm_head_core_grid.num_cores
+        self.prefill_rows = 8
+        self.attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
+        self.mlp_core_grid = self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
+        self.mlp2_core_grid = self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
+        self._init_compute_kernel_configs()
+        self._init_model_config()
+        self.capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
+        self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    @property
+    def base_model_name(self):
+        return _base_model_name(self.model_name)
+
+    @property
+    def use_fused_all_gather_matmul(self):
+        return self._use_fused_all_gather_matmul
+
+    def _set_model_params(self, model_info):
+        for key, value in model_info.items():
+            if value is not None or key != "model_name":
+                setattr(self, key, value)
+
+    def _init_compute_kernel_configs(self):
+        self.compute_kernel_config_lofi = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.compute_kernel_config_hifi2_fp16 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.compute_kernel_config_hifi4_fp32 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            dst_full_sync_en=False,
+        )
+        self.compute_kernel_config_hifi2_na = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        self.compute_kernel_config_hifi2_nol1acc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+    def _init_model_config(self):
+        self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
+        self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
+        )
+        self.model_config["CREATE_QKV_DECODE_SHARD"] = (
+            ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, self.head_dim),
+                core_grid=ttnn.CoreGrid(y=4, x=8),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            if ttnn.device.is_blackhole(self.mesh_device)
+            else ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        )
+        self.model_config["ATTN_OUTPUT_PROGCFG"] = self.dram_matmul_config(
+            m=self.tile_padded_batch_rows,
+            k=(self.n_heads * self.head_dim) // self.num_devices,
+            n=self.dim,
+            num_cores=self.n_heads // self.num_devices,
+        )
+        self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = self.get_decode_all_gather_matmul_program_config()
+        self.model_config[
+            "ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"
+        ] = self.get_decode_all_gather_matmul_output_mem_config()
+        self.model_config["ATTN_AGMM_CONFIG"] = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+        self.model_config["MLP_RS_CONFIG"] = {
+            "num_links": 1,
+            "chunks_per_sync": 10,
+            "num_workers_per_link": 2,
+            "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+        }
+        self.model_config["SAMPLING_AG_CONFIG"] = {
+            "allow_force_argmax": False,
+            "num_links": 1,
+            "chunks_per_sync": 10,
+            "num_workers_per_link": 2,
+            "topology": ttnn.Topology.Linear,
+        }
+
+    def get_decode_all_gather_matmul_program_config(self):
+        if not self.use_fused_all_gather_matmul:
+            return None
+        do_core_grid_size = (8, 1)
+        do_per_core_n = self.dim // self.num_devices // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1])
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=do_core_grid_size,
+            in0_block_w=self.dim // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1]),
+            out_subblock_h=1,
+            out_subblock_w=_get_out_subblock_w(do_per_core_n, out_subblock_h=1),
+            per_core_M=self.tile_padded_batch_rows // ttnn.TILE_SIZE,
+            per_core_N=do_per_core_n,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+    def get_decode_all_gather_matmul_output_mem_config(self):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                _num_to_core_range_set(self.num_devices),
+                [
+                    self.tile_padded_batch_rows,
+                    self.dim // self.num_devices,
+                ],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+    def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
+        return (
+            prefill_seq_len in self.trace_prefill_supported_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
+
+    def get_trace_prefill_supported_seq_lens(self):
+        return [seq_len for seq_len in (128, 1024) if seq_len <= self.capped_warmup_seq_len]
+
+    def get_max_prefill_chunk_size(self):
+        override = os.getenv("MAX_PREFILL_CHUNK_SIZE")
+        if override is not None:
+            return int(override) * 1024
+        return {"N150": 4, "N300": 64, "T3K": 128}.get(self.device_name, 128) * 1024
+
+    def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
+        layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
+        module_map = {"MLP": "feed_forward", "Attention": "attention", "TransformerBlock": "", "": ""}
+        return layer_prefix + module_map[module_name]
+
+    def weight_cache_path(self, dtype):
+        if self.instruct:
+            return (
+                self.model_cache_path
+                / {ttnn.bfloat16: "tensor_cache_instruct_bf16", ttnn.bfloat8_b: "tensor_cache_instruct_bfp8"}[dtype]
+            )
+        return self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
+
+    def get_model_config(self):
+        return self.model_config
+
+    def load_state_dict(self):
+        if self._state_dict_loader is None:
+            raise ValueError("No state_dict_loader was provided for this runtime config.")
+        state_dict, self.fuse_qkv, self.fuse_mlp = self._state_dict_loader(self)
+        return state_dict
+
+    def create_tokenizer(self):
+        if self.tokenizer is None:
+            raise ValueError("No tokenizer was provided for this runtime config.")
+        return self.tokenizer
+
+    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
+        if self._prompt_encoder is None:
+            raise ValueError("No prompt_encoder was provided for this runtime config.")
+        return self._prompt_encoder(prompt_text, system_prompt_text, instruct=instruct)
+
+    def create_dram_sharded_mem_config(self, k, n, dram_grid=None):
+        dram_cores = self.dram_grid_size.x
+        padded_size = math.ceil(n / (ttnn.TILE_SIZE * dram_cores)) * (ttnn.TILE_SIZE * dram_cores)
+        if dram_grid is None:
+            dram_grid = self.dram_weight_grid
+        shard_spec = ttnn.ShardSpec(dram_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    def find_grid(self, n):
+        max_rows = 8 if ttnn.device.is_wormhole_b0(self.mesh_device) else 10
+        max_cols = 8 if ttnn.device.is_wormhole_b0(self.mesh_device) else 12
+        possible_cores = [k for k in range(1, max_rows * max_cols + 1) if n % k == 0]
+        possible_cores.sort(key=lambda x: abs(x - 32))
+        for cores in possible_cores:
+            for rows in range(1, max_rows + 1):
+                if cores % rows == 0:
+                    cols = cores // rows
+                    if cols <= max_cols:
+                        return rows, cols
+        raise AssertionError(f"Cannot find grid for {n} tiles")
+
+    def find_grid_k_n(self, k, n):
+        possible_cores = [c for c in range(1, 65) if k % c == 0 and n % c == 0]
+        possible_cores.sort(reverse=True)
+        for cores in possible_cores:
+            for rows in range(1, 9):
+                if cores % rows == 0:
+                    cols = cores // rows
+                    if cols <= 8:
+                        return rows, cols
+        raise AssertionError(f"Cannot find grid for K={k}, N={n}")
+
+    def dram_shard_core_grid_for_k(self, k):
+        rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
+        return ttnn.CoreGrid(x=cols, y=rows)
+
+    def dram_shard_core_grid_for_k_and_n(self, k, n):
+        rows, cols = self.find_grid_k_n(k // ttnn.TILE_SIZE, n // ttnn.TILE_SIZE)
+        return ttnn.CoreGrid(x=cols, y=rows)
+
+    def find_largest_divisor(self, n, max_divisor=8):
+        for i in range(max_divisor, 0, -1):
+            if n % i == 0:
+                return i
+        return 1
+
+    def dram_matmul_config(self, m, k, n, num_cores=None, fused_activation=None):
+        if num_cores is None:
+            num_cores = self.dram_shard_core_grid_for_k_and_n(k, n).num_cores
+        return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores)),
+            per_core_M=math.ceil(m / ttnn.TILE_SIZE),
+            per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
+            fused_activation=fused_activation,
+        )
+
+    def create_sharded_norm_config(self, grid):
+        block_w = self.dim // grid.num_cores // ttnn.TILE_SIZE
+        subblock_w = 4
+        while subblock_w > 0:
+            if block_w % subblock_w == 0:
+                break
+            subblock_w -= 1
+        return ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[grid.x, grid.y],
+            subblock_w=subblock_w,
+            block_h=self.tile_padded_batch_rows // ttnn.TILE_SIZE,
+            block_w=block_w,
+            inplace=False,
+        )
+
+    def get_decode_residual_mem_config(self):
+        residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
+        return ttnn.create_sharded_memory_config(
+            (self.tile_padded_batch_rows, self.dim // residual_grid.num_cores // self.num_devices),
+            residual_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    def get_decode_norm_config(self, norm_type):
+        if norm_type == "attn":
+            grid = self.attn_input_grid
+            mem = ttnn.create_sharded_memory_config(
+                (self.tile_padded_batch_rows, self.dim // grid.num_cores),
+                grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        elif norm_type == "ff":
+            grid = self.mlp_core_grid
+            mem = ttnn.create_sharded_memory_config(
+                (self.tile_padded_batch_rows, self.dim // grid.num_cores),
+                grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        elif norm_type == "lm_head":
+            grid = self.lm_head_core_grid
+            mem = ttnn.create_sharded_memory_config(
+                (self.tile_padded_batch_rows, _nearest_32(self.dim // grid.num_cores)),
+                grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        else:
+            raise ValueError(f"Invalid norm_type: {norm_type}")
+        return {
+            "sharded_program_config": self.create_sharded_norm_config(grid),
+            "sharded_output_config": mem,
+            "output_mem_config": None,
+        }
+
+    def get_decode_mlp_ff1_3_prg_config(self):
+        return self.dram_matmul_config(
+            self.tile_padded_batch_rows,
+            self.dim,
+            self.hidden_dim // self.cluster_shape[1],
+            self.mlp_core_grid.num_cores,
+        )
+
+    def get_decode_mlp_ff2_prg_config(self):
+        return self.dram_matmul_config(
+            self.tile_padded_batch_rows,
+            self.hidden_dim // self.cluster_shape[1],
+            self.dim,
+            self.mlp2_core_grid.num_cores,
+        )
+
+    def get_decode_mlp_binary_mult_mem_config(self):
+        return ttnn.create_sharded_memory_config(
+            (self.tile_padded_batch_rows, self.hidden_dim // self.cluster_shape[1] // self.mlp2_core_grid.num_cores),
+            self.mlp2_core_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    def get_decode_mlp_output_mem_config(self):
+        return self.get_decode_residual_mem_config()
+
+    def get_tensor_dtype(self, layer_num, tensor):
+        return self.optimizations.get_tensor_dtype(layer_num, tensor)
+
+    def get_math_fidelity(self, layer_num, op):
+        return self.optimizations.get_math_fidelity(layer_num, op, self)
+
+    def get_kv_cache_dtype(self, layer_num):
+        return self.get_tensor_dtype(layer_num, "kv_cache")
+
+    def ccl_topology(self):
+        cluster_type = ttnn.cluster.get_cluster_type()
+        if cluster_type in (
+            ttnn.cluster.ClusterType.P300_X2,
+            ttnn.cluster.ClusterType.P150_X4,
+            ttnn.cluster.ClusterType.P150_X8,
+        ):
+            return ttnn.Topology.Ring
+        if cluster_type in (
+            ttnn.cluster.ClusterType.T3K,
+            ttnn.cluster.ClusterType.GALAXY,
+            ttnn.cluster.ClusterType.TG,
+            ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+        ):
+            return ttnn.Topology.Ring if self.num_devices >= 8 else ttnn.Topology.Linear
+        return ttnn.Topology.Linear if self.num_devices > 1 else None
+
+
+def create_llama31_runtime_args(**kwargs):
+    return Llama31RuntimeArgs(**kwargs)
+
 
 # =============================================================================
 # TransformerBlock1D
@@ -198,7 +874,7 @@ class Llama31_8BPagedAttentionConfig:
 
 @dataclass
 class Llama3Transformer1DConfig:
-    """Full model config. Build via from_hf_config() or construct manually."""
+    """Full TTTv2 model config."""
 
     n_layers: int
     vocab_size: int
@@ -225,7 +901,7 @@ class Llama3Transformer1DConfig:
     # CCL
     tt_ccl: TT_CCL | None = None
 
-    # Weight cache path (for from_hf_config)
+    # Weight cache path
     cache_path: "str | None" = None
 
 
@@ -285,20 +961,9 @@ def build_llama3_transformer_1d_config(
         )
 
     def make_rope_config() -> Rope1DConfig:
-        rope_scaling = None
-        if getattr(args, "rope_scaling_params", None) is not None:
-            rope_scaling = rope_scaling_model_factory(
-                args.rope_scaling_params, getattr(args, "original_max_context_len", None)
-            )
-        cos_torch, sin_torch = compute_gather_cos_sin(
-            dhead=args.head_dim,
-            end=2 * args.max_seq_len,
-            theta=args.rope_theta,
-            rope_scaling=rope_scaling,
-        )
         return Rope1DConfig(
-            cos_matrix=LazyWeight(source=cos_torch, device=mesh_device),
-            sin_matrix=LazyWeight(source=sin_torch, device=mesh_device),
+            cos_matrix=LazyWeight(source=args.rope_cos, device=mesh_device),
+            sin_matrix=LazyWeight(source=args.rope_sin, device=mesh_device),
             max_batch_size=args.max_batch_size,
             head_dim=args.head_dim,
             device=mesh_device,

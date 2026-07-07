@@ -20,7 +20,6 @@ Usage:
     python_env/bin/pytest models/common/tests/demos/llama3_8b/demo.py -k "batch-32" -v
 """
 
-import json
 import os
 from pathlib import Path
 
@@ -30,17 +29,11 @@ from loguru import logger
 
 import ttnn
 from models.common.models.executor import run_perf_benchmark, run_teacher_forcing
-from models.common.models.llama3_8b.input_preprocessing import preprocess_inputs_prefill
-from models.common.models.llama3_8b.model import (
-    EagerLlamaExecutor,
-    Llama3Transformer1D,
-    Llama31_8BPagedAttentionConfig,
-    TracedLlamaExecutor,
-    build_llama3_transformer_1d_config,
-)
-from models.common.models.llama3_8b.runtime_args import create_llama31_runtime_args
+from models.common.models.llama3_8b.hf_adaptor import from_pretrained
+from models.common.models.llama3_8b.model import EagerLlamaExecutor, Llama31_8BPagedAttentionConfig, TracedLlamaExecutor
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
+from models.common.tests.demos.llama3_8b.demo_utils import load_input_prompts, preprocess_llama3_8b_chat_prompts
 
 # =============================================================================
 # Expected metrics
@@ -95,23 +88,6 @@ def load_reference_data(model_name: str):
     return reference_tokens, top5_tokens
 
 
-def load_input_prompts(batch_size: int):
-    """Load input prompts for performance testing."""
-    prompts_path = DEMO_DIR / "sample_prompts" / "input_data_questions_prefill_128.json"
-    if not prompts_path.exists():
-        return ["What is the meaning of life?"] * batch_size
-
-    with open(prompts_path) as f:
-        data = json.load(f)
-
-    prompts = (
-        [entry["prompt"] for entry in data] if isinstance(data, list) else data.get("prompts", [data.get("prompt", "")])
-    )
-    while len(prompts) < batch_size:
-        prompts = prompts * 2
-    return prompts[:batch_size]
-
-
 def log_generated_text(prompts, generated_token_ids, tokenizer):
     """Print the final generated continuation for each user."""
     logger.info("Finished decoding, printing the final outputs...\n")
@@ -153,27 +129,16 @@ def create_model_and_args(mesh_device, optimizations="performance", max_batch_si
     max_num_blocks = 1024
     paged_attention_config = Llama31_8BPagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
 
-    model_args = create_llama31_runtime_args(
+    model, model_args = from_pretrained(
         mesh_device=mesh_device,
+        hf_model=hf_model,
         instruct=instruct,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
         optimizations=optimizations,
-    )
-    model_args.paged_attention_config = paged_attention_config
-
-    state_dict = model_args.load_state_dict()
-    dtype = ttnn.bfloat8_b
-
-    model_config = build_llama3_transformer_1d_config(
-        mesh_device=mesh_device,
-        args=model_args,
-        state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        dtype=dtype,
+        dtype=ttnn.bfloat8_b,
         paged_attention_config=paged_attention_config,
     )
-    model = Llama3Transformer1D(model_config)
 
     return model, model_args
 
@@ -321,18 +286,14 @@ def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size, ca
         kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, model_args.n_layers)
         page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
-        prompts = load_input_prompts(batch_size)
+        prompts_path = DEMO_DIR / "sample_prompts" / "input_data_questions_prefill_128.json"
+        prompts = load_input_prompts(prompts_path, batch_size)
         tokenizer = model_args.tokenizer
-        input_tokens_prefill, _, decoding_pos, _ = preprocess_inputs_prefill(
+        input_tokens, prompt_lens = preprocess_llama3_8b_chat_prompts(
             prompts,
-            tokenizer,
-            [model_args],
-            model_args.instruct,
-            128,
-            max_prefill_len=model_args.max_seq_len,
+            model_args,
+            reserve_decode_tokens=128,
         )
-        input_tokens = torch.stack(input_tokens_prefill).view(batch_size, -1)
-        prompt_lens = torch.tensor(decoding_pos, dtype=torch.long)
 
         sampling_mode = os.environ.get("SAMPLING_MODE", "on_device_topk").lower()
         on_device_params = {
