@@ -136,7 +136,7 @@ for base_param in base_params:
 
         # Create complete parameter tuple matching test signature
         combined_params = (
-            base_testname,  # testname
+            base_testname,  # cpp_source
             formats,  # formats
             broadcast_type,  # broadcast_type
             disable_src_zero,  # disable_src_zero
@@ -162,7 +162,7 @@ def filter_params_with_constraints(all_params):
     for params in all_params:
         # Extract parameters from tuple
         (
-            testname,
+            cpp_source,
             formats,
             broadcast_type,
             disable_src_zero,
@@ -321,11 +321,11 @@ def create_simple_ids(all_params):
     """Create comprehensive but readable IDs for unpack_A tests"""
     ids = []
     for i, params in enumerate(all_params):
-        # params = (testname, formats, broadcast_type, disable_src_zero,
+        # params = (cpp_source, formats, broadcast_type, disable_src_zero,
         #           acc_to_dest, stoch_rnd_type, reuse_dest, transpose_of_faces,
         #           within_face_16x16_transpose, num_faces, face_r_dim)
 
-        testname = params[0]
+        cpp_source = params[0]
         formats = params[1]
         broadcast_type = params[2]
         disable_src_zero = params[3]
@@ -366,14 +366,14 @@ param_ids = create_simple_ids(all_params)
 # When tests are randomised, they fail in various ways: https://github.com/tenstorrent/tt-llk/issues/1108
 @skip_for_blackhole
 @pytest.mark.parametrize(
-    "testname, formats, broadcast_type, disable_src_zero, acc_to_dest, "
+    "cpp_source, formats, broadcast_type, disable_src_zero, acc_to_dest, "
     "stochastic_rnd, reuse_dest, transpose_of_faces, "
     "within_face_16x16_transpose, num_faces, face_r_dim, input_dimensions",
     all_params,
     ids=param_ids,
 )
 def test_unpack_comprehensive(
-    testname,
+    cpp_source,
     formats,
     broadcast_type,
     disable_src_zero,
@@ -527,7 +527,7 @@ def test_unpack_comprehensive(
     )
 
     configuration = TestConfig(
-        testname,
+        cpp_source,
         formats,
         templates=[
             STOCHASTIC_ROUNDING(stochastic_rnd),

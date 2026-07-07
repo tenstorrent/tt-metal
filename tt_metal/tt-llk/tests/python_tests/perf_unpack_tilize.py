@@ -29,12 +29,14 @@ _UNPACK_TILIZE_INT_DIMENSIONS = [(rt, ct) for rt in range(1, 3) for ct in range(
     ),
     num_faces=[4],
     dimensions=_UNPACK_TILIZE_FLOAT_DIMENSIONS,
+    input_dimensions=lambda dimensions: [[dimensions[0] * 32, dimensions[1] * 32]],
 )
 def test_perf_unpack_tilize_float(
     perf_report,
     formats,
     num_faces,
     dimensions,
+    input_dimensions,
 ):
     if formats.input_format == DataFormat.Bfp8_b:
         pytest.skip("Bfp8_b input not supported for unpack_tilize")
@@ -53,12 +55,14 @@ def test_perf_unpack_tilize_float(
     formats=input_output_formats([DataFormat.Int32]),
     num_faces=[4],
     dimensions=_UNPACK_TILIZE_INT_DIMENSIONS,
+    input_dimensions=lambda dimensions: [[dimensions[0] * 32, dimensions[1] * 32]],
 )
 def test_perf_unpack_tilize_int(
     perf_report,
     formats,
     num_faces,
     dimensions,
+    input_dimensions,
 ):
     rt_dim, ct_dim = dimensions
     _perf_unpack_tilize(

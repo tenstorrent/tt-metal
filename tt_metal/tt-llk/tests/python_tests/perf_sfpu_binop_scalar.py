@@ -105,7 +105,7 @@ def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
         DestAccumulation.Yes,
         DestAccumulation.No,
     ],
-    mathop=[
+    math_op=[
         MathOperation.ScalarAdd,
         MathOperation.ScalarSub,
         MathOperation.ScalarMul,
@@ -120,14 +120,14 @@ def test_perf_sfpu_binop_scalar(
     perf_report,
     formats,
     dest_acc,
-    mathop,
+    math_op,
     loop_factor,
     iterations,
     input_dimensions,
 ):
     _run(
         formats,
-        mathop,
+        math_op,
         dest_acc,
         loop_factor,
         iterations,

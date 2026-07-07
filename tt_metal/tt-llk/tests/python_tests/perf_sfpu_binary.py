@@ -49,7 +49,7 @@ def get_dest_accum_modes(formats):
         ApproximationMode.Yes,
         ApproximationMode.No,
     ],
-    mathop=[
+    math_op=[
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
         MathOperation.SfpuElwmul,
@@ -75,7 +75,7 @@ def get_dest_accum_modes(formats):
 def test_perf_sfpu_binary_float(
     perf_report,
     formats,
-    mathop,
+    math_op,
     approx_mode,
     bcast_dim,
     dest_acc,
@@ -102,7 +102,7 @@ def test_perf_sfpu_binary_float(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
         ],
@@ -141,7 +141,7 @@ def test_perf_sfpu_binary_float(
         ApproximationMode.Yes,
         ApproximationMode.No,
     ],
-    mathop=[
+    math_op=[
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwLogicalRightShift,
@@ -161,7 +161,7 @@ def test_perf_sfpu_binary_float(
 def test_perf_sfpu_binary_int(
     perf_report,
     formats,
-    mathop,
+    math_op,
     approx_mode,
     dest_acc,
     loop_factor,
@@ -187,7 +187,7 @@ def test_perf_sfpu_binary_int(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
         ],
@@ -229,7 +229,7 @@ def test_perf_sfpu_binary_int(
         ApproximationMode.Yes,
         ApproximationMode.No,
     ],
-    mathop=[
+    math_op=[
         MathOperation.SfpuAddTopRow,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
@@ -246,7 +246,7 @@ def test_perf_sfpu_binary_int(
 def test_perf_sfpu_binary_add_top_row(
     perf_report,
     formats,
-    mathop,
+    math_op,
     approx_mode,
     dest_acc,
     loop_factor,
@@ -283,7 +283,7 @@ def test_perf_sfpu_binary_add_top_row(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
         ],

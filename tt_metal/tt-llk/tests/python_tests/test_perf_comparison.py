@@ -7,8 +7,9 @@ For each matched pair it maps every parametrized function in the functional
 module to its counterpart in the perf module and, axis by axis, reports which
 parameters are identical and which differ. For a differing axis it simply prints
 both sweeps (the functional value list and the perf value list) so you can see
-how the two diverge; it does not compute shared / functional-only / perf-only
-breakdowns.
+how the two diverge. When one sweep is a subset of the other it labels that
+relationship (perf subset of functional, or the reverse); otherwise it reports
+a true mismatch.
 
 By default it sweeps a folder (its own folder, i.e. ``python_tests``): it
 collects every ``test_*.py`` and ``perf_*.py`` module, pairs them by the part of
@@ -173,6 +174,18 @@ def fmt_values(values: list[str], full: bool, limit: int = 8) -> str:
     return ", ".join(values[:limit]) + f", ... (+{len(values) - limit} more)"
 
 
+def axis_value_relation(test_values: list[str], perf_values: list[str]) -> str:
+    """Classify how functional and perf value sets relate."""
+    set_t, set_p = set(test_values), set(perf_values)
+    if set_t == set_p:
+        return "identical"
+    if set_p <= set_t:
+        return "perf_subset"
+    if set_t <= set_p:
+        return "functional_subset"
+    return "different"
+
+
 def compare(test_axes: dict, perf_axes: dict, full: bool) -> None:
     """Report identical vs differing axes; for differing ones print both sweeps."""
     all_axes = [
@@ -197,7 +210,19 @@ def compare(test_axes: dict, perf_axes: dict, full: bool) -> None:
             elif not in_p:
                 print(f"  [T] {axis}: FUNCTIONAL-ONLY axis")
             else:
-                print(f"  [x] {axis}: DIFFERENT")
+                relation = axis_value_relation(t, p)
+                if relation == "perf_subset":
+                    print(
+                        f"  [~] {axis}: perf subset of functional "
+                        f"({len(p)}/{len(t)} value(s))"
+                    )
+                elif relation == "functional_subset":
+                    print(
+                        f"  [~] {axis}: functional subset of perf "
+                        f"({len(t)}/{len(p)} value(s))"
+                    )
+                else:
+                    print(f"  [x] {axis}: DIFFERENT")
             print(f"        functional : {fmt_values(t, full)}")
             print(f"        perf       : {fmt_values(p, full)}")
     print(f"\n  Summary: {len(same)} identical axis/axes, {len(diff)} differing.")

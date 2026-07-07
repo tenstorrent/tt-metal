@@ -157,7 +157,7 @@ FLOAT_TEST_PARAMS = list(
 @skip_for_coverage
 @pytest.mark.nightly
 @pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc",
+    "formats,approx_mode,math_op,fast_mode,dest_acc",
     FLOAT_TEST_PARAMS,
 )
 @pytest.mark.parametrize(
@@ -171,13 +171,13 @@ FLOAT_TEST_PARAMS = list(
 def test_eltwise_unary_sfpu_float(
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
-    mathop: MathOperation,
+    math_op: MathOperation,
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
     stable_sort: StableSort,
 ):
-    if TestConfig.WITH_COVERAGE and mathop in [
+    if TestConfig.WITH_COVERAGE and math_op in [
         MathOperation.Acosh,
         MathOperation.Log,
         MathOperation.Log1p,
@@ -201,13 +201,13 @@ def test_eltwise_unary_sfpu_float(
             reason="When these SFPU ops get compiled with coverage, `#pragma GCC unroll X` marked loops get compiled to invalid assembly"
         )
 
-    if mathop == MathOperation.ReluMin:
+    if math_op == MathOperation.ReluMin:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
 
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
+    if math_op == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
         pytest.skip(reason="Metal tanh does not support approximation mode")
 
-    if TestConfig.WITH_COVERAGE and mathop == MathOperation.Gelu:
+    if TestConfig.WITH_COVERAGE and math_op == MathOperation.Gelu:
         # Issue link: https://github.com/tenstorrent/tt-llk/issues/883
         pytest.skip(
             reason="Compilation error when this mathop gets compiled with coverage"
@@ -224,7 +224,7 @@ def test_eltwise_unary_sfpu_float(
 
     if (
         approx_mode == ApproximationMode.Yes
-        and mathop in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
+        and math_op in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
         and (
             formats.input_format == DataFormat.Bfp8_b
             or formats.output_format == DataFormat.Bfp8_b
@@ -239,7 +239,7 @@ def test_eltwise_unary_sfpu_float(
         formats,
         dest_acc,
         approx_mode,
-        mathop,
+        math_op,
         fast_mode,
         input_dimensions,
     )
@@ -358,7 +358,7 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
-    mathop=[
+    math_op=[
         MathOperation.Neg,
         MathOperation.Fill,
     ],
@@ -369,7 +369,7 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
 def test_eltwise_unary_sfpu_int(
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
-    mathop: MathOperation,
+    math_op: MathOperation,
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
@@ -382,7 +382,7 @@ def test_eltwise_unary_sfpu_int(
         formats,
         dest_acc,
         approx_mode,
-        mathop,
+        math_op,
         fast_mode,
         input_dimensions,
     )

@@ -106,7 +106,7 @@ def _run_sfpu_binop_scalar(formats, dest_acc, mathop, input_dimensions=[32, 32])
         same=True,
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=[
+    math_op=[
         MathOperation.ScalarAdd,
         MathOperation.ScalarSub,
         MathOperation.ScalarMul,
@@ -115,7 +115,7 @@ def _run_sfpu_binop_scalar(formats, dest_acc, mathop, input_dimensions=[32, 32])
     ],
     input_dimensions=[[128, 64]],
 )
-def test_sfpu_binop_scalar(formats, dest_acc, mathop, input_dimensions):
+def test_sfpu_binop_scalar(formats, dest_acc, math_op, input_dimensions):
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
     if (
@@ -124,4 +124,4 @@ def test_sfpu_binop_scalar(formats, dest_acc, mathop, input_dimensions):
     ):
         pytest.skip("Float16_b not supported with DestAccumulation.Yes")
 
-    _run_sfpu_binop_scalar(formats, dest_acc, mathop, input_dimensions)
+    _run_sfpu_binop_scalar(formats, dest_acc, math_op, input_dimensions)

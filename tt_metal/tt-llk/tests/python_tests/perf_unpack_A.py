@@ -24,7 +24,7 @@ from helpers.test_variant_parameters import (
 
 @pytest.mark.perf
 @parametrize(
-    testname=["sources/unpack_transpose_perf.cpp"],
+    cpp_source=["sources/unpack_transpose_perf.cpp"],
     formats=input_output_formats(
         [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Int32],
     ),
@@ -41,7 +41,7 @@ from helpers.test_variant_parameters import (
 )
 def test_perf_unpack_comprehensive(
     perf_report,
-    testname,
+    cpp_source,
     formats,
     broadcast_type,
     disable_src_zero,
@@ -88,7 +88,7 @@ def test_perf_unpack_comprehensive(
     tile_count = 16
 
     configuration = PerfConfig(
-        testname,
+        cpp_source,
         formats,
         run_types=[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE],
         templates=[],

@@ -121,7 +121,7 @@ def _run_sfpu_ternary(formats, dest_acc, mathop, input_dimensions=[32, 32]):
         same=True,
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=[
+    math_op=[
         MathOperation.SfpuAddcmul,
         MathOperation.SfpuAddcdiv,
         MathOperation.SfpuLerp,
@@ -129,13 +129,13 @@ def _run_sfpu_ternary(formats, dest_acc, mathop, input_dimensions=[32, 32]):
     ],
     input_dimensions=[[128, 64]],
 )
-def test_sfpu_ternary(formats, dest_acc, mathop, input_dimensions):
+def test_sfpu_ternary(formats, dest_acc, math_op, input_dimensions):
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
     if (
         formats.input_format == DataFormat.Bfp8_b
-        and mathop != MathOperation.SfpuAddcmul
+        and math_op != MathOperation.SfpuAddcmul
     ):
         pytest.skip("Bfp8_b is only supported for addcmul")
 
-    _run_sfpu_ternary(formats, dest_acc, mathop, input_dimensions)
+    _run_sfpu_ternary(formats, dest_acc, math_op, input_dimensions)

@@ -54,7 +54,7 @@ from helpers.utils import passed_test
         LlkBroadcastType.Column,
         LlkBroadcastType.Scalar,
     ],
-    mathop=[
+    math_op=[
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
         MathOperation.SfpuElwmul,
@@ -73,7 +73,7 @@ from helpers.utils import passed_test
 def test_sfpu_binary_float(
     formats,
     dest_acc,
-    mathop,
+    math_op,
     bcast_dim,
     approx_mode,
     input_dimensions,
@@ -103,7 +103,7 @@ def test_sfpu_binary_float(
     sfpu_binary(
         formats,
         dest_acc,
-        mathop,
+        math_op,
         broadcast_type=bcast_dim,
     )
 
@@ -114,7 +114,7 @@ def test_sfpu_binary_float(
             DataFormat.Int32,
         ]
     ),
-    mathop=[
+    math_op=[
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLeftShift,
@@ -131,14 +131,14 @@ def test_sfpu_binary_float(
 def test_sfpu_binary_int(
     formats,
     dest_acc,
-    mathop,
+    math_op,
     approx_mode,
     input_dimensions,
 ):
     sfpu_binary(
         formats,
         dest_acc,
-        mathop,
+        math_op,
     )
 
 
@@ -151,13 +151,13 @@ def test_sfpu_binary_int(
         ],
         same=True,
     ),
-    mathop=[MathOperation.SfpuAddTopRow],
+    math_op=[MathOperation.SfpuAddTopRow],
     approx_mode=[ApproximationMode.No],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_dimensions=[[128, 64]],
 )
 def test_sfpu_binary_add_top_row(
-    formats, dest_acc, mathop, approx_mode, input_dimensions
+    formats, dest_acc, math_op, approx_mode, input_dimensions
 ):
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip(
@@ -174,7 +174,7 @@ def test_sfpu_binary_add_top_row(
 
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_tensor = generate_golden(
-        mathop,
+        math_op,
         src_A,
         0,
         1,
@@ -195,7 +195,7 @@ def test_sfpu_binary_add_top_row(
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             APPROX_MODE(),
             BROADCAST_TYPE(LlkBroadcastType.None_),
         ],

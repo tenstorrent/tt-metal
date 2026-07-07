@@ -41,10 +41,14 @@ from helpers.utils import passed_test
         ]
     ),
     num_faces=[2, 4],
+    dimensions=[(2, 2)],
+    input_dimensions=[[64, 64]],
 )
 def test_unpack_tilize_float(
     formats,
     num_faces,
+    dimensions,
+    input_dimensions,
 ):
     if (
         formats.input_format == DataFormat.Fp8_e4m3
@@ -85,10 +89,14 @@ def test_unpack_tilize_float32_lossless(
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     num_faces=[2, 4],
+    dimensions=[(2, 2)],
+    input_dimensions=[[64, 64]],
 )
 def test_unpack_tilize_int(
     formats,
     num_faces,
+    dimensions,
+    input_dimensions,
 ):
     unpack_tilize(formats, unpack_to_dest=True, num_faces=num_faces)
 

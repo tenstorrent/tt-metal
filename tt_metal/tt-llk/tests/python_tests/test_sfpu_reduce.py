@@ -280,21 +280,21 @@ def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
 
 @parametrize(
     formats=get_reduce_formats,
-    mathop=get_supported_reduce_axioms,
+    math_op=get_supported_reduce_axioms,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_bounds=get_format_input_bounds,
     reduce_pool=[ReducePool.Min, ReducePool.Max, ReducePool.Sum, ReducePool.Average],
-    dimension_combinations=lambda mathop, dest_acc, formats: [
+    dimension_combinations=lambda math_op, dest_acc, formats: [
         dim
         for dim in dimension_combinations
-        if is_valid_reduce_dimension(mathop, dest_acc, formats, dim)
+        if is_valid_reduce_dimension(math_op, dest_acc, formats, dim)
     ],
     reduced_extent=get_reduce_extents,
 )
 def test_sfpu_reduce(
     formats,
     dest_acc,
-    mathop,
+    math_op,
     reduce_pool,
     input_bounds,
     dimension_combinations,
@@ -310,7 +310,7 @@ def test_sfpu_reduce(
         )
 
     if (
-        mathop == MathOperation.ReduceRow
+        math_op == MathOperation.ReduceRow
         and reduce_pool in (ReducePool.Max, ReducePool.Min)
         and formats.input_format == DataFormat.UInt16
     ):
@@ -370,7 +370,7 @@ def test_sfpu_reduce(
     # real data and fill the rest with the reduction identity (mirrors the padding ttnn injects when
     # folding dim=0/dim=1 onto H). The real data must win so the result matches a golden reduced over
     # only the real rows.
-    if mathop == MathOperation.ReduceColumn and reduced_extent < TILE_DIM:
+    if math_op == MathOperation.ReduceColumn and reduced_extent < TILE_DIM:
         pad_value = get_reduce_pad_value(reduce_pool, formats.input_format)
         src_A = src_A.view(TILE_DIM, tile_cnt * TILE_DIM)
         src_A[reduced_extent:, :] = pad_value
@@ -380,7 +380,7 @@ def test_sfpu_reduce(
     # Dimensions for Max reduction work column wise, for Sum/Avg processing tiles independently is same as column reduction on dst block dimension [32, num_tiles * 32] where num rows is 32 i.e RT_DIM=1 (same as a single tile)
     dst_dim = (
         [32, tile_cnt * 32]
-        if mathop == MathOperation.ReduceColumn
+        if math_op == MathOperation.ReduceColumn
         else input_dimensions
     )
 
@@ -393,11 +393,11 @@ def test_sfpu_reduce(
 
     # Reduce only over the real rows; the padded rows must not contribute to the golden.
     golden_input = src_A_untilized
-    if mathop == MathOperation.ReduceColumn and reduced_extent < TILE_DIM:
+    if math_op == MathOperation.ReduceColumn and reduced_extent < TILE_DIM:
         golden_input = src_A_untilized[:reduced_extent]
 
     golden_tensor = get_golden_generator(UnarySFPUGolden)(
-        mathop,
+        math_op,
         golden_input,
         formats.output_format,
         dest_acc,
@@ -412,7 +412,7 @@ def test_sfpu_reduce(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(ApproximationMode.No),
-            MATH_OP(mathop=mathop, pool_type=reduce_pool),
+            MATH_OP(mathop=math_op, pool_type=reduce_pool),
         ],
         runtimes=[
             NUM_BLOCKS(num_blocks),
@@ -428,7 +428,7 @@ def test_sfpu_reduce(
             tile_count_A=tile_cnt,
             tile_count_B=1,
             tile_count_res=tile_cnt,
-            twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
+            twos_complement=use_int32_twos_complement(formats, reduce_pool, math_op),
         ),
         dest_acc=dest_acc,
         unpack_to_dest=True,
@@ -440,19 +440,19 @@ def test_sfpu_reduce(
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
-    if mathop == MathOperation.ReduceColumn:
+    if math_op == MathOperation.ReduceColumn:
         golden_slice = golden_tensor[0]
         res_slice = res_tensor[0]
-    elif mathop == MathOperation.ReduceRow:
+    elif math_op == MathOperation.ReduceRow:
         golden_slice = golden_tensor[:, 0]
         res_slice = res_tensor[:, 0]
     else:
-        raise ValueError(f"Unsupported math operation: {mathop}")
+        raise ValueError(f"Unsupported math operation: {math_op}")
 
     # Accumulating float reductions lose precision proportional to the number of summed
     # terms; size the absolute tolerance accordingly (PCC still guards correctness).
     reduce_atol = get_reduce_sum_atol(
-        formats.output_format, reduce_pool, mathop, input_dimensions, input_bounds
+        formats.output_format, reduce_pool, math_op, input_dimensions, input_bounds
     )
 
     assert passed_test(

@@ -28,7 +28,7 @@ from helpers.test_variant_parameters import (
         same=True,
     ),
     dest_acc=[DestAccumulation.No],
-    mathop=[MathOperation.ReduceColumn],
+    math_op=[MathOperation.ReduceColumn],
     reduce_pool=[ReducePool.Max],  # Only MAX is supported for SDPA reduce
     input_dimensions=[[128, 64]],
     loop_factor=list(
@@ -39,7 +39,7 @@ def test_perf_sfpu_reduce_sdpa(
     perf_report,
     formats,
     dest_acc,
-    mathop,
+    math_op,
     reduce_pool,
     input_dimensions,
     loop_factor,
@@ -70,7 +70,7 @@ def test_perf_sfpu_reduce_sdpa(
             # PerfRunType.PACK_ISOLATE,     # Pack timing for reference
         ],
         templates=[
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             REDUCE_POOL_TYPE(reduce_pool),
             generate_input_dim(input_dimensions, input_dimensions),
         ],

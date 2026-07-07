@@ -98,7 +98,7 @@ def _get_stable_sort_modes(mathop):
         ApproximationMode.Yes,
         ApproximationMode.No,
     ],
-    mathop=[
+    math_op=[
         MathOperation.Reciprocal,
         MathOperation.Sqrt,
         MathOperation.Rsqrt,
@@ -117,15 +117,15 @@ def _get_stable_sort_modes(mathop):
         MathOperation.TopKMerge,
         MathOperation.TopKRebuild,
     ],
-    dest_acc=lambda mathop: _get_dest_acc_modes(mathop),
+    dest_acc=lambda math_op: _get_dest_acc_modes(math_op),
     loop_factor=[
         16,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
     iterations=[
         32,
     ],  # Number of SFPU iterations
-    fast_mode=lambda mathop: _get_fast_modes(mathop),
-    stable_sort=lambda mathop: _get_stable_sort_modes(mathop),
+    fast_mode=lambda math_op: _get_fast_modes(math_op),
+    stable_sort=lambda math_op: _get_stable_sort_modes(math_op),
     input_dimensions=[
         [128, 64],  # tile_cnt: 8
     ],  # Specifying different input sizes to cover different tile counts
@@ -133,7 +133,7 @@ def _get_stable_sort_modes(mathop):
 def test_perf_eltwise_unary_sfpu_float(
     perf_report,
     formats,
-    mathop,
+    math_op,
     approx_mode,
     dest_acc,
     loop_factor,
@@ -164,7 +164,7 @@ def test_perf_eltwise_unary_sfpu_float(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
             FAST_MODE(fast_mode),
@@ -221,7 +221,7 @@ def _run_math_isolate(formats, mathop, input_dimensions):
         formats,
         run_types=[PerfRunType.MATH_ISOLATE],
         templates=[
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             APPROX_MODE(ApproximationMode.No),
             ITERATIONS(32),
             FAST_MODE(FastMode.No),
@@ -253,7 +253,7 @@ def _run_math_isolate(formats, mathop, input_dimensions):
 @parametrize(
     formats=input_output_formats([DataFormat.Int32], same=True),
     approx_mode=[ApproximationMode.No],
-    mathop=_INT32_UNARY_OPS,
+    math_op=_INT32_UNARY_OPS,
     fast_mode=[FastMode.No],
     dest_acc=[DestAccumulation.Yes],
     input_dimensions=[[128, 64]],
@@ -262,9 +262,9 @@ def test_perf_eltwise_unary_sfpu_int(
     perf_report,
     formats,
     approx_mode,
-    mathop,
+    math_op,
     fast_mode,
     dest_acc,
     input_dimensions,
 ):
-    _run_math_isolate(formats, mathop, input_dimensions).run(perf_report)
+    _run_math_isolate(formats, math_op, input_dimensions).run(perf_report)
