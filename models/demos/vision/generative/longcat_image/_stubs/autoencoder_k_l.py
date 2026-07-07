@@ -259,16 +259,19 @@ class _AutoencoderKL:
     # ── encode / decode ──────────────────────────────────────────────────
     def _encode(self, x_cf, H, W):
         e = self.vae.encoder
+        # thread height AND width independently through the 3 downsamples (non-square inputs:
+        # the edit path derives H!=W from the image aspect ratio via calculate_dimensions).
         h2, h4, h8 = H // 2, H // 4, H // 8
+        w2, w4, w8 = W // 2, W // 4, W // 8
         x = self._conv(x_cf, e.conv_in, 3, 128, H, W)
         x = self._down_block(x, e.down_blocks[0], 128, 128, H, W, True)
-        x = self._down_block(x, e.down_blocks[1], 128, 256, h2, h2, True)
-        x = self._down_block(x, e.down_blocks[2], 256, 512, h4, h4, True)
-        x = self._down_block(x, e.down_blocks[3], 512, 512, h8, h8, False)
-        x = self._midblock(x, e.mid_block, 512, h8, h8)
-        x = self._gn_silu(x, e.conv_norm_out, 512, h8, h8, silu=True)
-        x = self._conv(x, e.conv_out, 512, 2 * self.latent_channels, h8, h8)
-        return x, h8
+        x = self._down_block(x, e.down_blocks[1], 128, 256, h2, w2, True)
+        x = self._down_block(x, e.down_blocks[2], 256, 512, h4, w4, True)
+        x = self._down_block(x, e.down_blocks[3], 512, 512, h8, w8, False)
+        x = self._midblock(x, e.mid_block, 512, h8, w8)
+        x = self._gn_silu(x, e.conv_norm_out, 512, h8, w8, silu=True)
+        x = self._conv(x, e.conv_out, 512, 2 * self.latent_channels, h8, w8)
+        return x, h8, w8
 
     def _decode(self, z, hb, wb):
         d = self.vae.decoder
