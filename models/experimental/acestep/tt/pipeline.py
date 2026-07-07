@@ -66,6 +66,10 @@ def _set_dit_fidelity(module, fidelity, _seen=None):
         return changed
     _seen.add(id(module))
     cfg = getattr(module, "config", None)
+    # Only swap the attention/model `compute_kernel_config`. We deliberately do NOT touch the MLP1D
+    # feed-forward configs (ff1_3_/ff2_compute_kernel_cfg): measured HiFi4 on the MLP feed-forward
+    # REGRESSES the CFG PCC (0.888 -> 0.621) - the reference MLP aligns better at HiFi2. HiFi4 helps
+    # only the attention path under CFG amplification.
     ck = getattr(cfg, "compute_kernel_config", None) if cfg is not None else None
     if ck is not None and hasattr(ck, "math_fidelity"):
         changed.append((ck, ck.math_fidelity))
