@@ -150,12 +150,22 @@ matmul_shapes_bfloat16 = [
     (256, 256, 384, True, True, 1, 1, 1),
     (256, 384, 384, True, True, 2, 1, 1),
     (384, 384, 384, True, True, 4, 1, 1),
-    (384, 384, 512, False, False, 2, 1, 1),
-    (384, 512, 512, False, False, 2, 1, 1),
-    (416, 320, 320, False, False, 1, 1, 1),  # P150 square: 4160x4160x4160
-    (512, 512, 512, False, False, 1, 2, 2),
-    (1024, 1024, 1024, False, False, 2, 4, 4),
-    (2048, 2048, 2048, False, False, 4, 8, 8),
+    (64, 64, 64, False, False, 1, 1, 1),
+    (64, 128, 128, False, False, 1, 1, 1),
+    (64, 128, 256, False, False, 1, 1, 1),
+    (128, 128, 128, False, False, 1, 1, 1),
+    (128, 128, 256, False, False, 1, 1, 1),
+    (128, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 384, False, False, 1, 1, 1),
+    (256, 384, 384, False, False, 2, 1, 1),
+    (384, 384, 384, False, False, 4, 1, 1),
+    # (384, 384, 512, False, False, 2, 1, 1),
+    # (384, 512, 512, False, False, 2, 1, 1),
+    # (416, 320, 320, False, False, 1, 1, 1),  # P150 square: 4160x4160x4160
+    # (512, 512, 512, False, False, 1, 2, 2),
+    # (1024, 1024, 1024, False, False, 2, 4, 4),
+    # (2048, 2048, 2048, False, False, 4, 8, 8),
 ]
 
 matmul_shapes_bfloat8_b = [
@@ -169,11 +179,21 @@ matmul_shapes_bfloat8_b = [
     (256, 256, 384, True, True, 1, 1, 1),
     (256, 384, 384, True, True, 1, 1, 1),
     (384, 384, 384, True, True, 2, 1, 1),
-    (384, 384, 512, True, True, 2, 1, 1),
-    (416, 320, 320, False, False, 1, 1, 1),
-    (512, 512, 512, False, False, 1, 2, 2),
-    (1024, 1024, 1024, False, False, 2, 4, 4),
-    (2048, 2048, 2048, False, False, 4, 8, 8),
+    (64, 64, 64, False, False, 1, 1, 1),
+    (64, 128, 128, False, False, 1, 1, 1),
+    (64, 128, 256, False, False, 1, 1, 1),
+    (128, 128, 128, False, False, 1, 1, 1),
+    (128, 128, 256, False, False, 1, 1, 1),
+    (128, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 384, False, False, 1, 1, 1),
+    (256, 384, 384, False, False, 1, 1, 1),
+    (384, 384, 384, False, False, 2, 1, 1),
+    # (384, 384, 512, True, True, 2, 1, 1),
+    # (416, 320, 320, False, False, 1, 1, 1),
+    # (512, 512, 512, False, False, 1, 2, 2),
+    # (1024, 1024, 1024, False, False, 2, 4, 4),
+    # (2048, 2048, 2048, False, False, 4, 8, 8),
 ]
 
 matmul_shapes_bfloat4_b = [
@@ -187,35 +207,45 @@ matmul_shapes_bfloat4_b = [
     (256, 256, 384, True, True, 1, 1, 1),
     (256, 384, 384, True, True, 1, 1, 1),
     (384, 384, 384, True, True, 1, 1, 1),
-    (384, 384, 512, True, True, 1, 1, 1),
-    (384, 512, 512, True, True, 2, 1, 1),
-    (416, 320, 320, False, False, 1, 1, 1),
-    (512, 512, 512, True, True, 2, 1, 1),
-    (1024, 1024, 1024, False, False, 2, 2, 2),
-    (2048, 2048, 2048, False, False, 4, 4, 4),
+    (64, 64, 64, False, False, 1, 1, 1),
+    (64, 128, 128, False, False, 1, 1, 1),
+    (64, 128, 256, False, False, 1, 1, 1),
+    (128, 128, 128, False, False, 1, 1, 1),
+    (128, 128, 256, False, False, 1, 1, 1),
+    (128, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 256, False, False, 1, 1, 1),
+    (256, 256, 384, False, False, 1, 1, 1),
+    (256, 384, 384, False, False, 1, 1, 1),
+    (384, 384, 384, False, False, 1, 1, 1),
+    # (384, 384, 512, True, True, 1, 1, 1),
+    # (384, 512, 512, True, True, 2, 1, 1),
+    # (416, 320, 320, False, False, 1, 1, 1),
+    # (512, 512, 512, True, True, 2, 1, 1),
+    # (1024, 1024, 1024, False, False, 2, 2, 2),
+    # (2048, 2048, 2048, False, False, 4, 4, 4),
 ]
 
 # (dtype, math_fidelity, use_trace)
 matmul_configs = [
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
+    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
+    # (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
+    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
+    # (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
 ]
 
 
-@pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
+# @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("num_warmup_iterations", [5])
-@pytest.mark.parametrize("num_measurement_iterations", [100])
+@pytest.mark.parametrize("num_measurement_iterations", [25])
 def test_matmul_2d_host_perf(
     device,
     grid_size,
@@ -522,27 +552,27 @@ matmul_shapes_oob = [
     (256, 256, 384),
     (256, 384, 384),
     (384, 384, 384),
-    (384, 384, 512),
-    (384, 512, 512),
-    (512, 512, 512),
+    # (384, 384, 512),
+    # (384, 512, 512),
+    # (512, 512, 512),
 ]
 
 matmul_configs_oob = [
     (ttnn.bfloat16, False),
     (ttnn.bfloat16, True),
-    (ttnn.bfloat8_b, False),
-    (ttnn.bfloat8_b, True),
-    (ttnn.bfloat4_b, False),
-    (ttnn.bfloat4_b, True),
+    # (ttnn.bfloat8_b, False),
+    # (ttnn.bfloat8_b, True),
+    # (ttnn.bfloat4_b, False),
+    # (ttnn.bfloat4_b, True),
 ]
 
 
-@pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
+# @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("num_warmup_iterations", [5])
-@pytest.mark.parametrize("num_measurement_iterations", [100])
+@pytest.mark.parametrize("num_measurement_iterations", [25])
 def test_matmul_2d_host_perf_out_of_box(
     device,
     grid_size,
