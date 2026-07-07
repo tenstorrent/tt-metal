@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
-TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1dev_gas_16.yaml"
+TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_1dev.yaml"
 MAX_SEQ_LEN = 2048
 
 # tt-transformers generation captures an on-device decode trace, so the mesh

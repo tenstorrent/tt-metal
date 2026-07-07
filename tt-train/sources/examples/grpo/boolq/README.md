@@ -244,8 +244,8 @@ width and exports `GRPO_BOOLQ_TOPOLOGY` (forwarded to both ranks via
 
 | `--topology` | Bindings | TTML mesh (YAML) | TTT parent → submeshes | Chips |
 |--------------|----------|------------------|------------------------|-------|
-| `2x2` (default) | `configurations/local4` | `[1, 2]` DDP ([`grpo_boolq_llama_2dev_ddp_gas_4.yaml`](../../../../configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_4.yaml)) | `[1, 2]` → 2× `[1, 1]` | 4 |
-| `4x4` | `configurations/local8` | `[1, 4]` DDP ([`grpo_boolq_llama_4dev_ddp.yaml`](../../../../configs/training_configs/grpo_boolq_llama_4dev_ddp.yaml)) | `[1, 4]` → 4× `[1, 1]` | 8 |
+| `2x2` (default) | `configurations/local4` | `[1, 2]` DDP ([`grpo_boolq_llama_1b_ddp_2dev.yaml`](../../../../configs/training_configs/grpo_boolq_llama_1b_ddp_2dev.yaml)) | `[1, 2]` → 2× `[1, 1]` | 4 |
+| `4x4` | `configurations/local8` | `[1, 4]` DDP ([`grpo_boolq_llama_1b_ddp_4dev.yaml`](../../../../configs/training_configs/grpo_boolq_llama_1b_ddp_4dev.yaml)) | `[1, 4]` → 4× `[1, 1]` | 8 |
 
 `local4` pins rank 0 to board `0` and rank 1 to board `1`; `local8`
 pins rank 0 to boards `0,1` and rank 1 to boards `2,3` (a T3000-class
