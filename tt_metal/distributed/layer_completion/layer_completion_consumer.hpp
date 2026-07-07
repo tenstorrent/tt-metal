@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Test / scheduler-stand-in consumer for the layer-completion aggregation feature. Test-only: it is
-// built into the standalone `_layer_completion` extension (this dir), NOT into the ttnn module, and
-// is NOT production router infra. Drains the master router's scheduler counter
+// built into the standalone `_layer_completion` nanobind extension (NOT the ttnn module) and is NOT
+// production router infra. Drains the master router's scheduler counter
 // channel on a NATIVE C++ thread so it is immune to the Python GIL: a Python drain thread on the
 // master rank gets starved the moment that rank's main thread blocks in a GIL-holding call (e.g. the
 // request loop waiting on H2D), which made the old Python shim stall at a partial count while the

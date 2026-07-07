@@ -14,7 +14,7 @@
 #include <sys/stat.h>
 
 #include "layer_completion_ring_layout.hpp"
-#include <named_shm.hpp>  // tt_metal/distributed/ — on the include path (see distributed/CMakeLists.txt)
+#include "tt_metal/distributed/named_shm.hpp"
 
 namespace tt::tt_metal::distributed {
 

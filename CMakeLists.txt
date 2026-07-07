@@ -292,12 +292,6 @@ add_subdirectory(tt_stl)
 add_subdirectory(tools)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
-# Standalone `_layer_completion` nanobind extension for pipelined prefill. Added after
-# ttnn (its TT::Nanobind alias + nanobind helpers must be in scope) and gated on python bindings; it
-# links only TT::Metalium and is NOT part of the ttnn module/API.
-if(WITH_PYTHON_BINDINGS)
-    add_subdirectory(models/demos/common/prefill/runners/pipelined_prefill)
-endif()
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
 endif()

@@ -20,10 +20,10 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/unique_ptr.h>
 
-#include "layer_completion_consumer.hpp"
-#include "layer_completion_message.hpp"
-#include "layer_completion_queue.hpp"
-#include "layer_completion_router.hpp"
+#include "tt_metal/distributed/layer_completion/layer_completion_consumer.hpp"
+#include "tt_metal/distributed/layer_completion/layer_completion_message.hpp"
+#include "tt_metal/distributed/layer_completion/layer_completion_queue.hpp"
+#include "tt_metal/distributed/layer_completion/layer_completion_router.hpp"
 
 namespace nb = nanobind;
 

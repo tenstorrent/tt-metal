@@ -468,6 +468,51 @@ if(WITH_PYTHON_BINDINGS)
     # .. set important linker flags
     nanobind_link_options(ttnn)
 
+    # Standalone `_layer_completion` nanobind extension for the pipelined-prefill layer-completion
+    # aggregation feature. Built here because this is where nanobind tooling is set up; it links only
+    # TT::Metalium and is NOT part of the ttnn module/API.
+    add_library(layer_completion_ext SHARED)
+    target_sources(layer_completion_ext PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/layer_completion.cpp)
+    target_link_libraries(
+        layer_completion_ext
+        PRIVATE
+            TT::Nanobind
+            TT::Metalium
+    )
+    target_include_directories(
+        layer_completion_ext
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}
+            ${PROJECT_SOURCE_DIR}/tt_metal/distributed
+            ${PROJECT_SOURCE_DIR}/tt_metal/distributed/layer_completion
+    )
+    nanobind_compile_options(layer_completion_ext)
+    nanobind_link_options(layer_completion_ext)
+    set_target_properties(
+        layer_completion_ext
+        PROPERTIES
+            OUTPUT_NAME
+                layer_completion
+            PREFIX
+                "_"
+            CXX_VISIBILITY_PRESET
+                "default"
+            LIBRARY_OUTPUT_DIRECTORY
+                ${CMAKE_CURRENT_BINARY_DIR}
+            BUILD_RPATH
+                "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
+            INSTALL_RPATH
+                "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
+    )
+    install(
+        TARGETS
+            layer_completion_ext
+            DESTINATION
+            ${PROJECT_SOURCE_DIR}/models/demos/common/prefill/runners/pipelined_prefill
+            COMPONENT
+            tt_pybinds
+    )
+
     if(TT_INSTALL)
         install(TARGETS ttnn EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime)
     endif()
