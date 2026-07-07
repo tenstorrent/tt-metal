@@ -269,6 +269,26 @@ TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
+std::vector<tt::tt_metal::DynamicRuntimeArg> TilizeDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Only the sharded factory is CB-bound (in/out addresses ride on the sharded CBs, no Buffer* rt-arg).
+    // Re-apply reader arg0 (num_tiles_per_shard, unchanged) on the first core to trip the fast-path so
+    // apply_resolved_bindings re-patches the CB base addresses instead of rebuilding create_descriptor.
+    if (!std::holds_alternative<TilizeMultiCoreShardedProgramFactory>(
+            select_program_factory(operation_attributes, tensor_args))) {
+        return {};
+    }
+    const auto& shard_spec = tensor_args.input_tensor.shard_spec().value();
+    return {tt::tt_metal::DynamicRuntimeArg{
+        /*kernel_idx=*/0,
+        corerange_to_cores(shard_spec.grid).front(),
+        /*arg_idx=*/0,
+        shard_spec.shape[0] * shard_spec.shape[1] / tt::constants::TILE_HW}};
+}
+
 ttnn::Tensor tilize(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& output_mem_config,
