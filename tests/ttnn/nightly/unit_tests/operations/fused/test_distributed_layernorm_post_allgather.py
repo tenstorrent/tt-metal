@@ -12,6 +12,10 @@ from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
+    ttnn_rms_norm_post_all_gather,
+    ttnn_layer_norm_post_all_gather,
+)
 
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
@@ -95,7 +99,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
         )
 
         if is_rmsnorm:
-            tt_lnp2_out = ttnn.rms_norm_post_all_gather(
+            tt_lnp2_out = ttnn_rms_norm_post_all_gather(
                 tt_inp,
                 tt_stats,
                 epsilon=epsilon,
@@ -104,7 +108,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
                 dtype=output_dtype,
             )
         else:
-            tt_lnp2_out = ttnn.layer_norm_post_all_gather(
+            tt_lnp2_out = ttnn_layer_norm_post_all_gather(
                 tt_inp,
                 tt_stats,
                 epsilon=epsilon,
@@ -235,7 +239,7 @@ def test_layer_norm_post_all_gather_non_tile_aligned_width(device, input_w):
         )
 
     epsilon = 1e-5
-    out_ttnn = ttnn.layer_norm_post_all_gather(
+    out_ttnn = ttnn_layer_norm_post_all_gather(
         to_device(inp),
         to_device(stats),
         epsilon=epsilon,
@@ -323,7 +327,7 @@ def test_layer_norm_post_all_gather_bias_only_matches_torch(device):
         tt_memory_config=dram_memcfg,
     )
 
-    tt_out = ttnn.layer_norm_post_all_gather(
+    tt_out = ttnn_layer_norm_post_all_gather(
         tt_inp,
         tt_stats,
         epsilon=epsilon,

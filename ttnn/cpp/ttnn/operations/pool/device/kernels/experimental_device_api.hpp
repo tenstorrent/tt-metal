@@ -30,7 +30,7 @@ using CB = CircularBuffer;
 
 // Single-packet convenience wrappers for set_async_read_state / async_read_with_state.
 // These wrappers put max_page_size first so callers don't need to spell out
-// VcSelection::DEFAULT every time.
+// NocOptions::DEFAULT every time.
 
 // Helper to create UnicastEndpoint src_args for local L1 self-reads.
 // Must use my_x/my_y for the correct NOC — NOC 0 and NOC 1 have different coordinate spaces.
@@ -44,7 +44,7 @@ template <uint32_t transfer_size>
 FORCE_INLINE void set_read_state(Noc noc, uint32_t src_addr) {
     static_assert(transfer_size <= NOC_MAX_BURST_SIZE, "Use noc.async_read for multi-packet transfers");
     UnicastEndpoint ep;
-    noc.set_async_read_state<Noc::VcSelection::DEFAULT, transfer_size>(
+    noc.set_async_read_state<NocOptions::DEFAULT, transfer_size>(
         ep, transfer_size, local_addr(src_addr, noc.get_noc_id()));
 }
 
@@ -54,7 +54,7 @@ FORCE_INLINE void set_read_state(Noc noc, uint32_t src_addr) {
 template <uint32_t transfer_size = 1>
 FORCE_INLINE void read_with_state(Noc noc, uint32_t dst_addr, uint32_t src_addr) {
     UnicastEndpoint ep;
-    noc.async_read_with_state<Noc::VcSelection::DEFAULT, transfer_size>(
+    noc.async_read_with_state<NocOptions::DEFAULT, transfer_size>(
         ep, CoreLocalMem<uint32_t>(dst_addr), transfer_size, local_addr(src_addr, noc.get_noc_id()), {});
 }
 
@@ -63,7 +63,7 @@ template <typename Dst>
 FORCE_INLINE void read_with_state(
     Noc noc, const Dst& dst, uint32_t src_addr, const typename noc_traits_t<Dst>::dst_args_type& dst_args) {
     UnicastEndpoint ep;
-    noc.async_read_with_state<Noc::VcSelection::DEFAULT, 1>(
+    noc.async_read_with_state<NocOptions::DEFAULT, 1>(
         ep, dst, 0, local_addr(src_addr, noc.get_noc_id()), dst_args);
 }
 
@@ -71,7 +71,7 @@ FORCE_INLINE void read_with_state(
 template <typename Dst>
 FORCE_INLINE void read_with_state(Noc noc, const Dst& dst, uint32_t src_addr) {
     UnicastEndpoint ep;
-    noc.async_read_with_state<Noc::VcSelection::DEFAULT, 1>(ep, dst, 0, local_addr(src_addr, noc.get_noc_id()), {});
+    noc.async_read_with_state<NocOptions::DEFAULT, 1>(ep, dst, 0, local_addr(src_addr, noc.get_noc_id()), {});
 }
 
 // Set the active transaction id (NOC_PACKET_TAG) for subsequent async_read* calls on this
@@ -83,7 +83,7 @@ FORCE_INLINE void set_read_trid(Noc noc, uint32_t trid) { noc_async_read_set_tri
 // Block until reads tagged `trid` on this noc are flushed.  Other in-flight reads with
 // different trids continue independently.
 FORCE_INLINE void async_read_barrier_with_trid(Noc noc, uint32_t trid) {
-    noc.template async_read_barrier<Noc::BarrierMode::TXN_ID>(trid);
+    noc.template async_read_barrier<NocOptions::TXN_ID>({.trid = trid});
 }
 
 #endif

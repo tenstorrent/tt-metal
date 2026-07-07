@@ -17,7 +17,6 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
-from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.weights.cache import BspmVariant, CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.prepare import (
@@ -264,11 +263,11 @@ class CacheWeightProvider:
         schema_version: int = 1,
         sram_hot_experts: SramHotExpertConfig | None = None,
         sram_core_grids: SramExpertCoreGrids | None = None,
-        sram_assigner: CompressedTensorAssigner | None = None,
         worker_l1_size: int | None = None,
         bspm_dir: Path | None = None,
         bspm_variant: BspmVariant | str = BspmVariant.B,
         bspm_budget: float = 3.5,
+        enable_sram_bspm: bool = False,
     ) -> None:
         cache_path = Path(cache_path)
         model_path = Path(model_path)
@@ -281,11 +280,11 @@ class CacheWeightProvider:
         self._hf_revision = hf_revision
         self._sram_hot_experts = sram_hot_experts
         self._sram_core_grids = sram_core_grids
-        self._sram_assigner = sram_assigner
         self._worker_l1_size = worker_l1_size
         self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
         self._bspm_variant = BspmVariant(bspm_variant)
         self._bspm_budget = bspm_budget
+        self._enable_sram_bspm = enable_sram_bspm
 
     def _cache_config(self, device: ttnn.MeshDevice) -> CacheConfig:
         context = CacheContext(
@@ -344,11 +343,11 @@ class CacheWeightProvider:
             cache_config=self._cache_config(device),
             sram_hot_experts=self._sram_hot_experts,
             sram_core_grids=self._sram_core_grids,
-            sram_assigner=self._sram_assigner,
             worker_l1_size=self._worker_l1_size,
             bspm_dir=self._bspm_dir,
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
+            enable_sram_bspm=self._enable_sram_bspm,
             compressed_tp8=True,
             sram_expert_ids=resolve_sram_expert_ids(
                 layer_id,
@@ -407,19 +406,19 @@ class SyntheticWeightProvider:
         *,
         sram_hot_experts: SramHotExpertConfig | None = None,
         sram_core_grids: SramExpertCoreGrids | None = None,
-        sram_assigner: CompressedTensorAssigner | None = None,
         worker_l1_size: int | None = None,
         bspm_dir: Path | None = None,
         bspm_variant: BspmVariant | str = BspmVariant.B,
         bspm_budget: float = 3.5,
+        enable_sram_bspm: bool = False,
     ) -> None:
         self._sram_hot_experts = sram_hot_experts
         self._sram_core_grids = sram_core_grids
-        self._sram_assigner = sram_assigner
         self._worker_l1_size = worker_l1_size
         self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
         self._bspm_variant = BspmVariant(bspm_variant)
         self._bspm_budget = bspm_budget
+        self._enable_sram_bspm = enable_sram_bspm
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         g = torch.Generator().manual_seed(42)
@@ -460,11 +459,11 @@ class SyntheticWeightProvider:
             move_to_device=True,
             sram_hot_experts=self._sram_hot_experts,
             sram_core_grids=self._sram_core_grids,
-            sram_assigner=self._sram_assigner,
             worker_l1_size=self._worker_l1_size,
             bspm_dir=self._bspm_dir,
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
+            enable_sram_bspm=self._enable_sram_bspm,
             compressed_tp8=True,
             sram_expert_ids=resolve_sram_expert_ids(
                 layer_id,
@@ -511,11 +510,11 @@ class StateDictWeightProvider:
         *,
         sram_hot_experts: SramHotExpertConfig | None = None,
         sram_core_grids: SramExpertCoreGrids | None = None,
-        sram_assigner: CompressedTensorAssigner | None = None,
         worker_l1_size: int | None = None,
         bspm_dir: Path | None = None,
         bspm_variant: BspmVariant | str = BspmVariant.B,
         bspm_budget: float = 3.5,
+        enable_sram_bspm: bool = False,
     ) -> None:
         model_path = Path(model_path)
         assert model_path.exists(), f"Model path does not exist: {model_path}"
@@ -523,11 +522,11 @@ class StateDictWeightProvider:
         self._state_dict = LazyStateDict(model_path)
         self._sram_hot_experts = sram_hot_experts
         self._sram_core_grids = sram_core_grids
-        self._sram_assigner = sram_assigner
         self._worker_l1_size = worker_l1_size
         self._bspm_dir = Path(bspm_dir) if bspm_dir is not None else None
         self._bspm_variant = BspmVariant(bspm_variant)
         self._bspm_budget = bspm_budget
+        self._enable_sram_bspm = enable_sram_bspm
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         return prepare_embedding_weights(self._state_dict, device, move_to_device=True)
@@ -554,11 +553,11 @@ class StateDictWeightProvider:
             move_to_device=True,
             sram_hot_experts=self._sram_hot_experts,
             sram_core_grids=self._sram_core_grids,
-            sram_assigner=self._sram_assigner,
             worker_l1_size=self._worker_l1_size,
             bspm_dir=self._bspm_dir,
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
+            enable_sram_bspm=self._enable_sram_bspm,
             compressed_tp8=True,
             sram_expert_ids=resolve_sram_expert_ids(
                 layer_id,

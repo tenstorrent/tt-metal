@@ -103,7 +103,8 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
  * This function should NOT be used as a substitute for the native _llk_unpack_AB_ LLK.
  * Use the standard _llk_unpack_AB_ in a loop for general-purpose block reduction operations.
  */
-inline void _llk_unpack_AB_reduce_block_max_row_runtime_(const std::uint32_t address_a, const std::uint32_t address_b, bool respect_trigger = false)
+inline void _llk_unpack_AB_reduce_block_max_row_runtime_(
+    const std::uint32_t address_a, const std::uint32_t address_b, bool respect_trigger = false, bool overlap_first_half = false)
 {
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 
@@ -126,11 +127,20 @@ inline void _llk_unpack_AB_reduce_block_max_row_runtime_(const std::uint32_t add
 
     if (respect_trigger)
     {
-        // MOP is programmed for half of block_ct_dim; run first half immediately
+        // Barrier for the split reduce. run()#1 reads cols [0,N/2), run()#2 reads [N/2,N)
+        // (MOP outerloop = block_ct_dim/2; Z continues across the two run()s). Overlap path: run()#1
+        // waits on the early first-half token so it overlaps the second-half pack; else on FPU_SFPU.
+        // run()#2 always FPU_SFPU. Literal branch — TTI_SEMWAIT encodes the sem index as immediate.
+        if (overlap_first_half)
+        {
+            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_MATH_DONE);
+        }
+        else
+        {
+            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::FPU_SFPU);
+        }
         ckernel::ckernel_template::run();
-        // Wait for blocked_matmul_and_pack to signal that second-half data is ready
         t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::FPU_SFPU);
-        // Run MOP again for the second half (Z counter continues from where first half stopped)
         ckernel::ckernel_template::run();
     }
     else
@@ -160,18 +170,19 @@ inline void _llk_unpack_AB_reduce_block_max_row_runtime_(const std::uint32_t add
  * This function should NOT be used as a substitute for native reduce unpacking cleanup.
  * Standard _llk_unpack_AB_reduce_init_ operations typically don't require explicit cleanup.
  */
-inline void _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(
-    const std::uint32_t unpA_face_r_dim, const std::uint32_t unpB_face_r_dim, bool respect_trigger = false)
+inline void _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(bool respect_trigger = false, bool overlap_first_half = false)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim * FACE_C_DIM - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim * FACE_C_DIM - 1, 0x0);
 
     if (respect_trigger)
     {
         t6_semaphore_get(semaphore::FPU_SFPU);
+        if (overlap_first_half)
+        {
+            // Balance the first-half-token post; conditional so the non-overlap path leaves it untouched.
+            t6_semaphore_get(semaphore::UNPACK_MATH_DONE);
+        }
     }
 }

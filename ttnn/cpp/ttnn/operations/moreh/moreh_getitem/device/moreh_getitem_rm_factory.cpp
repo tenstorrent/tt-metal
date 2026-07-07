@@ -13,7 +13,7 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 struct IndexInfo {
     bool is_defined{};
-    uint32_t address{};
+    tt::tt_metal::Buffer* buffer{};
     uint32_t unit_size{};
     tt::tt_metal::TensorAccessorArgs args;
 };
@@ -71,7 +71,7 @@ tt::tt_metal::ProgramDescriptor MorehGetItemOperation::MorehGetItemRmFactory::cr
         const auto& index = index_tensors[i];
 
         index_info[dim].is_defined = true;
-        index_info[dim].address = index_tensors[i].buffer()->address();
+        index_info[dim].buffer = index_tensors[i].buffer();
         index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index_tensors[i].buffer());
         index_info[dim].unit_size = index.padded_shape()[-1] * index.element_size();
     }
@@ -142,7 +142,7 @@ tt::tt_metal::ProgramDescriptor MorehGetItemOperation::MorehGetItemRmFactory::cr
     KernelDescriptor::Defines writer_defines;
 
     KernelDescriptor::CompileTimeArgs reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(input_5d.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     for (auto& dim : index_info) {
         dim.args.append_to(reader_compile_time_args);
     }
@@ -188,12 +188,12 @@ tt::tt_metal::ProgramDescriptor MorehGetItemOperation::MorehGetItemRmFactory::cr
             core,
             {
                 // buffers
-                input_5d.buffer(),
-                index_info[0].address,
-                index_info[1].address,
-                index_info[2].address,
-                index_info[3].address,
-                index_info[4].address,
+                input.buffer(),
+                index_info[0].buffer,
+                index_info[1].buffer,
+                index_info[2].buffer,
+                index_info[3].buffer,
+                index_info[4].buffer,
 
                 // input
                 input_stick_idx_stride_n,

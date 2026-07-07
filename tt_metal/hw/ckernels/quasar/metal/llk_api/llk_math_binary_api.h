@@ -23,8 +23,8 @@
  * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication
  *     when input is Tf32 format. Only applicable for ELWMUL operations.
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB
- * @param operand_A: Logical dataflow buffer id for input A, used to derive the tensor / tile shape
- * @param operand_B: Unused on Quasar. Present for API compatibility.
+ * @param operand_A: Logical dataflow buffer id for input A, used to derive the tensor shape
+ * @param operand_B: Logical dataflow buffer id for input B
  * @param acc_to_dest: Flag to control if the result should be accumulated with the current dest
  *     (NONE broadcast path only).
  */
@@ -34,11 +34,17 @@ template <
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary_init(
-    const std::uint32_t operand_A, [[maybe_unused]] const std::uint32_t operand_B, const bool acc_to_dest = false) {
-    const std::uint32_t operand_id = get_operand_id(operand_A);
-    const ckernel::TensorShape tensor_shape_A = get_operand_tensor_shape(operand_id);
+    const std::uint32_t operand_A, const std::uint32_t operand_B, const bool acc_to_dest = false) {
+    const std::uint32_t operandA_id = get_operand_id(operand_A);
+    const std::uint32_t operandB_id = get_operand_id(operand_B);
+    const ckernel::TensorShape tensor_shape_A = get_operand_tensor_shape(operandA_id);
+    const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operandA_id));
+    const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operandB_id));
 
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
+
+    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+        srcA_format, srcB_format);
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         _llk_math_eltwise_binary_init_<eltwise_binary_type, effective_math_fidelity, binary_reuse_dest>(
             tensor_shape_A, acc_to_dest);
@@ -74,11 +80,8 @@ template <
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
+inline void llk_math_eltwise_binary(std::uint32_t dst_index, const bool clear_fp32_dst_acc = true) {
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
-    static_assert(
-        eltwise_binary_type == EltwiseBinaryType::ELWMUL || effective_math_fidelity == MathFidelity::LoFi,
-        "Math fidelity must be LoFi for non-ELWMUL ops");
 
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
@@ -104,7 +107,7 @@ inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_ac
  * @tparam src_b_bcast_type: Broadcast type for SrcB; one of {NONE, ROW, COL, SCALAR}.
  * @tparam is_fp32_dest_acc_en: Unused tparam; only for API compatibiliy.
  * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication
- *     when input is Tf32 format. Unused tparam; only for API compatibiliy.
+ *     when input is Tf32 format. Unused in assert and for API compatibility.
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB.
  *     The MOVD2A/B instruction copies a face from dest to the source register before each MOP run.
  * @param operand_A: Logical dataflow buffer id for input A, used to derive the number of faces
@@ -123,8 +126,12 @@ template <
 inline void llk_math_eltwise_binary(
     const std::uint32_t operand_A,
     [[maybe_unused]] const std::uint32_t operand_B,
-    uint dst_index,
+    std::uint32_t dst_index,
     const bool clear_fp32_dst_acc) {
+    static_assert(
+        eltwise_binary_type == EltwiseBinaryType::ELWMUL || math_fidelity == MathFidelity::LoFi,
+        "Math fidelity must be LoFi for non-ELWMUL ops");
+
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         const std::uint32_t operand_id = get_operand_id(operand_A);

@@ -1,0 +1,31 @@
+name: "Deprecation reaper"
+
+# Weekly check that opens (and keeps in sync) a tracking issue for deprecated APIs
+# whose scheduled removal date has passed. The removal date is computed from the exact
+# merge time of each deprecation's PR plus its grace period, both listed in
+# .github/deprecations.json -- so the countdown starts at merge and nobody has to
+# remember a date. Run it on demand from the Actions tab via "Run workflow".
+on:
+  schedule:
+    - cron: "0 8 * * 1" # Mondays 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# Serialize runs so a scheduled run and a manual dispatch cannot race while
+# creating/editing/closing the single tracking issue.
+concurrency:
+  group: deprecation-reaper
+  cancel-in-progress: false
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Reap overdue deprecations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/deprecation_reaper.py

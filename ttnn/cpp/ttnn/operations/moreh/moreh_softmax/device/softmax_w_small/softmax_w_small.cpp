@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <bit>
 #include <string>
 
 #include <tt_stl/assert.hpp>
@@ -249,13 +248,11 @@ tt::tt_metal::ProgramDescriptor MorehSoftmaxOperation::MorehSoftmaxWSmallFactory
             TT_THROW("Core not in specified core ranges");
         }
 
-        float scaler = 1.0f;
         uint32_t mask_w = input.logical_shape()[-1] % tt::constants::TILE_WIDTH;
         if (mask_w == 0) {
             mask_w = tt::constants::TILE_WIDTH;
         }
-        reader_desc.emplace_runtime_args(
-            core, {input.buffer(), num_tiles_per_core, tile_offset, Wt, std::bit_cast<uint32_t>(scaler), mask_w});
+        reader_desc.emplace_runtime_args(core, {input.buffer(), num_tiles_per_core, tile_offset, Wt, mask_w});
 
         writer_desc.emplace_runtime_args(core, {output.buffer(), num_tiles_per_core, tile_offset, Wt});
 

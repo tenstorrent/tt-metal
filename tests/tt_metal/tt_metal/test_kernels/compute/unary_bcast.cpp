@@ -33,11 +33,13 @@ void kernel_main() {
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             dfb_src.wait_front(1);
             dfb_dst.reserve_back(1);
-            acquire_dst();
+            tile_regs_acquire();
             // One tile visible per iteration: unpack always reads fifo front (index 0); dst slot is tile_index.
             unary_bcast<BCAST_DIM>(icb, 0, tile_index);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(tile_index, ocb);
-            release_dst();
+            tile_regs_release();
             dfb_src.pop_front(1);
             dfb_dst.push_back(1);
         }
@@ -55,10 +57,12 @@ void kernel_main() {
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             cb0.wait_front(1);
             cb16.reserve_back(1);
-            acquire_dst();
+            tile_regs_acquire();
             unary_bcast<BCAST_DIM>(tt::CBIndex::c_0, 0, tile_index);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(tile_index, tt::CBIndex::c_16);
-            release_dst();
+            tile_regs_release();
             cb0.pop_front(1);
             cb16.push_back(1);
         }

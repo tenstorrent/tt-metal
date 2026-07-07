@@ -59,7 +59,7 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a)
 // Handle sync requests from host: capture device timestamp and enqueue
 // a sync marker record into the ring buffer for the NCRISC pusher.
 __attribute__((noinline)) void realtime_profiler_sync() {
-    DPRINT << "REALTIME: entering sync" << ENDL();
+    DPRINT("REALTIME: entering sync\n");
 
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 
@@ -69,7 +69,7 @@ __attribute__((noinline)) void realtime_profiler_sync() {
 
         uint32_t host_time = rt_profiler_msg->sync_host_timestamp;
         if (host_time > 0) {
-            DPRINT << "REALTIME: sync got host_time=" << host_time << ENDL();
+            DPRINT("REALTIME: sync got host_time={}\n", host_time);
 
             // Spin until ring buffer has space
             while (rt_ring_full(ring_buffer)) {
@@ -95,14 +95,14 @@ __attribute__((noinline)) void realtime_profiler_sync() {
 
             rt_profiler_msg->sync_host_timestamp = 0;
             sync_count++;
-            DPRINT << "REALTIME: sync pushed count=" << sync_count << ENDL();
+            DPRINT("REALTIME: sync pushed count={}\n", sync_count);
         }
     }
-    DPRINT << "REALTIME: exiting sync, total=" << sync_count << ENDL();
+    DPRINT("REALTIME: exiting sync, total={}\n", sync_count);
 }
 
 void kernel_main() {
-    DPRINT << "REALTIME BRISC: kernel started" << ENDL();
+    DPRINT("REALTIME BRISC: kernel started\n");
 
     // Initialize ring buffer
     ring_buffer->write_index = 0;
@@ -119,7 +119,7 @@ void kernel_main() {
         switch (state) {
             case REALTIME_PROFILER_STATE_IDLE:
                 if (rt_profiler_msg->sync_request) {
-                    DPRINT << "REALTIME: sync_request detected!" << ENDL();
+                    DPRINT("REALTIME: sync_request detected!\n");
                     realtime_profiler_sync();
                 }
                 continue;

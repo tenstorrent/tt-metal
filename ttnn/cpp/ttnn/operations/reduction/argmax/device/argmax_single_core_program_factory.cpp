@@ -9,12 +9,14 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include <vector>
+
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
 static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
-    const Tensor& input, const Tensor& output, bool keepdim, bool reduce_all) {
+    const MeshTensor& input, const MeshTensor& output, bool keepdim, bool reduce_all) {
     const auto& input_shape = input.padded_shape();
     const uint32_t rank = input_shape.size();
 
@@ -44,13 +46,14 @@ static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
 }
 
 static std::vector<uint32_t> get_ctime_args_single_core(
-    const Tensor& input,
+    const MeshTensor& input,
     uint32_t src_page_size,
     uint32_t dst_page_size,
     uint32_t src_cb_index,
     uint32_t dst_cb_index,
     bool keepdim,
-    bool reduce_all) {
+    bool reduce_all,
+    bool tile_reader_omit_reduce_all_keepdim) {
     const auto& input_shape = input.padded_shape();
     const uint32_t rank = input_shape.size();
 
@@ -82,7 +85,7 @@ static std::vector<uint32_t> get_ctime_args_single_core(
             const uint32_t h_logical = logical_rank > 1 ? input.logical_shape()[logical_rank - 2] : 1;
             const uint32_t outer_dim_units = input.logical_volume() / (h_logical * w_logical);
 
-            return {
+            std::vector<uint32_t> cta = {
                 src_cb_index,
                 dst_cb_index,
                 src_page_size,
@@ -94,9 +97,13 @@ static std::vector<uint32_t> get_ctime_args_single_core(
                 h_logical,
                 w_logical,
                 outer_dim_units,
-                static_cast<uint32_t>(reduce_all),
-                static_cast<uint32_t>(keepdim),
             };
+            // Width-reduction reader uses reduce_all/keepdim; height-reduction reader does not.
+            if (!tile_reader_omit_reduce_all_keepdim) {
+                cta.push_back(static_cast<uint32_t>(reduce_all));
+                cta.push_back(static_cast<uint32_t>(keepdim));
+            }
+            return cta;
         }
         default:
             TT_FATAL(
@@ -108,13 +115,13 @@ static std::vector<uint32_t> get_ctime_args_single_core(
 
 ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value) {
-    const auto& input = tensor_args.input;
-    const auto& output = tensor_return_value;
+    const auto& input = tensor_args.input.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
     const auto& dim = operation_attributes.dim;
     const bool keepdim = operation_attributes.keepdim;
 
     ProgramDescriptor desc;
-    const tt::tt_metal::IDevice* device = output.device();
+    const tt::tt_metal::IDevice* device = &output.mutable_device();
     const bool reduce_all = not dim.has_value();
 
     // Circular buffers
@@ -156,20 +163,34 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
         }}},
     });
 
+    const int32_t rank_i = static_cast<int32_t>(input.logical_shape().size());
+    const int32_t nd = dim.has_value() ? (dim.value() < 0 ? dim.value() + rank_i : dim.value()) : -1;
+    const bool dim_is_h = dim.has_value() && rank_i >= 2 && nd == rank_i - 2;
+
     // Compile-time args
+    const bool tile_reader_omit_reduce_all_keepdim = input.layout() == Layout::TILE && dim_is_h;
     std::vector<uint32_t> ctime_args = get_ctime_args_single_core(
-        input, src_page_size, dst_page_size, src_cb_index, dst_cb_index, keepdim, reduce_all);
+        input,
+        src_page_size,
+        dst_page_size,
+        src_cb_index,
+        dst_cb_index,
+        keepdim,
+        reduce_all,
+        tile_reader_omit_reduce_all_keepdim);
 
-    auto* const src_buffer = input.buffer();
-    auto* const dst_buffer = output.buffer();
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(ctime_args);
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(ctime_args);
+    tt::tt_metal::TensorAccessorArgs(input).append_to(ctime_args);
+    tt::tt_metal::TensorAccessorArgs(output).append_to(ctime_args);
 
-    // Kernel
-    std::string kernel_path =
-        input.layout() == Layout::ROW_MAJOR
-            ? "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp"
-            : "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
+    std::string kernel_path;
+    if (input.layout() == Layout::ROW_MAJOR) {
+        kernel_path = "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp";
+    } else {
+        // TILE: reduction on H (rank-2) uses the height reader
+        kernel_path = dim_is_h
+                          ? "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout_h.cpp"
+                          : "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
+    }
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kernel_path;
@@ -181,7 +202,7 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     // Runtime args
     const auto cores = grid_to_cores(num_cores, grid_size.x, grid_size.y, false);
     for (const auto& core : cores) {
-        reader_desc.emplace_runtime_args(core, {src_buffer, dst_buffer});
+        reader_desc.emplace_runtime_args(core, {input, output});
     }
 
     desc.kernels.push_back(std::move(reader_desc));

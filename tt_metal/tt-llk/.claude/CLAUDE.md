@@ -53,6 +53,17 @@ Trigger examples for `arch-lookup`:
 
 - **`const` placement**: write `const <type>` (e.g. `const uint32_t x`), never `<type> const` (e.g. `uint32_t const x`). Semantics are identical, but the codebase uses `const <type>` everywhere — match it. Applies to all type qualifiers in the same position (e.g. `volatile`, `constexpr` modifiers on declarations).
 
+### Documentation
+
+We use lightweight Doxygen docstrings — high-signal, low-noise (`@brief`, `@param`, `@tparam`, `@ref`, `@note`), with an imperative `@note` (plus `@ref`) encoding the init/execute/uninit contract and pairing the per-thread (T0/T1/T2) halves of an op. Do not use `@pre`/`@post` (they imply guarantees, but our contract is an imperative the caller must satisfy). Avoid bloat tags (`@details`, `@author`, `@date`, `@version`, `@todo`, `@remark`, and `@return` on void functions). Applies to LLK lib (`_llk_*`), LLK API (`llk_*`), and the Compute API (`tt_metal/hw/inc/api/compute/`) — the Compute API keeps its published prose+table format (it feeds the public Sphinx docs), not `@param` tags.
+
+**When writing or updating docstrings**, follow `.claude/references/doxygen-style.md`.
+
+### Dead Code
+
+- **Commented-out code must have an explanation.** Any commented-out instruction or function call (e.g. `// TTI_*`, `// llk_*`, `// _llk_*`, `// _gmg_*`, `// MATH(`, `// UNPACK(`, `// PACK(`, `// sfpi::`) requires an inline comment on the same line or immediately above it explaining *why* it is disabled. Acceptable reasons: known HW bug workaround, arch-specific divergence (e.g. WH vs BH), pending re-evaluation.
+- **During code review, always scan for commented-out code without explanation and flag it.** Check every `//` line whose content looks like a function call or instruction using the prefixes above. Commented-out code with a clear explanation is acceptable — the explanation is what matters, not the presence of commented-out code itself.
+
 ## Test Infrastructure
 
 ### Two-Phase Test Flow

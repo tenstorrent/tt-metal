@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_sfpu_polygamma.h"
+#include "ckernel_sfpu_polygamma.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -37,12 +38,20 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void polygamma_tile(uint32_t idst, uint32_t n_packed, uint32_t scale_packed) {
-    MATH((llk_math_eltwise_unary_sfpu_polygamma<APPROX, DST_ACCUM_MODE>(idst, n_packed, scale_packed)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_polygamma,
+        (APPROX, DST_ACCUM_MODE),
+        idst,
+        VectorMode::RC,
+        n_packed,
+        scale_packed));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void polygamma_tile_init() { MATH((llk_math_eltwise_unary_sfpu_polygamma_init<APPROX, DST_ACCUM_MODE>())); }
+ALWI void polygamma_tile_init() { MATH(SFPU_UNARY_INIT_FN(polygamma, sfpu::polygamma_init, (APPROX, DST_ACCUM_MODE))); }
 
 }  // namespace ckernel

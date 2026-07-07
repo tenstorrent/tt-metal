@@ -24,13 +24,13 @@ from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.weights.prepare import (
-    build_sram_expert_weights,
     create_gate_bias_tensor,
     create_gate_indices_tensor,
     prepare_attention_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
 )
+from models.demos.deepseek_v3_b1.weights.sram_slots import build_sram_routed_proj_cts
 
 
 # ============================================================================
@@ -521,7 +521,6 @@ def create_routed_expert_tensors(
     sram_up_proj_weights = None
     sram_down_proj_weights = None
     if sram_expert_ids:
-        from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
         from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert as _RE
 
         moe_tp = device.shape[0] * device.shape[1]
@@ -539,15 +538,14 @@ def create_routed_expert_tensors(
         sram_gate_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in a_cores])
         sram_up_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in b_cores])
         _sram_per_core_N = (N_per_dev // 32) // 8  # 1 N-tile per core
-        sram_gate_proj_weights = build_sram_expert_weights(
+        sram_gate_proj_weights = build_sram_routed_proj_cts(
+            mesh_device=device,
             sram_expert_ids=sram_expert_ids,
             full_torch_weights_per_device=full_torch_per_device,
-            assigner=CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"]),
-            mesh_device=device,
             core_grid=sram_gate_core_grid,
-            sram_k_per_core=(_RE.K // 32) // 8,  # 28 (K=7168, k_parallel=8)
-            sram_n_parallel=8,  # cores per K-slice
-            sram_per_core_N=_sram_per_core_N,
+            num_tiles_k=(_RE.K // 32) // 8,  # 28 (K=7168, k_parallel=8)
+            n_parallel=8,  # cores per K-slice
+            per_core_N=_sram_per_core_N,
         )
 
         # SRAM up_proj weights: same shape as gate_proj (K, N); use up_proj_weights_dict.
@@ -560,15 +558,14 @@ def create_routed_expert_tensors(
             ]
             for eid in sram_expert_ids
         }
-        sram_up_proj_weights = build_sram_expert_weights(
+        sram_up_proj_weights = build_sram_routed_proj_cts(
+            mesh_device=device,
             sram_expert_ids=sram_expert_ids,
             full_torch_weights_per_device=full_torch_per_device_up,
-            assigner=CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"]),
-            mesh_device=device,
             core_grid=sram_up_core_grid,
-            sram_k_per_core=(_RE.K // 32) // 8,
-            sram_n_parallel=8,
-            sram_per_core_N=_sram_per_core_N,
+            num_tiles_k=(_RE.K // 32) // 8,
+            n_parallel=8,
+            per_core_N=_sram_per_core_N,
         )
 
         # SRAM down_proj weights: per-expert (K=GATE_PROJ_N=2048, N=K=7168). Mesh
@@ -589,15 +586,14 @@ def create_routed_expert_tensors(
         }
         sram_down_core_grid = DownProj.build_matmul_core_grid()  # 112 cores
         _sram_down_per_core_N = (_RE.K // 32) // DownProj.NUM_MATMUL_CORES  # 7168 / 32 / 112 = 2 tiles
-        sram_down_proj_weights = build_sram_expert_weights(
+        sram_down_proj_weights = build_sram_routed_proj_cts(
+            mesh_device=device,
             sram_expert_ids=sram_expert_ids,
             full_torch_weights_per_device=full_torch_per_device_down,
-            assigner=CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"]),
-            mesh_device=device,
             core_grid=sram_down_core_grid,
-            sram_k_per_core=K_per_dev_down // 32,  # 8 tiles
-            sram_n_parallel=DownProj.NUM_MATMUL_CORES,  # all 112 cores in same K-slice
-            sram_per_core_N=_sram_down_per_core_N,  # 2 tiles
+            num_tiles_k=K_per_dev_down // 32,  # 8 tiles
+            n_parallel=DownProj.NUM_MATMUL_CORES,  # all 112 cores in same K-slice
+            per_core_N=_sram_down_per_core_N,  # 2 tiles
         )
 
         # SRAM gate/up/down proj cb_out tensors are now overlaid onto the SDPA

@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     build_cb_reconfig_tensor,
     cb_descriptor_from_overlapped_tensor,
     record_cb_metadata,
+    record_cb_metadata_per_coord,
 )
 from models.demos.deepseek_v3_b1.fused_ops.face_view_utils import FACE_HEIGHT, FACE_WIDTH, can_use_face_view
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import MESH_LEAF, MESH_ROOT1, MESH_ROOT2, MESH_ROOT3
@@ -152,6 +153,10 @@ class MoeContext:
 
     # CB reconfig
     reconfig_moe_cbs: bool = False
+    # SRAM BSPM divergence: when True, per-device SRAM weight CBs have
+    # different L1 addresses across the mesh.  Forces the reconfig tensor
+    # to be sharded per-device (ShardTensor2dMesh) instead of replicated.
+    enable_sram_bspm: bool = False
 
 
 @dataclass
@@ -350,6 +355,11 @@ class _MoeRoutedExpertContext:
     sram_down_proj_cb_in1_descriptors_per_device: Any = None
     sram_down_proj_cb_out_descriptor: Any = None
 
+    # When 1, SRAM matmul kernels take the compressed_custom_mm path (per-tile
+    # BSPM format codes). When 0, they take the plain custom_mm path (uniform
+    # BFP4). Threaded into kernel CT args as sram_use_compression.
+    sram_use_compression: int = 0
+
     # Merged down output CB — receives either eltwise_add(sram_down, shared_down)
     # when n_sram_active > 0, or a copy of shared_down_matmul_out when n_sram_active = 0.
     # Replaces shared_down_matmul_out_cb as residual_add's in0.
@@ -508,7 +518,8 @@ class MoeRoutedExpertOp:
             dict with:
               - ``per_core_n``, ``Kt``, ``subblock_k``, ``num_subblocks_k`` (matmul dims)
               - ``in1_backing_tensor`` (replicated L1 CB backing; buffer_address seeds cb_in1)
-              - ``meta_tensors`` (dict[MeshCoordinate -> dict[core_idx -> L1 uint32 tensor]])
+              - ``meta_tensors`` (dict[MeshCoordinate -> (offset_tensor, bs_tensor)];
+                under lockstep refactor, the SAME mesh tensor pair for every coord)
               - ``fmt_dram_tensor`` (replicated DRAM fmt tensor)
               - ``fmt_dram_addr`` / ``fmt_per_expert_bytes`` / ``fmt_per_core_bytes``
               - ``expert_offsets_l1_addr_per_device`` (dict[MeshCoordinate -> list[(core, addr)]])
@@ -771,7 +782,7 @@ class MoeRoutedExpertOp:
                 tensor dicts: {coord: {core_idx: tensor}})
               - ``sram_fmt_l1_addr_per_device`` /
                 ``sram_base_addrs_l1_addr_per_device`` (per-device per-core
-                L1 byte addresses, ready for upload_per_core_uint32_tensor)
+                L1 byte addresses)
               - ``sram_k_offsets`` (per-core K-slice offset values, None when
                 no K-slicing)
               - ``cb_in1_size_bytes`` (per-core SRAM weight region size)
@@ -794,9 +805,17 @@ class MoeRoutedExpertOp:
                 "accum_experts": 1 if accum_experts else 0,
             }
 
-        # Build fmt + base_addrs tables per device per core. Mirrors
-        # _build_sram_fmt_data in test_matmul_expert.py.
-        sram_fmt_tensors, sram_base_addr_tensors = create_expert_fmt_tensors(
+        # Build fmt + base_addrs tables as TWO mesh tensors (one each), each
+        # HEIGHT_SHARDED on core_grid + ShardTensor2dMesh across the mesh +
+        # lockstep-allocated.  Lockstep gives a uniform L1 base across the
+        # mesh, so per-core L1 addresses are uniform across devices (the
+        # CONTENT varies per device via ShardTensor2dMesh; only the ADDRESS is
+        # uniform).  Replaces the prior pattern of 130 single-core per_core
+        # allocated tensors per projection per device, which (a) exhausted
+        # the per-core allocator slot table and (b) produced divergent
+        # per-(device, core) addresses under BSPM-SRAM L1 frontier
+        # divergence.
+        sram_fmt_tensor, sram_base_addr_tensor, sram_fmt_l1_addrs, sram_base_addrs_l1_addrs = create_expert_fmt_tensors(
             sram_cts_list, mesh_device, core_grid, num_tiles_k, per_core_n
         )
 
@@ -810,17 +829,24 @@ class MoeRoutedExpertOp:
         if num_tiles_k < Kt:
             n_parallel = len(cores) * num_tiles_k // Kt
             sram_k_offsets = [(cores[i], (i // n_parallel) * num_tiles_k) for i in range(len(cores))]
-        sram_fmt_l1_addr_per_device = {}
-        sram_base_addrs_l1_addr_per_device = {}
-        for coord in sram_fmt_tensors:
-            sram_fmt_l1_addr_per_device[coord] = [
-                (cores[i], sram_fmt_tensors[coord][i].experimental_per_core_buffer_address(cores[i]))
-                for i in range(len(cores))
-            ]
-            sram_base_addrs_l1_addr_per_device[coord] = [
-                (cores[i], sram_base_addr_tensors[coord][i].experimental_per_core_buffer_address(cores[i]))
-                for i in range(len(cores))
-            ]
+
+        # Per-device dicts now hold IDENTICAL per-core lists for every coord
+        # (lockstep → uniform addresses across mesh).  Kept as dicts to
+        # preserve the existing API consumed by _build_compile_time_args /
+        # _setup_per_device_args without churn.
+        mesh_shape = mesh_device.shape
+        _fmt_addr_tuples = [(cores[i], sram_fmt_l1_addrs[i]) for i in range(len(cores))]
+        _base_addr_tuples = [(cores[i], sram_base_addrs_l1_addrs[i]) for i in range(len(cores))]
+        sram_fmt_l1_addr_per_device = {
+            ttnn.MeshCoordinate(r, c): _fmt_addr_tuples
+            for r in range(int(mesh_shape[0]))
+            for c in range(int(mesh_shape[1]))
+        }
+        sram_base_addrs_l1_addr_per_device = {
+            ttnn.MeshCoordinate(r, c): _base_addr_tuples
+            for r in range(int(mesh_shape[0]))
+            for c in range(int(mesh_shape[1]))
+        }
 
         # Per-tile fmt metadata word count. Matches DRAM path's
         # _meta_words_for_tiles convention used by the canonical fmt encoder.
@@ -849,8 +875,10 @@ class MoeRoutedExpertOp:
             "meta_words_per_expert": meta_words_per_expert,
             "accum_experts": 1 if accum_experts else 0,
             "num_active_experts": num_active_experts,
-            "sram_fmt_tensors": sram_fmt_tensors,
-            "sram_base_addr_tensors": sram_base_addr_tensors,
+            # Single mesh tensors (one each), kept alive in the params dict so
+            # they aren't garbage-collected during MoeOp's lifetime.
+            "sram_fmt_tensors": sram_fmt_tensor,
+            "sram_base_addr_tensors": sram_base_addr_tensor,
             "sram_fmt_l1_addr_per_device": sram_fmt_l1_addr_per_device,
             "sram_base_addrs_l1_addr_per_device": sram_base_addrs_l1_addr_per_device,
             "sram_k_offsets": sram_k_offsets,
@@ -1172,6 +1200,11 @@ class MoeRoutedExpertOp:
         # width-sharded on 112 cores → (256, 64) per core. accum_experts=True so
         # the kernel sums across SRAM-flagged TopK winners. None = skipped.
         sram_down_proj_weights_tensor=None,
+        # When True, SRAM expert weights carry per-tile BSPM mixed precision and
+        # the kernel must use the compressed_custom_mm path (use_compression=1).
+        # When False (default), SRAM is uniform BFP4 and the plain custom_mm
+        # fast path is used (use_compression=0).
+        enable_sram_bspm=False,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values.
 
@@ -1690,6 +1723,15 @@ class MoeRoutedExpertOp:
             for coord in sram_gate_proj_params["sram_fmt_l1_addr_per_device"]:
                 _descs = _ct0.cb_descriptor_from_compressed_tensor(sram_gate_proj_cb_in1, device_coord=coord)
                 for _desc in _descs:
+                    # Override desc to report a uniform 1-page (576 B) cb_in1
+                    # extent across (device, core).  The actual L1 buffer is
+                    # >= 576 B (per min_shard_bytes=576 in build_sram_expert_
+                    # weights for the cb_in1 backing expert), so this lie is
+                    # safe — the framework sees a smaller window than the
+                    # real buffer.  Kernel reads tile bytes via fmt metadata
+                    # (compressed_custom_mm path), so the smaller window
+                    # doesn't affect data reads.
+                    _desc.total_size = _bfp4_tile_size
                     _desc.format_descriptors = [
                         ttnn.CBFormatDescriptor(
                             buffer_index=sram_gate_proj_cb_in1,
@@ -1753,6 +1795,8 @@ class MoeRoutedExpertOp:
             for coord in sram_up_proj_params["sram_fmt_l1_addr_per_device"]:
                 _descs_up = _ct0_up.cb_descriptor_from_compressed_tensor(sram_up_proj_cb_in1, device_coord=coord)
                 for _desc in _descs_up:
+                    # Uniform 576 B cb_in1 extent (= 1 bfp4 page); see gate.
+                    _desc.total_size = _bfp4_tile_size
                     _desc.format_descriptors = [
                         ttnn.CBFormatDescriptor(
                             buffer_index=sram_up_proj_cb_in1,
@@ -1809,6 +1853,8 @@ class MoeRoutedExpertOp:
             for coord in sram_down_proj_params["sram_fmt_l1_addr_per_device"]:
                 _descs_dn = _ct0_dn.cb_descriptor_from_compressed_tensor(sram_down_proj_cb_in1, device_coord=coord)
                 for _desc in _descs_dn:
+                    # Uniform 576 B cb_in1 extent (= 1 bfp4 page); see gate.
+                    _desc.total_size = _bfp4_tile_size
                     _desc.format_descriptors = [
                         ttnn.CBFormatDescriptor(
                             buffer_index=sram_down_proj_cb_in1,
@@ -2391,6 +2437,7 @@ class MoeRoutedExpertOp:
             sram_gather_data_size_bytes=sram_gather_data_size_bytes,
             sram_gather_expert_dst_stride=sram_gather_expert_dst_stride,
             sram_gather_total_tiles=sram_gather_total_tiles,
+            sram_use_compression=1 if enable_sram_bspm else 0,
             sram_ag_receiver_semaphore_addr=sem_addrs[MoeSem.SRAM_AG_GATHER],
             sram_bg_receiver_semaphore_addr=sem_addrs[MoeSem.SRAM_BG_GATHER],
         )
@@ -2890,7 +2937,7 @@ class MoeRoutedExpertOp:
         # ---- SRAM routed gate_proj CT args (always emitted; gated at runtime) ----
         # Default values are placeholders; the kernel's Op call is `if constexpr false`
         # no-op when sram_gate_proj_active=0. Real values come in when the caller
-        # builds SRAM weights via build_sram_expert_weights + setup_matmul_expert_sram.
+        # builds SRAM weights via build_sram_routed_proj_cts + setup_matmul_expert_sram.
         # Per-core values (fmt_l1_addr, base_addrs_l1_addr, k_offset) emitted via
         # _build_core_descriptors with default 0 → all-cores 0 by default.
         sgp = ctx.sram_gate_proj_params or {}
@@ -2918,6 +2965,9 @@ class MoeRoutedExpertOp:
             ("sram_gate_proj_in0_page_size", sgp.get("in0_page_size", 0)),
             ("sram_gate_proj_accum_experts", sgp.get("accum_experts", 0)),
             ("sram_gate_proj_cb_out_sram", 0),
+            # Shared by gate/up/down kernel CTArgs (use_compression). 1=BSPM
+            # compressed_custom_mm path; 0=uniform BFP4 plain custom_mm path.
+            ("sram_use_compression", ctx.sram_use_compression),
         ]
         ncrisc_named_compile_time_args += sram_uniform_args
         trisc_named_compile_time_args += sram_uniform_args
@@ -6230,6 +6280,7 @@ class MoeOp:
         bcast_sender_coord=None,
         socket=None,
         reconfig_moe_cbs=False,
+        enable_sram_bspm=False,
         semaphores=None,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         cb_id_context=None,
@@ -6300,6 +6351,7 @@ class MoeOp:
             sram_gate_proj_weights_tensor=sram_gate_proj_weights_tensor,
             sram_up_proj_weights_tensor=sram_up_proj_weights_tensor,
             sram_down_proj_weights_tensor=sram_down_proj_weights_tensor,
+            enable_sram_bspm=enable_sram_bspm,
         )
 
         device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]
@@ -6363,6 +6415,7 @@ class MoeOp:
             enable_reduce_to_one=routed_ctx.enable_reduce_to_one,
             enable_bcast=routed_ctx.enable_bcast,
             reconfig_moe_cbs=reconfig_moe_cbs,
+            enable_sram_bspm=enable_sram_bspm,
             # IO tensors
             gate_mm_weights_tensor=gate_mm_weights_tensor,
             gate_bias_tensor=gate_bias_tensor,
@@ -6425,18 +6478,93 @@ class MoeOp:
             # reset_stream_regs skips these CBs and setup_sharded_buffer's iter-2
             # cb_reserve_back blocks because iter-1's push (received=1, acked=0,
             # cap=1) was never reset.
-            sram_metadata_descs = []
+            #
+            # Replicated path (uniform SRAM): all coords share the same per-core
+            # addresses, so flattening to a single list is safe.
+            #
+            # Per-coord path (BSPM SRAM, enable_sram_bspm=True): each device has
+            # different SRAM weight CB addresses, so we keep the coord key and
+            # build a per-device reconfig tensor via ShardTensor2dMesh.
             rctx = self.ctx.routed_ctx
-            for per_dev_attr in (
-                "sram_gate_proj_cb_in1_descriptors_per_device",
-                "sram_up_proj_cb_in1_descriptors_per_device",
-                "sram_down_proj_cb_in1_descriptors_per_device",
-            ):
-                per_dev = getattr(rctx, per_dev_attr, None) or {}
-                for descs in per_dev.values():
-                    if descs:
-                        sram_metadata_descs.extend(descs)
-            self.cb_metadata = record_cb_metadata(cb_descriptors + sram_metadata_descs)
+            sram_descs_per_coord = {}
+            if self.ctx.enable_sram_bspm:
+                for per_dev_attr in (
+                    "sram_gate_proj_cb_in1_descriptors_per_device",
+                    "sram_up_proj_cb_in1_descriptors_per_device",
+                    "sram_down_proj_cb_in1_descriptors_per_device",
+                ):
+                    per_dev = getattr(rctx, per_dev_attr, None) or {}
+                    for coord, descs in per_dev.items():
+                        if descs:
+                            sram_descs_per_coord.setdefault(coord, []).extend(descs)
+            # Take per-coord path only if we actually have per-(device, core) SRAM
+            # descs.  Defensive: if enable_sram_bspm=True was set but the SRAM
+            # weights came from the auto-fit path (uniform across devices), we
+            # have no per-coord descs and must fall back to the replicated path.
+            if self.ctx.enable_sram_bspm and sram_descs_per_coord:
+                # cb_in1 descriptors already carry uniform (total_size=576,
+                # page_size=576) — set at desc creation time in setup_matmul_
+                # expert_sram for gate/up/down.  No reconfig-time override
+                # needed; record_cb_metadata_per_coord reads desc.total_size
+                # directly and gets the uniform value.
+                self.cb_metadata = None
+                self.cb_metadata_per_coord = record_cb_metadata_per_coord(cb_descriptors, sram_descs_per_coord)
+                # BSPM-SRAM diagnostic: surface (device, core, cb) combinations
+                # where the placeholder buffer kicked in (num_pages=0 or
+                # total_size < page_size).  These are the all-bfp0 cores from
+                # min_shard_bytes — if the kernel does any cb_wait/cb_reserve
+                # on those CBs, num_pages=0 hangs.  Hang is non-deterministic
+                # across runs, suggesting an underlying race or uninitialized
+                # memory rather than a fixed-core bug.
+                from loguru import logger as _diag_logger
+
+                _sram_cb_ids = set()
+                for _descs in sram_descs_per_coord.values():
+                    for _desc in _descs:
+                        for _fmt in _desc.format_descriptors:
+                            _sram_cb_ids.add(_fmt.buffer_index)
+                _sram_cb_ids = sorted(_sram_cb_ids)
+                _placeholder_hits = []
+                for coord in sorted(self.cb_metadata_per_coord.keys(), key=lambda c: (c[0], c[1])):
+                    per_cb = self.cb_metadata_per_coord[coord]
+                    for cb_id in _sram_cb_ids:
+                        for addr, total_size, num_pages, page_size, core_ranges in per_cb.get(cb_id, []):
+                            if num_pages == 0 or total_size < page_size:
+                                for c in ttnn.corerange_to_cores(core_ranges, row_wise=True):
+                                    _placeholder_hits.append(
+                                        (coord, (c.x, c.y), cb_id, addr, total_size, num_pages, page_size)
+                                    )
+                if _placeholder_hits:
+                    _diag_logger.warning(
+                        "[BSPM-SRAM diag] {} placeholder-buffer (num_pages=0) SRAM CB entries detected:",
+                        len(_placeholder_hits),
+                    )
+                    for coord, core, cb_id, addr, total_size, num_pages, page_size in _placeholder_hits:
+                        _diag_logger.warning(
+                            "  coord={} core{} cb{}: addr=0x{:x} size={} pages={} ps={}",
+                            coord,
+                            core,
+                            cb_id,
+                            addr,
+                            total_size,
+                            num_pages,
+                            page_size,
+                        )
+                else:
+                    _diag_logger.info("[BSPM-SRAM diag] No placeholder-buffer SRAM CB entries (all cores have data).")
+            else:
+                sram_metadata_descs = []
+                for per_dev_attr in (
+                    "sram_gate_proj_cb_in1_descriptors_per_device",
+                    "sram_up_proj_cb_in1_descriptors_per_device",
+                    "sram_down_proj_cb_in1_descriptors_per_device",
+                ):
+                    per_dev = getattr(rctx, per_dev_attr, None) or {}
+                    for descs in per_dev.values():
+                        if descs:
+                            sram_metadata_descs.extend(descs)
+                self.cb_metadata = record_cb_metadata(cb_descriptors + sram_metadata_descs)
+                self.cb_metadata_per_coord = None
         return cb_descriptors
 
     def _build_dummy_cb_descs(self):
@@ -6449,10 +6577,21 @@ class MoeOp:
         return self.cb_id_manager.build_dummy_cb_descriptors(self.ctx.full_device_grid)
 
     def _build_cb_reconfig_tensor(self):
-        """Build L1-sharded CB reconfig tensor using shared utility."""
-        self.reconfig_tensor = build_cb_reconfig_tensor(
-            self.cb_metadata, self.ctx.full_device_grid, self.ctx.mesh_device
-        )
+        """Build L1-sharded CB reconfig tensor using shared utility.
+
+        Dispatches between replicated and per-device modes based on whether
+        SRAM BSPM is enabled — see :meth:`_build_cb_descriptors`.
+        """
+        if self.cb_metadata_per_coord is not None:
+            self.reconfig_tensor = build_cb_reconfig_tensor(
+                full_device_grid=self.ctx.full_device_grid,
+                mesh_device=self.ctx.mesh_device,
+                cb_metadata_per_coord=self.cb_metadata_per_coord,
+            )
+        else:
+            self.reconfig_tensor = build_cb_reconfig_tensor(
+                self.cb_metadata, self.ctx.full_device_grid, self.ctx.mesh_device
+            )
 
     def _build_core_descriptors(self):
         """Build combined core descriptors for routed + shared expert."""
@@ -6543,9 +6682,15 @@ class MoeOp:
             if proj_params["in1_backing_tensor"] is not None:
                 io_tensors.append(proj_params["in1_backing_tensor"])
             io_tensors.append(proj_params["fmt_dram_tensor"])
-            for offset_t, bsize_t in proj_params["meta_tensors_per_device"].values():
-                io_tensors += list(offset_t.values())
-                io_tensors += list(bsize_t.values())
+            # Lockstep refactor: meta_tensors_per_device[coord] = (offset_tensor,
+            # bs_tensor) — the SAME mesh tensor for every coord (shared across
+            # devices).  Add to io_tensors once for keep-alive.
+            _meta_map = proj_params["meta_tensors_per_device"]
+            if _meta_map:
+                _first_coord = next(iter(_meta_map))
+                _offset_t, _bsize_t = _meta_map[_first_coord]
+                io_tensors.append(_offset_t)
+                io_tensors.append(_bsize_t)
         if ctx.final_output_tensor is not None:
             io_tensors += [ctx.final_output_tensor]
         io_tensors += [
@@ -6677,6 +6822,27 @@ class MoeOp:
                 "sram_gate_proj_fmt_l1_addr": sgp["sram_fmt_l1_addr_per_device"][coord],
                 "sram_gate_proj_base_addrs_l1_addr": sgp["sram_base_addrs_l1_addr_per_device"][coord],
             }
+            # Host-side diag: dump per-(device, core) values fed into the kernel
+            # CT-arg override.  Cross-reference with kernel DPRINT
+            # "[SRAM-CT-arg cb_in1=...] fmt=0x... base=0x..." — mismatch
+            # means PerCoreCompileTimeDescriptor isn't routing per-core values.
+            if self.ctx.enable_sram_bspm:
+                from loguru import logger as _diag_logger
+
+                _gate_cb_in1 = routed_ctx.sram_gate_proj_cb_in1
+                for (_core, _fmt_addr), (_, _base_addr) in zip(
+                    sram_overrides["sram_gate_proj_fmt_l1_addr"],
+                    sram_overrides["sram_gate_proj_base_addrs_l1_addr"],
+                ):
+                    _diag_logger.info(
+                        "[SRAM-CT-arg host cb_in1={}] coord={} core=({}, {}) fmt=0x{:x} base=0x{:x}",
+                        _gate_cb_in1,
+                        coord,
+                        _core.x,
+                        _core.y,
+                        _fmt_addr,
+                        _base_addr,
+                    )
             for i, desc in enumerate(self.device_per_core_descs):
                 name = desc.named_compile_time_arg
                 if name in sram_overrides:
@@ -6804,6 +6970,7 @@ class MoeOp:
         # SRAM routed down_proj weights — runs on the 112 shared mcast receiver
         # cores. None = no SRAM down_proj; kernel skips uniformly.
         sram_down_proj_weights_tensor=None,
+        enable_sram_bspm=False,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -6882,6 +7049,7 @@ class MoeOp:
             sram_gate_proj_weights_tensor=sram_gate_proj_weights_tensor,
             sram_up_proj_weights_tensor=sram_up_proj_weights_tensor,
             sram_down_proj_weights_tensor=sram_down_proj_weights_tensor,
+            enable_sram_bspm=enable_sram_bspm,
         )
 
         # ==================================================================

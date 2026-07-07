@@ -177,10 +177,15 @@ def assert_with_ulp(
 
     The error is measured using the following formula:
     ``
-        | expected - actual | / ULP(expected)
+        | actual - expected | / ULP(expected)
     ``
 
     Where ULP(expected) returns, for each element, the length of a single Unit of Least Precision (ULP).
+
+    ``expected_result`` is the reference (golden) tensor and ``actual_result`` is the tensor under test.
+    On failure the message reports the worst element as ``|calculated <actual> - golden <expected>| /
+    ULP(golden)``, i.e. the first printed operand is ``actual_result`` and the divisor is the ULP of
+    ``expected_result``.
 
 
     Args:
@@ -257,6 +262,42 @@ def assert_with_ulp(
     ulp_passed, ulp_message = comp_ulp(expected_result, actual_result, ulp_threshold, allow_nonfinite)
     assert ulp_passed, ulp_message
     return ulp_passed, ulp_message
+
+
+def ulp_distance(a: torch.Tensor, b: torch.Tensor, treat_zero_signs_equal: bool = True) -> torch.Tensor:
+    """Per-element integer ULP distance for matching-dtype BF16 or FP32 tensors.
+
+    Maps each value's sign-magnitude bit pattern to a monotonic int (negatives
+    -> all_ones - bits, positives -> bits + sign_bit) so float ordering is
+    preserved by int subtraction; per-element ULP = |mono(a) - mono(b)|.
+
+    Differs from ``comp_ulp`` (which divides by ``ulp(golden)``) in two ways:
+      * Integer-valued across power-of-2 boundaries (``comp_ulp`` can return
+        fractional ULPs there because ``ulp(a)`` differs above vs below the
+        boundary).
+      * Optionally treats +0 and -0 as 0 ULP apart -- they are numerically
+        equal per IEEE 754, and some Tenstorrent SFPU pack/convert paths
+        canonicalise -0 to +0, so the 1-ULP gap the bit mapping would
+        otherwise report is an artefact.
+    """
+    assert a.dtype == b.dtype, f"dtype mismatch: {a.dtype} vs {b.dtype}"
+    if a.dtype == torch.bfloat16:
+        bits_dtype, wider_dtype, sign_mask, all_mask = torch.int16, torch.int32, 0x8000, 0xFFFF
+    elif a.dtype == torch.float32:
+        bits_dtype, wider_dtype, sign_mask, all_mask = torch.int32, torch.int64, 0x80000000, 0xFFFFFFFF
+    else:
+        raise ValueError(f"ulp_distance: unsupported dtype {a.dtype}; only bfloat16 and float32 are supported")
+
+    a_bits = a.contiguous().view(bits_dtype).to(wider_dtype) & all_mask
+    b_bits = b.contiguous().view(bits_dtype).to(wider_dtype) & all_mask
+    a_mono = torch.where((a_bits & sign_mask) != 0, all_mask - a_bits, a_bits + sign_mask)
+    b_mono = torch.where((b_bits & sign_mask) != 0, all_mask - b_bits, b_bits + sign_mask)
+    diff = (a_mono - b_mono).abs()
+    if treat_zero_signs_equal:
+        magnitude_mask = all_mask ^ sign_mask
+        both_zero = ((a_bits & magnitude_mask) == 0) & ((b_bits & magnitude_mask) == 0)
+        diff = torch.where(both_zero, torch.zeros_like(diff), diff)
+    return diff
 
 
 def measure_ulp_with_near_zero_atol(
@@ -812,3 +853,29 @@ def assert_numeric_metrics(
         assert overall_passed, full_message
     else:
         return overall_passed, full_message
+
+
+def assert_div_by_zero_outputs(
+    golden_tensor: torch.Tensor, device_tensor: torch.Tensor, *, ulp_threshold: int = 3
+) -> None:
+    """Assert correctness of divide-by-zero outputs (golden assumed all-±inf after zero-replacement).
+
+    Three-part check:
+    1. Non-finite position mask matches exactly.
+    2. Inf sign matches where both sides are inf.
+    3. ULP safety net on any finite elements (not reached under current parametrization
+       when the numerator contains no zeros and divisor is 0.0).
+    """
+    g_nonfinite = ~torch.isfinite(golden_tensor)
+    d_nonfinite = ~torch.isfinite(device_tensor)
+    assert torch.equal(g_nonfinite, d_nonfinite), "Non-finite positions differ between golden and device"
+    both_inf = torch.isinf(golden_tensor) & torch.isinf(device_tensor)
+    if both_inf.any():
+        assert torch.equal(
+            torch.sign(golden_tensor[both_inf]),
+            torch.sign(device_tensor[both_inf]),
+        ), "Inf sign mismatch between golden and device"
+    finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(device_tensor)
+    if finite_mask.any():
+        # Safety net: not reached when golden is all ±inf after zero replacement.
+        assert_with_ulp(golden_tensor[finite_mask], device_tensor[finite_mask], ulp_threshold=ulp_threshold)

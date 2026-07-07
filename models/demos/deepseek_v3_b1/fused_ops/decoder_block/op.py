@@ -204,6 +204,7 @@ class DecoderBlock:
         persistent_mode=False,
         termination_semaphore=None,
         is_torus=True,
+        enable_sram_bspm=False,
     ):
         """Build io_tensors and mesh_program_descriptor without executing.
 
@@ -289,6 +290,7 @@ class DecoderBlock:
             reduce_semaphores=reduce_semaphores,
             reduce_root_coord=reduce_root_coord,
             reconfig_moe_cbs=True,
+            enable_sram_bspm=enable_sram_bspm,
             semaphores=moe_semaphores,
             noc_mode=noc_mode,
             cb_id_context=moe_cb_id_context,

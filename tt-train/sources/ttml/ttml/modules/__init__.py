@@ -13,7 +13,7 @@ from .embedding import Embedding
 from .linear import LinearLayer, ColumnParallelLinear, RowParallelLinear
 from .lora import LoraConfig, LoraLinear, LoraColumnParallelLinear, LoraRowParallelLinear, LoraModel
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
-from .parameter import Buffer, Parameter
+from .parameter import Buffer, Parameter, TensorMetadata
 
 __all__ = [
     # C++ bindings
@@ -35,4 +35,5 @@ __all__ = [
     "ModuleDict",
     "ModuleList",
     "Parameter",
+    "TensorMetadata",
 ]

@@ -81,13 +81,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     }
 }
 
-// The do... while(0) in this macro allows for it to be called more flexibly, e.g. in an if-else
-// without {}s.
-#define ASSERT(condition, ...)                        \
-    do {                                              \
-        if (not(condition))                           \
-            assert_and_hang(__LINE__, ##__VA_ARGS__); \
-    } while (0)
+#define ASSERT(condition, ...) (void(not(condition) ? assert_and_hang(__LINE__, ##__VA_ARGS__), 0 : 0))
 
 #define ASSERT_ENABLED 1
 #define WATCHER_ASSERT_ENABLED 1
@@ -97,33 +91,21 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 
 #if defined(LIGHTWEIGHT_KERNEL_ASSERTS)
 
-#define ASSERT(condition, ...)      \
-    do {                            \
-        if (!(condition)) {         \
-            asm volatile("ebreak"); \
-        }                           \
-    } while (0)
+#define ASSERT(condition, ...) (void(not(condition) ? ({ asm("ebreak"); }), 0 : 0))
 
 #define ASSERT_ENABLED 1
 #define LIGHTWEIGHT_ASSERT_ENABLED 1
 #define WATCHER_ASSERT_ENABLED 0
 
-#elif defined(ENABLE_LLK_ASSERT)
+#else
 
-#define ASSERT(condition, ...)
+// Avoid unused variable warnings here.
+#define ASSERT(condition, ...) (void(sizeof(not(condition))))
 
 #define ASSERT_ENABLED 0
 #define LIGHTWEIGHT_ASSERT_ENABLED 0
 #define WATCHER_ASSERT_ENABLED 0
 
-#else  // No asserts enabled
-
-#define ASSERT(condition, ...)
-
-#define ASSERT_ENABLED 0
-#define WATCHER_ASSERT_ENABLED 0
-#define LIGHTWEIGHT_ASSERT_ENABLED 0
-
-#endif  // LIGHTWEIGHT_KERNEL_ASSERTS / ENABLE_LLK_ASSERT
+#endif  // LIGHTWEIGHT_KERNEL_ASSERTS
 
 #endif  // WATCHER_ENABLED

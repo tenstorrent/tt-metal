@@ -5,6 +5,7 @@
 import pytest
 from loguru import logger
 import ttnn
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
@@ -145,7 +146,7 @@ def test_llama2_matmul(
         packer_l1_acc=packer_l1_acc,
     )
 
-    output_t = ttnn.matmul(
+    output_t = ttnn_matmul(
         in0_t,
         in1_t,
         program_config=program_config,
@@ -468,7 +469,10 @@ def test_multi_core_matmul_2d_wh(
         packer_l1_acc=packer_l1_acc,
     )
 
-    output_t = ttnn.matmul(
+    # The determinism wrapper runs matmul twice; for the largest sharded shape that
+    # exhausts device memory, so use a single matmul call for it.
+    matmul_op = ttnn.matmul if (M, K, N) == (1792, 2048, 4096) else ttnn_matmul
+    output_t = matmul_op(
         in0_t,
         in1_t,
         program_config=program_config,
@@ -778,7 +782,10 @@ def test_multi_core_matmul_1d_wh(
         packer_l1_acc=packer_l1_acc,
     )
 
-    output_t = ttnn.matmul(
+    # The determinism wrapper runs matmul twice; for the largest sharded shape that
+    # exhausts device memory, so use a single matmul call for it.
+    matmul_op = ttnn.matmul if (M, K, N) == (512, 8192, 8192) else ttnn_matmul
+    output_t = matmul_op(
         in0_t,
         in1_t,
         program_config=program_config,

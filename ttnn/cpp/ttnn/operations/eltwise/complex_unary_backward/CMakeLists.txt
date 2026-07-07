@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_eltwise_complex_unary_backward ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Complex::Unary::Backward ALIAS ttnn_op_eltwise_complex_unary_backward)
 
-tt_reuse_precompile_headers(ttnn_op_eltwise_complex_unary_backward TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_eltwise_complex_unary_backward TTNN::PCHLean)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_complex_unary_backward)
 
 set_target_properties(

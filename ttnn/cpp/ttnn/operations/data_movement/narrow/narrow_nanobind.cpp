@@ -13,28 +13,37 @@ namespace ttnn::operations::data_movement {
 
 void bind_narrow(nb::module_& mod) {
     const auto* doc = R"doc(
-        This is a zero-cost narrow operation that returns the narrowed version of the tensor. The returned tensor shares the same data buffer as the input tensor, but dimension dim will have the specified length, starting from the start index.
+        Returns a narrowed view of the input tensor along dimension :attr:`dim`, starting at index :attr:`start`
+        with the given :attr:`length`. Equivalent to `torch.narrow`.
+
+        This is a zero-cost operation: the returned tensor shares the same data buffer as the input tensor.
+        No data is copied or moved.
 
         Note:
             * Input tensor must be stored on the device.
             * Currently supports only DRAM INTERLEAVED or L1 sharded tensors.
-            * For DRAM INTERLEAVED tensors, narrow can only be performed on the first non-trivial dimension, with start pointing to the first bank.
-            * For L1 sharded tensors, narrow is supported only in specific cases: when the narrowed region consists of complete full shards, or when the narrowed region spans multiple shards with the same page offset.
-            * Supports all pairs of layout and data types that are supported by ttnn.
+            * For DRAM INTERLEAVED tensors, narrow can only be performed on the first non-trivial dimension,
+              with ``start`` pointing to the first DRAM bank.
+            * For L1 sharded tensors, narrow is supported only when the narrowed region consists of complete
+              full shards, or spans multiple shards with the same page offset.
+            * For TILE_LAYOUT, ``start`` and ``length`` on the height or width dimension must be multiples of 32.
+            * Negative values for ``dim`` and ``start`` are supported.
 
         Args:
-            * input_tensor: Input Tensor.
-            * dim: Dimension to narrow.
-            * start: Starting index of the narrow operation.
-            * length: Length of the narrow dimension.
+            * input_tensor (ttnn.Tensor): Input tensor. Must be on device.
+            * dim (int): Dimension along which to narrow. Supports negative indexing.
+            * start (int): Starting index (inclusive). Supports negative indexing.
+            * length (int): Length of the narrowed dimension. Must be > 0.
 
         Returns:
-            ttnn.Tensor: a reference to the narrowed tensor but with the new shape.
+            ttnn.Tensor: A view of the input tensor with ``shape[dim] == length``.
 
         Example:
 
             >>> tensor = ttnn.rand((32, 16, 16, 4), dtype=ttnn.bfloat16, device=device)
             >>> output = ttnn.narrow(tensor, 0, 0, 12)
+            >>> print(output.shape)
+            ttnn.Shape([12, 16, 16, 4])
 
         )doc";
 

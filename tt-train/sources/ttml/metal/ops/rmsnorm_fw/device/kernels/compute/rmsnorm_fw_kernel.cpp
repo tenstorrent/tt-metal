@@ -294,7 +294,7 @@ void kernel_main() {
             tile_regs_acquire();
 
             const uint32_t reduction_register = 0;
-            reconfig_data_format(cb_rms_before_reduction_intermediate, cb_scaler);
+            reconfig_data_format(cb_scaler, cb_rms_before_reduction_intermediate);
             reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
                 cb_rms_before_reduction_intermediate, cb_scaler, cb_rms_after_reduction_intermediate);
             reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(

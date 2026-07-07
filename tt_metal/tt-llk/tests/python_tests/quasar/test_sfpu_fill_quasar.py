@@ -19,7 +19,7 @@ from helpers.llk_params import (
     UnpackerEngine,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, parametrize, runtime
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -74,7 +74,7 @@ def generate_sfpu_fill_combinations(
         for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
             for input_dimensions in [[32, 32], [64, 64]]:
                 combinations.append(
-                    (fmt, dest_acc, implied_math_format, input_dimensions)
+                    (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
                 )
 
     # Int fill: _calculate_fill_int_ with FILL_INT_FORMAT-selected SFPMEM store mode.
@@ -84,7 +84,9 @@ def generate_sfpu_fill_combinations(
         in_fmt = fmt.input_format
         dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else DestAccumulation.No
         for input_dimensions in [[32, 32], [64, 64]]:
-            combinations.append((fmt, dest_acc, ImpliedMathFormat.No, input_dimensions))
+            combinations.append(
+                (fmt, dest_acc, ImpliedMathFormat.No, runtime(input_dimensions))
+            )
 
     return combinations
 
@@ -104,14 +106,14 @@ SFPU_FILL_FLOAT_FORMATS = [
     for out_fmt in _FILL_FLOAT_OUTPUTS
 ]
 
-# Fill int path: _calculate_fill_int_ with p_sfpu::sfpmem::INT32/UINT16/UINT8.
+# Fill int path: _calculate_fill_int_ with p_sfpu::sfpmem::INT32/UINT16/INT8/UINT8.
 # Quasar integer formats and their SFPMEM store modes:
-#   Int32  → sfpmem::INT32  (32-bit sign-magnitude)
-#   Int16  → sfpmem::UINT16 (INT16 = Quasar hardware code 9, maps to SFPMEM::UINT16)
-#   Int8   → sfpmem::UINT8  (8-bit)
-#   UInt8  → sfpmem::UINT8  (8-bit unsigned)
-# Note: UInt16 (Quasar code 130) is invalid on Quasar; Int16 (code 9) is the correct
-# 16-bit integer format. FILL_INT_FORMAT bakes the format into each compiled variant.
+#   Int32 → sfpmem::INT32  (32-bit sign-magnitude)
+#   Int16 → sfpmem::INT16 (16-bit truncate)
+#   Int8  → sfpmem::INT8   (0b0101, sign-magnitude 8-bit)
+#   UInt8 → sfpmem::UINT8  (0b1011, true unsigned 8-bit; validated on the emulator — see
+#           ckernel_sfpu_fill.h)
+# FILL_INT_FORMAT bakes the format into each compiled variant.
 SFPU_FILL_INT_FORMATS = input_output_formats(
     [DataFormat.Int32, DataFormat.Int16, DataFormat.Int8, DataFormat.UInt8],
     same=True,

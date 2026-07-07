@@ -26,8 +26,6 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
     constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
-    constexpr uint32_t num_faces = get_arg(args::num_faces);
-    constexpr uint32_t num_rows_per_face = get_arg(args::num_rows_per_face);
     DataflowBuffer dfb_in0(dfb::in);
     DataflowBuffer dfb_out0(dfb::out);
 
@@ -37,7 +35,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
     copy_tile_to_dst_init_short(dfb::in);
-    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(dfb::out, num_rows_per_face, num_faces);
+    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(dfb::out);
 
     for (uint32_t r = 0; r < per_core_block_cnt; ++r) {
         dfb_out0.reserve_back(full_ct_dim);
@@ -49,7 +47,7 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_untilize_dest<block_ct_dim, full_ct_dim>(dfb::out, 1, b, num_rows_per_face, num_faces);
+            pack_untilize_dest<block_ct_dim, full_ct_dim>(dfb::out, 1, b);
             tile_regs_release();
             dfb_in0.pop_front(block_ct_dim);
         }

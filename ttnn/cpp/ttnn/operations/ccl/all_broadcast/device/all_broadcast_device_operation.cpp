@@ -65,22 +65,35 @@ std::vector<Tensor> AllBroadcastDeviceOperation::create_output_tensors(
     return outputs;
 }
 
-ttsl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "AllBroadcastDeviceOperation::compute_program_hash is called");
+std::vector<tt::tt_metal::TensorTopology> AllBroadcastDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const Tensor& input) {
+    // all_broadcast produces `ring_size` tensors, each carrying the full data of one source
+    // device on `cluster_axis` and replicated across the remaining devices on that axis.
+    // So every output's placement on `cluster_axis` is Replicate; placements on the other
+    // mesh axes are inherited from the input.
+    const auto& input_topology = input.tensor_topology();
+    auto output_placements = input_topology.placements();
 
-    auto subdevice_id = operation_attributes.sub_device_id;
-    auto* mesh_device = tensor_args.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<AllBroadcastDeviceOperation>(
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.output_mem_config,
-        operation_attributes.topology,
-        operation_attributes.cluster_axis,
-        subdevice_core_range_set,
-        tensor_args);
+    if (operation_attributes.cluster_axis.has_value()) {
+        const auto axis = operation_attributes.cluster_axis.value();
+        if (axis < output_placements.size()) {
+            output_placements[axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+        }
+    } else {
+        for (auto& placement : output_placements) {
+            placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+        }
+    }
+
+    tt::tt_metal::TensorTopology output_topology(
+        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords());
+
+    std::vector<tt::tt_metal::TensorTopology> topologies;
+    topologies.reserve(operation_attributes.ring_size);
+    for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
+        topologies.push_back(output_topology);
+    }
+    return topologies;
 }
 
 std::vector<ttnn::Tensor> all_broadcast(

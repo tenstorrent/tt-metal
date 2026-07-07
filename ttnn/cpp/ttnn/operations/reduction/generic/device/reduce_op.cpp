@@ -83,7 +83,8 @@ Tensor reduce(
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    bool negate) {
+    bool negate,
+    bool use_row_major_support) {
     if (reduce_math == tt::tt_metal::ReduceOpMath::MIN) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
     }
@@ -109,17 +110,53 @@ Tensor reduce(
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
-    // Reduce only works with tile layout, so we need to tilize the input tensor if necessary
-    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-    auto tilized_input = ttnn::tilize_with_val_padding(
-        input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
+    // Dense row-major reduce: a fast path that consumes ROW_MAJOR input directly (no host tilize)
+    // and is currently restricted to mean (AVG) / sum (SUM) on 4D BF16/FLOAT32 tensors with
+    // interleaved I/O on both sides. Anything else — MAX/MIN, HW reduce, other dtypes, sharded
+    // input or output — falls back to the standard tilize + tile-reduce path.
+    //
+    // MAX/MIN are excluded because the RM compute kernel accumulates partial reductions via
+    // Accumulate::at across chunks, and the cross-chunk fold uses SUM semantics. Wiring MAX
+    // accumulation through that pipeline is doable but not yet done; for now they tilize.
+    //
+    // The path is opt-in via use_row_major_support: when false (the default), eligibility is forced
+    // off and the op always tilizes through the classic tile-reduce kernels. Default-off because the
+    // dense RM path currently regresses perf and can hang on tall (multi-H-tile) reduces; flip on
+    // only once those are fixed.
+    const bool both_interleaved =
+        input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+        output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
+    const bool rm_base_eligible =
+        use_row_major_support && input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+        input_tensor.logical_shape().rank() == 4 && both_interleaved &&
+        (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
+        (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM);
+    const bool use_rm_dense_w = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::W;
+    const bool use_rm_dense_h = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::H;
+    const bool use_rm_dense = use_rm_dense_w || use_rm_dense_h;
 
-    // GMPOOL applies exp2(floor(log2(|s|))) of the scalar (only the exponent), so for
-    // MAX/MIN with non-unity scalar we instead reduce with scaler=1.0 and apply the user
-    // scalar after reduction via post-multiplication. See issue #40498. The flag also
-    // covers reduce_min (math_op=MAX with negate=true) since high-level dispatch lowers
-    // min through reduce_min before reaching here.
-    const bool use_post_mul = (reduce_math == tt::tt_metal::ReduceOpMath::MAX) && (scaler != 1.0f);
+    // High-level mean uses AVG with scaler (1/N). On the tiled path, GMPOOL AVG matches that intent. On the dense
+    // row-major W/H path we tilize one logical row at a time from a narrow RM page; AVG applies an extra normalization
+    // for full tile faces that does not match torch.mean together with partial-row tilize. Use SUM + the same scaler.
+    // SUM and MAX pass through unchanged.
+    tt::tt_metal::ReduceOpMath prim_reduce_math = reduce_math;
+    if (use_rm_dense && reduce_math == tt::tt_metal::ReduceOpMath::AVG) {
+        prim_reduce_math = tt::tt_metal::ReduceOpMath::SUM;
+    }
+
+    // Reduce only works with tile layout on the classic path; dense path keeps row-major input.
+    Tensor tilized_input = input_tensor;
+    if (!use_rm_dense) {
+        auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+        tilized_input = ttnn::tilize_with_val_padding(
+            input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
+    }
+
+    // A non-unity scalar is applied after the reduction (see requires_post_mul() in common.hpp):
+    // GMPOOL keeps only the scaler's exponent for MAX/MIN, and the Int32 SFPU path ignores the
+    // scaler CB. Int32 post-mul rounds through fp32, so it is lossy for |result| > 2^24.
+    const bool use_post_mul = ttnn::prim::requires_post_mul(reduce_math, tilized_input.dtype(), scaler);
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
 
@@ -153,12 +190,30 @@ Tensor reduce(
     // sqrt(scaler) in ReduceSingleCoreHwProgramFactory::create.
     // However, sqrt of a negative number is NaN, so negative scalers
     // must take the two-step W-then-H path where the scaler is applied once.
-    if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
+    //
+    // INT32 SFPU reduce has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
+    // W-then-H. Float32 max HW can use single-core REDUCE_SCALAR (FPU) when num_tiles == 1;
+    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to MAX/SUM and MIN (MIN via negate).
+    const bool use_two_step_hw_sfpu_reduce =
+        (reduce_dim == tt::tt_metal::ReduceOpDim::HW) && (tilized_input.dtype() == tt::tt_metal::DataType::INT32) &&
+        (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM);
+
+    if (is_multicore_hw || use_two_step_hw_sfpu_reduce ||
+        (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
         // Multi-core HW reduction: first reduce W, then reduce H on the result.
-        // For the Sum chain's terminal fp32->bf16 stage, keep W in fp32 so only H packs to bf16.
+        // Keep the W intermediate in FP32 (only H packs to BF16) to preserve accumulation
+        // precision. Applies to SUM only:
+        // - FP32 input after an earlier NC-stage reduction with a BF16 final pack (chain path), or
+        // - BF16 input on a pure H+W reduction (e.g. dim=[-2,-1] on 8D tensors).
+        // MAX/MIN must not use this path: MIN is lowered to MAX + negate, and the fused-negate
+        // W step produces wrong results with an FP32 intermediate (issue #40854). They also gain
+        // no precision from FP32 since they select, not accumulate.
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
-        const bool keep_w_fp32 = output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
-                                 tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32;
+        const bool keep_w_fp32 =
+            reduce_math == tt::tt_metal::ReduceOpMath::SUM &&
+            ((output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
+              tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32) ||
+             (tilized_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en));
         const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
 
         const Tensor output_tensor = ttnn::prim::reduce(
@@ -171,7 +226,9 @@ Tensor reduce(
             config,
             sub_core_grids,
             negate,
-            /*post_mul_scaler=*/1.0f);
+            /*post_mul_scaler=*/1.0f,
+            /*row_major_w_dense_path=*/false,
+            /*row_major_h_dense_path=*/false);
 
         if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, sub_core_grids)) {
             return h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype);
@@ -187,7 +244,9 @@ Tensor reduce(
             config,
             sub_core_grids,
             negate,
-            /*post_mul_scaler=*/post_mul);
+            /*post_mul_scaler=*/post_mul,
+            /*row_major_w_dense_path=*/false,
+            /*row_major_h_dense_path=*/false);
     }
 
     if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
@@ -198,7 +257,7 @@ Tensor reduce(
 
     return ttnn::prim::reduce(
         tilized_input,
-        reduce_math,
+        prim_reduce_math,
         reduce_dim,
         reduce_scaler,
         output_mem_config,
@@ -206,7 +265,9 @@ Tensor reduce(
         config,
         sub_core_grids,
         negate,
-        /*post_mul_scaler=*/post_mul);
+        /*post_mul_scaler=*/post_mul,
+        /*row_major_w_dense_path=*/use_rm_dense_w,
+        /*row_major_h_dense_path=*/use_rm_dense_h);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail

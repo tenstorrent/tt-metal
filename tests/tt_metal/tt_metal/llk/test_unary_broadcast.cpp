@@ -44,8 +44,6 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -145,7 +143,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             for (int i = 0; i < vBroadcast.size(); i++) {
                 tempfp32v[i] = static_cast<float>(vBroadcast[i]);
             }
-            tilized_packed_res = pack_as_bfp8_tiles(tt::stl::make_const_span(tempfp32v), true, false);
+            tilized_packed_res = pack_as_bfp8_tiles(ttsl::make_const_span(tempfp32v), true, false);
         } else {
             TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
@@ -159,7 +157,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             auto packed_vec = pack_vector<uint32_t, bfloat16>(tempfp16bv);
             tilized_packed_res = ::unit_tests::compute::gold_standard_tilize(packed_vec, config);
         } else if (T_out == tt::DataFormat::Bfp8_b) {
-            tilized_packed_res = pack_as_bfp8_tiles(tt::stl::make_const_span(vBroadcast), true, false);
+            tilized_packed_res = pack_as_bfp8_tiles(ttsl::make_const_span(vBroadcast), true, false);
         } else {
             TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
@@ -206,16 +204,18 @@ bool check_is_close(
         }
         auto gold_bf16 = unpack_vector<bfloat16, uint32_t>(packed_golden);
         auto res_bf16 = unpack_vector<bfloat16, uint32_t>(device_res);
-        for (size_t i = 0; i < gold_bf16.size(); i++) {
-            if (!is_close(gold_bf16[i], res_bf16[i], 0.0)) {
-                log_unpacked_vectors_for_mismatch(result_label, gold_bf16, res_bf16);
-                TT_THROW(
-                    "{} mismatch at index {} golden={} device={}",
-                    result_label,
-                    i,
-                    static_cast<float>(gold_bf16[i]),
-                    static_cast<float>(res_bf16[i]));
-            }
+        auto it = std::mismatch(gold_bf16.begin(), gold_bf16.end(), res_bf16.begin(), [](bfloat16 a, bfloat16 b) {
+            return is_close(a, b, 0.0f);
+        });
+        if (it.first != gold_bf16.end()) {
+            const size_t i = static_cast<size_t>(it.first - gold_bf16.begin());
+            log_unpacked_vectors_for_mismatch(result_label, gold_bf16, res_bf16);
+            TT_THROW(
+                "{} mismatch at index {} golden={} device={}",
+                result_label,
+                i,
+                static_cast<float>(*it.first),
+                static_cast<float>(*it.second));
         }
         return true;
     }
@@ -228,17 +228,13 @@ bool check_is_close(
         if (gold_refloat.size() != res_refloat.size()) {
             TT_THROW("{} mismatch: size golden={} device={}", result_label, gold_refloat.size(), res_refloat.size());
         }
-        for (size_t i = 0; i < gold_refloat.size(); i++) {
-            if (std::fabs(gold_refloat[i] - res_refloat[i]) > atol) {
-                log_unpacked_vectors_for_mismatch(result_label, gold_refloat, res_refloat);
-                TT_THROW(
-                    "{} mismatch at index {} A={} B={} atol={}",
-                    result_label,
-                    i,
-                    gold_refloat[i],
-                    res_refloat[i],
-                    atol);
-            }
+        auto it = std::mismatch(gold_refloat.begin(), gold_refloat.end(), res_refloat.begin(), [](float a, float b) {
+            return std::fabs(a - b) <= atol;
+        });
+        if (it.first != gold_refloat.end()) {
+            const size_t i = static_cast<size_t>(it.first - gold_refloat.begin());
+            log_unpacked_vectors_for_mismatch(result_label, gold_refloat, res_refloat);
+            TT_THROW("{} mismatch at index {} A={} B={} atol={}", result_label, i, *it.first, *it.second, atol);
         }
         return true;
     }
@@ -286,7 +282,7 @@ void get_packed_tilized_input_output_pair(
 void run_single_core_unary_broadcast_quasar(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const UnaryBroadcastConfig& test_config) {
     auto* device = mesh_device->get_devices()[0];
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     constexpr uint32_t num_tiles = 32;
     constexpr uint32_t num_blocks = 4;
@@ -302,139 +298,120 @@ void run_single_core_unary_broadcast_quasar(
     auto out_tensor = MeshTensor::allocate_on_device(
         *mesh_device, make_flat_dram_tensor_spec(out_tile_size, num_tiles), TensorTopology{});
 
-    constexpr const char* SRC_DFB = "src_dfb";
-    constexpr const char* DST_DFB = "dst_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const experimental::DFBSpecName SRC_DFB{"src_dfb"};
+    const experimental::DFBSpecName DST_DFB{"dst_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
-    experimental::metal2_host_api::DataflowBufferSpec src_dfb_spec{
+    experimental::DataflowBufferSpec src_dfb_spec{
         .unique_id = SRC_DFB,
         .entry_size = in_tile_size,
         .num_entries = dfb_num_entries,
         .data_format_metadata = in_t,
     };
-    experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
+    experimental::DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = out_tile_size,
         .num_entries = dfb_num_entries,
         .data_format_metadata = out_t,
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = SRC_DFB,
-            .local_accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+        .dfb_bindings = {experimental::ProducerOf(SRC_DFB, "out")},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
-                        .disable_implicit_sync_for = {SRC_DFB}}},
+                .gen2_config =
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = DST_DFB,
-            .local_accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
-        .runtime_arguments_schema = {.named_runtime_args = {"num_tiles"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
-                        .disable_implicit_sync_for = {DST_DFB}}},
+                .gen2_config =
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
-    experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines;
-    compute_defines.emplace_back("BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim));
+    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
+    compute_defines.emplace("BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim));
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
             {{
                  .dfb_spec_name = SRC_DFB,
-                 .local_accessor_name = "src",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "src",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = DST_DFB,
-                 .local_accessor_name = "dst",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "dst",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = {{"per_core_block_cnt", num_blocks}, {"per_core_block_dim", block_size}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .compile_time_args = {{"per_core_block_cnt", num_blocks}, {"per_core_block_dim", block_size}},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec wu{
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "unary_broadcast_quasar",
+    experimental::ProgramSpec spec{
+        .name = "unary_broadcast_quasar",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src_dfb_spec, dst_dfb_spec},
         .tensor_parameters = {{.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     const uint32_t src_dram_addr = static_cast<uint32_t>(in_tensor.mesh_buffer().get_reference_buffer()->address());
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = READER,
-            .named_runtime_args =
-                {{.node = node,
-                  .args =
-                      {{"src_addr", src_dram_addr},
-                       {"src_dram_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"ublock_size_tiles", 1u},
-                       {"reader_only", 0u}}}},
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{node,
+                  {{"src_addr", src_dram_addr},
+                   {"src_dram_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"ublock_size_tiles", 1u},
+                   {"reader_only", 0u}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = WRITER,
-            .named_runtime_args = {{.node = node, .args = {{"num_tiles", num_tiles}}}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = {{node, {{"num_tiles", num_tiles}}}},
         },
     };
-    params.tensor_args = {{.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor}};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}}};
+    experimental::SetProgramRunArgs(program, params);
 
     std::vector<uint32_t> packed_tilized_input;
     std::vector<uint32_t> golden_packed_tilized_output;

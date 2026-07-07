@@ -57,11 +57,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
     }
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_unpack);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+        buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_unpack);
 
     // Unpacks all three input tiles (cond, true_val, false_val) from buffer_A in one call;
     // tile count is taken from num_tiles_per_unpack set during init.
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/);
+    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
 
     if constexpr (unpack_to_dest)
     {
@@ -79,10 +80,10 @@ const bool is_int_fpu_en = false;
 #include "cfg_defines.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_ternary_sfpu.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_sfpu/ckernel_sfpu_where.h"
+#include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_where.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -121,15 +122,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
 
-    // Primes the CC stack
-    // to a known-empty lane mask before the first select op.
-    _init_where_();
-
-    // Runs _calculate_where_ over the faces selected by VECTOR_MODE: cond=tile 0,
+    // Runs calculate_where over the faces selected by VECTOR_MODE: cond=tile 0,
     // true_val=tile 1, false_val=tile 2, result written to tile 0. Faces outside
     // the selected set keep whatever the producer wrote into Dest before SFPU ran
     // (the cond tile, here), so the Python test asserts only on the processed faces.
-    _llk_math_eltwise_ternary_sfpu_params_(sfpu::_calculate_where_<false>, 0u, 1u, 2u, 0u, VECTOR_MODE);
+    SFPU_TERNARY_CALL(
+        dest_sync,
+        is_fp32_dest_acc_en,
+        calculate_where,
+        (false /*APPROXIMATION_MODE*/),
+        0u /*DST_IN0*/,
+        1u /*DST_IN1*/,
+        2u /*DST_IN2*/,
+        0u /*DST_OUT*/,
+        VECTOR_MODE);
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 }
@@ -168,11 +174,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_(buf_desc_id, num_tiles_per_pack);
+    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
 
     // Packs only the result tile (DEST[DST_INDEX]); where produces one output tile
     // regardless of how many input tiles were loaded.
-    _llk_pack_(params.DST_INDEX, 0);
+    _llk_pack_(params.DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import inspect
 import subprocess
 import shutil
@@ -9,8 +10,6 @@ from pathlib import Path
 from typing import Any, Optional, Tuple, Dict
 
 from framework.sweeps_logger import sweeps_logger as logger
-from tracy.common import PROFILER_LOGS_DIR
-from tracy.process_ops_logs import get_device_data_generate_report
 from sweep_utils.roofline_utils import get_updated_message
 
 
@@ -18,10 +17,21 @@ from sweep_utils.roofline_utils import get_updated_message
 DEVICE_PERF_KEYS = [
     "DEVICE FW DURATION [ns]",
     "DEVICE KERNEL DURATION [ns]",
-    "OP TO OP LATENCY [ns]",
-    "DEVICE BRISC FW DURATION [ns]",
-    "DEVICE NCRISC FW DURATION [ns]",
+    "DEVICE BRISC KERNEL DURATION [ns]",
+    "DEVICE NCRISC KERNEL DURATION [ns]",
+    "DEVICE TRISC0 KERNEL DURATION [ns]",
+    "DEVICE TRISC1 KERNEL DURATION [ns]",
+    "DEVICE TRISC2 KERNEL DURATION [ns]",
+    "CORE COUNT",
 ]
+
+# Sentinel returned as the device-perf value when a sweep module opts a vector out of
+# profiling by setting _SKIP_DEVICE_PERF (e.g. conv2d's heavy FABRIC_1D path, where the
+# profiler read/clock-ARC over the busy fabric hangs). Distinct from None, which means
+# "profiler ran but produced nothing" -> FAIL_UNSUPPORTED_DEVICE_PERF. The runner treats
+# this sentinel as PASS with device-perf N/A, so an unprofilable-but-correct vector is
+# not counted as a failure.
+DEVICE_PERF_SKIPPED = "__device_perf_skipped__"
 
 
 def clear_disk_kernel_cache() -> None:
@@ -45,55 +55,96 @@ def clear_disk_kernel_cache() -> None:
         logger.warning(f"Failed to clear disk kernel cache: {e}")
 
 
+def _resolve_perf_device(device, test_module):
+    # Some model_traced ops (add/sdpa/paged_sdpa, conv2d) open their own mesh
+    # device inside run() (the fixture yields None) and cache it in a persistent
+    # module global that stays open across vectors. The global's name varies by
+    # module -- _CUR_DEVICE (add, sdpa, paged_sdpa) or _CONV_DEV (conv2d) -- so
+    # fall back through the known names to find the live device for the read.
+    if device is not None:
+        return device
+    for _name in ("_CUR_DEVICE", "_CONV_DEV"):
+        d = getattr(test_module, _name, None)
+        if d is not None:
+            return d
+    # CCL ops (all_gather etc.) don't keep a module-global device; they hold it in
+    # ccl_common's persistent _DEVICE_CACHE (kept open across vectors when the
+    # profiler is on). Read the live cached device if present. The cache is set to
+    # None on teardown/failure, so this self-corrects -- never a stale/closed read.
+    # Scan sys.modules instead of importing by name: the sweep module imports
+    # ccl_common as "tests.sweep_framework.sweep_utils.ccl_common" while a plain
+    # "from sweep_utils import ccl_common" here is a DIFFERENT module object (two
+    # PYTHONPATH roots -> two sys.modules entries, two separate _DEVICE_CACHE
+    # dicts). Reading the already-imported module that actually owns the device
+    # avoids creating a fresh, empty cache.
+    import sys
+
+    for _name, _mod in list(sys.modules.items()):
+        if _mod is not None and _name.endswith("sweep_utils.ccl_common"):
+            cache = getattr(_mod, "_DEVICE_CACHE", None)
+            if isinstance(cache, dict) and cache.get("mesh_device") is not None:
+                return cache["mesh_device"]
+    return None
+
+
 def gather_single_test_perf(device, test_passed):
-    if device is None or device.get_num_devices() > 1:
-        logger.error("Multi-device perf is not supported. Failing.")
+    if device is None:
+        logger.error("Device perf: no device available. Failing.")
+        return None
+    if os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
         return None
 
-    # Read profiler data from device
-    logger.info("Reading profiler data from device")
     import ttnn
 
+    # Modern Tracy flow: ReadDeviceProfiler triggers the C++ post-process
+    # (TT_METAL_PROFILER_CPP_POST_PROCESS=1), then get_latest_programs_perf_data()
+    # returns per-chip analysis results in memory (no CSV). Works on multi-chip
+    # meshes (T3K / galaxy); the legacy CSV path only worked single-chip and host-
+    # read remote chips mid-run -> inter-chip ethernet timeout.
+    logger.info("Reading profiler data from device")
     ttnn.ReadDeviceProfiler(device)
     logger.info("Reading profiler data from device done")
-    try:
-        opPerfData = get_device_data_generate_report(
-            PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
-        )
-    except Exception as e:
-        logger.warning(f"Failed to get device profiler data: {e}")
-        opPerfData = []
 
     if not test_passed:
         return None
-    elif opPerfData == []:
-        logger.warning("No profiling data available. Using dummy data for testing purposes.")
 
-        dummy_data = {
-            "DEVICE FW DURATION [ns]": 0,
-            "DEVICE KERNEL DURATION [ns]": 0,
-            "OP TO OP LATENCY [ns]": 0,
-            "DEVICE BRISC FW DURATION [ns]": 0,
-            "DEVICE NCRISC FW DURATION [ns]": 0,
-        }
-        return dummy_data
-    elif len(opPerfData) > 1:
-        logger.info("Composite op detected in device perf measurement. Will aggregate results.")
-        try:
-            for key in opPerfData[0].keys():
-                value = opPerfData[0][key]
-                for i in range(1, len(opPerfData)):
-                    if key in opPerfData[i]:
-                        if type(value) == str:
-                            opPerfData[0][key] = str(float(value) + float(opPerfData[i][key]))
-                        else:
-                            opPerfData[0][key] = value + opPerfData[i][key]
-            return opPerfData[0]
-        except Exception as e:
-            logger.info(e)
-            return None
-    else:
-        return opPerfData[0]
+    try:
+        perf_by_chip = ttnn.get_latest_programs_perf_data()
+    except Exception as e:
+        logger.warning(f"Failed to get device profiler data: {e}")
+        return None
+
+    if not perf_by_chip:
+        logger.warning("No profiling data available.")
+        return None
+
+    # Aggregate per distinct device program, keyed by its execution uid. Each
+    # program is replicated across the mesh, so take the max across chips (the
+    # bottleneck chip = that program's real latency). A single op may decompose
+    # into several device programs (composite op), so sum each analysis across the
+    # distinct programs -- matching the legacy CSV path's composite-op summation.
+    per_program: Dict[Any, Dict[str, int]] = {}
+    core_count = 0
+    for _chip, programs in perf_by_chip.items():
+        for program in programs:
+            core_count = max(core_count, int(getattr(program, "core_count", 0) or 0))
+            uid = program.program_execution_uid
+            key = (uid.runtime_id, uid.trace_id, uid.trace_id_counter)
+            slot = per_program.setdefault(key, {})
+            for name, result in program.program_analyses_results.items():
+                slot[name] = max(slot.get(name, 0), int(result.duration))
+
+    aggregated: Dict[str, int] = {}
+    for slot in per_program.values():
+        for name, duration in slot.items():
+            aggregated[name] = aggregated.get(name, 0) + duration
+
+    if not aggregated:
+        logger.warning("No profiling analyses available.")
+        return None
+
+    aggregated["CORE COUNT"] = core_count
+    return aggregated
 
 
 def prepare_program_cache_for_comparison(device) -> None:
@@ -184,23 +235,28 @@ def run_with_cache_comparison(
     # First run (without cache)
     status_uncached, message_uncached, e2e_uncached_ms = execute_test(test_module, test_vector, device)
 
-    device_perf_uncached = None
-    if getattr(config, "measure_device_perf", False):
-        device_perf_uncached = gather_single_test_perf(device, status_uncached)
-        # Clear the profiler log file for the next run to isolate device perf measurements
-        from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
-        import os as _os
+    # A sweep module can set _SKIP_DEVICE_PERF (per-vector) to opt this vector out of
+    # the profiler read -- e.g. conv2d's heavy FABRIC_1D path, where the profiler's
+    # remote-chip AICLK ARC read hangs over the fabric-busy ETH link. Checked AFTER
+    # execute_test() since run() sets the flag. dp_skipped -> return the SKIPPED
+    # sentinel so the runner marks PASS (perf N/A), not FAIL_UNSUPPORTED_DEVICE_PERF.
+    dp_requested = getattr(config, "measure_device_perf", False)
+    dp_skipped = dp_requested and getattr(test_module, "_SKIP_DEVICE_PERF", False)
+    measure_dp = dp_requested and not dp_skipped
 
-        device_log_path = _os.path.join(PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG)
-        if _os.path.exists(device_log_path):
-            _os.remove(device_log_path)
+    device_perf_uncached = None
+    if measure_dp:
+        # Each gather's ttnn.ReadDeviceProfiler refreshes the in-memory "latest"
+        # program perf data, so the cached run below reads its own data with no
+        # legacy CSV-log clearing needed.
+        device_perf_uncached = gather_single_test_perf(_resolve_perf_device(device, test_module), status_uncached)
 
     # Second run (with cache)
     status_cached, message_cached, e2e_cached_ms = execute_test(test_module, test_vector, device)
 
     device_perf_cached = None
-    if getattr(config, "measure_device_perf", False):
-        device_perf_cached = gather_single_test_perf(device, status_cached)
+    if measure_dp:
+        device_perf_cached = gather_single_test_perf(_resolve_perf_device(device, test_module), status_cached)
 
     # Determine combined status and message
     if not status_uncached:
@@ -230,7 +286,7 @@ def run_with_cache_comparison(
     e2e_perf = {"uncached": e2e_uncached_ms, "cached": e2e_cached_ms}
 
     # Device perf dict (simplified) and message augmentation
-    if getattr(config, "measure_device_perf", False):
+    if measure_dp:
         combined_device_perf = {"uncached": device_perf_uncached, "cached": device_perf_cached}
         if device_perf_uncached or device_perf_cached:
             message = get_updated_message(message, combined_device_perf)
@@ -241,6 +297,8 @@ def run_with_cache_comparison(
         if device_perf_cached:
             simplified_perf["cached"] = simplify_device_perf(device_perf_cached)
         return status, message, e2e_perf, simplified_perf, peak_memory
+    elif dp_skipped:
+        return status, message, e2e_perf, DEVICE_PERF_SKIPPED, peak_memory
     else:
         return status, message, e2e_perf, None, peak_memory
 
@@ -257,8 +315,14 @@ def run_single(
 
         peak_memory = capture_peak_memory(test_module, test_vector, device, use_no_dispatch=True)
 
-    if getattr(config, "measure_device_perf", False):
-        perf_result = gather_single_test_perf(device, status)
+    dp_requested = getattr(config, "measure_device_perf", False)
+    # Per-vector opt-out: a module sets _SKIP_DEVICE_PERF when the profiler read would
+    # hang (e.g. conv2d heavy FABRIC_1D path -> remote-chip AICLK ARC read over fabric).
+    # Return the SKIPPED sentinel (not None) so the runner marks PASS, not unsupported.
+    if dp_requested and getattr(test_module, "_SKIP_DEVICE_PERF", False):
+        return status, message, e2e_ms, DEVICE_PERF_SKIPPED, peak_memory
+    if dp_requested:
+        perf_result = gather_single_test_perf(_resolve_perf_device(device, test_module), status)
         message = get_updated_message(message, perf_result)
         simplified_perf = simplify_device_perf(perf_result)
         return status, message, e2e_ms, simplified_perf, peak_memory

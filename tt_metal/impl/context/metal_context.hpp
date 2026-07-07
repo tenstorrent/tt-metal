@@ -27,6 +27,10 @@ namespace tt::tt_metal::distributed::multihost {
 class DistributedContext;
 }
 
+namespace tt::tt_metal::internal {
+class ServiceCoreManager;
+}  // namespace tt::tt_metal::internal
+
 namespace tt::tt_metal {
 struct ProfilerStateManager;
 
@@ -90,6 +94,7 @@ public:
     get_env();
 
     dispatch_core_manager& get_dispatch_core_manager();
+    internal::ServiceCoreManager& get_service_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
     const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
     const DispatchMemMap& dispatch_mem_map(const CoreType& core_type) const;  // DispatchMemMap for specific core type.
@@ -112,7 +117,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         const tt_metal::DispatchCoreConfig& dispatch_core_config,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
         bool init_profiler = true,
         bool initialize_fabric_and_dispatch_fw = true);
@@ -180,7 +185,7 @@ public:
     void on_dispatch_timeout_detected();
 
 private:
-    friend class tt::stl::Indestructible<MetalContext>;
+    friend class ttsl::Indestructible<MetalContext>;
 
     // Construct MetalContext to use the given MetalEnv and assign it context id. The MetalEnv must not be
     // destroyed while its associated MetalContext instance is alive.
@@ -227,6 +232,7 @@ private:
     bool env_owned_ = false;
     ContextId context_id_;
 
+    std::unique_ptr<internal::ServiceCoreManager> service_core_manager_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
     std::unique_ptr<inspector::Data> inspector_data_;

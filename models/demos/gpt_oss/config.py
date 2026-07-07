@@ -144,6 +144,15 @@ class MeshConfig:
             cluster_axis=axis,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
+        # Free the full-size input (~94 MiB at ISL=16384) before the
+        # all-gather allocates its full-size output. Without this, peak
+        # live memory inside allreduce is tensor + scattered + gathered
+        # (~200 MiB at ISL=16384) which fragments DRAM under
+        # long-context prefill — see tt-shield run 26440169327 OOM.
+        # Callers must NOT use `tensor` after this returns (they don't:
+        # apply_allreduce assigns the return value and deallocates the
+        # original handle, which becomes a no-op).
+        tensor.deallocate(True)
 
         # All-gather back
         gathered = ttnn.experimental.all_gather_async(
@@ -157,6 +166,7 @@ class MeshConfig:
             memory_config=memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
+        scattered.deallocate(True)
 
         # Remove padding if applied
         if padded:

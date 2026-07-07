@@ -48,7 +48,7 @@ void kernel_main() {
     DataflowBuffer dfb0(dfb::out_data);
     const uint32_t tile_bytes = dfb0.get_entry_size();
 
-    const auto src_a = TensorAccessor(ta::src_tensor);
+    const auto src_a = TensorAccessor(tensor::src_tensor);
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
@@ -76,7 +76,7 @@ void kernel_main() {
 
         for (uint32_t r = 0; r < rem; r++) {
             uint64_t src_noc_addr =
-                get_noc_addr(i + r + tile_offset, src_a);  // not contiguous for sequential r, can be banked
+                src_a.get_noc_addr(i + r + tile_offset);  // not contiguous for sequential r, can be banked
             auto addr = l1_write_addr + (r * tile_bytes);
             noc_async_read(src_noc_addr, addr, tile_bytes);
         }

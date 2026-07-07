@@ -182,15 +182,12 @@ def run_flash_mla_prefill_chunked_vs_nonchunked(
     ### Compare chunked vs non-chunked
     ######################
     pcc_threshold = 0.999
-    # TODO: Investigate this relaxation as a potential no-MOP matmul race:
-    # https://github.com/tenstorrent/tt-metal/issues/44693
-    atol_threshold = 0.03
-    out_pass, out_pcc = comp_allclose_and_pcc(nonchunked_torch, chunked_torch, pcc=pcc_threshold, atol=atol_threshold)
+    out_pass, out_pcc = comp_allclose_and_pcc(nonchunked_torch, chunked_torch, pcc=pcc_threshold)
     logger.debug(f"num_chunks={num_chunks} chunked vs non-chunked PCC: {out_pcc}")
 
     assert out_pass, (
         f"chunked_flash_mla_prefill (num_chunks={num_chunks}) output mismatch "
-        f"vs flash_mla_prefill: PCC {out_pcc} < {pcc_threshold}, atol={atol_threshold}"
+        f"vs flash_mla_prefill: PCC {out_pcc} < {pcc_threshold}"
     )
 
 

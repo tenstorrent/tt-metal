@@ -43,35 +43,39 @@ inline void write_rank_bindings_yaml(
     const std::vector<RankBindingConfig>& rank_bindings,
     const std::string& mesh_graph_desc_path,
     const std::string& output_file) {
-    YAML::Node root;
-
-    YAML::Node rank_bindings_node;
+    // Emit via streaming YAML::Emitter so env_override values are force-quoted.
+    // The YAML::Node API emits a string like "5" as a bare scalar (5), which
+    // yaml.safe_load on the tt-run side parses back as an int and fails the
+    // TTRunConfig env_overrides: Dict[str, str] schema -- this happens when a
+    // rank owns a single device (e.g. host_topology with 1 device/rank). Forcing
+    // DoubleQuoted keeps every env_override value a string regardless of device count.
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "rank_bindings" << YAML::Value << YAML::BeginSeq;
     for (const auto& binding : rank_bindings) {
-        YAML::Node binding_node;
-        binding_node["rank"] = binding.rank;
-        binding_node["mesh_id"] = binding.mesh_id;
-        binding_node["mesh_host_rank"] = binding.mesh_host_rank;
-
+        emitter << YAML::BeginMap;
+        emitter << YAML::Key << "rank" << YAML::Value << binding.rank;
+        emitter << YAML::Key << "mesh_id" << YAML::Value << binding.mesh_id;
+        emitter << YAML::Key << "mesh_host_rank" << YAML::Value << binding.mesh_host_rank;
         if (!binding.env_overrides.empty()) {
-            YAML::Node env_overrides_node;
+            emitter << YAML::Key << "env_overrides" << YAML::Value << YAML::BeginMap;
             for (const auto& [key, value] : binding.env_overrides) {
-                env_overrides_node[key] = value;
+                emitter << YAML::Key << key << YAML::Value << YAML::DoubleQuoted << value;
             }
-            binding_node["env_overrides"] = env_overrides_node;
+            emitter << YAML::EndMap;
         }
-
-        rank_bindings_node.push_back(binding_node);
+        emitter << YAML::EndMap;
     }
-
-    root["rank_bindings"] = rank_bindings_node;
-    root["mesh_graph_desc_path"] = mesh_graph_desc_path;
+    emitter << YAML::EndSeq;
+    emitter << YAML::Key << "mesh_graph_desc_path" << YAML::Value << mesh_graph_desc_path;
+    emitter << YAML::EndMap;
 
     std::ofstream out_file(output_file);
     if (!out_file.is_open()) {
         throw std::runtime_error("Failed to open output file: " + output_file);
     }
 
-    out_file << root << std::endl;
+    out_file << emitter.c_str() << std::endl;
     out_file.close();
 }
 

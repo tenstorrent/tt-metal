@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: false
-        default: 'all'
+        default: "all"
         type: choice
         options:
           - all
@@ -41,22 +41,28 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 8 * * *"  # Every day at 8:00 UTC
+    - cron: "0 8 * * *" # Every day at 8:00 UTC
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       build-umd-tests: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   galaxy-unit-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
     with:

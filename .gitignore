@@ -159,3 +159,14 @@ models/experimental/petr/resources/*.pth
 
 .claude
 .cursor/.DS_store
+
+# Generated rank binding files (machine-specific, regenerated at runtime via generate_rank_bindings.py)
+2x4_multi_mesh_cyclic_rank_binding.yaml
+2x8_2x4_3_mesh_rank_binding.yaml
+4x2_multi_mesh_rank_binding.yaml
+4x4_2x4_3_mesh_rank_binding.yaml
+4x4_multi_big_mesh_rank_binding.yaml
+4x4_multi_mesh_rank_binding.yaml
+tray_to_pcie_device_mapping.yaml
+
+.DS_Store

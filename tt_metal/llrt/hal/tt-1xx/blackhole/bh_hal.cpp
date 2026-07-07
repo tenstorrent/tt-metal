@@ -70,7 +70,7 @@ constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t
 }
 
 constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
-    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+    return enable_dram_backed_cq ? (16u << 20)  // 16 MB
                                  : 0;
 }
 
@@ -96,7 +96,14 @@ public:
     HalJitBuildQueryBlackHole(const Hal& hal, bool enable_2_erisc_mode) :
         HalJitBuildQueryBase(hal), enable_2_erisc_mode_(enable_2_erisc_mode) {}
 
-    std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
+    std::string linker_flags([[maybe_unused]] const Params& params) const override {
+        // Suppress LTO false positive on the device-print lock's atomic exchange.
+        // GCC's -Wstringop-overflow object-size analysis treats the fixed L1
+        // mailbox address backing the atomic as a size-0 object. Source-level
+        // #pragma diagnostic doesn't apply to LTO-emitted warnings, so the
+        // suppression has to live on the link command.
+        return "-Wno-stringop-overflow ";
+    }
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
@@ -431,6 +438,7 @@ void Hal::initialize_bh(
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;

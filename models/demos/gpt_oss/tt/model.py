@@ -230,7 +230,6 @@ class Model:
                 args=self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, mesh_device),
                 mesh_device=mesh_device,
                 tt_ccl=None,
-                enable_internal_trace=False,
             )
             # Hook reset_sampling_params to set prefill flag — Generator calls this
             # before prefill forward; tells _forward_layers_and_head to skip TP all-gather
@@ -334,7 +333,6 @@ class Model:
         get_last_token=-1,
         is_decode=True,
         user_id=0,
-        sampling_on_device=False,
         batch_size=1,
         skip_lm_head=False,
         page_tables_per_layer=None,
@@ -498,8 +496,7 @@ class Model:
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
-        capture_sampling_trace=False,
+        on_device_logits=False,
         page_tables_per_layer=None,
     ):
         if page_tables_per_layer is None:
@@ -534,20 +531,20 @@ class Model:
             page_table=page_table,
             kv_cache=kv_cache,
             is_decode=True,
-            sampling_on_device=sampling_on_device,
             page_tables_per_layer=page_tables_per_layer,
         )
 
-        if sampling_on_device and self.sampling is not None:
-            # Pad logits batch to 32 (TTSampling requirement) before split-trace or sampling
+        if on_device_logits:
+            assert self.sampling is not None, (
+                "decode forward got on_device_logits=True but no on-device sampling "
+                "module exists (self.sampling is None)."
+            )
+            # Pad logits batch to 32 (TTSampling requirement) before sampling
             batch_dim = out.shape[-2]
             if batch_dim < 32:
                 out = ttnn.pad(out, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-            if capture_sampling_trace:
-                return out
-            tt_toks, tt_log_probs = self.sampling.sample(out, tt_out_tok=tokens, enable_trace=False)
-            return tt_toks, tt_log_probs
+            return out
 
         return out, None
 
@@ -711,12 +708,66 @@ class Model:
         sampling_params=None,
         model_args=None,
         trace_cache=None,
+        empty_slots=None,
     ):
-        """Row-parallel batched prefill: 1 user per row per iteration."""
+        """Row-parallel batched prefill: 1 user per row per iteration.
+
+        ``empty_slots``: optional list of decoder slot ids, one per input user.
+        If supplied, users are first reordered so that array-index ``i`` lands
+        on the same row that ``empty_slots[i]`` will decode on
+        (``target_row = slot // max_local_batch_size``). Required for
+        users_row_sharded models whose prefill array-index routing must match
+        decode's row mapping. See tenstorrent/tt-metal#44746. The output is
+        inverse-permuted back to the caller-supplied user order before
+        returning.
+        """
         from models.tt_transformers.tt.common import copy_host_to_device, get_block_size, num_blocks_in_seq
 
         mesh_device = self.mesh_device
         num_rows = mesh_device.shape[0]
+        original_n = len(prompt_lens)
+
+        # Row-aware reorder. Group users by their target decode row, pad each
+        # row group to the same upr-aligned length with duplicates so the
+        # flattened batch is contiguous per row at the iter stride
+        # prepare_row_sharded_prefill_iter uses (users_per_row = batch_size //
+        # num_rows). Padding each row to a multiple of upr at this stage
+        # avoids the later global-pad step inserting filler users at the end
+        # of the tensor that would land in the wrong row group when
+        # max_per_row is not itself a multiple of upr (Codex review on
+        # PR #45633).
+        new_order = None
+        if empty_slots is not None:
+            max_local_batch_size = getattr(model_args, "max_local_batch_size", None) or max(original_n // num_rows, 1)
+            users_by_row = [[] for _ in range(num_rows)]
+            for local_idx, slot in enumerate(list(empty_slots)[:original_n]):
+                target_row = min(int(slot) // max_local_batch_size, num_rows - 1)
+                users_by_row[target_row].append(local_idx)
+            max_per_row = max((len(group) for group in users_by_row), default=1) or 1
+            fallback = users_by_row[0][0] if users_by_row[0] else 0
+            for r in range(num_rows):
+                if not users_by_row[r]:
+                    users_by_row[r] = [fallback]
+            # Mirror the upr decision below so the per-row stride lines up
+            # with users_per_row * upr after the global-align no-op step.
+            _max_seq = max(prefill_seq_lens) if prefill_seq_lens else 128
+            _post_reorder_batch = num_rows * max_per_row
+            _upr_for_pad = 8 if (_max_seq <= 128 and _post_reorder_batch > 16) else 1
+            _max_per_row_padded = ((max_per_row + _upr_for_pad - 1) // _upr_for_pad) * _upr_for_pad
+            for r in range(num_rows):
+                while len(users_by_row[r]) < _max_per_row_padded:
+                    users_by_row[r].append(users_by_row[r][0])
+            new_order = []
+            for r in range(num_rows):
+                new_order.extend(users_by_row[r])
+            tokens = tokens[new_order]
+            prompt_lens_list = list(prompt_lens)
+            prompt_lens = [prompt_lens_list[i] for i in new_order]
+            prefill_seq_lens_list = list(prefill_seq_lens)
+            prefill_seq_lens = [prefill_seq_lens_list[i] for i in new_order]
+            if page_table is not None:
+                page_table = page_table[new_order]
+
         batch_size = len(prompt_lens)
         actual_batch_size = batch_size
         # upr (users-per-row-per-iter): pack 8 short-prompt users per row per
@@ -850,16 +901,35 @@ class Model:
                     )
 
         ttnn.synchronize_device(mesh_device)
+
+        # If we reordered, the output is in row-major order over new_order. Build
+        # an inverse permutation back to the caller-supplied user order and trim
+        # padded duplicates so the caller sees exactly ``original_n`` users.
+        if new_order is not None:
+            inverse_order = [-1] * original_n
+            for new_pos, orig_idx in enumerate(new_order):
+                if 0 <= orig_idx < original_n and inverse_order[orig_idx] == -1:
+                    inverse_order[orig_idx] = new_pos
+            assert all(p >= 0 for p in inverse_order), "internal: not all original users covered by new_order"
+            select_idx = torch.as_tensor(inverse_order, dtype=torch.long)
+        else:
+            select_idx = None
+
         if sampling_params is not None:
             # GPT-OSS always emits <|channel|> (token 200005) as the first generated token
             # regardless of prompt content. Skipping lm_head and returning this hardcoded
             # token saves ~100ms/user by avoiding the 201K-vocab matmul. vLLM device
             # sampling accepts this as a pre-sampled token ID.
             CHANNEL_TOKEN_ID = 200005
-            return torch.full((actual_batch_size, 1), CHANNEL_TOKEN_ID, dtype=torch.int64), torch.zeros(
-                actual_batch_size, 1, dtype=torch.float32
+            out_n = original_n if new_order is not None else actual_batch_size
+            return torch.full((out_n, 1), CHANNEL_TOKEN_ID, dtype=torch.int64), torch.zeros(
+                out_n, 1, dtype=torch.float32
             )
-        return output_tensor[:actual_batch_size]
+
+        out = output_tensor[:actual_batch_size]
+        if select_idx is not None:
+            out = out[select_idx]
+        return out
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """

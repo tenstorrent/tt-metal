@@ -23,40 +23,6 @@
 
 namespace tt::tt_metal {
 
-class DPrintParser {
-public:
-    struct ParseResult {
-        std::vector<std::string> completed_lines;
-        size_t bytes_consumed{};
-    };
-
-    explicit DPrintParser(std::string line_prefix = "");
-    ParseResult parse(const uint8_t* data, size_t len);
-    std::string flush();
-
-private:
-    std::string line_prefix_;
-    std::ostringstream intermediate_stream_;
-    DPrintTypeID prev_type_{DPrintTypeID_Count};
-    char most_recent_setw_{0};
-
-    // Helper methods (from dprint_server.cpp anonymous namespace)
-    static float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data);
-    static void AssertSize(uint8_t sz, uint8_t expected_sz);
-    static bool StreamEndsWithNewlineChar(const std::ostringstream* stream);
-    static void ResetStream(std::ostringstream* stream);
-
-    void PrintTileSlice(const uint8_t* ptr);
-    void PrintTensixRegisterData(int setwidth, uint32_t datum, uint16_t data_format);
-    void PrintTypedUint32Array(
-        int setwidth,
-        uint32_t raw_element_count,
-        const uint32_t* data,
-        TypedU32_ARRAY_Format force_array_type = TypedU32_ARRAY_Format_INVALID);
-
-    std::string get_completed_line();
-};
-
 // Abstract interface for parsing DEVICE_PRINT format strings from ELF files.
 // Concrete implementations are templated on pointer size (4 or 8 bytes) to handle
 // 32-bit and 64-bit ELFs at compile time via DevicePrintStringInfo32/DevicePrintStringInfo64.
@@ -74,6 +40,13 @@ public:
         std::vector<uint32_t> data;
     };
 
+    struct TopCallstackInfo {
+        // uint64_t fits both LP32 and LP64.
+        uint64_t pc;
+        uint64_t ra;
+        size_t skip_frames;
+    };
+
     using ArgumentValue = std::variant<
         bool,
         int8_t,
@@ -87,7 +60,8 @@ public:
         float,
         double,
         TileSliceDynamic,
-        TypedArray>;
+        TypedArray,
+        TopCallstackInfo>;
     struct FormatMessageBuffer {
         fmt::memory_buffer buffer;
         std::vector<ArgumentValue> argument_values;

@@ -5,6 +5,7 @@
 #include "paged_update_cache_device_operation.hpp"
 #include "paged_update_cache_device_operation_types.hpp"
 #include "paged_update_cache_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
 

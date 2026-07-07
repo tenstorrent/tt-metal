@@ -1,4 +1,5 @@
 set(TT_METAL_PUBLIC_API
+    api/internal/service/inter_process_counter_channel.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp
     api/tt-metalium/bfloat16.hpp
@@ -22,12 +23,11 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed.hpp
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
-    api/tt-metalium/experimental/blitz_decode_pipeline.hpp
+    api/tt-metalium/experimental/dispatch_telemetry.hpp
     api/tt-metalium/experimental/context/metal_env.hpp
     api/tt-metalium/experimental/core_subset_write/buffer_write.hpp
     api/tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp
     api/tt-metalium/experimental/core_subset_write/tensor.hpp
-    api/tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp
     api/tt-metalium/experimental/device.hpp
     api/tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp
     api/tt-metalium/experimental/dispatch_context.hpp
@@ -50,24 +50,31 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/topology_solver.hpp
     api/tt-metalium/experimental/fabric/topology_solver.tpp
     api/tt-metalium/experimental/forge_backdoor/global_semaphore.hpp
-    api/tt-metalium/experimental/host_api.hpp
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
+    api/tt-metalium/experimental/internal/blitz_decode_pipeline.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
     api/tt-metalium/experimental/mesh_program_descriptor.hpp
+    api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
+    api/tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp
+    api/tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp
     api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/node_coord.hpp
     api/tt-metalium/experimental/metal2_host_api/program.hpp
-    api/tt-metalium/experimental/metal2_host_api/program_run_params.hpp
+    api/tt-metalium/experimental/metal2_host_api/program_run_args.hpp
     api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
+    api/tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
-    api/tt-metalium/experimental/mock_device.hpp
+    api/tt-metalium/experimental/metal2_host_api/utility/group.hpp
+    api/tt-metalium/experimental/metal2_host_api/utility/table.hpp
+    api/tt-metalium/experimental/mock_device/mock_allocator.hpp
+    api/tt-metalium/experimental/mock_device/mock_device.hpp
     api/tt-metalium/experimental/noc_estimator/noc_estimator.hpp
     api/tt-metalium/experimental/noc_estimator/types.hpp
     api/tt-metalium/experimental/offline_kernel_compile.hpp
@@ -101,6 +108,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/udm/mesh_tensor_builder.hpp
     api/tt-metalium/experimental/udm/mesh_utils.hpp
     api/tt-metalium/experimental/udm/types.hpp
+    api/tt-metalium/face_geometry.hpp
     api/tt-metalium/global_circular_buffer.hpp
     api/tt-metalium/global_semaphore.hpp
     api/tt-metalium/graph_tracking.hpp
@@ -108,6 +116,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/hal_types.hpp
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
+    api/tt-metalium/internal/cluster.hpp
+    api/tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp
@@ -148,7 +158,8 @@ set(TT_METAL_PUBLIC_API
 )
 
 set(TT_METAL_SOURCES
-    tt_metal.cpp
+    impl/host_api/tt_metal.cpp
+    impl/experimental/offline_compile/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
     hal.cpp
 )
@@ -189,7 +200,10 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_prefetch.hpp
     impl/dispatch/kernels/cq_relay.hpp
     impl/dispatch/kernels/cq_helpers.hpp
+    impl/dispatch/kernels/telemetry.hpp
+    impl/dispatch/kernels/cq_telemetry_dispatch_subordinate.hpp
     impl/dispatch/kernels/realtime_profiler.hpp
+    impl/dispatch/kernels/cq_realtime_profiler_dispatch_subordinate.hpp
     impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp
     soc_descriptors/blackhole_140_arch.yaml
     soc_descriptors/wormhole_b0_80_arch.yaml
@@ -209,13 +223,5 @@ set(JITAPI_FILES
     impl/dispatch/kernels/device_print_dispatch.h
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
-    kernels/compute/blank.cpp
-    kernels/compute/eltwise_binary.cpp
-    kernels/compute/eltwise_sfpu.cpp
-    kernels/dataflow/blank.cpp
-    kernels/dataflow/reader_binary_diff_lengths.cpp
-    kernels/dataflow/reader_unary.cpp
-    kernels/dataflow/writer_unary.cpp
-    kernels/dataflow/writer_unary_1.cpp
     sfpi-version
 )

@@ -24,13 +24,6 @@ skus:
       - pipeline-perf
       - in-service
 
-  wh_llmbox_perf_release:
-    runs_on:
-      - arch-wormhole_b0
-      - config-t3000
-      - pipeline-perf
-      - in-release
-
   bh_p100:
     runs_on:
       - cloud-virtual-machine
@@ -44,34 +37,19 @@ skus:
       - topology-6u
       - in-service
 
+  wh_galaxy_merge_gate:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-functional
+      - topology-6u
+      - in-service-dedicated-merge-gate
+
   wh_galaxy_perf:
     runs_on:
       - arch-wormhole_b0
       - pipeline-perf
       - topology-6u
       - in-service
-
-  # Temporary SKU separating UF machines
-  wh_galaxy_perf_uf:
-    runs_on:
-      - arch-wormhole_b0
-      - pipeline-perf-uf
-      - topology-6u
-      - in-service
-
-  wh_galaxy_release:
-    runs_on:
-      - arch-wormhole_b0
-      - pipeline-functional
-      - topology-6u
-      - in-release
-
-  wh_galaxy_perf_release:
-    runs_on:
-      - arch-wormhole_b0
-      - pipeline-perf
-      - topology-6u
-      - in-release
 
   bh_galaxy:
     runs_on:
@@ -86,20 +64,6 @@ skus:
       - pipeline-perf
       - topology-6u
       - in-service
-
-  bh_galaxy_release:
-    runs_on:
-      - arch-blackhole
-      - pipeline-functional
-      - topology-6u
-      - in-release
-
-  bh_galaxy_perf_release:
-    runs_on:
-      - arch-blackhole
-      - pipeline-perf
-      - topology-6u
-      - in-release
 
   wh_n150:
     runs_on:
@@ -125,6 +89,14 @@ skus:
     runs_on:
       - tt-ubuntu-2204-N300-llmbox-stable
 
+  wh_llmbox_civ2_viommu:
+    runs_on:
+      - tt-ubuntu-2204-N300-llmbox-viommu-stable
+
+  wh_llmbox_civ2_prio:
+    runs_on:
+      - tt-ubuntu-2204-N300-llmbox-viommu-prio-stable
+
   bh_p100_perf:
     runs_on:
       - pipeline-perf
@@ -139,9 +111,14 @@ skus:
     runs_on:
       - tt-ubuntu-2204-P150b-viommu-stable
 
+  bh_p150b_civ2_viommu_prio:
+    runs_on:
+      - tt-ubuntu-2204-P150b-viommu-prio-stable
+
   bh_p150b_civ2:
     runs_on:
       - tt-ubuntu-2204-P150b-stable
+    weights-cache-mode: lfc
 
   wh_n300_perf:
     runs_on:
@@ -156,6 +133,7 @@ skus:
       - arch-blackhole
       - P150
       - pipeline-functional
+    weights-cache-mode: cloud-mlperf
 
   bh_p150_perf:
     runs_on:
@@ -163,13 +141,7 @@ skus:
       - arch-blackhole
       - P150
       - pipeline-perf
-
-  bh_llmbox:
-    runs_on:
-      - in-service
-      - arch-blackhole
-      - BH-LLMBox
-      - pipeline-perf
+    weights-cache-mode: local-disk
 
   bh_loudbox:
     runs_on:
@@ -177,6 +149,7 @@ skus:
       - arch-blackhole
       - BH-LoudBox
       - pipeline-functional
+    weights-cache-mode: cloud-mlperf
 
   bh_p300:
     runs_on:
@@ -184,29 +157,14 @@ skus:
       - arch-blackhole
       - P300-viommu
       - pipeline-yyz2-lfc
+    weights-cache-mode: lfc
+
   bh_p300_viommu:
     runs_on:
       - pipeline-yyz2-lfc
       - P300-viommu
       - in-service
-
-  bh_quietbox:
-    runs_on:
-      - BH-LLMBox
-      - pipeline-functional
-      - in-service
-
-  bh_quietbox_perf:
-    runs_on:
-      - BH-LLMBox
-      - pipeline-perf
-      - in-service
-
-  bh_deskbox:
-    runs_on:
-      - BH-DeskBox
-      - pipeline-functional
-      - in-service
+    weights-cache-mode: lfc
 
   bh_loudbox_civ2_viommu:
     runs_on:
@@ -214,9 +172,17 @@ skus:
 
   bh_quietbox_2:
     runs_on:
-      - BH-QB-GE
+      - BH-Quietbox-2
       - pipeline-perf
       - in-service
+    weights-cache-mode: yyz4-mnt-models
+
+  bh_quietbox_2_iommu:
+    runs_on:
+      - BH-Quietbox-2-iommu
+      - pipeline-perf
+      - in-service
+    weights-cache-mode: yyz4-mnt-models
 
   bh_spsg:
     runs_on:
@@ -224,9 +190,6 @@ skus:
     allocation:
       type: Count
       count: 1
-      match_labels:
-        exabox.tenstorrent.com/purpose: ci-metal
-        exabox.tenstorrent.com/superpod: A29
 
   bh_sp1:
     runs_on:
@@ -234,9 +197,26 @@ skus:
     allocation:
       type: Count
       count: 4
-      match_labels:
-        exabox.tenstorrent.com/purpose: ci-metal
-        exabox.tenstorrent.com/superpod: A29
+      topologyKeys:
+        - exabox.tenstorrent.com/quad
+
+  bh_sp1-blitz:
+    runs_on:
+      - exabox-multihost-with-nfs
+    allocation:
+      type: MGD
+      topologyKeys:
+        - exabox.tenstorrent.com/quad
+      mgd_file: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
+
+  bh_sp1-mgd:
+    runs_on:
+      - exabox-multihost-with-nfs
+    allocation:
+      type: MGD
+      topologyKeys:
+        - exabox.tenstorrent.com/quad
+      mgd_file: tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
 
   bh_sp4:
     runs_on:
@@ -244,6 +224,30 @@ skus:
     allocation:
       type: Count
       count: 16
-      match_labels:
-        exabox.tenstorrent.com/purpose: ci-metal
-        exabox.tenstorrent.com/superpod: A29
+      topologyKeys:
+        - exabox.tenstorrent.com/SC16
+
+  cpu_medium:
+    runs_on:
+      - tt-ubuntu-2204-medium-stable
+  cpu_medium_prio:
+    runs_on:
+      - tt-ubuntu-2204-medium-prio-stable
+
+  # Synthetic CPU SKUs for ttsim simulator jobs. Tests using these SKUs run on
+  # ubuntu-latest; the impl is expected to invoke .github/actions/setup-ttsim
+  # gated on `startsWith(sku, 'sim_')` to download the matching libttsim_<arch>.so
+  # and export the simulator env vars. The arch suffix on the SKU name selects
+  # the ttsim binary (sim_wormhole_b0 → libttsim_wh.so, sim_blackhole → libttsim_bh.so).
+  sim_wormhole_b0:
+    runs_on:
+      - ubuntu-latest
+  sim_blackhole:
+    runs_on:
+      - ubuntu-latest
+  sim_wormhole_b0_galaxy:
+    runs_on:
+      - tt-ubuntu-2204-large-stable
+  sim_blackhole_galaxy:
+    runs_on:
+      - tt-ubuntu-2204-large-stable

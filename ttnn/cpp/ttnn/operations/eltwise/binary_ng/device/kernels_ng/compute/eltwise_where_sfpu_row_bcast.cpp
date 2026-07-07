@@ -52,6 +52,7 @@ void kernel_main() {
         exp_cb_in1.wait_front(num_tiles_per_cycle);
 
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
+        pack_reconfig_data_format(cb_out, cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
 
         tile_regs_acquire();
@@ -66,9 +67,7 @@ void kernel_main() {
         exp_cb_bcast.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-#ifdef ARCH_BLACKHOLE
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
-#endif
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);
         exp_cb_llk_post.wait_front(num_tiles_per_cycle);

@@ -216,7 +216,7 @@ void kernel_main() {
                         const uint32_t weight_block_bytes = weight_tiles * tile_bytes;
                         const uint32_t local_addr = cb_weight.get_write_ptr();
                         MulticastEndpoint mcast_dst;
-                        noc.async_write_multicast<Noc::McastMode::EXCLUDE_SRC>(
+                        noc.async_write_multicast(
                             use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_weight),
                             mcast_dst,
                             weight_block_bytes,
@@ -236,7 +236,7 @@ void kernel_main() {
                         // not a destination, so the data already in cb_weight from the DRAM read
                         // is what compute consumes.
                         weights_mcast_receiver_sem.set(VALID);
-                        weights_mcast_receiver_sem.set_multicast<Noc::McastMode::EXCLUDE_SRC>(
+                        weights_mcast_receiver_sem.set_multicast(
                             noc,
                             mcast_bbox_start_x,
                             mcast_bbox_start_y,

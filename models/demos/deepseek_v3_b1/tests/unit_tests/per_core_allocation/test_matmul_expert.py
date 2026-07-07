@@ -13,7 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     ExpertKernel,
@@ -1085,20 +1085,21 @@ def _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_c
 
 
 def _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, sram_k_per_core, sram_per_core_n, Kt):
-    """Build SRAM format tensors and K-offset core values."""
+    """Build SRAM format tensors (lockstep mesh tensors + uniform L1 addrs) and K-offset core values."""
     from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import create_expert_fmt_tensors
 
-    sram_fmt_tensors, sram_base_addr_tensors = create_expert_fmt_tensors(
+    sram_fmt_tensor, sram_base_addr_tensor, sram_fmt_l1_addrs, sram_base_addrs_l1_addrs = create_expert_fmt_tensors(
         sram_cts, mesh_device, sram_core_grid, sram_k_per_core, sram_per_core_n
     )
 
     sram_k_offsets = None
     if sram_k_per_core < Kt:
-        sram_cores = ttnn.corerange_to_cores(sram_core_grid)
+        # row_wise=True matches create_expert_fmt_tensors's core iteration order.
+        sram_cores = ttnn.corerange_to_cores(sram_core_grid, row_wise=True)
         n_parallel = len(sram_cores) * sram_k_per_core // Kt
         sram_k_offsets = [(sram_cores[i], (i // n_parallel) * sram_k_per_core) for i in range(len(sram_cores))]
 
-    return sram_fmt_tensors, sram_base_addr_tensors, sram_k_offsets
+    return sram_fmt_tensor, sram_base_addr_tensor, sram_fmt_l1_addrs, sram_base_addrs_l1_addrs, sram_k_offsets
 
 
 # ---------------------------------------------------------------------------
@@ -1294,10 +1295,10 @@ def _run_standard(
         dram_fuse_silu=dram_fuse_silu,
     )
 
-    sram_fmt_tensors, sram_base_addr_tensors, sram_k_offsets = (
+    sram_fmt_tensor, sram_base_addr_tensor, sram_fmt_l1_addrs, sram_base_addrs_l1_addrs, sram_k_offsets = (
         _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, Kt, sram_per_core_N, Kt)
         if has_sram
-        else ({}, {}, None)
+        else (None, None, None, None, None)
     )
     result = ExpertKernel.op(
         a_tensor,
@@ -1313,8 +1314,10 @@ def _run_standard(
         dram_per_core_n=dram_per_core_N,
         has_sram=has_sram,
         sram_core_grid=sram_core_grid,
-        sram_fmt_tensors=sram_fmt_tensors,
-        sram_base_addr_tensors=sram_base_addr_tensors,
+        sram_fmt_tensor=sram_fmt_tensor,
+        sram_base_addr_tensor=sram_base_addr_tensor,
+        sram_fmt_l1_addrs=sram_fmt_l1_addrs,
+        sram_base_addrs_l1_addrs=sram_base_addrs_l1_addrs,
         sram_k_offsets=sram_k_offsets,
         n_parallel_per_bank=n_parallel_per_bank,
         k_parallel_per_bank=k_parallel_per_bank,
@@ -1530,10 +1533,10 @@ def _run_accum(
         tile_w,
     )
 
-    sram_fmt_tensors, sram_base_addr_tensors, sram_k_offsets = (
+    sram_fmt_tensor, sram_base_addr_tensor, sram_fmt_l1_addrs, sram_base_addrs_l1_addrs, sram_k_offsets = (
         _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, Kt, sram_per_core_N, Kt)
         if has_sram
-        else ({}, {}, None)
+        else (None, None, None, None, None)
     )
     result = ExpertKernel.op(
         a_tensor,
@@ -1549,8 +1552,10 @@ def _run_accum(
         dram_per_core_n=dram_per_core_N,
         has_sram=has_sram,
         sram_core_grid=sram_core_grid,
-        sram_fmt_tensors=sram_fmt_tensors,
-        sram_base_addr_tensors=sram_base_addr_tensors,
+        sram_fmt_tensor=sram_fmt_tensor,
+        sram_base_addr_tensor=sram_base_addr_tensor,
+        sram_fmt_l1_addrs=sram_fmt_l1_addrs,
+        sram_base_addrs_l1_addrs=sram_base_addrs_l1_addrs,
         sram_k_offsets=sram_k_offsets,
         n_parallel_per_bank=n_parallel_per_bank,
         accum_experts=True,
@@ -1740,7 +1745,7 @@ def _run_slice_k(
         dram_fuse_silu=dram_fuse_silu,
     )
 
-    sram_fmt_tensors, sram_base_addr_tensors, sram_k_offsets = (
+    sram_fmt_tensor, sram_base_addr_tensor, sram_fmt_l1_addrs, sram_base_addrs_l1_addrs, sram_k_offsets = (
         _build_sram_fmt_data(
             sram_cts,
             mesh_device,
@@ -1750,7 +1755,7 @@ def _run_slice_k(
             Kt,
         )
         if has_sram
-        else ({}, {}, None)
+        else (None, None, None, None, None)
     )
     result = ExpertKernel.op(
         a_tensor,
@@ -1766,8 +1771,10 @@ def _run_slice_k(
         dram_per_core_n=dram_per_core_N,
         has_sram=has_sram,
         sram_core_grid=sram_core_grid,
-        sram_fmt_tensors=sram_fmt_tensors,
-        sram_base_addr_tensors=sram_base_addr_tensors,
+        sram_fmt_tensor=sram_fmt_tensor,
+        sram_base_addr_tensor=sram_base_addr_tensor,
+        sram_fmt_l1_addrs=sram_fmt_l1_addrs,
+        sram_base_addrs_l1_addrs=sram_base_addrs_l1_addrs,
         sram_k_offsets=sram_k_offsets,
         n_parallel_per_bank=n_parallel_per_bank,
         k_parallel_per_bank=k_parallel_per_bank,
@@ -2441,6 +2448,12 @@ def test_benchmark_down_proj(device, formats_per_device, fmt_ratios):
     )
 
 
+@skip_with_llk_assert(
+    'Hit LLK_ASSERT in cb_push_back: "CB push_back: fifo_wr_ptr would exceed fifo_limit" '
+    "(llk_io_pack.h) on TRISC2/packer from the per-expert cb_out push/pop wraparound trick "
+    "in the accum + primary_at_last_offset path; cores hang and host times out in "
+    "wait_until_cores_done. Issue: #45174"
+)
 def test_benchmark_down_proj_gather_to_next(device):
     """Accum + primary_at_last_offset: 2-core bank splits N, sender NOC-writes its slice
     onto the receiver so receiver's shard holds the bank's full N output.
@@ -2733,7 +2746,10 @@ def _run_dram_bspm(
         expert_selection_meta=expert_selection_meta,
         has_sram=False,
         sram_core_grid=None,
-        sram_fmt_tensors={},
+        sram_fmt_tensor=None,
+        sram_base_addr_tensor=None,
+        sram_fmt_l1_addrs=None,
+        sram_base_addrs_l1_addrs=None,
         sram_k_offsets=None,
         cores_per_dram_bank=cores_per_dram_bank,
         sram_per_core_n=0,

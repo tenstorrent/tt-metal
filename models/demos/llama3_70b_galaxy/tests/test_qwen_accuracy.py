@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import os
 import ttnn
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     HostEmbedding,
     PagedAttentionConfig,
@@ -312,6 +313,8 @@ def test_qwen_model_acc(
 
     # Compile the model
     logger.info("Compiling model...")
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
     tt_out_tok, tt_out = run_model()
 
     # Capturing trace
@@ -515,6 +518,38 @@ def test_qwen_model_acc(
     tt_model.tt_ccl.close()
 
     logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
+
+    if is_ci_env:
+        profiler.end("run")
+        benchmark_data = BenchmarkData()
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "run",
+            "top1_token_accuracy",
+            total_top1_acc,
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "run",
+            "top5_token_accuracy",
+            total_top5_acc,
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="demo_accuracy",
+            ml_model_name=model_args.base_model_name,
+            ml_model_type="llm",
+            batch_size=batch_size,
+            input_sequence_length=prefill_len,
+            output_sequence_length=decode_len,
+        )
+
     assert (
         total_top1_acc >= min_top1_acc
     ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"

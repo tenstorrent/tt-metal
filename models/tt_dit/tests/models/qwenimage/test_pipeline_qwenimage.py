@@ -10,7 +10,8 @@ from loguru import logger
 
 import ttnn
 
-from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
+from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
+from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
 
 
 @pytest.mark.parametrize(
@@ -73,19 +74,20 @@ def test_qwenimage_pipeline(
     if is_ci_env:
         monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
 
-    pipeline = QwenImagePipeline.create_pipeline(
-        mesh_device=mesh_device,
-        dit_cfg=cfg,
-        dit_sp=sp,
-        dit_tp=tp,
-        encoder_tp=encoder_tp,
-        vae_tp=vae_tp,
-        use_torch_text_encoder=use_torch_text_encoder,
-        use_torch_vae_decoder=False,
-        num_links=num_links,
-        topology=topology,
-        width=width,
-        height=height,
+    pipeline = QwenImagePipeline(
+        device=mesh_device,
+        config=QwenImagePipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
+            encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
+            vae_parallel_config=VAEParallelConfig.from_tuple(vae_tp),
+            use_torch_text_encoder=use_torch_text_encoder,
+            use_torch_vae_decoder=False,
+            num_links=num_links,
+            topology=topology,
+            width=width,
+            height=height,
+        ),
     )
 
     prompts = [
@@ -128,11 +130,11 @@ def test_qwenimage_pipeline(
     def run(*, prompt: str, number: int, seed: int) -> None:
         images = pipeline(
             prompts=[prompt],
-            negative_prompts=[None],
             num_inference_steps=num_inference_steps,
-            cfg_scale=4.0,
             seed=seed,
             traced=traced,
+            vae_traced=False,
+            encoder_traced=False,
         )
 
         output_filename = f"{filename_prefix}_{number}.png"

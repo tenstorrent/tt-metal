@@ -40,6 +40,7 @@ public:
         uint32_t num_hw_cqs,
         const Hal& hal,
         bool is_galaxy_cluster,
+        bool are_fd_kernels_on_same_core,
         const tt::llrt::RunTimeOptions& rtoptions);
 
     uint32_t prefetch_q_entries() const;
@@ -123,6 +124,7 @@ private:
     uint32_t noc_stream_reg_space_size_ = 0;
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;
     uint32_t dispatch_stream_base_ = 0;
+    bool has_stream_registers_ = false;
 };
 
 }  // namespace tt::tt_metal

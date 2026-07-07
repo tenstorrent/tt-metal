@@ -5,6 +5,8 @@ set(TTNN_OP_REDUCTION_SRCS
     argmax/device/argmax_device_operation.cpp
     argmax/device/argmax_multi_core_program_factory.cpp
     argmax/device/argmax_single_core_program_factory.cpp
+    argmax/device/argmax_nc_device_operation.cpp
+    argmax/device/argmax_nc_program_factory.cpp
     argmax/argmax.cpp
     accumulation/accumulation_common.cpp
     accumulation/cumprod/cumprod.cpp

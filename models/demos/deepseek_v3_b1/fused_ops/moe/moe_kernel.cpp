@@ -1239,7 +1239,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_gate_proj_k_offset"),
                 get_named_compile_time_arg_val("sram_gate_proj_cb_out_sram"),
                 /*compact_in0=*/0,
-                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
+                get_named_compile_time_arg_val("enable_routing"),  // → enable_indexing
+                get_named_compile_time_arg_val("sram_use_compression")>;
 
             // SRAM up_proj Matmul Expert (compute, TRISC) — mirror of gate_proj.
             using SramUpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ComputeCTArgs<
@@ -1260,7 +1261,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_up_proj_k_offset"),
                 get_named_compile_time_arg_val("sram_up_proj_cb_out_sram"),
                 /*compact_in0=*/0,
-                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
+                get_named_compile_time_arg_val("enable_routing"),  // → enable_indexing
+                get_named_compile_time_arg_val("sram_use_compression")>;
 
             // SRAM down_proj Matmul Expert (compute, TRISC) — accum_experts=1 +
             // compact_in0=1 path. Reads compact mcast dst (n_sram_active face
@@ -1284,7 +1286,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_down_proj_k_offset"),
                 get_named_compile_time_arg_val("sram_down_proj_cb_out_sram"),
                 get_named_compile_time_arg_val("sram_down_proj_compact_in0"),
-                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
+                get_named_compile_time_arg_val("enable_routing"),  // → enable_indexing
+                get_named_compile_time_arg_val("sram_use_compression")>;
 
             // SRAM extended GatedReduce (compute, sender_core only).
             // tiles_per_k = 8 K-partial faces per output face. k_num_tiles is

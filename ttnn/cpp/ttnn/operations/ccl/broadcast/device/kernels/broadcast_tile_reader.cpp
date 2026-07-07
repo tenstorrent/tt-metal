@@ -65,7 +65,7 @@ void kernel_main() {
 #ifdef SHARDED
                 noc_async_read_page(tile_id, tensor0_addrgen, l1_write_addr);
 #else
-                noc_async_read_tile(tile_id, tensor0_addrgen, l1_write_addr);
+                noc_async_read_page(tile_id, tensor0_addrgen, l1_write_addr);
 #endif
                 l1_write_addr += tensor0_page_size;
                 tile_id++;

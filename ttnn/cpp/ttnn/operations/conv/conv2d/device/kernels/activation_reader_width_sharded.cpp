@@ -224,7 +224,7 @@ void kernel_main() {
 
                     // Multicast tilized activations to all reader cores (including self)
                     mcast_dst.addr = act_cb.get_write_ptr();
-                    noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
+                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                         tilized_src,
                         mcast_ep,
                         act_mcast_sender_size_bytes,
@@ -243,7 +243,7 @@ void kernel_main() {
                     // API uses the semaphore itself as both source and destination, so we can't
                     // clear the local value and wait for loopback — use write barrier instead.
                     act_mcast_receiver_sem.set(VALID);
-                    act_mcast_receiver_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
+                    act_mcast_receiver_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
                         noc,
                         mcast_rect.noc_x_start,
                         mcast_rect.noc_y_start,

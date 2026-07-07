@@ -4,7 +4,7 @@ include(sources.cmake)
 add_executable(
     fabric_unit_tests
     ${UNIT_TESTS_FABRIC_SRC}
-    ${PROJECT_SOURCE_DIR}/tt_metal/impl/experimental/disaggregation/kv_chunk_address_table_protobuf.cpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.cpp
 )
 
 target_link_libraries(
@@ -101,7 +101,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
-        ${PROJECT_SOURCE_DIR}/tests/tt_metal/perf_microbenchmark/routing
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_fabric/test_infra
 )
 
 target_link_libraries(
@@ -119,6 +119,60 @@ set_target_properties(
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
+set(TEST_TT_FABRIC_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/test_tt_fabric.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_common_types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_results.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_latency_results.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_bandwidth_results.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_bandwidth_profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_device_setup.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_progress_monitor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_eth_readback.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_code_profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_telemetry_manager.cpp
+)
+
+add_executable(test_tt_fabric ${TEST_TT_FABRIC_SOURCES})
+
+target_link_libraries(
+    test_tt_fabric
+    PRIVATE
+        tt_metal
+        test_common_libs
+        yaml-cpp::yaml-cpp
+)
+
+# NOTE(#48783): Take only TT::ScaleoutTools headers, do NOT link it. Its protobuf sources
+# are already in libtt_metal.so; linking again duplicates the descriptor pool and trips a
+# libprotobuf fatal on the Torus paths. Symbols resolve from libtt_metal.so at link/run time.
+target_include_directories(
+    test_tt_fabric
+    SYSTEM
+    PRIVATE
+        $<TARGET_PROPERTY:TT::ScaleoutTools,INTERFACE_INCLUDE_DIRECTORIES>
+)
+
+target_include_directories(
+    test_tt_fabric
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_infra
+)
+
+set_target_properties(
+    test_tt_fabric
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric/test_infra
 )
 
 # ---- Bench: unicast ----

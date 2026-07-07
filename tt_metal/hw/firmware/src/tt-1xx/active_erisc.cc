@@ -212,13 +212,15 @@ int __attribute__((noinline)) main(void) {
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
-    tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
     risc_init();
 
 #if defined(ENABLE_2_ERISC_MODE)
-    subordinate_sync->all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
-    subordinate_sync->dm1 = RUN_SYNC_MSG_INIT;
+    {
+        tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
+        subordinate_sync->all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+        subordinate_sync->dm1 = RUN_SYNC_MSG_INIT;
+    }
 
     // ERISC firmware >= 1.7.2 has already done this step. But on older firmware versions we need to do it here
     // and it will write to an "unused" region in base firmware.
