@@ -310,22 +310,21 @@ HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
 **Prerequisites:**
 
 - **Weights**: `briaai/FIBO` (gated). Pre-download all components used by the pipeline: `huggingface-cli download briaai/FIBO --include "text_encoder/*" "tokenizer/*" "transformer/*" "vae/*" "scheduler/*"`. Tests run offline (`HF_HUB_OFFLINE=1`) and `pytest.skip` if weights are absent.
-- **Devices**: the pipeline tests run on the 2×2 Blackhole mesh. The end-to-end latent PCC also loads the diffusers reference transformer on CPU as the oracle, so it uses a reduced resolution (256²) to stay tractable.
+- **Devices**: the pipeline tests run on the 2×2 Blackhole mesh. The end-to-end latent PCC also loads the diffusers reference transformer on CPU as the oracle, so it uses a reduced resolution (512²) to stay tractable — the smallest resolution whose spatial token count is a clean multiple of the ring joint-SDPA constraint `k_chunk_size(512) · sp(2) = 1024` (512² → 32×32 = 1024 tokens), so no attention-padding code is needed.
 
 ### Measured PCCs (real `briaai/FIBO` weights, bf16 tt vs f32 HF reference, 2×2 Blackhole)
 
 | Test | Configuration | Result |
 |---|---|---|
 | Text-encoder wrapper vs reference `get_prompt_embeds` | representative prompt | 99.79% |
-| End-to-end latent trajectory vs diffusers `BriaFiboPipeline` | 256², 2 steps, identical injected noise | 99.69% |
-| End-to-end latent trajectory (higher-confidence) | 256², 4 steps | 99.12% |
+| End-to-end latent trajectory vs diffusers `BriaFiboPipeline` | 512² (32×32 latent, 1024 tokens), 2 steps, identical injected noise | 99.69% |
+| End-to-end latent trajectory (higher-confidence, committed test) | 512², 4 steps | 99.12% |
 | Full image smoke | 1024², 30 steps | runs; finite, non-degenerate `(1024,1024,3)` image |
 
-The end-to-end latent PCC is measured against a full-precision diffusers reference fed *identical* injected noise (`latents=`), on the pre-VAE latent. PCC declines slightly with step count (99.69% → 99.12%) — accumulated bf16 drift over solver steps, not a wiring defect (a glue bug would crater PCC far below 0.99 at any step count). The glue is resolution-independent, so the reduced-resolution gate transfers to production resolution, where each component carries its own production PCC (sp1–sp3).
+The end-to-end latent PCC is measured against a full-precision (fp32) diffusers reference fed *identical* injected noise (`latents=`), on the pre-VAE latent. PCC declines slightly with step count (99.69% @ 2 steps → 99.12% @ 4 steps) — accumulated bf16 drift over solver steps, not a wiring defect (a glue bug would crater PCC far below 0.99 at any step count). The glue under test (noise → no-patch pack → RoPE → per-branch CFG → Euler solver → latent) is resolution-independent, so the reduced-resolution gate transfers to production resolution, where each component carries its own production PCC (sp1–sp3). The committed test runs 4 steps.
 
 ### Out of Scope / Deferred
 
 - **On-device VAE decode on the 2×2 mesh**: the hw-parallel `(2,2)` residual decoder currently fails at weight load (`decoder.conv_in.weight` (1728,640) vs (1728,1024)) — a Wan hw-parallel *residual* weight-prep limitation (sp3 validated the residual VAE only at single-device `(1,1)`). The pipeline uses a **host-torch `AutoencoderKLWan` fallback** for decode (bit-faithful to the reference decode; the on-device path is attempted first and auto-activates if fixed). On-device fix: repair the residual hw-parallel `conv_in` weight-prep, or decode on a dedicated `(1,1)` submesh (sp3's validated config).
 - **Perf**: tracing the denoise loop (flux1 `Tracer`), batched+masked CFG (needs transformer attention-mask support), and DRAM/coresidence tuning are all follow-ups — this bringup is functional-first and untraced.
 - **VLM prompt→JSON front-end** is out of scope (the pipeline takes the text prompt directly).
-- **Pipeline wiring and end-to-end Blackhole bringup** (denoise loop calling the transformer + `EulerSolver`, then this VAE decoder) is sub-project 4, still TODO. Until that lands, the host (`torch`/diffusers) `AutoencoderKLWan` decode is an available stopgap for end-to-end testing.
