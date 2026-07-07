@@ -221,22 +221,64 @@ def test_binary_scalar_int32_relational(device, ttnn_fn, scalar):
     assert torch.equal(expected, result)
 
 
-def test_binary_scalar_int32_large_values(device):
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        16777217,
+        16777366,
+        2147483640,
+        2147483647,
+        -2147483647,
+        -2147483540,
+        -2147483648,
+    ],
+)
+def test_binary_scalar_int32_large_values(scalar, device):
     """Verify that large int32 scalars are not corrupted by float conversion.
 
     Values > 2^24 cannot be represented exactly in float32.  With ScalarVariant
     they should be packed as int32 directly and arrive on the device unchanged.
     """
-    large_scalar = 2**24 + 1  # 16777217 — not exactly representable as float32
 
-    torch_input = torch.zeros([1, 1, 32, 32], dtype=torch.int32)
-    expected = torch.add(torch_input, large_scalar)
+    torch_input = torch.ones([1, 1, 32, 32], dtype=torch.int32)
+    expected = torch.add(torch_input, scalar)
 
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_output = ttnn.add(tt_input, large_scalar)
+    tt_output = ttnn.add(tt_input, scalar)
     result = ttnn.to_torch(tt_output)
 
     assert torch.equal(expected, result), (
-        f"Large scalar {large_scalar} was likely truncated to float. "
+        f"Large scalar {scalar} was likely truncated to float. "
+        f"Expected {expected.flatten()[0].item()}, got {result.flatten()[0].item()}"
+    )
+
+
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        16777217,
+        16777366,
+        2147483640,
+        2147483647,
+        4294967200,
+        4294967294,
+    ],
+)
+def test_binary_scalar_uint32_large_values(scalar, device):
+    """Verify that large uint32 scalars are not corrupted by float conversion.
+
+    Values > 2^24 cannot be represented exactly in float32.  With ScalarVariant
+    they should be packed as uint32 directly and arrive on the device unchanged.
+    """
+
+    torch_input = torch.ones([1, 1, 32, 32], dtype=torch.int64)
+    expected = torch.add(torch_input, scalar)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.add(tt_input, scalar)
+    result = ttnn.to_torch(tt_output, dtype=torch.int64)
+
+    assert torch.equal(expected, result), (
+        f"Large scalar {scalar} was likely truncated to float. "
         f"Expected {expected.flatten()[0].item()}, got {result.flatten()[0].item()}"
     )

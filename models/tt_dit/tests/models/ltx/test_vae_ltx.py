@@ -5,7 +5,7 @@
 """
 Tests for LTX-2 Video VAE components.
 
-Torch references use diffusers LTX-2 VAE modules (mirrors test_vae_wan2_1.py / test_audio_components_ltx.py).
+Torch references use diffusers LTX-2 VAE modules (mirrors test_vae_wan2_1.py / test_audio_ltx.py).
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ def _require_diffusers_ltx_vae():
     try:
         from diffusers.models.autoencoders.autoencoder_kl_ltx2 import (
             LTX2VideoCausalConv3d,
+            LTX2VideoDownsampler3d,
             LTX2VideoResnetBlock3d,
             LTX2VideoUpsampler3d,
             PerChannelRMSNorm,
@@ -47,12 +48,14 @@ def _require_diffusers_ltx_vae():
             "causal_conv": LTX2VideoCausalConv3d,
             "resnet": LTX2VideoResnetBlock3d,
             "upsample": LTX2VideoUpsampler3d,
+            "downsample": LTX2VideoDownsampler3d,
             "pixel_norm": PerChannelRMSNorm,
             "ltx2": True,
         }
     except ImportError:
         from diffusers.models.autoencoders.autoencoder_kl_ltx import (
             LTXVideoCausalConv3d,
+            LTXVideoDownsampler3d,
             LTXVideoResnetBlock3d,
             LTXVideoUpsampler3d,
         )
@@ -62,6 +65,7 @@ def _require_diffusers_ltx_vae():
             "causal_conv": LTXVideoCausalConv3d,
             "resnet": LTXVideoResnetBlock3d,
             "upsample": LTXVideoUpsampler3d,
+            "downsample": LTXVideoDownsampler3d,
             "pixel_norm": RMSNorm,
             "ltx2": False,
         }
@@ -95,6 +99,12 @@ def _run_diffusers_upsample(block: nn.Module, x: torch.Tensor, *, causal: bool, 
     return block(x)
 
 
+def _run_diffusers_downsample(block: nn.Module, x: torch.Tensor, *, causal: bool, ltx2: bool) -> torch.Tensor:
+    if ltx2:
+        return block(x, causal=causal)
+    return block(x)
+
+
 class _PerChannelStatistics(nn.Module):
     """Minimal per-channel latent stats (ltx_core key names for TT weight load)."""
 
@@ -107,6 +117,11 @@ class _PerChannelStatistics(nn.Module):
         mean = self.get_buffer("mean-of-means").view(1, -1, 1, 1, 1)
         std = self.get_buffer("std-of-means").view(1, -1, 1, 1, 1)
         return x * std + mean
+
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
+        mean = self.get_buffer("mean-of-means").view(1, -1, 1, 1, 1)
+        std = self.get_buffer("std-of-means").view(1, -1, 1, 1, 1)
+        return (x - mean) / std
 
 
 def _diffusers_decoder_state_to_tt(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -150,6 +165,20 @@ def _unpatchify(x: torch.Tensor, *, patch_size_hw: int = 4, patch_size_t: int = 
     p_t = patch_size_t
     x = x.reshape(batch_size, -1, p_t, p, p, num_frames, height, width)
     return x.permute(0, 1, 5, 2, 6, 4, 7, 3).flatten(6, 7).flatten(4, 5).flatten(2, 3)
+
+
+def _patchify(x: torch.Tensor, *, patch_size_hw: int = 4, patch_size_t: int = 1) -> torch.Tensor:
+    """Space-to-depth patchify (exact inverse of ``_unpatchify``): folds a
+    ``(p_t, p_hw, p_hw)`` patch into channels with order ``(c, p_t, p_width, p_height)``.
+    Mirrors the ltx_core/TT encoder patchify so both references agree.
+    """
+    batch_size, num_channels, num_frames, height, width = x.shape
+    p = patch_size_hw
+    p_t = patch_size_t
+    x = x.reshape(batch_size, num_channels, num_frames // p_t, p_t, height // p, p, width // p, p)
+    # (b, c, f', p_t, h', p_h, w', p_w) -> (b, c, p_t, p_w, p_h, f', h', w')
+    x = x.permute(0, 1, 3, 7, 5, 2, 4, 6)
+    return x.reshape(batch_size, num_channels * p_t * p * p, num_frames // p_t, height // p, width // p)
 
 
 class _TorchLTXVideoDecoder(nn.Module):
@@ -758,20 +787,134 @@ def test_ltx_video_decoder_2k(
 
 
 # ---------------------------------------------------------------------------
-# Encoder parity (LTXVideoEncoder vs ltx_core VideoEncoder)
+# Encoder parity (LTXVideoEncoder vs a diffusers-primitives reference encoder)
 # ---------------------------------------------------------------------------
-def _require_ltx_core_encoder():
-    """Return the ltx_core reference VideoEncoder + enums, skipping if unavailable."""
-    pytest.importorskip("ltx_core")
-    from ltx_core.model.video_vae.enums import LogVarianceType, NormLayerType, PaddingModeType
-    from ltx_core.model.video_vae.video_vae import VideoEncoder
+def _diffusers_encoder_state_to_tt(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Remap diffusers LTX-2 encoder keys (incl. nested resnets) to the TT/ltx_core layout."""
+    out: dict[str, torch.Tensor] = {}
+    for key, value in state.items():
+        if key.endswith("conv_shortcut.weight"):
+            out[key.replace("conv_shortcut.weight", "conv_shortcut.conv.weight")] = value
+        elif key.endswith("conv_shortcut.bias"):
+            out[key.replace("conv_shortcut.bias", "conv_shortcut.conv.bias")] = value
+        else:
+            out[key] = value
+    return out
 
-    return {
-        "encoder": VideoEncoder,
-        "NormLayerType": NormLayerType,
-        "LogVarianceType": LogVarianceType,
-        "PaddingModeType": PaddingModeType,
+
+class _TorchLTXVideoEncoder(nn.Module):
+    """Block-list LTX encoder built from diffusers VAE primitives (matches TT/ltx_core layout).
+
+    Mirrors the reference ``VideoEncoder`` encode path: patchify -> conv_in -> down_blocks
+    (``res_x`` mid blocks + ``compress_*_res`` space-to-depth downsamplers) -> PixelNorm + SiLU
+    -> conv_out (latent means) -> per-channel normalize. Always causal.
+    """
+
+    _STRIDE_MAP = {
+        "compress_time_res": (2, 1, 1),
+        "compress_space_res": (1, 2, 2),
+        "compress_all_res": (2, 2, 2),
     }
+
+    def __init__(
+        self,
+        *,
+        encoder_blocks: list[tuple[str, dict | int]],
+        in_channels: int = 3,
+        out_channels: int = 128,
+        patch_size: int = 4,
+        base_channels: int = 128,
+        causal: bool = True,
+        spatial_padding_mode: str = "zeros",
+        vae_mods: dict,
+    ) -> None:
+        super().__init__()
+        self.patch_size = patch_size
+        self.causal = causal
+        self.ltx2 = vae_mods["ltx2"]
+        causal_conv = vae_mods["causal_conv"]
+        resnet_cls = vae_mods["resnet"]
+        downsample_cls = vae_mods["downsample"]
+        pixel_norm = vae_mods["pixel_norm"]
+
+        in_channels_patched = in_channels * patch_size**2
+        feature_channels = base_channels
+
+        conv_kwargs: dict[str, Any] = {}
+        if self.ltx2:
+            if spatial_padding_mode != "zeros":
+                conv_kwargs["spatial_padding_mode"] = spatial_padding_mode
+        else:
+            conv_kwargs["is_causal"] = causal
+
+        self.conv_in = causal_conv(
+            in_channels=in_channels_patched,
+            out_channels=feature_channels,
+            kernel_size=3,
+            stride=1,
+            **conv_kwargs,
+        )
+
+        self.down_blocks = nn.ModuleList()
+        ch = feature_channels
+        for block_name, block_params in encoder_blocks:
+            block_config = {"num_layers": block_params} if isinstance(block_params, int) else block_params
+            if block_name == "res_x":
+                self.down_blocks.append(
+                    _TorchUNetMidBlock3D(
+                        in_channels=ch,
+                        num_layers=block_config["num_layers"],
+                        resnet_cls=resnet_cls,
+                        ltx2=self.ltx2,
+                        spatial_padding_mode=spatial_padding_mode,
+                    )
+                )
+            elif block_name in self._STRIDE_MAP:
+                multiplier = block_config.get("multiplier", 2)
+                new_ch = ch * multiplier
+                downsample_kwargs: dict[str, Any] = {
+                    "in_channels": ch,
+                    "out_channels": new_ch,
+                    "stride": self._STRIDE_MAP[block_name],
+                }
+                if self.ltx2 and spatial_padding_mode != "zeros":
+                    downsample_kwargs["spatial_padding_mode"] = spatial_padding_mode
+                self.down_blocks.append(downsample_cls(**downsample_kwargs))
+                ch = new_ch
+            else:
+                raise ValueError(f"Unknown encoder block: {block_name}")
+
+        self.conv_norm_out = pixel_norm()
+        self.conv_act = nn.SiLU()
+        self.conv_out = causal_conv(
+            in_channels=ch,
+            out_channels=out_channels,
+            kernel_size=3,
+            stride=1,
+            **conv_kwargs,
+        )
+        self.per_channel_statistics = _PerChannelStatistics(out_channels)
+
+    def forward(self, sample: torch.Tensor) -> torch.Tensor:
+        # Crop trailing frames so F == 1 + 8*k (mirrors the reference; no-op for the test shapes).
+        frames_count = sample.shape[2]
+        if (frames_count - 1) % 8 != 0:
+            sample = sample[:, :, : frames_count - ((frames_count - 1) % 8)]
+
+        sample = _patchify(sample, patch_size_hw=self.patch_size)
+        sample = _run_diffusers_causal_conv(self.conv_in, sample, causal=self.causal, ltx2=self.ltx2)
+        for down_block in self.down_blocks:
+            if isinstance(down_block, _TorchUNetMidBlock3D):
+                sample = down_block(sample, causal=self.causal, ltx2=self.ltx2)
+            else:
+                sample = _run_diffusers_downsample(down_block, sample, causal=self.causal, ltx2=self.ltx2)
+        if self.ltx2:
+            sample = self.conv_norm_out(sample)
+        else:
+            sample = self.conv_norm_out(sample.movedim(1, -1)).movedim(-1, 1)
+        sample = self.conv_act(sample)
+        sample = _run_diffusers_causal_conv(self.conv_out, sample, causal=self.causal, ltx2=self.ltx2)
+        return self.per_channel_statistics.normalize(sample)
 
 
 # Small encoder config: conv_in (48->128) -> res_x -> compress_space_res -> compress_time_res.
@@ -796,28 +939,29 @@ _LTX_ENCODER_SMALL_BLOCKS = [
     indirect=["mesh_device", "device_params"],
 )
 def test_ltx_video_encoder(mesh_device: ttnn.MeshDevice, num_frames: int, height: int, width: int):
-    """LTXVideoEncoder parity vs the ltx_core reference VideoEncoder.
+    """LTXVideoEncoder parity vs a diffusers-primitives reference encoder.
 
     Random weights — checks the encode path (patchify -> conv_in -> down_blocks -> PixelNorm+SiLU
     -> conv_out (means) -> per-channel normalize) matches the reference numerically.
     """
-    mods = _require_ltx_core_encoder()
-    VideoEncoder = mods["encoder"]
+    vae_mods = _require_diffusers_ltx_vae()
+    if not vae_mods["ltx2"]:
+        pytest.skip("Encoder parity requires diffusers autoencoder_kl_ltx2 (runtime causal= support)")
 
     torch.manual_seed(42)
     latent_channels = 128
 
-    ref = VideoEncoder(
+    ref = _TorchLTXVideoEncoder(
+        encoder_blocks=_LTX_ENCODER_SMALL_BLOCKS,
         in_channels=3,
         out_channels=latent_channels,
-        encoder_blocks=_LTX_ENCODER_SMALL_BLOCKS,
         patch_size=4,
-        norm_layer=mods["NormLayerType"].PIXEL_NORM,
-        latent_log_var=mods["LogVarianceType"].UNIFORM,
-        encoder_spatial_padding_mode=mods["PaddingModeType"].ZEROS,
+        base_channels=latent_channels,
+        causal=True,
+        spatial_padding_mode="zeros",
+        vae_mods=vae_mods,
     )
-    # The reference per-channel stats buffers are uninitialized (torch.empty); set known values so
-    # normalize() = (x - mean) / std is deterministic and well-conditioned.
+    # Set known per-channel stats so normalize() = (x - mean) / std is deterministic/well-conditioned.
     with torch.no_grad():
         ref.per_channel_statistics.get_buffer("mean-of-means").copy_(torch.randn(latent_channels))
         ref.per_channel_statistics.get_buffer("std-of-means").copy_(torch.rand(latent_channels) + 0.5)
@@ -838,7 +982,7 @@ def test_ltx_video_encoder(mesh_device: ttnn.MeshDevice, num_frames: int, height
         width=width,
         **_vae_parallel_kwargs(mesh_device),
     )
-    tt_model.load_torch_state_dict(ref.state_dict())
+    tt_model.load_torch_state_dict(_diffusers_encoder_state_to_tt(ref.state_dict()))
 
     tt_out = _unwrap_tt_output(tt_model(x.clone()))  # host (B, C, F', H', W')
 
@@ -846,7 +990,7 @@ def test_ltx_video_encoder(mesh_device: ttnn.MeshDevice, num_frames: int, height
     assert tt_out.shape == ref_out.shape, f"shape mismatch: TT {tt_out.shape} vs ref {ref_out.shape}"
     assert torch.isfinite(tt_out).all(), "NaN/Inf in TT encoder output"
     assert_quality(ref_out, tt_out, pcc=0.99)
-    logger.info("PASSED: LTXVideoEncoder matches ltx_core VideoEncoder")
+    logger.info("PASSED: LTXVideoEncoder matches diffusers reference encoder")
 
 
 # ---------------------------------------------------------------------------
@@ -879,24 +1023,26 @@ def _run_ltx_encoder_parity(
     *,
     pcc: float = 0.99,
 ):
-    """Build torch (ltx_core) + TT production encoders at ``(num_frames, height, width)`` and
-    assert numerical parity. The TT encoder shards H/W across the mesh exactly like the I2V
+    """Build torch (diffusers reference) + TT production encoders at ``(num_frames, height, width)``
+    and assert numerical parity. The TT encoder shards H/W across the mesh exactly like the I2V
     pipeline; this is the path that fails when a per-device spatial dim is not divisible by the
     downsample stride (patch groups would straddle a shard boundary)."""
-    mods = _require_ltx_core_encoder()
-    VideoEncoder = mods["encoder"]
+    vae_mods = _require_diffusers_ltx_vae()
+    if not vae_mods["ltx2"]:
+        pytest.skip("Encoder parity requires diffusers autoencoder_kl_ltx2 (runtime causal= support)")
 
     torch.manual_seed(42)
     latent_channels = 128
 
-    ref = VideoEncoder(
+    ref = _TorchLTXVideoEncoder(
+        encoder_blocks=_LTX_PROD_ENCODER_BLOCKS,
         in_channels=3,
         out_channels=latent_channels,
-        encoder_blocks=_LTX_PROD_ENCODER_BLOCKS,
         patch_size=4,
-        norm_layer=mods["NormLayerType"].PIXEL_NORM,
-        latent_log_var=mods["LogVarianceType"].UNIFORM,
-        encoder_spatial_padding_mode=mods["PaddingModeType"].ZEROS,
+        base_channels=latent_channels,
+        causal=True,
+        spatial_padding_mode="zeros",
+        vae_mods=vae_mods,
     )
     with torch.no_grad():
         ref.per_channel_statistics.get_buffer("mean-of-means").copy_(torch.randn(latent_channels))
@@ -925,7 +1071,7 @@ def _run_ltx_encoder_parity(
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
     )
-    tt_model.load_torch_state_dict(ref.state_dict())
+    tt_model.load_torch_state_dict(_diffusers_encoder_state_to_tt(ref.state_dict()))
 
     tt_out = _unwrap_tt_output(tt_model(x.clone()))
 
@@ -933,7 +1079,7 @@ def _run_ltx_encoder_parity(
     assert tt_out.shape == ref_out.shape, f"shape mismatch: TT {tt_out.shape} vs ref {ref_out.shape}"
     assert torch.isfinite(tt_out).all(), "NaN/Inf in TT encoder output"
     assert_quality(ref_out, tt_out, pcc=pcc)
-    logger.info("PASSED: production LTXVideoEncoder matches ltx_core VideoEncoder")
+    logger.info("PASSED: production LTXVideoEncoder matches diffusers reference encoder")
 
 
 # (num_frames, H, W). On a 4x8 mesh (H//4, W//8) the per-device spatial dim after patchify and
@@ -969,7 +1115,7 @@ def test_ltx_video_encoder_prod(
     w_axis: int,
     num_links: int,
 ):
-    """Production-config LTXVideoEncoder parity vs ltx_core, sharded like the I2V pipeline.
+    """Production-config LTXVideoEncoder parity vs the diffusers reference, sharded like the I2V pipeline.
 
     The "boundary" resolution reproduces the I2V conditioning-latent corruption (device-vs-host
     PCC ~0.3): a per-device spatial dim becomes odd at the second ``compress_all_res``, so the

@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import math
 import os
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import torch
 from einops import rearrange
 from loguru import logger
+from safetensors import safe_open
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -30,7 +31,11 @@ from ...utils.conv3d import (
     conv_pad_width,
     get_conv3d_config,
 )
+from ...utils.ltx import pad_hw_replicate
 from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
+
+if TYPE_CHECKING:
+    from ..upsampler.latent_upsampler_ltx import LTXLatentUpsampler
 
 
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
@@ -211,10 +216,9 @@ class LTXCausalConv3d(Module):
                 x_BTHWC = ttnn.concat([*padding_frames, x_BTHWC], dim=1)
             else:
                 last_frame = x_BTHWC[:, -1:, :, :, :]
-                front_pad = self.time_pad // 2
-                back_pad = self.time_pad // 2
-                front_frames = [first_frame] * front_pad
-                back_frames = [last_frame] * back_pad
+                half_pad = self.time_pad // 2
+                front_frames = [first_frame] * half_pad
+                back_frames = [last_frame] * half_pad
                 parts = front_frames + [x_BTHWC] + back_frames
                 x_BTHWC = ttnn.concat(parts, dim=1)
 
@@ -565,6 +569,14 @@ class LTXDepthToSpaceUpsample(Module):
         pass  # Conv handles its own state via LTXCausalConv3d._prepare_torch_state
 
 
+# Decoder upsample strides (depth-to-space expansion factors).
+_DECODER_STRIDE_MAP = {
+    "compress_all": (2, 2, 2),
+    "compress_space": (1, 2, 2),
+    "compress_time": (2, 1, 1),
+}
+
+
 def _compute_ltx_decoder_dims(
     *,
     decoder_blocks: list[tuple[str, dict]],
@@ -597,13 +609,12 @@ def _compute_ltx_decoder_dims(
     def k3_dims() -> ConvDims:
         return ConvDims(T=cur_T + 2, H=_dev(full_H, h_factor), W=_dev(full_W, w_factor))
 
-    stride_map = {"compress_all": (2, 2, 2), "compress_space": (1, 2, 2), "compress_time": (2, 1, 1)}
     dims: list[ConvDims] = [k3_dims()]  # conv_in
     for block_name, _block_params in reversed(decoder_blocks):
-        if block_name in stride_map:
+        if block_name in _DECODER_STRIDE_MAP:
             dims.append(k3_dims())  # conv runs at the PRE-upsample shape
             # Post-upsample: depth-to-space expands H,W by p2,p3 and T by p1 (first frame dropped if p1==2).
-            p1, p2, p3 = stride_map[block_name]
+            p1, p2, p3 = _DECODER_STRIDE_MAP[block_name]
             full_H = full_H * p2
             full_W = full_W * p3
             cur_T = cur_T * p1 - (1 if p1 == 2 else 0)
@@ -687,19 +698,14 @@ class LTXVideoDecoder(Module):
         for block_name, block_params in reversed(decoder_blocks):
             block_config = {"num_layers": block_params} if isinstance(block_params, int) else block_params
 
-            if block_name in ("compress_all", "compress_space", "compress_time"):
-                stride_map = {
-                    "compress_all": (2, 2, 2),
-                    "compress_space": (1, 2, 2),
-                    "compress_time": (2, 1, 1),
-                }
+            if block_name in _DECODER_STRIDE_MAP:
                 multiplier = block_config.get("multiplier", 1)
                 residual = block_config.get("residual", False)
                 new_ch = ch // multiplier
                 self.up_blocks.append(
                     LTXDepthToSpaceUpsample(
                         in_channels=ch,
-                        stride=stride_map[block_name],
+                        stride=_DECODER_STRIDE_MAP[block_name],
                         out_channels_reduction_factor=multiplier,
                         residual=residual,
                         conv_dims=_pop_dims(),
@@ -1376,3 +1382,43 @@ class LTXVideoEncoder(Module):
         result = result[:, :, :logical_h, :logical_w, :]
         # (B, F', H', W', C) -> (B, C, F', H', W')
         return result.permute(0, 4, 1, 2, 3)
+
+
+# =============================================================================
+# Latent normalization stats + spatial-2x latent upsample (bridges the VAE
+# per-channel stats with the standalone latent upsampler).
+# =============================================================================
+
+
+def read_vae_per_channel_stats(checkpoint_path: str) -> tuple[torch.Tensor, torch.Tensor]:
+    """Read ``(mean-of-means, std-of-means)`` from a checkpoint and reshape for ``(B, C, F, H, W)``
+    broadcast — the un_normalize/normalize bookends matching ``ltx_core.upsample_video``."""
+    with safe_open(checkpoint_path, framework="pt") as f:
+        mean = f.get_tensor("vae.per_channel_statistics.mean-of-means").float()
+        std = f.get_tensor("vae.per_channel_statistics.std-of-means").float()
+    return mean.view(1, -1, 1, 1, 1), std.view(1, -1, 1, 1, 1)
+
+
+def upsample_latent(
+    upsampler: "LTXLatentUpsampler",
+    video_latent: torch.Tensor,
+    mean: torch.Tensor,
+    std: torch.Tensor,
+) -> torch.Tensor:
+    """Spatial-2x latent upsample. Mirrors ``ltx_core.upsample_video``: un_normalize
+    → bare upsampler → re_normalize. ``(B, C, F, H, W)`` host in/out.
+
+    ``mean``/``std`` are the VAE per-channel stats reshaped for ``(B, C, F, H, W)`` broadcast
+    (see ``read_vae_per_channel_stats``). The caller must load the ``upsampler`` weights onto
+    the mesh before invoking this.
+    """
+    x = video_latent.float() * std + mean
+    # Pad to even mesh shards so the upsampler's sharded convs skip the uneven-dim halo
+    # crop-masking that seams the 2x4 boundaries (s1 17x30); crop the 2x-upsampled margin
+    # off to preserve the field of view. The upsampler is built at these rounded dims so its
+    # pinned GroupNorm/conv shapes match.
+    pc = upsampler.parallel_config
+    x, H, W = pad_hw_replicate(x, pc.height_parallel.factor, pc.width_parallel.factor)
+    x = upsampler(x)
+    x = x[:, :, :, : H * 2, : W * 2]
+    return (x.float() - mean) / std

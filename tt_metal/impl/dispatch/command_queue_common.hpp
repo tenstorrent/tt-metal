@@ -31,7 +31,10 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     // region rather than a per-core mailbox because no worker core touches it.
     REALTIME_PROFILER_MSG = 10,
     DISPATCH_TELEMETRY = 11,
-    UNRESERVED = 12,
+    DISPATCH_TELEMETRY_CONTROL = 12,
+    // Completion counters for worker-done signalling on Quasar. Not used on WH/BH.
+    WORKER_COMPLETION_SEMAPHORES = 13,
+    UNRESERVED = 14,
 };
 
 // likely only used in impl

@@ -464,19 +464,9 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
     // Validate kernel tensor bindings
     for (const auto& kernel : spec.kernels) {
-        // TEMPORARY: tensor bindings on compute kernels are not yet supported end-to-end. A
-        // TensorAccessor cannot currently be constructed in a compute kernel, so a spec that binds a
-        // tensor to a compute kernel looks valid here but fails once it reaches the kernel. Reject it
-        // up front with an honest message until the compute-path support lands (expected within a day
-        // or two of 2026-06-16). Remove this guard when that ships.
-        TT_FATAL(
-            !kernel.is_compute_kernel() || kernel.tensor_bindings.empty(),
-            "Kernel '{}' is a compute kernel with a tensor binding ('{}'). Tensor bindings on compute "
-            "kernels are not yet supported — a TensorAccessor cannot currently be constructed in a "
-            "compute kernel, so this spec would compile but fail in the kernel. This is a temporary "
-            "restriction that will be lifted soon.",
-            kernel.unique_id,
-            kernel.tensor_bindings.empty() ? std::string{} : kernel.tensor_bindings.front().accessor_name);
+        // A tensor binding is legal on both DM and compute kernels:
+        //   - a DM kernel can use the binding token to construct a TensorAccessor or LocalTensorAccessor
+        //   - a compute kernel can only use LocalTensorAccessor (NOC-free, local-L1 only)
 
         std::unordered_set<std::string> accessor_names;
         for (const auto& binding : kernel.tensor_bindings) {
@@ -641,6 +631,20 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
     }
 }
 
+// Whether a Gen2 DM kernel opts out of implicit sync for a particular DFB.
+// Two routes lead to the same opt-out:
+//   - disable_dfb_implicit_sync_for_all: the per-kernel hammer, covering every DFB the kernel binds.
+//   - disable_implicit_sync_for: an explicit per-DFB list.
+// Precondition: the caller has already established this is a DM kernel with a gen2_config.
+bool DmKernelDisablesImplicitSync(
+    const DataMovementHardwareConfig::Gen2Config& gen2_config, const DFBSpecName& dfb_name) {
+    if (gen2_config.disable_dfb_implicit_sync_for_all) {
+        return true;
+    }
+    const auto& vec = gen2_config.disable_implicit_sync_for;
+    return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
+}
+
 // ValidateProgramSpec: Semantic validation
 // ----------------------------------------------------------------------------
 //
@@ -792,7 +796,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // On Gen1 (WH/BH), the kernel must declare its placement: either a READER/WRITER role
             // hint (the runtime fills in processor/NOC/NOC-mode), or an explicit Gen1 config. There
             // is no safe default for reader-vs-writer — it is op-specific. Gen2 is fully optional:
-            // absence is treated as "use defaults" (empty disable_implicit_sync_for).
+            // absence is treated as "use defaults" (implicit sync left on for all bound DFBs).
             if (is_gen1_arch()) {
                 TT_FATAL(
                     data_movement_config.role != DataMovementRoleHint::UNSPECIFIED ||
@@ -936,15 +940,17 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate DM kernel disable_implicit_sync_for entries.
     //
     // Implicit sync is a Gen2-only, DM-only mechanism (ISR-based credit posting from NoC
-    // transaction completion). Each DM kernel can opt out per-DFB by listing the DFB's name
-    // in its Gen2Config::disable_implicit_sync_for vector. The opt-out applies to
-    // the side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
+    // transaction completion). A DM kernel can opt out per-DFB by listing the DFB's name in
+    // its Gen2Config::disable_implicit_sync_for vector, or opt out of all the DFBs it binds at
+    // once via Gen2Config::disable_dfb_implicit_sync_for_all. Either way the opt-out applies to the
+    // side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
     //
     // Per-kernel rule: every listed name references a DFB the kernel binds (typo guard).
     //
-    // Cross-kernel rule (per DFB): on each side independently, all DM kernels must agree —
-    // either all list the DFB, or none do. (Producer-side and consumer-side are checked
-    // separately; the underlying hardware mechanism is per-side, with one mask per side.)
+    // Cross-kernel rule (per DFB): on each side independently, all DM kernels must agree on the
+    // opt-out — either all disable it (by list or by _all), or none do. (Producer-side and
+    // consumer-side are checked separately; the underlying hardware mechanism is per-side, with
+    // one mask per side.)
     {
         // Per-kernel pass: typo guard.
         for (const auto& kernel : spec.kernels) {
@@ -977,7 +983,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 const DFBSpecName& dfb_name,
                 std::string_view side_label) {
                 const KernelSpec* canonical = nullptr;
-                bool canonical_lists_dfb = false;
+                bool canonical_disables = false;
                 for (const auto& ep : endpoints) {
                     if (!ep.kernel->is_data_movement_kernel()) {
                         continue;
@@ -987,16 +993,15 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                         // Gen1-only DM kernel — can't physically participate in Gen2 implicit sync; abstains.
                         continue;
                     }
-                    const auto& vec = dm_config.gen2_config->disable_implicit_sync_for;
-                    const bool lists_dfb = std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
+                    const bool disables = DmKernelDisablesImplicitSync(*dm_config.gen2_config, dfb_name);
                     if (canonical == nullptr) {
                         canonical = ep.kernel;
-                        canonical_lists_dfb = lists_dfb;
+                        canonical_disables = disables;
                         continue;
                     }
                     TT_FATAL(
-                        lists_dfb == canonical_lists_dfb,
-                        "DFB '{}' has disagreeing disable_implicit_sync_for state on the {} side",
+                        disables == canonical_disables,
+                        "DFB '{}' has disagreeing implicit-sync opt-out state on the {} side",
                         dfb_name,
                         side_label);
                 }
@@ -2387,8 +2392,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
             if (!dm_config.gen2_config.has_value()) {
                 continue;
             }
-            const auto& vec = dm_config.gen2_config->disable_implicit_sync_for;
-            if (std::find(vec.begin(), vec.end(), dfb_spec->unique_id) != vec.end()) {
+            if (DmKernelDisablesImplicitSync(*dm_config.gen2_config, dfb_spec->unique_id)) {
                 disabled = true;
             }
         }

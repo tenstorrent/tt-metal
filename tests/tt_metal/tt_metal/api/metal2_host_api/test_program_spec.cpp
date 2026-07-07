@@ -827,6 +827,121 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
 // add a positive scope-disagreement test that exercises the
 // "must agree on DFBSelfLoopScope" TT_FATAL.
 
+// ----------------------------------------------------------------------------
+// DFB implicit-sync opt-out (Gen2)
+// ----------------------------------------------------------------------------
+// Implicit sync is ON by default for any DFB side that has a DM endpoint. A DM kernel can
+// opt out per-DFB (disable_implicit_sync_for) or for all the DFBs it binds at once
+// (disable_dfb_implicit_sync_for_all). These tests pin the per-kernel "all" hammer.
+
+TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllDisablesProducerSide) {
+    // Build the canonical DM-producer -> compute-consumer DFB, optionally hammering the
+    // producer's implicit sync off, and read back the lowered DataflowBufferConfig.
+    auto make_spec = [](bool disable_all) {
+        ProgramSpec spec;
+        spec.name = "test_program";
+
+        auto dm_kernel = MakeMinimalDMKernel("dm_kernel");
+        auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
+        std::get<DataMovementHardwareConfig>(dm_kernel.hw_config).gen2_config->disable_dfb_implicit_sync_for_all =
+            disable_all;
+
+        auto dfb = MakeMinimalDFB("dfb_0");
+        dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+        dm_kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "out"));
+        compute_kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_0"}, "in"));
+
+        spec.kernels = {dm_kernel, compute_kernel};
+        spec.dataflow_buffers = {dfb};
+        spec.work_units = {MakeMinimalWorkUnit("work_unit_0", NodeCoord{0, 0}, {"dm_kernel", "compute_kernel"})};
+        return spec;
+    };
+
+    // Default: the producer side has a DM kernel, so implicit sync is on.
+    {
+        auto program = MakeProgramFromSpec(*mesh_device_, make_spec(/*disable_all=*/false));
+        const uint32_t dfb_id = program.impl().get_dfb_handle("dfb_0");
+        EXPECT_TRUE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
+    }
+    // disable_dfb_implicit_sync_for_all turns it off for every DFB the kernel binds.
+    {
+        auto program = MakeProgramFromSpec(*mesh_device_, make_spec(/*disable_all=*/true));
+        const uint32_t dfb_id = program.impl().get_dfb_handle("dfb_0");
+        EXPECT_FALSE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
+    }
+}
+
+TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllDisagreementAcrossProducersFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer1 = MakeMinimalDMKernel("producer1");
+    auto producer2 = MakeMinimalDMKernel("producer2");
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    // producer1 hammers implicit sync off; producer2 leaves it on. Both bind the same DFB on
+    // the producer side, so the per-side opt-out disagrees and validation must reject.
+    std::get<DataMovementHardwareConfig>(producer1.hw_config).gen2_config->disable_dfb_implicit_sync_for_all = true;
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    producer1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer1, producer2, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer1", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer2", "consumer"}),
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("disagreeing implicit-sync opt-out state")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllAgreesWithExplicitList) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer1 = MakeMinimalDMKernel("producer1");
+    auto producer2 = MakeMinimalDMKernel("producer2");
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    // producer1 opts out via the per-kernel hammer; producer2 opts the same DFB out by name.
+    // Both express the same per-side decision (disable), so they agree and the side lowers off.
+    std::get<DataMovementHardwareConfig>(producer1.hw_config).gen2_config->disable_dfb_implicit_sync_for_all = true;
+    std::get<DataMovementHardwareConfig>(producer2.hw_config)
+        .gen2_config->disable_implicit_sync_for.push_back(DFBSpecName{"dfb"});
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    producer1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer1, producer2, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer1", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer2", "consumer"}),
+    };
+
+    auto program = MakeProgramFromSpec(*mesh_device_, spec);
+    const uint32_t dfb_id = program.impl().get_dfb_handle("dfb");
+    EXPECT_FALSE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
+}
+
 // ============================================================================
 // SECTION 2: Semantic Validation Tests (ValidateProgramSpec)
 // ============================================================================
@@ -1179,17 +1294,16 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingDuplicateAccessorFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate semaphore accessor_name 'same'")));
 }
 
-TEST_F(ProgramSpecTestQuasar, TensorBindingOnComputeKernelTemporarilyUnsupportedFails) {
-    // TEMPORARY restriction: a TensorAccessor cannot yet be constructed in a compute kernel, so
-    // binding a tensor to one is rejected up front in ValidateProgramSpec with an apologetic message.
-    // Delete this test when compute-path tensor bindings are supported (the guard goes with it).
+TEST_F(ProgramSpecTestQuasar, TensorBindingOnComputeKernelIsAccepted) {
+    // A tensor binding on a compute kernel is legal: the kernel constructs a LocalTensorAccessor
+    // (NOC-free) from the binding token rather than a TensorAccessor. ValidateProgramSpec accepts it;
+    // there is no host-side residency check. (The compile/dispatch path is proven in the HW test
+    // LocalTensorAccessorBindingCompileComputeKernel.)
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.tensor_parameters = {MakeMinimalTensorParameter("t")};
     BindTensorParameterToKernel(spec.kernels[1], "t", "t_acc");  // kernels[1] == compute_kernel
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("compute kernel with a tensor binding")));
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, SemaphoreNonZeroInitialValueFailsOnQuasar) {

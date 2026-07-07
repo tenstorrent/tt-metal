@@ -46,6 +46,52 @@ def _tile_preserving_chunk0(x: ttnn.Tensor, n: int) -> list[ttnn.Tensor]:
     return out
 
 
+def build_audio_masks(
+    audio_N: int, audio_N_real: int, *, mesh_device: ttnn.MeshDevice, sp_axis: int
+) -> tuple[ttnn.Tensor | None, ttnn.Tensor | None, ttnn.Tensor | None]:
+    """SDPA attn mask + padding masks for SP-sharded vs gathered audio tokens.
+
+    Returns ``(attn_mask, pad_mask_sp, pad_mask_full)`` — ``pad_mask_sp`` is sharded on the
+    sequence dim for multiply with local audio activations; ``pad_mask_full`` is replicated
+    for multiply after the all_gather on A→V keys. All ``None`` when no padding is needed.
+    """
+    if audio_N <= audio_N_real:
+        return None, None, None
+
+    # Column mask only: real/padded queries are barred from attending TO padded keys.
+    # Do NOT mask padded-query rows to -inf — that makes all attention scores in those
+    # rows -inf → softmax NaN → NaN propagates via padded-token outputs (which we then
+    # multiply by 0; IEEE 0*NaN = NaN, not 0). The pad mask already zeros the padded-query
+    # outputs after attention, so column-only masking is sufficient and numerically safer
+    # at high σ where activations have largest magnitude.
+    mask = torch.zeros(1, 1, audio_N, audio_N)
+    mask[:, :, :, audio_N_real:] = float("-inf")
+    tt_attn_mask = bf16_tensor(mask.to(torch.bfloat16), device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+
+    pad_mask = torch.ones(1, 1, audio_N, 1, dtype=torch.bfloat16)
+    pad_mask[:, :, audio_N_real:, :] = 0.0
+    tt_pad_mask_sp = bf16_tensor(pad_mask, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+    tt_pad_mask_full = bf16_tensor(pad_mask, device=mesh_device)
+    return tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full
+
+
+def build_video_pad_mask(
+    video_N: int, video_N_real: int, *, mesh_device: ttnn.MeshDevice, sp_axis: int
+) -> ttnn.Tensor | None:
+    """SP-sharded video padding mask ``(1, 1, video_N, 1)``; ``None`` when no padding is needed.
+
+    Multiply the local (sharded) video activations by this to zero padded slots before they
+    propagate downstream (self-attn residual / cross-attn K / FF). No SDPA attn_mask is needed
+    (unlike audio) — video self-attention uses ring SDPA, which masks padded keys via its
+    ``logical_n=video_N_real`` arg.
+    """
+    if video_N <= video_N_real:
+        return None
+    pad_mask = torch.ones(1, 1, video_N, 1, dtype=torch.bfloat16)
+    pad_mask[:, :, video_N_real:, :] = 0.0
+    return bf16_tensor(pad_mask, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+
+
 class LTXTransformerBlock(Module):
     def __init__(
         self,
@@ -243,6 +289,30 @@ class LTXTransformerBlock(Module):
                 t[scale_idxs, :, :, :] += 1.0
                 state[key] = t.to(dtype=torch.bfloat16)
 
+    def _modulated_ffn(self, ffn, norm, x_1BND, shift_ff, scale_ff_p1, gate_ff):
+        """norm -> AdaLN (shift + x * scale_p1) -> gated FFN residual.
+
+        Ring fuses ff1(AG) + ff2 + RS + addcmul; Linear needs explicit AG + plain ffn().
+        """
+        normed = norm(x_1BND)
+        normed = ttnn.addcmul(shift_ff, normed, scale_ff_p1)
+        if self.ccl_manager.topology == ttnn.Topology.Ring:
+            return ffn.forward_fused_addcmul(
+                normed,
+                x_1BND,
+                gate_ff,
+                scalar=1.0,
+                compute_kernel_config=self.ff_compute_kernel_config,
+                parallel_config=self.parallel_config,
+            )
+        else:
+            if self.parallel_config.tensor_parallel.factor > 1:
+                normed = self.ccl_manager.all_gather_persistent_buffer(
+                    normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            ff_out = ffn(normed, compute_kernel_config=self.ff_compute_kernel_config)
+            return ttnn.addcmul(x_1BND, ff_out, gate_ff)
+
     def forward(
         self,
         video_1BND: ttnn.Tensor,
@@ -267,8 +337,6 @@ class LTXTransformerBlock(Module):
         video_cross_pe_sin: ttnn.Tensor | None = None,
         audio_cross_pe_cos: ttnn.Tensor | None = None,
         audio_cross_pe_sin: ttnn.Tensor | None = None,
-        video_cross_pe_cos_full: ttnn.Tensor | None = None,
-        video_cross_pe_sin_full: ttnn.Tensor | None = None,
         audio_cross_pe_cos_full: ttnn.Tensor | None = None,
         audio_cross_pe_sin_full: ttnn.Tensor | None = None,
         skip_cross_attn: bool = False,
@@ -329,26 +397,7 @@ class LTXTransformerBlock(Module):
 
         if not self.has_audio:
             # Video-only feed forward
-            video_normed = self.norm3(video_1BND)
-            video_normed = ttnn.addcmul(v_shift_ff, video_normed, v_scale_ff_p1)
-            # Ring fuses ff1(AG) + ff2 + RS + addcmul; Linear needs explicit AG + plain ffn().
-            if self.ccl_manager.topology == ttnn.Topology.Ring:
-                video_1BND = self.ffn.forward_fused_addcmul(
-                    video_normed,
-                    video_1BND,
-                    v_gate_ff,
-                    scalar=1.0,
-                    compute_kernel_config=self.ff_compute_kernel_config,
-                    parallel_config=self.parallel_config,
-                )
-            else:
-                if self.parallel_config.tensor_parallel.factor > 1:
-                    video_normed = self.ccl_manager.all_gather_persistent_buffer(
-                        video_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-                    )
-                video_ff = self.ffn(video_normed, compute_kernel_config=self.ff_compute_kernel_config)
-                video_1BND = ttnn.addcmul(video_1BND, video_ff, v_gate_ff)
-            return video_1BND
+            return self._modulated_ffn(self.ffn, self.norm3, video_1BND, v_shift_ff, v_scale_ff_p1, v_gate_ff)
 
         # Audio path (has_audio=True from here)
         shifted_a = self.audio_scale_shift_table.data + audio_temb
@@ -450,44 +499,12 @@ class LTXTransformerBlock(Module):
             audio_1BND = ttnn.addcmul(audio_1BND, v2a_output, a_ca_gate)
 
         # Video feed forward
-        video_normed = self.norm3(video_1BND)
-        video_normed = ttnn.addcmul(v_shift_ff, video_normed, v_scale_ff_p1)
-        if self.ccl_manager.topology == ttnn.Topology.Ring:
-            video_1BND = self.ffn.forward_fused_addcmul(
-                video_normed,
-                video_1BND,
-                v_gate_ff,
-                scalar=1.0,
-                compute_kernel_config=self.ff_compute_kernel_config,
-                parallel_config=self.parallel_config,
-            )
-        else:
-            if self.parallel_config.tensor_parallel.factor > 1:
-                video_normed = self.ccl_manager.all_gather_persistent_buffer(
-                    video_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-                )
-            video_ff = self.ffn(video_normed, compute_kernel_config=self.ff_compute_kernel_config)
-            video_1BND = ttnn.addcmul(video_1BND, video_ff, v_gate_ff)
+        video_1BND = self._modulated_ffn(self.ffn, self.norm3, video_1BND, v_shift_ff, v_scale_ff_p1, v_gate_ff)
 
         # Audio feed forward
-        audio_normed = self.audio_norm3(audio_1BND)
-        audio_normed = ttnn.addcmul(a_shift_ff, audio_normed, a_scale_ff_p1)
-        if self.ccl_manager.topology == ttnn.Topology.Ring:
-            audio_1BND = self.audio_ff.forward_fused_addcmul(
-                audio_normed,
-                audio_1BND,
-                a_gate_ff,
-                scalar=1.0,
-                compute_kernel_config=self.ff_compute_kernel_config,
-                parallel_config=self.parallel_config,
-            )
-        else:
-            if self.parallel_config.tensor_parallel.factor > 1:
-                audio_normed = self.ccl_manager.all_gather_persistent_buffer(
-                    audio_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-                )
-            audio_ff = self.audio_ff(audio_normed, compute_kernel_config=self.ff_compute_kernel_config)
-            audio_1BND = ttnn.addcmul(audio_1BND, audio_ff, a_gate_ff)
+        audio_1BND = self._modulated_ffn(
+            self.audio_ff, self.audio_norm3, audio_1BND, a_shift_ff, a_scale_ff_p1, a_gate_ff
+        )
 
         return video_1BND, audio_1BND
 
@@ -725,8 +742,6 @@ class LTXTransformerModel(Module):
         video_cross_pe_sin: ttnn.Tensor | None = None,
         audio_cross_pe_cos: ttnn.Tensor | None = None,
         audio_cross_pe_sin: ttnn.Tensor | None = None,
-        video_cross_pe_cos_full: ttnn.Tensor | None = None,
-        video_cross_pe_sin_full: ttnn.Tensor | None = None,
         audio_cross_pe_cos_full: ttnn.Tensor | None = None,
         audio_cross_pe_sin_full: ttnn.Tensor | None = None,
         skip_cross_attn: bool = False,
@@ -775,8 +790,6 @@ class LTXTransformerModel(Module):
             video_cross_pe_sin=video_cross_pe_sin,
             audio_cross_pe_cos=audio_cross_pe_cos,
             audio_cross_pe_sin=audio_cross_pe_sin,
-            video_cross_pe_cos_full=video_cross_pe_cos_full,
-            video_cross_pe_sin_full=video_cross_pe_sin_full,
             audio_cross_pe_cos_full=audio_cross_pe_cos_full,
             audio_cross_pe_sin_full=audio_cross_pe_sin_full,
             skip_cross_attn=skip_cross_attn,
@@ -810,8 +823,6 @@ class LTXTransformerModel(Module):
         video_cross_pe_sin: ttnn.Tensor | None = None,
         audio_cross_pe_cos: ttnn.Tensor | None = None,
         audio_cross_pe_sin: ttnn.Tensor | None = None,
-        video_cross_pe_cos_full: ttnn.Tensor | None = None,
-        video_cross_pe_sin_full: ttnn.Tensor | None = None,
         audio_cross_pe_cos_full: ttnn.Tensor | None = None,
         audio_cross_pe_sin_full: ttnn.Tensor | None = None,
         skip_cross_attn: bool = False,
@@ -962,8 +973,6 @@ class LTXTransformerModel(Module):
                 video_cross_pe_sin=video_cross_pe_sin,
                 audio_cross_pe_cos=audio_cross_pe_cos,
                 audio_cross_pe_sin=audio_cross_pe_sin,
-                video_cross_pe_cos_full=video_cross_pe_cos_full,
-                video_cross_pe_sin_full=video_cross_pe_sin_full,
                 audio_cross_pe_cos_full=audio_cross_pe_cos_full,
                 audio_cross_pe_sin_full=audio_cross_pe_sin_full,
                 skip_cross_attn=skip_cross_attn,

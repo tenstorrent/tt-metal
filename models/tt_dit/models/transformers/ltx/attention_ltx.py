@@ -480,7 +480,7 @@ class LTXAttention(Module):
                 v_BHNE = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
 
         if rope_cos is not None:
-            _k_cos = _k_cos_pe if _k_cos_pe is not None else rope_cos
+            _k_cos = _k_cos_pe
             _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
             q_BHNE = ttnn.experimental.rotary_embedding_llama(
                 q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
@@ -494,7 +494,7 @@ class LTXAttention(Module):
             spatial_BHNE = v_BHNE
         elif prompt_1BLP is None:
             if sp_factor > 1 and attn_mask is None:
-                spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                spatial_BHNE, _prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
                     k_BHNE,
                     v_BHNE,

@@ -1,7 +1,5 @@
 # Matrix multiply that bypasses the MOP sequencer.
 
-supported_archs: ["wormhole"]
-
 operands:
   - name: "input_A"
     dims: [256, 256]

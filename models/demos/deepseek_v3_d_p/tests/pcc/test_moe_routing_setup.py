@@ -111,6 +111,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 def test_prep_dispatch_combine(
     mesh_device,
     seq_len_per_chip,
@@ -121,6 +122,7 @@ def test_prep_dispatch_combine(
     num_links,
     topology,
     use_predictable_data,
+    padded_percent,
 ):
     """
     Test TtMoERoutingSetup (masked_bincount + offset_cumsum pipeline) against the
@@ -207,6 +209,15 @@ def test_prep_dispatch_combine(
 
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
+    # Padding awareness: right-pad by sentinel-marking the trailing rows (== num_routed_experts).
+    # TtMoERoutingSetup (masked_bincount) must drop those rows, so the reference is fed only the
+    # real (leading) rows — both must produce identical counts/offsets for the checks below to pass.
+    num_padded_rows = int(seq_len_per_chip * padded_percent / 100)
+    num_real_rows = seq_len_per_chip - num_padded_rows
+    if num_padded_rows > 0:
+        indices[:, -num_padded_rows:, :] = num_routed_experts
+    ref_indices = indices[:, :num_real_rows, :]
+
     # x and indices: replicated across EP ranks
     mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
         mesh_device,
@@ -231,13 +242,14 @@ def test_prep_dispatch_combine(
         num_routed_experts=num_routed_experts,
     )
 
-    # Compute gate outputs (offsets and token counts) before dispatch
+    # Compute gate outputs (offsets and token counts) before dispatch.
+    # Reference sees only real rows (it cannot index the out-of-range sentinel expert).
     expert_offsets, expert_token_counts, expert_region_offsets, per_device_expert_counter = get_gate_outputs(
-        indices,
+        ref_indices,
         dispatch_group_size,
         num_routed_experts,
         experts_per_chip,
-        seq_len_per_chip,
+        num_real_rows,
         num_experts_per_tok,
         expert_dispatch_table=expert_dispatch_table,
     )

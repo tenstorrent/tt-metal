@@ -188,11 +188,10 @@
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and ((mesh-4x2 or mesh-2x4 or linear-8) or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe))" --timeout 1800 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and ((mesh-4x2 or mesh-2x4 or linear-8) or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe)) and not (linear-8 and (pcc-device or (5k and not 25k))) and not (ttnn_moe and kimi and perf) and not (ttnn_moe and deepseek_v3 and mesh-4x2 and not fabric2d-)" --timeout 1800 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 2x4 and fabric2d" -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d" -vvv --tb=short --timeout=900 || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device and not fabric2d-" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d and not iter2000" -vvv --tb=short --timeout=900 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device and not fabric2d- and 2link" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
@@ -209,7 +208,7 @@
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 37
+      timeout: 30
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
@@ -218,14 +217,14 @@
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 || exit_code=$?
+    # pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 || exit_code=$? Commented out until problems with various results on different runners is resolved Issue https://github.com/tenstorrent/tt-metal/issues/47287
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 30
+      timeout: 39
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
 

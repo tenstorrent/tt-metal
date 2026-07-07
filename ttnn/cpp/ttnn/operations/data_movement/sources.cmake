@@ -85,6 +85,8 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     reshape_view/device/reshape_tiled_program_factory.cpp
     reshape_view/device/reshape_device_operation.cpp
     reshape_view/reshape.cpp
+    roll/device/roll_device_operation.cpp
+    roll/device/roll_program_factory.cpp
     roll/roll.cpp
     scatter/scatter.cpp
     scatter/tosa_scatter.cpp

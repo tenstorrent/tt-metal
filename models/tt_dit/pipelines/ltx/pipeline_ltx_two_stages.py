@@ -16,7 +16,9 @@ import time
 import torch
 from loguru import logger
 
+from ...models.vae.vae_ltx import upsample_latent
 from ...utils.fuse_loras import LoraSpec
+from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.video import export_video_audio
 from .pipeline_ltx import DEFAULT_NEGATIVE_PROMPT, SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, latent_grid
@@ -241,8 +243,8 @@ class LTXTwoStagesPipeline(LTXPipeline):
                 img_path, _, cond_strength = cond_imgs[0]
                 logger.info(f"I2V: encoding conditioning image {img_path} (strength={cond_strength})")
                 t0 = time.time()
-                img_s1 = self._load_conditioning_image(img_path, s1_h, s1_w)
-                img_full = self._load_conditioning_image(img_path, height, width)
+                img_s1 = load_conditioning_image(img_path, s1_h, s1_w)
+                img_full = load_conditioning_image(img_path, height, width)
                 s1_cond_latent = self.encode_image(img_s1)
                 full_cond_latent = self.encode_image(img_full)
                 timings.append(("Image encode", time.time() - t0))
@@ -282,7 +284,8 @@ class LTXTwoStagesPipeline(LTXPipeline):
         s1_lh, s1_lw = s1_h // SPATIAL_COMPRESSION, s1_w // SPATIAL_COMPRESSION
         s1_spatial = s1_video.reshape(1, latent_frames, s1_lh, s1_lw, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
-        upsampled = self._upsample_latent(s1_spatial)
+        self._prepare_upsampler()
+        upsampled = upsample_latent(self.upsampler, s1_spatial, *self._vae_per_channel_stats())
         t_upsample = time.time() - t0
         timings.append(("Latent upsample", t_upsample))
         logger.info(f"Upsample: {t_upsample:.1f}s")

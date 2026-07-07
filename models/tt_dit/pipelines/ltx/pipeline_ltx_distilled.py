@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 
 import torch
 from loguru import logger
 
 import ttnn
 
-from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
+from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
+from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
+from ...models.vae.vae_ltx import upsample_latent
+from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.video import export_video_audio
@@ -42,6 +46,16 @@ DISTILLED_SIGMA_VALUES = _sigma_override("LTX_S1_SIGMAS", _DEFAULT_S1_SIGMAS)
 STAGE_2_DISTILLED_SIGMA_VALUES = _sigma_override("LTX_S2_SIGMAS", _DEFAULT_S2_SIGMAS)
 
 
+@dataclass
+class _I2VConditioning:
+    """Frame-0 image conditioning for one denoise stage — the tt analog of the reference
+    LatentState fields written by ``VideoConditionByLatentIndex.apply_to`` (latent_idx=0)."""
+
+    denoise_mask: torch.Tensor | None  # (B, N, 1): 1−strength at cond tokens else 1; None = plain T2V
+    clean_latent: torch.Tensor | None  # (B, N, C): cond tokens at frame-0 else 0
+    n_cond: int  # count of pinned frame-0 tokens
+
+
 class LTXDistilledPipeline(LTXPipeline):
     """Distilled 2-stage AV pipeline: half-res denoise → upsample → full-res refine."""
 
@@ -49,18 +63,63 @@ class LTXDistilledPipeline(LTXPipeline):
     SUPPORTS_IMAGE_CONDITIONING = True
 
     @staticmethod
-    def _pin_i2v_latent_tt(
-        video_lat: ttnn.Tensor,
+    def _post_process_latent_tt(
+        denoised: ttnn.Tensor,
         denoise_mask: ttnn.Tensor,
         clean_latent: ttnn.Tensor,
-    ) -> None:
-        """In-place frame-0 pin: ``lat = lat * mask + clean * (1 - mask)``."""
+    ) -> ttnn.Tensor:
+        """Blend the denoised estimate toward the clean latent: ``denoised * mask + clean * (1 - mask)``.
+        Mirrors the reference ``post_process_latent``; the caller applies it to the x0 estimate before
+        the Euler step so partial ``image_cond_strength`` integrates like the reference (hard pin at 1.0)."""
         one_minus = ttnn.subtract(
             ttnn.full_like(denoise_mask, 1.0, dtype=ttnn.bfloat16),
             denoise_mask,
         )
-        pinned = ttnn.add(ttnn.multiply(video_lat, denoise_mask), ttnn.multiply(clean_latent, one_minus))
-        ttnn.copy(pinned, video_lat)
+        return ttnn.add(ttnn.multiply(denoised, denoise_mask), ttnn.multiply(clean_latent, one_minus))
+
+    @staticmethod
+    def _noise_video_latent(
+        base: torch.Tensor,
+        denoise_mask: torch.Tensor | None,
+        sigma: torch.Tensor,
+        seed: int,
+    ) -> torch.Tensor:
+        """GaussianNoiser (ltx_core): ``noise·(mask·σ) + base·(1−mask·σ)``.
+
+        ``denoise_mask`` None is the plain forward step (mask ≡ 1); a per-token mask holding
+        ``1−strength`` at the conditioning tokens pins them toward ``base``. Noise is drawn at
+        bf16 — the device latent dtype — matching the reference, which draws at ``latent.dtype``."""
+        torch.manual_seed(seed)
+        noise = torch.randn(base.shape, dtype=torch.bfloat16).to(base.dtype)
+        scaled_mask = sigma if denoise_mask is None else denoise_mask * sigma
+        return noise * scaled_mask + base * (1.0 - scaled_mask)
+
+    def _build_i2v_conditioning(
+        self,
+        image_cond_latent: torch.Tensor | None,
+        image_cond_strength: float,
+        needs_video_ts: bool,
+        B: int,
+        video_N_real: int,
+    ) -> _I2VConditioning:
+        """Build the frame-0 conditioning (per-token denoise mask + clean latent) — tt analog of the
+        reference ``create_initial_state`` + ``VideoConditionByLatentIndex.apply_to``. ``denoise_mask``
+        is None only when the transformer needs no per-token video timestep and no image is staged
+        (the plain-T2V forward-noise path)."""
+        if image_cond_latent is None and not needs_video_ts:
+            return _I2VConditioning(denoise_mask=None, clean_latent=None, n_cond=0)
+        denoise_mask = torch.ones(B, video_N_real, 1)
+        clean_latent = None
+        n_cond = 0
+        if image_cond_latent is not None:
+            cond_tokens = image_cond_latent.float().permute(0, 2, 3, 4, 1).reshape(B, -1, self.in_channels)
+            n_cond = cond_tokens.shape[1]
+            assert n_cond <= video_N_real, f"image cond tokens {n_cond} exceed video tokens {video_N_real}"
+            clean_latent = torch.zeros(B, video_N_real, self.in_channels)
+            clean_latent[:, :n_cond, :] = cond_tokens
+            denoise_mask[:, :n_cond, :] = 1.0 - image_cond_strength
+            logger.info(f"I2V: pinning {n_cond} frame-0 tokens (strength={image_cond_strength})")
+        return _I2VConditioning(denoise_mask=denoise_mask, clean_latent=clean_latent, n_cond=n_cond)
 
     def warmup_buffers(
         self,
@@ -89,15 +148,19 @@ class LTXDistilledPipeline(LTXPipeline):
         v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
         a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
 
-        # Allocate both stages' persistent trace I/O before any capture, so all held inputs
-        # sit below both traces' activation regions and neither trace's replay can overwrite
-        # the other's inputs. Held for the session; generate() refreshes contents in place.
+        # Allocate both stages' persistent trace I/O before any capture so all held inputs sit
+        # below both traces' activation regions and neither replay overwrites the other's inputs.
         if self._traced:
             self._prealloc_trace_io("s1", num_frames=num_frames, height=height // 2, width=width // 2)
             self._prealloc_trace_io("s2", num_frames=num_frames, height=height, width=width)
 
-        # Sigma schedules from the real distilled paths so warmup exercises the
-        # same math branches generate() does (incl. the sigma_next == 0 final step).
+        # Warm the encoder before any capture so its connector workspace isn't in a trace's
+        # activation region (zeroed on replay). dynamic_load reloads per request → warms last.
+        if self._traced and not self.dynamic_load:
+            self.gemma_encoder_pair.ensure_loaded()
+            self.encode_prompts(["warmup"], use_cache=False)
+
+        # Real distilled sigmas so warmup hits the same branches (incl. sigma_next == 0 final step).
         s1_sigmas = list(DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
         s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
 
@@ -144,9 +207,8 @@ class LTXDistilledPipeline(LTXPipeline):
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
             self._warmup_decode(num_frames, height, width)
 
-            # Build + JIT-compile the on-device audio decode on the exact latent
-            # shape generate() produces, so the first real audio decode loads
-            # from cache instead of building from the checkpoint (cold ~64s).
+            # JIT-compile on-device audio decode at the real latent shape so the first real decode
+            # loads from cache instead of building from the checkpoint (cold ~64s).
             logger.info("warmup audio decode (on-device)")
             self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
             # The BWE trace captures on the first POST-cold decode (not the cold one above), and that
@@ -168,9 +230,11 @@ class LTXDistilledPipeline(LTXPipeline):
             self._warmup_encode(height // 2, width // 2)
             self._warmup_encode(height, width)
 
-        # use_cache=False forces a real encode so the Gemma/connector kernels actually compile.
-        self.gemma_encoder_pair.ensure_loaded()
-        self.encode_prompts(["warmup"], use_cache=False)
+        # use_cache=False forces a real encode so the Gemma/connector kernels compile. traced-static
+        # already warmed before capture (above); dynamic_load / untraced warm last.
+        if self.dynamic_load or not self._traced:
+            self.gemma_encoder_pair.ensure_loaded()
+            self.encode_prompts(["warmup"], use_cache=False)
 
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 
@@ -180,21 +244,45 @@ class LTXDistilledPipeline(LTXPipeline):
         """Build a stage's static per-shape inputs once (rope/cross-PE/masks/trans_mat)."""
         if state.tt_video_rope_cos is not None:
             return
-        v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
-        a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
-        # Cross-PE is required: without it A↔V cross-attention has no positional info and
-        # audio-video temporal sync (lip sync) breaks.
+        v_cos, v_sin = prepare_video_rope(
+            latent_frames,
+            latent_h,
+            latent_w,
+            inner_dim=self.inner_dim,
+            num_attention_heads=self.num_attention_heads,
+            theta=self.positional_embedding_theta,
+            max_pos=self.positional_embedding_max_pos,
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
+        a_cos, a_sin = prepare_audio_rope(
+            audio_N,
+            audio_N_real,
+            theta=self.positional_embedding_theta,
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
+        # Cross-PE required: without it A↔V cross-attention loses positional info and lip sync breaks.
         (
             v_xpe_cos,
             v_xpe_sin,
             a_xpe_cos,
             a_xpe_sin,
-            v_xpe_cos_full,
-            v_xpe_sin_full,
             a_xpe_cos_full,
             a_xpe_sin_full,
-        ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
-        tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = self._prepare_audio_masks(audio_N, audio_N_real)
+        ) = prepare_av_cross_pe(
+            latent_frames,
+            latent_h,
+            latent_w,
+            audio_N,
+            audio_N_real,
+            theta=self.positional_embedding_theta,
+            mesh_device=self.mesh_device,
+            parallel_config=self.parallel_config,
+        )
+        tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = build_audio_masks(
+            audio_N, audio_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis
+        )
         state._tt_video_rope_cos.update(v_cos, False)
         state._tt_video_rope_sin.update(v_sin, False)
         state._tt_audio_rope_cos.update(a_cos, False)
@@ -204,14 +292,14 @@ class LTXDistilledPipeline(LTXPipeline):
         state._tt_video_cross_pe_sin.update(v_xpe_sin, False)
         state._tt_audio_cross_pe_cos.update(a_xpe_cos, False)
         state._tt_audio_cross_pe_sin.update(a_xpe_sin, False)
-        state._tt_video_cross_pe_cos_full.update(v_xpe_cos_full, False)
-        state._tt_video_cross_pe_sin_full.update(v_xpe_sin_full, False)
         state._tt_audio_cross_pe_cos_full.update(a_xpe_cos_full, False)
         state._tt_audio_cross_pe_sin_full.update(a_xpe_sin_full, False)
         state._tt_audio_attn_mask.update(tt_attn_mask, False)
         state._tt_audio_padding_mask.update(tt_pad_mask_sp, False)
         state._tt_audio_padding_mask_full.update(tt_pad_mask_full, False)
-        state._tt_video_padding_mask.update(self._prepare_video_masks(video_N, video_N_real), False)
+        state._tt_video_padding_mask.update(
+            build_video_pad_mask(video_N, video_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis), False
+        )
         v_mask = torch.ones(1, 1, video_N, self.in_channels)
         v_mask[:, :, video_N_real:, :] = 0.0
         a_mask = torch.ones(1, 1, audio_N, self.in_channels)
@@ -262,15 +350,22 @@ class LTXDistilledPipeline(LTXPipeline):
                 mesh_axes=[None, None, sp_axis, None],
                 device=self.mesh_device,
             )
-            # I2V pin buffers (mask + clean frame-0 latent): reserve here so traced replays can't
-            # clobber them. Allocated for every stage even when unused by t2v — small and harmless.
-            for buf in (state._tt_i2v_mask, state._tt_i2v_clean):
-                buf.update(
-                    torch.zeros(1, 1, video_N, self.in_channels),
-                    False,
-                    mesh_axes=[None, None, sp_axis, None],
-                    device=self.mesh_device,
-                )
+            # I2V pin buffers (mask + clean frame-0 latent): reserve here so replays can't clobber
+            # them. Allocated for every stage even when unused by t2v — small and harmless. The mask
+            # is per-token width-1 (broadcasts against the 128-ch latent in the pin); clean carries the
+            # real per-channel cond latent, so it stays full width.
+            state._tt_i2v_mask.update(
+                torch.zeros(1, 1, video_N, 1),
+                False,
+                mesh_axes=[None, None, sp_axis, None],
+                device=self.mesh_device,
+            )
+            state._tt_i2v_clean.update(
+                torch.zeros(1, 1, video_N, self.in_channels),
+                False,
+                mesh_axes=[None, None, sp_axis, None],
+                device=self.mesh_device,
+            )
 
     def _denoise_no_guidance(
         self,
@@ -292,7 +387,7 @@ class LTXDistilledPipeline(LTXPipeline):
         B = 1
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         video_N_real = latent_frames * latent_h * latent_w
-        # SP padding: round the video seq dim up to TILE_SIZE * sp_factor for ring SDPA.
+        # SP padding: round video seq dim up to TILE_SIZE * sp_factor for ring SDPA.
         video_N = self._sp_pad_len(video_N_real)
         als = AudioLatentShape.from_video_pixel_shape(
             VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
@@ -304,25 +399,12 @@ class LTXDistilledPipeline(LTXPipeline):
 
         image_cond = image_cond_latent is not None
         needs_video_ts = getattr(self.transformer, "image_conditioning", False)
-        denoise_mask = None
-        clean_latent = None
-        n_cond = 0
-        if image_cond or needs_video_ts:
-            denoise_mask = torch.ones(B, video_N_real, 1)
-            if image_cond:
-                cond = image_cond_latent.float()
-                cond_tokens = cond.permute(0, 2, 3, 4, 1).reshape(B, -1, self.in_channels)
-                n_cond = cond_tokens.shape[1]
-                assert n_cond <= video_N_real, f"image cond tokens {n_cond} exceed video tokens {video_N_real}"
-                clean_latent = torch.zeros(B, video_N_real, self.in_channels)
-                clean_latent[:, :n_cond, :] = cond_tokens
-                denoise_mask[:, :n_cond, :] = 1.0 - image_cond_strength
-                logger.info(f"I2V: pinning {n_cond} frame-0 tokens (strength={image_cond_strength})")
+        i2v = self._build_i2v_conditioning(image_cond_latent, image_cond_strength, needs_video_ts, B, video_N_real)
 
         logger.info(f"  shapes: vN={video_N}(real={video_N_real}), aN={audio_N}(real={audio_N_real}) [sp={sp_factor}]")
 
-        # Persist buffers only when traced (baked addresses, fixed shape); untraced uses a transient
-        # state so statics rebuild — resolution can differ across generates.
+        # Persist buffers only when traced (baked addresses); untraced uses a transient state so
+        # statics rebuild — resolution can differ across generates.
         state = self._trace_state.setdefault(trace_key, LTXTransformerState()) if traced else LTXTransformerState()
         self._prepare_stage_statics(
             state,
@@ -338,8 +420,8 @@ class LTXDistilledPipeline(LTXPipeline):
 
         prompt_v = self._prepare_prompt(v_embeds)
         prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
-        # Traced persists the shared prompt (baked address); untraced keeps the locals so they
-        # don't fragment DRAM for the downstream VAE decode.
+        # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
+        # fragmenting DRAM for the downstream VAE decode.
         if traced:
             self._prompt_v.update(prompt_v, traced)
             self._prompt_a.update(prompt_a, traced)
@@ -347,10 +429,10 @@ class LTXDistilledPipeline(LTXPipeline):
 
         sigmas = torch.tensor(sigma_values, dtype=torch.float32)
 
-        # ----- Video latent init (always end up with shape (B, video_N, C)) -----
-        if image_cond:
-            ns = sigmas[0].item()
-            torch.manual_seed(seed)
+        # ----- Video latent init: one GaussianNoiser over three bases — I2V (frame-0 replaced by
+        # the clean cond latent), T2V-S2 (upsampled latent), T2V-S1 (zeros). denoise_mask pins the
+        # conditioning tokens; None ≡ full forward noise. Ends at (B, video_N, C). -----
+        if image_cond:  # I2V: zeros (S1) or upsampled (S2), frame-0 overwritten by the cond latent
             if initial_video_latent is not None:
                 base_v = initial_video_latent.float()
                 if base_v.dim() == 2:
@@ -358,22 +440,15 @@ class LTXDistilledPipeline(LTXPipeline):
                 base_v = base_v.clone()
             else:
                 base_v = torch.zeros(B, video_N_real, self.in_channels)
-            base_v[:, :n_cond, :] = clean_latent[:, :n_cond, :]
-            noise_v = torch.randn_like(base_v)
-            scaled_mask = denoise_mask * ns
-            video_lat_real = noise_v * scaled_mask + base_v * (1.0 - scaled_mask)
-        elif initial_video_latent is not None:
-            # Stage-2 path: upsampled latent comes in at (B, video_N_real, C).
-            video_lat_real = initial_video_latent.float()
-            assert video_lat_real.shape[1] == video_N_real, (
-                f"initial_video_latent seq dim {video_lat_real.shape[1]} != " f"video_N_real {video_N_real}"
-            )
-            torch.manual_seed(seed)
-            noise_v = torch.randn_like(video_lat_real)
-            video_lat_real = video_lat_real * (1 - sigmas[0]) + noise_v * sigmas[0]
-        else:
-            torch.manual_seed(seed)
-            video_lat_real = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+            base_v[:, : i2v.n_cond, :] = i2v.clean_latent[:, : i2v.n_cond, :]
+        elif initial_video_latent is not None:  # T2V S2: upsampled latent arrives at (B, video_N_real, C)
+            base_v = initial_video_latent.float()
+            assert (
+                base_v.shape[1] == video_N_real
+            ), f"initial_video_latent seq dim {base_v.shape[1]} != video_N_real {video_N_real}"
+        else:  # T2V S1: pure noise from zeros
+            base_v = torch.zeros(B, video_N_real, self.in_channels)
+        video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], seed)
 
         if video_N > video_N_real:
             video_lat = torch.zeros(B, video_N, self.in_channels)
@@ -390,8 +465,8 @@ class LTXDistilledPipeline(LTXPipeline):
             audio_lat = audio_lat * (1 - sigmas[0]) + noise_a * sigmas[0]
         else:
             torch.manual_seed(seed)
-            # Consume the same number of RNG draws the previous (video_N-sized) randn
-            # consumed, so the audio RNG stream is bit-identical to prior runs.
+            # Consume the same RNG draws the prior video_N-sized randn did, keeping the audio
+            # stream bit-identical to prior runs.
             _ = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16)
             audio_lat_real = torch.randn(B, audio_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
             audio_lat = torch.zeros(B, audio_N, self.in_channels)
@@ -399,9 +474,8 @@ class LTXDistilledPipeline(LTXPipeline):
 
         num_steps = len(sigma_values) - 1
 
-        # Device-resident loop: inner_step returns SP-sharded velocity (gather_output=False),
-        # stepped in place by an on-device Euler. update() copies into the address-baked buffer when
-        # traced, rebinds otherwise.
+        # Device-resident loop: inner_step returns SP-sharded velocity, stepped in place by an
+        # on-device Euler. update() copies into the address-baked buffer when traced, else rebinds.
         state._tt_video_lat.update(
             video_lat.unsqueeze(0), traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
         )
@@ -411,12 +485,14 @@ class LTXDistilledPipeline(LTXPipeline):
 
         tt_i2v_mask = tt_i2v_clean = None
         if image_cond:
-            mask_host = torch.ones(1, 1, video_N, self.in_channels)
-            mask_host[:, :, :video_N_real, :] = denoise_mask[0, :, 0].unsqueeze(-1).expand(-1, self.in_channels)
+            # Mask stays width-1; ttnn broadcasts it against the (…,128) latent in the pin. Padded
+            # tokens keep 1.0 (unpinned).
+            mask_host = torch.ones(1, 1, video_N, 1)
+            mask_host[:, :, :video_N_real, :] = i2v.denoise_mask[0, :, 0].unsqueeze(-1)
             clean_host = torch.zeros(1, 1, video_N, self.in_channels)
-            clean_host[:, :, :video_N_real, :] = clean_latent
-            # Write into the pre-allocated, trace-baked buffers (copy-in-place when traced) so the
-            # held pin inputs keep stable addresses across replays — never freshly allocated here.
+            clean_host[:, :, :video_N_real, :] = i2v.clean_latent
+            # Copy into the pre-allocated trace-baked buffers so pin inputs keep stable addresses
+            # across replays — never freshly allocated here.
             state._tt_i2v_mask.update(mask_host, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
             state._tt_i2v_clean.update(
                 clean_host, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
@@ -432,13 +508,13 @@ class LTXDistilledPipeline(LTXPipeline):
             video_ts_pair_tt = video_pin_mask_tt = None
             if needs_video_ts:
                 # Per-token timestep has 2 values (pinned frame-0 vs. sigma): pass the (2,) pair +
-                # {0,1} pin mask so the transformer blends per token (avoids dense modulation, OOM).
-                pinned_scale = (1.0 - image_cond_strength) if (image_cond and n_cond > 0) else 1.0
+                # {0,1} pin mask so the transformer blends per token (avoids dense modulation OOM).
+                pinned_scale = (1.0 - image_cond_strength) if (image_cond and i2v.n_cond > 0) else 1.0
                 ts_pair = torch.tensor([pinned_scale * sigma, sigma], dtype=torch.float32)
                 state._tt_video_ts_pair.update(ts_pair.reshape(1, 1, 2, 1) * 1000.0, traced, device=self.mesh_device)
                 pin_mask_host = torch.zeros(1, 1, video_N, 1)
-                if n_cond > 0:
-                    pin_mask_host[:, :, :n_cond, :] = 1.0
+                if i2v.n_cond > 0:
+                    pin_mask_host[:, :, : i2v.n_cond, :] = 1.0
                 state._tt_video_pin_mask.update(
                     pin_mask_host,
                     traced,
@@ -447,8 +523,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 )
                 video_ts_pair_tt = state.tt_video_ts_pair
                 video_pin_mask_tt = state.tt_video_pin_mask
-            # video_N is the LOGICAL (unpadded) count, forwarded as logical_n so ring SDPA masks
-            # padded K positions.
+            # video_N_real is the logical (unpadded) count so ring SDPA masks padded K positions.
             v_out, a_out = self.transformer.inner_step(
                 video_1BNI=state.tt_video_lat,
                 timestep=state.tt_timestep,
@@ -468,8 +543,6 @@ class LTXDistilledPipeline(LTXPipeline):
                 video_cross_pe_sin=state.tt_video_cross_pe_sin,
                 audio_cross_pe_cos=state.tt_audio_cross_pe_cos,
                 audio_cross_pe_sin=state.tt_audio_cross_pe_sin,
-                video_cross_pe_cos_full=state.tt_video_cross_pe_cos_full,
-                video_cross_pe_sin_full=state.tt_video_cross_pe_sin_full,
                 audio_cross_pe_cos_full=state.tt_audio_cross_pe_cos_full,
                 audio_cross_pe_sin_full=state.tt_audio_cross_pe_sin_full,
                 audio_attn_mask=state.tt_audio_attn_mask,
@@ -480,16 +553,23 @@ class LTXDistilledPipeline(LTXPipeline):
                 traced=traced,
                 tracer_trace_key=trace_key,
             )
-            # In-place flow-matching Euler (latents += dt*velocity); SP-padding slots zeroed.
-            # In place so the trace's baked latent address holds across replays.
+            # Flow-matching Euler (latents += dt*velocity, SP-padding slots zeroed) so the trace's
+            # baked latent address holds across replays.
             dt = sigma_next - sigma
             v_vel = ttnn.typecast(v_out, ttnn.bfloat16)
             ttnn.multiply_(v_vel, state.tt_video_pad_mask)
-            ttnn.multiply_(v_vel, dt)
-            ttnn.add_(state.tt_video_lat, v_vel)
-            ttnn.multiply_(state.tt_video_lat, state.tt_video_pad_mask)
             if image_cond:
-                self._pin_i2v_latent_tt(state.tt_video_lat, tt_i2v_mask, tt_i2v_clean)
+                # Reference-parity: pin the x0 estimate pre-step, then Euler-step it. Stepping the
+                # pinned x0 (not overwriting the latent after) tracks the reference under partial
+                # image_cond_strength; equal at strength 1.0. sigma is never 0 in-loop, so dt/sigma is safe.
+                x0 = ttnn.subtract(state.tt_video_lat, ttnn.multiply(v_vel, sigma))
+                x0 = self._post_process_latent_tt(x0, tt_i2v_mask, tt_i2v_clean)
+                v_pin = ttnn.multiply(ttnn.subtract(state.tt_video_lat, x0), dt / sigma)
+                ttnn.add_(state.tt_video_lat, v_pin)
+            else:
+                ttnn.multiply_(v_vel, dt)
+                ttnn.add_(state.tt_video_lat, v_vel)
+            ttnn.multiply_(state.tt_video_lat, state.tt_video_pad_mask)
             a_vel = ttnn.typecast(a_out, ttnn.bfloat16)
             ttnn.multiply_(a_vel, state.tt_audio_pad_mask)
             ttnn.multiply_(a_vel, dt)
@@ -543,8 +623,7 @@ class LTXDistilledPipeline(LTXPipeline):
         timings: list[tuple[str, float]] = []
 
         t0 = time.time()
-        # On-device Gemma encode. Only load the encoder (coresident-evicts DiT/VAE) on a cache
-        # miss — a cached prompt skips the encoder entirely.
+        # Only load the Gemma encoder (coresident-evicts DiT/VAE) on a cache miss.
         cached = os.path.exists(self._device_embed_cache_path([prompt]))
         if not cached:
             self.gemma_encoder_pair.ensure_loaded()
@@ -622,7 +701,8 @@ class LTXDistilledPipeline(LTXPipeline):
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
-        upsampled = self._upsample_latent(s1_spatial)
+        self._prepare_upsampler()
+        upsampled = upsample_latent(self.upsampler, s1_spatial, *self._vae_per_channel_stats())
         t_upsample = time.time() - t0
         timings.append(("Latent upsample", t_upsample))
         logger.info(f"Latent upsample: {t_upsample:.1f}s")

@@ -184,11 +184,7 @@ class UpSample1d(Module):
         self._conv1d_cache: dict = {}
         self._use_polyphase = (self.kernel_size % ratio) == 0
         if self._use_polyphase:
-            K_sub = self.kernel_size // ratio
-            self._sub_taps_cpu: list[list[float]] = [
-                [self._taps_cpu[ratio * j + p] for j in range(K_sub)] for p in range(ratio)
-            ]
-            self._poly_K_sub = K_sub
+            self._poly_K_sub = self.kernel_size // ratio
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "filter" in state:
@@ -338,8 +334,6 @@ class Activation1d(Module):
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         y = self.upsample(x_BTC)
-        # Snake / SnakeBeta upcast to TILE internally; pull back to ROW_MAJOR
-        # for the downsample.
         y = self.act(y)
         if y.layout != ttnn.ROW_MAJOR_LAYOUT:
             y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)

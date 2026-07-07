@@ -44,6 +44,7 @@ class Module(ABC):
         self._parameters = {}
         self._is_loaded = False
         self.coresident_exclusions = None  # modules that cannot be resident in memory at the same time as this module. They should be deallocated before this module is loaded.
+        self._coresident_peers: list[Module] = []
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
         yield from self._children.items()
@@ -402,7 +403,7 @@ class Parameter:
         )
 
     def save(self, path: str | Path, /) -> None:
-        ttnn.dump_tensor(path, self.data)
+        ttnn.dump_tensor(path, self.data, mode=ttnn.DumpTensorMode.LOCAL)
 
     def load(self, path: str | Path, /) -> None:
         if _HOST_WEIGHT_CACHE and not self.on_host:

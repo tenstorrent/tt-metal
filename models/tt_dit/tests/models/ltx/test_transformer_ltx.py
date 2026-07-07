@@ -20,7 +20,12 @@ from safetensors.torch import load_file
 
 import ttnn
 from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
-from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerBlock, LTXTransformerModel
+from models.tt_dit.models.transformers.ltx.transformer_ltx import (
+    LTXTransformerBlock,
+    LTXTransformerModel,
+    build_audio_masks,
+    build_video_pad_mask,
+)
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
@@ -165,7 +170,7 @@ def _pad_seq_dim(t: torch.Tensor, n_pad: int, dim: int = -2) -> torch.Tensor:
 def _pad_rope_bhnd(cos_i: torch.Tensor, sin_i: torch.Tensor, pad_to: int | None):
     """Right-pad BHND INTERLEAVED freqs on the seq dim (2) with identity rotation (cos=1, sin=0).
 
-    Same convention as LTXPipeline._pad_video_rope_sp: padded slots are no-op rotations; SDPA
+    Same convention as rope_ltx.pad_video_rope_sp: padded slots are no-op rotations; SDPA
     still masks them out via logical_n / padding masks.
     """
     if pad_to is None or pad_to <= cos_i.shape[2]:
@@ -575,30 +580,6 @@ def _audio_seq_lens(F: int, sp_factor: int) -> tuple[int, int]:
     return audio_N, audio_N_real
 
 
-def _audio_masks(audio_N, audio_N_real, *, mesh_device, sp_axis):
-    """Replicate LTXPipeline._prepare_audio_masks: SDPA column mask + SP/full pad masks (None if unpadded)."""
-    if audio_N <= audio_N_real:
-        return None, None, None
-    # Column-only mask: bar queries from attending to padded keys (pad_mask zeros padded rows).
-    mask = torch.zeros(1, 1, audio_N, audio_N)
-    mask[:, :, :, audio_N_real:] = float("-inf")
-    tt_attn_mask = bf16_tensor(mask.to(torch.bfloat16), device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
-    pad = torch.ones(1, 1, audio_N, 1, dtype=torch.bfloat16)
-    pad[:, :, audio_N_real:, :] = 0.0
-    tt_pad_sp = bf16_tensor(pad, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
-    tt_pad_full = bf16_tensor(pad, device=mesh_device)
-    return tt_attn_mask, tt_pad_sp, tt_pad_full
-
-
-def _video_masks(video_N, video_N_real, *, mesh_device, sp_axis):
-    """Replicate ``LTXPipeline._prepare_video_masks``: SP-sharded pad mask (``None`` when aligned)."""
-    if video_N <= video_N_real:
-        return None
-    pad = torch.ones(1, 1, video_N, 1, dtype=torch.bfloat16)
-    pad[:, :, video_N_real:, :] = 0.0
-    return bf16_tensor(pad, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
-
-
 def _tt_rope(freqs_fn, *args, mesh_device, sp_axis, tp_axis, pad_to=None):
     """Build INTERLEAVED freqs for the TT runtime: precompute → BHND reshape → SP-pad → 2D shard."""
     cos_i, sin_i = freqs_fn(*args, rope_type=LTXRopeType.INTERLEAVED)
@@ -827,18 +808,15 @@ def test_ltx_transformer_block(
         ax_cos, ax_sin = _tt_rope(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
         )
-        vx_cos_full, vx_sin_full = _tt_rope_full(
-            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, tp_axis=tp_axis, pad_to=video_N
-        )
         ax_cos_full, ax_sin_full = _tt_rope_full(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
         )
 
         # Padding masks, same construction as the fast pipeline (audio padded, video aligned).
-        a_attn_mask, a_pad_sp, a_pad_full = _audio_masks(
+        a_attn_mask, a_pad_sp, a_pad_full = build_audio_masks(
             audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis
         )
-        v_pad_sp = _video_masks(video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
+        v_pad_sp = build_video_pad_mask(video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
 
         forward_kwargs.update(
             audio_1BND=bf16_tensor_2dshard(
@@ -870,8 +848,6 @@ def test_ltx_transformer_block(
             video_cross_pe_sin=vx_sin,
             audio_cross_pe_cos=ax_cos,
             audio_cross_pe_sin=ax_sin,
-            video_cross_pe_cos_full=vx_cos_full,
-            video_cross_pe_sin_full=vx_sin_full,
             audio_cross_pe_cos_full=ax_cos_full,
             audio_cross_pe_sin_full=ax_sin_full,
             audio_attn_mask=a_attn_mask,
@@ -1071,14 +1047,11 @@ def _run_inner_step(
         ax_cos, ax_sin = _tt_rope(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
         )
-        vx_cos_full, vx_sin_full = _tt_rope_full(
-            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, tp_axis=tp_axis, pad_to=video_N
-        )
         ax_cos_full, ax_sin_full = _tt_rope_full(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
         )
-        # Zero padded video tokens as V→A cross-attention keys (matches LTXPipeline._prepare_video_masks).
-        v_pad_sp = _video_masks(video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
+        # Zero padded video tokens as V→A cross-attention keys (matches build_video_pad_mask).
+        v_pad_sp = build_video_pad_mask(video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
         call_kwargs.update(
             audio_1BNI_torch=audio_lat.unsqueeze(0),
             audio_prompt_1BLP=bf16_tensor(audio_prompt.unsqueeze(0), device=mesh_device),
@@ -1089,8 +1062,6 @@ def _run_inner_step(
             video_cross_pe_sin=vx_sin,
             audio_cross_pe_cos=ax_cos,
             audio_cross_pe_sin=ax_sin,
-            video_cross_pe_cos_full=vx_cos_full,
-            video_cross_pe_sin_full=vx_sin_full,
             audio_cross_pe_cos_full=ax_cos_full,
             audio_cross_pe_sin_full=ax_sin_full,
             video_padding_mask=v_pad_sp,

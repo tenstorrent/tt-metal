@@ -13,7 +13,7 @@ to ``(B, T, C)`` ROW_MAJOR at the device boundary for ``Conv1dViaConv3d``.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import List, NamedTuple, Sequence
+from typing import List, Sequence
 
 import torch
 
@@ -36,19 +36,9 @@ from ...parallel.manager import CCLManager
 from ...utils.tracing import Tracer
 
 
-class _TraceEntry(NamedTuple):
-    """A captured trace for one input shape: the trace id plus its persistent
-    input/output device buffers (replay copies new data into ``input``, reads ``output``)."""
-
-    trace_id: int
-    input: ttnn.Tensor
-    output: ttnn.Tensor
-
-
 class DilatedConv1d(_AlignedOutConv1d):
-    """Dilated 1D conv: a symmetric ("same") zeros-pad ``Conv1dViaConv3d`` with
-    ``dilation`` passed through to conv3d. For the AMP block's ``(k-1)*d`` (always
-    even) the base's ``eff_k // 2`` halo equals the symmetric ``same_pad``."""
+    """Symmetric ("same") zeros-pad ``Conv1dViaConv3d`` with ``dilation``. For the AMP
+    block's even ``(k-1)*d``, the base's ``eff_k // 2`` halo equals the symmetric pad."""
 
     def __init__(
         self,
@@ -133,8 +123,7 @@ class AMPBlock1(Module):
                 for i in range(self.num_branches)
             ]
         )
-        # alpha_logscale=True: the checkpoint stores log α / log β and
-        # Snake/SnakeBeta collapses it at load time.
+        # alpha_logscale=True: checkpoint stores log α / log β, collapsed at load time.
         self.acts1 = ModuleList(
             [
                 Activation1d(
@@ -300,7 +289,7 @@ class Vocoder(Module):
             ]
         )
 
-        # 3 x num_upsamples AMP blocks, row-major over (stage, branch).
+        # num_kernels x num_upsamples AMP blocks, row-major over (stage, branch).
         self.resblocks = ModuleList()
         for i in range(self.num_upsamples):
             ch = upsample_initial_channel // (2 ** (i + 1))
@@ -346,8 +335,7 @@ class Vocoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            # Final waveform has out_channels=2 — too small to channel-shard; keep
-            # the output full so the trailing all-gather is a no-op.
+            # out_channels=2 is too small to channel-shard; keep output full (no trailing gather).
             channel_shard_output=False,
         )
 
@@ -422,9 +410,8 @@ class Vocoder(Module):
         x_BTC_torch = x_t.transpose(1, 2).float().contiguous()
 
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
-        # Pad T to a multiple of (TILE_HEIGHT * factor) so mesh_partition produces
-        # tile-aligned per-chip shards. The extras propagate at upsampled length
-        # and get cropped from the final waveform.
+        # Pad T to a multiple of (TILE_HEIGHT * factor) for tile-aligned per-chip shards;
+        # the extras propagate and get cropped from the final waveform.
         t_pad = 0
         if sharded:
             factor = self.parallel_config.factor
@@ -450,17 +437,14 @@ class Vocoder(Module):
             x_dev = _partition_t(x_dev, self.parallel_config)
             x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
 
-        # Channel-TP: split C across the channel axis up front so conv_pre's gather
-        # reconstructs full C_in. (Gathering a channel-replicated tensor would
-        # duplicate it.) conv_post leaves its output full, so no trailing gather.
+        # Channel-TP: split C up front so conv_pre's gather reconstructs full C_in (gathering a
+        # channel-replicated tensor would duplicate it). conv_post stays full, so no trailing gather.
         x_dev = partition_channel(x_dev, self.parallel_config, dim=2)
 
         def _set_tail(xd, cumrate, mode):
-            # The tile-align pad image (t_pad*cumrate rows at the global tail) propagates as
-            # signal. Each non-causal op's kept-boundary output must see what unsharded sees:
-            # the gather-to-full upsamplers and zeros-pad convs want zeros, the replicate-pad
-            # activations want the real last row. Materialize the pad image to the op's own
-            # boundary right before it. No-op when unsharded (t_pad == 0).
+            # Materialize the tile-align pad image (t_pad*cumrate tail rows) to the op's boundary so
+            # it matches unsharded: zeros for gather/zeros-pad convs, the real last row for
+            # replicate-pad activations. No-op when unsharded (t_pad == 0).
             if t_pad == 0:
                 return xd
             return _set_tpad_tail(
@@ -481,8 +465,7 @@ class Vocoder(Module):
             cumrate *= self.upsample_rates[i]
             stage_set_tail = (lambda c: (lambda xd, mode: _set_tail(xd, c, mode)))(cumrate)
             start = i * self.num_kernels
-            # Mean over the num_kernels parallel AMP branches. Each block sets its own op
-            # boundaries (acts replicate, convs zeros) via stage_set_tail.
+            # Mean over the num_kernels parallel AMP branches.
             block_outputs = []
             # All three blocks read the same stage input; their acts1[0] each replicate-tail it
             # identically, so do that tail-set once and share it (read-only) across the blocks.
@@ -523,8 +506,7 @@ class Vocoder(Module):
         """Readback + host crop. Trims padded out-channels and the upsampled image of the
         input T-padding (``self._t_pad``), then returns ``(B, out_channels, T_out)``."""
         x_host = ttnn.to_torch(ttnn.get_device_tensors(x_dev)[0])
-        # Trim padded out channels in case the conv left them.
-        x_host = x_host[..., : self.out_channels]
+        x_host = x_host[..., : self.out_channels]  # trim any padded out channels
         # Crop the upsampled image of the input T-padding.
         if self._t_pad > 0:
             prod_rates = 1

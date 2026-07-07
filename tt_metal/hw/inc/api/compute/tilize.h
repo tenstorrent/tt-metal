@@ -11,8 +11,8 @@
 #ifdef ARCH_BLACKHOLE
 #include "experimental/llk_math_fast_tilize_api.h"
 #endif
-#ifndef ARCH_QUASAR
 #include "llk_math_reduce_api.h"
+#ifndef ARCH_QUASAR
 #include "llk_math_matmul_api.h"
 #endif
 #endif
@@ -69,7 +69,6 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
 #endif
 }
 
-#ifndef ARCH_QUASAR
 #if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
 
 // clang-format off
@@ -95,6 +94,7 @@ template <bool neginf_srcA = true, bool zero_srcA_reduce = false>
 ALWI void tilizeA_B_reduce_init(
     uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1_scaler, ocb, call_line);
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
         icb0, icb1_scaler, block)));
@@ -106,8 +106,22 @@ ALWI void tilizeA_B_reduce_init(
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
+#else
+    UNPACK((llk_unpack_hw_configure(icb0, icb1_scaler)));
+    UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
+        icb0, icb1_scaler, block)));
+
+    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(icb0, icb1_scaler)));
+    MATH((llk_math_pack_sync_init()));
+    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
+
+    PACK((llk_pack_hw_configure(ocb)));
+    PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init()));
+#endif
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * @deprecated Operand A unpack face geometry (num_faces, face_r_dim) is now read from circular-buffer metadata
@@ -158,7 +172,9 @@ tilizeA_B_reduce_init(
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
 }
 #endif
+#endif  // (REDUCE_OP && REDUCE_DIM) || __DOXYGEN__
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Re-initializes the tilize operation and reconfigures the unpacker with CB data type.
@@ -231,8 +247,6 @@ ALWI void tilize_block(
     }
 }
 
-#ifndef ARCH_QUASAR
-
 // clang-format off
 /**
  * Unpacks and tilizes a block from two input CBs.
@@ -263,6 +277,7 @@ ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, u
         icb0, icb1, block, tile_idx_b)));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * @deprecated Operand A face geometry (num_faces, srca_face_r_dim) is now read from circular-buffer unpack
@@ -302,12 +317,15 @@ unpack_tilizeA_B_block(
 #pragma GCC diagnostic pop
 }
 
+#endif  // ifndef ARCH_QUASAR
+
 // clang-format off
 /**
  * Uninitializes the tilize operation before re-initializing for another operation.
  *
  * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
  * as a part of tt-metal#22904.
+ * NOTE: Does nothing on Quasar because there is no persistent tilize unpack/pack state to undo.
  *
  * Return value: None
  *
@@ -325,6 +343,7 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
 #endif
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Uninitializes the tilize operation and reconfigures the unpacker with CB data types.
@@ -545,6 +564,8 @@ ALWI void fast_tilize_block(
 #endif
 }
 
+#endif  // !ARCH_QUASAR
+
 // clang-format off
 /**
  * Uninitializes the unpack tilizeA_B configuration and restores unpacker state
@@ -570,7 +591,4 @@ ALWI void fast_tilize_block(
  */
 // clang-format on
 ALWI void unpack_tilizeA_B_uninit(uint32_t icb) { UNPACK((llk_unpack_tilizeA_B_uninit(icb))); }
-
-#endif  // !ARCH_QUASAR
-
 }  // namespace ckernel

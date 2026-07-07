@@ -17,6 +17,7 @@ on:
           - llama3.1-8b-dp-galaxy
           - llama3.3-70b-galaxy
           - qwen3-32b-galaxy
+          - qwen3.6-27b
           - gpt-oss-120b
           - whisper
           - gemma-4-12b
