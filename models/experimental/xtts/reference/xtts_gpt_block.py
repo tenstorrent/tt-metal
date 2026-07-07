@@ -91,6 +91,30 @@ def _install_tts_stub():
         sys.meta_path.insert(0, _FakeTTSFinder())
 
 
+# Non-block GPT weights the model uses (block weights match ``gpt.gpt.h.``).
+_GPT_SCALAR_WEIGHTS = frozenset(
+    {
+        "gpt.gpt.ln_f.weight",
+        "gpt.gpt.ln_f.bias",
+        "gpt.text_embedding.weight",
+        "gpt.mel_embedding.weight",
+        "gpt.text_pos_embedding.emb.weight",
+        "gpt.mel_pos_embedding.emb.weight",
+        "gpt.final_norm.weight",
+        "gpt.final_norm.bias",
+        "gpt.text_head.weight",
+        "gpt.text_head.bias",
+        "gpt.mel_head.weight",
+        "gpt.mel_head.bias",
+    }
+)
+
+
+def _is_gpt_weight(key):
+    """True for the checkpoint keys the XTTS GPT decoder model actually loads."""
+    return key.startswith("gpt.gpt.h.") or key in _GPT_SCALAR_WEIGHTS
+
+
 def load_xtts_state_dict():
     """Download coqui/XTTS-v2 ``model.pth`` and return its tensor state dict.
 
@@ -104,7 +128,24 @@ def load_xtts_state_dict():
     checkpoint_path = hf_hub_download(repo_id=HF_REPO_ID, filename=CHECKPOINT_FILE)
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     state_dict = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
-    return {k: v for k, v in state_dict.items() if torch.is_tensor(v)}
+    tensors = {k: v for k, v in state_dict.items() if torch.is_tensor(v)}
+
+    # Verify only the weights the GPT model actually consumes (the 30 decoder
+    # blocks + ln_f, the text/mel token + position embeddings, final_norm, and
+    # the two heads) — not the whole ~1.9 GB checkpoint. Print name, shape,
+    # dtype and size for each.
+    total_params, total_bytes = 0, 0
+    used = {k: v for k, v in tensors.items() if _is_gpt_weight(k)}
+    print(f"[load_xtts_state_dict] {len(used)} GPT weights used (of {len(tensors)} tensors in checkpoint):")
+    for name, t in used.items():
+        n_elem = t.numel()
+        n_bytes = n_elem * t.element_size()
+        total_params += n_elem
+        total_bytes += n_bytes
+        print(f"  {name:<55} shape={tuple(t.shape)} dtype={t.dtype} " f"params={n_elem:,} size={n_bytes / 1e6:.2f} MB")
+    print(f"[load_xtts_state_dict] total GPT: {total_params:,} params, {total_bytes / 1e6:.2f} MB")
+
+    return tensors
 
 
 # ---------------------------------------------------------------------------
