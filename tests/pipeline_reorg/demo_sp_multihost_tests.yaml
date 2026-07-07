@@ -41,7 +41,7 @@
     export MLA_CHUNKED_TRACE_PATH=/mnt/models/deepseek-prefill-cache/golden/mla_sdpa_traces/kimi_metal_56320_sdpa_mla/
     export KIMI_K2_6_HF_MODEL=/data/nbabin/Kimi-K2_6-dequantized
     python3 -m pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k '8x4 and line and trace and kimi and deep-50k+5k' -vvv --tb=short
+    python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k '8x4 and line and trace and kimi and deep-50k+5k' -vvv --tb=short
   skus:
     bh_spsg:
       timeout: 20
