@@ -2984,60 +2984,66 @@ class TTSeamlessM4Tv2Model:
             )
         unit_ids_argmax = ttnn.argmax(t2u_logits_tt, dim=-1)  # [B, unit_seq] int32
         ttnn.deallocate(t2u_logits_tt)
-        if unit_ids_argmax.dtype != ttnn.uint32:
-            unit_u = ttnn.typecast(unit_ids_argmax, ttnn.uint32)
-            ttnn.deallocate(unit_ids_argmax)
-            unit_ids_argmax = unit_u
-        if unit_ids_argmax.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-            unit_rm = ttnn.to_layout(unit_ids_argmax, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(unit_ids_argmax)
-            unit_ids_argmax = unit_rm
 
-        # Unit id remap (EOS/pad mask + vocoder offset) on host — device ``where`` on uint32 still diverges.
-        if padding_tt.dtype != ttnn.bfloat16:
-            pad_bf = ttnn.typecast(padding_tt, ttnn.bfloat16)
+        # On-device unit-id remap (EOS/pad mask + vocoder offset). Mirrors the HF host remap
+        #   voc = (unit == eos | pad < 0.5 | unit == pad_id) ? pad_id : unit - vocoder_offset
+        # Integer math runs in int32 (bf16 cannot represent unit ids up to ``t2u_vocab_size`` exactly,
+        # and uint32 elementwise ``where`` diverges); raw ids and the vocoder input are converted to
+        # uint32 ROW_MAJOR at the boundary — byte-identical to the prior host ``from_torch`` path,
+        # including sub-offset wraparound. This keeps the T2U->vocoder handoff device-resident,
+        # removing the per-utterance D2H + two H2D stalls between the two device-heavy stages.
+        unit_i32 = (
+            unit_ids_argmax if unit_ids_argmax.dtype == ttnn.int32 else ttnn.typecast(unit_ids_argmax, ttnn.int32)
+        )
+        if unit_i32 is not unit_ids_argmax:
+            ttnn.deallocate(unit_ids_argmax)
+        if unit_i32.get_layout() != ttnn.TILE_LAYOUT:
+            unit_tile = ttnn.to_layout(unit_i32, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(unit_i32)
+            unit_i32 = unit_tile
+
+        b_m = int(unit_i32.shape[0])
+        s_m = int(unit_i32.shape[1])
+
+        # Padding mask -> bf16 TILE, sliced to the unit timeline for the ``pad < 0.5`` compare.
+        pad_bf = padding_tt if padding_tt.dtype == ttnn.bfloat16 else ttnn.typecast(padding_tt, ttnn.bfloat16)
+        if pad_bf is not padding_tt:
             ttnn.deallocate(padding_tt)
-        else:
-            pad_bf = padding_tt
-        if pad_bf.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-            pad_rm = ttnn.to_layout(pad_bf, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if pad_bf.get_layout() != ttnn.TILE_LAYOUT:
+            pad_tile = ttnn.to_layout(pad_bf, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(pad_bf)
-            pad_bf = pad_rm
-
-        b_m = int(unit_ids_argmax.shape[0])
-        s_m = int(unit_ids_argmax.shape[1])
-        if int(pad_bf.shape[1]) != s_m:
+            pad_bf = pad_tile
+        if int(pad_bf.shape[0]) != b_m or int(pad_bf.shape[1]) != s_m:
             pad_sl = ttnn.slice(pad_bf, [0, 0], [b_m, s_m], (1, 1))
             ttnn.deallocate(pad_bf)
             pad_bf = pad_sl
 
-        import torch as _torch
-
-        unit_host = to_torch_replicated_first_shard(unit_ids_argmax).to(_torch.long)
-        pad_host = to_torch_replicated_first_shard(pad_bf).to(_torch.float32)
-        ttnn.deallocate(unit_ids_argmax)
-        ttnn.deallocate(pad_bf)
-
-        rm_host = (unit_host == int(self.t2u_eos_token_id)) | (pad_host < 0.5)
+        eos_id = int(self.t2u_eos_token_id)
         pad_id = int(self.t2u_pad_token_id)
         off = int(self.vocoder_offset)
-        u = unit_host.clone()
-        u[rm_host] = pad_id
-        voc = _torch.where(u == pad_id, u, u - off).to(_torch.int32)
-        output_unit_ids_tt = ttnn.from_torch(
-            unit_host.to(_torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+
+        # keep_pad != 0 where the position must map to pad_id (eos, out-of-length pad, or already pad).
+        keep_pad = ttnn.logical_or(
+            ttnn.logical_or(ttnn.eq(unit_i32, eos_id), ttnn.eq(unit_i32, pad_id)),
+            ttnn.typecast(ttnn.lt(pad_bf, 0.5), ttnn.int32),
         )
-        vocoder_input = ttnn.from_torch(
-            voc,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.deallocate(pad_bf)
+        shifted = ttnn.subtract(unit_i32, off)
+        pad_full = ttnn.full_like(unit_i32, pad_id)
+        voc_i32 = ttnn.where(keep_pad, pad_full, shifted)
+        ttnn.deallocate(keep_pad)
+        ttnn.deallocate(shifted)
+        ttnn.deallocate(pad_full)
+
+        # Boundary conversion to the uint32 ROW_MAJOR tensors the vocoder / callers expect.
+        output_unit_ids_tt = ttnn.to_layout(
+            ttnn.typecast(unit_i32, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
+        ttnn.deallocate(unit_i32)
+        vocoder_input = ttnn.to_layout(
+            ttnn.typecast(voc_i32, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(voc_i32)
 
         # Vocoder language + speaker tensors built on device.
         voc_id = int(gc.vocoder_lang_code_to_id[tgt_lang])
