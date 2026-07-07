@@ -1,10 +1,15 @@
 # THROWAWAY diagnostic workflow — safe to delete after the investigation closes.
 # Reproduces the "IndexError: unordered_map::at" seen in Galaxy DeepSeek Prefill
 # CI failures (see run 28753760978). Does not touch the production test matrix
-# or its Slack alerting, and only runs on workflow_dispatch.
+# or its Slack alerting. Triggers on push to this branch only — workflow_dispatch
+# isn't usable here because new workflow files aren't dispatchable until they
+# exist on the default branch, which this intentionally never touches.
 name: "[investigation] Repro cluster-teardown IndexError"
 
 on:
+  push:
+    branches:
+      - ci-repro/cluster-teardown-indexerror
   workflow_dispatch:
 
 jobs:
