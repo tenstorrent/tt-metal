@@ -625,8 +625,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
 
         # The rotate-half matrix must stay precise (a bf4 rotation would corrupt RoPE).
         self.rot = _load_weight(_interleaved_rotate_matrix(self.rope_dim), device, cache_file_name=cache.file("rot"))
-
         compressor_cls = _COMPRESSORS.get(self.layer_type)
+        print(f"Attn with {compressor_cls} compressor at layer {self.layer_idx}. {self.layer_type}")
         self.compressor = (
             compressor_cls(config, weights, device, self.rot, self.rope_dim, cache=cache, weight_dtype=weight_dtype)
             if compressor_cls is not None
