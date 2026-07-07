@@ -27,9 +27,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.janus_pro.tt.janus_pro_vision_aligner import TtJanusProVisionAligner
-from models.experimental.janus_pro.tt.janus_pro_vision_block import TtJanusProVisionModel
-from models.experimental.janus_pro.tt.load_checkpoints import convert_vision_hf_to_meta
+from models.experimental.janus_pro.tt.janus_pro_vision_model import TtJanusProTransformerVision
 from models.experimental.janus_pro.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -86,39 +84,19 @@ def test_e2e_hybrid(mesh_device, reset_seeds, dummy_weights):
     with torch.no_grad():
         ref_logits = hf_model(input_ids=input_ids, pixel_values=pixel_values.float()).logits
 
-    # ---- hybrid: TT vision tower + TT aligner on device ----
+    # ---- hybrid: TT vision tower (vision encoder + aligner) on device ----
+    # The wrapper runs vision_model -> aligner on device, so there is no host
+    # round-trip between them; the aligner input stays in tile layout.
     tt_ccl = TT_CCL(mesh_device)
-    tt_vision = TtJanusProVisionModel(
+    tt_tower = TtJanusProTransformerVision(
         mesh_device,
         tt_ccl=tt_ccl,
         state_dict=state_dict,
-        state_dict_prefix="model.vision_model.",
+        state_dict_prefix="model.",
         dtype=dtype,
         configuration=model_args,
     )
-    vision_out = tt_vision(pixel_values)
-    vision_torch = ttnn.to_torch(
-        ttnn.from_device(vision_out), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-    )[0]
-    vision_torch = vision_torch.reshape(1, bsz, num_image_tokens, model_args.vision_dim)
-
-    aligner_in = ttnn.from_torch(
-        vision_torch,
-        dtype=dtype,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    tt_aligner = TtJanusProVisionAligner(
-        mesh_device=mesh_device,
-        args=model_args,
-        state_dict=state_dict,
-        state_dict_prefix="model.aligner.",
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        dtype=dtype,
-    )
-    image_feat_tt = tt_aligner(aligner_in)
+    image_feat_tt = tt_tower(pixel_values)
     image_features = ttnn.to_torch(
         ttnn.from_device(image_feat_tt), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     )[0]
