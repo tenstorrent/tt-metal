@@ -12,6 +12,7 @@
 #include "move_sharded_program_factory.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/distributed/types.hpp"
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 

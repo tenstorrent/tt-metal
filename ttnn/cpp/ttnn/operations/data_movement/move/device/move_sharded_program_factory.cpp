@@ -137,7 +137,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> MoveDeviceOperation::get_dynamic_ru
     const uint32_t total_size_bytes = src_buffer->aligned_size_per_bank();
     const uint32_t move_chunk_size_bytes = dst_buffer->address() - src_buffer->address();
     if (move_chunk_size_bytes == 0) {
-        return {};  // src == dst address: let the slow path handle it (matches create_descriptor).
+        return {};  // degenerate dst==src (unreachable for a real move); avoids div-by-zero below.
     }
     const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
     const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
