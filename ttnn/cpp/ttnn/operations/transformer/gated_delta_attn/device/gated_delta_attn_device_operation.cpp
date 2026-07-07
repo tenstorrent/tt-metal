@@ -12,26 +12,51 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-static void validate_tensor(const Tensor& t, const std::string& name) {
+// allow_bf16=false: fp32-only (inverse / scan-stability path). allow_bf16=true: fp32 OR bf16
+// (value path). The value-path tensors enter matmuls that accumulate in the fp32 DST (fp32_dest_acc_en)
+// or the forward-substitution copy, so bf16 inputs only round the operand, not the accumulation.
+static void validate_tensor(const Tensor& t, const std::string& name, bool allow_bf16 = false) {
     TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(t.buffer() != nullptr, "{} must be allocated", name);
     TT_FATAL(t.buffer()->buffer_type() == BufferType::DRAM, "{} must be in DRAM", name);
     TT_FATAL(t.layout() == Layout::TILE, "{} must be tiled", name);
-    TT_FATAL(t.dtype() == DataType::FLOAT32, "{} must be float32, got {}", name, t.dtype());
+    if (allow_bf16) {
+        TT_FATAL(
+            t.dtype() == DataType::FLOAT32 || t.dtype() == DataType::BFLOAT16,
+            "{} must be float32 or bfloat16, got {}",
+            name,
+            t.dtype());
+    } else {
+        TT_FATAL(t.dtype() == DataType::FLOAT32, "{} must be float32, got {}", name, t.dtype());
+    }
 }
 
 void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
+    // Stay fp32 (triangular solve + inter-chunk state recurrence stability).
     validate_tensor(in.L_unit, "L_unit");
-    validate_tensor(in.v_beta_sc, "v_beta_sc");
     validate_tensor(in.k_bd_sc, "k_bd_sc");
-    validate_tensor(in.intra_attn, "intra_attn");
-    validate_tensor(in.q_decay, "q_decay");
-    validate_tensor(in.k_decay_t, "k_decay_t");
     validate_tensor(in.dl_exp, "dl_exp");
     validate_tensor(in.L_inv, "L_inv");
+    // Value path — bf16 allowed. Per-tensor CB formats (program factory) and the tensor's dtype
+    // (part of its hashed TensorSpec) keep the cached program consistent with the actual dtype.
+    validate_tensor(in.v_beta_sc, "v_beta_sc", /*allow_bf16=*/true);
+    validate_tensor(in.intra_attn, "intra_attn", /*allow_bf16=*/true);
+    validate_tensor(in.q_decay, "q_decay", /*allow_bf16=*/true);
+    validate_tensor(in.k_decay_t, "k_decay_t", /*allow_bf16=*/true);
     if (in.initial_state.has_value()) {
         validate_tensor(*in.initial_state, "initial_state");
+    }
+    TT_FATAL(
+        in.q_raw.has_value() == in.k_raw.has_value(), "q_raw and k_raw must either both be provided or both be absent");
+    const bool fused_intra = in.q_raw.has_value();
+    if (fused_intra) {
+        validate_tensor(*in.q_raw, "q_raw");
+        validate_tensor(*in.k_raw, "k_raw");
+        // c_12/c_13 are used for q_raw/k_raw in fused-intra mode; keep the bf16 value-path
+        // scratch disabled for this first fusion slice.
+        TT_FATAL(in.intra_attn.dtype() == DataType::FLOAT32, "fused-intra L_mask must be float32");
+        TT_FATAL(in.k_decay_t.dtype() == DataType::FLOAT32, "fused-intra k_decay_t must be float32");
     }
 
     const uint32_t BH = attrs.num_heads;
@@ -68,6 +93,10 @@ void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_miss(
     check_shape(in.dl_exp, {BH, NC, 1, 1}, "dl_exp");
     // L_inv: [BH, NC, C, 32] — 4 diagonal block inverses per chunk (Ct=C/32 tiles × 32 columns)
     check_shape(in.L_inv, {BH, NC, C, tt::constants::TILE_HEIGHT}, "L_inv");
+    if (fused_intra) {
+        check_shape(*in.q_raw, {BH, NC, C, Dk}, "q_raw");
+        check_shape(*in.k_raw, {BH, NC, C, Dk}, "k_raw");
+    }
     if (in.initial_state.has_value()) {
         check_shape(*in.initial_state, {BH, Dk, Dv}, "initial_state");
     }
@@ -122,7 +151,9 @@ ttsl::hash::hash_t GatedDeltaAttnSeqDeviceOperation::compute_program_hash(
         // otherwise a cache hit can reuse a reader compiled for a different L_inv layout or for absent
         // initial_state. Hashing the optional also distinguishes state present vs. absent.
         in.L_inv,
-        in.initial_state);
+        in.initial_state,
+        in.q_raw,
+        in.k_raw);
 }
 
 std::vector<Tensor> gated_delta_attn_seq(
@@ -136,7 +167,9 @@ std::vector<Tensor> gated_delta_attn_seq(
     const Tensor& L_inv,
     const std::optional<Tensor>& initial_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<Tensor>& q_raw,
+    const std::optional<Tensor>& k_raw) {
     using Op = GatedDeltaAttnSeqDeviceOperation;
     auto shape = L_unit.logical_shape();
     return ttnn::device_operation::launch<Op>(
@@ -159,6 +192,8 @@ std::vector<Tensor> gated_delta_attn_seq(
             .dl_exp = dl_exp,
             .L_inv = L_inv,
             .initial_state = initial_state,
+            .q_raw = q_raw,
+            .k_raw = k_raw,
         });
 }
 

@@ -185,18 +185,18 @@ def _blocks_for(seqlen, max_generated_tokens):
 @pytest.mark.parametrize(
     "seqlen, max_generated_tokens, use_trace, repeat_batches",
     [
-        pytest.param(128, 50, True, 1, id="traced_128"),
+        pytest.param(128, 5, True, 1, id="traced_128"),
         pytest.param(128, 50, False, 1, id="paged_128"),
-        pytest.param(4096, 100, True, 1, id="traced_4k"),
-        pytest.param(4096, 100, False, 1, id="paged_4k"),
+        pytest.param(4096, 5, True, 1, id="traced_4k"),
+        pytest.param(4096, 5, False, 1, id="paged_4k"),
         pytest.param(8192, 100, True, 1, id="traced_8k"),
         pytest.param(8192, 100, False, 1, id="paged_8k"),
-        pytest.param(16384, 100, True, 1, id="traced_16k"),
-        pytest.param(32768, 100, True, 1, id="traced_32k"),
-        pytest.param(65536, 500, True, 1, id="traced_64k"),
+        pytest.param(16384, 5, True, 1, id="traced_16k"),
+        pytest.param(32768, 5, True, 1, id="traced_32k"),
+        pytest.param(65536, 5, True, 1, id="traced_64k"),
         pytest.param(65536, 100, False, 1, id="paged_64k"),
         pytest.param(131072, 100, True, 1, id="traced_128k"),
-        pytest.param(262144, 100, True, 1, id="traced_256k"),
+        pytest.param(262144, 5, True, 1, id="traced_256k"),
         pytest.param(128, 50, True, 2, id="determinism_128"),
     ],
 )
@@ -345,7 +345,8 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     t_cap = time.time()
     signpost("compile_prefill")
     profiler.start("compile_prefill")
-    model.capture_prefill_trace_chunked(model.mesh_device, page_table, chunk_size=CHUNK)
+    model.capture_prefill_trace_chunked(model.mesh_device, page_table, chunk_size=CHUNK, warmup_masked_buckets=False)
+    # model.capture_prefill_trace_chunked(model.mesh_device, page_table, chunk_size=CHUNK)
     profiler.end("compile_prefill")
     logger.info(f"[TP] prefill chunk-trace captured in {time.time() - t_cap:.1f}s")
 

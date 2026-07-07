@@ -15,9 +15,12 @@ void bind_gated_delta_attn_seq(nb::module_& mod) {
         R"doc(
         Gated DeltaNet attention — sequential inter-chunk scan (Path A).
 
-        All inputs must be float32. Python pre-normalises L_unit to unit-diagonal
-        form and precomputes L_inv (diagonal block inverses). The C++ kernel performs
-        blocked forward substitution and the sequential inter-chunk state update.
+        The scan-stability inputs (L_unit, k_bd_sc, dl_exp, L_inv, initial_state) must be
+        float32. The value-path inputs (v_beta_sc, intra_attn, q_decay, k_decay_t) accept
+        float32 or bfloat16 (they accumulate into the fp32 DST). Python pre-normalises
+        L_unit to unit-diagonal form and precomputes L_inv (diagonal block inverses). The
+        C++ kernel performs blocked forward substitution and the sequential inter-chunk
+        state update.
 
         Args:
             L_unit (ttnn.Tensor):      [BH, NC, C, C]    unit-diagonal lower-tri
@@ -33,6 +36,8 @@ void bind_gated_delta_attn_seq(nb::module_& mod) {
             initial_state (ttnn.Tensor, optional): [BH, Dk, Dv] initial state (zeros if absent).
             memory_config (ttnn.MemoryConfig, optional): output memory config.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            q_raw/k_raw (ttnn.Tensor, optional): if both provided, intra_attn is interpreted
+                as L_mask and the kernel computes intra_attn = q_raw @ k_raw.T * L_mask.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -54,7 +59,9 @@ void bind_gated_delta_attn_seq(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("initial_state") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("q_raw") = nb::none(),
+        nb::arg("k_raw") = nb::none());
 }
 
 }  // namespace ttnn::operations::transformer

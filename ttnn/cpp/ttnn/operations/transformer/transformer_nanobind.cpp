@@ -14,6 +14,7 @@
 #include "attention_softmax/attention_softmax_nanobind.hpp"
 #include "concatenate_heads/concatenate_heads_nanobind.hpp"
 #include "gated_delta_attn/gated_delta_attn_nanobind.hpp"
+#include "gated_delta_attn/gated_delta_attn_preprocess_nanobind.hpp"
 #include "sdpa/sdpa_nanobind.hpp"
 #include "sdpa_config.hpp"
 #include "sdpa_decode/sdpa_decode_nanobind.hpp"
@@ -56,6 +57,7 @@ void py_module(nb::module_& mod) {
 
     bind_sdpa(mod);
     bind_sdpa_decode(mod);
+    bind_gated_delta_attn_preprocess(mod);
     bind_gated_delta_attn_seq(mod);
 }
 

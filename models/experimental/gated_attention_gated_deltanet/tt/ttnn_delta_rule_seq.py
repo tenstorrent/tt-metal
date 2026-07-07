@@ -19,6 +19,26 @@ import ttnn
 
 _DBG = _os.environ.get("QWEN9B_GDN_DBG")
 
+# Feed the C++ scan kernel bf16 on the value path (v_beta_sc, intra_attn, q_decay, k_decay_t).
+# The kernel accepts bf16 for these and accumulates in fp32; the triangular-solve / state-recurrence
+# inputs (L_unit, k_bd_sc, dl_exp, L_inv) stay fp32. Halves their DRAM/marshalling; A/B via env.
+_BF16_VALUEPATH = _os.environ.get("QWEN_GDN_BF16_VALUEPATH", "0") != "0"
+
+# First preprocessing-fusion slice: compute intra_attn = q @ k.T * L_mask inside the C++ scan
+# kernel. This deletes the Python qk matmul + mask multiply and uses the existing scan unchanged
+# after synthesizing intra_attn on-core.
+_FUSE_INTRA = _os.environ.get("QWEN_GDN_FUSE_INTRA", "0") != "0"
+
+# Validation-only fused preprocess slice. This path matches the Python preamble for g=0 and
+# QWEN_GDN_DIAG_ALPHA=0.0. It is not the production path until decay/D_inv are implemented.
+_PREPROCESS_NODECAY = _os.environ.get("QWEN_GDN_PREPROCESS_NODECAY", "0") != "0"
+
+# Production fused preprocess: replace the entire Python preamble (decay, masks, L_mat, L_inv,
+# q_decay/k_decay/v_beta scaling) with the single C++ `gated_delta_attn_preprocess` op, feeding its
+# eight outputs straight into the scan. Uses the real QWEN_GDN_DIAG_ALPHA (Horner inverse only —
+# not compatible with QWEN_GDN_INV_DOUBLING).
+_FUSE_PREPROCESS = _os.environ.get("QWEN_GDN_FUSE_PREPROCESS", "0") != "0"
+
 
 def _ck(name, t):
     if not _DBG:
@@ -481,16 +501,20 @@ def chunk_gated_delta_rule_seq(
     else:
         beta_flat = ttnn.reshape(beta_flat, [BH, L, 1])
 
+    _fused_prep = _PREPROCESS_NODECAY or _FUSE_PREPROCESS
+
     v_beta = ttnn.multiply(v, beta_flat, memory_config=None)
     k_beta = ttnn.multiply(k, beta_flat, memory_config=None)
-    del beta_flat
+    if not _fused_prep:
+        del beta_flat
 
     q_c = ttnn.reshape(q, [batch, chunk_size, K], memory_config=None)
     k_c = ttnn.reshape(k, [batch, chunk_size, K], memory_config=None)
     k_beta_c = ttnn.reshape(k_beta, [batch, chunk_size, K], memory_config=None)
     v_beta_c = ttnn.reshape(v_beta, [batch, chunk_size, V], memory_config=None)
     g_c = ttnn.reshape(g, [batch, chunk_size], memory_config=None)
-    del q, v, k_beta, v_beta
+    if not _fused_prep:
+        del q, v, k_beta, v_beta
 
     _eye_32 = None
     if cached_masks is not None:
@@ -515,6 +539,117 @@ def chunk_gated_delta_rule_seq(
         lower_causal = _create_tril_ones(chunk_size, mesh_device, dtype=ttnn.float32)
 
     _cmc = ttnn.DRAM_MEMORY_CONFIG if chunk_size > 64 else None
+
+    if _fused_prep:
+        # NODECAY validation slice hardwires alpha=0; production uses the real diagonal-damping alpha.
+        _diag_alpha = 0.0 if _PREPROCESS_NODECAY else float(_os.environ.get("QWEN_GDN_DIAG_ALPHA", "0.25"))
+        # Build g_3d [BH,L,1] via a ROW_MAJOR round-trip: a direct TILE reshape of [BH,L] leaves the
+        # tiling in a form the preprocess reader mis-loads (breaks L_mask), so relayout explicitly.
+        g_rm = ttnn.to_layout(g, ttnn.ROW_MAJOR_LAYOUT)
+        g_3d = ttnn.reshape(g_rm, [BH, L, 1])
+        g_3d = ttnn.to_layout(g_3d, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # The C++ preprocess op is only correct when each core handles exactly one (head, chunk) work
+        # item; a core that processes a 2nd work item leaves stale HW/CB state that corrupts the outputs.
+        # Split the launch along the head dim so every sub-launch has num_heads*num_chunks <= grid cores.
+        _grid = mesh_device.compute_with_storage_grid_size()
+        _total_cores = _grid.x * _grid.y
+        _max_bh = max(1, _total_cores // num_chunks)
+
+        def _run_preprocess(_q, _k, _v, _beta, _g):
+            return ttnn.transformer.gated_delta_attn_preprocess(
+                _q,
+                _k,
+                _v,
+                _beta,
+                _g,
+                triu_ones,
+                tril_mask,
+                _eye_1cc,
+                lower_causal,
+                _eye_32,
+                chunk_size=chunk_size,
+                diag_alpha=_diag_alpha,
+                bf16_value_path=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        if _max_bh >= BH:
+            (
+                L_unit_4d,
+                v_beta_sc_4d,
+                k_bd_sc_4d,
+                intra_attn_4d,
+                q_decay_4d,
+                k_decay_t_4d,
+                dl_exp_4d,
+                L_inv_4d,
+            ) = _run_preprocess(q, k, v, beta_flat, g_3d)
+        else:
+            _parts = [[] for _ in range(8)]
+            for _h0 in range(0, BH, _max_bh):
+                _h1 = min(_h0 + _max_bh, BH)
+                _qs = ttnn.slice(q, [_h0, 0, 0], [_h1, L, K], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                _ks = ttnn.slice(k, [_h0, 0, 0], [_h1, L, K], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                _vs = ttnn.slice(v, [_h0, 0, 0], [_h1, L, V], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                _bs = ttnn.slice(beta_flat, [_h0, 0, 0], [_h1, L, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                _gs = ttnn.slice(g_3d, [_h0, 0, 0], [_h1, L, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                _outs = _run_preprocess(_qs, _ks, _vs, _bs, _gs)
+                for _i in range(8):
+                    _parts[_i].append(_outs[_i])
+                ttnn.deallocate(_qs)
+                ttnn.deallocate(_ks)
+                ttnn.deallocate(_vs)
+                ttnn.deallocate(_bs)
+                ttnn.deallocate(_gs)
+            _merged = []
+            for _i in range(8):
+                _m = ttnn.concat(_parts[_i], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                for _p in _parts[_i]:
+                    ttnn.deallocate(_p)
+                _merged.append(_m)
+            (
+                L_unit_4d,
+                v_beta_sc_4d,
+                k_bd_sc_4d,
+                intra_attn_4d,
+                q_decay_4d,
+                k_decay_t_4d,
+                dl_exp_4d,
+                L_inv_4d,
+            ) = _merged
+
+        S0_tt = None
+        if initial_state is not None:
+            S0_tt = ttnn.typecast(
+                ttnn.reshape(initial_state, [BH, K, V], memory_config=None),
+                ttnn.float32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        out_4d, final_state = ttnn.transformer.gated_delta_attn_seq(
+            L_unit_4d,
+            v_beta_sc_4d,
+            k_bd_sc_4d,
+            intra_attn_4d,
+            q_decay_4d,
+            k_decay_t_4d,
+            dl_exp_4d,
+            L_inv_4d,
+            initial_state=S0_tt,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(L_inv_4d)
+        out_4d = ttnn.to_layout(
+            ttnn.typecast(out_4d, ttnn.float32, memory_config=None) if out_4d.dtype != ttnn.float32 else out_4d,
+            ttnn.TILE_LAYOUT,
+            memory_config=None,
+        )
+        o = ttnn.reshape(out_4d, [BH, L, V], memory_config=None)
+        if pad_len > 0:
+            o = o[:, :T, :]
+            o = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=None)
+        return o, final_state
 
     # ---- Decay preprocessing ----
     # decay = g_c @ triu_ones (prefix-sum of g along the chunk). triu_ones is broadcast across
@@ -657,15 +792,27 @@ def chunk_gated_delta_rule_seq(
 
     L_mask_4d = ttnn.reshape(L_mask, [BH, num_chunks, chunk_size, chunk_size], memory_config=None)
     L_mask_4d = ttnn.to_layout(L_mask_4d, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    lower_causal_4d = ttnn.reshape(lower_causal, [1, 1, chunk_size, chunk_size], memory_config=None)
-    combined_mask_4d = ttnn.multiply(L_mask_4d, lower_causal_4d, memory_config=_cmc)
-    ttnn.deallocate(L_mask_4d)
-    k_c_4d_t = ttnn.transpose(k_c_4d, 2, 3, memory_config=_cmc)
-    qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg, program_config=_bmm_cfg)
-    ttnn.deallocate(k_c_4d_t)
-    intra_attn_4d = ttnn.multiply(qk_4d, combined_mask_4d, memory_config=_cmc)
-    ttnn.deallocate(qk_4d)
-    ttnn.deallocate(combined_mask_4d)
+    q_raw_4d = None
+    k_raw_4d = None
+    if _FUSE_INTRA:
+        # The kernel interprets the intra_attn slot as L_mask and synthesizes intra_attn on-core:
+        # intra_attn = q_c_4d @ k_c_4d.T * L_mask. L_mask is already lower-triangular, so the
+        # extra lower_causal multiply is redundant.
+        intra_attn_4d = L_mask_4d
+        q_raw_4d = q_c_4d
+        k_raw_4d = k_c_4d
+    else:
+        lower_causal_4d = ttnn.reshape(lower_causal, [1, 1, chunk_size, chunk_size], memory_config=None)
+        combined_mask_4d = ttnn.multiply(L_mask_4d, lower_causal_4d, memory_config=_cmc)
+        ttnn.deallocate(L_mask_4d)
+        k_c_4d_t = ttnn.transpose(k_c_4d, 2, 3, memory_config=_cmc)
+        qk_4d = ttnn.matmul(
+            q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg, program_config=_bmm_cfg
+        )
+        ttnn.deallocate(k_c_4d_t)
+        intra_attn_4d = ttnn.multiply(qk_4d, combined_mask_4d, memory_config=_cmc)
+        ttnn.deallocate(qk_4d)
+        ttnn.deallocate(combined_mask_4d)
 
     # ---- Reshape preprocessing outputs to 4D for the C++ kernel ----
     def _to4d_f32(t, d1, d2):
@@ -676,19 +823,32 @@ def chunk_gated_delta_rule_seq(
     v_beta_sc_4d = _to4d_f32(v_beta_sc, chunk_size, V)
     k_bd_sc_4d = _to4d_f32(k_bd_sc, chunk_size, K)
 
-    def _ensure_f32_dram(t):
-        if t.dtype != ttnn.float32:
-            t = ttnn.typecast(t, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    def _ensure_dram(t, dtype):
+        if t.dtype != dtype:
+            t = ttnn.typecast(t, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         elif t.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
             t = ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
         return t
 
+    def _ensure_f32_dram(t):
+        return _ensure_dram(t, ttnn.float32)
+
+    # Value-path tensors -> bf16 when enabled (kernel accepts bf16 for these); fp32 otherwise.
+    # Per-tensor override flags (QWEN_GDN_BF16_{VBS,ATT,QDEC,KDT}) for diagnosis; default to master.
+    def _vp(name):
+        v = _os.environ.get("QWEN_GDN_BF16_" + name)
+        on = False if _FUSE_INTRA else (_BF16_VALUEPATH if v is None else (v != "0"))
+        return ttnn.bfloat16 if on else ttnn.float32
+
     L_unit_4d = _ensure_f32_dram(L_unit_4d)
-    v_beta_sc_4d = _ensure_f32_dram(v_beta_sc_4d)
+    v_beta_sc_4d = _ensure_dram(v_beta_sc_4d, _vp("VBS"))
     k_bd_sc_4d = _ensure_f32_dram(k_bd_sc_4d)
-    intra_attn_4d = _ensure_f32_dram(intra_attn_4d)
-    q_decay_4d = _ensure_f32_dram(q_decay_4d)
-    k_decay_t_4d = _ensure_f32_dram(k_decay_t_4d)
+    intra_attn_4d = _ensure_dram(intra_attn_4d, _vp("ATT"))
+    q_decay_4d = _ensure_dram(q_decay_4d, _vp("QDEC"))
+    k_decay_t_4d = _ensure_dram(k_decay_t_4d, _vp("KDT"))
+    if _FUSE_INTRA:
+        q_raw_4d = _ensure_f32_dram(q_raw_4d)
+        k_raw_4d = _ensure_f32_dram(k_raw_4d)
 
     _ck("L_unit", L_unit_4d)
     _ck("v_beta_sc", v_beta_sc_4d)
@@ -723,6 +883,8 @@ def chunk_gated_delta_rule_seq(
         L_inv_4d,
         initial_state=S0_tt,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        q_raw=q_raw_4d,
+        k_raw=k_raw_4d,
     )
     ttnn.deallocate(L_inv_4d)
 

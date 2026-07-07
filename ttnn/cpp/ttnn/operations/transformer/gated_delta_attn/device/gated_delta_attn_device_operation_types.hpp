@@ -22,7 +22,9 @@ struct GatedDeltaAttnSeqParams {
 
 // Input tensors for the sequential scan kernel (Path A — Python pre-computes L_inv).
 //
-// All tensors are float32, TILE_LAYOUT, DRAM.
+// All tensors are TILE_LAYOUT, DRAM. Scan-stability inputs (L_unit, k_bd_sc, dl_exp, L_inv,
+// initial_state) are float32; value-path inputs (v_beta_sc, intra_attn, q_decay, k_decay_t)
+// may be float32 or bfloat16.
 // Shape conventions (num_chunks axis is dim-1):
 //   L_unit      : [BH, NC, C, C]   unit-diagonal lower-tri matrix (= D^{-1} L, where L = I + kk*mask)
 //   v_beta_sc   : [BH, NC, C, Dv]  v_beta row-scaled by D^{-1}  (= D^{-1} @ v_beta)
@@ -38,12 +40,14 @@ struct GatedDeltaAttnSeqInputs {
     Tensor L_unit;
     Tensor v_beta_sc;
     Tensor k_bd_sc;
-    Tensor intra_attn;
+    Tensor intra_attn;  // normal path: intra_attn; fused-intra path: L_mask
     Tensor q_decay;
     Tensor k_decay_t;
     Tensor dl_exp;
     Tensor L_inv;
     std::optional<Tensor> initial_state;
+    std::optional<Tensor> q_raw;  // [BH, NC, C, Dk] when fused-intra path is enabled
+    std::optional<Tensor> k_raw;  // [BH, NC, C, Dk] when fused-intra path is enabled
 };
 
 }  // namespace ttnn::prim

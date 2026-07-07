@@ -30,4 +30,7 @@ set(TTNN_OP_TRANSFORMER_SRCS
     gated_delta_attn/device/gated_delta_attn_device_operation.cpp
     gated_delta_attn/device/gated_delta_attn_program_factory.cpp
     gated_delta_attn/gated_delta_attn.cpp
+    gated_delta_attn/device/gated_delta_attn_preprocess_device_operation.cpp
+    gated_delta_attn/device/gated_delta_attn_preprocess_program_factory.cpp
+    gated_delta_attn/gated_delta_attn_preprocess.cpp
 )

@@ -24,6 +24,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/bcast.h"
@@ -43,7 +44,10 @@ constexpr uint32_t cb_S = tt::CBIndex::c_8;  // persistent state
 constexpr uint32_t cb_nm_P_a = tt::CBIndex::c_9;   // fwd_rhs scratch
 constexpr uint32_t cb_nm_P_b = tt::CBIndex::c_10;  // corr_mm scratch
 constexpr uint32_t cb_nm_R_a = tt::CBIndex::c_11;  // temp_rhs scratch
-// c_12, c_13: unused (were Neumann-only)
+// fp32 upcast scratch for bf16 value-path matmul operands consumed against the fp32 v_new
+// intermediate (intra_attn -> c_12, k_decay_t -> c_13). Unused when those inputs are fp32.
+constexpr uint32_t cb_intra_att_f32 = tt::CBIndex::c_12;
+constexpr uint32_t cb_k_dt_f32 = tt::CBIndex::c_13;
 
 // L_inv diagonal block inverses — pre-loaded per chunk by reader
 constexpr uint32_t cb_L_inv_0 = tt::CBIndex::c_14;
@@ -62,6 +66,26 @@ constexpr uint32_t cb_out = tt::CBIndex::c_24;
 constexpr uint32_t cb_s_upd = tt::CBIndex::c_25;
 constexpr uint32_t cb_S_tmp = tt::CBIndex::c_26;
 constexpr uint32_t cb_final_state = tt::CBIndex::c_27;
+
+// Generic tiled matmul loop for small 4x4 blocks. Caller performs mm_init, reserves/pushes the
+// output CB, and waits/pops inputs. If b_grid_transposed is true, B is stored as [N,K] tiles and the
+// matmul init must have transpose=true, so B tile index is n*K+k.
+__attribute__((noinline)) static void matmul_pack_reserved(
+    uint32_t M, uint32_t N, uint32_t K, uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, bool b_grid_transposed) {
+    for (uint32_t m = 0; m < M; m++) {
+        for (uint32_t n = 0; n < N; n++) {
+            tile_regs_acquire();
+            for (uint32_t k = 0; k < K; k++) {
+                uint32_t b_tile = b_grid_transposed ? (n * K + k) : (k * N + n);
+                matmul_tiles(cb_a, cb_b, m * K + k, b_tile, 0);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_out, m * N + n);
+            tile_regs_release();
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // One row of blocked forward substitution.
@@ -84,7 +108,10 @@ __attribute__((noinline)) static void fwd_sub_row(
     }
 
     // Step 1: fwd_rhs = rhs_cb[row_i * Xt .. (row_i+1)*Xt - 1]
+    // rhs_cb may be bf16 (v_beta_sc) or fp32 (k_bd_sc): reprogram SrcA to the rhs format before the
+    // datacopy so the unpacker reads the correct tile width. Output (cb_nm_P_a) stays fp32.
     CircularBuffer(cb_nm_P_a).reserve_back(Xt);
+    reconfig_data_format_srca(rhs_cb);
     copy_tile_to_dst_init_short(rhs_cb);
     for (uint32_t xt = 0; xt < Xt; xt++) {
         tile_regs_acquire();
@@ -204,6 +231,10 @@ void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
     constexpr uint32_t Vt = get_compile_time_arg_val(2);
+    // Value-path inputs consumed against the fp32 v_new intermediate need an fp32 upcast when bf16.
+    constexpr bool intra_att_bf16 = get_compile_time_arg_val(3) != 0;
+    constexpr bool k_dt_bf16 = get_compile_time_arg_val(4) != 0;
+    constexpr bool fused_intra = get_compile_time_arg_val(5) != 0;
 
     const uint32_t num_chunks = get_arg_val<uint32_t>(0);
 
@@ -213,10 +244,10 @@ void kernel_main() {
     constexpr uint32_t attn_tiles = Ct * Ct;
     constexpr uint32_t kdt_tiles = Kt * Ct;
 
-    // Pre-configure hardware UNPACK format registers for float32.
-    // TT Metal requires mm_init before any copy_tile_to_dst_init_short call.
-    // Without this, the first copy_tile in fwd_sub_row(row_i=0) reads tiles as zeros.
-    mm_init(cb_v_beta_sc, cb_S, cb_v_cor);
+    // Pre-configure the matmul HW (required before any copy_tile_to_dst_init_short; without it the
+    // first copy_tile in fwd_sub_row(row_i=0) reads tiles as zeros). Prime with fp32 CBs — v_beta_sc
+    // may be bf16, and fwd_sub_row reprograms SrcA to the rhs format per row anyway.
+    mm_init(cb_k_bd_sc, cb_S, cb_v_cor);
 
     // Initial state pre-loaded by reader into cb_S.
     CircularBuffer(cb_S).wait_front(state_tiles);
@@ -273,18 +304,7 @@ void kernel_main() {
         CircularBuffer(cb_k_cum).wait_front(in_kv_tiles);
         CircularBuffer(cb_v_prime).reserve_back(out_tiles);
         mm_init(cb_k_cum, cb_S, cb_v_prime);
-        for (uint32_t ct = 0; ct < Ct; ct++) {
-            for (uint32_t vt = 0; vt < Vt; vt++) {
-                tile_regs_acquire();
-                for (uint32_t kt = 0; kt < Kt; kt++) {
-                    matmul_tiles(cb_k_cum, cb_S, ct * Kt + kt, kt * Vt + vt, 0);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(0, cb_v_prime, ct * Vt + vt);
-                tile_regs_release();
-            }
-        }
+        matmul_pack_reserved(Ct, Vt, Kt, cb_k_cum, cb_S, cb_v_prime, /*b_grid_transposed=*/false);
         CircularBuffer(cb_v_prime).push_back(out_tiles);
         CircularBuffer(cb_k_cum).pop_front(in_kv_tiles);
 
@@ -311,19 +331,10 @@ void kernel_main() {
         // 3. o_inter = q_decay @ S
         // ==================================================================
         CircularBuffer(cb_o_inter).reserve_back(out_tiles);
+        // q_decay (SrcB) may be bf16, S (SrcA) fp32 — mm_init's hw_configure handles this mix here
+        // (SrcA operand cb_S is unchanged from the previous matmul, so only the SrcB format switches).
         mm_init(cb_q_decay, cb_S, cb_o_inter);
-        for (uint32_t ct = 0; ct < Ct; ct++) {
-            for (uint32_t vt = 0; vt < Vt; vt++) {
-                tile_regs_acquire();
-                for (uint32_t kt = 0; kt < Kt; kt++) {
-                    matmul_tiles(cb_q_decay, cb_S, ct * Kt + kt, kt * Vt + vt, 0);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(0, cb_o_inter, ct * Vt + vt);
-                tile_regs_release();
-            }
-        }
+        matmul_pack_reserved(Ct, Vt, Kt, cb_q_decay, cb_S, cb_o_inter, /*b_grid_transposed=*/false);
         CircularBuffer(cb_o_inter).push_back(out_tiles);
         CircularBuffer(cb_q_decay).pop_front(in_kv_tiles);
 
@@ -332,21 +343,78 @@ void kernel_main() {
         // ==================================================================
         CircularBuffer(cb_v_new).wait_front(out_tiles);
         CircularBuffer(cb_intra_v).reserve_back(out_tiles);
-        mm_init(cb_intra_att, cb_v_new, cb_intra_v);
-        for (uint32_t ct = 0; ct < Ct; ct++) {
-            for (uint32_t vt = 0; vt < Vt; vt++) {
+        if constexpr (fused_intra) {
+            // In fused-intra mode cb_intra_att holds L_mask, and c12/c13 hold raw q/k [C,K].
+            // First compute qk = q @ k.T into the now-free cb_v_prime scratch (16 tiles), then
+            // multiply by L_mask into cb_k_cum (also free). Finally run the unchanged intra_v
+            // matmul from the synthesized intra_attn.
+            CircularBuffer(cb_v_prime).reserve_back(attn_tiles);
+            mm_init(cb_intra_att_f32, cb_k_dt_f32, cb_v_prime, /*transpose=*/1);
+            matmul_pack_reserved(Ct, Ct, Kt, cb_intra_att_f32, cb_k_dt_f32, cb_v_prime, /*b_grid_transposed=*/true);
+            CircularBuffer(cb_v_prime).push_back(attn_tiles);
+
+            CircularBuffer(cb_v_prime).wait_front(attn_tiles);
+            CircularBuffer(cb_k_cum).reserve_back(attn_tiles);
+            mul_tiles_init(cb_v_prime, cb_intra_att);
+            for (uint32_t t = 0; t < attn_tiles; t++) {
                 tile_regs_acquire();
-                for (uint32_t ct2 = 0; ct2 < Ct; ct2++) {
-                    matmul_tiles(cb_intra_att, cb_v_new, ct * Ct + ct2, ct2 * Vt + vt, 0);
-                }
+                mul_tiles(cb_v_prime, cb_intra_att, t, t, 0);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(0, cb_intra_v, ct * Vt + vt);
+                pack_tile(0, cb_k_cum, t);
                 tile_regs_release();
             }
+            CircularBuffer(cb_k_cum).push_back(attn_tiles);
+            CircularBuffer(cb_v_prime).pop_front(attn_tiles);
+            CircularBuffer(cb_intra_att).pop_front(attn_tiles);
+            CircularBuffer(cb_intra_att_f32).pop_front(in_kv_tiles);
+            CircularBuffer(cb_k_dt_f32).pop_front(in_kv_tiles);
+
+            CircularBuffer(cb_k_cum).wait_front(attn_tiles);
+            mm_init(cb_k_cum, cb_v_new, cb_intra_v);
+            matmul_pack_reserved(Ct, Vt, Ct, cb_k_cum, cb_v_new, cb_intra_v, /*b_grid_transposed=*/false);
+            CircularBuffer(cb_intra_v).push_back(out_tiles);
+            CircularBuffer(cb_k_cum).pop_front(attn_tiles);
+        } else {
+            // intra_attn may be bf16. A bf16 SrcB against the fp32 v_new intermediate (SrcA) misreads
+            // here (unlike q_decay@S), so upcast intra_attn into an fp32 scratch first, then matmul
+            // fp32xfp32. The upcast reuses the proven bf16->fp32 datacopy path (same as v_beta_sc).
+            uint32_t intra_mm_cb = cb_intra_att;
+            if constexpr (intra_att_bf16) {
+                CircularBuffer(cb_intra_att_f32).reserve_back(attn_tiles);
+                reconfig_data_format_srca(cb_intra_att);
+                copy_tile_to_dst_init_short(cb_intra_att);
+                for (uint32_t t = 0; t < attn_tiles; t++) {
+                    tile_regs_acquire();
+                    copy_tile(cb_intra_att, t, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, cb_intra_att_f32, t);
+                    tile_regs_release();
+                }
+                CircularBuffer(cb_intra_att_f32).push_back(attn_tiles);
+                CircularBuffer(cb_intra_att_f32).wait_front(attn_tiles);
+                intra_mm_cb = cb_intra_att_f32;
+            }
+            mm_init(intra_mm_cb, cb_v_new, cb_intra_v);
+            for (uint32_t ct = 0; ct < Ct; ct++) {
+                for (uint32_t vt = 0; vt < Vt; vt++) {
+                    tile_regs_acquire();
+                    for (uint32_t ct2 = 0; ct2 < Ct; ct2++) {
+                        matmul_tiles(intra_mm_cb, cb_v_new, ct * Ct + ct2, ct2 * Vt + vt, 0);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, cb_intra_v, ct * Vt + vt);
+                    tile_regs_release();
+                }
+            }
+            CircularBuffer(cb_intra_v).push_back(out_tiles);
+            if constexpr (intra_att_bf16) {
+                CircularBuffer(cb_intra_att_f32).pop_front(attn_tiles);
+            }
+            CircularBuffer(cb_intra_att).pop_front(attn_tiles);
         }
-        CircularBuffer(cb_intra_v).push_back(out_tiles);
-        CircularBuffer(cb_intra_att).pop_front(attn_tiles);
 
         // ==================================================================
         // 5. out = o_inter + intra_v
@@ -371,21 +439,31 @@ void kernel_main() {
         // 6. s_upd = k_decay_t @ v_new
         // ==================================================================
         CircularBuffer(cb_s_upd).reserve_back(state_tiles);
-        mm_init(cb_k_dt, cb_v_new, cb_s_upd);
-        for (uint32_t kt = 0; kt < Kt; kt++) {
-            for (uint32_t vt = 0; vt < Vt; vt++) {
+        // k_decay_t may be bf16; upcast to fp32 scratch first (same reasoning as intra_attn above).
+        uint32_t kdt_mm_cb = cb_k_dt;
+        if constexpr (k_dt_bf16) {
+            CircularBuffer(cb_k_dt_f32).reserve_back(kdt_tiles);
+            reconfig_data_format_srca(cb_k_dt);
+            copy_tile_to_dst_init_short(cb_k_dt);
+            for (uint32_t t = 0; t < kdt_tiles; t++) {
                 tile_regs_acquire();
-                for (uint32_t ct2 = 0; ct2 < Ct; ct2++) {
-                    matmul_tiles(cb_k_dt, cb_v_new, kt * Ct + ct2, ct2 * Vt + vt, 0);
-                }
+                copy_tile(cb_k_dt, t, 0);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(0, cb_s_upd, kt * Vt + vt);
+                pack_tile(0, cb_k_dt_f32, t);
                 tile_regs_release();
             }
+            CircularBuffer(cb_k_dt_f32).push_back(kdt_tiles);
+            CircularBuffer(cb_k_dt_f32).wait_front(kdt_tiles);
+            kdt_mm_cb = cb_k_dt_f32;
         }
+        mm_init(kdt_mm_cb, cb_v_new, cb_s_upd);
+        matmul_pack_reserved(Kt, Vt, Ct, kdt_mm_cb, cb_v_new, cb_s_upd, /*b_grid_transposed=*/false);
         CircularBuffer(cb_s_upd).push_back(state_tiles);
         CircularBuffer(cb_v_new).pop_front(out_tiles);
+        if constexpr (k_dt_bf16) {
+            CircularBuffer(cb_k_dt_f32).pop_front(kdt_tiles);
+        }
         CircularBuffer(cb_k_dt).pop_front(kdt_tiles);
 
         // ==================================================================

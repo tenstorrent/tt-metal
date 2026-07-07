@@ -5,6 +5,7 @@
 Dispatches to either Gated DeltaNet (linear attention) or Gated Full Attention
 based on the layer index. Both share the same RMSNorm + residual pattern and MLP.
 """
+import os
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
@@ -154,6 +155,12 @@ class Qwen36DecoderLayer:
         chunk_start_idx_tensor=None,
         valid_len=None,
     ):
+        # Per-layer profiler signpost (QWEN36_LAYER_SIGNPOSTS=1). Marks each layer's forward so a
+        # Tracy CSV can be sliced per layer; fires only on eager passes (traced replay skips host code).
+        if os.environ.get("QWEN36_LAYER_SIGNPOSTS") == "1":
+            from tracy import signpost
+
+            signpost(f"layer{self.layer_num}_{'full' if self.is_full_attention else 'gdn'}_{mode}")
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.

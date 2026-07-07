@@ -7,6 +7,7 @@
 
 namespace ttnn::operations::transformer {
 namespace nb = nanobind;
-void bind_gated_delta_attn_seq(nb::module_& mod);
+
 void bind_gated_delta_attn_preprocess(nb::module_& mod);
+
 }  // namespace ttnn::operations::transformer

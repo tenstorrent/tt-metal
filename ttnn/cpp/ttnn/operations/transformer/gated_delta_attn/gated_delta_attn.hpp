@@ -18,7 +18,9 @@ namespace ttnn::transformer {
  * (4 diagonal block inverses per chunk). The C++ kernel performs blocked
  * forward substitution and the sequential inter-chunk state update.
  *
- * All inputs must be float32, TILE_LAYOUT, DRAM.
+ * All inputs are TILE_LAYOUT, DRAM. Scan-stability inputs (L_unit, k_bd_sc, dl_exp, L_inv,
+ * initial_state) are float32; value-path inputs (v_beta_sc, intra_attn, q_decay, k_decay_t)
+ * may be float32 or bfloat16.
  *
  * Args:
  *   L_unit       [BH, NC, C, C]    unit-diagonal lower-tri (= D^{-1}*L_mat)
@@ -45,6 +47,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> gated_delta_attn_seq(
     const ttnn::Tensor& L_inv,
     const std::optional<ttnn::Tensor>& initial_state = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& q_raw = std::nullopt,
+    const std::optional<ttnn::Tensor>& k_raw = std::nullopt);
 
 }  // namespace ttnn::transformer

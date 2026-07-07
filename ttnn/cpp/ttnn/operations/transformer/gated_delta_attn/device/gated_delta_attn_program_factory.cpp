@@ -70,8 +70,18 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
 
     tt::DataFormat df_f32 = tt::DataFormat::Float32;
 
+    // Value-path inputs may be bf16 (see device op validation). Derive their CB format from the
+    // actual tensor dtype so the reader's per-CB get_tile_size and the DRAM page size match. The
+    // triangular-solve / state-recurrence inputs and all intermediate/output CBs stay fp32.
+    auto df_of = [](const Tensor& t) { return tt::tt_metal::datatype_to_dataformat_converter(t.dtype()); };
+    tt::DataFormat df_vbs = df_of(in.v_beta_sc);
+    tt::DataFormat df_att = df_of(in.intra_attn);
+    tt::DataFormat df_qdec = df_of(in.q_decay);
+    tt::DataFormat df_kdt = df_of(in.k_decay_t);
+    const bool fused_intra = in.q_raw.has_value();
+
     // -----------------------------------------------------------------------
-    // Circular buffers — all fp32
+    // Circular buffers — fp32 except the bf16-capable value-path inputs
     // -----------------------------------------------------------------------
     auto make_cb = [&](uint32_t idx, tt::DataFormat fmt, uint32_t n_tiles, uint32_t n_bufs = 1) {
         uint32_t sz = n_tiles * n_bufs * tt::tile_size(fmt);
@@ -82,11 +92,11 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
 
     // Per-chunk inputs — single-buffered to stay within L1 budget (1.5 MB).
     make_cb(0, df_f32, attn_tiles, 1);   // L_unit [C,C]
-    make_cb(1, df_f32, out_tiles, 1);    // v_beta_sc [C,Dv]
+    make_cb(1, df_vbs, out_tiles, 1);    // v_beta_sc [C,Dv]
     make_cb(2, df_f32, in_kv_tiles, 1);  // k_bd_sc [C,Dk]
-    make_cb(3, df_f32, attn_tiles, 1);   // intra_attn [C,C]
-    make_cb(4, df_f32, in_kv_tiles, 1);  // q_decay [C,Dk]
-    make_cb(5, df_f32, kdt_tiles, 1);    // k_decay_t [Dk,C]
+    make_cb(3, df_att, attn_tiles, 1);   // intra_attn [C,C]
+    make_cb(4, df_qdec, in_kv_tiles, 1);  // q_decay [C,Dk]
+    make_cb(5, df_kdt, kdt_tiles, 1);     // k_decay_t [Dk,C]
     make_cb(6, df_f32, 1, 1);            // dl_exp (fp32 scalar)
     // CB7: unused (was identity_32)
     make_cb(8, df_f32, state_tiles, 1);  // S — persistent state
@@ -97,7 +107,19 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
     make_cb(9, df_f32, scratch_Xt, 1);   // fwd_rhs
     make_cb(10, df_f32, scratch_Xt, 1);  // corr_mm
     make_cb(11, df_f32, scratch_Xt, 1);  // temp_rhs
-    // CB12, CB13: unused (were Neumann-only)
+    // fp32 upcast scratch for bf16 value-path matmul operands consumed against the fp32 v_new
+    // intermediate. Only allocated (L1) when the corresponding input is actually bf16.
+    const bool intra_att_bf16 = !fused_intra && (df_att != df_f32);
+    const bool k_dt_bf16 = !fused_intra && (df_kdt != df_f32);
+    if (fused_intra) {
+        make_cb(12, df_f32, in_kv_tiles, 1);  // q_raw [C,Dk]
+        make_cb(13, df_f32, in_kv_tiles, 1);  // k_raw [C,Dk]
+    } else if (intra_att_bf16) {
+        make_cb(12, df_f32, attn_tiles, 1);  // intra_attn upcast
+    }
+    if (!fused_intra && k_dt_bf16) {
+        make_cb(13, df_f32, kdt_tiles, 1);  // k_decay_t upcast
+    }
 
     // Diagonal block inverses — 1 tile each, loaded per chunk by reader
     make_cb(14, df_f32, 1, 1);  // L_inv0
@@ -124,7 +146,16 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
     // -----------------------------------------------------------------------
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/gated_delta_attn/device/kernels/";
 
+    // Compute-kernel compile args: {Ct, Kt, Vt, intra_att_bf16, k_dt_bf16}. The reader/writer
+    // reuse only the first three (they don't branch on the value-path dtype).
     const std::vector<uint32_t> ct_args = {Ct, Kt, Vt};
+    const std::vector<uint32_t> compute_ct_args = {
+        Ct,
+        Kt,
+        Vt,
+        static_cast<uint32_t>(intra_att_bf16),
+        static_cast<uint32_t>(k_dt_bf16),
+        static_cast<uint32_t>(fused_intra)};
 
     // Reader/writer also carry per-tensor TensorAccessorArgs compile-time blocks,
     // appended right after {Ct, Kt, Vt} in the SAME order the kernels consume them
@@ -143,6 +174,8 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
     TensorAccessorArgs(in.dl_exp.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(in.L_inv.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct_args);
+    TensorAccessorArgs(in.q_raw.has_value() ? in.q_raw->buffer() : nullptr).append_to(reader_ct_args);
+    TensorAccessorArgs(in.k_raw.has_value() ? in.k_raw->buffer() : nullptr).append_to(reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = ct_args;
     TensorAccessorArgs(outputs[0].buffer()).append_to(writer_ct_args);
@@ -170,7 +203,7 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
             .math_fidelity = MathFidelity::HiFi2,
             .fp32_dest_acc_en = true,
             .math_approx_mode = false,
-            .compile_args = ct_args});
+            .compile_args = compute_ct_args});
 
     // -----------------------------------------------------------------------
     // Per-core runtime arguments
@@ -184,6 +217,8 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
     uint32_t dle_addr = in.dl_exp.buffer()->address();
     uint32_t linv_addr = in.L_inv.buffer()->address();
     uint32_t s0_addr = in.initial_state.has_value() ? in.initial_state->buffer()->address() : 0u;
+    uint32_t qraw_addr = in.q_raw.has_value() ? in.q_raw->buffer()->address() : 0u;
+    uint32_t kraw_addr = in.k_raw.has_value() ? in.k_raw->buffer()->address() : 0u;
 
     uint32_t out_addr = outputs[0].buffer()->address();
     uint32_t state_addr = outputs[1].buffer()->address();
@@ -194,7 +229,19 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
             program,
             reader_id,
             core,
-            {h, NC, lu_addr, vbs_addr, kbs_addr, att_addr, qdec_addr, kdt_addr, dle_addr, linv_addr, s0_addr});
+            {h,
+             NC,
+             lu_addr,
+             vbs_addr,
+             kbs_addr,
+             att_addr,
+             qdec_addr,
+             kdt_addr,
+             dle_addr,
+             linv_addr,
+             s0_addr,
+             qraw_addr,
+             kraw_addr});
         SetRuntimeArgs(program, writer_id, core, {h, NC, out_addr, state_addr});
         SetRuntimeArgs(program, compute_id, core, {NC});
     }
@@ -229,6 +276,8 @@ void GatedDeltaAttnSeqProgramFactory::override_runtime_arguments(
     uint32_t dle_addr = in.dl_exp.buffer()->address();
     uint32_t linv_addr = in.L_inv.buffer()->address();
     uint32_t s0_addr = in.initial_state.has_value() ? in.initial_state->buffer()->address() : 0u;
+    uint32_t qraw_addr = in.q_raw.has_value() ? in.q_raw->buffer()->address() : 0u;
+    uint32_t kraw_addr = in.k_raw.has_value() ? in.k_raw->buffer()->address() : 0u;
     uint32_t out_addr = outputs[0].buffer()->address();
     uint32_t state_addr = outputs[1].buffer()->address();
 
@@ -244,6 +293,8 @@ void GatedDeltaAttnSeqProgramFactory::override_runtime_arguments(
         ra[8] = dle_addr;
         ra[9] = linv_addr;
         ra[10] = s0_addr;
+        ra[11] = qraw_addr;
+        ra[12] = kraw_addr;
 
         auto& wa = GetRuntimeArgs(program, sv.writer_kernel_id, core);
         wa[2] = out_addr;
