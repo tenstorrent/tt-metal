@@ -36,12 +36,29 @@ CFG = dict(
     ln_eps=1e-5,
 )
 PREFIX = "thinker.audio_tower."
+MODEL_ID = "Qwen/Qwen3-ASR-1.7B"
+
+
+def resolve_snap_dir(snap_dir=None):
+    """Locate the local HF snapshot directory for Qwen3-ASR-1.7B.
+
+    Precedence: explicit `snap_dir` arg -> $QWEN3ASR_SNAP_DIR -> the huggingface_hub
+    cache (`snapshot_download`, which returns the already-cached path and only
+    downloads if it is missing). Avoids baking in a username or a specific cache
+    layout — the old `/home/ttuser/.cache/.../snapshots` + `os.listdir(base)[0]`
+    default broke on bare-metal / non-root / multi-snapshot caches."""
+    if snap_dir:
+        return snap_dir
+    env = os.environ.get("QWEN3ASR_SNAP_DIR")
+    if env:
+        return env
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(MODEL_ID)
 
 
 def load_audio_tower_weights(snap_dir=None, dtype=torch.float32):
-    if snap_dir is None:
-        base = "/home/ttuser/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots"
-        snap_dir = os.path.join(base, os.listdir(base)[0])
+    snap_dir = resolve_snap_dir(snap_dir)
     w = {}
     for f in sorted(glob.glob(snap_dir + "/*.safetensors")):
         with safe_open(f, "pt") as h:

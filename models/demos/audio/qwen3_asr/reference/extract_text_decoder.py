@@ -8,8 +8,8 @@ golden for the Phase-3/4 PCC tests.
 
 Strips the `thinker.` / `thinker.model.` prefixes, writes a Qwen3 config.json, and
 copies the tokenizer files. Then runs one short transcription and saves the merged
-`inputs_embeds` (audio+text), `input_ids`, `position_ids`, prefill logits and the
-generated token ids.
+`inputs_embeds` (audio+text) and `position_ids`, plus `decoder_meta.json` (the
+transcription text). The prefill-logits golden comes separately from `dump_reference.py`.
 
 Run with the qwen3-asr-eval venv.
 """
@@ -22,12 +22,7 @@ import shutil
 import numpy as np
 import torch
 
-# Base Qwen3-ASR-1.7B snapshot dir. Overridable via env so this runs both on the host
-# (eval venv, default below) and inside the server container (e.g. /root/.cache/...).
-SNAP_BASE = os.environ.get(
-    "QWEN3ASR_SNAP_BASE",
-    "/home/ttuser/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots",
-)
+MODEL_ID = "Qwen/Qwen3-ASR-1.7B"
 TEXT_CFG = dict(
     architectures=["Qwen3ForCausalLM"],
     model_type="qwen3",
@@ -52,7 +47,16 @@ TOK_FILES = ["merges.txt", "vocab.json", "tokenizer_config.json", "generation_co
 
 
 def snap_dir():
-    return os.path.join(SNAP_BASE, os.listdir(SNAP_BASE)[0])
+    """Resolve the Qwen3-ASR-1.7B snapshot dir. Precedence: $QWEN3ASR_SNAP_DIR ->
+    the huggingface_hub cache (`snapshot_download`, downloads only if absent). Runs
+    both on the host (eval venv) and inside the server container without baking in a
+    username / cache layout."""
+    env = os.environ.get("QWEN3ASR_SNAP_DIR")
+    if env:
+        return env
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(MODEL_ID)
 
 
 def extract_checkpoint(out_dir):
