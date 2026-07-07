@@ -46,12 +46,14 @@ class CoreMagicValues:
         self.active_eth = fw_elf.get_enum_value("CoreMagicNumber::ACTIVE_ETH")
         self.idle_eth = fw_elf.get_enum_value("CoreMagicNumber::IDLE_ETH")
         self.dram = fw_elf.get_enum_value("CoreMagicNumber::DRAM")
+        self.dispatch = fw_elf.get_enum_value("CoreMagicNumber::DISPATCH")
 
         self.magic_to_name = {
             self.worker: "WORKER",
             self.active_eth: "ACTIVE_ETH",
             self.idle_eth: "IDLE_ETH",
             self.dram: "DRAM",
+            self.dispatch: "DISPATCH",
         }
 
     def get_name(self, magic_value: int) -> str | None:
@@ -75,6 +77,8 @@ def get_expected_magic_for_location(
             return magic_values.active_eth, "ACTIVE_ETH"
         case "dram":
             return magic_values.dram, "DRAM"
+        case "dispatch":
+            return magic_values.dispatch, "DISPATCH"
         case _:
             return magic_values.worker, "WORKER"
 

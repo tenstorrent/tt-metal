@@ -902,7 +902,7 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
     } else if (programmable_core_type == HalProgrammableCoreType::DRAM) {
         core_info.core_magic_number() = dev_msgs::CoreMagicNumber::DRAM;
     } else if (programmable_core_type == HalProgrammableCoreType::DISPATCH) {
-        core_info.core_magic_number() = dev_msgs::CoreMagicNumber::WORKER;
+        core_info.core_magic_number() = dev_msgs::CoreMagicNumber::DISPATCH;
     } else {
         core_info.core_magic_number() = dev_msgs::CoreMagicNumber::IDLE_ETH;
     }
