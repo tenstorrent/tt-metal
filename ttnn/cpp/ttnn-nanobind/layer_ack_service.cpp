@@ -57,9 +57,9 @@ void py_module_types(nb::module_& mod) {
             R"doc(
                 Signal the reader thread to exit and join it. Idempotent.
 
-                NOTE: read_metadata() blocks until the device sends the next
-                record, so stop() blocks on the join until a record arrives (or
-                the parked read returns). The destructor also calls stop().
+                The reader polls has_data() before each read, so it never parks
+                inside a blocking read; stop() joins the thread promptly even when
+                no further record arrives. The destructor also calls stop().
             )doc");
 }
 
