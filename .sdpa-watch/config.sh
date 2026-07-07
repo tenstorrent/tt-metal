@@ -5,9 +5,30 @@ REPO="tenstorrent/tt-metal"
 BRANCH="main"
 TT_METAL_DIR="/localdev/skrstic/tt-metal"
 SLACK_WEBHOOK_FILE="$HOME/.sdpa-watch/slack_webhook"
-# Auth is via Claude Enterprise OAuth (~/.claude/.credentials.json), set up
-# by logging into `claude` once interactively. The org retired console API
-# keys in 2026-07, so there is no api_key file anymore.
+
+# ---- Auth ----------------------------------------------------------------
+# The org retired console API keys (2026-07), so there is no api_key file.
+# watch.sh authenticates the headless agent one of two ways, in this order:
+#
+#   MODE A (optional, most robust): a LONG-LIVED token from `claude setup-token`
+#   saved to $OAUTH_TOKEN_FILE. Exported as CLAUDE_CODE_OAUTH_TOKEN; never needs
+#   refreshing. Drop one in if you ever want to stop relying on the credential
+#   below. Leave the file absent to use MODE B.
+#
+#   MODE B (default, zero-manual): the interactive OAuth credential at
+#   $CLAUDE_CREDS_FILE, seeded once by logging into `claude`. Its access token
+#   is short-lived (~8h) and — critically — headless `claude -p` does NOT
+#   refresh it (that's what made every cron tick fail rc=1 from 2026-07-02).
+#   So watch.sh refreshes it ITSELF before each tick via the OAuth endpoint,
+#   using the rotating refresh token. An hourly cron then keeps the credential
+#   alive indefinitely with no human in the loop.
+OAUTH_TOKEN_FILE="$HOME/.sdpa-watch/oauth_token"           # MODE A (optional)
+CLAUDE_CREDS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"  # MODE B
+# MODE B refresh parameters (Claude Code's public OAuth client). Update these
+# only if Anthropic changes the endpoint/client_id.
+OAUTH_TOKEN_ENDPOINT="https://platform.claude.com/v1/oauth/token"
+OAUTH_CLIENT_ID="9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+OAUTH_REFRESH_MARGIN_SEC=1800   # refresh when <30 min of validity remain
 
 # Model for the LLM agent. Heavier = better diagnosis, more $$$.
 MODEL="claude-opus-4-8"
