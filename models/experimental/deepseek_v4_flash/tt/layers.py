@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Callable, Optional
 
 import ttnn
 
@@ -182,6 +182,110 @@ class LinearDecode(DeepSeekV4Module):
         )
         l1_weights.deallocate()
         return result
+
+
+class BatchedLinearDecode(DeepSeekV4Module):
+    """Batched (block-diagonal) ``x[b] @ W[b]`` via ``ttnn.experimental.matmul_decode``.
+
+    A rank-4 activation ``[d0, d1, M, K]`` (batch = ``d0*d1``) is matmul'd against a
+    per-batch weight ``[batch, K, N]`` that is folded along BOTH batch and N into a
+    width-sharded ``[1, 1, Bc*K, b_blocks*N]`` tensor (``Bc = batch / b_blocks``,
+    ``Nc = N / n_blocks``) laid across a ``b_blocks x n_blocks`` core grid -- the layout
+    the batched matmul_decode factory expects. The op infers ``b_blocks`` / ``n_blocks``
+    from the operand shapes and emits a DRAM-interleaved ``[d0, d1, M, N]`` result.
+
+    As in :class:`LinearDecode`, the (static) weight is prepared once here and only the
+    activation is resharded per call. ``preprocess`` (optional) is applied to the raw
+    torch weight on a cache MISS, *before* the batch/N fold, to normalize it to
+    ``[batch, K, N]`` (e.g. the o_a reshape from ``[batch*N, K]``); it is skipped on a
+    cache hit (the folded, tilized weight is already on disk).
+    """
+
+    def __init__(
+        self,
+        weight,
+        device: ttnn.MeshDevice,
+        cache_file_name: Optional[str] = None,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        batch: int,
+        K: int,
+        N: int,
+        b_blocks: Optional[int] = None,
+        n_blocks: Optional[int] = None,
+        num_inputA_cores: int = 32,
+        preprocess: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+    ):
+        self.device = device
+        self.dtype = dtype
+        self.batch = batch
+        self.K = K
+        self.N = N
+        self.num_inputA_cores = num_inputA_cores
+
+        # One batch per core row (Bc = 1) by default; widen N across as many cores as the grid
+        # allows while keeping each N-shard tile-aligned.
+        self.b_blocks = b_blocks if b_blocks is not None else batch
+        if n_blocks is None:
+            device_grid = device.compute_with_storage_grid_size()
+            max_cores = device_grid.x * device_grid.y
+            n_blocks = max(1, max_cores // self.b_blocks)
+            while n_blocks > 1 and (N % n_blocks != 0 or (N // n_blocks) % ttnn.TILE_SIZE != 0):
+                n_blocks -= 1
+        self.n_blocks = n_blocks
+
+        assert batch % self.b_blocks == 0, "b_blocks must divide batch"
+        assert N % self.n_blocks == 0, "n_blocks must divide N"
+        self.bc = batch // self.b_blocks
+        self.nc = N // self.n_blocks
+
+        b_core_range_set = rectangular_core_range_set(self.b_blocks * self.n_blocks, device)
+        self.weights_memory_config = ttnn.create_sharded_memory_config(
+            (self.bc * K, self.nc),
+            core_grid=b_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        w = _materialize(weight, cache_file_name, dtype)
+        if w is not None:
+            if preprocess is not None:
+                w = preprocess(w)
+            # w: [batch, K, N] -> [b_blocks, Bc, K, N] -> [Bc, K, b_blocks, N] -> [1, 1, Bc*K, b_blocks*N].
+            w = (
+                w.reshape(self.b_blocks, self.bc, K, N)
+                .permute(1, 2, 0, 3)
+                .reshape(1, 1, self.bc * K, self.b_blocks * N)
+                .contiguous()
+            )
+        self.weight = _load_weight(w, device, cache_file_name=cache_file_name, dtype=dtype)
+
+    def deallocate(self):
+        pass
+
+    def get_input_memory_config(self, m: int) -> ttnn.MemoryConfig:
+        # Activation A is width(K)-sharded: shard [batch * m_padded, K / num_inputA_cores].
+        m_padded = ((m + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        a_core_range_set = rectangular_core_range_set(self.num_inputA_cores, self.device)
+        return ttnn.create_sharded_memory_config(
+            (self.batch * m_padded, self.K // self.num_inputA_cores),
+            core_grid=a_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # x: rank-4 [d0, d1, M, K] with d0*d1 == batch. Reshard to the width(K)-sharded L1 layout,
+        # then run the batched matmul_decode (b_blocks / n_blocks are inferred from the shapes).
+        m = x.shape[-2]
+        if not x.is_sharded():
+            x = ttnn.to_memory_config(x, self.get_input_memory_config(m))
+        l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
+        y = ttnn.experimental.matmul_decode(x, l1_weights)  # DRAM-interleaved [d0, d1, M, N]
+        l1_weights.deallocate()
+        return y
 
 
 class DeepSeekV4RMSNorm(DeepSeekV4Module):
