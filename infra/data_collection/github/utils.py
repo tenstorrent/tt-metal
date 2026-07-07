@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 import pathlib
 import pickle
 import os
@@ -266,43 +267,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
         logger.warning(f"{github_job_id} is not completed, skipping this job")
         return None
 
-    # Best effort card type getting
-
-    get_overlap = lambda labels_a, labels_b: set(labels_a) & set(labels_b)
-    labels_have_overlap = lambda labels_a, labels_b: bool(get_overlap(labels_a, labels_b))
-
-    try:
-        detected_config = return_first_string_starts_with("config-", labels).replace("config-", "")
-    except Exception as e:
-        logger.error(e)
-        logger.info("Seems to have no config- label, so assuming no special config requested")
-        detected_config = None
-
-    if labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0", "config-t3000"], labels):
-        detected_arch = "wormhole_b0"
-    elif labels_have_overlap(["BH", "arch-blackhole"], labels):
-        detected_arch = "blackhole"
-    else:
-        detected_arch = None
-
-    single_cards_list = ("N150", "N300", "BH")
-    single_cards_overlap = get_overlap(single_cards_list, labels)
-
-    # In order of preference
-    if detected_config:
-        if not detected_arch:
-            # This will occur for jobs where runs-on: has a config-* label but doesn't have an arch-* or card-specific label
-            logger.warning(f"No arch label found for config {detected_config} in job label, unable to infer card type")
-            card_type = None
-        else:
-            card_type = f"{detected_config}-{detected_arch}"
-    elif single_cards_overlap:
-        logger.info(f"Detected overlap in single cards: {single_cards_overlap}")
-        card_type = list(single_cards_overlap)[0]
-    elif detected_arch:
-        card_type = detected_arch
-    else:
-        card_type = None
+    card_type = _card_type_from_job_labels(labels)
 
     job_submission_ts = github_job["created_at"]
 
@@ -383,6 +348,48 @@ def get_job_rows_from_github_info(workflow_outputs_dir, github_jobs_json, github
 def _get_repo_root() -> pathlib.Path:
     """Return the repository root directory (parent of infra/)."""
     return pathlib.Path(__file__).resolve().parents[3]
+
+
+@functools.lru_cache(maxsize=1)
+def _load_sku_config_skus() -> dict:
+    sku_config_path = _get_repo_root() / ".github" / "sku_config.yaml"
+    with open(sku_config_path) as f:
+        config = yaml.safe_load(f)
+    return config.get("skus") or {}
+
+
+def _card_type_from_job_labels(labels: list[str]) -> Optional[str]:
+    """
+    Map GitHub job runner labels to a pipeline SKU from sku_config.yaml.
+
+    A SKU matches when every label in its runs_on list is present on the job (the job
+    may have additional labels). When multiple SKUs match, the most specific SKU wins
+    (the one with the largest runs_on list). Ties break lexicographically on SKU name.
+    """
+    label_set = set(labels)
+    matches: list[tuple[int, str]] = []
+
+    for sku_name, sku_entry in _load_sku_config_skus().items():
+        if sku_name.startswith("sim_"):
+            continue
+
+        runs_on = sku_entry.get("runs_on") or []
+        if not runs_on:
+            continue
+
+        required_labels = frozenset(runs_on)
+        if not required_labels.issubset(label_set):
+            continue
+
+        matches.append((len(required_labels), sku_name))
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda match: (-match[0], match[1]))
+    card_type = matches[0][1]
+    logger.info(f"Matched job labels to SKU {card_type!r}")
+    return card_type
 
 
 def get_github_partial_benchmark_data_filenames():

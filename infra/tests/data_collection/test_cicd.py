@@ -4,7 +4,7 @@ import pathlib
 from infra.data_collection.github import workflows
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis
 from infra.data_collection.models import InfraErrorV1, TestErrorV1
-from infra.data_collection.github.utils import get_job_failure_signature_
+from infra.data_collection.github.utils import get_job_failure_signature_, _card_type_from_job_labels, _load_sku_config_skus
 from infra.data_collection.pydantic_models import JobStatus
 from infra.data_collection.pydantic_models import Step
 from loguru import logger
@@ -312,3 +312,68 @@ def test_non_checkout_git_failure_stays_generic():
         mock_job, "The process '/usr/bin/git' failed with exit code 1", workflow_outputs_dir=None
     )
     assert result == str(InfraErrorV1.GENERIC_FAILURE)
+
+
+@pytest.fixture(autouse=True)
+def clear_sku_config_cache():
+    _load_sku_config_skus.cache_clear()
+    yield
+    _load_sku_config_skus.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "labels,expected_card_type",
+    [
+        (["N300", "cloud-virtual-machine", "in-service"], "wh_n300"),
+        (["N150", "cloud-virtual-machine", "in-service"], "wh_n150"),
+        (
+            ["P300-viommu", "arch-blackhole", "in-service", "pipeline-yyz2-lfc"],
+            "bh_p300",
+        ),
+        (["P300-viommu", "in-service", "pipeline-yyz2-lfc"], "bh_p300_viommu"),
+        (
+            ["P150", "arch-blackhole", "in-service", "pipeline-functional"],
+            "bh_p150",
+        ),
+        (["P100", "cloud-virtual-machine", "in-service"], "bh_p100"),
+        (
+            ["config-t3000", "arch-wormhole_b0", "in-service", "pipeline-functional"],
+            "wh_llmbox",
+        ),
+        # tm-fabric-style runs_on is a strict subset of bh_p300 runs_on in sku_config
+        (["P300-viommu", "arch-blackhole", "in-service"], None),
+        (["build", "in-service"], None),
+        (["ubuntu-latest"], None),
+    ],
+)
+def test_card_type_from_job_labels(labels, expected_card_type):
+    assert _card_type_from_job_labels(labels) == expected_card_type
+
+
+def test_card_type_prefers_more_specific_sku():
+    labels = ["P300-viommu", "arch-blackhole", "in-service", "pipeline-yyz2-lfc"]
+    assert _card_type_from_job_labels(labels) == "bh_p300"
+
+
+def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_environment):
+    pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_passing_10662355710")
+
+    wh_n300_labels = {"N300", "cloud-virtual-machine", "in-service"}
+    full_wh_n300_jobs = [
+        job
+        for job in pipeline.jobs
+        if job.job_label and wh_n300_labels.issubset(set(job.job_label.split(",")))
+    ]
+    assert full_wh_n300_jobs
+    assert all(job.card_type == "wh_n300" for job in full_wh_n300_jobs)
+
+    # Legacy post-commit jobs may only carry a subset of wh_n300 runs_on labels.
+    partial_n300_jobs = [
+        job
+        for job in pipeline.jobs
+        if job.job_label
+        and "N300" in job.job_label.split(",")
+        and "cloud-virtual-machine" not in job.job_label.split(",")
+    ]
+    assert partial_n300_jobs
+    assert all(job.card_type is None for job in partial_n300_jobs)
