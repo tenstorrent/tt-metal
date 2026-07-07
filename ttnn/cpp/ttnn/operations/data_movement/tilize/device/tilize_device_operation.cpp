@@ -27,6 +27,12 @@ bool can_use_sharded_optimized_factories(
         return false;
     }
 
+    // The optimized factory aliases the input CB directly to the input shard buffer (zero-copy read).
+    // CBs can only reside in L1, so a DRAM-backed input shard is always incompatible.
+    if (input_tensor.memory_config().buffer_type() != BufferType::L1) {
+        return false;
+    }
+
     auto memory_layout = input_tensor.memory_config().memory_layout();
     if (memory_layout != TensorMemoryLayout::HEIGHT_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
         memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
@@ -67,7 +73,11 @@ bool can_use_sharded_optimized_factories(
                 // so there is no performance benefit from the optimized path. Fall back to the default factory.
                 return false;
             }
-        } else if (out_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+        } else if (out_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            if (operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
+                return false;  // CBs cannot be backed by DRAM; sharded output must be L1.
+            }
+        } else {
             return false;  // Only same-layout or L1 INTERLEAVED output supported for HEIGHT_SHARDED.
         }
     }
