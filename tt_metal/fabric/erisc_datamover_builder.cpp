@@ -8,6 +8,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/combine_flow_log.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -64,10 +65,12 @@ namespace tt::tt_fabric {
 // the trace region (top-down). Deciphered from the DRAM usage of
 // models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py (BH ring-8 2link), whose
 // interleaved footprint is a tiny fraction of one 4 GB bank. Offsets stay < 4 GiB so they fit uint32_t.
-static constexpr uint64_t COMBINE_LOG_DRAM_BUFFER_SIZE = 4ull << 20;     // 4 MiB per buffer (sender, receiver)
-static constexpr uint64_t COMBINE_SENDER_LOG_DRAM_BASE = 0xC0000000ull;  // 3 GiB (per-bank byte offset)
-static constexpr uint64_t COMBINE_RECEIVER_LOG_DRAM_BASE =
-    COMBINE_SENDER_LOG_DRAM_BASE + COMBINE_LOG_DRAM_BUFFER_SIZE;  // 3 GiB + 4 MiB
+//
+// The geometry constants live in combine_flow_log.hpp so the host reader (dump_combine_flow_logs) drains the
+// exact same DRAM locations these compile-time args point the kernel at.
+using tt::tt_fabric::COMBINE_LOG_DRAM_BUFFER_SIZE;
+using tt::tt_fabric::COMBINE_RECEIVER_LOG_DRAM_BASE;
+using tt::tt_fabric::COMBINE_SENDER_LOG_DRAM_BASE;
 
 size_t FabricEriscDatamoverBuilder::get_max_packet_payload_size_for_arch(tt::ARCH arch) {
     switch (arch) {
