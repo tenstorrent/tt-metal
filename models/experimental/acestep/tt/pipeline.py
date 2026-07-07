@@ -297,9 +297,16 @@ class AceStepPipeline:
                 device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT,
             )
 
-        def _cfg_velocity(xt, ts, context, enc, unc, cos, sin, run):
-            vt_cond = self.dit.forward(xt, context, ts, ts, cos, sin, enc, sliding_mask=sliding)
-            vt_uncond = self.dit.forward(xt, context, ts, ts, cos, sin, unc, sliding_mask=sliding)
+        # Cross-attention K/V are denoise-invariant -> precompute once per context (outside the trace)
+        # and pass as trace CONSTANTS (like context/rope): supplied on the first capture call, reused
+        # via tracer.inputs on replays. Only Q is projected against them each step. Skips the redundant
+        # per-step condition_embedder + K/V projection (24 layers x 2 contexts). Math identical.
+        cross_kv_cond = self.dit.compute_cross_kv(enc_cond)
+        cross_kv_uncond = self.dit.compute_cross_kv(enc_uncond)
+
+        def _cfg_velocity(xt, ts, cos, sin, run, ckv_cond, ckv_uncond):
+            vt_cond = self.dit.forward(xt, context_latents, ts, ts, cos, sin, None, sliding_mask=sliding, cross_kv=ckv_cond)
+            vt_uncond = self.dit.forward(xt, context_latents, ts, ts, cos, sin, None, sliding_mask=sliding, cross_kv=ckv_uncond)
             return apg_forward_ttnn_traced(vt_cond, vt_uncond, guidance_scale, run, dim=-2)
 
         # Momentum running-average starts at zeros (reference seeds running=diff on step 0, i.e.
@@ -316,12 +323,11 @@ class AceStepPipeline:
             vt, new_run = tracer(
                 xt=xt,
                 ts=_ts(t_curr),
-                context=context_latents if first else tracer.inputs["context"],
-                enc=enc_cond if first else tracer.inputs["enc"],
-                unc=enc_uncond if first else tracer.inputs["unc"],
                 cos=cos_tt if first else tracer.inputs["cos"],
                 sin=sin_tt if first else tracer.inputs["sin"],
                 run=run0 if first else tracer.inputs["run"],
+                ckv_cond=cross_kv_cond if first else tracer.inputs["ckv_cond"],
+                ckv_uncond=cross_kv_uncond if first else tracer.inputs["ckv_uncond"],
                 traced=True,
             )
             xt = solver.euler_step(tracer.inputs["xt"], ttnn.clone(vt), t_curr - t_prev)
