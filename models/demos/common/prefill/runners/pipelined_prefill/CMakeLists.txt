@@ -14,7 +14,7 @@ target_sources(
     PRIVATE
         # shared impls (queue/reorder/router) + this module's own binding entry point + test consumer
         ${LAYER_COMPLETION_IMPL_SRCS}
-        ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion_bindings.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion_nanobind.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion_consumer.cpp
 )
 target_link_libraries(
