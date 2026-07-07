@@ -29,7 +29,7 @@ from helpers.test_variant_parameters import (
     unpack_transpose_faces=[Transpose.No, Transpose.Yes],
     math_transpose_faces=[Transpose.No, Transpose.Yes],
 )
-def test_perf_math_transpose(
+def test_perf_transpose_dest_float(
     perf_report,
     formats,
     unpack_transpose_faces,

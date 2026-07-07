@@ -12,7 +12,7 @@ baseline). Running this module twice -- once without the env (macro ON,
 optimized) and once with TT_METAL_DISABLE_SFPLOADMACRO=1 (macro OFF, baseline)
 -- gives a clean A/B on the same tree.
 
-Unlike test_perf_eltwise_unary_sfpu (which dispatches a single MathOperation),
+Unlike test_perf_eltwise_unary_sfpu_float (which dispatches a single MathOperation),
 typecast is selected by the (IN, OUT) DataFormat pair via typecast_tile<IN, OUT>
 / the shared SfpuType::typecast dispatch, so this module uses the dedicated
 typecast perf kernel sources/eltwise_unary_typecast_perf.cpp with the
@@ -88,7 +88,7 @@ def _is_block_float(fmt: DataFormat) -> bool:
         [128, 64],  # tile_cnt: 8
     ],
 )
-def test_perf_eltwise_typecast(
+def test_perf_eltwise_unary_typecast(
     perf_report,
     typecast_case,
     approx_mode,

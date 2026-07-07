@@ -70,7 +70,7 @@ def get_dest_accum_modes(formats):
         [128, 64],  # tile_cnt: 8
     ],  # Specifying different input sizes to cover different tile counts
 )
-def test_perf_eltwise_binary_sfpu_float(
+def test_perf_sfpu_binary_float(
     perf_report,
     formats,
     mathop,
@@ -155,7 +155,7 @@ def test_perf_eltwise_binary_sfpu_float(
         [128, 64],  # tile_cnt: 8
     ],
 )
-def test_perf_eltwise_binary_sfpu_int(
+def test_perf_sfpu_binary_int(
     perf_report,
     formats,
     mathop,
@@ -240,7 +240,7 @@ def test_perf_eltwise_binary_sfpu_int(
         [128, 64],  # tile_cnt: 8
     ],
 )
-def test_perf_eltwise_binary_sfpu_add_top_row(
+def test_perf_sfpu_binary_add_top_row(
     perf_report,
     formats,
     mathop,

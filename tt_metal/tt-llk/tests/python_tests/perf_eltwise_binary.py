@@ -34,7 +34,7 @@ from helpers.test_variant_parameters import (
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
 )
-def test_perf_eltwise_binary_fpu(
+def test_perf_eltwise_binary(
     perf_report,
     formats,
     mathop,

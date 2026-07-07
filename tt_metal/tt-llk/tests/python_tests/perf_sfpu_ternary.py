@@ -106,126 +106,36 @@ def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
         DestAccumulation.Yes,
         DestAccumulation.No,
     ],
-    loop_factor=[16],
-    iterations=[32],
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
-)
-def test_perf_sfpu_addcmul(
-    perf_report,
-    formats,
-    dest_acc,
-    loop_factor,
-    iterations,
-    input_dimensions,
-):
-    _run(
-        formats,
+    mathop=[
         MathOperation.SfpuAddcmul,
-        dest_acc,
-        loop_factor,
-        iterations,
-        input_dimensions,
-    ).run(perf_report)
-
-
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-        ],
-        same=True,
-    ),
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
-    ],
-    loop_factor=[16],
-    iterations=[32],
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
-)
-def test_perf_sfpu_addcdiv(
-    perf_report,
-    formats,
-    dest_acc,
-    loop_factor,
-    iterations,
-    input_dimensions,
-):
-    _run(
-        formats,
         MathOperation.SfpuAddcdiv,
-        dest_acc,
-        loop_factor,
-        iterations,
-        input_dimensions,
-    ).run(perf_report)
-
-
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-        ],
-        same=True,
-    ),
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
-    ],
-    loop_factor=[16],
-    iterations=[32],
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
-)
-def test_perf_sfpu_lerp(
-    perf_report,
-    formats,
-    dest_acc,
-    loop_factor,
-    iterations,
-    input_dimensions,
-):
-    _run(
-        formats,
         MathOperation.SfpuLerp,
-        dest_acc,
-        loop_factor,
-        iterations,
-        input_dimensions,
-    ).run(perf_report)
-
-
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-        ],
-        same=True,
-    ),
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
+        MathOperation.SfpuSnakeBeta,
     ],
     loop_factor=[16],
     iterations=[32],
     input_dimensions=[[128, 64]],  # tile_cnt: 8
 )
-def test_perf_sfpu_snake_beta(
+def test_perf_sfpu_ternary(
     perf_report,
     formats,
     dest_acc,
+    mathop,
     loop_factor,
     iterations,
     input_dimensions,
 ):
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    if (
+        formats.input_format == DataFormat.Bfp8_b
+        and mathop != MathOperation.SfpuAddcmul
+    ):
+        pytest.skip("Bfp8_b is only supported for addcmul")
+
     _run(
         formats,
-        MathOperation.SfpuSnakeBeta,
+        mathop,
         dest_acc,
         loop_factor,
         iterations,

@@ -57,7 +57,7 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     input_dimensions=generate_input_dimensions(16),
 )
-def test_fast_tilize_perf(
+def test_perf_fast_tilize(
     perf_report,
     input_format,
     output_format,
