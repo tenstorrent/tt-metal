@@ -243,10 +243,10 @@ class _Transformer:
         if cos is not None:
             q = self._rope(q, cos, sin)
             k = self._rope(k, cos, sin)
-        scores = ttnn.matmul(q, k, transpose_b=True, dtype=F32, compute_kernel_config=self._ck(), memory_config=DRAM)
+        scores = ttnn.matmul(q, k, transpose_b=True, dtype=F32, compute_kernel_config=self._ck(), memory_config=DRAM, core_grid=ttnn.CoreGrid(y=8, x=8))
         scores = ttnn.multiply(scores, self.scale)
         probs = ttnn.softmax(scores, dim=-1)
-        out = ttnn.matmul(probs, v, dtype=self.wdtype, compute_kernel_config=self._ck(), memory_config=DRAM)
+        out = ttnn.matmul(probs, v, dtype=self.wdtype, compute_kernel_config=self._ck(), memory_config=DRAM, core_grid=ttnn.CoreGrid(y=8, x=8))
         return self._merge_heads(out, S)
 
     def _double_attn(self, a, norm_hs, norm_enc, cos, sin, img_len, txt_len):
@@ -267,10 +267,10 @@ class _Transformer:
             q = self._rope(q, cos, sin)
             k = self._rope(k, cos, sin)
 
-        scores = ttnn.matmul(q, k, transpose_b=True, dtype=F32, compute_kernel_config=self._ck(), memory_config=DRAM)
+        scores = ttnn.matmul(q, k, transpose_b=True, dtype=F32, compute_kernel_config=self._ck(), memory_config=DRAM, core_grid=ttnn.CoreGrid(y=8, x=8))
         scores = ttnn.multiply(scores, self.scale)
         probs = ttnn.softmax(scores, dim=-1)
-        out = ttnn.matmul(probs, v, dtype=self.wdtype, compute_kernel_config=self._ck(), memory_config=DRAM)
+        out = ttnn.matmul(probs, v, dtype=self.wdtype, compute_kernel_config=self._ck(), memory_config=DRAM, core_grid=ttnn.CoreGrid(y=8, x=8))
         out = self._merge_heads(out, S)  # [1,S,dim]
 
         enc_attn = ttnn.slice(out, [0, 0, 0], [1, txt_len, self.dim], [1, 1, 1])
