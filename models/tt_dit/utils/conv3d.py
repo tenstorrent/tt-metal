@@ -474,6 +474,13 @@ _DEFAULT_BLOCKINGS = {
     # channel combos all have swept exact _BLOCKINGS entries for 2x4/4x8 1080p;
     # they remain here as the cross-mesh/cross-resolution fallback (the hardcoded
     # full-Cin default OOMs at these widths).
+    (128, 1024, (3, 3, 3)): (
+        64,
+        128,
+        1,
+        2,
+        2,
+    ),  # s0_conv_in / ups_initial — sole LTX decoder+ups combo with no channel fallback; the (Cin,32,1,1,1) default OOMs at off-1080p spatial dims
     (1024, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s0_up
     (512, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s1_up
     (256, 512, (3, 3, 3)): (256, 32, 1, 4, 4),  # s3_chg
