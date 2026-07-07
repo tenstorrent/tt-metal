@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>LTX stage bottlenecks — nsight</title>
+<style>
+ :root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--border:#30363d;--fg:#e6edf3;
+  --muted:#9da7b3;--accent:#4493f8;--good:#3fb950;--warn:#d29922;--bad:#f85149;
+  --cmp:#4493f8;--bw:#d29922;--disp:#8b949e;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;}
+ @media (prefers-color-scheme:light){:root{--bg:#f6f8fa;--panel:#fff;--panel2:#eef1f5;
+  --border:#d0d7de;--fg:#1f2328;--muted:#59636e;}}
+ :root[data-theme=dark]{--bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--border:#30363d;--fg:#e6edf3;--muted:#9da7b3;}
+ :root[data-theme=light]{--bg:#f6f8fa;--panel:#fff;--panel2:#eef1f5;--border:#d0d7de;--fg:#1f2328;--muted:#59636e;}
+ *{box-sizing:border-box;}
+ body{margin:0;background:var(--bg);color:var(--fg);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+ .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 80px;}
+ h1{font-size:25px;margin:0 0 4px;letter-spacing:-.3px;}
+ h2{font-size:18px;margin:34px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+ h3{font-size:15px;margin:22px 0 6px;}
+ .sub{color:var(--muted);margin:0 0 8px;}
+ .small{font-size:12.5px;} .muted{color:var(--muted);}
+ .mono{font-family:var(--mono);font-size:.9em;}
+ .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:16px 0;}
+ .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;}
+ .card .k{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;}
+ .card .v{font-size:22px;font-weight:650;margin:4px 0;} .card .v small{font-size:13px;color:var(--muted);font-weight:400;}
+ .tablewrap{overflow-x:auto;}
+ table{width:100%;border-collapse:collapse;margin:10px 0;background:var(--panel);
+  border:1px solid var(--border);border-radius:10px;overflow:hidden;font-size:13.5px;}
+ th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);white-space:nowrap;}
+ th{background:var(--panel2);color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.3px;}
+ td.num{text-align:right;font-variant-numeric:tabular-nums;}
+ tr:last-child td{border-bottom:none;}
+ tr.total td{font-weight:650;background:var(--panel2);}
+ .good{color:var(--good);} .bad{color:var(--bad);} .ok{color:var(--fg);}
+ .bar{background:var(--panel2);border-radius:5px;height:9px;min-width:90px;overflow:hidden;}
+ .bar span{display:block;height:100%;} .bar .cmp{background:var(--accent);}
+ .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;}
+ .pill.cmp{background:rgba(68,147,248,.16);color:var(--cmp);}
+ .pill.bw{background:rgba(210,153,34,.16);color:var(--warn);}
+ .pill.disp{background:rgba(139,148,158,.18);color:var(--disp);}
+ .note{background:var(--panel2);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;padding:12px 16px;margin:14px 0;font-size:13.5px;}
+ .foot{color:var(--muted);font-size:12.5px;margin-top:40px;border-top:1px solid var(--border);padding-top:14px;}
+</style></head><body><div class="wrap">
+ <h1>LTX per-stage bottlenecks</h1>
+ <p class="sub">nsight ops-perf rollup · critical-path device time + per-stage wall-clock budget</p>
+ <div class="note">Source CSV(s): /home/smarton/tt-metal/tmp/ltx-rt-opt/prof/s2named/reports/2026_07_04_10_17_38/ops_perf_results_2026_07_04_10_17_38.csv · log: /tmp/claude-1007/-home-smarton-tt-metal/5b5ad79d-c202-43b3-b28f-2afd279086da/scratchpad/ltx_replay.log · rollup: mesh critical-path</div>
+ <div class="grid"><div class='card'><div class='k'>e2e wall-clock</div><div class='v'>12.22<small> s</small></div><div class='muted small'>sum of per-stage timers (--log)</div></div><div class='card'><div class='k'>e2e budget</div><div class='v'>6.00<small> s</small></div><div class='muted small'>OVER by 6.22s</div></div><div class='card'><div class='k'>device critical-path</div><div class='v'>76.0<small> ms</small></div><div class='muted small'>max-across-mesh per op, summed</div></div><div class='card'><div class='k'>hottest stage (device)</div><div class='v'>Stage 2 denoise</div><div class='muted small'>76.0 ms</div></div></div>
+ <h2>Stage rollup &amp; e2e budget</h2>
+ <div class="tablewrap"><table>
+  <tr><th>stage</th><th>device time</th><th>share (device)</th><th>wall-clock</th><th>% e2e</th><th>vs budget</th></tr>
+  <tr><td><strong>text-encode</strong></td><td class='num'>0.00 ms</td><td><div class="bar"><span class="cmp" style="width:0.0%"></span></div></td><td class='num'>0.20 s</td><td class='num'>2%</td><td class='num ok'>-0.10 s vs 0.30</td></tr><tr><td><strong>Stage 1 denoise</strong></td><td class='num'>0.00 ms</td><td><div class="bar"><span class="cmp" style="width:0.0%"></span></div></td><td class='num'>4.33 s</td><td class='num'>35%</td><td class='num bad'>+2.33 s vs 2.00</td></tr><tr><td><strong>Stage 2 denoise</strong></td><td class='num'>75.96 ms</td><td><div class="bar"><span class="cmp" style="width:100.0%"></span></div></td><td class='num'>3.23 s</td><td class='num'>26%</td><td class='num bad'>+1.73 s vs 1.50</td></tr><tr><td><strong>VAE decode</strong></td><td class='num'>0.00 ms</td><td><div class="bar"><span class="cmp" style="width:0.0%"></span></div></td><td class='num'>2.02 s</td><td class='num'>17%</td><td class='num bad'>+1.02 s vs 1.00</td></tr><tr><td><strong>Audio decode</strong></td><td class='num'>0.00 ms</td><td><div class="bar"><span class="cmp" style="width:0.0%"></span></div></td><td class='num'>0.84 s</td><td class='num'>7%</td><td class='num bad'>+0.34 s vs 0.50</td></tr><tr><td><strong>Video export</strong></td><td class='num'>0.00 ms</td><td><div class="bar"><span class="cmp" style="width:0.0%"></span></div></td><td class='num'>1.60 s</td><td class='num'>13%</td><td class='num bad'>+0.90 s vs 0.70</td></tr><tr class='total'><td>TOTAL</td><td class='num'>76.0 ms</td><td></td><td class='num'>12.22 s</td><td class='num'>100%</td><td class='num bad'>OVER by 6.22s — need −51%</td></tr>
+ </table></div>
+ <p class='muted small'>Aux (non-stage) timers: Transformer prepare 2.10s · Latent upsample 1.42s · VAE prepare 0.11s</p>
+ <p class="muted small">Device time = mesh critical-path (max-across-chip per op, summed) — never the
+  cross-chip sum. It is ≤ wall-clock; the gap is host / dispatch / D2H that is not a device op.
+  Bound tag thresholds: FPU ≥ 30% = compute, NoC/CCL ≥ 20% = bandwidth, else dispatch/host.</p>
+ <h2>Top ops per stage</h2>
+ <h3>text-encode</h3><p class='muted'>No device ops — host/dispatch stage; time from the pipeline log only.</p><h3>Stage 1 denoise</h3><p class='muted'>No device ops — host/dispatch stage; time from the pipeline log only.</p><h3>Stage 2 denoise <span class='muted small'>· 75.96 ms device · 354 ops</span></h3><table class='ops'><tr><th>ms</th><th>%stg</th><th>n</th><th>op</th><th>FPU</th><th>NoC</th><th>CCL</th><th>bound</th></tr><tr><td class='num'>24.19</td><td class='num'>32%</td><td class='num'>×2</td><td class='mono'>RingJointSDPADeviceOperation</td><td class='num'>54%</td><td class='num'>n/a</td><td class='num'>n/a</td><td><span class='pill cmp'>compute-bound (FPU 54%)</span></td></tr><tr><td class='num'>14.25</td><td class='num'>19%</td><td class='num'>×26</td><td class='mono'>MinimalMatmulDeviceOperation</td><td class='num'>0%</td><td class='num'>n/a</td><td class='num'>n/a</td><td><span class='pill cmp'>compute (FPU unmodelled)</span></td></tr><tr><td class='num'>8.43</td><td class='num'>11%</td><td class='num'>×39</td><td class='mono'>AllGatherAsyncDeviceOperation</td><td class='num'>41%</td><td class='num'>n/a</td><td class='num'>41%</td><td><span class='pill bw'>CCL-bound (41% fabric)</span></td></tr><tr><td class='num'>8.05</td><td class='num'>11%</td><td class='num'>×35</td><td class='mono'>TilizeDeviceOperation</td><td class='num'>0%</td><td class='num'>n/a</td><td class='num'>n/a</td><td><span class='pill disp'>dispatch/host-bound (util low)</span></td></tr><tr><td class='num'>5.25</td><td class='num'>7%</td><td class='num'>×48</td><td class='mono'>TypecastDeviceOperation</td><td class='num'>0%</td><td class='num'>n/a</td><td class='num'>n/a</td><td><span class='pill disp'>dispatch/host-bound (util low)</span></td></tr><tr><td class='num'>3.96</td><td class='num'>5%</td><td class='num'>×21</td><td class='mono'>BinaryNgDeviceOperation</td><td class='num'>0%</td><td class='num'>n/a</td><td class='num'>n/a</td><td><span class='pill disp'>dispatch/host-bound (util low)</span></td></tr></table><h3>VAE decode</h3><p class='muted'>No device ops — host/dispatch stage; time from the pipeline log only.</p><h3>Audio decode</h3><p class='muted'>No device ops — host/dispatch stage; time from the pipeline log only.</p><h3>Video export</h3><p class='muted'>No device ops — host/dispatch stage; time from the pipeline log only.</p>
+ <div class="foot">Generated by tools/tracy/ltx_stage_bottlenecks.py. Self-contained; regenerate after each capture.</div>
+</div></body></html>
