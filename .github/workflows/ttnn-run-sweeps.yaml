@@ -609,7 +609,7 @@ on:
           - blackhole
         default: "wormhole_b0"
       runner-label:
-        description: "Single sweep only"
+        description: "Single sweep only — target SKU"
         required: true
         type: choice
         options:
@@ -685,6 +685,7 @@ jobs:
       measure-memory: ${{ steps.resolve.outputs.measure-memory }}
       arch: ${{ steps.resolve.outputs.arch }}
       runner-label: ${{ steps.resolve.outputs.runner-label }}
+      enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
       log-level: ${{ steps.resolve.outputs.log-level }}
       mesh-shape: ${{ steps.resolve.outputs.mesh-shape }}
       fail-on-test-failure: ${{ steps.resolve.outputs.fail-on-test-failure }}
@@ -738,7 +739,37 @@ jobs:
           echo "measure-e2e-perf=$MEASURE_E2E_PERF" >> $GITHUB_OUTPUT
           echo "measure-memory=$MEASURE_MEMORY" >> $GITHUB_OUTPUT
           echo "arch=${{ github.event.inputs.arch || 'wormhole_b0' }}" >> $GITHUB_OUTPUT
-          echo "runner-label=${{ github.event.inputs['runner-label'] || 'N150' }}" >> $GITHUB_OUTPUT
+
+          # A single-module sweep loads only its target SKU (the runner-label, which
+          # is now a SKU name); ALL SWEEPS runs enable every SKU in the matrix yaml.
+          if [[ "$SWEEP_NAME" == "ALL SWEEPS"* ]]; then
+            ENABLED_SKUS="ALL_SKUS_IN_TESTS"
+          else
+            case "$RUNNER_LABEL" in
+              N150)
+                ENABLED_SKUS="wh_n150_civ2"
+                ;;
+              N300)
+                ENABLED_SKUS="wh_n300_civ2"
+                ;;
+              P100a)
+                ENABLED_SKUS="wh_p100"
+                ;;
+              P150b)
+                ENABLED_SKUS="wh_p150b_civ2"
+                ;;
+              n300-llmbox)
+                ENABLED_SKUS="wh_llmbox"
+                ;;
+              topology-6u)
+                ENABLED_SKUS="wh_galaxy"
+                ;;
+              BH-LoudBox)
+                ENABLED_SKUS="bh_loudbox"
+                ;;
+            esac
+          fi
+          echo "enabled-skus=$ENABLED_SKUS" >> $GITHUB_OUTPUT
           echo "log-level=${{ github.event.inputs['log-level'] || 'INFO' }}" >> $GITHUB_OUTPUT
           echo "mesh-shape=${{ github.event.inputs.mesh_shape || '' }}" >> $GITHUB_OUTPUT
 
@@ -832,3 +863,5 @@ jobs:
       fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       upload-results: ${{ needs.resolve-inputs.outputs.upload-results }}
       arch: ${{ needs.resolve-inputs.outputs.arch }}
+      enabled-skus: ${{ needs.resolve-inputs.outputs.enabled-skus }}
+      group-by: ${{ needs.resolve-inputs.outputs.generate-sweeps-group-by }}

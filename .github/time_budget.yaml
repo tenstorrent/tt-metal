@@ -128,15 +128,16 @@ ttnn:
   # workflows. Budget planning uses a 30-min figure per job (the verify step
   # passes --timeout-minutes 30); actual job timeout is 60 min.
   sweep:
-    wh_n150: 847
-    wh_n300: 847
+    wh_n150_civ2: 847
+    wh_n300_civ2: 847
+    bh_p100: 847
     bh_p150b_civ2: 847
     wh_galaxy: 200
     bh_loudbox: 90
     wh_llmbox: 120
   sweep_validation:
-    wh_n150: 120
-    wh_n300: 120
+    wh_n150_civ2: 120
+    wh_n300_civ2: 120
     bh_p150b_civ2: 120
     wh_galaxy: 120
 

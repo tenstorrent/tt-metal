@@ -8,9 +8,9 @@
 - name: ttnn sweep validation
   cmd: 'python3 tests/sweep_framework/validate_sweep_trace.py'
   skus:
-    wh_n150:
+    wh_n150_civ2:
       timeout: 120
-    wh_n300:
+    wh_n300_civ2:
       timeout: 120
     bh_p150b_civ2:
       timeout: 120

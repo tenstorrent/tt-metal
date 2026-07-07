@@ -1,26 +1,30 @@
 # Sweep batch definitions for the MESH split of the ttnn-run-sweeps workflow.
 #
-# Model-traced sweeps are NOT batched by op category — their vector files carry a
-# .mesh_<rows>x<cols> suffix and are routed to a runner lane by mesh shape
-# (see MODEL_TRACED_MESH_TEST_GROUPS in
-# tests/sweep_framework/framework/matrix_runner_config.py). Each entry is one
-# runner LANE; the universal `category` field holds that lane name, which
-# ttnn-run-sweeps-impl.yaml wires to TEST_GROUP_NAME so sweeps_runner.py's
-# vector_source filters loaded vectors to the lane's allowed mesh shapes (with the
-# manifest's vector_grouping_mode=mesh). Lane -> owned mesh shapes:
+# Used when model_traced vectors are generated with --group-by mesh: files carry a
+# .mesh_<rows>x<cols> suffix and route to a runner lane by mesh shape
+# (MODEL_TRACED_MESH_TEST_GROUPS in
+# tests/sweep_framework/framework/matrix_runner_config.py).
+#
+# Wormhole lanes use strict CI ownership: the universal `category` field holds the
+# lane name, which ttnn-run-sweeps-impl.yaml wires to TEST_GROUP_NAME so
+# vector_source filters loaded vectors to that lane's owned mesh shapes:
 #   wormhole-n150-sweeps   -> 1x1
 #   wormhole-n300-sweeps   -> 1x2, 2x1
 #   wormhole-t3k-sweeps    -> 1x4, 1x8
 #   wormhole-galaxy-sweeps -> 2x4, 4x8, 8x4, 2x16, 16x2, 4x4, 1x32, 32x1
 #
+# Blackhole boards own no mesh shapes in MODEL_TRACED_MESH_TEST_GROUPS (a strict
+# TEST_GROUP_NAME would raise), so the blackhole entry sets no `category`: each
+# board auto-detects its local mesh capability (p150b/p100a -> 1x1, p300a ->
+# 1x1,1x2) via LOCAL_HARDWARE_MESH_CAPABILITY_RULES. One entry, fanned out per SKU.
+#
 # Budget: enforced by verify_time_budget.py (team: ttnn, category: sweep) against
-# .github/time_budget.yaml. Timeouts are first-pass estimates — tune from observed
-# run durations.
+# .github/time_budget.yaml. Timeouts are first-pass estimates.
 
 - name: ttnn sweeps mesh wormhole-n150
   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
   skus:
-    wh_n150:
+    wh_n150_civ2:
       timeout: 60
   team: ttnn
   owner_id: U08T3JQEB36 # Steven Lee
@@ -29,7 +33,7 @@
 - name: ttnn sweeps mesh wormhole-n300
   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
   skus:
-    wh_n300:
+    wh_n300_civ2:
       timeout: 60
   team: ttnn
   owner_id: U08T3JQEB36 # Steven Lee
@@ -52,3 +56,17 @@
   team: ttnn
   owner_id: U08T3JQEB36 # Steven Lee
   category: wormhole-galaxy-sweeps
+
+# Blackhole: no `category` (empty TEST_GROUP_NAME) -> each board auto-detects its
+# local mesh capability. One entry, fanned out per SKU by prepare_test_matrix.py.
+- name: ttnn sweeps mesh blackhole
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  skus:
+    bh_p150b_civ2:
+      timeout: 60
+    bh_p100:
+      timeout: 60
+    bh_loudbox:
+      timeout: 60
+  team: ttnn
+  owner_id: U08T3JQEB36 # Steven Lee

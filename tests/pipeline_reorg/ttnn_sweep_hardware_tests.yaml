@@ -1,0 +1,33 @@
+# Sweep batch definition for the HARDWARE split of the ttnn-run-sweeps workflow.
+#
+# Model-traced sweeps generated with --group-by hw carry no op-category and route
+# by hardware group. In this mode vector_source auto-detects the runner's own
+# hardware (get_test_group_name_for_hardware_group) and enforces that lane's
+# capability — so the physical runner, selected by SKU, already IS the routing.
+# No per-lane TEST_GROUP_NAME is needed; leaving `category` unset keeps it empty.
+#
+# There is therefore exactly ONE entry: prepare_test_matrix.py fans it out into
+# one job per enabled SKU (enabled-skus), covering both wormhole and blackhole.
+#
+# Budget: enforced by verify_time_budget.py (team: ttnn, category: sweep) against
+# .github/time_budget.yaml. Timeouts are first-pass estimates.
+
+- name: ttnn sweeps hardware
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  skus:
+    wh_n150_civ2:
+      timeout: 60
+    wh_n300_civ2:
+      timeout: 60
+    wh_llmbox:
+      timeout: 120
+    wh_galaxy:
+      timeout: 200
+    bh_p150b_civ2:
+      timeout: 60
+    bh_p100:
+      timeout: 60
+    bh_loudbox:
+      timeout: 60
+  team: ttnn
+  owner_id: U08T3JQEB36 # Steven Lee

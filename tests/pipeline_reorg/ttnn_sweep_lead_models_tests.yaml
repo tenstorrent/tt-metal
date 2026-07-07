@@ -4,19 +4,24 @@
 # unlike model_traced they collapse into only TWO logical lanes — single-chip and
 # galaxy — via LEAD_MODELS_MESH_TEST_GROUPS in
 # tests/sweep_framework/framework/matrix_runner_config.py. Each entry is one such
-# lane; the universal `category` field holds the lane name, which
-# ttnn-run-sweeps-impl.yaml wires to TEST_GROUP_NAME (and, because it starts with
-# `lead-models`, to LEAD_MODELS_RUN=1) so vector_source applies the lead-models
-# capability filter (manifest vector_grouping_mode=mesh).
-#
-# Budget: enforced by verify_time_budget.py (team: ttnn, category: sweep) against
-# .github/time_budget.yaml. Timeouts are first-pass estimates — tune from observed
-# run durations.
+# lane.
+
+# Each entry represents a parallel job with the following keys:
+#  name: The display name for the job in GitHub Actions.
+#  cmd: The exact command to run for the test.
+#  skus: A mapping of SKU names to their configuration.
+#    Each SKU entry contains:
+#      timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#  owner_id: The Slack user ID to notify on failure.
+#  team: The team that owns the test.
+#  category: Selector sets LEAD_MODELS_RUN=1 and is wired to TEST_GROUP_NAME so vector_source applies the lead-models capability filter (manifest vector_grouping_mode=mesh).
+
+# For max allowed timeout refer to .github/time_budget.yaml
 
 - name: ttnn sweeps lead-models single-chip
   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
   skus:
-    wh_n150:
+    wh_n150_civ2:
       timeout: 120
   team: ttnn
   owner_id: U08T3JQEB36 # Steven Lee
