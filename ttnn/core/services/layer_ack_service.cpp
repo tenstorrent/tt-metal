@@ -4,7 +4,9 @@
 
 #include "ttnn/services/layer_ack_service.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <thread>
 #include <vector>
 
 #include <tt_stl/span.hpp>
@@ -40,14 +42,20 @@ void LayerAckService::stop() {
 void LayerAckService::reader_loop() {
     // Metadata record size is fixed for the service's lifetime; allocate once.
     std::vector<std::byte> metadata(d2h_service_.metadata_size_bytes());
-    while (running_.load(std::memory_order_acquire)) {
-        // Blocks until the device sends the next per-layer record.
-        d2h_service_.read_metadata(ttsl::Span<std::byte>(metadata.data(), metadata.size()));
 
-        // A record may have completed the same instant stop() flipped the flag.
-        if (!running_.load(std::memory_order_acquire)) {
-            break;
+    const auto sockets = d2h_service_.get_sockets();
+    TT_FATAL(!sockets.empty(), "LayerAckService: metadata-only D2HStreamService exposes no sockets");
+    while (running_.load(std::memory_order_acquire)) {
+        // read_metadata() reads one page from *every* socket, and each of those reads blocks
+        // uninterruptibly until its data arrives. Only proceed once every socket has a record
+        // ready, so the read below never blocks and stop() is observed promptly.
+        const bool all_ready =
+            std::all_of(sockets.begin(), sockets.end(), [](auto* socket) { return socket->has_data(); });
+        if (!all_ready) {
+            std::this_thread::yield();
+            continue;
         }
+        d2h_service_.read_metadata(ttsl::Span<std::byte>(metadata.data(), metadata.size()));
         ack_channel_.inject(1);
     }
 }
