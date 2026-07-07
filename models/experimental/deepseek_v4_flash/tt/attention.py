@@ -221,7 +221,7 @@ def _update_cache_at(cache: ttnn.Tensor, row: ttnn.Tensor, pos_tensor: ttnn.Tens
     """In-place write ``row`` ``[1, 1, 1, F]`` into ``cache`` ``[1, 1, L, F]`` at the
     sequence index held (on device) by ``pos_tensor`` ``[1]`` (INT32). Trace-safe."""
     width = row.shape[-1]
-    row_sharded = ttnn.interleaved_to_sharded(row, _height_sharded_l1_config(width))
+    row_sharded = ttnn.to_memory_config(row, _height_sharded_l1_config(width))
     ttnn.experimental.paged_update_cache(cache, row_sharded, update_idxs_tensor=pos_tensor)
     ttnn.deallocate(row_sharded)
 
@@ -307,8 +307,8 @@ class DeepSeekV4HCACompressor:
         gate = ttnn.reshape(gate, [b, n_win, cr, self.head_dim])
         gate = ttnn.add(gate, self.position_bias)
         compressed = _softmax_weighted_sum(kv, gate, window_axis=2)  # [B, n_win, Dh]
-        compressed = self.kv_norm(compressed)
         compressed = ttnn.reshape(compressed, [b, 1, n_win, self.head_dim])
+        compressed = self.kv_norm(compressed)
         return _apply_rope(compressed, cos_win, sin_win, self.rot, self.rope_dim)
 
     def decode(
@@ -460,8 +460,8 @@ class DeepSeekV4CSACompressor:
         new_kv = ttnn.concat([ca_prev, cb], dim=2)  # [B, n_win, 2*cr, Dh]
         new_gate = ttnn.concat([cag_prev, cb_g], dim=2)
         compressed = _softmax_weighted_sum(new_kv, new_gate, window_axis=2)  # [B, n_win, Dh]
-        compressed = self.kv_norm(compressed)
         compressed = ttnn.reshape(compressed, [b, 1, n_win, dh])
+        compressed = self.kv_norm(compressed)
         return _apply_rope(compressed, cos_win, sin_win, self.rot, self.rope_dim)
 
     def decode(
@@ -643,6 +643,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         """
         mask_h = ttnn.repeat(mask, ttnn.Shape([1, 1, self.num_heads, 1]))  # [1, 1, H, Skv]
         # sdpa_decode requires its K/V operands in DRAM.
+        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+        kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.transformer.scaled_dot_product_attention_decode(
             q,
             kv,
@@ -719,8 +721,6 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         kv = self.kv_norm(self.kv_proj(hidden))  # [B, S, Dh]
 
         kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)  # [B, 1, S, Dh]
-        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
         return q, kv
 
     def decode(
