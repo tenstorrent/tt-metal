@@ -59,16 +59,17 @@ def apply_fast_env(env=None):
 
 # Quality tiers for the served High/Medium/Fast dropdown, sharing the same authority as the fast
 # bundle (conftest + ltx_server worker), applied before the pipeline import. high = shipped baseline
-# (bf16/HiFi2, 8+3 steps); medium = the fast bundle (scene-preserving); fast drops two more head
-# sigmas to a 4-step S1 (composition may shift but stays coherent). The perf-only knobs (traced,
-# host-weight-cache) stay on for every tier so high isn't needlessly slow.
-FAST_S1_SIGMAS_N4 = "1.0,0.909375,0.725,0.421875,0.0"
+# (bf16/HiFi2, 8+3 steps); medium = the fast bundle (scene-preserving); fast collapses S1 to a 2-step
+# schedule — the fewest steps that still resolve a coherent composition, so it may land a different
+# scene than medium but not garbage. The perf-only knobs (traced, host-weight-cache) stay on for
+# every tier so high isn't needlessly slow.
+FAST_S1_SIGMAS_N2 = "1.0,0.421875,0.0"
 
 # tier -> (quant, s1_sigmas, s2_sigmas); None keeps the pipeline's shipped default for that knob.
 _QUALITY_TIERS = {
     "high": (None, None, None),
     "medium": (FAST_QUANT, FAST_S1_SIGMAS, FAST_S2_SIGMAS),
-    "fast": (FAST_QUANT, FAST_S1_SIGMAS_N4, FAST_S2_SIGMAS),
+    "fast": (FAST_QUANT, FAST_S1_SIGMAS_N2, FAST_S2_SIGMAS),
 }
 
 
