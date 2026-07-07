@@ -155,14 +155,6 @@ def main():
         if args.check_kv_rope:
 
             def _capture_l0_attn_input(module, args, kwargs):
-                print(f"[pre-hook] args count: {len(args)}")
-                for i, a in enumerate(args):
-                    desc = f"shape={a.shape}, dtype={a.dtype}" if isinstance(a, torch.Tensor) else repr(a)
-                    print(f"[pre-hook] args[{i}]: {desc}")
-                print(f"[pre-hook] kwargs keys: {list(kwargs.keys())}")
-                for k, v in kwargs.items():
-                    desc = f"shape={v.shape}, dtype={v.dtype}" if isinstance(v, torch.Tensor) else repr(v)
-                    print(f"[pre-hook] kwargs[{k!r}]: {desc}")
                 if args:
                     hs = args[0]
                 else:
@@ -195,7 +187,7 @@ def main():
                     .squeeze(0)
                 )  # [seq_len, num_kv_heads * head_dim]
             head_dim = attn0.head_dim
-            num_kv = attn0.num_key_value_heads
+            num_kv = attn0.k_proj.weight.shape[0] // head_dim
             k_manual = k_manual.reshape(-1, num_kv, head_dim).permute(1, 0, 2)  # [num_kv, seq, head_dim]
 
             k_cached = out.past_key_values[0][0][0].float()  # [num_kv, seq, head_dim]
