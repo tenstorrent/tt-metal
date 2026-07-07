@@ -182,9 +182,10 @@ def main():
                 x1, x2 = x[..., ::2], x[..., 1::2]
                 return torch.stack((-x2, x1), dim=-1).flatten(-2)
 
-            for i, (k, v) in enumerate(out.past_key_values):
+            for i, layer_kv in enumerate(out.past_key_values):
                 if i >= num_capture:
                     break
+                k, v = layer_kv[0], layer_kv[1]
                 # k: [batch, num_kv_heads, seq_len, head_dim] bfloat16, pre-RoPE
                 k_float = k[0].float()  # [num_kv_heads, seq_len, head_dim]
                 k_post_rope = k_float * cos[0] + _rotate_half(k_float) * sin[0]
