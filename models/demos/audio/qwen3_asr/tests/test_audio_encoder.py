@@ -45,7 +45,7 @@ def test_conv_frontend_pcc(device, golden, audio_tower_weights):
 
     conv_w = tt_enc.preprocess_conv_weights(w, device)
     conv_out_w = ttnn.to_device(preprocess_linear_weight(w["conv_out.weight"], dtype=ttnn.bfloat16), device)
-    out = tt_enc.conv_frontend_tt(mel, conv_w, conv_out_w, None, device)
+    out = tt_enc.conv_frontend_tt(mel, conv_w, conv_out_w, device)
 
     assert_with_pcc(gold, out, PCC_CONV)
 

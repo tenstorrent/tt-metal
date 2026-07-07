@@ -44,7 +44,6 @@ import audio_encoder_ref as ref  # noqa: E402  (weights loader only)
 from qwen3_asr_decoder import Qwen3ASRDecoder  # noqa: E402
 
 CKPT = os.environ.get("HF_MODEL", "/ttwork/qwen3_asr_text_decoder")
-SNAP_BASE = "/root/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots"
 AUDIO_TOKEN_ID = 151676
 _LOCK = threading.Lock()
 
@@ -67,7 +66,7 @@ def _parse(text):
 
 @app.on_event("startup")
 def _load():
-    snap = os.path.join(SNAP_BASE, os.listdir(SNAP_BASE)[0])
+    snap = ref.resolve_snap_dir()
     t0 = time.time()
     dev = ttnn.open_device(device_id=0, trace_region_size=200000000, l1_small_size=65536)
     w = ref.load_audio_tower_weights(snap_dir=snap, dtype=torch.float32)

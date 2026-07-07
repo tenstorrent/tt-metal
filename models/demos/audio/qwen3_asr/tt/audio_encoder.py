@@ -55,7 +55,7 @@ def preprocess_conv_weights(w, device):
     return cp
 
 
-def conv_frontend_tt(mel, conv_w, conv_out_w, conv_out_b, device):
+def conv_frontend_tt(mel, conv_w, conv_out_w, device):
     """mel (num_mel=128, T) -> (n_chunks*13, d_model=1024) on device, pre-PE.
     Mirrors reference.conv_frontend but the 3 conv2d (+GELU) + conv_out run on TT."""
     nm, T = mel.shape
@@ -162,7 +162,7 @@ _PE_CACHE = {}
 def encode_mel(mel, params, device):
     """Full-TT encoder from mel (num_mel, T): TT conv2d frontend -> +PE -> transformer
     -> projector. Returns audio embeds (S, output_dim) as torch."""
-    conv = conv_frontend_tt(mel, params["conv_w"], params["conv_out_w"], None, device)  # (S,1024) torch
+    conv = conv_frontend_tt(mel, params["conv_w"], params["conv_out_w"], device)  # (S,1024) torch
     per_chunk = 13
     if per_chunk not in _PE_CACHE:
         # sinusoidal PE[:13] (matches reference.sinusoids)

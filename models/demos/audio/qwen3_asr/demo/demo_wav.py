@@ -33,7 +33,6 @@ from qwen3_asr_decoder import Qwen3ASRDecoder  # noqa: E402
 
 WAV_DIR = os.environ.get("WAV_DIR", "/ttwork/qwen3_asr_wav")
 CKPT = os.environ.get("HF_MODEL", "/ttwork/qwen3_asr_text_decoder")
-SNAP = "/root/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots"
 AUDIO_TOKEN_ID = 151676
 
 
@@ -52,8 +51,7 @@ def parse_asr(text):
 
 
 def main():
-    snap = os.path.join(SNAP, os.listdir(SNAP)[0])
-    w = ref.load_audio_tower_weights(snap_dir=snap, dtype=torch.float32)
+    w = ref.load_audio_tower_weights(dtype=torch.float32)
     tok = AutoTokenizer.from_pretrained(CKPT)
     embed = load_embed_tokens()
     summary = json.load(open(os.path.join(WAV_DIR, "summary.json")))

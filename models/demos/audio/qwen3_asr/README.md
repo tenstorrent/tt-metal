@@ -27,42 +27,6 @@ Single `Qwen3ASRForConditionalGeneration` ("Thinker"), three parts:
    embeddings replace placeholder `audio_token_id=151676` (`audio_start=151669`) in the
    input-embedding sequence, then standard causal prefill + greedy decode. 30 languages.
 
-## Phase plan
-
-- [x] **Phase 0** — scaffold (`tt/ reference/ tests/ demo/`), dev branch `yito/qwen3_asr`.
-- [x] **Phase 1** — CPU reference + per-stage PCC golden (`reference/dump_reference.py`).
-- [x] **Phase 2** — AuT encoder in ttnn (`tt/audio_encoder.py`). PCC=0.9934 vs golden on device
-      (Blackhole, bf16+HiFi4, fused SDPA + fused matmul+gelu). Full bidirectional attention
-      (matches the CPU/sdpa reference; cu_seqlens windowing only applies on the FA2 path, not
-      needed for <=60s segments). conv2d frontend on host for now (TODO: ttnn.conv2d).
-- [x] **Phase 3** — Qwen3-1.7B decoder via tt_transformers. `reference/extract_text_decoder.py`
-      makes a vanilla Qwen3ForCausalLM checkpoint (`qwen3_asr_text_decoder/`); `tt/qwen3_asr_decoder.py`
-      = `Qwen3ASRDecoder(Transformer)` with embed-input prefill. Prefill last-token logits
-      **PCC=0.9895**, argmax matches golden (first token 3838).
-- [x] **Phase 4** — multimodal splice: TT audio embeds replace the audio-token rows in the prompt.
-- [x] **Phase 5** — prefill + greedy decode loop (`tt/qwen3_asr_decoder.py`), full chain `demo/demo.py`.
-      **Steady-state RTF = 0.076 on one P150** (12s clip) vs CPU-bf16 ~0.30 → ~4× faster. Decoder
-      30 tok/s; one-time setup (weight preprocess + build) ~3s. Transcription coherent & near-identical
-      to the reference (bf16 greedy drifts a few words).
-- [~] **Speed (decode trace)** — a persistent decode trace was prototyped (~1.7×: 30.8 → 53.5 tok/s,
-      tokens byte-identical, RTF 0.076 → 0.044) but **removed**: it destabilized the long-lived server
-      across mixed request shapes. The shipped path is host-argmax greedy decode (steady-state RTF 0.076).
-      Re-landing a stable in-server decode trace is future work.
-- [x] **Raw wav + language auto-detect** (`reference/prep_wav.py` + `demo/demo_wav.py`): no language hint.
-      EN (jim_keller, 20s, RTF 0.059): **byte-identical to CPU Qwen3-ASR**, detected English.
-      JA (patlabor, 20s, RTF 0.048): semantically identical to CPU (bf16 homophone swaps only), detected
-      Japanese. vs whisper-large-v3@TT: EN comparable; **JA whisper fails (English mistranslation, no
-      Japanese output)** → TT Qwen3-ASR beats the existing TT whisper for Japanese, matches CPU for both.
-- [x] **conv2d on TT** (`tt/audio_encoder.py` `conv_frontend_tt`/`encode_mel`): 3× `ttnn.conv2d` +
-      conv_out on device, PCC vs golden **0.9994** → full-TT encoder. Open device with `l1_small_size=32768`.
-- [x] **API server** (`server/qwen3_asr_server.py`): OpenAI `/v1/audio/transcriptions`, same contract as
-      tt-media-server whisper. Auto-detect language. EN→English rtf0.095, JA→Japanese rtf0.047. See server/README.md.
-- [x] **Transparent --engine**: `ttqwen3asr` in qwen3-asr-eval (`TTWhisperEngine`→:8002) — drop-in for whisper.
-- [ ] **Phase 6 remaining** — >30s segmentation in the server; fold setup into a rebuilt image; optional
-      native tt-media-server runner (needs media-image rebuild); on-device argmax for more decode speed.
-
-Encoder/decoder validated by PCC against the Phase-1 golden; end-to-end validated by RTF + transcription.
-
 ## Prefill seqlen rule
 Prefill embeds are padded to a **multiple of 512** (`tt/qwen3_asr_decoder.py:prefill_logits`), min 512.
 Trailing pad rows are causal-masked from the last real token, so padding does not change the last real
