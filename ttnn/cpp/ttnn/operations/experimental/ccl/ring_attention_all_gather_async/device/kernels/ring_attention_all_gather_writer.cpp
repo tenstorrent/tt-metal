@@ -173,13 +173,7 @@ void kernel_main() {
                 if (num_pages_to_read == 2) {
                     uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
 
-                    // D1 completeness: also place the local slice into THIS device's own output buffer.
-                    // Issued before the fabric write so its noc_async_writes_flushed() drains these reads
-                    // from cb_output before pop_front. Gated per-input; default-off elsewhere. Restricted
-                    // to the forward writer (direction == 1): the first loop runs in BOTH direction
-                    // kernels, so an ungated write would have each device write its own slice twice (two
-                    // cores -> same DRAM tiles) on the AG critical path. direction is constexpr, so the
-                    // backward writer compiles this out entirely.
+                    // Place the local slice into THIS device's own output buffer.
                     if (direction == 1 && write_local[input_idx]) {
                         noc_async_write(
                             l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id, 0), output_page_size);
@@ -208,7 +202,7 @@ void kernel_main() {
                 } else {
                     ASSERT(num_pages_to_read == 1);
 
-                    // D1 completeness: local slice into this device's own output buffer (see above).
+                    // Place the local slice into this device's own output buffer.
                     // Forward writer only (see two-page branch); direction is constexpr.
                     if (direction == 1 && write_local[input_idx]) {
                         noc_async_write(

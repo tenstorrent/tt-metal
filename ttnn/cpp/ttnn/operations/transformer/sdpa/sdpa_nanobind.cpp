@@ -601,11 +601,9 @@ void bind_sdpa(nb::module_& mod) {
                 The op infers the sharded path when per-device joint seq == logical_l / ring_size.
                 If 0 (default) or omitted, behaves as the replicated path (backward-compatible).
             persistent_output_buffer_joint_k (ttnn.Tensor, optional): Persistent buffer for the
-                gathered joint K tensor [b x nhv x L x dv]. Required for trace/ping-pong reuse.
-                Allocated internally when omitted.
+                gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
             persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
-                gathered joint V tensor [b x nhv x L x dv]. Required for trace/ping-pong reuse.
-                Allocated internally when omitted.
+                gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
