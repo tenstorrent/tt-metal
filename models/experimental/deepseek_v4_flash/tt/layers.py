@@ -79,6 +79,7 @@ class LinearDecode(DeepSeekV4Module):
         self.num_inputA_cores = num_inputA_cores
         self.dtype = dtype
         self.device = device
+        self.l1_weights = None
 
         assert K != -1 and N != -1, "K and N must be set"
         self.K = K
@@ -140,8 +141,8 @@ class LinearDecode(DeepSeekV4Module):
             cache_file_name=cache_file_name,
         )
 
-    def deallocate(self):
-        pass
+    def fetch_weights(self):
+        self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         # self.weight.deallocate()
 
     def get_input_memory_config(self, m: int, k: int) -> ttnn.MemoryConfig:
@@ -156,7 +157,11 @@ class LinearDecode(DeepSeekV4Module):
         return a_memory_config
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
+        if self.l1_weights is None or not self.l1_weights.is_allocated():
+            print(
+                f"Just-in-Time loading L1 weights is not efficient. Consider fetching weights in advance. Shape = {self.weight.shape}"
+            )
+            self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         m = x.shape[-2]
         m_padded = ((m + 31) // 32) * 32
         if self.partial_width_sharded:
@@ -178,9 +183,10 @@ class LinearDecode(DeepSeekV4Module):
         if not x.is_sharded():
             x = ttnn.to_memory_config(x, self.get_input_memory_config(x.shape[-2], x.shape[-1]))
         result = ttnn.experimental.matmul_decode(
-            x, l1_weights, partial_width_sharded=self.partial_width_sharded, output_mem_config=output_memory_config
+            x, self.l1_weights, partial_width_sharded=self.partial_width_sharded, output_mem_config=output_memory_config
         )
-        l1_weights.deallocate()
+        self.l1_weights.deallocate()
+        self.l1_weights = None
         return result
 
 
