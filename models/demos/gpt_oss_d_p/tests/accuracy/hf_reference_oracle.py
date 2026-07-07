@@ -94,13 +94,12 @@ def main():
     print("[oracle] model loaded", flush=True)
 
     num_model_layers = len(model.model.layers)
-    if args.save_layers or args.save_kv:
-        num_capture = args.max_layers if args.max_layers is not None else num_model_layers
-        num_capture = min(num_capture, num_model_layers)
-        if args.save_layers:
-            print(f"[oracle] will capture hidden states for layers 0..{num_capture - 1}", flush=True)
-        if args.save_kv:
-            print(f"[oracle] will capture KV cache for layers 0..{num_capture - 1}", flush=True)
+    num_capture = args.max_layers if args.max_layers is not None else num_model_layers
+    num_capture = min(num_capture, num_model_layers)
+    if args.save_layers:
+        print(f"[oracle] will capture hidden states for layers 0..{num_capture - 1}", flush=True)
+    if args.save_kv:
+        print(f"[oracle] will capture KV cache for layers 0..{num_capture - 1}", flush=True)
 
     # Load any existing results so we can append without overwriting.
     results_path = outdir / "ref_results.json"
@@ -141,8 +140,29 @@ def main():
             for i in range(num_capture):
                 hooks.append(model.model.layers[i].register_forward_hook(make_hook(i)))
 
-        with torch.no_grad():
-            out = model(input_ids=input_ids, use_cache=True)
+        # Hook F.scaled_dot_product_attention to capture post-RoPE K and V.
+        # past_key_values stores pre-RoPE keys in many modern HF models; SDPA inputs
+        # are post-RoPE and match what TT writes into fill_cache.
+        import torch.nn.functional as F
+
+        kv_captures: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+        original_sdpa = F.scaled_dot_product_attention
+        sdpa_call_idx = [0]
+
+        def _capturing_sdpa(q, k, v, *args, **kwargs):
+            idx = sdpa_call_idx[0]
+            sdpa_call_idx[0] += 1
+            if args.save_kv and idx < num_capture:
+                # k shape: [batch, num_kv_heads, seq_len, head_dim]
+                kv_captures[idx] = (k[0].detach().float(), v[0].detach().float())
+            return original_sdpa(q, k, v, *args, **kwargs)
+
+        F.scaled_dot_product_attention = _capturing_sdpa
+        try:
+            with torch.no_grad():
+                out = model(input_ids=input_ids, use_cache=True)
+        finally:
+            F.scaled_dot_product_attention = original_sdpa
 
         for h in hooks:
             h.remove()
@@ -163,16 +183,13 @@ def main():
             print(f"[oracle] saved {len(layer_files)} layer activation file(s)", flush=True)
 
         kv_files: dict[str, dict[str, str]] = {}
-        if args.save_kv and out.past_key_values is not None:
-            for i, (k, v) in enumerate(out.past_key_values):
-                if i >= num_capture:
-                    break
-                # k, v shape from HF: [batch, num_kv_heads, seq_len, head_dim] in bfloat16
-                # Save as float32, drop batch dim -> [num_kv_heads, seq_len, head_dim]
+        if kv_captures:
+            for i, (cap_k, cap_v) in kv_captures.items():
+                # cap_k / cap_v: [num_kv_heads, seq_len, head_dim] float32, post-RoPE
                 k_fname = f"kv_k_{i}_{key}.npy"
                 v_fname = f"kv_v_{i}_{key}.npy"
-                np.save(outdir / k_fname, k[0].float().numpy())
-                np.save(outdir / v_fname, v[0].float().numpy())
+                np.save(outdir / k_fname, cap_k.numpy())
+                np.save(outdir / v_fname, cap_v.numpy())
                 kv_files[str(i)] = {"k": k_fname, "v": v_fname}
             print(f"[oracle] saved {len(kv_files)} KV cache layer(s)", flush=True)
 
