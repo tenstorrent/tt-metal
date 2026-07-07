@@ -52,14 +52,14 @@ def _fit_cores(total_rows, device):
 
 
 # (n, c, h, w, dim0, dim1, id) -- the fold's transpose intermediates, batch 1 and 2.
-# NARROW-ROW HYPOTHESIS: narrow-row transpose is unsupported on Quasar (pack_untilize_dest_init
-# LLK_ASSERT(narrow_row==false)); the op reroutes to the interleaved transpose_wh_rm.cpp which packs
-# with narrow_row=false hardcoded. If a transpose's untilize output row is narrow (< TILE_WIDTH=32)
-# the forced full-row pack corrupts it. The fold carries a narrow channel dim (C=4->8->16) through
-# the chain, so the transposes that move that narrow dim into the last (row) position are the ones
-# most likely to fail. The tile-aligned configs below are the CONTROL (should pass); the *_narrow
-# configs (last dim 8/16 < 32) directly test the narrow-row hypothesis (expected to fail if that's
-# the cause).
+# FINDING (emulator, 2-core): narrow-row is NOT the cause. The split is by transpose TYPE, not row width:
+#   * transpose(2,3) = WH transpose (transpose_wh_rm.cpp interleaved compute: tilize/transpose/untilize)
+#     FAILS on the 2-core large multi-tile shard EVEN WHEN the output row is a tile-aligned 256
+#     (partial/scrambled writes, tail of each core's shard left zero). Same kernel that hangs on craq-sim.
+#     WH silicon (56 cores -> small shards) passes, so it's a multi-tile-per-core iteration/stride bug.
+#   * transpose(1,2) = HC transpose (pure reader/writer stick-move, no compute) PASSES (PCC 1.0).
+# The *_aligned WH config is therefore the real repro; the *_narrow ones fail for the same reason (WH
+# transpose), not because of narrow_row; the *_hc_aligned config is the passing HC control.
 TRANSPOSE_CONFIGS = [
     # --- tile-aligned control: last dim is a multiple of 32 (no narrow-row path) ---
     # First fold transpose: padded input [n, C=4, padded_h32=256, w=224], transpose(2,3) -> [n,4,224,256].

@@ -230,63 +230,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     log_debug(tt::LogOp, "reshape_hc_output: {}", tt_output_tensor.logical_shape());
 
     // transpose
-    // QSR NARROW-ROW WORKAROUND: this transpose(2,3) makes the output's last dim (the untilize row
-    // width) equal to the current dim-2 size, which here is the folded channel dim c*stride_w
-    // (8 -> then 16 after the next view for the resnet stem, i.e. < TILE_WIDTH=32). On Quasar this
-    // routes to the interleaved WH row-major kernel (transpose_wh_rm.cpp), whose
-    // pack_untilize_dest_init<...> is called with narrow_row=false HARDCODED. narrow_row is
-    // unsupported on Quasar (LLK_ASSERT(narrow_row == false, "narrow_row not supported on Quasar")),
-    // so a narrow (<32) row is packed as a full 32-wide row and the data is CORRUPTED. Work around it
-    // WITHOUT touching the LLK by padding dim-2 up to TILE_WIDTH so the untilize row is a full tile,
-    // transposing, then slicing the padding back off. This is data-preserving: the padding is trailing
-    // zeros along exactly the axis that becomes the output row, and the slice drops that tail.
-    // WH/BH accept narrow rows, so gate on Quasar to avoid regressing their (working) path.
-    {
-        const auto pre_transpose_shape = tt_output_tensor.logical_shape();
-        const bool qsr_narrow_row = tt_output_tensor.device()->arch() == tt::ARCH::QUASAR &&
-                                    (static_cast<uint32_t>(pre_transpose_shape[2]) % TILE_WIDTH != 0);
-        if (qsr_narrow_row) {
-            const uint32_t true_row = static_cast<uint32_t>(pre_transpose_shape[2]);
-            const uint32_t padded_row = tt::round_up(true_row, TILE_WIDTH);
-            tt::tt_metal::Array4D narrow_pad_shape = {
-                static_cast<uint32_t>(pre_transpose_shape[0]),
-                static_cast<uint32_t>(pre_transpose_shape[1]),
-                padded_row,
-                static_cast<uint32_t>(pre_transpose_shape[3])};
-            auto narrow_pad_mem_config =
-                create_sharded_memory_config(ttnn::Shape(narrow_pad_shape), grid_size, shard_spec.orientation);
-            auto padded = ttnn::operations::experimental::quasar::pad(
-                tt_output_tensor,
-                narrow_pad_shape,
-                tt::tt_metal::Array4D({0, 0, 0, 0}),
-                0,
-                /*use_multicore*/ false,
-                narrow_pad_mem_config);
-
-            padded = ttnn::operations::experimental::quasar::transpose(padded, 2, 3);
-
-            // padded is now [.., pre_transpose_shape[3], padded_row]; slice the last dim back to true_row.
-            const auto post_transpose_shape = padded.logical_shape();
-            tt::tt_metal::Array4D slice_start = {0, 0, 0, 0};
-            tt::tt_metal::Array4D slice_end = {
-                static_cast<uint32_t>(post_transpose_shape[0]),
-                static_cast<uint32_t>(post_transpose_shape[1]),
-                static_cast<uint32_t>(post_transpose_shape[2]),
-                true_row};
-            auto narrow_slice_mem_config = create_sharded_memory_config(
-                ttnn::Shape(
-                    {static_cast<uint32_t>(post_transpose_shape[0]),
-                     static_cast<uint32_t>(post_transpose_shape[1]),
-                     static_cast<uint32_t>(post_transpose_shape[2]),
-                     true_row}),
-                grid_size,
-                shard_spec.orientation);
-            tt_output_tensor = ttnn::operations::experimental::quasar::slice(
-                padded, slice_start, slice_end, tt::tt_metal::Array4D({1, 1, 1, 1}), narrow_slice_mem_config);
-        } else {
-            tt_output_tensor = ttnn::operations::experimental::quasar::transpose(tt_output_tensor, 2, 3);
-        }
-    }
+    tt_output_tensor = ttnn::operations::experimental::quasar::transpose(tt_output_tensor, 2, 3);
 
     log_debug(tt::LogOp, "transpose_hw_output2: {}", tt_output_tensor.logical_shape());
 
