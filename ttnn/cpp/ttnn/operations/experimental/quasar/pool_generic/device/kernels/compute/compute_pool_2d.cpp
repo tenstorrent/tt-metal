@@ -248,6 +248,14 @@ void kernel_main() {
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
                 }
             }
+            // QSR fix (split-reader second stream): the top-of-kernel tilizeA_B_reduce_init binds the
+            // unpack-tilize descriptor to in_cb_0. Odd (reader1) sticks unpack in_cb_1, but without a
+            // per-stick re-init the unpacker kept reading in_cb_0's address, so reader1 reduced reader0's
+            // window -> every odd output stick duplicated the preceding even stick on non-constant input
+            // (invisible to the constant-per-channel probe). Re-bind the unpack-tilize to THIS stick's
+            // input CB so each stream reduces its own window.
+            UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce)));
             MATH(WATCHER_RING_BUFFER_PUSH(0xC0FFEE11u));
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
@@ -390,6 +398,12 @@ void kernel_main() {
                     (uint32_t)curr_scratch_cb_id,
                     (uint32_t)curr_scratch_cb.get_write_ptr()));
 #endif
+                // QSR fix (split-reader second stream): the top-of-kernel pack_untilize_dest_init targets
+                // scratch_cb_0 only, so odd (reader1) sticks packing into scratch_cb_1 used a packer
+                // descriptor still bound to scratch_cb_0 -> the pack landed nowhere and reader1 read an
+                // all-zero tile. Re-init the pack_untilize for THIS stick's scratch CB before packing so
+                // both scratch_cb_0 (even) and scratch_cb_1 (odd) get a valid, CB-matched descriptor.
+                pack_untilize_dest_init<max_tiles_per_iter>(curr_scratch_cb_id);
                 if (last_c_block) {
                     pack_untilize_dest<partial_iter_output_tiles>(curr_scratch_cb_id, 1, 0);
                 } else {
