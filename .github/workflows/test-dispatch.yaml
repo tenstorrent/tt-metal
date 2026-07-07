@@ -139,5 +139,12 @@ jobs:
           uv pip install pytest-repeat
           ${{ inputs.command }}
         shell: bash
+      - name: 📤 Upload perf results CSV
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: eltwise-perf-results
+          path: /work/eltwise_perf_results_*.csv
+          if-no-files-found: error
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
