@@ -5,19 +5,26 @@ language + mel). Runs MY TT audio encoder + MY TT Qwen3-1.7B decoder, lets the m
 auto-detect the language, and parses "language <Lang><asr_text><text>". Compares the
 TT transcription + detected language against the CPU baseline in summary.json.
 """
-import glob, json, os, re, sys, time
+import glob
+import json
+import os
+import re
+import sys
+import time
+
 import numpy as np
 import torch
-import ttnn
 from safetensors import safe_open
 from transformers import AutoTokenizer
+
+import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "reference"))
 sys.path.insert(0, os.path.join(ROOT, "tt"))
-import audio_encoder_ref as ref          # noqa: E402
-import audio_encoder as tt_enc           # noqa: E402
+import audio_encoder as tt_enc  # noqa: E402
+import audio_encoder_ref as ref  # noqa: E402
 from qwen3_asr_decoder import Qwen3ASRDecoder  # noqa: E402
 
 WAV_DIR = os.environ.get("WAV_DIR", "/ttwork/qwen3_asr_wav")
@@ -52,8 +59,9 @@ def main():
         enc_params = tt_enc.preprocess_weights(w, dev)
         args = ModelArgs(dev, max_batch_size=1, max_seq_len=2048)
         sd = args.load_state_dict()
-        model = Qwen3ASRDecoder(args, ttnn.bfloat16, dev, sd,
-                                args.weight_cache_path(ttnn.bfloat16), use_paged_kv_cache=False)
+        model = Qwen3ASRDecoder(
+            args, ttnn.bfloat16, dev, sd, args.weight_cache_path(ttnn.bfloat16), use_paged_kv_cache=False
+        )
 
         for npz in sorted(glob.glob(os.path.join(WAV_DIR, "*.npz"))):
             name = os.path.basename(npz)[:-4]
@@ -64,8 +72,8 @@ def main():
             # full-TT encoder: mel -> TT conv2d frontend -> transformer -> projector
             t0 = time.time()
             audio_embeds = tt_enc.encode_mel(mel, enc_params, dev).float()  # (N,2048)
-            inp = embed[input_ids].clone()                                 # (L,2048)
-            mask = (input_ids == AUDIO_TOKEN_ID)
+            inp = embed[input_ids].clone()  # (L,2048)
+            mask = input_ids == AUDIO_TOKEN_ID
             assert int(mask.sum()) == audio_embeds.shape[0], (int(mask.sum()), audio_embeds.shape)
             inp[mask] = audio_embeds
             t_enc = time.time() - t0
@@ -79,8 +87,10 @@ def main():
             audio_sec = mel.shape[1] / 100.0
             rtf = (t_enc + t_dec) / audio_sec
             cpu = summary.get(name, {})
-            print(f"\n===== {name}  ({audio_sec:.0f}s, RTF {rtf:.3f}, {len(ids)} tok, "
-                  f"{len(ids)/t_dec:.0f} tok/s) =====")
+            print(
+                f"\n===== {name}  ({audio_sec:.0f}s, RTF {rtf:.3f}, {len(ids)} tok, "
+                f"{len(ids)/t_dec:.0f} tok/s) ====="
+            )
             print(f"  TT  lang={lang!r}")
             print(f"  TT  : {text!r}")
             print(f"  CPU lang={cpu.get('cpu_lang')!r}")

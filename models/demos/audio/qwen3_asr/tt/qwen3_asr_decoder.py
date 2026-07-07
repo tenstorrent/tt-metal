@@ -9,6 +9,7 @@ pattern, minus vision MRoPE (Qwen3-ASR uses plain 1D RoPE).
 prefill (embeds) -> greedy decode loop (token ids) -> text.
 """
 import torch
+
 import ttnn
 from models.tt_transformers.tt.model import Transformer
 
@@ -22,7 +23,9 @@ class Qwen3ASRDecoder(Transformer):
         out = list(super().prepare_inputs_prefill(dummy, **kwargs))
         emb = ttnn.from_torch(
             inputs_embeds.reshape(1, 1, S, -1),
-            device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         out[0] = emb
@@ -54,8 +57,14 @@ class Qwen3ASRDecoder(Transformer):
         )[:3]
         get_last = (last // 32) * 32
         tt_logits = self.ttnn_prefill_forward(
-            prefill_input, rot_mats_global=rot_g, rot_mats_local=rot_l, user_id=0,
-            page_table=None, get_last_token=get_last, kv_cache=None, batch_size=1,
+            prefill_input,
+            rot_mats_global=rot_g,
+            rot_mats_local=rot_l,
+            user_id=0,
+            page_table=None,
+            get_last_token=get_last,
+            kv_cache=None,
+            batch_size=1,
         )
         tt_logits = ttnn.from_device(tt_logits)
         full = self.process_output_prefill(tt_logits, last_token_idx=(last - get_last))
@@ -65,11 +74,10 @@ class Qwen3ASRDecoder(Transformer):
     def decode_token(self, token_id, pos):
         """One greedy decode step. token_id: int, pos: int (0-based position of this token).
         Returns next-token logits (torch, vocab)."""
-        tokens = torch.tensor([token_id], dtype=torch.long)        # (B=1,)
-        current_pos = torch.tensor([pos], dtype=torch.int64)       # (B=1,)
+        tokens = torch.tensor([token_id], dtype=torch.long)  # (B=1,)
+        current_pos = torch.tensor([pos], dtype=torch.int64)  # (B=1,)
         tt_tokens, tt_pos, rope_idxs, tt_pt = self.prepare_inputs_decode(tokens, current_pos, None)
-        tt_out, _ = self.ttnn_decode_forward(tt_tokens, tt_pos, rot_mat_idxs=rope_idxs,
-                                             page_table=tt_pt, kv_cache=None)
+        tt_out, _ = self.ttnn_decode_forward(tt_tokens, tt_pos, rot_mat_idxs=rope_idxs, page_table=tt_pt, kv_cache=None)
         tt_out = ttnn.from_device(tt_out)
         logits = self.process_output_decode(tt_out, B=1, S=1)
         return logits.float().reshape(-1)
@@ -86,7 +94,8 @@ class Qwen3ASRDecoder(Transformer):
         # mixed request shapes of a long-lived server.
         while len(out) < max_new_tokens and nxt != eos_id:
             nxt = int(self.decode_token(nxt, pos).argmax())
-            out.append(nxt); pos += 1
+            out.append(nxt)
+            pos += 1
         if out and out[-1] == eos_id:
             out = out[:-1]
         return out

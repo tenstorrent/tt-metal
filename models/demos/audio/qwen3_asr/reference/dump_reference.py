@@ -13,7 +13,11 @@ Run with the qwen3-asr-eval venv (has qwen_asr + transformers + torch):
 Golden tensors are written outside the repo (large) with a small manifest
 (shapes/dtypes) printed and saved next to them.
 """
-import argparse, json, os, time
+import argparse
+import json
+import os
+import time
+
 import numpy as np
 import soundfile as sf
 import torch
@@ -38,6 +42,7 @@ CAP = {}
 def make_hook(name):
     def hook(mod, inp, out):
         CAP.setdefault(name, []).append((inp, out))
+
     return hook
 
 
@@ -79,8 +84,11 @@ def main():
     print(f"[load] {MODEL_ID} dtype={args.dtype} ...", flush=True)
     t0 = time.time()
     wrap = Qwen3ASRModel.from_pretrained(
-        MODEL_ID, dtype=dtype, device_map="cpu",
-        max_inference_batch_size=1, max_new_tokens=64,
+        MODEL_ID,
+        dtype=dtype,
+        device_map="cpu",
+        max_inference_batch_size=1,
+        max_new_tokens=64,
     )
     model = wrap.model
     print(f"[load] done in {time.time()-t0:.1f}s", flush=True)
@@ -112,9 +120,11 @@ def main():
 
     # pre-hook with kwargs to capture audio_tower's feature_lens (passed as kwarg)
     ENC_KW = {}
+
     def enc_pre(mod, a, kw):
         ENC_KW["args"] = a
         ENC_KW["kwargs"] = kw
+
     if "audio_tower" in targets:
         handles.append(targets["audio_tower"][1].register_forward_pre_hook(enc_pre, with_kwargs=True))
 
@@ -153,9 +163,16 @@ def main():
             print(f"[save] feature_lens={fl.tolist()}")
 
     # ---- save golden (first forward call per module) ----
-    manifest = {"model": MODEL_ID, "dtype": args.dtype, "wav": args.wav,
-                "start": args.start, "dur": args.dur, "language": args.language,
-                "text": txt, "tensors": {}}
+    manifest = {
+        "model": MODEL_ID,
+        "dtype": args.dtype,
+        "wav": args.wav,
+        "start": args.start,
+        "dur": args.dur,
+        "language": args.language,
+        "text": txt,
+        "tensors": {},
+    }
     np.save(os.path.join(args.out, "input_wav.npy"), wav)
     for k in targets:
         calls = CAP.get(k, [])
@@ -170,8 +187,12 @@ def main():
         t = to_cpu(t)
         fn = os.path.join(args.out, f"{k}.npy")
         np.save(fn, t.numpy())
-        manifest["tensors"][k] = {"shape": list(t.shape), "dtype": str(t.dtype),
-                                  "n_calls": len(calls), "file": os.path.basename(fn)}
+        manifest["tensors"][k] = {
+            "shape": list(t.shape),
+            "dtype": str(t.dtype),
+            "n_calls": len(calls),
+            "file": os.path.basename(fn),
+        }
         print(f"[save] {k:12s} shape={tuple(t.shape)} calls={len(calls)}")
 
     with open(os.path.join(args.out, "manifest.json"), "w") as f:

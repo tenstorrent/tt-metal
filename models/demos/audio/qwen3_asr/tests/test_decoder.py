@@ -17,7 +17,6 @@
 Golden tensors and the extracted text-decoder checkpoint are supplied via env vars; see
 tests/conftest.py. Run on a P150 (single Blackhole) box that has them staged.
 """
-import numpy as np
 import pytest
 import torch
 
@@ -35,8 +34,12 @@ def _build_decoder(device, max_seq_len):
     args = ModelArgs(device, max_batch_size=1, max_seq_len=max_seq_len)
     state_dict = args.load_state_dict()
     model = Qwen3ASRDecoder(
-        args, ttnn.bfloat16, device, state_dict,
-        args.weight_cache_path(ttnn.bfloat16), use_paged_kv_cache=False,
+        args,
+        ttnn.bfloat16,
+        device,
+        state_dict,
+        args.weight_cache_path(ttnn.bfloat16),
+        use_paged_kv_cache=False,
     )
     return model
 

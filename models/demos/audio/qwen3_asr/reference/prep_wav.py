@@ -5,7 +5,10 @@ the processor to get input_ids + mel, and also run the full CPU Qwen3-ASR (the e
 solution) to get the baseline transcription + detected language. Saves a per-clip npz
 the TT demo consumes; the TT path then runs MY encoder+decoder on the same input_ids+mel.
 """
-import argparse, json, os
+import argparse
+import json
+import os
+
 import numpy as np
 import soundfile as sf
 import torch
@@ -23,7 +26,8 @@ def load_slice(path, start, dur, sr=16000):
     assert file_sr == sr
     if w.ndim > 1:
         w = w.mean(1)
-    a = int(start * sr); b = min(len(w), a + int(dur * sr))
+    a = int(start * sr)
+    b = min(len(w), a + int(dur * sr))
     return w[a:b].copy()
 
 
@@ -34,9 +38,10 @@ def main():
     os.makedirs(args.out, exist_ok=True)
 
     from qwen_asr import Qwen3ASRModel
-    wrap = Qwen3ASRModel.from_pretrained("Qwen/Qwen3-ASR-1.7B", dtype=torch.float32,
-                                         device_map="cpu", max_inference_batch_size=1,
-                                         max_new_tokens=128)
+
+    wrap = Qwen3ASRModel.from_pretrained(
+        "Qwen/Qwen3-ASR-1.7B", dtype=torch.float32, device_map="cpu", max_inference_batch_size=1, max_new_tokens=128
+    )
     summary = {}
     for name, path, start, dur in CLIPS:
         wav = load_slice(path, start, dur)
@@ -52,13 +57,21 @@ def main():
         res = wrap.transcribe(audio=[(wav, 16000)], language=None)[0]
         cpu_text, cpu_lang = res.text.strip(), (res.language or "")
 
-        np.savez(os.path.join(args.out, f"{name}.npz"), input_ids=input_ids, mel=mel,
-                 prompt_len=len(input_ids))
-        summary[name] = {"wav": path, "start": start, "dur": dur,
-                         "n_audio_tokens": n_audio, "prompt_len": int(len(input_ids)),
-                         "mel_shape": list(mel.shape), "cpu_text": cpu_text, "cpu_lang": cpu_lang}
-        print(f"[{name}] mel={mel.shape} ids={input_ids.shape} audio_tok={n_audio} "
-              f"lang={cpu_lang!r}\n   CPU: {cpu_text!r}")
+        np.savez(os.path.join(args.out, f"{name}.npz"), input_ids=input_ids, mel=mel, prompt_len=len(input_ids))
+        summary[name] = {
+            "wav": path,
+            "start": start,
+            "dur": dur,
+            "n_audio_tokens": n_audio,
+            "prompt_len": int(len(input_ids)),
+            "mel_shape": list(mel.shape),
+            "cpu_text": cpu_text,
+            "cpu_lang": cpu_lang,
+        }
+        print(
+            f"[{name}] mel={mel.shape} ids={input_ids.shape} audio_tok={n_audio} "
+            f"lang={cpu_lang!r}\n   CPU: {cpu_text!r}"
+        )
     json.dump(summary, open(os.path.join(args.out, "summary.json"), "w"), ensure_ascii=False, indent=2)
     print(f"[done] -> {args.out}")
 

@@ -9,7 +9,12 @@ generated token ids.
 
 Run with the qwen3-asr-eval venv.
 """
-import argparse, glob, json, os, shutil
+import argparse
+import glob
+import json
+import os
+import shutil
+
 import numpy as np
 import torch
 
@@ -20,16 +25,26 @@ SNAP_BASE = os.environ.get(
     "/home/ttuser/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots",
 )
 TEXT_CFG = dict(
-    architectures=["Qwen3ForCausalLM"], model_type="qwen3",
-    hidden_size=2048, intermediate_size=6144, num_hidden_layers=28,
-    num_attention_heads=16, num_key_value_heads=8, head_dim=128,
-    vocab_size=151936, rope_theta=1000000.0, max_position_embeddings=65536,
-    hidden_act="silu", rms_norm_eps=1e-6, attention_bias=False,
-    tie_word_embeddings=False, torch_dtype="bfloat16",
-    bos_token_id=151643, eos_token_id=151645,
+    architectures=["Qwen3ForCausalLM"],
+    model_type="qwen3",
+    hidden_size=2048,
+    intermediate_size=6144,
+    num_hidden_layers=28,
+    num_attention_heads=16,
+    num_key_value_heads=8,
+    head_dim=128,
+    vocab_size=151936,
+    rope_theta=1000000.0,
+    max_position_embeddings=65536,
+    hidden_act="silu",
+    rms_norm_eps=1e-6,
+    attention_bias=False,
+    tie_word_embeddings=False,
+    torch_dtype="bfloat16",
+    bos_token_id=151643,
+    eos_token_id=151645,
 )
-TOK_FILES = ["merges.txt", "vocab.json", "tokenizer_config.json", "generation_config.json",
-             "chat_template.json"]
+TOK_FILES = ["merges.txt", "vocab.json", "tokenizer_config.json", "generation_config.json", "chat_template.json"]
 
 
 def snap_dir():
@@ -38,19 +53,20 @@ def snap_dir():
 
 def extract_checkpoint(out_dir):
     from safetensors.torch import save_file
+
     os.makedirs(out_dir, exist_ok=True)
     snap = snap_dir()
     sd = {}
     for f in sorted(glob.glob(snap + "/*.safetensors")):
         from safetensors import safe_open
+
         with safe_open(f, "pt") as h:
             for k in h.keys():
                 if k.startswith("thinker.model."):
-                    sd["model." + k[len("thinker.model."):]] = h.get_tensor(k)
+                    sd["model." + k[len("thinker.model.") :]] = h.get_tensor(k)
                 elif k == "thinker.lm_head.weight":
                     sd["lm_head.weight"] = h.get_tensor(k)
-    save_file(sd, os.path.join(out_dir, "model.safetensors"),
-              metadata={"format": "pt"})
+    save_file(sd, os.path.join(out_dir, "model.safetensors"), metadata={"format": "pt"})
     json.dump(TEXT_CFG, open(os.path.join(out_dir, "config.json"), "w"), indent=2)
     for fn in TOK_FILES:
         src = os.path.join(snap, fn)
@@ -61,12 +77,13 @@ def extract_checkpoint(out_dir):
 
 
 def dump_decoder_golden(out_dir, wav, start, dur, language):
-    from qwen_asr import Qwen3ASRModel
     import soundfile as sf
+    from qwen_asr import Qwen3ASRModel
+
     os.makedirs(out_dir, exist_ok=True)
-    wrap = Qwen3ASRModel.from_pretrained("Qwen/Qwen3-ASR-1.7B", dtype=torch.float32,
-                                         device_map="cpu", max_inference_batch_size=1,
-                                         max_new_tokens=64)
+    wrap = Qwen3ASRModel.from_pretrained(
+        "Qwen/Qwen3-ASR-1.7B", dtype=torch.float32, device_map="cpu", max_inference_batch_size=1, max_new_tokens=64
+    )
     model = wrap.model
     cap = {}
     # capture text-model inputs (inputs_embeds, position_ids, attention_mask)
@@ -81,19 +98,22 @@ def dump_decoder_golden(out_dir, wav, start, dur, language):
             cap["inputs_embeds"] = kw.get("inputs_embeds")
             cap["position_ids"] = kw.get("position_ids")
             cap["attention_mask"] = kw.get("attention_mask")
+
     h = text_model.register_forward_pre_hook(pre, with_kwargs=True)
 
     w, sr = sf.read(wav, dtype="float32")
     if w.ndim > 1:
         w = w.mean(1)
-    a = int(start * sr); b = min(len(w), a + int(dur * sr))
+    a = int(start * sr)
+    b = min(len(w), a + int(dur * sr))
     res = wrap.transcribe(audio=[(w[a:b].copy(), sr)], language=language)
     h.remove()
     txt = res[0].text.strip()
 
     def s(name, t):
         if t is None:
-            print(f"[warn] {name} None"); return
+            print(f"[warn] {name} None")
+            return
         t = t.detach().cpu()
         np.save(os.path.join(out_dir, name + ".npy"), t.float().numpy() if t.is_floating_point() else t.numpy())
         print(f"[save] {name} {tuple(t.shape)} {t.dtype}")

@@ -9,15 +9,28 @@ Config (Qwen3-ASR-1.7B audio_config): num_mel_bins=128, d_model=1024,
 encoder_layers=24, heads=16 (head_dim=64), ffn=4096, downsample_hidden_size=480,
 output_dim=2048, n_window=50, n_window_infer=800, max_source_positions=1500.
 """
-import os, glob, math
+import glob
+import math
+import os
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 from safetensors import safe_open
 
-CFG = dict(num_mel_bins=128, d_model=1024, encoder_layers=24, heads=16, ffn=4096,
-           ds_hidden=480, output_dim=2048, n_window=50, n_window_infer=800,
-           max_source_positions=1500, ln_eps=1e-5)
+CFG = dict(
+    num_mel_bins=128,
+    d_model=1024,
+    encoder_layers=24,
+    heads=16,
+    ffn=4096,
+    ds_hidden=480,
+    output_dim=2048,
+    n_window=50,
+    n_window_infer=800,
+    max_source_positions=1500,
+    ln_eps=1e-5,
+)
 PREFIX = "thinker.audio_tower."
 
 
@@ -30,7 +43,7 @@ def load_audio_tower_weights(snap_dir=None, dtype=torch.float32):
         with safe_open(f, "pt") as h:
             for k in h.keys():
                 if k.startswith(PREFIX):
-                    w[k[len(PREFIX):]] = h.get_tensor(k).to(dtype)
+                    w[k[len(PREFIX) :]] = h.get_tensor(k).to(dtype)
     return w
 
 
@@ -76,7 +89,7 @@ def conv_frontend(mel, w):
     # split along time into chunks of 100 (last may be shorter), pad to 100
     pieces = []
     for i in range(n_chunks):
-        seg = mel[:, i * chunk:(i + 1) * chunk]
+        seg = mel[:, i * chunk : (i + 1) * chunk]
         if seg.shape[1] < chunk:
             seg = F.pad(seg, (0, chunk - seg.shape[1]))
         pieces.append(seg)
@@ -107,7 +120,7 @@ def encoder_layer(x, w, li, mask):
     q = q.view(S, H, hd).transpose(0, 1)  # (H,S,hd)
     k = k.view(S, H, hd).transpose(0, 1)
     v = v.view(S, H, hd).transpose(0, 1)
-    scale = hd ** -0.5
+    scale = hd**-0.5
     scores = torch.matmul(q, k.transpose(-1, -2)) * scale + mask[0]  # (H,S,S)
     probs = torch.softmax(scores, dim=-1)
     o = torch.matmul(probs, v).transpose(0, 1).reshape(S, D)
@@ -131,7 +144,7 @@ def encode(mel, w, return_stages=False, windowed=False):
     windowed=True: block-diagonal attention from cu_seqlens (matches the FA2 deployment;
       an efficiency path for long-form / streaming, NOT needed for segment ASR)."""
     T = mel.shape[1]
-    conv = conv_frontend(mel, w)             # (n_chunks,13,1024)
+    conv = conv_frontend(mel, w)  # (n_chunks,13,1024)
     n_chunks, per_chunk = conv.shape[0], conv.shape[1]
     pe = sinusoids(CFG["max_source_positions"], CFG["d_model"])[:per_chunk]  # (13,1024)
     conv = conv + pe.unsqueeze(0)

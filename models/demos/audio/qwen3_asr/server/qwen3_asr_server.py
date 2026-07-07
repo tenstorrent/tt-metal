@@ -13,22 +13,30 @@ Run in the dev container (chip 3 = fake P150):
     'source /opt/venv/bin/activate && cd /work && \
      uvicorn models.demos.audio.qwen3_asr.server.qwen3_asr_server:app --host 0.0.0.0 --port 8002'
 """
-import asyncio, io, os, re, sys, threading, time
+import asyncio
+import io
+import os
+import re
+import sys
+import threading
+import time
+
 import numpy as np
 import soundfile as sf
 import torch
-import ttnn
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from qwen_asr.core.transformers_backend import Qwen3ASRProcessor
 from safetensors import safe_open
 from transformers import AutoTokenizer
-from qwen_asr.core.transformers_backend import Qwen3ASRProcessor
+
+import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "tt"))
 sys.path.insert(0, os.path.join(ROOT, "reference"))
-import audio_encoder as tt_enc                # noqa: E402
-import audio_encoder_ref as ref               # noqa: E402  (weights loader only)
+import audio_encoder as tt_enc  # noqa: E402
+import audio_encoder_ref as ref  # noqa: E402  (weights loader only)
 from qwen3_asr_decoder import Qwen3ASRDecoder  # noqa: E402
 
 CKPT = os.environ.get("HF_MODEL", "/ttwork/qwen3_asr_text_decoder")
@@ -41,8 +49,7 @@ STATE = {}
 
 
 def _build_prompt(processor, force_language):
-    msgs = [{"role": "system", "content": ""},
-            {"role": "user", "content": [{"type": "audio", "audio": ""}]}]
+    msgs = [{"role": "system", "content": ""}, {"role": "user", "content": [{"type": "audio", "audio": ""}]}]
     base = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
     if force_language:
         base = base + f"language {force_language}<asr_text>"
@@ -63,13 +70,19 @@ def _load():
     enc_params = tt_enc.preprocess_weights(w, dev)
     args = ModelArgs(dev, max_batch_size=1, max_seq_len=2048)
     sd = args.load_state_dict()
-    model = Qwen3ASRDecoder(args, ttnn.bfloat16, dev, sd,
-                            args.weight_cache_path(ttnn.bfloat16), use_paged_kv_cache=False)
+    model = Qwen3ASRDecoder(
+        args, ttnn.bfloat16, dev, sd, args.weight_cache_path(ttnn.bfloat16), use_paged_kv_cache=False
+    )
     with safe_open(os.path.join(CKPT, "model.safetensors"), "pt") as h:
         embed = h.get_tensor("model.embed_tokens.weight").float()
-    STATE.update(dev=dev, enc=enc_params, model=model, embed=embed,
-                 tok=AutoTokenizer.from_pretrained(CKPT),
-                 proc=Qwen3ASRProcessor.from_pretrained(snap, fix_mistral_regex=True))
+    STATE.update(
+        dev=dev,
+        enc=enc_params,
+        model=model,
+        embed=embed,
+        tok=AutoTokenizer.from_pretrained(CKPT),
+        proc=Qwen3ASRProcessor.from_pretrained(snap, fix_mistral_regex=True),
+    )
     print(f"[server] loaded in {time.time()-t0:.1f}s; ready on chip 3 (P150)", flush=True)
 
 
@@ -124,11 +137,12 @@ def _infer(wav, force, max_new_tokens=200):
     prompt = _build_prompt(STATE["proc"], force)
     inputs = STATE["proc"](text=[prompt], audio=[wav], return_tensors="pt", padding=True)
     input_ids = inputs["input_ids"][0].long()
-    mel = inputs["input_features"][0].float() if inputs["input_features"].dim() == 3 \
-        else inputs["input_features"].float()
+    mel = (
+        inputs["input_features"][0].float() if inputs["input_features"].dim() == 3 else inputs["input_features"].float()
+    )
     audio_embeds = tt_enc.encode_mel(mel, STATE["enc"], STATE["dev"]).float()
     inp = STATE["embed"][input_ids].clone()
-    mask = (input_ids == AUDIO_TOKEN_ID)
+    mask = input_ids == AUDIO_TOKEN_ID
     n_mask = int(mask.sum())
     # Encoder output length should equal the audio-token count; it is >= it by construction
     # (last partial chunk padded to 13 then masked, matching the reference). Guard BOTH
@@ -155,16 +169,16 @@ SR = 16000
 # MIXING buckets across requests in the long-lived server corrupts later requests (they return
 # empty) — the same failure class as the old 256-vs-512 mix. Capping all segments to one bucket
 # (512) makes the server stable. Longer audio is chunked; nothing is single-shot above the cap.
-SINGLE_CAP = FIXED_INFER_SEC   # <= this -> single-shot; longer -> chunk. Segments are <=FIXED_INFER_SEC
+SINGLE_CAP = FIXED_INFER_SEC  # <= this -> single-shot; longer -> chunk. Segments are <=FIXED_INFER_SEC
 # so _infer's fixed-length pin never drops real audio. Constant prefill length across all requests
 # is what keeps the pipeline stable (see _infer). Longer audio is silence-chunked into <=14s windows.
 SEG_TARGET, SEG_MAX, SEG_MIN = 12.0, 14.0, 7.0
-SIL_RMS = 0.005          # per-frame silence detection for segment CUTTING (not speech gating)
-SPEECH_MIN = 0.008       # speech-presence gate on the 90th-pctile of short-window RMS
+SIL_RMS = 0.005  # per-frame silence detection for segment CUTTING (not speech gating)
+SPEECH_MIN = 0.008  # speech-presence gate on the 90th-pctile of short-window RMS
 
 
 def _rms(a):
-    return float(np.sqrt(np.mean(a ** 2) + 1e-12))
+    return float(np.sqrt(np.mean(a**2) + 1e-12))
 
 
 def _has_speech(a, win_s=0.2):
@@ -176,7 +190,7 @@ def _has_speech(a, win_s=0.2):
     if len(a) < w:
         return _rms(a) >= SPEECH_MIN
     n = len(a) // w
-    r = np.sqrt(np.maximum(1e-12, (a[:n * w].reshape(n, w) ** 2).mean(1)))
+    r = np.sqrt(np.maximum(1e-12, (a[: n * w].reshape(n, w) ** 2).mean(1)))
     return float(np.percentile(r, 90)) >= SPEECH_MIN
 
 
@@ -187,14 +201,15 @@ def _segment(w):
     n = len(w) // fl
     if n == 0:
         return [(0, len(w))]
-    rms = np.sqrt(np.maximum(1e-12, (w[:n * fl].reshape(n, fl) ** 2).mean(1)))
+    rms = np.sqrt(np.maximum(1e-12, (w[: n * fl].reshape(n, fl) ** 2).mean(1)))
     thr = max(rms.mean() * 0.15, np.percentile(rms, 20) * 0.5)
     sil = rms < thr
     segs, start, N = [], 0, len(w)
     while start < N:
         ideal = start + int(SEG_TARGET * SR)
         if ideal >= N:
-            segs.append((start, N)); break
+            segs.append((start, N))
+            break
         lo = start + int(SEG_MIN * SR)
         hi = min(start + int(SEG_MAX * SR), N)
         f_lo, f_hi = lo // fl, min(hi // fl, len(sil))
@@ -211,17 +226,20 @@ def _segment(w):
         end = cut * fl if cut else hi
         if end <= start:
             end = hi
-        segs.append((start, end)); start = end
+        segs.append((start, end))
+        start = end
     return segs
 
 
 def _hallucinated(text):
     """Repetition hallucination (e.g. '厉害厉害…' on non-speech): one char dominating."""
     import re
+
     s = re.sub(r"[\s\W_]+", "", text)
     if len(s) < 10:
         return False
     from collections import Counter
+
     return Counter(s).most_common(1)[0][1] / len(s) > 0.35
 
 
@@ -231,15 +249,16 @@ def health():
 
 
 @app.post("/v1/audio/transcriptions")
-async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"),
-                     language: str = Form(None)):
+async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"), language: str = Form(None)):
     from collections import Counter
+
     raw = await file.read()
     wav, sr = sf.read(io.BytesIO(raw), dtype="float32")
     if wav.ndim > 1:
         wav = wav.mean(1)
     if sr != SR:
         import librosa
+
         wav = librosa.resample(wav, orig_sr=sr, target_sr=SR)
     force = None if (not language or language.strip().lower() in ("auto", "", "none")) else language
     dur = len(wav) / SR
@@ -247,7 +266,7 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
         _ensure_warm()
         t0 = time.time()
         if dur <= SINGLE_CAP:
-            if not _has_speech(wav):              # non-speech upload -> empty (peak-energy gate)
+            if not _has_speech(wav):  # non-speech upload -> empty (peak-energy gate)
                 text, langs, nseg = "", [], 1
             else:
                 text, lang, _ = _infer(wav, force)
@@ -260,11 +279,12 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
             parts, langs = [], []
             for a, b in segs:
                 win = wav[a:b]
-                if not _has_speech(win):           # skip non-speech windows (peak-energy gate)
+                if not _has_speech(win):  # skip non-speech windows (peak-energy gate)
                     continue
                 tx, lg, _ = _infer(win, force)
                 if tx and not _hallucinated(tx):
-                    parts.append(tx); langs.append(lg)
+                    parts.append(tx)
+                    langs.append(lg)
             text = " ".join(parts)
         dt = time.time() - t0
     # forced language: the tag lives in the prompt, not the generated tokens, so _parse
@@ -273,8 +293,14 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
         lang = force
     else:
         lang = Counter(langs).most_common(1)[0][0] if langs else ""
-    return {"text": text, "language": lang, "duration": round(dur, 2),
-            "rtf": round(dt / max(dur, 1e-3), 3), "segments": nseg, "model": model}
+    return {
+        "text": text,
+        "language": lang,
+        "duration": round(dur, 2),
+        "rtf": round(dt / max(dur, 1e-3), 3),
+        "segments": nseg,
+        "model": model,
+    }
 
 
 # --- P2-4 streaming: WebSocket online ASR (near-real-time, silence-segmented) ---
@@ -302,7 +328,8 @@ async def stream(ws: WebSocket):
     def _warm():
         with _LOCK:
             _ensure_warm()
-    await loop.run_in_executor(None, _warm)   # compile kernels before the stream's first segment
+
+    await loop.run_in_executor(None, _warm)  # compile kernels before the stream's first segment
 
     buf, nsamp, sil_run, consumed = [], 0, 0.0, 0
 
@@ -316,18 +343,22 @@ async def stream(ws: WebSocket):
             return
         tx, lg = await loop.run_in_executor(None, run_infer, seg)
         if tx:
-            await ws.send_json({"text": tx, "language": (force or lg),
-                                "seg_end_s": round(consumed / SR, 2), "final": final})
+            await ws.send_json(
+                {"text": tx, "language": (force or lg), "seg_end_s": round(consumed / SR, 2), "final": final}
+            )
 
     try:
         while True:
             data = await ws.receive_bytes()
             frame = np.frombuffer(data, "<i2").astype(np.float32) / 32768.0
-            buf.append(frame); nsamp += len(frame); consumed += len(frame)
+            buf.append(frame)
+            nsamp += len(frame)
+            consumed += len(frame)
             sil_run = sil_run + len(frame) / SR if _rms(frame) < STREAM_SIL_RMS else 0.0
             dur = nsamp / SR
             if (dur >= min_seg and sil_run >= STREAM_SIL_SEC) or dur >= max_seg:
-                seg = np.concatenate(buf); buf, nsamp, sil_run = [], 0, 0.0
+                seg = np.concatenate(buf)
+                buf, nsamp, sil_run = [], 0, 0.0
                 await flush(seg)
     except WebSocketDisconnect:
         if buf:
