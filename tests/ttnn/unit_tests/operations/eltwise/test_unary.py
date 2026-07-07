@@ -343,11 +343,11 @@ def test_relu_reglu_uint32_edge_cases(device):
 )
 def test_reglu_uint32_full_range(device, input_shapes, value_ranges):
     gate = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
-    multiplier = torch.ones(input_shapes, dtype=torch.int64).to(torch.uint32)
+    multiplier = (gate.to(torch.int64) // 2).to(torch.uint32)
     torch_reglu_input = torch.cat([multiplier, gate], dim=-1)
 
     reglu_golden = ttnn.get_golden_function(ttnn.reglu)
-    torch_reglu_output = reglu_golden(torch_reglu_input.to(torch.int64), -1).to(torch.uint32)
+    torch_reglu_output = (reglu_golden(torch_reglu_input.to(torch.int64), -1) % (2**32)).to(torch.uint32)
 
     reglu_input = ttnn.from_torch(
         torch_reglu_input,
@@ -362,13 +362,12 @@ def test_reglu_uint32_full_range(device, input_shapes, value_ranges):
 
 
 def test_reglu_uint16_full_range(device):
-    # UINT8 is not supported since multiply has no uint8 path.
     gate = create_banded_range_tensor((1, 1, 256, 256), [(0, 65535)], dtype=torch.uint16)
-    multiplier = torch.ones((1, 1, 256, 256), dtype=torch.int64).to(torch.uint16)
+    multiplier = (gate.to(torch.int64) // 2).to(torch.uint16)
     torch_reglu_input = torch.cat([multiplier, gate], dim=-1)
 
     reglu_golden = ttnn.get_golden_function(ttnn.reglu)
-    torch_reglu_output = reglu_golden(torch_reglu_input.to(torch.int64), -1).to(torch.uint16)
+    torch_reglu_output = (reglu_golden(torch_reglu_input.to(torch.int64), -1) % (2**16)).to(torch.uint16)
 
     reglu_input = ttnn.from_torch(
         torch_reglu_input,
@@ -383,10 +382,10 @@ def test_reglu_uint16_full_range(device):
 
 
 def test_relu_uint8_full_range(device):
-    torch_input_tensor = torch.arange(256, dtype=torch.uint8).reshape(1, 1, 8, 32)
+    torch_input_tensor = create_banded_range_tensor((1, 1, 32, 32), [(0, 255)], dtype=torch.uint8)
 
     golden_function = ttnn.get_golden_function(ttnn.relu)
-    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), device=device).to(torch.uint8)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
