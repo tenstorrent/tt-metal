@@ -54,9 +54,12 @@ def create_program_descriptor(
     S_kv = int(key.shape[2])
     H_kv = int(key.shape[1])  # K/V num heads (GQA/MQA: H_kv <= H_q)
 
-    S_q_t = S_q // 32  # tiles along S_q
-    S_kv_t = S_kv // 32  # tiles along S_kv
-    D_t = D // 32  # tiles along D (head dim)
+    # Use ceildiv for tile counts — non-aligned dimensions (S % 32 != 0 or
+    # D % 32 != 0) still occupy a full tile in TILE_LAYOUT (zero-padded by
+    # ttnn.from_torch). The kernel must process these partially-filled tiles.
+    S_q_t = (S_q + 31) // 32  # tiles along S_q (ceildiv)
+    S_kv_t = (S_kv + 31) // 32  # tiles along S_kv (ceildiv)
+    D_t = (D + 31) // 32  # tiles along D (head dim, ceildiv)
 
     dtype = query.dtype
     tile_size = ttnn.tile_size(dtype)
@@ -90,6 +93,21 @@ def create_program_descriptor(
         mask_per_head = mask_H == H
     else:
         mask_per_head = False
+
+    # Non-aligned S_kv: the last KV tile contains zero-padded rows (positions
+    # S_kv..32*S_kv_t-1). These produce Q·0=0 scores, and exp(0)=1 in softmax,
+    # which corrupts the normalization. We must mask them out with -1e9.
+    # Non-aligned S_q: padded Q rows produce garbage output, but the writer
+    # only writes S_q_t*32 >= S_q tiles — the padded rows are never written
+    # back. Non-aligned D: padded D columns are zeros in K/V, so Q·0=0 in the
+    # dot product — this doesn't corrupt the result (just reduces magnitude
+    # uniformly, which softmax normalization handles). So only S_kv padding
+    # needs masking.
+    has_kv_padding = S_kv % 32 != 0
+    S_kv_padded = S_kv  # actual KV length (for padding mask generation)
+    # When padding is needed and no mask is provided, we force a padding-only
+    # mask via the on-device generation path (like causal).
+    needs_padding_mask = has_kv_padding and not has_mask
 
     num_q_blocks = (S_q_t + B_q - 1) // B_q
     num_kv_blocks = (S_kv_t + B_kv - 1) // B_kv
@@ -158,7 +176,10 @@ def create_program_descriptor(
     v_pages = 2 * (actual_B_kv * D_t)
     # Mask CB: for custom mask, reader streams from DRAM (double-buffered).
     # For causal mask, reader generates 1 tile per diagonal KV block (B_q*B_kv=1).
-    mask_pages = 2 * (actual_B_q * actual_B_kv) if (has_mask or is_causal_mask) else 1
+    # For padding mask (non-aligned S_kv, no caller mask), reader generates
+    # padding mask tiles on-device.
+    needs_mask_cb = has_mask or is_causal_mask or needs_padding_mask
+    mask_pages = 2 * (actual_B_q * actual_B_kv) if needs_mask_cb else 1
     scale_pages = 1
     output_pages = 2 * (actual_B_q * D_t)
     # cb_scores holds QK^T scores (B_q×B_kv tiles, Phase 1) — used for scale,
@@ -208,7 +229,9 @@ def create_program_descriptor(
     # kernel via direct L1 writes). For custom mask, it follows the input dtype
     # (streamed from DRAM). Using intermediate format for causal ensures the
     # mask values (-1e38f) match the score accumulation precision.
-    mask_cb_format = intermediate_format if is_causal_mask else dtype
+    # Padding mask (non-aligned S_kv, no caller mask) also uses intermediate
+    # format — it's generated on-device like causal.
+    mask_cb_format = intermediate_format if (is_causal_mask or needs_padding_mask) else dtype
     mask_cb_tile_size = ttnn.tile_size(mask_cb_format)
     cbs.append(make_cb(cb_attn_mask_id, mask_pages, mask_cb_format, mask_cb_tile_size))
     cbs.append(make_cb(cb_scale_id, scale_pages, dtype, tile_size))
@@ -243,6 +266,8 @@ def create_program_descriptor(
         1 if mask_per_head else 0,
         H_kv,  # [11] K/V num heads (GQA/MQA broadcasting)
         1 if is_causal_mask else 0,  # [12] is_causal
+        1 if has_kv_padding else 0,  # [13] has_kv_padding
+        S_kv_padded,  # [14] actual S_kv (for padding mask generation)
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
@@ -317,6 +342,7 @@ def create_program_descriptor(
         1 if has_mask else 0,
         scale_bits,
         1 if is_causal_mask else 0,  # [9] is_causal
+        1 if has_kv_padding else 0,  # [10] has_kv_padding
     ]
 
     compute_rt_args = ttnn.RuntimeArgs()

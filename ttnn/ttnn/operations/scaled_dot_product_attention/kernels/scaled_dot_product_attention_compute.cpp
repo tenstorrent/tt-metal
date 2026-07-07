@@ -71,6 +71,7 @@ void kernel_main() {
     constexpr uint32_t has_mask = get_compile_time_arg_val(7);
     const uint32_t scale_bits = get_compile_time_arg_val(8);
     constexpr uint32_t is_causal = get_compile_time_arg_val(9);
+    constexpr uint32_t has_kv_padding = get_compile_time_arg_val(10);
 
     // RT arg: number of work units (B,H pairs) this core processes
     const uint32_t num_work_units = get_arg_val<uint32_t>(0);
@@ -112,7 +113,7 @@ void kernel_main() {
             for (uint32_t kvb = 0; kvb < num_kv_blocks; kvb++) {
                 cb_wait_front(cb_k, B_kv * D_t);
                 cb_wait_front(cb_v, B_kv * D_t);
-                if constexpr (has_mask || is_causal) {
+                if constexpr (has_mask || is_causal || has_kv_padding) {
                     cb_wait_front(cb_attn_mask, B_q * B_kv);
                 }
                 cb_wait_front(cb_scaler, 2);
@@ -145,8 +146,8 @@ void kernel_main() {
                 // Phase 2: Scale scores — S *= scale
                 ckl::transform_in_place<cb_scores>(ckl::EltwiseShape::grid(B_q, B_kv), ckl::MulUnary<>{scale_bits});
 
-                // Phase 2b: Apply mask (custom or causal)
-                if constexpr (has_mask || is_causal) {
+                // Phase 2b: Apply mask (custom, causal, or padding)
+                if constexpr (has_mask || is_causal || has_kv_padding) {
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::grid(B_q, B_kv),
                         ckl::BinaryFpu<cb_scores, cb_attn_mask, ckl::BinaryFpuOp::Add, ckl::BroadcastDim::None>{},
@@ -316,10 +317,9 @@ void kernel_main() {
 
                 // Cleanup: K and V tiles are already popped by the matmul helpers
                 // (WaitAndPopPerKBlock in both Phase 1 QK^T and Phase 12 PV matmuls).
-                // Mask tiles (custom or causal) are already popped by the BinaryFpu<Add>
-                // chain in Phase 2b (InputLifecycle::Streaming pops per-tile internally).
-                // Do NOT double-pop. cb_attn_mask is not popped here — the eltwise chain
-                // already drained it.
+                // Mask tiles (custom, causal, or padding) are already popped by the
+                // BinaryFpu<Add> chain in Phase 2b (InputLifecycle::Streaming pops
+                // per-tile internally). Do NOT double-pop.
             }
 
             // Scaler tiles are already consumed per KV block (MAX scaler popped

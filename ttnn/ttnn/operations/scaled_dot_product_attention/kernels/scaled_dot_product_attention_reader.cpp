@@ -63,6 +63,49 @@ inline void fill_constant_tile(uint32_t cb_id) {
     }
 }
 
+// Generate a padding mask tile: columns 0..(S_kv_in_tile-1) = 0 (attend),
+// columns S_kv_in_tile..31 = -1e9 (mask out padded positions).
+// S_kv_in_tile is the number of valid KV positions within this 32-col tile.
+// The scores tile is Q @ K^T, where rows = Q positions, columns = K positions.
+// So padded K positions are COLUMNS, not rows.
+// This handles the case where S_kv is not tile-aligned: the last KV tile
+// has zero-padded columns that would produce spurious attention scores.
+template <typename T, T zero_value, T neg_inf_value>
+inline void fill_padding_mask_tile(uint32_t cb_id, uint32_t S_kv_in_tile) {
+    T* tile_ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
+    for (uint32_t face = 0; face < 4; ++face) {
+        const uint32_t face_col_offset = (face & 1U) ? FACE_DIM : 0;
+        for (uint32_t h = 0; h < FACE_DIM; ++h) {
+            for (uint32_t w = 0; w < FACE_DIM; ++w) {
+                const uint32_t col = face_col_offset + w;
+                *tile_ptr++ = (col < S_kv_in_tile) ? zero_value : neg_inf_value;
+            }
+        }
+    }
+}
+
+// Overlay padding mask on an existing tile in L1: overwrite columns
+// S_kv_in_tile..31 with neg_inf_value. Used after reading a custom mask
+// tile from DRAM to ensure padded KV positions are masked out.
+// The scores tile has K positions along columns, so padded K positions
+// are columns >= S_kv_in_tile.
+template <typename T, T neg_inf_value>
+inline void overlay_padding_mask(uint32_t cb_id, uint32_t S_kv_in_tile) {
+    T* tile_ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
+    for (uint32_t face = 0; face < 4; ++face) {
+        const uint32_t face_col_offset = (face & 1U) ? FACE_DIM : 0;
+        for (uint32_t h = 0; h < FACE_DIM; ++h) {
+            for (uint32_t w = 0; w < FACE_DIM; ++w) {
+                const uint32_t col = face_col_offset + w;
+                if (col >= S_kv_in_tile) {
+                    *tile_ptr = neg_inf_value;
+                }
+                tile_ptr++;
+            }
+        }
+    }
+}
+
 void kernel_main() {
     // Scalar CT args
     const uint32_t B = get_compile_time_arg_val(0);
@@ -74,13 +117,15 @@ void kernel_main() {
     const uint32_t num_kv_blocks = get_compile_time_arg_val(6);
     constexpr uint32_t B_q = get_compile_time_arg_val(7);
     constexpr uint32_t B_kv = get_compile_time_arg_val(8);
-    const uint32_t has_mask = get_compile_time_arg_val(9);
+    const uint32_t has_mask = get_compile_time_arg_val(9);  // runtime const (used in runtime if)
     const uint32_t mask_per_head = get_compile_time_arg_val(10);
     const uint32_t H_kv = get_compile_time_arg_val(11);  // K/V num heads (GQA/MQA)
     constexpr uint32_t is_causal = get_compile_time_arg_val(12);
+    constexpr uint32_t has_kv_padding = get_compile_time_arg_val(13);
+    const uint32_t S_kv_actual = get_compile_time_arg_val(14);  // actual S_kv (before tile padding)
 
-    // TensorAccessorArgs start at CT offset 13
-    constexpr auto q_args = TensorAccessorArgs<13>();
+    // TensorAccessorArgs start at CT offset 15
+    constexpr auto q_args = TensorAccessorArgs<15>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -198,6 +243,10 @@ void kernel_main() {
                 }
 
                 // Push mask block
+                // When has_kv_padding, the last KV tile has zero-padded rows
+                // that must be masked out with -1e9. This is needed for all
+                // mask modes (none, custom, causal) to prevent spurious
+                // attention on padded K/V rows.
                 if constexpr (is_causal) {
                     // Causal mask: generate on-device based on block position
                     for (uint32_t sq = 0; sq < B_q; sq++) {
@@ -227,11 +276,22 @@ void kernel_main() {
                                     fill_constant_tile<uint16_t, BF16_ZERO_BITS>(cb_attn_mask);
                                 }
                             }
+                            // Overlay padding on last KV tile for padded rows
+                            if constexpr (has_kv_padding) {
+                                if (kv_tile_idx == S_kv_t - 1) {
+                                    uint32_t s_kv_in_tile = S_kv_actual - (S_kv_t - 1) * 32;
+                                    if (mask_is_fp32) {
+                                        overlay_padding_mask<uint32_t, FP32_NEG_INF_BITS>(cb_attn_mask, s_kv_in_tile);
+                                    } else {
+                                        overlay_padding_mask<uint16_t, BF16_NEG_INF_BITS>(cb_attn_mask, s_kv_in_tile);
+                                    }
+                                }
+                            }
                             cb_push_back(cb_attn_mask, 1);
                         }
                     }
                 } else if (has_mask) {
-                    // Custom mask: stream from DRAM
+                    // Custom mask: stream from DRAM, overlay padding on last KV tile
                     for (uint32_t sq = 0; sq < B_q; sq++) {
                         uint32_t m_sq = qb * B_q + sq;
                         for (uint32_t skv = 0; skv < B_kv; skv++) {
@@ -241,6 +301,45 @@ void kernel_main() {
                             uint32_t l1_write_addr = get_write_ptr(cb_attn_mask);
                             noc_async_read_tile(tile_id, mask_accessor, l1_write_addr);
                             noc_async_read_barrier();
+                            // Overlay padding on last KV tile
+                            if constexpr (has_kv_padding) {
+                                if (m_skv == S_kv_t - 1) {
+                                    uint32_t s_kv_in_tile = S_kv_actual - (S_kv_t - 1) * 32;
+                                    if (mask_is_fp32) {
+                                        overlay_padding_mask<uint32_t, FP32_NEG_INF_BITS>(cb_attn_mask, s_kv_in_tile);
+                                    } else {
+                                        overlay_padding_mask<uint16_t, BF16_NEG_INF_BITS>(cb_attn_mask, s_kv_in_tile);
+                                    }
+                                }
+                            }
+                            cb_push_back(cb_attn_mask, 1);
+                        }
+                    }
+                } else if constexpr (has_kv_padding) {
+                    // Padding mask: no caller mask, but S_kv is not tile-aligned.
+                    // Generate a mask that masks out padded KV positions.
+                    for (uint32_t sq = 0; sq < B_q; sq++) {
+                        for (uint32_t skv = 0; skv < B_kv; skv++) {
+                            cb_reserve_back(cb_attn_mask, 1);
+                            uint32_t kv_tile_idx = kvb * B_kv + skv;
+                            if (kv_tile_idx == S_kv_t - 1) {
+                                // Last KV tile: partially filled
+                                uint32_t s_kv_in_tile = S_kv_actual - (S_kv_t - 1) * 32;
+                                if (mask_is_fp32) {
+                                    fill_padding_mask_tile<uint32_t, FP32_ZERO_BITS, FP32_NEG_INF_BITS>(
+                                        cb_attn_mask, s_kv_in_tile);
+                                } else {
+                                    fill_padding_mask_tile<uint16_t, BF16_ZERO_BITS, BF16_NEG_INF_BITS>(
+                                        cb_attn_mask, s_kv_in_tile);
+                                }
+                            } else {
+                                // Not the last tile: all zeros (attend everything)
+                                if (mask_is_fp32) {
+                                    fill_constant_tile<uint32_t, FP32_ZERO_BITS>(cb_attn_mask);
+                                } else {
+                                    fill_constant_tile<uint16_t, BF16_ZERO_BITS>(cb_attn_mask);
+                                }
+                            }
                             cb_push_back(cb_attn_mask, 1);
                         }
                     }

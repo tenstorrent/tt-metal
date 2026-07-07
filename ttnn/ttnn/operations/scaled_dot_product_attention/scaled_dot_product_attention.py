@@ -85,7 +85,7 @@ INPUT_TAGGERS = {
 SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
-    "alignment": ["tile_aligned"],
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "mask_mode": ["none", "custom", "causal"],
     "scale_mode": ["auto", "explicit"],
     "attention_kind": ["self", "cross"],
@@ -254,7 +254,7 @@ def scaled_dot_product_attention(
     # shapes that would OOM. This prevents the TT_THROW RuntimeError from
     # crashing the shared module-scoped device in the golden test suite.
     # OOM shapes are Refinement 6 territory (large head_dim L1 budget).
-    D_t = D // 32
+    D_t = (D + 31) // 32  # ceildiv for non-aligned head_dim
     tile_bytes = ttnn.tile_size(query.dtype)
     fp32_dest = getattr(compute_kernel_config, "fp32_dest_acc_en", True)
     interm_bytes = ttnn.tile_size(ttnn.float32 if fp32_dest else ttnn.bfloat16)
@@ -263,7 +263,7 @@ def scaled_dot_product_attention(
     input_cbs = 4 * (2 * D_t * tile_bytes)
     # Intermediate CBs: scores(2), m(2), l(2), o(2*D_t), m_new(2), psum(2),
     # pv(2), pv_out(2*D_t) — all use intermediate format
-    S_kv_t = int(key.shape[2]) // 32
+    S_kv_t = (int(key.shape[2]) + 31) // 32  # ceildiv for non-aligned S_kv
     interm_cbs = (2 + 2 + 2 + 2 * D_t + 2 + 2 + 2 + 2 * D_t) * interm_bytes
     # Scaler CB: 2 * num_kv_blocks pages, always bf16
     scaler_cbs = 2 * S_kv_t * scaler_bytes
