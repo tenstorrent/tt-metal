@@ -16,8 +16,6 @@
 
 - name: Llama 3.1-8B e2e tests
   cmd: |
-    # [#47820 DIAGNOSTIC — DO NOT MERGE] Only ci-eval-32 so a flaky token-matching step
-    # can't block the reuse-fix signal for the repeat-batch prefetcher path.
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest --timeout 900 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True
   model: llama3.1-8b
