@@ -470,8 +470,8 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
     TT_FATAL(
         hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "Tensor prefetcher requires programmable DRAM cores; set "
-        "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1");
+        "Tensor prefetcher requires programmable DRAM cores, which auto-enable on Blackhole with firmware "
+        ">= 19.12.0.0 and either no harvested DRAM channels or a single device");
 
     enumerate_dram_senders();
 
@@ -834,7 +834,7 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     // (a) Dispatcher write: bump every target DRAM core's signal slot for this CQ. Runs
     // under the api lock we already hold (the method does not re-lock).
     mesh_device_->impl().mesh_command_queue_base(cq_id).enqueue_write_dram_core_counter(
-        tt::stl::Span<const DeviceMemoryAddress>(targets), signal_value, /*blocking=*/false);
+        ttsl::Span<const DeviceMemoryAddress>(targets), signal_value, /*blocking=*/false);
 
     // (b) Queue a WAIT_CQ request. It rides the same async worker path as prefetch
     // requests, so it lands in each socket's FIFO ahead of the next prefetch request;

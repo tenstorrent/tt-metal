@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "moe_gpt_ring_common.h"
 
 // Triple buffering constants
@@ -39,7 +41,7 @@ void kernel_main() {
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w0_w1_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
 
     // Run-time arguments
     uint32_t argidx = 0;
@@ -54,22 +56,28 @@ void kernel_main() {
     const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
+    // Noc typed wrapper
+    Noc noc_obj(noc_index);
+
     // CBs
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_0;
-    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_r2c_w0_w1_id = tt::CBIndex::c_0;
+    constexpr auto cb_s2c_in_id = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_rdy_id = tt::CBIndex::c_2;
+    constexpr auto cb_w2c_rdy_id = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_in2_id = tt::CBIndex::c_4;
 
     // CB Aliases
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
+    constexpr auto cb_r2c_w2_id = tt::CBIndex::c_0;
+    constexpr auto cb_c2s_out_id = tt::CBIndex::c_1;
+
+    CircularBuffer cb_r2c_w0_w1(cb_r2c_w0_w1_id);
+    CircularBuffer cb_r2c_w2(cb_r2c_w2_id);
 
     // Tile sizes
-    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
-    constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
-    constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
-    constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
+    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in_id);
+    constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1_id);
+    constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2_id);
+    constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2_id);
 
     // Constants for MoEGPT
     constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_PLUS_BIAS_H;  // 91 (90 weight + 1 bias)
@@ -127,7 +135,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // CB addresses
     //-------------------------------------------------------------------------
-    const uint32_t w_cb_base_addr = get_write_ptr(cb_r2c_w0_w1);
+    const uint32_t w_cb_base_addr = cb_r2c_w0_w1.get_write_ptr();
 
     // Precompute slot addresses (avoid multiply in hot loop)
     // Each slot holds 1 block (20 tiles = 10 tiles/txn * 2 txns/block)
@@ -138,6 +146,8 @@ void kernel_main() {
     // Expert loop
     //-------------------------------------------------------------------------
     // Set w0_w1 state once before loop (will be reused for all experts)
+    // Device 2.0 migration: legacy primitive retained: noc_async_read_one_packet_set_state is a
+    // state-machine setup with no Device 2.0 wrapper
     noc_async_read_one_packet_set_state<true>(dram_noc_addr, w0_w1_bytes_per_txn, vchannel);
 
     //-------------------------------------------------------------------------
@@ -147,7 +157,7 @@ void kernel_main() {
     bool txns_in_flight = false;
 
     // We reserve one to kick start the pipeline, and then it is steady state
-    cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+    cb_r2c_w0_w1.reserve_back(w0_w1_tiles_per_block);
 
 #ifdef TILIZE_FUSED
     //-------------------------------------------------------------------------
@@ -155,12 +165,12 @@ void kernel_main() {
     //-------------------------------------------------------------------------
 
     // Wait for metadata from tilize drain core
-    uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
-    volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr);
-    noc_semaphore_wait_min(metadata_ready_semaphore_ptr, 1);
+    Semaphore<> metadata_ready_sem(metadata_ready_semaphore_id);
+    metadata_ready_sem.wait_min(1);
 
     // Read per-expert token counts from dedicated semaphores
+    // Device 2.0 migration: legacy primitive retained: Semaphore<> has no accessor to read its
+    // current value; use the legacy pointer-based read.
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t e = 0; e < num_experts; ++e) {
         volatile tt_l1_ptr uint32_t* count_sem_ptr =
@@ -180,6 +190,8 @@ void kernel_main() {
             uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
 
             for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
+                // Device 2.0 migration: legacy primitives retained: trid-based one-packet state-machine
+                // reads have no Device 2.0 wrappers
                 noc_async_read_set_trid(trid_to_issue);
                 noc_async_read_one_packet_with_state_with_trid<false, true>(
                     dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
@@ -196,10 +208,12 @@ void kernel_main() {
                 ADVANCE_TRID(trid_to_issue);
 
                 if (txns_in_flight) {
+                    // Device 2.0 migration: legacy primitive retained: trid-based barrier paired with
+                    // noc_async_read_one_packet_with_state_with_trid
                     noc_async_read_barrier_with_trid(trid_to_wait);
-                    cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                    cb_r2c_w0_w1.push_back(w0_w1_tiles_per_block);
                     ADVANCE_TRID(trid_to_wait);
-                    cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
+                    cb_r2c_w0_w1.reserve_back(w0_w1_tiles_per_block * 2);
                 }
                 txns_in_flight = true;
             }
@@ -208,6 +222,8 @@ void kernel_main() {
             uint32_t w2_dram_read_offset = w2_expert_offset;
 
             for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
+                // Device 2.0 migration: legacy primitives retained: trid-based one-packet state-machine
+                // reads have no Device 2.0 wrappers
                 noc_async_read_set_trid(trid_to_issue);
                 noc_async_read_one_packet_with_state_with_trid<false, true>(
                     dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
@@ -220,10 +236,11 @@ void kernel_main() {
                 ADVANCE_SLOT(slot_to_issue);
                 ADVANCE_TRID(trid_to_issue);
 
+                // Device 2.0 migration: legacy primitive retained: trid-based barrier
                 noc_async_read_barrier_with_trid(trid_to_wait);
-                cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                cb_r2c_w0_w1.push_back(w0_w1_tiles_per_block);
                 ADVANCE_TRID(trid_to_wait);
-                cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
+                cb_r2c_w0_w1.reserve_back(w0_w1_tiles_per_block * 2);
             }
         }
 
@@ -232,9 +249,10 @@ void kernel_main() {
     }
 
     // Drain the pipeline
+    // Device 2.0 migration: legacy primitive retained: trid-based barrier
     noc_async_read_barrier_with_trid(trid_to_wait);
-    cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-    cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+    cb_r2c_w0_w1.push_back(w0_w1_tiles_per_block);
+    cb_r2c_w0_w1.push_back(w0_w1_tiles_per_block);
 
 #else
     // NON-FUSED MODE: Read all W0/W1 then W2 for each expert
@@ -246,6 +264,8 @@ void kernel_main() {
 
         for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
             // Issue reads with current trid
+            // Device 2.0 migration: legacy primitives retained: trid-based one-packet state-machine
+            // reads have no Device 2.0 wrappers
             noc_async_read_set_trid(trid_to_issue);
             noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
                 dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
@@ -260,15 +280,16 @@ void kernel_main() {
 
             // Only when we first start the pipeline, we don't have any txns in flight
             if (txns_in_flight) {
+                // Device 2.0 migration: legacy primitive retained: trid-based barrier
                 noc_async_read_barrier_with_trid(trid_to_wait);
-                cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                cb_r2c_w0_w1.push_back(w0_w1_tiles_per_block);
 
                 ADVANCE_TRID(trid_to_wait);
 
                 // Reserve for next block
                 // Reserve back is not incremental, so to reserve one more, we need to reserve 2
                 // This accounts for the one we already have reserved (for in-flight read)
-                cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
+                cb_r2c_w0_w1.reserve_back(w0_w1_tiles_per_block * 2);
             }
             txns_in_flight = true;
         }
@@ -280,6 +301,8 @@ void kernel_main() {
 
         for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
             // Issue reads with current trid
+            // Device 2.0 migration: legacy primitives retained: trid-based one-packet state-machine
+            // reads have no Device 2.0 wrappers
             noc_async_read_set_trid(trid_to_issue);
             noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
                 dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
@@ -292,15 +315,16 @@ void kernel_main() {
             ADVANCE_SLOT(slot_to_issue);
             ADVANCE_TRID(trid_to_issue);
 
+            // Device 2.0 migration: legacy primitive retained: trid-based barrier
             noc_async_read_barrier_with_trid(trid_to_wait);
-            cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+            cb_r2c_w2.push_back(w2_tiles_per_block);
 
             ADVANCE_TRID(trid_to_wait);
 
             // Reserve for next block
             // Reserve back is not incremental, so to reserve one more, we need to reserve 2
             // This accounts for the one we already have reserved (for in-flight read)
-            cb_reserve_back(cb_r2c_w2, w2_tiles_per_block * 2);
+            cb_r2c_w2.reserve_back(w2_tiles_per_block * 2);
         }
 
         // Update offsets for next expert
@@ -309,12 +333,13 @@ void kernel_main() {
     }
 
     // Drain the pipeline - the last txn in flight
+    // Device 2.0 migration: legacy primitive retained: trid-based barrier
     noc_async_read_barrier_with_trid(trid_to_wait);
-    cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+    cb_r2c_w2.push_back(w2_tiles_per_block);
 
     // We have one extra slot reserved, which we won't use.
     // For CB hygiene, we can push it back.
-    cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+    cb_r2c_w2.push_back(w2_tiles_per_block);
 #endif  // TILIZE_FUSED
 }
 

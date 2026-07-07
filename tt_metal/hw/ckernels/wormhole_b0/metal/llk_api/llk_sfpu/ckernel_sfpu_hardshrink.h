@@ -23,7 +23,7 @@ inline void calculate_hardshrink(uint32_t param0) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat abs_v = sfpi::setsgn(v, 0);
-        v_if(abs_v <= lambda) { sfpi::dst_reg[0] = sfpi::vConst0; }
+        v_if(abs_v <= lambda) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
         sfpi::dst_reg++;
     }

@@ -11,6 +11,7 @@ Automatically downloads weights from HuggingFace if not available locally.
 import json
 import os
 import shutil
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -21,9 +22,16 @@ from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.demos.common.prefill.adapter import ADAPTER_PATHS, PrefillModelAdapter, get_adapter
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
-from models.demos.deepseek_v3_d_p.tests.model_variants import DSV3, TEST_VARIANTS, TestVariant
+
+# The per-model registry now lives in models/demos/common/prefill/adapter.py and is shared by the
+# runner and the tests. These aliases keep the existing fixture/test references (TestVariant /
+# TEST_VARIANTS / DSV3) working.
+TestVariant = PrefillModelAdapter
+TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}
+DSV3 = get_adapter("deepseek_v3_d_p")
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
@@ -187,17 +195,33 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             ignore_patterns=["*.safetensors"],  # Don't download weight files
         )
 
+        # Variants that load config/tokenizer without trust_remote_code (e.g. DeepSeek-V3, stock fast
+        # tokenizer) can use the HF snapshot dir directly — no flat copy needed. Skipping it also avoids
+        # writing into a possibly read-only HF cache mount.
+        if not variant.needs_flat_config_dir:
+            logger.success(f"✓ Config files downloaded to: {model_dir}")
+            return Path(model_dir)
+
         # The HF cache stores files as symlinks into blobs/ (content-hash names). With
         # trust_remote_code=True, transformers resolves the remote module to its blob realpath
         # and then looks for its relative-import siblings (e.g. tool_declaration_ts.py) by name in
         # that same dir, which fails in blobs/. Copy into a flat dir of real files so relative
-        # imports resolve by name.
+        # imports resolve by name. The dir name is made dot-free (trust_remote_code can't import a
+        # dynamic module whose dir contains '.'). Weight shards are excluded so we never materialize
+        # the hundreds of GB the snapshot may hold from a prior weight download, and the flat dir lives
+        # in a writable temp location so a read-only HF cache mount doesn't break the copy.
         flat_dir = (
-            cache_dir
-            / "flat_config"
+            Path(tempfile.gettempdir())
+            / "ttnn_flat_config"
             / variant.hf_repo_id.replace("/", "__").replace(".", "_").replace("-", "_").replace("_", "-")
         )
-        shutil.copytree(model_dir, flat_dir, symlinks=False, dirs_exist_ok=True)
+        shutil.copytree(
+            model_dir,
+            flat_dir,
+            symlinks=False,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("*.safetensors"),
+        )
 
         logger.success(f"✓ Config files downloaded to: {model_dir} (flattened to: {flat_dir})")
         return flat_dir
@@ -422,6 +446,12 @@ def _resolve_hf_config(model_path_str: str):
 @lru_cache(maxsize=None)
 def _resolve_config_only(variant_name: str):
     v = TEST_VARIANTS[variant_name]
+    # Hand-built config takes precedence: some models (e.g. GLM-5.1 `glm_moe_dsa`, DeepSeek-V3.2
+    # `deepseek_v32`) are not registered with transformers, so AutoConfig cannot load them. The builder
+    # returns a ready HF-attribute config. (Result is lru_cached like the AutoConfig path; tests that
+    # mutate config.max_seq_len already rely on this shared/cached object.)
+    if v.config_builder is not None:
+        return v.config_builder()
     # Check environment variable first
     env_path = os.getenv(v.env_var)
     if env_path:
@@ -464,6 +494,9 @@ def _resolve_state_dict(model_path_str: str):
 @lru_cache(maxsize=None)
 def _resolve_tokenizer(variant_name: str, padding_side: str):
     v = TEST_VARIANTS[variant_name]
+    # Only variants that ship custom tokenizer code (e.g. Kimi) need trust_remote_code; DeepSeek-V3
+    # uses a stock fast tokenizer and turns it off to avoid the flat-config custom-import path.
+    trust_remote_code = v.tokenizer_trust_remote_code
     candidates = [
         os.getenv(v.env_var),
         str(v.default_local_path) if v.default_local_path is not None else None,
@@ -475,7 +508,7 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
         p = Path(candidate)
         if p.exists() and any(p.glob("tokenizer*")):
             logger.info(f"Loading tokenizer from: {p}")
-            tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=True)
+            tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=trust_remote_code)
             tok.padding_side = padding_side
             return tok
 
@@ -483,7 +516,7 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
     config_path = download_model_config_only(v, cache_dir)
     logger.info(f"Loading tokenizer from downloaded config: {config_path}")
-    tok = AutoTokenizer.from_pretrained(str(config_path), use_fast=True, trust_remote_code=True)
+    tok = AutoTokenizer.from_pretrained(str(config_path), use_fast=True, trust_remote_code=trust_remote_code)
     tok.padding_side = padding_side
     return tok
 

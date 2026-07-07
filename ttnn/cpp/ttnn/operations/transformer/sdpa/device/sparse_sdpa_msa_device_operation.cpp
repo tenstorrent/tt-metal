@@ -191,6 +191,23 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
         t.indices.dtype());
 }
 
+uint32_t SparseSDPAMsaOperation::compute_chunk_start_local(
+    const SparseSDPAMsaParams& attrs,
+    const SparseSDPAMsaInputs& t,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    // Derived exactly as indexer_score_msa's start, so the mask and the indexer's selection share one
+    // global-position frame.
+    if (!attrs.causal_enabled()) {
+        return 0;
+    }
+    const uint32_t S = t.q.logical_shape()[2];
+    const uint32_t device_index =
+        mesh_dispatch_coordinate.has_value()
+            ? ttnn::ccl::get_linearized_index_from_physical_coord(t.q, *mesh_dispatch_coordinate, attrs.cluster_axis)
+            : 0;
+    return attrs.chunk_start_idx.value() + device_index * S;
+}
+
 std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAMsaOperation::get_dynamic_runtime_args(
     const SparseSDPAMsaParams& attrs,
     const SparseSDPAMsaInputs& t,
@@ -203,18 +220,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAMsaOperation::get_dynamic
     if (!patch_kv && !attrs.causal_enabled()) {
         return {};
     }
-    // Per-device causal start: chunk_start_idx + rank*S along cluster_axis (rank 0 on a single device).
-    // Derived exactly as indexer_score_msa's start, so the mask and the indexer's selection share one
-    // global-position frame.
-    uint32_t chunk_start_local = 0;
-    if (attrs.causal_enabled()) {
-        const uint32_t S = t.q.logical_shape()[2];
-        const uint32_t device_index = mesh_dispatch_coordinate.has_value()
-                                          ? ttnn::ccl::get_linearized_index_from_physical_coord(
-                                                t.q, *mesh_dispatch_coordinate, attrs.cluster_axis)
-                                          : 0;
-        chunk_start_local = attrs.chunk_start_idx.value() + device_index * S;
-    }
+    const uint32_t chunk_start_local = compute_chunk_start_local(attrs, t, mesh_dispatch_coordinate);
     // Indexed programs patch per-slot tile offsets on every dispatch. GQA programs also patch per-KV-group strides
     // because interleaved K/V T is intentionally excluded from the program hash.
     constexpr uint32_t tw = tt::constants::TILE_WIDTH;

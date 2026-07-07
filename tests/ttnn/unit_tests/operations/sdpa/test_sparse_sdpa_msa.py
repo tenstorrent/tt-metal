@@ -218,6 +218,19 @@ def test_msa_native_causal_pcc(device):
 
 
 @run_for_blackhole()
+def test_msa_native_causal_multiband_pcc(device):
+    # Query heads per KV group padded to > dst_size tile-rows force the compute kernel to process the heads
+    # in more than one DEST band (qg>0). The token-level causal mask must land on every band, not just the
+    # first. bf16 DEST holds 8 tiles, so H_logical must exceed 256: H=288, n_kv=1 -> Sqt=9 -> 3 bands.
+    d, H, n_kv, S, nblk = _D, 288, 1, 320, 16
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk=nblk, d=d, causal=True, seed=31)
+    gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5, causal=True)
+    out = run_op_msa_native(q, k, v, indices, device, chunk_start_idx=0)
+    assert pcc(out, gold) > DEVICE_PCC, f"multi-band causal MSA pcc={pcc(out, gold)}"
+
+
+@run_for_blackhole()
 def test_msa_native_causal_fp8_q_rejected(device, expect_error):
     # fp8 q is silently inaccurate with the causal mask: fp8-specific, and not fp32-DEST-related -- bf16 q with
     # fp32_dest_acc_en forced on passes -- but the root cause is not yet identified. The op rejects the combo
