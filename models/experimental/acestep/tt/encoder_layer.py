@@ -125,6 +125,16 @@ class AceStepEncoderLayer(LightweightModule):
 
         residual = hidden_states
         x = self.post_attention_layernorm.forward(hidden_states, mode="prefill")
-        x = self.mlp.forward(x, mode="prefill")
+        # MLP1D is position-wise but flattens [B,1,seq,H] -> [1,1,B*seq,H] (it assumes a single
+        # sequence). For batch>1, flatten batch into the seq dim explicitly (math-identical since the
+        # MLP acts per-position), run, then restore [B,1,seq,H] to match the residual.
+        b = x.shape[0]
+        if b > 1:
+            seq, h = x.shape[2], x.shape[3]
+            x = ttnn.reshape(x, (1, 1, b * seq, h))
+            x = self.mlp.forward(x, mode="prefill")
+            x = ttnn.reshape(x, (b, 1, seq, h))
+        else:
+            x = self.mlp.forward(x, mode="prefill")
         hidden_states = ttnn.add(residual, x)
         return hidden_states

@@ -81,7 +81,11 @@ class AceStepTextEncoder(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.layers = [AceStepEncoderLayer(lc) for lc in config.layer_configs]
-        self.norm = RMSNorm1D.from_config(RMSNorm1DConfig(weight=config.norm_weight, eps=config.eps))
+        self.norm = RMSNorm1D.from_config(
+            RMSNorm1DConfig(
+                weight=config.norm_weight, eps=config.eps, compute_kernel_config=config.compute_kernel_config
+            )
+        )
         self._mask_cache: dict[int, ttnn.Tensor] = {}
 
     @classmethod
@@ -110,14 +114,14 @@ class AceStepTextEncoder(LightweightModule):
             if input_ids.dim() == 1:
                 input_ids = input_ids.unsqueeze(0)
             ids = ttnn.from_torch(
-                input_ids.to(torch.int32).reshape(1, input_ids.shape[-1]),
+                input_ids.to(torch.int32),  # [B, L]
                 device=self.config.mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
-        L = ids.shape[-1]
-        emb = ttnn.embedding(ids, self.embed_weight, layout=ttnn.TILE_LAYOUT)  # [1, L, hidden]
-        return ttnn.reshape(emb, (1, 1, L, self.config.hidden_size))
+        B, L = ids.shape[0], ids.shape[-1]
+        emb = ttnn.embedding(ids, self.embed_weight, layout=ttnn.TILE_LAYOUT)  # [B, L, hidden]
+        return ttnn.reshape(emb, (B, 1, L, self.config.hidden_size))
 
     def forward(self, input_ids: torch.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         x = self.embed(input_ids)

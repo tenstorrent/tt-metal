@@ -395,6 +395,7 @@ def _build_qwen3_encoder(mesh_device, subdir: str, *, dtype=None, compute_kernel
         ],
         hidden_size=hf_te.config.hidden_size,
         eps=hf_te.config.rms_norm_eps,
+        compute_kernel_config=compute_kernel_config,
     )
     return AceStepTextEncoder.from_config(cfg), hf_te
 
