@@ -56,6 +56,18 @@ def main():
     ap.add_argument("--out", type=str, default="/data/jmalone/gpt_oss_ref")
     ap.add_argument("--prompt", action="append", help="repeatable; defaults to one prompt")
     ap.add_argument(
+        "--prompt-file",
+        type=str,
+        default=None,
+        help="read a single prompt from a file (mutually exclusive with --prompt)",
+    )
+    ap.add_argument(
+        "--num-tokens",
+        type=int,
+        default=None,
+        help="truncate the tokenized prompt to this many tokens before running the model",
+    )
+    ap.add_argument(
         "--chat-template",
         action="store_true",
         help="apply chat template (off by default; GPT-OSS demos use plain tokenization)",
@@ -86,7 +98,13 @@ def main():
         ),
     )
     args = ap.parse_args()
-    prompts = args.prompt or ["What are the prime factors of 1?"]
+    if args.prompt_file is not None and args.prompt:
+        ap.error("--prompt-file and --prompt are mutually exclusive")
+    if args.prompt_file is not None:
+        with open(args.prompt_file) as f:
+            prompts = [f.read()]
+    else:
+        prompts = args.prompt or ["What are the prime factors of 1?"]
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -128,6 +146,9 @@ def main():
             )
         else:
             ids = tok(prompt)["input_ids"]
+
+        if args.num_tokens is not None:
+            ids = ids[: args.num_tokens]
 
         input_ids = torch.tensor(ids, dtype=torch.long).unsqueeze(0)
         last = len(ids) - 1
