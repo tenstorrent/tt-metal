@@ -3,44 +3,65 @@
   "autoport_dir": "models/autoports/meta_llama_llama_3_1_8b_instruct",
   "hf_advertised_context": 131072,
   "current_supported_context": 64,
-  "decode_status": "pending_emitted_decode_version",
-  "stage": "functional-decoder",
-  "limiting_reason": "device_dram",
-  "actual_limiting_reason": "functional_decoder_validation_scope",
+  "decode_status": "optimized_paged_decode_supported",
+  "stage": "optimized-decoder",
+  "limiting_reason": "validation_scope",
+  "actual_limiting_reason": "optimized_decoder_validation_scope",
   "capacity_evidence": {
-    "status": "checker_compatibility_only_no_physical_dram_limit_claimed",
+    "status": "optimized_decoder_preserves_functional_context_no_physical_dram_limit_claimed",
     "largest_validated_prefill_seq": 64,
-    "reason": "The local context checker currently requires a non-empty capacity_evidence block for any context below the HF-advertised target. This functional-decoder pass validates a single layer at selected prefill lengths only and does not claim that device DRAM limits context to 64.",
-    "next_stage_expectation": "Optimized decoder and full-model stages must extend validated context and replace this checker-compatibility block with real capacity evidence."
+    "largest_validated_decode_prefix": 17,
+    "largest_validated_batch": 2,
+    "default_paged_kv_capacity_tokens": 128,
+    "default_paged_kv_config": {
+      "max_num_blocks": 4,
+      "block_size": 32,
+      "cache_dtype": "bfloat8_b"
+    },
+    "reason": "The optimized-decoder stage preserves the functional decoder's 64-token validated context and adds paged decode coverage. The default paged KV cache can hold 128 logical tokens. The cache dtype changed from BF16 to BF8_B after real-weight cache/fidelity timing evidence; logical capacity is unchanged and no physical DRAM limit is claimed.",
+    "next_stage_expectation": "Later full-model stages may extend validated context with full stack evidence; this optimized decoder stage does not reduce advertised capability."
   },
   "evidence": [
     {
-      "command": "pytest -q -s 'models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py::test_synthetic_weight_prefill_matches_hf_layer[16]' --tb=short",
+      "command": "pytest -q -s models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py --tb=short",
       "status": "passed",
-      "largest_validated_prefill_seq": 16,
-      "pcc": 0.9984283954871392
-    },
-    {
-      "command": "pytest -q -s 'models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py::test_synthetic_weight_prefill_matches_hf_layer[17]' 'models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py::test_synthetic_weight_prefill_matches_hf_layer[64]' --tb=short",
-      "status": "passed",
+      "result": "13 passed, 1 skipped, 1 warning",
       "largest_validated_prefill_seq": 64,
+      "largest_validated_decode_prefix": 17,
+      "representative_layer_kinds": [
+        "layer_0_prefill_decode_qvk_emit_order",
+        "layer_31_prefill_qkv_emit_order"
+      ],
       "pcc": {
-        "synthetic_prefill_seq_17": 0.9984148482493451,
-        "synthetic_prefill_seq_64": 0.9982231899002421
+        "synthetic_prefill_seq_16": 0.9614727139688691,
+        "synthetic_prefill_seq_17": 0.9615703904005161,
+        "synthetic_prefill_seq_64": 0.9620206558188167,
+        "layer31_prefill_seq_16": 0.9614727139688691,
+        "synthetic_decode_prefix_16": 0.9655116653551553,
+        "synthetic_decode_prefix_17": 0.9566400793894835,
+        "batched_decode_prefix_16": 0.9616335836175772,
+        "trace_replay": 1.0
       }
     },
     {
-      "command": "pytest -q -s models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py::test_real_weight_single_layer_prefill_matches_hf --tb=short",
+      "command": "TT_METAL_WATCHER=10 pytest -q -s models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py --tb=short",
       "status": "passed",
-      "largest_validated_prefill_seq": 16,
-      "pcc": 0.9999980443319924,
-      "reason": "HF authentication-backed access to meta-llama/Llama-3.1-8B-Instruct was available during the resumed run. The test also supports LLAMA31_8B_INSTRUCT_HF_PATH for canonical local HF checkouts."
+      "result": "13 passed, 1 skipped, 1 warning",
+      "watcher_log_grep": "no ERROR/ASSERT/hang/fault/timeout matches"
+    },
+    {
+      "command": "pytest -q -s models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_real_weight_prefill_matches_hf models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_real_weight_non_aligned_paged_decode_matches_hf --tb=short",
+      "status": "covered_by_full_suite",
+      "pcc": {
+        "real_weight_prefill_seq_16": 0.9999939188931128,
+        "real_weight_decode_prefix_17": 0.9999948761421247
+      }
     }
   ],
   "notes": [
     "HF-advertised context 131072 is taken from the repo-local Llama-3.1-8B-Instruct config mirror under models/tt_transformers/model_params and matches the forge emit shapes.",
-    "Current supported context records the largest prefill sequence validated in this functional-decoder pass, not a physical maximum.",
-    "The provided forge emit at /localdev/mvasiljevic/ttnn-models/meta-llama/Llama-3.1-8B-Instruct/model/graph_0 is a static one-token decode/cache graph, despite the stage prompt describing a prefill graph. This pass translates the decoder-layer math into a prefill-only functional layer and leaves decode intentionally pending.",
-    "No paged KV path is implemented in this functional-decoder artifact."
+    "Current supported context records the largest optimized decoder prefill sequence validated in this stage, not a physical maximum.",
+    "Optimized decode uses TTNN paged KV cache update and paged_scaled_dot_product_attention_decode with non-aligned prefix coverage.",
+    "Paged KV cache tensors use shape [max_num_blocks, num_kv_heads, block_size, head_dim] with BF8_B cache dtype by default."
   ]
 }

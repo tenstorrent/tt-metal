@@ -1,0 +1,3 @@
+candidate,prefill_host_ms,traced_decode_host_ms,result
+final_separate_prefill_packed_decode,1.411823,1.283127,kept
+l1_attention_input_and_prefill_down_input,1.765099,1.307348,rejected_slower

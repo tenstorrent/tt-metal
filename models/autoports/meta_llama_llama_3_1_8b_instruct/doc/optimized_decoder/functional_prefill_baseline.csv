@@ -1,0 +1,2 @@
+model,decoder,profile,layer,mode,seq_len,decode_pos,batch,traced,host_ms
+meta-llama/Llama-3.1-8B-Instruct,FunctionalDecoder,functional_prefill_baseline,0,prefill,16,,1,False,5.590055
