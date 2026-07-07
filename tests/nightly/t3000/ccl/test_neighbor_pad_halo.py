@@ -244,7 +244,11 @@ def test_neighbor_pad_halo_padded_border(mesh_device, device_params, input_shape
     dims = [None, None]
     dims[h_axis], dims[w_axis] = h_dim, w_dim
     inp_mesh = ttnn.from_torch(
-        inp, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+        inp,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
         mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
     )
     # full-pad reference (async persistent buffer)
@@ -252,26 +256,55 @@ def test_neighbor_pad_halo_padded_border(mesh_device, device_params, input_shape
     out_shape[h_dim] += hf * 2 * pH
     out_shape[w_dim] += wf * 2 * pW
     persist = ttnn.from_torch(
-        torch.zeros(out_shape).bfloat16(), device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16,
-        memory_config=mem, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+        torch.zeros(out_shape).bfloat16(),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
     )
     full = ttnn.experimental.neighbor_pad_async(
-        inp_mesh, [h_dim, w_dim], [pH, pW], [pH, pW], "zeros", [h_axis, w_axis], [h_sem, w_sem], [barrier_sem],
-        num_links=[num_links, num_links], memory_config=mem, topology=ttnn.Topology.Linear, persistent_output_buffer=persist,
+        inp_mesh,
+        [h_dim, w_dim],
+        [pH, pW],
+        [pH, pW],
+        "zeros",
+        [h_axis, w_axis],
+        [h_sem, w_sem],
+        [barrier_sem],
+        num_links=[num_links, num_links],
+        memory_config=mem,
+        topology=ttnn.Topology.Linear,
+        persistent_output_buffer=persist,
     )
     ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
     # Step 1: neighbor_pad_halo -> compact buffer [total_sticks, C] (mux path, unchanged).
     h_total = Hd + 2 * pH
     total_sticks = T * 2 * pH * Wd + T * 2 * pW * h_total
     compact = ttnn.from_torch(
-        torch.zeros(total_sticks, C).bfloat16(), device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+        torch.zeros(total_sticks, C).bfloat16(),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
     )
     ttnn.experimental.neighbor_pad_halo(
-        inp_mesh, compact, np_padding_h=pH, np_padding_w=pW, np_cluster_axis=h_axis, np_num_links=num_links,
-        np_topology=ttnn.Topology.Linear, h_neighbor_semaphore=h_sem, barrier_semaphore=barrier_sem,
-        w_neighbor_semaphore=w_sem, np_pad_dim2=w_dim, np_pad2_left=pW, np_pad2_right=pW,
-        np_pad2_cluster_axis=w_axis, np_pad2_num_links=num_links, padding_mode="zeros",
+        inp_mesh,
+        compact,
+        np_padding_h=pH,
+        np_padding_w=pW,
+        np_cluster_axis=h_axis,
+        np_num_links=num_links,
+        np_topology=ttnn.Topology.Linear,
+        h_neighbor_semaphore=h_sem,
+        barrier_semaphore=barrier_sem,
+        w_neighbor_semaphore=w_sem,
+        np_pad_dim2=w_dim,
+        np_pad2_left=pW,
+        np_pad2_right=pW,
+        np_pad2_cluster_axis=w_axis,
+        np_pad2_num_links=num_links,
+        padding_mode="zeros",
     )
     ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
     # Step 2: halo_scatter allocates the padded buffer and fills interior (from inp) + border (from
@@ -335,22 +368,42 @@ def test_neighbor_pad_halo_strided_input(mesh_device, device_params, input_shape
 
     def run(x_mesh, ipad_h, ipad_w):
         compact = ttnn.from_torch(
-            torch.zeros(total_sticks, C).bfloat16(), device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+            torch.zeros(total_sticks, C).bfloat16(),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=mem,
         )
         ttnn.experimental.neighbor_pad_halo(
-            x_mesh, compact, np_padding_h=pH, np_padding_w=pW, np_cluster_axis=h_axis, np_num_links=num_links,
-            np_topology=ttnn.Topology.Linear, h_neighbor_semaphore=h_sem, barrier_semaphore=barrier_sem,
-            w_neighbor_semaphore=w_sem, np_pad_dim2=w_dim, np_pad2_left=pW, np_pad2_right=pW,
-            np_pad2_cluster_axis=w_axis, np_pad2_num_links=num_links, padding_mode="zeros",
-            input_pad_h=ipad_h, input_pad_w=ipad_w,
+            x_mesh,
+            compact,
+            np_padding_h=pH,
+            np_padding_w=pW,
+            np_cluster_axis=h_axis,
+            np_num_links=num_links,
+            np_topology=ttnn.Topology.Linear,
+            h_neighbor_semaphore=h_sem,
+            barrier_semaphore=barrier_sem,
+            w_neighbor_semaphore=w_sem,
+            np_pad_dim2=w_dim,
+            np_pad2_left=pW,
+            np_pad2_right=pW,
+            np_pad2_cluster_axis=w_axis,
+            np_pad2_num_links=num_links,
+            padding_mode="zeros",
+            input_pad_h=ipad_h,
+            input_pad_w=ipad_w,
         )
         ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
         return ttnn.get_device_tensors(ttnn.from_device(compact))
 
     # Reference: contiguous input.
     inp_mesh = ttnn.from_torch(
-        inp, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+        inp,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
         mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
     )
     ref = run(inp_mesh, 0, 0)
@@ -360,10 +413,20 @@ def test_neighbor_pad_halo_strided_input(mesh_device, device_params, input_shape
     xp = torch.zeros(B, T, h_total * hf, (Wd + 2 * pW) * wf, C).bfloat16()
     for hi in range(hf):
         for wi in range(wf):
-            dev = inp[:, :, hi * Hd:(hi + 1) * Hd, wi * Wd:(wi + 1) * Wd, :]
-            xp[:, :, hi * h_total + pH:hi * h_total + pH + Hd, wi * (Wd + 2 * pW) + pW:wi * (Wd + 2 * pW) + pW + Wd, :] = dev
+            dev = inp[:, :, hi * Hd : (hi + 1) * Hd, wi * Wd : (wi + 1) * Wd, :]
+            xp[
+                :,
+                :,
+                hi * h_total + pH : hi * h_total + pH + Hd,
+                wi * (Wd + 2 * pW) + pW : wi * (Wd + 2 * pW) + pW + Wd,
+                :,
+            ] = dev
     xp_mesh = ttnn.from_torch(
-        xp, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+        xp,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
         mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
     )
     test = run(xp_mesh, pH, pW)
@@ -416,18 +479,37 @@ def test_halo_scatter_border_only(mesh_device, device_params, input_shape):
     total_sticks = T * 2 * pH * Wd + T * 2 * pW * h_total
 
     inp_mesh = ttnn.from_torch(
-        inp, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+        inp,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
         mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
     )
     compact = ttnn.from_torch(
-        torch.zeros(total_sticks, C).bfloat16(), device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+        torch.zeros(total_sticks, C).bfloat16(),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
     )
     ttnn.experimental.neighbor_pad_halo(
-        inp_mesh, compact, np_padding_h=pH, np_padding_w=pW, np_cluster_axis=h_axis, np_num_links=num_links,
-        np_topology=ttnn.Topology.Linear, h_neighbor_semaphore=h_sem, barrier_semaphore=barrier_sem,
-        w_neighbor_semaphore=w_sem, np_pad_dim2=w_dim, np_pad2_left=pW, np_pad2_right=pW,
-        np_pad2_cluster_axis=w_axis, np_pad2_num_links=num_links, padding_mode="zeros",
+        inp_mesh,
+        compact,
+        np_padding_h=pH,
+        np_padding_w=pW,
+        np_cluster_axis=h_axis,
+        np_num_links=num_links,
+        np_topology=ttnn.Topology.Linear,
+        h_neighbor_semaphore=h_sem,
+        barrier_semaphore=barrier_sem,
+        w_neighbor_semaphore=w_sem,
+        np_pad_dim2=w_dim,
+        np_pad2_left=pW,
+        np_pad2_right=pW,
+        np_pad2_cluster_axis=w_axis,
+        np_pad2_num_links=num_links,
+        padding_mode="zeros",
     )
     ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
 
@@ -438,10 +520,20 @@ def test_halo_scatter_border_only(mesh_device, device_params, input_shape):
     xp = torch.zeros(B, T, h_total * hf, (Wd + 2 * pW) * wf, C).bfloat16()
     for hi in range(hf):
         for wi in range(wf):
-            dev = inp[:, :, hi * Hd:(hi + 1) * Hd, wi * Wd:(wi + 1) * Wd, :]
-            xp[:, :, hi * h_total + pH:hi * h_total + pH + Hd, wi * (Wd + 2 * pW) + pW:wi * (Wd + 2 * pW) + pW + Wd, :] = dev
+            dev = inp[:, :, hi * Hd : (hi + 1) * Hd, wi * Wd : (wi + 1) * Wd, :]
+            xp[
+                :,
+                :,
+                hi * h_total + pH : hi * h_total + pH + Hd,
+                wi * (Wd + 2 * pW) + pW : wi * (Wd + 2 * pW) + pW + Wd,
+                :,
+            ] = dev
     xp_mesh = ttnn.from_torch(
-        xp, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem,
+        xp,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
         mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
     )
     bo = ttnn.experimental.halo_scatter(compact, xp_mesh, np_padding_h=pH, np_padding_w=pW, border_only=True)
@@ -1029,17 +1121,39 @@ def run_conv3d_halo_vs_fullpad_2d(mesh_device, input_shape, C_out, kernel_size, 
         # -> boundary blocks skip the coalesced gather) is the net-loss source on small 4x8 shards.
         def _np_async():
             return ttnn.experimental.neighbor_pad_async(
-                inp_mesh, [h_dim, w_dim], [pH, pW], [pH, pW], "zeros", [h_axis, w_axis],
-                [h_sem, w_sem], [barrier_sem], num_links=[num_links, num_links],
-                memory_config=mem, topology=ttnn.Topology.Linear, persistent_output_buffer=persist)
+                inp_mesh,
+                [h_dim, w_dim],
+                [pH, pW],
+                [pH, pW],
+                "zeros",
+                [h_axis, w_axis],
+                [h_sem, w_sem],
+                [barrier_sem],
+                num_links=[num_links, num_links],
+                memory_config=mem,
+                topology=ttnn.Topology.Linear,
+                persistent_output_buffer=persist,
+            )
 
         def _np_halo():
             return ttnn.experimental.neighbor_pad_halo(
-                inp_mesh, halo_buf, np_padding_h=pH, np_padding_w=pW, np_cluster_axis=h_axis,
-                np_num_links=num_links, np_topology=ttnn.Topology.Linear, h_neighbor_semaphore=h_sem,
-                barrier_semaphore=barrier_sem, w_neighbor_semaphore=w_sem, np_pad_dim2=w_dim,
-                np_pad2_left=pW, np_pad2_right=pW, np_pad2_cluster_axis=w_axis, np_pad2_num_links=num_links,
-                padding_mode="zeros")
+                inp_mesh,
+                halo_buf,
+                np_padding_h=pH,
+                np_padding_w=pW,
+                np_cluster_axis=h_axis,
+                np_num_links=num_links,
+                np_topology=ttnn.Topology.Linear,
+                h_neighbor_semaphore=h_sem,
+                barrier_semaphore=barrier_sem,
+                w_neighbor_semaphore=w_sem,
+                np_pad_dim2=w_dim,
+                np_pad2_left=pW,
+                np_pad2_right=pW,
+                np_pad2_cluster_axis=w_axis,
+                np_pad2_num_links=num_links,
+                padding_mode="zeros",
+            )
 
         a = _trace_and_time(mesh_device, _np_async)
         hh = _trace_and_time(mesh_device, _np_halo)
@@ -1158,3 +1272,64 @@ def test_neighbor_pad_halo_reuse(mesh_device, device_params):
         print(f"iter {it}: OK", flush=True)
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
+
+
+def _depth_to_space_ref(x, p1, p2, p3, drop_first):
+    """Host golden mirroring vae_ltx._depth_to_space_channels_last (channel order p1,p2,p3,C)."""
+    B, T, H, W, BigC = x.shape
+    C = BigC // (p1 * p2 * p3)
+    x = x.reshape(B, T, H, W, p1, p2, p3, C)
+    x = x.permute(0, 1, 4, 2, 5, 3, 6, 7)  # B,T,p1,H,p2,W,p3,C
+    x = x.reshape(B, T * p1, H * p2, W * p3, C)
+    if drop_first:
+        x = x[:, 1:]
+    return x  # dense interior [B, T_out, H*p2, W*p3, C]
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
+@pytest.mark.parametrize(
+    "p1,p2,p3,drop_first",
+    [(1, 2, 2, False), (2, 2, 2, True), (2, 1, 1, True), (2, 2, 2, False)],
+    ids=["compress_space", "compress_all_drop", "compress_time", "compress_all_nodrop"],
+)
+def test_depth_to_space_pad(mesh_device, p1, p2, p3, drop_first):
+    """Fused depth-to-space + pad: the padded output's INTERIOR must equal the dense depth-to-space
+    reference bit-exact (border is uninitialized, ignored). Local op — replicate input, check every
+    device."""
+    pH, pW = 1, 1
+    B, T, H, W, C = 1, 4, 6, 8, 64
+    BigC = p1 * p2 * p3 * C
+    torch.manual_seed(0)
+    inp = torch.rand(B, T, H, W, BigC).bfloat16()
+
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    inp_mesh = ttnn.from_torch(
+        inp,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    out = ttnn.experimental.depth_to_space_pad(
+        inp_mesh, p1, p2, p3, np_padding_h=pH, np_padding_w=pW, drop_first=drop_first
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    ref = _depth_to_space_ref(inp, p1, p2, p3, drop_first)  # [B, T_out, H*p2, W*p3, C]
+    _, T_out, Hd_out, Wd_out, _ = ref.shape
+    Hp, Wp = Hd_out + 2 * pH, Wd_out + 2 * pW
+
+    dev = ttnn.get_device_tensors(ttnn.from_device(out))
+    all_pass = True
+    for i in range(len(dev)):
+        p = ttnn.to_torch(dev[i]).reshape(B, T_out, Hp, Wp, C)
+        interior = p[:, :, pH : pH + Hd_out, pW : pW + Wd_out, :]
+        eq, _ = comp_equal(interior, ref)
+        if not eq:
+            all_pass = False
+            _, pcc = comp_pcc(interior, ref, 0.0)
+            print(f"FAIL dev {i}: interior pcc={pcc}", flush=True)
+    print(f"depth_to_space_pad {p1}{p2}{p3} drop={drop_first}: {'PASS' if all_pass else 'FAIL'}", flush=True)
+    assert all_pass, "depth_to_space_pad interior != dense depth-to-space reference"
