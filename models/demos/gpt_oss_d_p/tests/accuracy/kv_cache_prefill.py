@@ -25,10 +25,10 @@ Then run this test (4×8 mesh, SP=4 TP=8):
 Notes:
   - Non-paged attention only. Paged cache has a different block layout and requires
     a page_table to reconstruct; handle separately if needed.
-  - SP>1 (multi-row mesh): the forward pass splits the sequence across rows, but the
-    KV cache is not SP-sharded. Each row writes its shard of positions independently.
-    For SP>1 this script reads row-0 only (which holds positions 0..isl_per_row-1).
-    Full SP>1 KV gather support is a future extension.
+  - SP>1 (multi-row mesh): each row independently fills positions 0..isl_per_row-1 of its
+    local cache with its sequence shard.  This script gathers all rows and concatenates their
+    shards to reconstruct the full [num_kv_heads, real_len, head_dim] tensor.  RoPE matrices
+    are also per-row offset so each row's K values use the correct absolute positions.
   - The TT cache is stored in bfloat8_b after ttnn.fill_cache; expect PCC ~0.98-0.99
     vs the bf16 HF reference rather than near 1.0.
 """
@@ -241,11 +241,39 @@ def main():
 
         emb = _sp_shard_embed(mesh, model, padded, sp, isl_per_row)
 
-        seq_len = emb.shape[-2]
-        rope_mats = [
-            model.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
-            model.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
-        ]
+        seq_len = emb.shape[-2]  # = isl_per_row for SP>1
+
+        if sp > 1:
+            # Each SP row needs RoPE for its own position range [r*seq_len, (r+1)*seq_len).
+            # Pull the full matrices to CPU, slice per row, then reshard across mesh rows.
+            cos_cpu = ttnn.to_torch(model.rope_setup.cos_matrix_prefill)  # [1, 1, max_seq, rope_dim]
+            sin_cpu = ttnn.to_torch(model.rope_setup.sin_matrix_prefill)
+            cos_rows = torch.cat(
+                [cos_cpu[..., row * seq_len : (row + 1) * seq_len, :] for row in range(sp)], dim=0
+            )  # [sp, 1, seq_len, rope_dim]
+            sin_rows = torch.cat([sin_cpu[..., row * seq_len : (row + 1) * seq_len, :] for row in range(sp)], dim=0)
+            rope_dtype = ttnn.get_dtype(model.rope_setup.cos_matrix_prefill)
+            rope_mats = [
+                ttnn.from_torch(
+                    cos_rows,
+                    device=mesh,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=rope_dtype,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh.shape, dims=(0, None)),
+                ),
+                ttnn.from_torch(
+                    sin_rows,
+                    device=mesh,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=rope_dtype,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh.shape, dims=(0, None)),
+                ),
+            ]
+        else:
+            rope_mats = [
+                model.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
+                model.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
+            ]
 
         hidden_states = emb
         results_table: list[tuple[int, float, float, bool]] = []
@@ -273,9 +301,9 @@ def main():
             ttnn.synchronize_device(mesh)
             k_cache, v_cache = layer_kv
 
-            tt_k = _gather_kv_cache(k_cache, mesh, real_len)  # [num_kv_heads, real_len, head_dim]
+            tt_k = _gather_kv_cache(k_cache, mesh, real_len, isl_per_row)  # [num_kv_heads, real_len, head_dim]
             tt_k = permute_1d(tt_k)  # convert interleaved (Meta) → block (HF) format for comparison
-            tt_v = _gather_kv_cache(v_cache, mesh, real_len)
+            tt_v = _gather_kv_cache(v_cache, mesh, real_len, isl_per_row)
 
             oracle_k = torch.tensor(
                 np.load(oracle_dir / record["kv_files"][str(i)]["k"]), dtype=torch.float32
