@@ -81,18 +81,28 @@ class TtXttsGptModel(LightweightModule):
         pos = ttnn.to_layout(ttnn.embedding(pos_tt, pos_weight), ttnn.TILE_LAYOUT)
         return ttnn.add(tok, pos)
 
-    def forward(self, text_ids, mel_ids):
+    def forward(self, text_ids, mel_ids, cond_latents=None):
         """text_ids / mel_ids are torch int tensors ``[batch, seq]``.
 
-        Returns ``(text_logits, mel_logits)`` on device.
+        ``cond_latents`` (optional) is a ttnn tensor ``[b, n_cond, hidden]`` of
+        audio conditioning latents prepended as the GPT prompt; it is stripped
+        (via ``offset``) after the stack, before the heads. ``n_cond`` should be
+        tile-aligned (32 for XTTS). Returns ``(text_logits, mel_logits)`` on device.
         """
         text_len, mel_len = text_ids.shape[1], mel_ids.shape[1]
 
         text_emb = self._embed(text_ids, self.text_emb_weight, self.text_pos_weight)
         mel_emb = self._embed(mel_ids, self.mel_emb_weight, self.mel_pos_weight)
 
-        emb = ttnn.concat([text_emb, mel_emb], dim=1)  # [b, text_len + mel_len, hidden]
+        parts, offset = [text_emb, mel_emb], 0
+        if cond_latents is not None:
+            parts = [cond_latents] + parts
+            offset = cond_latents.shape[1]
+
+        emb = ttnn.concat(parts, dim=1)  # [b, (n_cond +) text_len + mel_len, hidden]
         enc = self.stack(emb)
+        if offset:
+            enc = ttnn.slice(enc, [0, offset, 0], [enc.shape[0], enc.shape[1], HIDDEN_SIZE])  # strip prompt
         enc = ttnn.layer_norm(enc, weight=self.final_norm_weight, bias=self.final_norm_bias, epsilon=LAYER_NORM_EPS)
 
         b = enc.shape[0]
