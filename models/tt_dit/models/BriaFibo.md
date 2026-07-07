@@ -213,7 +213,7 @@ FIBO's VAE is `AutoencoderKLWan` configured as the Wan 2.2 high-compression ("TI
 
 `z_dim=48` is also the BriaFibo transformer's `in_channels`/`out_channels` (sub-project 2), so the diffusion latent feeds the transformer directly with no 2×2 packing step (unlike Flux's VAE/transformer channel relationship).
 
-`tt_dit`'s existing `vae_wan2_1.py` previously hard-blocked this configuration (`assert not is_residual` in `WanEncoder3D`, encode-side only — encode remains out of scope for FIBO, which only needs decode). This sub-project adds the residual **decoder** path:
+`tt_dit`'s existing `vae_wan2_1.py` previously hard-blocked this configuration with `assert not is_residual` in `WanDecoder3d`, `WanDecoder`, and `WanEncoder3D`. This sub-project removes the two **decode-side** asserts and implements the residual decoder path below; the **encode-side** assert (`WanEncoder3D`) is left in place — encode is out of scope for FIBO, which only needs decode. The residual decoder path adds:
 
 - **`WanDupUp3D`**: a parameter-free residual-shortcut upsampler, a BTHWC port of diffusers' `DupUp3D`. Repeats/duplicates the input along the upsample factor and optionally drops the leading `factor_t - 1` frames when `first_chunk=True`.
 - **`WanResidualUpBlock`**: the Wan 2.2 up-block. Wraps the existing resnet-block path and adds the `avg_shortcut` (a `WanDupUp3D`) applied to the block's input and summed into its output: `x = x + avg_shortcut(x_copy, first_chunk=first_chunk)`.
