@@ -175,25 +175,24 @@ def main():
             _h0.remove()
             # Manually compute pre-RoPE K for layer 0.
             attn0 = model.model.layers[0].self_attn
+            print(f"[debug] attn0 submodules: {list(attn0._modules.keys())}")
             hs_in = layer0_attn_input[0]  # [1, seq_len, hidden_size], float32 (post-layernorm)
             with torch.no_grad():
-                k_manual = (
-                    torch.nn.functional.linear(
-                        hs_in.bfloat16(),
-                        attn0.k_proj.weight,
-                        attn0.k_proj.bias,
-                    )
-                    .float()
-                    .squeeze(0)
-                )  # [seq_len, num_kv_heads * head_dim]
+                k_manual = torch.nn.functional.linear(
+                    hs_in.bfloat16(),
+                    attn0.k_proj.weight,
+                    attn0.k_proj.bias,
+                ).squeeze(
+                    0
+                )  # [seq_len, num_kv_heads * head_dim], bfloat16
             head_dim = attn0.head_dim
             num_kv = attn0.k_proj.weight.shape[0] // head_dim
             k_manual = k_manual.reshape(-1, num_kv, head_dim).permute(1, 0, 2)  # [num_kv, seq, head_dim]
 
-            k_cached = out.past_key_values[0][0][0].float()  # [num_kv, seq, head_dim]
+            k_cached = out.past_key_values.layers[0].keys[0]  # [num_kv, seq, head_dim], keep native dtype
 
             def _cosim(a, b):
-                a, b = a.flatten(), b.flatten()
+                a, b = a.float().flatten(), b.float().flatten()
                 return float((a * b).sum() / (a.norm() * b.norm() + 1e-8))
 
             cos = _cosim(k_manual, k_cached)
