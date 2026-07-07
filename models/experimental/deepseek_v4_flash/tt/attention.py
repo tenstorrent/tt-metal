@@ -3,7 +3,7 @@ from typing import Optional
 import ttnn
 import torch
 
-from .common import DeepSeekV4Module, _HIFI4, _HIFI4_SDPA, _MASK_NEG, _profile
+from .common import DeepSeekV4Module, _HIFI4, _HIFI4_SDPA, _MASK_NEG, _profile, width_sharded_l1_config
 from .layers import DeepSeekV4RMSNorm, Linear, LinearDecode, _rms_norm_unweighted
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
@@ -669,7 +669,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         y = ttnn.matmul(x, self.o_a_weight, compute_kernel_config=_HIFI4)  # [g, B*S, o_lora_rank]
         y = ttnn.permute(y, [1, 0, 2])  # [B*S, g, o_lora_rank]
         y = ttnn.reshape(y, [b, s, 1, self.o_groups * self.o_lora_rank])
-        return self.o_b_proj(y)
+        return ttnn.to_memory_config(self.o_b_proj(y), ttnn.DRAM_MEMORY_CONFIG)
 
     def _attend(
         self, q: ttnn.Tensor, kv: ttnn.Tensor, mask: ttnn.Tensor, cos: ttnn.Tensor, neg_sin: ttnn.Tensor
@@ -711,7 +711,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # hidden = ttnn.to_memory_config(hidden, hidden_input_memory_config)
         q_a = self.q_a_norm(self.q_a_proj(hidden))
         q = self.q_b_proj(q_a)  # [B, S, H*Dh]
-        q = ttnn.reshape(q, [1, 1, h, dh])
+        q = ttnn.reshape(q, [1, 1, h, dh], memory_config=width_sharded_l1_config(b * s * h, dh, self.device))
 
         q = _rms_norm_unweighted(q, self.eps)
         q = _apply_rope(q, cos, sin, self.rot, self.rope_dim)  # [B, 1, H, Dh]
@@ -719,6 +719,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         kv = self.kv_norm(self.kv_proj(hidden))  # [B, S, Dh]
 
         kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)  # [B, 1, S, Dh]
+        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+        kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
         return q, kv
 
     def decode(
