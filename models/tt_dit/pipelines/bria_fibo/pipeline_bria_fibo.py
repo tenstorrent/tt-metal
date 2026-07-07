@@ -97,8 +97,13 @@ class BriaFiboPipelineConfig:
         encoder_parallel_config = EncoderParallelConfig.from_tuple((1, tp_axis))
 
         # VAE: height/width parallel matched to the physical mesh (mirrors wan's (2,2) BH preset:
-        # height on the tp axis, width on the sp axis). Factor-1 hw configs would be force-sharded by
-        # ShardTensor2dMesh yet skip the residual decoder's halo exchange, so they must match the mesh.
+        # height on the tp axis, width on the sp axis). The Wan 2.2 residual decoder decodes on the full
+        # 2x2 submesh (halo/CCL exchange across devices), which distributes the decode's activations over
+        # all 4 devices. Verified to run on-device and produce a correct-range, non-degenerate 1024x1024
+        # image (test_fibo_pipeline_smoke, force_device_decode=True); the golden PCC-vs-host-reference is
+        # gated by test_fibo_pipeline_vae_decode_on_device (native res, run on-demand). Requires the
+        # ``decoder_base_dim`` weight-prep fix in ``vae_wan2_1.py`` (without it conv_in loaded (1728,640)
+        # vs (1728,1024) and fell back to host).
         vae_parallel_config = VaeHWParallelConfig.from_tuples(height=(tp_factor, tp_axis), width=(sp_factor, sp_axis))
 
         return cls(
@@ -152,6 +157,10 @@ class BriaFiboPipeline:
         ttnn.synchronize_device(self._submesh)
 
         logger.info("creating VAE decoder...")
+        # Decode the Wan 2.2 residual VAE on the same 2x2 submesh as the transformer, reusing its
+        # CCLManager for the decoder's halo/all-gather exchange. Sharing the submesh (rather than a
+        # dedicated 1-device submesh) spreads the decode's activations across all 4 devices, which
+        # coexists with the resident transformer/encoder shards.
         self._vae = WanVAEDecoderAdapter(
             checkpoint_name=config.checkpoint_name,
             parallel_config=config.vae_parallel_config,
@@ -177,6 +186,7 @@ class BriaFiboPipeline:
         seed: int = 0,
         latents: torch.Tensor | None = None,
         output_type: str = "pil",
+        force_device_decode: bool = False,
     ) -> list[Image.Image] | torch.Tensor:
         height = height if height is not None else self._height
         width = width if width is not None else self._width
@@ -242,7 +252,9 @@ class BriaFiboPipeline:
             logger.info("returning pre-VAE latent...")
             return self._gather_latent(latent)
         logger.info("decoding image...")
-        return self._decode_latents(latent, height=height, width=width, output_type=output_type)
+        return self._decode_latents(
+            latent, height=height, width=width, output_type=output_type, force_device_decode=force_device_decode
+        )
 
     def _prepare_branch(
         self,
@@ -335,7 +347,15 @@ class BriaFiboPipeline:
         torch_latents = ttnn.to_torch(ttnn.get_device_tensors(latent)[0])  # (1, h*w, 48)
         return torch_latents.to(torch.float32)
 
-    def _decode_latents(self, latent: ttnn.Tensor, *, height: int, width: int, output_type: str) -> list[Image.Image]:
+    def _decode_latents(
+        self,
+        latent: ttnn.Tensor,
+        *,
+        height: int,
+        width: int,
+        output_type: str,
+        force_device_decode: bool = False,
+    ) -> list[Image.Image]:
         submesh = self._submesh
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
         latent_h = height // _VAE_SCALE_FACTOR
@@ -350,22 +370,25 @@ class BriaFiboPipeline:
         torch_latents = torch_latents.reshape(1, latent_h, latent_w, self._in_channels).permute(0, 3, 1, 2)
         torch_latents = torch_latents.unsqueeze(2).to(torch.float32)
 
-        decoded = self._decode_vae(torch_latents)  # -> (1, 3, 1, H, W) in [-1, 1]
+        decoded = self._decode_vae(torch_latents, force_device_decode=force_device_decode)  # (1, 3, 1, H, W) in [-1, 1]
         decoded = decoded.squeeze(2)  # (1, 3, H, W)
 
         image = self._image_processor.postprocess(decoded.float(), output_type=output_type)
         return image
 
-    def _decode_vae(self, latents_bcthw: torch.Tensor) -> torch.Tensor:
+    def _decode_vae(self, latents_bcthw: torch.Tensor, *, force_device_decode: bool = False) -> torch.Tensor:
         """Decode the (denormalized internally) BCTHW latent to RGB in [-1, 1].
 
-        Primary path: the on-device ``WanVAEDecoderAdapter`` (returns raw 12-ch patchified pixels;
-        we ``unpatchify(patch_size=2)`` + ``clamp`` to match sp3's ``test_vae`` post-processing).
-        Fallback: the host reference ``AutoencoderKLWan.decode`` (documented in the task brief) ONLY for
-        the known Wan hw-parallel *residual* decoder weight-load failure (a ``LoadingError`` at
-        ``decoder.conv_in.weight``: builds (1728, 640) but the state-dict prep yields (1728, 1024)).
-        Any other failure -- OOM (a ``RuntimeError``), a real device/shape bug, etc. -- propagates
-        rather than being silently routed to the slow host path.
+        Primary path: the on-device ``WanVAEDecoderAdapter`` on the 2x2 submesh (hw-parallel residual
+        decode; returns raw 12-ch patchified pixels, so we ``unpatchify(patch_size=2)`` + ``clamp`` to
+        match sp3's ``test_vae`` post-processing). Verified to run + produce a correct-range image; the
+        golden PCC-vs-host-reference is gated by test_fibo_pipeline_vae_decode_on_device.
+
+        The ``LoadingError`` fallback to the host reference ``AutoencoderKLWan.decode`` is now only a
+        defensive net (the historical failure -- ``decoder.conv_in.weight`` (1728, 640) vs (1728, 1024)
+        -- was the adapter omitting ``decoder_base_dim``, fixed in ``vae_wan2_1.py``). Pass
+        ``force_device_decode=True`` to re-raise instead of falling back, proving the on-device path.
+        Any non-``LoadingError`` failure (OOM, real device/shape bug) always propagates.
         """
         try:
             out = self._vae.decode(latents_bcthw, output_type="pt")  # (1, C>=12, 1, H/2, W/2)
@@ -373,9 +396,10 @@ class BriaFiboPipeline:
             out = unpatchify(out, patch_size=self._vae.config.patch_size)  # (1, 3, 1, H, W)
             return torch.clamp(out, min=-1.0, max=1.0)
         except LoadingError as e:
+            if force_device_decode:
+                raise
             logger.warning(
-                f"on-device VAE weight load failed ({type(e).__name__}: {e}); falling back to host torch "
-                "VAE (known Wan hw-parallel residual conv_in mismatch)"
+                f"on-device VAE weight load failed ({type(e).__name__}: {e}); falling back to host torch VAE"
             )
             return self._host_decode_vae(latents_bcthw)
 

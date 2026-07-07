@@ -2149,6 +2149,9 @@ class WanVAEDecoderAdapter:
 
         self._decoder = WanDecoder(
             base_dim=self._torch_vae.config.base_dim,
+            # Wan 2.2 (e.g. FIBO) uses an asymmetric decoder width (decoder_base_dim != base_dim);
+            # Wan 2.1 configs omit this field, so default to base_dim to stay backward-compatible.
+            decoder_base_dim=getattr(self._torch_vae.config, "decoder_base_dim", None),
             z_dim=self._torch_vae.config.z_dim,
             dim_mult=self._torch_vae.config.dim_mult,
             num_res_blocks=self._torch_vae.config.num_res_blocks,
