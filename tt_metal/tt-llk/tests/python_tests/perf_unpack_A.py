@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+"""Perf coverage for unpack-A transpose axes (subset of test_unpack_comprehensive)."""
+
 import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import PerfRunType, Transpose
@@ -19,14 +21,14 @@ from helpers.test_variant_parameters import (
     formats=input_output_formats(
         [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Int32],
     ),
-    unpack_transpose_faces=[Transpose.No, Transpose.Yes],
-    unpack_transpose_within_face=[Transpose.No, Transpose.Yes],
+    transpose_of_faces=[Transpose.No, Transpose.Yes],
+    within_face_16x16_transpose=[Transpose.No, Transpose.Yes],
 )
-def test_perf_unpack_transpose(
+def test_perf_unpack_comprehensive(
     perf_report,
     formats,
-    unpack_transpose_faces,
-    unpack_transpose_within_face,
+    transpose_of_faces,
+    within_face_16x16_transpose,
 ):
     # Int32 format restrictions
     if formats.input_format == DataFormat.Int32:
@@ -37,8 +39,8 @@ def test_perf_unpack_transpose(
             )
         # Transpose: Int32 does not support any transposition operations
         if (
-            unpack_transpose_faces == Transpose.Yes
-            or unpack_transpose_within_face == Transpose.Yes
+            transpose_of_faces == Transpose.Yes
+            or within_face_16x16_transpose == Transpose.Yes
         ):
             pytest.skip("Transpose not supported for Int32")
 
@@ -52,11 +54,11 @@ def test_perf_unpack_transpose(
         )
 
     if (
-        unpack_transpose_faces == Transpose.No
-        and unpack_transpose_within_face == Transpose.No
+        transpose_of_faces == Transpose.No
+        and within_face_16x16_transpose == Transpose.No
     ):
         pytest.skip(
-            "Skipping test for unpack_transpose_faces=False and unpack_transpose_within_face=False"
+            "Skipping test for transpose_of_faces=False and within_face_16x16_transpose=False"
         )
 
     tile_count = 16
@@ -68,8 +70,8 @@ def test_perf_unpack_transpose(
         templates=[],
         runtimes=[
             TILE_COUNT(tile_count),
-            UNPACK_TRANS_FACES(unpack_transpose_faces),
-            UNPACK_TRANS_WITHIN_FACE(unpack_transpose_within_face),
+            UNPACK_TRANS_FACES(transpose_of_faces),
+            UNPACK_TRANS_WITHIN_FACE(within_face_16x16_transpose),
         ],
         variant_stimuli=StimuliConfig(
             None,
