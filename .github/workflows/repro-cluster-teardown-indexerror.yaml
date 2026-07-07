@@ -1,11 +1,15 @@
 # THROWAWAY diagnostic workflow — safe to delete after the investigation closes.
-# Round 2: the synthetic requires_mesh_topology repro (round 1) did not reproduce
-# the crash, and a follow-up check found most of the real failing test files
-# (test_mla.py, test_kv_cache_table.py, sparse_mla/test_sparse_mla.py) don't
-# even use that marker. This round instruments the real ttnn device-probe
-# entry points (see conftest.py pytest_sessionstart) and repeatedly runs the
-# actual production "MLA Chunked" test to catch a live failure with a full
-# call trace. Triggers on push to this branch only, same reasoning as before.
+# Round 3: round 2 proved the crash is real and 100% reproducible via the
+# production MLA Chunked test, and pinpointed it to MetalContext's implicit
+# default-context init (conftest.py:548 -> GetNumPCIeDevices -> MetalContext::
+# instance() -> create_default_instance_implicit_locked()) — but that was
+# inferred from log adjacency, not a real stack trace. This round adds native
+# backtrace dumps at every candidate .at() call site in
+# tt_metal/impl/context/metal_env.cpp (MetalEnvImpl ctor, is_base_routing_fw_enabled,
+# should_enable_blackhole_dram_programmable_cores, set_hal) and
+# tt_metal/llrt/tt_cluster.cpp (Cluster::set_hal's four sub-calls), built with
+# RelWithDebInfo for symbol resolution, to get the actual throw site instead of
+# a theory. Triggers on push to this branch only, same reasoning as before.
 name: "[investigation] Repro cluster-teardown IndexError"
 
 on:
@@ -27,7 +31,7 @@ jobs:
     secrets: inherit
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      build-type: Release
+      build-type: RelWithDebInfo
       build-wheel: true
       platform: "Ubuntu 22.04"
 
@@ -71,11 +75,11 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-      - name: Run production MLA Chunked test 8x with instrumentation
+      - name: Run production MLA Chunked test with native backtrace instrumentation
         id: repro
         run: |
           set -uo pipefail
-          RUNS=8
+          RUNS=3
           fail_count=0
           repro_count=0
           mkdir -p /tmp/repro_logs
@@ -100,13 +104,13 @@ jobs:
           done
 
           {
-            echo "## Instrumented MLA Chunked repro"
+            echo "## Instrumented MLA Chunked repro (native backtrace)"
             echo ""
             echo "Ran the real production test $RUNS times: $repro_count/$RUNS reproduced the IndexError, $fail_count/$RUNS failed total."
-            if [ "$repro_count" -eq 0 ]; then
-              echo ""
-              echo "Did not reproduce this round either. See full run logs above (job log) for the [REPRO-INSTRUMENT] call trace on every run regardless of pass/fail."
-            fi
+            echo ""
+            echo '```'
+            grep -h "REPRO-INSTRUMENT" /tmp/repro_logs/run_*.log || echo "(no [REPRO-INSTRUMENT] lines captured)"
+            echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

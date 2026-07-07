@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <optional>
+#include <execinfo.h>
 #include <tt_stl/fmt.hpp>
 #include "tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
@@ -464,10 +465,32 @@ void Cluster::set_hal(const tt_metal::Hal* hal) {
         hal->get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
     this->driver_->set_barrier_address_params(barrier_params);
 
-    this->generate_virtual_to_umd_coord_mapping();
-    this->generate_virtual_to_profiler_flat_id_mapping();
-    this->disable_ethernet_cores_with_retrain();
-    this->initialize_ethernet_sockets();
+    // TEMPORARY diagnostic for the intermittent "IndexError: unordered_map::at" during
+    // implicit MetalContext init (see run 28846076912 / conftest.py:548). Dumps a native
+    // backtrace so we can see exactly which of these four calls throws. Safe to revert
+    // once the investigation closes.
+    auto repro_diag_call = [](const char* label, auto&& fn) {
+        try {
+            fn();
+        } catch (const std::exception& e) {
+            log_error(tt::LogDevice, "[REPRO-INSTRUMENT] Cluster::set_hal -> {} threw: {}", label, e.what());
+            void* frames[64];
+            int n = ::backtrace(frames, 64);
+            char** syms = ::backtrace_symbols(frames, n);
+            for (int i = 0; i < n; ++i) {
+                log_error(tt::LogDevice, "[REPRO-INSTRUMENT]   #{}: {}", i, syms ? syms[i] : "?");
+            }
+            if (syms) {
+                free(syms);
+            }
+            throw;
+        }
+    };
+    repro_diag_call("generate_virtual_to_umd_coord_mapping", [this] { this->generate_virtual_to_umd_coord_mapping(); });
+    repro_diag_call(
+        "generate_virtual_to_profiler_flat_id_mapping", [this] { this->generate_virtual_to_profiler_flat_id_mapping(); });
+    repro_diag_call("disable_ethernet_cores_with_retrain", [this] { this->disable_ethernet_cores_with_retrain(); });
+    repro_diag_call("initialize_ethernet_sockets", [this] { this->initialize_ethernet_sockets(); });
 }
 
 void Cluster::start_driver(umd::DeviceParams& device_params) const {

@@ -5,6 +5,8 @@
 
 #include <pthread.h>
 #include <algorithm>
+#include <cstdlib>
+#include <execinfo.h>
 #include <filesystem>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
@@ -52,6 +54,25 @@ MetalEnvDescriptor::MetalEnvDescriptor(
 
 // ─── MetalEnvImpl core ───────────────────────────────────────────────────────
 
+namespace {
+// TEMPORARY diagnostic for the intermittent "IndexError: unordered_map::at" during
+// implicit MetalContext init (see run 28846076912 / conftest.py:548). Dumps a native
+// backtrace so we can see exactly which .at() call throws instead of inferring it
+// from log adjacency. Safe to revert once the investigation closes.
+void repro_dump_backtrace(const char* label, const std::exception& e) {
+    log_error(tt::LogMetal, "[REPRO-INSTRUMENT] {} threw: {}", label, e.what());
+    void* frames[64];
+    int n = ::backtrace(frames, 64);
+    char** syms = ::backtrace_symbols(frames, n);
+    for (int i = 0; i < n; ++i) {
+        log_error(tt::LogMetal, "[REPRO-INSTRUMENT]   #{}: {}", i, syms ? syms[i] : "?");
+    }
+    if (syms) {
+        free(syms);
+    }
+}
+}  // namespace
+
 void MetalEnvImpl::prefork_check_all() {
     std::lock_guard<std::mutex> lock(s_registry_mutex_);
     for (auto* impl : s_registry_) {
@@ -60,8 +81,13 @@ void MetalEnvImpl::prefork_check_all() {
 }
 
 MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::move(descriptor)) {
-    initialize_base_objects();
-    verify_fw_capabilities();
+    try {
+        initialize_base_objects();
+        verify_fw_capabilities();
+    } catch (const std::exception& e) {
+        repro_dump_backtrace("MetalEnvImpl ctor (post initialize_base_objects/verify_fw_capabilities)", e);
+        throw;
+    }
 
     // Apply fabric config from descriptor
     const auto& fc = descriptor_.fabric_config_descriptor();
@@ -184,9 +210,24 @@ void MetalEnvImpl::initialize_base_objects() {
         this->rtoptions_->disable_watcher_noc_sanitize();
     }
 
-    // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
-    // a throwaway TopologyDiscovery via get_cluster_type_from_cluster_desc().
-    const bool is_base_routing_fw_enabled = cluster_->is_base_routing_fw_enabled();
+    // TEMPORARY diagnostic (see repro_dump_backtrace above) — pinpoints which of these
+    // two calls throws, before the Hal constructor and set_hal() run.
+    bool is_base_routing_fw_enabled = false;
+    try {
+        // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
+        // a throwaway TopologyDiscovery via get_cluster_type_from_cluster_desc().
+        is_base_routing_fw_enabled = cluster_->is_base_routing_fw_enabled();
+    } catch (const std::exception& e) {
+        repro_dump_backtrace("cluster_->is_base_routing_fw_enabled()", e);
+        throw;
+    }
+    bool enable_bh_dram_cores = false;
+    try {
+        enable_bh_dram_cores = should_enable_blackhole_dram_programmable_cores(*this->cluster_);
+    } catch (const std::exception& e) {
+        repro_dump_backtrace("should_enable_blackhole_dram_programmable_cores()", e);
+        throw;
+    }
     this->hal_ = std::make_unique<Hal>(
         platform_arch,
         is_base_routing_fw_enabled,
@@ -194,10 +235,15 @@ void MetalEnvImpl::initialize_base_objects() {
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
-        should_enable_blackhole_dram_programmable_cores(*this->cluster_));
+        enable_bh_dram_cores);
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
-    this->cluster_->set_hal(hal_.get());
+    try {
+        this->cluster_->set_hal(hal_.get());
+    } catch (const std::exception& e) {
+        repro_dump_backtrace("cluster_->set_hal()", e);
+        throw;
+    }
 }
 
 void MetalEnvImpl::verify_fw_capabilities() {
