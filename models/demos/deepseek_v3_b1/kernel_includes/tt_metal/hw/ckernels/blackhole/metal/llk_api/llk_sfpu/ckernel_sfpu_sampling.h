@@ -50,16 +50,16 @@ inline void calculate_sampling_binary_comp_first_column(
     for (int d = 0; d < ITERATIONS_FIRST_COLUMN; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat result = sfpi::vConst0;
+        sfpi::vFloat result = 0.0f;
 
         if constexpr (OP == SfpuType::le) {
-            v_if(in0 <= in1) { result = sfpi::vConst1; }
+            v_if(in0 <= in1) { result = 1.0f; }
             v_endif;
         } else if constexpr (OP == SfpuType::lt) {
-            v_if(in0 < in1) { result = sfpi::vConst1; }
+            v_if(in0 < in1) { result = 1.0f; }
             v_endif;
         } else {
-            v_if(in0 >= in1) { result = sfpi::vConst1; }
+            v_if(in0 >= in1) { result = 1.0f; }
             v_endif;
         }
 

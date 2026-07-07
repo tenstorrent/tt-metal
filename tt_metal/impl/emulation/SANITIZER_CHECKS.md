@@ -253,7 +253,7 @@ Two properties make this safe:
   still aborts. Real OOB bugs (e.g. the untilize / repeat / nd_reshard kernel
   overruns) are not masked.
 - **Invisible to Object Intent (§12).** Host-poke ranges live in their own array,
-  are **not** appended to `__emule_l1_resolved_ranges`, and are **not** snapshotted
+  are **not** appended to `__emule_self->san_resolved_log`, and are **not** snapshotted
   by Object Intent — so a host-NOC write into a poked destination can't be
   misread as an "unintended write."
 
@@ -450,7 +450,7 @@ no-violation control, and the per-check opt-out env test).
 ### 12. Object Intent Violation
 **Lives in:** `[metal] tt_metal/impl/emulation/emule_sanitizers.cpp` (the
 pre-launch byte snapshot + post-join `memcmp`); the per-kernel "resolved set"
-(`__emule_l1_resolved_ranges`) is recorded by `__emule_asan_check_oob_tensor`
+(the fiber ctx `__emule_self->san_resolved_log`) is recorded by `__emule_asan_check_oob_tensor`
 (`[emule] include/jit_hw/asan/asan_l1_checks.h`), reached via the
 `__emule_local_l1_to_ptr` chokepoint.
 **What it catches:** a kernel that scribbles on *another* buffer's bytes — valid,
