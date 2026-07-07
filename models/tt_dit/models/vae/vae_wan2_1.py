@@ -1839,8 +1839,11 @@ class WanEncoder(Module):
     ) -> tuple[ttnn.Tensor, int, int]:
         """
         encoder_t_chunk_size controls how the T dimension is processed:
-            None  - full-T single pass, no caching (fastest, most memory)
-            N     - frame 0 alone, then N frames at a time with caching
+            chunk_size => None  - process full-T frame by frame, no caching (fastest, most memory)
+            chunk_size => N     - process frame 0 alone, then cache it, then process in chunks consisting
+                                  of (N - 1) frames from the input plus 1 from the cache; trailing
+                                  (T-1) % N frames are dropped. This behavior is intended to match
+                                  the reference  WAN encoder behavior.
         """
         assert (
             encoder_t_chunk_size is None or encoder_t_chunk_size >= 4
@@ -1873,9 +1876,24 @@ class WanEncoder(Module):
             )
             output_BTHWC = out_BTHWC
 
-            for t_start in range(1, T, encoder_t_chunk_size):
+            # The intent here was to match the reference _encode loop in diffusers.AutoencoderKLWan.: frame 0 is
+            # processed alone and cached (above), then iterate over groups of encoder_t_chunk_size (with 1 frame
+            # in the chunk coming from the cache each time). Any trailing (T - 1) % chunk frames are dropped, because the
+            # stride-2 downsample3d time_conv cannot form a valid temporal window from a partial tail.
+            # NOTE: This change was proposed by Claude, so feel free to double check the validity. Also
+            # if we no longer intend to match exactly the reference behavior we should revisit this algorithm.
+            num_chunks = (T - 1) // encoder_t_chunk_size
+            dropped = (T - 1) - num_chunks * encoder_t_chunk_size
+            if dropped:
+                logger.warning(
+                    f"WanEncoder.forward: T={T} is not equal to 1 + k * encoder_t_chunk_size, where k is an integer representing a whole number of chunks (encoder_t_chunk_size={encoder_t_chunk_size})); "
+                    f"dropping (T - 1) % encoder_t_chunk_size = {dropped} trailing frame(s)"
+                )
+
+            for i in range(num_chunks):
                 self._conv_idx = [0]
-                t_end = min(t_start + encoder_t_chunk_size, T)
+                t_start = 1 + i * encoder_t_chunk_size
+                t_end = t_start + encoder_t_chunk_size
                 out_BTHWC, new_logical_h, new_logical_w = self.encoder(
                     x_BTHWC[:, t_start:t_end, :, :, :],
                     logical_h,
