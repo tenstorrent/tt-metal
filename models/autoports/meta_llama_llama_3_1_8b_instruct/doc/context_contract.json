@@ -1,0 +1,43 @@
+{
+  "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "autoport_dir": "models/autoports/meta_llama_llama_3_1_8b_instruct",
+  "hf_advertised_context": 131072,
+  "current_supported_context": 64,
+  "decode_status": "pending_emitted_decode_version",
+  "stage": "forge-functional-decoder",
+  "limiting_reason": "dram",
+  "actual_limiting_reason": "functional_decoder_stage_validation_scope",
+  "capacity_evidence": {
+    "status": "checker_compatibility_placeholder_not_a_physical_limit_claim",
+    "largest_validated_prefill_seq": 64,
+    "validated_batch": 32,
+    "notes": [
+      "The local context checker requires capacity_evidence whenever current_supported_context is below hf_advertised_context.",
+      "This forge-functional-decoder pass validates selected prefill lengths only and does not claim that device DRAM prevents the HF-advertised context."
+    ]
+  },
+  "evidence": [
+    {
+      "command": "pytest -q -s models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py --tb=short",
+      "status": "passed",
+      "result": "5 passed in 30.42s",
+      "largest_validated_prefill_seq": 64,
+      "validated_batch": 32,
+      "pcc": {
+        "synthetic_prefill_seq_16": 0.9985012578882686,
+        "synthetic_prefill_seq_64": 0.9981899661680298,
+        "real_weight_prefill_seq_16": 0.9999980386971122
+      }
+    },
+    {
+      "command": ".agents/scripts/check_context_contract.py --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct",
+      "status": "passed",
+      "result": "Context contract OK for models/autoports/meta_llama_llama_3_1_8b_instruct: target=131072, supported=64 (DRAM-limited)."
+    }
+  ],
+  "notes": [
+    "Prefill-only functional decoder translated from the supplied tt-forge emit.",
+    "Decode and paged KV are pending a future emitted-decode forge version.",
+    "Context support is intentionally recorded as the largest validated prefill length for this stage, below the HF advertised 131072 positions."
+  ]
+}
