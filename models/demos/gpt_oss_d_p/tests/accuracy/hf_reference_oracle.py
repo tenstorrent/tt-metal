@@ -107,6 +107,7 @@ def main():
         prompts = args.prompt or ["What are the prime factors of 1?"]
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers.cache_utils import DynamicCache
 
     model_path = os.environ["HF_MODEL"]
     outdir = pathlib.Path(args.out)
@@ -119,6 +120,24 @@ def main():
         model_path, trust_remote_code=True, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True
     ).eval()
     print("[oracle] model loaded", flush=True)
+
+    class FullKVCapture(DynamicCache):
+        """DynamicCache subclass that snapshots the full pre-truncation K,V per layer.
+
+        GPT-OSS uses sliding_window=128 for some layers, so past_key_values only retains
+        the last 127 positions after a long prefill.  By intercepting update() here we
+        capture the complete [1, num_kv_heads, seq_len, head_dim] tensors before the
+        sliding-window layer discards earlier positions, while still returning the
+        truncated view so that attention computation remains correct.
+        """
+
+        def __init__(self, config):
+            super().__init__(config=config)
+            self.full_kv: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+
+        def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+            self.full_kv[layer_idx] = (key_states.detach().cpu(), value_states.detach().cpu())
+            return super().update(key_states, value_states, layer_idx, cache_kwargs)
 
     num_model_layers = len(model.model.layers)
     num_capture = args.max_layers if args.max_layers is not None else num_model_layers
@@ -191,8 +210,9 @@ def main():
 
             _h0 = model.model.layers[0].self_attn.register_forward_pre_hook(_capture_l0_attn_input, with_kwargs=True)
 
+        capture_cache = FullKVCapture(config=model.config) if args.save_kv else None
         with torch.no_grad():
-            out = model(input_ids=input_ids, use_cache=True)
+            out = model(input_ids=input_ids, use_cache=True, past_key_values=capture_cache)
 
         for h in hooks:
             h.remove()
@@ -266,16 +286,20 @@ def main():
             print(f"[oracle] saved {len(layer_files)} layer activation file(s)", flush=True)
 
         kv_files: dict[str, dict[str, str]] = {}
-        if args.save_kv and out.past_key_values is not None:
-            # SANITY CHECK: save pre-RoPE K to match TT fill_cache (which also now saves
-            # pre-RoPE K).  Revert both sides once QKV/fill correctness is confirmed.
-            for i, layer_kv in enumerate(out.past_key_values):
-                if i >= num_capture:
+        if args.save_kv and capture_cache is not None:
+            # Use full_kv captured before any sliding-window truncation.
+            # GPT-OSS has sliding_window=128 for some layers; past_key_values for those
+            # layers only retains the last 127 positions after a long prefill, while the
+            # TT model fills its cache with all positions.  capture_cache.full_kv holds
+            # the complete post-RoPE K,V tensors ([1, num_kv_heads, seq_len, head_dim])
+            # for every layer, captured in FullKVCapture.update() before truncation.
+            for i in range(num_capture):
+                if i not in capture_cache.full_kv:
                     break
-                k, v = layer_kv[0], layer_kv[1]
-                # k: [batch, num_kv_heads, seq_len, head_dim] bfloat16, pre-RoPE
-                k_float = k[0].float()  # [num_kv_heads, seq_len, head_dim]
-                v_float = v[0].float()  # V is not RoPE-rotated
+                k_full, v_full = capture_cache.full_kv[i]
+                # k_full: [1, num_kv_heads, seq_len, head_dim]
+                k_float = k_full[0].float()  # [num_kv_heads, seq_len, head_dim]
+                v_float = v_full[0].float()
                 k_fname = f"kv_k_{i}_{key}.npy"
                 v_fname = f"kv_v_{i}_{key}.npy"
                 np.save(outdir / k_fname, k_float.numpy())
