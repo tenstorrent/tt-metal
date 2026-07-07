@@ -587,29 +587,34 @@ def run_model(
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
-        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced"
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced, padded_percent"
     ),
     [
         # fmt: off
+        # padded_percent (right-padding + padding-aware dispatch) only changes behavior on the perf
+        # (non-PCC) DEVICE_FP32 path — see the run_model docstring. On every other row pad0 and pad50
+        # exercise identical code (actual_isl stays None), so only perf-device-256 carries a pad50
+        # variant; folding padded_percent into the row tuple avoids a wasteful pad0/pad50 cartesian
+        # across all rows (the rest are pad0-only).
         # is_balanced=True (zigzag placement) spreads real tokens evenly across SP devices so
         # padding-aware dispatch shrinks every device's token loop. Only enabled for the
         # perf-device-256 (DEVICE_FP32, non-PCC) row — the only one that builds a padding_config;
         # the rest keep sequential placement (their reference / PCC path isn't zigzag).
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   False, True,  0,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256-pad0"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   False, True,  50, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256-pad50"),
         # PCC gate on the production 256-expert / 32-per-chip path. The unified
         # routed-expert MoE op switches into the unfused extract -> FFN -> insert
         # chain whenever num_routed_experts > 64; without this variant that
         # branch ships PCC-untested on Blackhole. Lighter dispatch capacity (5
         # vs 8) keeps the soak time bounded.
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.DEVICE_FP32,   True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-256"),
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 8, 5, GateComputeMode.HOST_ALL, True,  False, marks=pytest.mark.timeout(900)),
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-256"),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.DEVICE_FP32,   True,  False, 0,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-256-pad0"),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 8, 5, GateComputeMode.HOST_ALL, True,  False, 0,  marks=pytest.mark.timeout(900), id="pcc-host-64-pad0"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True,  False, 0,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-256-pad0"),
         # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=800).
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, False, 0,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64-pad0"),
         # fmt: on
     ],
 )
-@pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
