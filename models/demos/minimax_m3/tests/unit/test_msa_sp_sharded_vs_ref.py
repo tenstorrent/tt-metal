@@ -109,8 +109,19 @@ def test_msa_sp_sharded(mesh_device, device_params, chunk_local, reset_seeds):
 
     # --- (B) full deployed path runs at SP=8xTP=4: finite, right shape, non-degenerate ---
     out = msa_sp_attention_nocache(
-        shard(q, True), shard(k, True), shard(v, True), iq_t, ik_t,
-        mesh_config=mesh_config, ccl_manager=ccl, cached_len=0, s_local=chunk_local, scale=scale, num_groups=1,
+        shard(q, True),
+        shard(k, True),
+        shard(v, True),
+        iq_t,
+        ik_t,
+        mesh_config=mesh_config,
+        ccl_manager=ccl,
+        cached_len=0,
+        s_local=chunk_local,
+        scale=scale,
+        num_groups=1,
+        block_size=128,
+        topk_blocks=16,
     )
     dts = ttnn.get_device_tensors(out)
     # reassemble: per col(group) concat the 8 SP rows' 640-row shards along seq; then concat groups (heads)

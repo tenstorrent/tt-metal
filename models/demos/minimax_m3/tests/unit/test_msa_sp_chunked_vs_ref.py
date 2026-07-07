@@ -67,7 +67,15 @@ def test_msa_sp_chunked(mesh_device, device_params, chunk_local, n_prior, reset_
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=dims),
         )
 
-    common = dict(mesh_config=mesh_config, ccl_manager=ccl, cached_len=cached_len, scale=scale, num_groups=1)
+    common = dict(
+        mesh_config=mesh_config,
+        ccl_manager=ccl,
+        cached_len=cached_len,
+        scale=scale,
+        num_groups=1,
+        block_size=128,
+        topk_blocks=16,
+    )
 
     # deployed: sharded chunk-1 query over the full AG'd context, per-device causality from the merged op's
     # mesh-coord cluster_axis -> device r's rows start at global cached_len + rank*640 (non-zero cached_len

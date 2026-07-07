@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 
 
@@ -13,6 +15,10 @@ class CCLManager:
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
         self._ping_pong_buffer_indices = {}
+
+        # Persistent ring-gather scratch buffers for ring_joint SDPA, allocated once and reused across
+        # every layer/chunk (key -> tensor). See get_ring_gather_buffer.
+        self._ring_gather_buffers = {}
 
         # Setup semaphores
         self._init_subdevice()
@@ -102,6 +108,28 @@ class CCLManager:
         cur_idx = self.barrier_idx
         self.barrier_idx = (cur_idx + 1) % 2
         return self.barrier_semaphore[cur_idx]
+
+    def get_ring_gather_buffer(self, key, n_kv, seq, head_dim, dtype):
+        """Persistent ring-gather scratch for ``ring_joint`` SDPA — allocated ONCE and reused across every
+        layer/chunk (replaces the per-call ``from_torch(zeros)`` that churned host + DRAM on every dense
+        attention). The op treats it as pure scratch: it fills the gathered region and masks the invalid
+        tail via ``kv_actual_isl``, so reuse without re-zeroing is safe (matches DeepSeek's shared TT_CCL
+        ring buffers). ``key`` separates buffers that are live simultaneously (e.g. ``"k"`` vs ``"v"`` in one
+        op call); shape/dtype key the rest (cache-read is bf8 x max_seq_len, first-chunk is bf16 x chunk).
+        Heads shard on the TP cols, seq replicated across the SP rows (dims=[None, 1]) — the layout the
+        ring op reconstructs into.
+        """
+        cache_key = (key, n_kv, seq, head_dim, str(dtype))
+        if cache_key not in self._ring_gather_buffers:
+            rows, cols = tuple(self.mesh_device.shape)
+            self._ring_gather_buffers[cache_key] = ttnn.from_torch(
+                torch.zeros(1, n_kv, seq, head_dim),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=(rows, cols), dims=[None, 1]),
+            )
+        return self._ring_gather_buffers[cache_key]
 
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""

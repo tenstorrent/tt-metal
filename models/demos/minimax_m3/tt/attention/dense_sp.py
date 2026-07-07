@@ -17,22 +17,7 @@ tests/unit/test_ring_joint_cache_read_sp_vs_ref.py (PCC 0.99994); this is that m
 model forward. Perf config q_chunk=128 / k_chunk=512 (Pavle's minimax3_gqa_causal_perf).
 """
 
-import torch
-
 import ttnn
-
-
-def _persistent_buf(mesh_device, rows, cols, n_kv, cache_global, head_dim):
-    """Ring gather buffer: full cached prefix, dtype MUST match the (bf8) KV cache."""
-    import torch
-
-    return ttnn.from_torch(
-        torch.zeros(1, n_kv, cache_global, head_dim),
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=[None, 1]),
-    )
 
 
 def dense_sp_attention(
@@ -70,8 +55,6 @@ def dense_sp_attention(
     write_chunk       when False, skip the cache write and only read (the per-layer seam is the writer)
     -> out            [1, n_q_local, chunk_local, head_dim]    block-cyclic over the chunk
     """
-    rows, cols = tuple(mesh_device.shape)
-
     if write_chunk:
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             cache_k,
@@ -99,8 +82,14 @@ def dense_sp_attention(
         None,
         None,
         None,
-        persistent_output_buffer_k=_persistent_buf(mesh_device, rows, cols, n_kv, cache_global, head_dim),
-        persistent_output_buffer_v=_persistent_buf(mesh_device, rows, cols, n_kv, cache_global, head_dim),
+        # Persistent ring-gather scratch, allocated once by the CCL manager and reused across all
+        # layers/chunks (was a per-call from_torch(zeros)). dtype MUST match the (bf8) KV cache.
+        persistent_output_buffer_k=ccl_manager.get_ring_gather_buffer(
+            "dense_k", n_kv, cache_global, head_dim, ttnn.bfloat8_b
+        ),
+        persistent_output_buffer_v=ccl_manager.get_ring_gather_buffer(
+            "dense_v", n_kv, cache_global, head_dim, ttnn.bfloat8_b
+        ),
         joint_strategy="rear",
         logical_n=logical_n,
         program_config=program_config,
@@ -151,19 +140,7 @@ def dense_sp_attention_nocache(
     cols (1/device at TP=4), matching the per-device KV head that tt_k/tt_v already carry.
     """
     mesh_device = ccl_manager.mesh_device
-    rows, cols = tuple(mesh_device.shape)
-    sp_axis, tp_axis = mesh_config.sp_axis, mesh_config.tp_axis
-    pbuf_dims = [None, None]
-    pbuf_dims[tp_axis] = 1  # gathered full-seq buffer: heads on TP cols, seq replicated across SP
-
-    def pbuf():
-        return ttnn.from_torch(
-            torch.zeros(1, n_kv, logical_n, head_dim),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=pbuf_dims),
-        )
+    sp_axis = mesh_config.sp_axis
 
     out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
@@ -172,8 +149,14 @@ def dense_sp_attention_nocache(
         None,
         None,
         None,
-        persistent_output_buffer_k=pbuf(),
-        persistent_output_buffer_v=pbuf(),
+        # Persistent ring-gather scratch (heads on TP cols, seq replicated across SP -> dims=[None, 1]),
+        # allocated once by the CCL manager and reused across chunks. First-chunk K/V are bf16.
+        persistent_output_buffer_k=ccl_manager.get_ring_gather_buffer(
+            "nocache_k", n_kv, logical_n, head_dim, ttnn.bfloat16
+        ),
+        persistent_output_buffer_v=ccl_manager.get_ring_gather_buffer(
+            "nocache_v", n_kv, logical_n, head_dim, ttnn.bfloat16
+        ),
         joint_strategy="rear",
         logical_n=logical_n,
         program_config=program_config,

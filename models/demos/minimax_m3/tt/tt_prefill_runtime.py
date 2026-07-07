@@ -25,7 +25,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder, blockcyclic_positions
 
 from .attention import allocate_kv_caches
 
@@ -73,6 +73,7 @@ class TtPrefillRuntime:
 
         self._build_model(state_dict)
         self._allocate_kv_cache()
+        self._build_indexed_rope()
 
     def _build_model(self, state_dict: dict) -> None:
         from models.demos.minimax_m3.config import MeshConfig, ModeConfig
@@ -120,20 +121,30 @@ class TtPrefillRuntime:
         )
         self.kv_cache_allocated = True
 
-    # --- RoPE: re-shard the model's own prefill cos/sin across the SP rows so row r rotates its OWN
-    # absolute positions [a + r*chunk_local : a + (r+1)*chunk_local]. Matches prepare_inputs_prefill's
-    # SP reshard, sliced at the chunk's absolute offset (for a chunk that does not start at position 0).
-    def _sp_reshard_rope(self, a: int, b: int):
+    # --- RoPE: whole-cache cos/sin for the INDEXED on-device rope (rotary_embedding_indexed), built ONCE
+    # and reused for every chunk. Replaces the old per-chunk to_torch/slice/from_torch reshard (a D2H2D
+    # host roundtrip each prefill call). The cos/sin cover every cache position, block-cyclic-reordered
+    # (keyed by the per-chip chunk) then SP-sharded, so device c's contiguous shard holds -- in
+    # local-cache-row order -- the rope for every global position it carries; the indexed op then derives
+    # each chunk's start row on-device from kv_actual_global (the same block-cyclic math the KV-cache
+    # writer uses). Mirrors DeepSeek RotarySetup.get_rope_tensors_indexed.
+    def _build_indexed_rope(self) -> None:
         mesh = self.mesh_device
+        sp = self.config.sp_factor
+        cache_seq = self.config.max_seq_len  # cache capacity; % chunk_size == 0 (asserted in __init__)
+        chunk_local = self.config.chunk_size // sp
         rdims = [None, None]
         rdims[self.config.sp_axis] = 2  # seq dim across SP rows
         mapper = ttnn.ShardTensor2dMesh(mesh, dims=tuple(rdims), mesh_shape=mesh.shape)
 
-        def rs(dev_tensor):
-            full = ttnn.to_torch(ttnn.get_device_tensors(dev_tensor)[0])[:, :, a:b, :]
-            return ttnn.from_torch(full, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper)
+        def build(dev_mat):
+            # one-time D2H of the model's replicated cos/sin (device-0 copy), sliced to the cache capacity
+            full = ttnn.to_torch(ttnn.get_device_tensors(dev_mat)[0])[:, :, :cache_seq, :]
+            bc = block_cyclic_reorder(full, chunk_local, sp, seq_dim=2)
+            return ttnn.from_torch(bc, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper)
 
-        return [rs(self.model.rope_setup.cos_matrix_prefill), rs(self.model.rope_setup.sin_matrix_prefill)]
+        rs = self.model.rope_setup
+        self.rope_indexed = [build(rs.cos_matrix_prefill), build(rs.sin_matrix_prefill)]
 
     def make_chunk_input(self, token_ids: list) -> ttnn.Tensor:
         """Embed + SP-shard one chunk's token ids -> the model input tensor (consumed by prefill())."""
@@ -190,19 +201,19 @@ class TtPrefillRuntime:
             actual_start < actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
 
-        a, b = actual_start, actual_start + self.config.chunk_size
-        rope_abs = self._sp_reshard_rope(a, b)
+        # Whole-cache indexed rope built once (self.rope_indexed); the indexed op picks this chunk's rows
+        # on-device from kv_actual_global (= actual_start, threaded via cached_len + indexed_rope=True). No
+        # per-chunk host reshard, and the tensors are persistent (do NOT deallocate them here).
         out = self.model.ttnn_prefill_forward(
             input_tensor,
-            rot_mats_global=rope_abs,
+            rot_mats_global=self.rope_indexed,
             kv_cache=self.kv_cache,
             cached_len=actual_start,  # valid prefix already in the cache before this chunk
             user_id=slot_id,
             get_last_token=get_last_token,
             skip_lm_head=skip_lm_head,  # default: cache-fill only (skip final norm + lm_head)
+            indexed_rope=True,
         )
-        for t in rope_abs:
-            t.deallocate(True)
         ttnn.deallocate(input_tensor)
         if skip_lm_head:
             out.deallocate(True)

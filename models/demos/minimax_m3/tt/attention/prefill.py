@@ -40,6 +40,7 @@ def prefill_forward(
     batch_size=1,
     layer_idx=0,
     cached_len=0,
+    indexed_rope=False,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
@@ -109,15 +110,34 @@ def prefill_forward(
         tt_q_pre.deallocate(True)
         tt_k_pre.deallocate(True)
 
-    # Apply RoPE (use per-user seq_len positions)
-    if batch_size > 1:
+    # Apply RoPE. indexed_rope: rope_mats are the WHOLE-cache block-cyclic SP-sharded cos/sin (built once
+    # by the runtime); the indexed op derives this chunk's per-chip start from kv_actual_global=cached_len +
+    # the device's cluster_axis coord on-device (no per-chunk host reshard). The per-user seq_len slice only
+    # applies to the non-indexed multi-user path (indexed rope carries the whole cache, never sliced here).
+    rope_kv_actual = cached_len if indexed_rope else None
+    rope_cluster_axis = mesh_config.sp_axis if indexed_rope else None
+    if batch_size > 1 and not indexed_rope:
         rope_mats_sliced = [rope_mats[0][:, :, :seq_len, :], rope_mats[1][:, :, :seq_len, :]]
     else:
         rope_mats_sliced = rope_mats
     tt_q_orig = tt_q
     tt_k_orig = tt_k
-    tt_q = apply_rope(tt_q, rope_mats_sliced, transformation_mat, is_decode_mode=False)
-    tt_k = apply_rope(tt_k, rope_mats_sliced, transformation_mat, is_decode_mode=False)
+    tt_q = apply_rope(
+        tt_q,
+        rope_mats_sliced,
+        transformation_mat,
+        is_decode_mode=False,
+        kv_actual_global=rope_kv_actual,
+        cluster_axis=rope_cluster_axis,
+    )
+    tt_k = apply_rope(
+        tt_k,
+        rope_mats_sliced,
+        transformation_mat,
+        is_decode_mode=False,
+        kv_actual_global=rope_kv_actual,
+        cluster_axis=rope_cluster_axis,
+    )
     tt_q_orig.deallocate(True)
     tt_k_orig.deallocate(True)
 
@@ -145,7 +165,14 @@ def prefill_forward(
     #     (ring_joint, dense_sp.py) + the per-layer KV cache lifecycle is the remaining model-level wiring.
     if config.is_sparse:
         tt_iq, tt_ik = index_branch_forward(
-            hidden_states, weights, rope_mats_sliced, transformation_mat, rms_norm_eps=config.rms_norm_eps
+            hidden_states,
+            weights,
+            rope_mats_sliced,
+            transformation_mat,
+            index_dim=config.msa_index_dim,
+            rms_norm_eps=config.rms_norm_eps,
+            kv_actual_global=rope_kv_actual,
+            cluster_axis=rope_cluster_axis,
         )
         hidden_states.deallocate(True)
         # MSA-only: cache the post-norm/post-RoPE index_k (single shared head, TP-replicated) at this
@@ -167,9 +194,21 @@ def prefill_forward(
             n_chunks = cached_len // (seq_len * sp) + 1  # chunks now in the cache (incl. current)
             n_rows = n_chunks * chunk_local  # accumulated per-chip cache rows
             slot = user_id * kv_cache.num_layers + layer_idx
-            k_acc = ttnn.slice(kv_cache.k, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
-            v_acc = ttnn.slice(kv_cache.v, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
-            ik_acc = ttnn.slice(kv_cache.index_k, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
+            # ttnn.slice on an NdShard(ROUND_ROBIN_1D) tensor corrupts the round-robin bank mapping (a
+            # subsequent read then pulls the wrong banks -> the accumulated context is scrambled, chunked
+            # KV-PCC craters). Convert the packed cache to plain DRAM-interleaved FIRST (the round-robin is
+            # intact for the full tensor), THEN slice the slot on the interleaved result. Verified on-device
+            # by test_ndshard_reorder_probe / test_msa_sp_cache_read_ndshard_pcc. Fully on-device (no host
+            # round-trip); the eventual slab-aware in-kernel cache read (ring_joint-style) supersedes it.
+            k_int = ttnn.to_memory_config(kv_cache.k, ttnn.DRAM_MEMORY_CONFIG)
+            v_int = ttnn.to_memory_config(kv_cache.v, ttnn.DRAM_MEMORY_CONFIG)
+            ik_int = ttnn.to_memory_config(kv_cache.index_k, ttnn.DRAM_MEMORY_CONFIG)
+            k_acc = ttnn.slice(k_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
+            v_acc = ttnn.slice(v_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
+            ik_acc = ttnn.slice(ik_int, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
+            k_int.deallocate(True)
+            v_int.deallocate(True)
+            ik_int.deallocate(True)
             tt_sdpa_out = msa_sp_attention(
                 tt_q,
                 k_acc,
@@ -183,8 +222,9 @@ def prefill_forward(
                 n_chunks=n_chunks,
                 chunk_local=chunk_local,
                 scale=config.head_dim**-0.5,
+                block_size=config.msa_block_size,
+                topk_blocks=config.msa_topk_blocks,
                 num_groups=num_local_kv_heads,
-                layer_idx=layer_idx,
             )
         else:
             tt_sdpa_out = msa_sp_attention_nocache(
@@ -198,8 +238,9 @@ def prefill_forward(
                 cached_len=0,
                 s_local=seq_len,
                 scale=config.head_dim**-0.5,
+                block_size=config.msa_block_size,
+                topk_blocks=config.msa_topk_blocks,
                 num_groups=num_local_kv_heads,
-                layer_idx=layer_idx,
             )
     elif config.sequence_parallel:
         # SP dense (first chunk, no prior cache): ring_joint over the chunk's own SP-sharded K/V, each
@@ -229,7 +270,13 @@ def prefill_forward(
                 kv_actual=cached_len,
                 logical_n=logical_n,
                 n_kv=config.num_kv_heads,
-                cache_global=logical_n,
+                # Ring-gather output buffer must span the FULL cache capacity: ring_joint gathers the
+                # entire per-device cache shard (seq_local = max_seq_len/sp rows -> x sp across the ring =
+                # max_seq_len), independent of the valid prefix (logical_n/kv_actual_isl drive causal
+                # masking of the not-yet-written tail). Sizing it to logical_n only worked for the 2-chunk
+                # case where the last chunk's logical_n == max_seq_len; any run with >2 chunks (e.g. 50k /
+                # 11 chunks) fails "gather dim 2 too small: got <logical_n>, expected >= max_seq_len".
+                cache_global=kv_cache.max_seq_len,
                 head_dim=config.head_dim,
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,

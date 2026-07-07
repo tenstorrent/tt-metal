@@ -383,6 +383,7 @@ class Model:
         on_layer_complete=None,
         kv_cache=None,
         cached_len=0,
+        indexed_rope=False,
     ):
         """
         Prefill forward pass through decoder layers and final projection.
@@ -417,6 +418,7 @@ class Model:
                 user_id=user_id,
                 batch_size=batch_size,
                 cached_len=cached_len,
+                indexed_rope=indexed_rope,
             )
             if _dbg:
                 _dbg_layer_stats(f"L{i}", hidden_states)
@@ -480,6 +482,7 @@ class Model:
         skip_lm_head=False,
         on_layer_complete=None,
         cached_len=0,
+        indexed_rope=False,
     ):
         """Prefill forward pass - processes full sequences"""
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
@@ -505,6 +508,7 @@ class Model:
             skip_lm_head=skip_lm_head,
             on_layer_complete=on_layer_complete,
             cached_len=cached_len,
+            indexed_rope=indexed_rope,
         )
 
         return logits

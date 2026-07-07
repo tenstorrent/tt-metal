@@ -86,6 +86,7 @@ class Attention:
         user_id=0,
         batch_size=1,
         cached_len=0,
+        indexed_rope=False,
     ):
         """
         Prefill attention forward.
@@ -118,4 +119,5 @@ class Attention:
             batch_size=batch_size,
             layer_idx=self.layer_idx,
             cached_len=cached_len,
+            indexed_rope=indexed_rope,
         )

@@ -203,7 +203,7 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(xqkv, NQ, NKV)
     tt_q = apply_rope(apply_qk_norm_per_head(tt_q, weights.q_norm, EPS), rope_mats, trans_mat, False)
     tt_k = apply_rope(apply_qk_norm_per_head(tt_k, weights.k_norm, EPS), rope_mats, trans_mat, False)
-    tt_iq, tt_ik = index_branch_forward(x_tt, weights, rope_mats, trans_mat, rms_norm_eps=EPS)
+    tt_iq, tt_ik = index_branch_forward(x_tt, weights, rope_mats, trans_mat, index_dim=128, rms_norm_eps=EPS)
     tt_out, tt_block_ids = msa_indexer_sparse(
         tt_iq,
         tt_ik,
@@ -213,6 +213,8 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         chunk_start_idx=0,
         scale=scale,
         num_groups=NIDX,
+        block_size=128,
+        topk_blocks=16,
         device=mesh_device,
         return_block_ids=True,
     )

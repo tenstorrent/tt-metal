@@ -166,6 +166,16 @@ class DecoderLayer:
             freq = getattr(sparse_cfg, "sparse_attention_freq", None) if sparse_cfg is not None else None
         is_sparse = bool(freq[layer_idx]) if freq is not None and layer_idx < len(freq) else False
 
+        # MSA hyperparams from sparse_attention_config (dict or object); defaults match M3.
+        def _sc(name, default):
+            if sparse_cfg is None:
+                return default
+            return sparse_cfg.get(name, default) if isinstance(sparse_cfg, dict) else getattr(sparse_cfg, name, default)
+
+        msa_block_size = _sc("sparse_block_size", 128)
+        msa_topk_blocks = _sc("sparse_topk_blocks", 16)
+        msa_index_dim = _sc("sparse_index_dim", 128)
+
         # Create attention configuration
         attention_config = AttentionConfig(
             hidden_size=hf_config.hidden_size,
@@ -181,6 +191,9 @@ class DecoderLayer:
             max_local_batch_size=max_local_batch_size,
             users_row_sharded=users_row_sharded,
             is_sparse=is_sparse,
+            msa_block_size=msa_block_size,
+            msa_topk_blocks=msa_topk_blocks,
+            msa_index_dim=msa_index_dim,
             sequence_parallel=sequence_parallel,
         )
 
@@ -210,6 +223,7 @@ class DecoderLayer:
         user_id=0,
         batch_size=1,
         cached_len=0,
+        indexed_rope=False,
     ):
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -232,6 +246,7 @@ class DecoderLayer:
             user_id=user_id,
             batch_size=batch_size,
             cached_len=cached_len,
+            indexed_rope=indexed_rope,
         )
         hidden_states_post_norm.deallocate(True)
         _dbg_sub(self.layer_idx, "attn_out", hidden_states)

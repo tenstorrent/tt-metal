@@ -47,7 +47,7 @@ def split_qkv_heads_prefill(xqkv_fused, num_heads: int, num_kv_heads: int):
     )
 
 
-def apply_rope(tensor, rope_mats, transformation_mat, is_decode_mode: bool):
+def apply_rope(tensor, rope_mats, transformation_mat, is_decode_mode: bool, kv_actual_global=None, cluster_axis=None):
     """
     Apply rotary position embedding (RoPE), supporting PARTIAL rotary.
 
@@ -58,11 +58,21 @@ def apply_rope(tensor, rope_mats, transformation_mat, is_decode_mode: bool):
     rotation (the rotary_embedding_llama op always rotates its full last dim, so
     we slice the head into rotate / pass-through parts ourselves).
 
+    Two inner ops (the partial-rotary slice/concat wrapper is identical for both):
+      * default (``kv_actual_global`` is None): ``rotary_embedding_llama`` with a per-chunk cos/sin
+        already sliced to this chunk's positions (decode + the non-cache prefill paths).
+      * indexed (``kv_actual_global`` set): ``rotary_embedding_indexed`` — ``rope_mats`` carry the
+        WHOLE-cache, block-cyclic-reordered, SP-sharded cos/sin (built once), and the op derives this
+        chunk's per-chip start row on-device from ``kv_actual_global`` + the device's ``cluster_axis``
+        coordinate (same block-cyclic math as the KV-cache writer). No per-chunk host reshard.
+
     Args:
         tensor: Input tensor (Q or K), shape [..., head_dim]
         rope_mats: Tuple of (cos, sin) matrices, last dim = rotary_dim
         transformation_mat: Transformation matrix for the mode
         is_decode_mode: Whether in decode mode
+        kv_actual_global: prior valid global KV length (tile-aligned). Set -> indexed on-device RoPE.
+        cluster_axis: SP mesh axis the whole-cache cos/sin are sharded along (required when indexed).
 
     Returns:
         Tensor with RoPE applied
@@ -70,18 +80,28 @@ def apply_rope(tensor, rope_mats, transformation_mat, is_decode_mode: bool):
     rotary_dim = rope_mats[0].shape[-1]
     head_dim = tensor.shape[-1]
 
-    if rotary_dim >= head_dim:
+    def _rotate(t):
+        if kv_actual_global is not None:
+            return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                t,
+                rope_mats[0],
+                rope_mats[1],
+                transformation_mat,
+                kv_actual_global=kv_actual_global,
+                cluster_axis=cluster_axis,
+            )
         return ttnn.experimental.rotary_embedding_llama(
-            tensor, rope_mats[0], rope_mats[1], transformation_mat, is_decode_mode=is_decode_mode
+            t, rope_mats[0], rope_mats[1], transformation_mat, is_decode_mode=is_decode_mode
         )
+
+    if rotary_dim >= head_dim:
+        return _rotate(tensor)
 
     # Partial rotary: split [..., :rotary_dim] (rotate) and [..., rotary_dim:] (pass through).
     shape = tensor.shape
     t_rot = ttnn.slice(tensor, [0, 0, 0, 0], [shape[0], shape[1], shape[2], rotary_dim])
     t_pass = ttnn.slice(tensor, [0, 0, 0, rotary_dim], [shape[0], shape[1], shape[2], head_dim])
-    t_rot = ttnn.experimental.rotary_embedding_llama(
-        t_rot, rope_mats[0], rope_mats[1], transformation_mat, is_decode_mode=is_decode_mode
-    )
+    t_rot = _rotate(t_rot)
     out = ttnn.concat([t_rot, t_pass], dim=-1)
     t_rot.deallocate(True)
     t_pass.deallocate(True)

@@ -24,62 +24,38 @@ uniform across SP devices (no per-device offset needed). Causality is encoded en
 selection; sparse_sdpa_msa applies no token mask.
 """
 
-import os
-
-import torch
 
 import ttnn
 
 from .operations import apply_qk_norm_per_head, apply_rope
 
 
-def _dbg_msa_save(t, device, layer_idx, name):
-    """DBG_MSA_BLOCKIDS=1: save a per-query MSA tensor (block_ids or block_scores), reassembled across SP
-    rows on the query axis (col-0 device of each row), so we can diff chunked vs one-shot per global query
-    position. -> /tmp/m3_msa/L{idx}_{name}.pt, shape [1, num_groups, S_global, last]."""
-    if os.getenv("DBG_MSA_BLOCKIDS") != "1" or layer_idx is None:
-        return
-    try:
-        import os as _os
-
-        rows, cols = tuple(device.shape)
-        dts = ttnn.get_device_tensors(t)
-        shards = [ttnn.to_torch(dts[r * cols]) for r in range(rows)]  # col-0 of each SP row
-        full = torch.cat(shards, dim=2)  # concat on the query (Sq) axis -> global order
-        _os.makedirs("/tmp/m3_msa", exist_ok=True)
-        torch.save(full, f"/tmp/m3_msa/L{layer_idx}_{name}.pt")
-        from loguru import logger
-
-        logger.info(f"[MSA L{layer_idx} {name}] saved {tuple(full.shape)}")
-    except Exception as e:
-        from loguru import logger
-
-        logger.info(f"[MSA L{layer_idx} {name}] failed: {e}")
-
-
-# M3 sparse_attention_config (configs/MiniMax-M3/config.json).
-BLOCK_SIZE = 128
-TOPK_BLOCKS = 16
-NUM_INDEX_HEADS = 4  # sparse_num_index_heads (1 per GQA group; 1 per device at TP=4)
-INDEX_DIM = 128  # sparse_index_dim
-
-
-def _split_index_heads(t):
-    """[1, 1, S, n*INDEX_DIM] -> [1, n, S, INDEX_DIM] (head-major split, like the main QKV split)."""
+def _split_index_heads(t, index_dim):
+    """[1, 1, S, n*index_dim] -> [1, n, S, index_dim] (head-major split, like the main QKV split)."""
     s = t.shape[2]
-    n = t.shape[-1] // INDEX_DIM
+    n = t.shape[-1] // index_dim
     t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
-    t = ttnn.reshape(t, [1, s, n, INDEX_DIM])
-    t = ttnn.permute(t, (0, 2, 1, 3))  # [1, n, S, INDEX_DIM]
+    t = ttnn.reshape(t, [1, s, n, index_dim])
+    t = ttnn.permute(t, (0, 2, 1, 3))  # [1, n, S, index_dim]
     return ttnn.to_layout(t, ttnn.TILE_LAYOUT)
 
 
-def index_branch_forward(hidden_states, weights, rope_mats, transformation_mat, *, rms_norm_eps):
+def index_branch_forward(
+    hidden_states,
+    weights,
+    rope_mats,
+    transformation_mat,
+    *,
+    index_dim,
+    rms_norm_eps,
+    kv_actual_global=None,
+    cluster_axis=None,
+):
     """The MSA index branch: pre-roped index_q (n index heads, 1/TP col) + index_k (single shared head).
 
     proj -> split heads -> per-head RMSNorm -> RoPE. index_q_proj is column-parallel (4 index heads ->
     1/TP col); index_k_proj is replicated (shared head). Per device this yields index_q [1, n_idx_local,
-    S, INDEX_DIM] (n_idx_local=1 at TP=4) and index_k [1, 1, S, INDEX_DIM] -> the MSA indexer.
+    S, index_dim] (n_idx_local=1 at TP=4) and index_k [1, 1, S, index_dim] -> the MSA indexer.
 
     VERIFIED 2026-06-26 against transformers-main MiniMaxM3VLIndexer source (not just a summary):
       * order proj -> q_norm/k_norm -> apply_rotary_pos_emb — matches.
@@ -90,13 +66,31 @@ def index_branch_forward(hidden_states, weights, rope_mats, transformation_mat, 
         128-wide index head), same as main attention. Our apply_rope(rope_mats=main 64-wide) matches.
       * norm: index_q_norm/index_k_norm gains ship in the checkpoint, applied per-head.
     """
-    iq = _split_index_heads(ttnn.linear(hidden_states, weights.index_q_proj))  # [1, n_idx_local, S, IDX_DIM]
+    iq = _split_index_heads(
+        ttnn.linear(hidden_states, weights.index_q_proj), index_dim
+    )  # [1, n_idx_local, S, index_dim]
     iq = apply_qk_norm_per_head(iq, weights.index_q_norm, rms_norm_eps)
-    iq = apply_rope(iq, rope_mats, transformation_mat, is_decode_mode=False)
+    iq = apply_rope(
+        iq,
+        rope_mats,
+        transformation_mat,
+        is_decode_mode=False,
+        kv_actual_global=kv_actual_global,
+        cluster_axis=cluster_axis,
+    )
 
-    ik = _split_index_heads(ttnn.linear(hidden_states, weights.index_k_proj))  # [1, 1, S, IDX_DIM] (shared)
+    ik = _split_index_heads(
+        ttnn.linear(hidden_states, weights.index_k_proj), index_dim
+    )  # [1, 1, S, index_dim] (shared)
     ik = apply_qk_norm_per_head(ik, weights.index_k_norm, rms_norm_eps)
-    ik = apply_rope(ik, rope_mats, transformation_mat, is_decode_mode=False)
+    ik = apply_rope(
+        ik,
+        rope_mats,
+        transformation_mat,
+        is_decode_mode=False,
+        kv_actual_global=kv_actual_global,
+        cluster_axis=cluster_axis,
+    )
     return iq, ik
 
 
@@ -110,15 +104,15 @@ def msa_indexer_sparse(
     chunk_start_idx,
     scale,
     num_groups,
+    block_size,
+    topk_blocks,
     device,
     return_block_ids=False,
     cluster_axis=None,
-    layer_idx=None,
-    dbg_tag=None,
 ):
     """The MSA op chain over a FULL-context (already-gathered) K/V; index_q/q may stay SP-sharded.
 
-    index_q [1, num_groups, Sq, INDEX_DIM]   index_k [1, 1, T, INDEX_DIM]   (1 shared index-k head)
+    index_q [1, num_groups, Sq, index_dim]   index_k [1, 1, T, index_dim]   (1 shared index-k head)
     q       [1, Hq, Sq, head_dim]            k, v    [1, n_kv, T, head_dim]  (TILE layout)
     cluster_axis: when set, the merged op derives a PER-DEVICE causal chunk_start from the device's
       mesh coordinate along that axis -> chunk_start = chunk_start_idx + rank*Sq (Sq = q's S/sp rows),
@@ -126,18 +120,6 @@ def msa_indexer_sparse(
       (Replaces the old host-built per-device chunk_offset tile; mesh-coord approach, #47939.)
     -> out  [1, Hq, Sq, head_dim]
     """
-    # DBG: dump the indexer's actual inputs to localize a chunked-vs-oneshot score divergence.
-    if os.getenv("DBG_MSA_BLOCKIDS") == "1" and layer_idx is not None and dbg_tag is not None:
-        _dbg_msa_save(index_q, device, layer_idx, f"{dbg_tag}_idxq")  # sharded on Sq -> global order
-        try:  # index_k is the full gathered context, replicated across rows -> dev0 has it all
-            import os as _os
-
-            ik0 = ttnn.to_torch(ttnn.get_device_tensors(index_k)[0]).float()
-            _os.makedirs("/tmp/m3_msa", exist_ok=True)
-            torch.save(ik0, f"/tmp/m3_msa/L{layer_idx}_{dbg_tag}_idxk.pt")
-        except Exception:
-            pass
-
     # Block scores: scaled dot, causal -inf for future, group-sum, block-max-pool. bf16 row-major out.
     block_scores = ttnn.experimental.indexer_score_msa(
         index_q,
@@ -145,28 +127,29 @@ def msa_indexer_sparse(
         chunk_start_idx=chunk_start_idx,
         scale=scale,
         num_groups=num_groups,
-        block_size=BLOCK_SIZE,
+        block_size=block_size,
         program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
         cluster_axis=cluster_axis,
     )
 
-    # The op already force-locals the current block (+inf); the real MiniMax-M3 indexer forces ONLY the
-    # local block (upstream minimax_m3_vl: index_local_blocks, no init/sink block), so nothing else is added.
-    _dbg_msa_save(block_scores, device, layer_idx, f"{dbg_tag}_scores" if dbg_tag else None)
+    # Top-k block ids (uint32 row-major) — the block selection that encodes causality. The op already
+    # force-locals the current (diagonal) block; upstream minimax_m3_vl forces ONLY the local block.
+    block_ids = ttnn.experimental.topk_large_indices(block_scores, k=topk_blocks)
 
-    # Top-k block ids (uint32 row-major) — the block selection that encodes causality.
-    block_ids = ttnn.experimental.topk_large_indices(block_scores, k=TOPK_BLOCKS)
-    _dbg_msa_save(block_ids, device, layer_idx, dbg_tag)
-
-    # sparse_sdpa_msa: q + block-ids row-major, K/V tiled; expands blocks->tokens internally.
+    # sparse_sdpa_msa (#48700): q + block-ids row-major, K/V tiled; expands blocks->tokens internally.
+    # chunk_start_idx + cluster_axis drive the token-level diagonal-block causal mask with the per-device
+    # SP start (chunk_start = chunk_start_idx + rank*Sq); q must be bf16 (the op rejects fp8 q under causal).
     out = ttnn.transformer.sparse_sdpa_msa(
         ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT),
         k,
         v,
         block_ids,
         scale=scale,
-        block_size=BLOCK_SIZE,
+        block_size=block_size,
+        chunk_start_idx=chunk_start_idx,
+        cluster_axis=cluster_axis,
     )
+
     # sparse_sdpa_msa returns ROW_MAJOR; the model's concat_heads (prefill.py) needs TILE — match the
     # dense (ring_joint) output so the shared post-attention path works for MSA layers too.
     out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
@@ -185,9 +168,10 @@ def msa_sp_attention_nocache(
     cached_len,
     s_local,
     scale,
+    block_size,
+    topk_blocks,
     num_groups=1,
     return_block_ids=False,
-    layer_idx=None,
 ):
     """Sharded-query MSA under SP: AllGather only the KEYS; q/index_q stay sharded (S/sp rows/device).
 
@@ -213,10 +197,10 @@ def msa_sp_attention_nocache(
         chunk_start_idx=cached_len,
         scale=scale,
         num_groups=num_groups,
+        block_size=block_size,
+        topk_blocks=topk_blocks,
         device=device,
         cluster_axis=sp_axis,
-        layer_idx=layer_idx,
-        dbg_tag="nocache",
     )
 
 
@@ -251,8 +235,9 @@ def msa_sp_attention(
     n_chunks,
     chunk_local,
     scale,
+    block_size,
+    topk_blocks,
     num_groups=1,
-    layer_idx=None,
 ):
     """Cross-chunk MSA: the CURRENT chunk's queries attend the ACCUMULATED context read from the
     block-cyclic SP cache (the multi-chunk read path; ``msa_sp_attention_nocache`` is its single-chunk,
@@ -303,8 +288,8 @@ def msa_sp_attention(
         chunk_start_idx=cached_len,
         scale=scale,
         num_groups=num_groups,
+        block_size=block_size,
+        topk_blocks=topk_blocks,
         device=device,
         cluster_axis=sp_axis,
-        layer_idx=layer_idx,
-        dbg_tag="cacheread",
     )

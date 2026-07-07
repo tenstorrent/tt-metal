@@ -34,6 +34,10 @@ class AttentionConfig:
     # the index branch (index_q/k proj -> norm -> RoPE) + block-sparse attention (indexer -> top-k ->
     # sparse_sdpa_msa) instead of dense GQA. Dense layers 0-2 stay False. See tt/attention/msa.py.
     is_sparse: bool = False
+    # MSA (sparse) hyperparams, from hf_config.text_config.sparse_attention_config (used when is_sparse).
+    msa_block_size: int = 128  # sparse_block_size
+    msa_topk_blocks: int = 16  # sparse_topk_blocks
+    msa_index_dim: int = 128  # sparse_index_dim
 
     def __post_init__(self):
         """Compute scaling factor if not provided"""
