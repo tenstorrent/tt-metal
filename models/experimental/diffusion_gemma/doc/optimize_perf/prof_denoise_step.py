@@ -54,7 +54,10 @@ def _log_dram(mesh, label):
 def run(num_layers, canvas_length, iters, prompt, max_seq_len, do_trace, commit_tokens=None):
     # TP=4 attention all-reduce needs the 1D fabric initialized (as the text demo does).
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, ttnn.FabricReliabilityMode.STRICT_INIT, None)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=1300000000)
+    # --no-trace (eager op-table profiling) does not use the trace region; shrink it to free
+    # DRAM for full-model weights + the on-device profiler op buffer (avoids OOM at 30 layers).
+    trace_region_size = 1300000000 if do_trace else 20000000
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=trace_region_size)
     try:
         model_inputs = build_tt_model_from_checkpoint_dir(
             mesh, CKPT, max_batch_size=1, max_seq_len=max_seq_len, num_layers=num_layers, create_kv_cache=True
