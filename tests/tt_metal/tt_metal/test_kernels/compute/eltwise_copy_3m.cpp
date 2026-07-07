@@ -34,9 +34,9 @@ void core_agnostic_main() {
 
 void core_agnostic_main() {
     int __outer_loop_iter;
-    llk_pack_init();
+    llk_pack_init(16);
     llk_pack_hw_configure<DST_ACCUM_MODE>(16);
-    llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>();
+    llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(16);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         llk_packer_wait_for_math_done();
@@ -51,7 +51,7 @@ void core_agnostic_main() {
 #ifdef TRISC_UNPACK
 void core_agnostic_main() {
     int __outer_loop_iter;
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()));
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(0, 0, 0)));
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(0)));
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {

@@ -15,7 +15,7 @@ template <
     bool zero_output = false,
     bool skip_addrmod_config = false,
     bool skip_packer_strides = false>
-inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1) {
+inline void llk_pack_init(const std::uint32_t pack_output, std::uint32_t num_tiles = 1) {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
         "Wormhole B0: pack init supports PackMode::Default and PackMode::Untilize only");

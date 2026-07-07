@@ -32,7 +32,7 @@ ALWI void sdpa_custom_mm_block_init(
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     MATH((llk_math_sdpa_custom_mm_init<transpose>(in0_cb_id, in1_cb_id, ct_dim)));
 
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
 

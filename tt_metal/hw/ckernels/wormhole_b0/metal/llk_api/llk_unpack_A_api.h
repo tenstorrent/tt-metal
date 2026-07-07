@@ -16,9 +16,9 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_init(
-    const std::uint32_t transpose_of_faces = 0,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t operand = 0) {
+    const std::uint32_t transpose_of_faces,
+    const std::uint32_t within_face_16x16_transpose,
+    const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);

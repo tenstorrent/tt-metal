@@ -89,9 +89,9 @@ inline void pack_block(
 
 void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);
-    llk_pack_init();
-    llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>();
-    llk_init_packer_dest_offset_registers<PackMode::Default>();
+    llk_pack_init(16);
+    llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(16);
+    llk_init_packer_dest_offset_registers<PackMode::Default>(16);
     llk_pack_hw_configure<DST_ACCUM_MODE>(16);
     // inner block size in tiles
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1);
