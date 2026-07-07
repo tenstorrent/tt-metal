@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Launch the dedicated Qwen3-ASR API server container (chip 3 = fake P150).
 # Mounts: tt-metal (TT_METAL_HOME), extracted Qwen3 checkpoint, HF cache (audio weights).
 set -e
