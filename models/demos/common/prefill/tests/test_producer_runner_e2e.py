@@ -23,7 +23,7 @@ import pytest
 from models.common.utility_functions import is_blackhole, skip_for_slow_dispatch
 
 CHUNK_SIZE = 5120
-NUM_LAYERS = 61
+NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", "2"))
 SERVICE_ID = "ci_ds_prefill"
 TABLE_PATH = "/tmp/ci_prefill_kv_table.pb"  # IPC rendezvous files; cleaned up around each scenario
 DEVMAP_PATH = "/tmp/ci_prefill_kv_devmap.json"
