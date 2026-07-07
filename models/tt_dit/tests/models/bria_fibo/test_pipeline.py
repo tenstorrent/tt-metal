@@ -7,6 +7,8 @@ import os
 import pytest
 from huggingface_hub import snapshot_download
 
+import ttnn
+
 FIBO_PATH = os.environ.get("FIBO_PATH", "briaai/FIBO")
 
 
@@ -15,6 +17,39 @@ def _fibo_local():
         return snapshot_download(FIBO_PATH, local_files_only=True)
     except Exception as e:
         pytest.skip(f"FIBO not cached: {e}")
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    indirect=["device_params"],
+)
+def test_fibo_pipeline_smoke(*, mesh_device):
+    """Full end-to-end FIBO text->image smoke on the 2x2 Blackhole mesh.
+
+    Encode (SmolLM3, replicated) -> 30-step CFG flow-match denoise (BriaFibo transformer, sp=2/tp=2)
+    -> Wan 2.2 residual VAE decode -> 1024x1024 image. No reference comparison at full steps (the
+    per-step path is PCC-gated elsewhere); this only asserts the pipeline runs and produces a
+    finite (1024, 1024, 3) image, and saves the PNG for visual inspection.
+    """
+    import numpy as np
+
+    from models.tt_dit.pipelines.bria_fibo.pipeline_bria_fibo import BriaFiboPipeline, BriaFiboPipelineConfig
+
+    ckpt = _fibo_local()
+    pipe = BriaFiboPipeline(
+        device=mesh_device,
+        config=BriaFiboPipelineConfig.default(
+            mesh_shape=mesh_device.shape, checkpoint_name=ckpt, height=1024, width=1024
+        ),
+    )
+    imgs = pipe("a luxury sports car", num_inference_steps=30, guidance_scale=5.0, seed=0)
+
+    arr = np.asarray(imgs[0])
+    assert arr.shape[:2] == (1024, 1024), f"unexpected image shape {arr.shape}"
+    assert np.isfinite(arr).all(), "image contains non-finite values"
+    imgs[0].save("fibo_smoke.png")
 
 
 def test_build_text_encoder_layers_pads_37_to_46():
