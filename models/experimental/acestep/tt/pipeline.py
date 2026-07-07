@@ -399,7 +399,7 @@ class AceStepPipeline:
         lyrics: str = "",
         seconds: float = 8.0,
         infer_steps: int = 30,
-        shift: float = 3.0,
+        shift: float = 1.0,
         seed: int = 0,
         use_trace: bool = False,
         guidance_scale: float = 7.0,

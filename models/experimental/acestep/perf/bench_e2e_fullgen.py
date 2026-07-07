@@ -36,7 +36,7 @@ from models.experimental.acestep.tt.pipeline import create_tt_pipeline
 SECONDS = 10.24  # T'=128 latent frames (~10.24 s of audio)
 INFER_STEPS = 30  # HF generate_audio default
 GUIDANCE_SCALE = 7.0  # HF text2music default (CFG). >1.0 => two DiT passes/step + APG.
-SHIFT = 3.0  # HF text2music default timestep shift.
+SHIFT = 1.0  # HF base-model generate_audio default timestep shift (modeling_acestep_v15_base.py:1810).
 PROMPT = "upbeat synthwave, driving bass, warm analog pads, nostalgic 80s energy"
 LYRICS = "neon lights over the city tonight, we ride the endless skyline"
 RUNS = 5
