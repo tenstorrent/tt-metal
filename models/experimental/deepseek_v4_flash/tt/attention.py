@@ -570,8 +570,12 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # self.q_a_proj = Linear(weights["q_a_proj.weight"], device, cache.file("q_a_proj"), dtype=weight_dtype)
         # self.q_b_proj = Linear(weights["q_b_proj.weight"], device, cache.file("q_b_proj"), dtype=weight_dtype)
         # self.kv_proj = Linear(weights["kv_proj.weight"], device, cache.file("kv_proj"), dtype=weight_dtype)
-        self.q_a_norm = DeepSeekV4RMSNorm(weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"))
-        self.kv_norm = DeepSeekV4RMSNorm(weights["kv_norm.weight"], self.eps, device, cache.file("kv_norm"))
+        self.q_a_norm = DeepSeekV4RMSNorm(
+            weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True
+        )
+        self.kv_norm = DeepSeekV4RMSNorm(
+            weights["kv_norm.weight"], self.eps, device, cache.file("kv_norm"), sharded=True
+        )
 
         # Grouped output projection (``DeepseekV4GroupedLinear``): block-diagonal
         # over o_groups. Store the per-group weight as [g, in_per_group, out_per_group]

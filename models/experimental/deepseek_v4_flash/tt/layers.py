@@ -187,17 +187,21 @@ class LinearDecode(DeepSeekV4Module):
 class DeepSeekV4RMSNorm(DeepSeekV4Module):
     """Weighted RMSNorm over the last dim (matches ``DeepseekV4RMSNorm``)."""
 
-    def __init__(self, weight, eps: float, device: ttnn.MeshDevice, cache_file_name: Optional[str] = None):
+    def __init__(
+        self, weight, eps: float, device: ttnn.MeshDevice, cache_file_name: Optional[str] = None, sharded: bool = False
+    ):
         w = _materialize(weight, cache_file_name, ttnn.bfloat16)
         self.weight = _load_weight(
             w.reshape(1, 1, 1, -1) if w is not None else None, device, cache_file_name=cache_file_name
         )
         self.eps = eps
+        self.sharded = sharded
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # b, s, t, d = x.shape
-        # x_mem_config = width_sharded_l1_config(b * s * t, d, x.device())
-        # x = ttnn.to_memory_config(x, x_mem_config)
+        if self.sharded:
+            b, s, t, d = x.shape
+            x_mem_config = width_sharded_l1_config(b * s * t, d, x.device())
+            x = ttnn.to_memory_config(x, x_mem_config)
         return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps)
 
 
