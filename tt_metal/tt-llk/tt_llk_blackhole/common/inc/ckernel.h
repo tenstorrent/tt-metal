@@ -421,14 +421,23 @@ inline void reg_write(std::uint32_t addr, std::uint32_t data)
 
 inline void wait(std::uint32_t cycles)
 {
-    volatile std::uint32_t tt_reg_ptr *clock_lo = reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    volatile std::uint32_t tt_reg_ptr *clock_hi = reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(RISCV_DEBUG_REG_WALL_CLOCK_H);
-    std::uint64_t wall_clock_timestamp          = clock_lo[0] | (static_cast<std::uint64_t>(clock_hi[0]) << 32);
-    std::uint64_t wall_clock                    = 0;
+    // Read the 64-bit wall clock as two sequenced accesses (low then high):
+    // reading WALL_CLOCK_L latches the current high word, so the following
+    // WALL_CLOCK_H read is coherent with it. Composing both reads in a single
+    // expression leaves their evaluation order unsequenced, letting the compiler
+    // read the (stale) high word before the low word that refreshes it — which
+    // yields a bogus timestamp and makes wait() return early regardless of the
+    // requested cycle count. Mirror read_wall_clock()'s low-then-high ordering.
+    const std::uint32_t start_lo   = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    const std::uint32_t start_hi   = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    const std::uint64_t start_time = (static_cast<std::uint64_t>(start_hi) << 32) | start_lo;
+    std::uint64_t wall_clock       = start_time;
     do
     {
-        wall_clock = clock_lo[0] | (static_cast<std::uint64_t>(clock_hi[0]) << 32);
-    } while (wall_clock < (wall_clock_timestamp + cycles));
+        const std::uint32_t lo = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        const std::uint32_t hi = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+        wall_clock             = (static_cast<std::uint64_t>(hi) << 32) | lo;
+    } while (wall_clock < (start_time + cycles));
 }
 
 // Clear dest
@@ -795,7 +804,16 @@ inline void init_prng_seed(const std::uint32_t seed)
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
     cfg[PRNG_SEED_Seed_Val_ADDR32]         = seed;
 
-    // TODO: ckernel::wait does not work properly. Use ckernel::wait when fixed.
+    // The seed above is written to CFG space by this RISC-V core, whereas the SFPU
+    // instructions that consume the PRNG are pushed to the Tensix instruction FIFO.
+    // Those two paths are asynchronous and may be reordered, so a later PRNG read
+    // can observe the pre-seed value. The SFPNOP burst serialises the instruction
+    // stream long enough for the CFG write to land before any consumer runs; it is
+    // an instruction-ordering barrier, not a cycle delay. ckernel::wait() only
+    // spins this RISC-V core on the wall clock and enforces no ordering against the
+    // Tensix FIFO, so it cannot replace this loop even with a large cycle count.
+    // The robust fix is to route the seed write through an in-FIFO Tensix
+    // instruction (WRCFG/RMWCIB, e.g. cfg_reg_rmw_tensix); left as follow-up.
     for (int i = 0; i < 600; i++)
     {
         TTI_SFPNOP;
