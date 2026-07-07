@@ -294,6 +294,11 @@ struct KernelConfig {
     KernelDescriptor::RuntimeArgs compute_all_to_all_rt_args;
     KernelDescriptor::RuntimeArgs compute_not_all_to_all_rt_args;
 
+    // Optional gamma/beta writer base-address slots, bound as BufferBindings in
+    // add_kernel_descriptors() (patched on cache hits); null when the tensor is absent.
+    Buffer* gamma_buffer = nullptr;
+    Buffer* beta_buffer = nullptr;
+
     // NOC config
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0;
     tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
