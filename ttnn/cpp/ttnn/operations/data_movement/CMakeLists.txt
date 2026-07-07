@@ -29,6 +29,7 @@ file(
     move/device/kernels/*
     pad/device/kernels/*
     permute/device/kernels/*
+    pixel_unshuffle/device/kernels/*
     reshape_on_device/device/kernels/*
     repeat/device/kernels/repeat_*_rm.cpp
     reshape_view/device/device/*
@@ -196,6 +197,10 @@ target_sources(
             # permute/
             permute/permute_nanobind.hpp
             permute/device/permute_device_operation.hpp
+            # pixel_unshuffle/
+            pixel_unshuffle/pixel_unshuffle.hpp
+            pixel_unshuffle/pixel_unshuffle_nanobind.hpp
+            pixel_unshuffle/device/pixel_unshuffle_device_op.hpp
             # repeat/
             repeat/repeat_nanobind.hpp
             repeat/device/repeat_device_operation.hpp
@@ -415,6 +420,9 @@ target_sources(
         permute/device/permute_rm_program_factory.cpp
         permute/device/permute_tiled_program_factory.cpp
         permute/permute.cpp
+        pixel_unshuffle/device/pixel_unshuffle_device_op.cpp
+        pixel_unshuffle/device/pixel_unshuffle_program_factory.cpp
+        pixel_unshuffle/pixel_unshuffle.cpp
         repeat/device/repeat_program_factory_last_dim.cpp
         repeat/device/repeat_program_factory_higher_dim.cpp
         repeat/device/repeat_device_operation.cpp

@@ -548,6 +548,7 @@ def get_arch_name():
 
 
 from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
+from ttnn._ttnn.operations.data_movement import PixelUnshuffleChannelOrder
 from ttnn._ttnn.operations.data_movement import (
     SliceParams,
     SliceInputs,
