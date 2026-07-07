@@ -81,6 +81,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
 
     Program program{};
 
+    // Padded-output fused mode: mux worker/mux core ranges (defined in the mux branches below, in cols>=1)
+    // that the concurrent interior-copy scatter must avoid. Empty in non-mux paths (subtract is a no-op).
+    CoreRangeSet occ_hw_workers, occ_hmux, occ_w_workers, occ_wmux;
+
     // =========================================================================
     // PART 1: NP FABRIC KERNELS (fabric_only H-dim path, dim=1 for BTHWC)
     // =========================================================================
@@ -692,6 +696,8 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         }
         CoreRangeSet hw_crset(hw_crs);
         CoreRangeSet hm_crset(hm_crs.empty() ? std::set<CoreRange>{CoreRange({0, 0})} : hm_crs);
+        occ_hw_workers = hw_crset;
+        occ_hmux = hm_crset;
 
         // Send CB (hsend) + sender CB (c_in0) on the H worker cores. hsend MUST be a whole multiple of the
         // row size (num_sticks_per_halo_dim): the H reader reserves a full row at once and the writer reads
@@ -908,6 +914,8 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             }
             CoreRangeSet worker_crset(worker_crs);
             CoreRangeSet mux_crset(mux_crs.empty() ? std::set<CoreRange>{CoreRange({0, 0})} : mux_crs);
+            occ_w_workers = worker_crset;
+            occ_wmux = mux_crset;
 
             // Send CB (c_in0) on the mux WORKER cores — the base cb_w_sender_config was created only on
             // the standard column-0 W cores, so the relocated workers had no CB (reader/writer would
@@ -1229,7 +1237,11 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         // Free cores = cols [1, grid.x) minus the NP sender workers (col 0 is fabric). The interior copy
         // runs here, concurrent with the exchange (which uses col 0 + the worker cores).
         const CoreRangeSet cols_ge1(CoreRange({1, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
-        const CoreRangeSet scatter_cores = cols_ge1.subtract(np_worker_core_ranges);
+        const CoreRangeSet scatter_cores = cols_ge1.subtract(np_worker_core_ranges)
+                                               .subtract(occ_hw_workers)
+                                               .subtract(occ_hmux)
+                                               .subtract(occ_w_workers)
+                                               .subtract(occ_wmux);
         const uint32_t num_scatter = scatter_cores.num_cores();
         if (n_int > 0 && num_scatter > 0) {
             const uint32_t per_core = (n_int + num_scatter - 1) / num_scatter;
