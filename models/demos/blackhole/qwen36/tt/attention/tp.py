@@ -55,7 +55,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             mesh,
             dim=-1,
             memory_config=args.attn_qkv_fused_weight_memcfg,
-            cache_path=c("wqkv_fused_deint.dramshard" if qg_deint else "wqkv_fused.dramshard"),
+            cache_path=c("wqkv_fused_qkvg.dramshard" if qg_deint else "wqkv_fused.dramshard"),
             dtype=ttnn.bfloat8_b,
         )
     else:
@@ -180,14 +180,16 @@ class TPAttention:
             )
         else:
             qkv = self._col_proj(x, tw["wqkv_fused"], self.args.attn_qkv_fused_progcfg)
-        qg_dim = self.NH * self.HD * 2
-        kv_dim = self.NKV * self.HD
+        # Fused weight is [q|k|v|gate] (prepare_attn_qkv_deint): the q|k|v block is contiguous, so
+        # return it whole (no gate wedged between q and k → no re-concat in _make_heads*). Gate is
+        # the trailing block. Sentinel: vp=None flags the fused/contiguous layout to _make_heads*.
+        qkv3_dim = self.NH * self.HD + 2 * self.NKV * self.HD
+        gate_dim = self.NH * self.HD
         sh = list(qkv.shape)
-        qg = ttnn.slice(qkv, (0, 0, 0, 0), (sh[0], sh[1], sh[2], qg_dim))
-        kp = ttnn.slice(qkv, (0, 0, 0, qg_dim), (sh[0], sh[1], sh[2], qg_dim + kv_dim))
-        vp = ttnn.slice(qkv, (0, 0, 0, qg_dim + kv_dim), (sh[0], sh[1], sh[2], qg_dim + 2 * kv_dim))
+        qkv3 = ttnn.slice(qkv, (0, 0, 0, 0), (sh[0], sh[1], sh[2], qkv3_dim))
+        gate = ttnn.slice(qkv, (0, 0, 0, qkv3_dim), (sh[0], sh[1], sh[2], qkv3_dim + gate_dim))
         ttnn.deallocate(qkv)
-        return qg, kp, vp
+        return qkv3, gate, None
 
     def _col_proj(self, x, weight, decode_progcfg):
         """Column-parallel projection; DRAM-sharded decode matmul when enabled."""
@@ -226,14 +228,13 @@ class TPAttention:
         reshape/transpose is needed; bit-identical to per-head gating, saves ~1 ms/attn-layer at S=2048.
         """
         NH, NKV, HD = self.NH, self.NKV, self.HD
-        if self._qg_deint:
-            # De-interleaved qg: contiguous q/gate slices; gate stays flat (applied post-concat).
+        if vp is None:
+            # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is the contiguous [q|k|v] block,
+            # kp is the gate. Slice q and (already-contiguous) kv directly — no concat needed.
+            gate_flat = kp
             q_flat = ttnn.slice(qg, (0, 0, 0, 0), (1, 1, S, NH * HD))
-            gate_flat = ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, S, 2 * NH * HD))
+            kv = ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, S, NH * HD + 2 * NKV * HD))
             ttnn.deallocate(qg)
-            kv = ttnn.concat([kp, vp], dim=-1)
-            ttnn.deallocate(kp)
-            ttnn.deallocate(vp)
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
                 q_flat,
                 kv,
@@ -284,11 +285,14 @@ class TPAttention:
         """
         NH, NKV, HD = self.NH, self.NKV, self.HD
         _L1 = ttnn.L1_MEMORY_CONFIG
-        if self._qg_deint:
-            # De-interleaved qg: contiguous q / gate halves.
-            q_flat = ttnn.slice(qg, (0, 0, 0, 0), (1, 1, B, NH * HD), memory_config=_L1)
-            gate_flat = ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, B, 2 * NH * HD), memory_config=_L1)
+        if vp is None:
+            # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is already the contiguous [q|k|v]
+            # the decode head-split wants — feed it directly, no concat. kp is the gate. qkv must be
+            # L1 (tt-metal #16667: DRAM input zeros odd Q rows); one to_memory_config replaces the
+            # old 3-way concat (which had also served to land qkv in L1).
+            qkv = ttnn.to_memory_config(qg, _L1)
             ttnn.deallocate(qg)
+            gate_flat = kp
         else:
             # Interleaved qg: [q;gate] per head -> split then re-flatten to [1,1,B,NH*HD].
             qg_r = ttnn.reshape(qg, (1, B, NH, 2 * HD), memory_config=_L1)
@@ -300,10 +304,10 @@ class TPAttention:
             ttnn.deallocate(q_part)
             gate_flat = ttnn.reshape(gate_part, (1, 1, B, NH * HD), memory_config=_L1)
             ttnn.deallocate(gate_part)
-        qkv = ttnn.concat([q_flat, kp, vp], dim=-1, memory_config=_L1)
-        ttnn.deallocate(q_flat)
-        ttnn.deallocate(kp)
-        ttnn.deallocate(vp)
+            qkv = ttnn.concat([q_flat, kp, vp], dim=-1, memory_config=_L1)
+            ttnn.deallocate(q_flat)
+            ttnn.deallocate(kp)
+            ttnn.deallocate(vp)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             qkv, num_heads=NH, num_kv_heads=NKV, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         )
@@ -448,21 +452,25 @@ class TPAttention:
 
         if self._use_nlp_decode_heads:
             q, gate, k, v = self._make_heads_decode(qg, kp, vp, B)
-        elif self._qg_deint:
-            # De-interleaved qg: slice contiguous q/gate halves, then split heads
+        elif vp is None:
+            # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is contiguous [q|k|v], kp is gate.
+            # Slice q/k/v heads directly from qg; gate is the separate block.
             q = ttnn.reshape(
                 ttnn.slice(qg, (0, 0, 0, 0), (1, 1, B, NH * HD), memory_config=_L1), (1, B, NH, HD), memory_config=_L1
             )
-            gate = ttnn.reshape(
-                ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, B, 2 * NH * HD), memory_config=_L1),
-                (1, B, NH, HD),
+            k = ttnn.reshape(
+                ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, B, NH * HD + NKV * HD), memory_config=_L1),
+                (1, B, NKV, HD),
+                memory_config=_L1,
+            )
+            v = ttnn.reshape(
+                ttnn.slice(qg, (0, 0, 0, NH * HD + NKV * HD), (1, 1, B, NH * HD + 2 * NKV * HD), memory_config=_L1),
+                (1, B, NKV, HD),
                 memory_config=_L1,
             )
             ttnn.deallocate(qg)
-            k = ttnn.reshape(kp, (1, B, NKV, HD), memory_config=_L1)
+            gate = ttnn.reshape(kp, (1, B, NH, HD), memory_config=_L1)
             ttnn.deallocate(kp)
-            v = ttnn.reshape(vp, (1, B, NKV, HD), memory_config=_L1)
-            ttnn.deallocate(vp)
         else:
             qg_r = ttnn.reshape(qg, (1, B, NH, HD * 2), memory_config=_L1)
             ttnn.deallocate(qg)

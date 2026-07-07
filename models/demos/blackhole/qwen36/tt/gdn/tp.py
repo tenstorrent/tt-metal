@@ -245,10 +245,11 @@ class TPGatedDeltaNet:
         # Zero cross-chunk conv carry for new sequence
         ttnn.copy(self._zero_conv_carry, self.conv_carry)
 
-    def _col_proj(self, x, weight, decode_progcfg):
-        """Column-parallel qkvz projection; DRAM-sharded decode matmul when enabled."""
+    def _col_proj(self, x, weight, decode_progcfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        """Column-parallel qkvz projection; DRAM-sharded decode matmul when enabled.
+        out_memory_config: decode result placement (default DRAM; L1 keeps it resident)."""
         if not self._dram_sharded:
-            return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=out_memory_config)
         return tpc.sharded_decode_matmul(
             x,
             weight,
@@ -257,6 +258,7 @@ class TPGatedDeltaNet:
             self.args.act_shard_hidden,
             self.args.prefill_progcfg,
             self.args.dim,
+            decode_out_memory_config=out_memory_config,
         )
 
     def _row_proj(self, x, weight):
@@ -274,9 +276,13 @@ class TPGatedDeltaNet:
             self.args.gdn_value_dim_tp,
         )
 
-    def _project_qkvzab(self, x, S):
-        """Project x → (qkv, z, a, b). Fused path: one [qkv|z|a|b] matmul then slice."""
+    def _project_qkvzab(self, x, S, out_mc=None):
+        """Project x → (qkv, z, a, b). Fused path: one [qkv|z|a|b] matmul then slice.
+        out_mc: placement of the qkvzab matmul + slices. Default (None) → DRAM (prefill, where
+        L1 only adds NoC traffic). forward_decode passes L1 to keep the small decode qkvzab
+        resident (avoids the sharded→DRAM round-trip + DRAM-resident slices)."""
         Nv, qz, az = self.Nv, self.qkv_dim_tp, self.qkvz_dim_tp
+        _proj_mc = out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
         if self._fuse_ab:
             # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + qkvzab matmul.
             if self._fuse_agmm and S > tpc.TILE_SIZE:
@@ -285,11 +291,11 @@ class TPGatedDeltaNet:
                 )
                 qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
             else:
-                qkvzab = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvzab_progcfg)
-            qkv = ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz))
-            z = ttnn.slice(qkvzab, (0, 0, qz), (1, S, az))
-            a = ttnn.slice(qkvzab, (0, 0, az), (1, S, az + Nv))
-            b = ttnn.slice(qkvzab, (0, 0, az + Nv), (1, S, az + 2 * Nv))
+                qkvzab = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvzab_progcfg, out_memory_config=_proj_mc)
+            qkv = ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz), memory_config=out_mc)
+            z = ttnn.slice(qkvzab, (0, 0, qz), (1, S, az), memory_config=out_mc)
+            a = ttnn.slice(qkvzab, (0, 0, az), (1, S, az + Nv), memory_config=out_mc)
+            b = ttnn.slice(qkvzab, (0, 0, az + Nv), (1, S, az + 2 * Nv), memory_config=out_mc)
             ttnn.deallocate(qkvzab)
             return qkv, z, a, b
         qkvz = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvz_progcfg)
@@ -445,7 +451,7 @@ class TPGatedDeltaNet:
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
 
-        qkv, z, a, b = self._project_qkvzab(x, B)
+        qkv, z, a, b = self._project_qkvzab(x, B, out_mc=_L1)
 
         # Conv1d shift-register + weighted sum + SiLU
         st = self.conv_states

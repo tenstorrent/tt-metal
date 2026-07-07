@@ -340,11 +340,22 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
     return ttnn.clone(rs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def sharded_decode_matmul(x, weight, compute_cfg, decode_progcfg, act_shard_cfg, prefill_progcfg_fn, prefill_k):
+def sharded_decode_matmul(
+    x,
+    weight,
+    compute_cfg,
+    decode_progcfg,
+    act_shard_cfg,
+    prefill_progcfg_fn,
+    prefill_k,
+    decode_out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+):
     """DRAM-WIDTH_SHARDED weight matmul; branches on M (decode vs prefill).
 
     Decode (M<=32): L1-sharded act + DRAM-sharded kernel. Prefill: 2D matmul.
-    Gate on x.shape[-2] (seq/M), not x.shape[1] (Z=1 in both modes). Returns DRAM-interleaved."""
+    Gate on x.shape[-2] (seq/M), not x.shape[1] (Z=1 in both modes). Decode result placement is
+    `decode_out_memory_config` (default DRAM-interleaved; pass L1 to keep the small decode
+    activation resident). Prefill result is always DRAM-interleaved."""
     seq = x.shape[-2]
     if seq <= TILE_SIZE:
         # Reshard act to L1 if needed; skip dealloc when x already sharded (GDN reuses x).
@@ -359,7 +370,7 @@ def sharded_decode_matmul(x, weight, compute_cfg, decode_progcfg, act_shard_cfg,
         )
         if not already_sharded:
             ttnn.deallocate(x_sh)
-        return ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.to_memory_config(out, decode_out_memory_config)
     pc = prefill_progcfg_fn(seq, prefill_k, weight.shape[-1])
     return ttnn.linear(
         x, weight, compute_kernel_config=compute_cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -446,10 +457,13 @@ def prepare_attn_qkv_deint(q_w, k_w, v_w, nh_local, hd, kv_per, tp):
         base = d * nh_local * hd2
         q_rows = [q_w[base + h * hd2 : base + h * hd2 + hd, :] for h in range(nh_local)]
         g_rows = [q_w[base + h * hd2 + hd : base + h * hd2 + hd2, :] for h in range(nh_local)]
+        # Per-device layout [all_q | k | v | all_gate]: q/k/v contiguous so _make_heads* can hand
+        # the fused q|k|v block straight to nlp_create_qkv_heads (no re-concat); gate trails, applied
+        # post-SDPA. (Column perm only; numerically identical to [q|gate|k|v].)
         parts.append(torch.cat(q_rows, dim=0))  # all_q
-        parts.append(torch.cat(g_rows, dim=0))  # all_gate
         parts.append(k_w[d * kv_per : (d + 1) * kv_per, :])
         parts.append(v_w[d * kv_per : (d + 1) * kv_per, :])
+        parts.append(torch.cat(g_rows, dim=0))  # all_gate (last)
     return torch.cat(parts, dim=0)
 
 
