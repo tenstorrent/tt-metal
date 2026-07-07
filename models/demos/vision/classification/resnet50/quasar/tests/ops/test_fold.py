@@ -122,23 +122,164 @@ def test_quasar_fold(mesh_device, batch_size):
     shard_spec = ttnn.ShardSpec(shard_grid, (total_rows // num_cores, w), ttnn.ShardOrientation.ROW_MAJOR)
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    tt_input = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=input_mem_config,
-    )
+    # ------------------------------------------------------------------ DEBUG
+    # Comprehensive, file-backed instrumentation. The emulator captures/loses stdout
+    # and can be killed mid-run, so every marker is flushed to a log file immediately
+    # (append + flush + fsync) as well as printed. Localizes WHERE the fold output
+    # diverges (per-channel / per-fold-group / per-spatial / pad channels) so we can
+    # tell a bad transpose from a bad untilize/pad without device-side trace.
+    import os
+    import time
+    import traceback
 
-    tt_out = ttnn.experimental.quasar.fold(
-        tt_input,
-        stride_h,
-        stride_w,
-        use_transpose_as_fold=True,
-        padding=[pad_h, pad_h, pad_w, pad_w, 0, pad_c],
-        grid_size=shard_grid,
-    )
+    log_path = os.environ.get("FOLD_DBG_LOG", os.path.abspath(f"fold_dbg_b{batch_size}.log"))
 
-    got = ttnn.to_torch(tt_out).to(torch.bfloat16)
+    def _dbg(msg):
+        line = f"[fold-dbg b{batch_size} t={time.time():.3f}] {msg}"
+        try:
+            with open(log_path, "a") as fh:
+                fh.write(line + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+        except Exception:
+            pass
+        print(line, flush=True)
+
+    def _pcc(a, b):
+        a = a.detach().float().flatten()
+        b = b.detach().float().flatten()
+        if a.numel() != b.numel():
+            return f"SHAPE-MISMATCH a={a.numel()} b={b.numel()}"
+        if torch.equal(a, b):
+            return 1.0
+        sa, sb = a.std().item(), b.std().item()
+        if sa == 0.0 or sb == 0.0:
+            return f"CONSTANT a_std={sa:.3e} b_std={sb:.3e}"
+        return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+
+    def _fmt(v):
+        return f"{v:.4f}" if isinstance(v, float) else str(v)
+
+    def np_unravel(flat, shape):
+        idx = []
+        for dim in reversed(shape):
+            idx.append(int(flat % dim))
+            flat //= dim
+        return tuple(reversed(idx))
+
+    def _stats(name, t):
+        tf = t.detach().float()
+        _dbg(
+            f"{name}: shape={tuple(t.shape)} dtype={t.dtype} "
+            f"min={tf.min().item():.4f} max={tf.max().item():.4f} mean={tf.mean().item():.4f} "
+            f"std={tf.std().item():.4f} nnz={(tf != 0).sum().item()}/{tf.numel()} "
+            f"nan={torch.isnan(tf).any().item()} inf={torch.isinf(tf).any().item()}"
+        )
+
+    _dbg(
+        f"START config: N={batch_size} c={c} h={h} w={w} stride={stride_h}x{stride_w} "
+        f"pad_hw={pad_h} pad_c={pad_c} C={C} total_rows={total_rows} num_cores={num_cores} "
+        f"grid={grid.x}x{grid.y} log={log_path}"
+    )
+    _stats("torch_input(NCHW)", torch_input)
+    _stats("golden(NHWC)", golden)
+
+    got = None
+    exc = None
+    try:
+        _dbg("STAGE from_torch: begin")
+        tt_input = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=input_mem_config,
+        )
+        _dbg("STAGE from_torch: done")
+
+        _dbg("STAGE fold: begin")
+        tt_out = ttnn.experimental.quasar.fold(
+            tt_input,
+            stride_h,
+            stride_w,
+            use_transpose_as_fold=True,
+            padding=[pad_h, pad_h, pad_w, pad_w, 0, pad_c],
+            grid_size=shard_grid,
+        )
+        _dbg(
+            f"STAGE fold: done; tt_out spec shape={list(tt_out.shape)} layout={tt_out.layout} "
+            f"dtype={tt_out.dtype} mem={tt_out.memory_config()}"
+        )
+
+        _dbg("STAGE to_torch: begin")
+        got = ttnn.to_torch(tt_out).to(torch.bfloat16)
+        _dbg("STAGE to_torch: done")
+    except Exception as e:  # noqa: BLE001
+        exc = e
+        _dbg("EXCEPTION during device fold:\n" + traceback.format_exc())
+
+    if got is not None:
+        try:
+            _stats("got(device)", got)
+            # Save both for offline diff.
+            try:
+                torch.save({"golden": golden, "got": got, "torch_input": torch_input}, log_path.replace(".log", ".pt"))
+                _dbg(f"saved tensors -> {log_path.replace('.log', '.pt')}")
+            except Exception as e:  # noqa: BLE001
+                _dbg(f"tensor save failed: {e!r}")
+
+            g = golden.float()
+            r = got.float()
+            if tuple(g.shape) != tuple(r.shape):
+                _dbg(
+                    f"!!! SHAPE MISMATCH golden={tuple(g.shape)} got={tuple(r.shape)} "
+                    f"(cannot do elementwise; skipping localized diffs)"
+                )
+            else:
+                _dbg(f"OVERALL pcc={_pcc(g, r)}")
+                diff = (g - r).abs()
+                _dbg(
+                    f"abs-err: max={diff.max().item():.5f} mean={diff.mean().item():.6f} "
+                    f"frac_wrong(>1e-2)={(diff > 1e-2).float().mean().item():.4f}"
+                )
+                # Location of the single worst element.
+                fi = torch.argmax(diff).item()
+                idx = np_unravel(fi, g.shape)
+                _dbg(f"worst elem at {idx}: golden={g[idx].item():.4f} got={r[idx].item():.4f}")
+
+                # Per-channel PCC (last dim = 16 folded channels).
+                Cf = g.shape[-1]
+                per_ch = [f"ch{ci}:{_fmt(_pcc(g[..., ci], r[..., ci]))}" for ci in range(Cf)]
+                _dbg("PER-CHANNEL pcc: " + "  ".join(per_ch))
+
+                # Per-fold-group PCC: stride_h*stride_w groups of C channels each. Group i is the
+                # sub-sample at spatial offset (i//stride_w, i%stride_w). Isolates a bad transpose /
+                # sub-position interleave from a bad pad/channel path.
+                ngroups = stride_h * stride_w
+                for i in range(ngroups):
+                    sl = slice(i * C, (i + 1) * C)
+                    off = (i // stride_w, i % stride_w)
+                    _dbg(f"  group{i} (offset {off}, ch[{i*C}:{(i+1)*C}]) pcc={_fmt(_pcc(g[..., sl], r[..., sl]))}")
+
+                # Pad-channel check: within each group of C=4, channel index (C-1) is the padded
+                # channel (pad_c=1) and must be 0 in the golden; report got's content there.
+                for i in range(ngroups):
+                    pc = i * C + (C - 1)
+                    gp, rp = g[..., pc], r[..., pc]
+                    _dbg(
+                        f"  pad-ch{pc}: golden_nnz={(gp != 0).sum().item()} "
+                        f"got_nnz={(rp != 0).sum().item()} got_absmax={rp.abs().max().item():.4f}"
+                    )
+
+                # Spatial spot checks (first few output sticks).
+                for yy, xx in [(0, 0), (0, 1), (1, 0), (g.shape[1] // 2, g.shape[2] // 2)]:
+                    _dbg(f"  stick[0,{yy},{xx},:] golden={g[0, yy, xx, :].tolist()} " f"got={r[0, yy, xx, :].tolist()}")
+        except Exception as e:  # noqa: BLE001
+            _dbg("EXCEPTION during diagnostics:\n" + traceback.format_exc())
+
+    _dbg("END diagnostics")
+    if exc is not None:
+        raise exc
+    # ---------------------------------------------------------------- END DEBUG
     # fold is a pure data-preserving rearrangement.
     assert_with_pcc(golden.to(torch.bfloat16), got, pcc=0.999)
