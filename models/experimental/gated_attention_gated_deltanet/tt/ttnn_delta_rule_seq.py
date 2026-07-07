@@ -26,6 +26,21 @@ import ttnn
 _DBG = _os.environ.get("QWEN9B_GDN_DBG")
 
 
+def _preproc_dtype():
+    """Working dtype for the chunk-prefill preprocessing slab.
+
+    ``QWEN_GDN_PREPROC_BF16=1`` runs the payload tensors + big matmuls (kk, qk) in
+    bfloat16 with fp32 accumulation (Stage A of the prefill bf16 swap); the default
+    keeps everything float32, byte-identical to the pre-swap path. The sensitive
+    spine (decay cumsum, exp/clip, D_inv reciprocal, L_mat/L_unit, L_inv, dl_exp) is
+    always float32, and the 7 C++-kernel inputs are cast back to float32 at the
+    boundary (``_ensure_f32_dram``), so this toggle never changes the kernel contract.
+    Read per-call so the QWEN_GDN_PREPROC_BF16 env var can gate an fp32 oracle vs a
+    bf16 run within one process (the §14.1 long-ISL precision harness).
+    """
+    return ttnn.bfloat16 if _os.environ.get("QWEN_GDN_PREPROC_BF16") == "1" else ttnn.float32
+
+
 def _ck(name, t):
     if not _DBG:
         return
@@ -85,14 +100,16 @@ def chunk_gated_delta_rule_seq_adapter(
     q = l2_norm_ttnn(q, dim=-1)
     k = l2_norm_ttnn(k, dim=-1)
 
-    def _to_bhtd(t, D):  # [B,T,H,D] -> [BH,T,D] float32 TILE/DRAM (ROW_MAJOR-correct)
+    _pdt = _preproc_dtype()  # payload dtype (bf16 when QWEN_GDN_PREPROC_BF16=1, else fp32)
+
+    def _to_bhtd(t, D):  # [B,T,H,D] -> [BH,T,D] _pdt TILE/DRAM (ROW_MAJOR-correct)
         t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
         t = ttnn.reshape(t, [B, T, H, D])
         t = ttnn.permute(t, (0, 2, 1, 3))  # [B,H,T,D]
         t = ttnn.reshape(t, [BH, T, D])
         t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)
-        if t.dtype != ttnn.float32:
-            t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
+        if t.dtype != _pdt:
+            t = ttnn.typecast(t, _pdt, memory_config=_DRAM)
         return t
 
     def _to_bht(t):  # [B,T,H] -> [BH,T] float32 TILE/DRAM
@@ -334,6 +351,12 @@ def chunk_gated_delta_rule_seq(
         packer_l1_acc=False,
     )
 
+    # Payload dtype for the bf16 preprocessing swap (Stage A); fp32 by default.
+    # q/k/v arrive as _pdt from _to_bhtd; g/beta stay fp32 (sensitive spine). The kk/qk
+    # matmuls take bf16 inputs but emit fp32 (dtype=float32) so the L_mat/L_unit/L_inv
+    # spine and the kernel boundary stay float32. See _preproc_dtype().
+    _pdt = _preproc_dtype()
+
     BH = q.shape[0]
     T = q.shape[1]
     K = q.shape[2]
@@ -369,10 +392,10 @@ def chunk_gated_delta_rule_seq(
     beta_flat = beta
     if pad_len > 0:
         zeros_q = ttnn.zeros(
-            [BH, pad_len, K], device=mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=None
+            [BH, pad_len, K], device=mesh_device, dtype=_pdt, layout=ttnn.TILE_LAYOUT, memory_config=None
         )
         zeros_v = ttnn.zeros(
-            [BH, pad_len, V], device=mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=None
+            [BH, pad_len, V], device=mesh_device, dtype=_pdt, layout=ttnn.TILE_LAYOUT, memory_config=None
         )
         zeros_beta = ttnn.zeros(
             [BH, pad_len, 1], device=mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=None
@@ -461,7 +484,8 @@ def chunk_gated_delta_rule_seq(
     del k
     k_c = ttnn.move(k_c)
     k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=_cmc)
-    kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+    # bf16-in/fp32-out (dtype=float32): feeds the fp32 L_mat/L_unit/L_inv spine.
+    kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg, dtype=ttnn.float32)
     ttnn.deallocate(k_c_t)
 
     _ck("kk", kk)
@@ -487,10 +511,12 @@ def chunk_gated_delta_rule_seq(
     L_unit = ttnn.add(_eye_1cc, N, memory_config=_cmc)
     ttnn.deallocate(N)
 
-    v_beta_sc = ttnn.multiply(D_inv_row, v_beta_c, memory_config=_cmc)
+    # Payload operand first so the product inherits _pdt (bf16 when toggled); commutative,
+    # so byte-identical to the D_inv_row-first form when fp32.
+    v_beta_sc = ttnn.multiply(v_beta_c, D_inv_row, memory_config=_cmc)
     del v_beta_c
     k_beta_decay = ttnn.multiply(k_beta_c, decay_exp, memory_config=_cmc)
-    k_bd_sc = ttnn.multiply(D_inv_row, k_beta_decay, memory_config=_cmc)
+    k_bd_sc = ttnn.multiply(k_beta_decay, D_inv_row, memory_config=_cmc)
     ttnn.deallocate(k_beta_decay)
     ttnn.deallocate(D_inv_row)
 
@@ -550,7 +576,8 @@ def chunk_gated_delta_rule_seq(
     combined_mask_4d = ttnn.multiply(L_mask_4d, lower_causal_4d, memory_config=_cmc)
     ttnn.deallocate(L_mask_4d)
     k_c_4d_t = ttnn.transpose(k_c_4d, 2, 3, memory_config=_cmc)
-    qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+    # bf16-in/fp32-out (dtype=float32): feeds intra_attn * fp32 mask and the kernel boundary.
+    qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg, dtype=ttnn.float32)
     ttnn.deallocate(k_c_4d_t)
     intra_attn_4d = ttnn.multiply(qk_4d, combined_mask_4d, memory_config=_cmc)
     ttnn.deallocate(qk_4d)
