@@ -1345,7 +1345,7 @@ def main() -> int:
     ap.add_argument(
         "--tt-metal-path",
         type=Path,
-        default=Path(os.environ.get("TT_METAL_HOME", "/home/user/tt-metal")),
+        default=Path(os.environ.get("TT_METAL_HOME") or Path(__file__).resolve().parents[4]),
         help="tt-metal repo root (contains build/test/tt_metal/unit_tests_deployment).",
     )
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))

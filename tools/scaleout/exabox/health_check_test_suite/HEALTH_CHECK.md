@@ -92,9 +92,12 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 ### ETH
 | Check | Rule | On fail |
 |---|---|---|
+| `eth_links_up` | Per chip, every enabled internal (non-QSFP) port reports live. Expected mask = `(ETH_INTERNAL_BY_ASIC \| ETH_EXAMAX_BY_ASIC) & ENABLED_ETH`, with the topology tables indexed by *physical* `ASIC_LOCATION` (derived from the BDF, not FW telemetry). Compared against `ETH_LIVE_STATUS` masked to the same non-QSFP set. | **FAIL** if any expected port is down (reports OK chip count + first failing BDF and `down_ports`). **WARN** if `ETH_LIVE_STATUS=0x0` on all chips despite FW ≥ 19.9. **SKIP** if the field is absent from the snapshot, or is all-zero on FW < 19.9 (the field is only populated by FW bundle ≥ 19.9, so a capability gap isn't misattributed to a real link fault). |
 | `eth_speed` | (no field in current tt-smi schemas) | SKIP — pending future schema |
 
-The `eth_link_up` check runs as a gtest in the test phase, not the snapshot.
+The `eth_link_up` gtest (test phase) is distinct from the snapshot-phase
+`eth_links_up` check above: the gtest actively pushes traffic over each link,
+while `eth_links_up` reads the `ETH_LIVE_STATUS` telemetry from the snapshot.
 
 ### ASIC
 | Check | Rule | On fail |
@@ -149,7 +152,8 @@ The `eth_link_up` check runs as a gtest in the test phase, not the snapshot.
             gddr_speed                       PASS   32/32 chips at 14G (RevA/B)
             gddr_info_max_gddr_temp          PASS   MAX_GDDR_TEMP: 32 chips reporting
             ...
-    eth:    eth_speed                        SKIP   no eth speed field in tt-smi snapshot schema
+    eth:    eth_links_up                     SKIP   ETH_LIVE_STATUS requires FW bundle >= 19.9 (detected: 19.7.1.0) — firmware does not populate this field; cannot validate links
+            eth_speed                        SKIP   no eth speed field in tt-smi snapshot schema
     asic:   asic_location_per_ubb            PASS   all UBBs complete
             physical_vs_fw_location          PASS   32/32 chips match
     fw:     fw_bundle_version_consistent     PASS   all chips: 19.7.1.0
@@ -182,5 +186,5 @@ ninja -C build_Release unit_tests_deployment
 tools/scaleout/exabox/healt_check_test_suite/
 ├── run_diag.sh        # bash dispatcher (sets TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH, execs runner)
 ├── diag_runner.py     # Python orchestrator (this is where all check logic lives)
-└── HEALT_CHECK.md     # this file
+└── HEALTH_CHECK.md     # this file
 ```
