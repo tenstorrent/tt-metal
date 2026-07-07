@@ -801,6 +801,31 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
 // Kernel and CB descriptor builders
 //////////////////////////////////////////////////////////////////////////////
 
+namespace {
+
+// build_writer_args() lays out the gamma/beta base addresses at fixed writer arg indices 3 and 4.
+constexpr uint32_t kWriterGammaArgIdx = 3;
+constexpr uint32_t kWriterBetaArgIdx = 4;
+
+// Bind the gamma/beta writer address slots to their Buffer* so the framework patches them on
+// cache hits. A null buffer (absent optional tensor) leaves the baked 0 untouched.
+void bind_writer_gamma_beta(KernelDescriptor& desc, Buffer* gamma_buffer, Buffer* beta_buffer) {
+    if (gamma_buffer == nullptr && beta_buffer == nullptr) {
+        return;
+    }
+    for (const auto& core_args : desc.runtime_args) {
+        const CoreCoord& core = core_args.first;
+        if (gamma_buffer != nullptr) {
+            desc.buffer_bindings.push_back({core, kWriterGammaArgIdx, gamma_buffer});
+        }
+        if (beta_buffer != nullptr) {
+            desc.buffer_bindings.push_back({core, kWriterBetaArgIdx, beta_buffer});
+        }
+    }
+}
+
+}  // namespace
+
 void add_kernel_descriptors(
     ProgramDescriptor& program_descriptor,
     const CoreRanges& core_ranges,
@@ -931,6 +956,7 @@ void add_kernel_descriptors(
     writer_sender_kernel_desc.named_compile_time_args = std::move(writer_sender_named_args);
     writer_sender_kernel_desc.defines = kernel_config.writer_defines;
     writer_sender_kernel_desc.runtime_args = std::move(kernel_config.writer_sender_rt_args);
+    bind_writer_gamma_beta(writer_sender_kernel_desc, kernel_config.gamma_buffer, kernel_config.beta_buffer);
     writer_sender_kernel_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = kernel_config.writer_noc,
@@ -949,6 +975,7 @@ void add_kernel_descriptors(
         writer_receiver_kernel_desc.named_compile_time_args = std::move(writer_receiver_named_args);
         writer_receiver_kernel_desc.defines = std::move(kernel_config.writer_defines);
         writer_receiver_kernel_desc.runtime_args = std::move(kernel_config.writer_receiver_rt_args);
+        bind_writer_gamma_beta(writer_receiver_kernel_desc, kernel_config.gamma_buffer, kernel_config.beta_buffer);
         writer_receiver_kernel_desc.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = kernel_config.writer_noc,
