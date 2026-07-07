@@ -1413,14 +1413,15 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
 
         tt::umd::RiscType reset_val;
         if (cluster_.arch() == ARCH::QUASAR) {
-            reset_val = tt::umd::RiscType::ALL;
+            cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL_NEO_DMS_UNCORE);
+            cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL_NEO_DMS);
         } else {
             reset_val = tt::umd::RiscType::BRISC;
             if (multi_risc_active_eth_cores.contains(worker_core)) {
                 reset_val |= tt::umd::RiscType::ERISC1;
             }
+            cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
         }
-        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
     for (const auto& dram_core : dram_not_done_cores) {
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
