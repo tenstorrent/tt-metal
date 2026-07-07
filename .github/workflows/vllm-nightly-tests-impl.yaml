@@ -90,7 +90,7 @@ jobs:
           # Re-enable once hybrid KV cache is enabled (which will size the
           # sliding-window layers' KV cache to the window instead of the full
           # sequence length, freeing the DRAM needed to fit the full model).
-          # https://github.com/tenstorrent/tt-metal/issues/48680
+          # Tracked in https://github.com/tenstorrent/tt-metal/issues/49257
           #
           # Disabled entry preserved verbatim for the re-enable:
           #
