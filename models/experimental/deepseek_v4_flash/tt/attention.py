@@ -50,6 +50,7 @@ class _SlidingKVCache:
 
     def append(self, kv_new: ttnn.Tensor) -> ttnn.Tensor:
         """Append ``kv_new`` ``[B, 1, n, Dh]`` and return the (capped) cache."""
+        kv_new = ttnn.to_memory_config(kv_new, ttnn.DRAM_MEMORY_CONFIG)
         self.kv = kv_new if self.kv is None else ttnn.concat([self.kv, kv_new], dim=2)
         b, _, length, dh = self.kv.shape
         if length > self.window:
@@ -65,6 +66,8 @@ class _CompressorCache:
         self.gate: Optional[ttnn.Tensor] = None
 
     def append(self, kv_new: ttnn.Tensor, gate_new: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        kv_new = ttnn.to_memory_config(kv_new, ttnn.DRAM_MEMORY_CONFIG)
+        gate_new = ttnn.to_memory_config(gate_new, ttnn.DRAM_MEMORY_CONFIG)
         self.kv = kv_new if self.kv is None else ttnn.concat([self.kv, kv_new], dim=1)
         self.gate = gate_new if self.gate is None else ttnn.concat([self.gate, gate_new], dim=1)
         return self.kv, self.gate
@@ -270,7 +273,7 @@ class DeepSeekV4HCACompressor:
             weights["compressor.gate_proj.weight"], device, cache.file("compressor.gate_proj"), dtype=weight_dtype
         )
         self.kv_norm = DeepSeekV4RMSNorm(
-            weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm")
+            weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm"), sharded=True
         )
         # position_bias: [compress_rate, head_dim] -> broadcast over [B, n_win].
         pb = _materialize(weights["compressor.position_bias"], cache.file("compressor.position_bias"), ttnn.bfloat16)
@@ -395,7 +398,7 @@ class DeepSeekV4CSACompressor:
             weights["compressor.gate_proj.weight"], device, cache.file("compressor.gate_proj"), dtype=weight_dtype
         )
         self.kv_norm = DeepSeekV4RMSNorm(
-            weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm")
+            weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm"), sharded=True
         )
         pb = _materialize(weights["compressor.position_bias"], cache.file("compressor.position_bias"), ttnn.bfloat16)
         self.position_bias = _load_weight(
@@ -757,6 +760,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         if self.compressor is not None:
             compressed = self.compressor.decode(hidden, cos_win, sin_win, kv_cache.compressor)
             if compressed is not None:
+                kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
+                compressed = ttnn.to_memory_config(compressed, ttnn.DRAM_MEMORY_CONFIG)
                 kv = ttnn.concat([kv, compressed], dim=2)  # [B, 1, L_sld + n_win, Dh]
         _profile(self.device)
 
@@ -794,6 +799,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             compressed = self.compressor.decode_static(
                 hidden, cos_win, sin_win, scache.compressor_kv, scache.compressor_gate, compress_pos
             )
+            kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
+            compressed = ttnn.to_memory_config(compressed, ttnn.DRAM_MEMORY_CONFIG)
             kv = ttnn.concat([kv, compressed], dim=2)  # [1, 1, window + n_win, Dh]
 
         return self._attend(q, kv, mask, cos, neg_sin)
