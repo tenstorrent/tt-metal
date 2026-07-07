@@ -551,13 +551,14 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
 //
 // Dispatch:
 //  - INT32/UINT32: broadcast-multiply (matmul does not support integer accum).
-//  - FLOAT32: broadcast-multiply (matmul's fp32 path is dominated by SFPU
-//    time here and loses to the eltwise path across all measured batches).
+//  - FLOAT32: broadcast-multiply for precision, not speed. matmul is actually
+//    faster in device time here, but its FPU truncates the FP32 inputs before
+//    multiplying, whereas the eltwise multiply is FP32-native.
 //  - BFLOAT16/BFLOAT8_B: matmul when the effective batch is 1 (both inputs
 //    have no leading dims beyond the vector), otherwise broadcast-multiply.
 //    Rationale: the [N,1]x[1,M] tile-outer-product path is the fastest kernel
 //    at batch=1, but the K=1 padding tax dominates once the workload scales
-//    across cores, at which point broadcast-multiply wins by ~5-16x.
+//    across cores, at which point broadcast-multiply wins (~2x by batch=128).
 //
 // Height-sharded inputs flow through unchanged: the shard is along the
 // preserved dim, so unsqueeze's reshape and the downstream op both accept
