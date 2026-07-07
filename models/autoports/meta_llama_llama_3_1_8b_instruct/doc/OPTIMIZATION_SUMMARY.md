@@ -24,6 +24,35 @@ time 1,570 us, decode device time 1,229 us. Modeled decode DRAM roofline ≈ 91 
 (31.6%); the remaining gap is matmul program efficiency / op scheduling, not host
 fallback (0 host ops in both windows).
 
+## Decode optimization contributions (traced, prefix 16)
+
+How much each optimization moved traced decode, from the first correct candidate
+(1.845 ms) to the final decoder (1.289 ms). The precision sweep is a true
+cumulative ladder; the topology/cache rows are A/B deltas measured against their
+alternative while the other final choices are held fixed (so they do not sum
+exactly — run-to-run variance ~±0.02 ms).
+
+### Precision ladder (all LoFi, real-weight PCC pass, cumulative)
+
+| Step | Traced decode | Δ vs previous | Evidence |
+| --- | ---: | ---: | --- |
+| BFP8 attn + BFP8 MLP (first correct) | 1.845 ms | — | `precision_trials.csv` |
+| **+ BFP4 MLP weights** | 1.373 ms | **−0.472 ms (~26%)** | `precision_trials.csv` |
+| **+ BFP4 attention weights** | 1.287 ms | −0.086 ms (~5%) | `precision_trials.csv` |
+
+BFP4 on the MLP weights is by far the single biggest decode lever; BFP4 on the
+attention weights adds a smaller win on top.
+
+### A/B choices at BFP4/BFP4 LoFi (each vs its alternative)
+
+| Decision | Kept | Alternative | Contribution | Evidence |
+| --- | ---: | ---: | ---: | --- |
+| Decode Q/K/V | packed 1.294 ms | separate 1.413 ms | ~0.119 ms | `qkv_projection_trials.csv` |
+| Gate/up MLP | separate 1.289 ms | packed 1.333 ms | ~0.045 ms | `gate_up_projection_trials.csv` |
+| Down proj `in0_block_w` | 14 → 1.286 ms | 28 → 1.310 ms | ~0.024 ms | `down_geometry_trials.csv` |
+| KV cache dtype | BF8_B 1.276 ms | BF16 1.285 ms | ~0.009 ms (mostly a memory win) | `fidelity_cache_trials.csv` |
+| L1 input movement | rejected | L1 → 1.307 ms | would *add* +0.024 ms | `l1_movement_trials.csv` |
+
 ## Correctness
 
 | Check | PCC |
