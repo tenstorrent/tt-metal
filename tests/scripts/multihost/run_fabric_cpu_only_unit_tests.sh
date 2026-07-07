@@ -478,14 +478,15 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_quad_galaxy_4x8_4x4_4x2_10stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins"
 # Quad-galaxy heterogeneous 4x8+4x2 10-stage ring (128 ASICs): 2x 4x8 RING+RING + 8x 4x2 RING+LINE on subtorus mock.
 # Homogeneous 4x2 hops use NESW (no assign_z_direction); heterogeneous 4x8<->4x2 hops use assign_z_direction.
-# TestGalaxyCornerPins is omitted here: this ring mixes 4x8 and 4x2 meshes, and the corner-fold invariant
-# (mesh endpoints must map to asic_location 1 / trays 1-4) does not hold for the 4x2 mesh endpoints (utils.cpp:1044).
+# TODO(tt-metal#49277): TestGalaxyCornerPins is omitted here: this ring mixes 4x8 and 4x2 meshes, and the
+# corner-fold invariant (mesh endpoints must map to asic_location 1 / trays 1-4) does not hold for the 4x2
+# mesh endpoints (utils.cpp:1044).
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x8_2x4_10stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:ControlPlaneFixture.TestGalaxyLayoutCheck"
 # Dual 4x16 quad-galaxy intermesh (128 ASICs): M0 1x8 hosts + M1 2x16 hosts, 4 intermesh links
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/dual_4x16_blitz_test.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins"
 # Quad BH galaxy subtorus (128 ASICs, 32x4 RING+RING on quad subtorus mock)
-# TestPipelineBuilderCheck is omitted here: the 32x4 RING pipeline is a 4-stage ring over the 4 host
-# slices (8x4 each), so it needs the torus wrap (row 31 <-> row 0, i.e. submesh 3 <-> submesh 0) to close.
+# TODO(tt-metal#49275): TestPipelineBuilderCheck is omitted here: the 32x4 RING pipeline is a 4-stage ring
+# over the 4 host slices (8x4 each), so it needs the torus wrap (row 31 <-> row 0, i.e. submesh 3 <-> submesh 0) to close.
 # On this single-pod mock that wrap has no direct ethernet link (discover_connections sees a line
 # 0-1-2-3, not a ring; get_chip_neighbors returns 0 neighbors for the 3<->0 pair even though routing
 # finds a multi-hop path), so resolve_graph_layout cannot place the loopback edge. Not a routing-plane
