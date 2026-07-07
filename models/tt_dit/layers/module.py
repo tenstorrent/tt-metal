@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, overload
@@ -11,6 +12,12 @@ from typing import TYPE_CHECKING, NamedTuple, overload
 from typing_extensions import deprecated
 
 import ttnn
+
+# When set, Parameter.load keeps the deserialized weights resident in host RAM so a dynamic_load
+# reload (the DiT is evicted and re-loaded every gen) is a bare host->device DMA instead of
+# re-reading and deserializing the tensorbin cache. Opt-in: only the LTX fast worker, which evicts
+# the 22B DiT each gen, sets it; default off leaves every other model's load path byte-for-byte.
+_HOST_WEIGHT_CACHE = os.environ.get("TT_DIT_HOST_WEIGHT_CACHE", "") == "1"
 
 from ..utils import tensor
 from ..utils.substate import pop_substate
@@ -375,6 +382,7 @@ class Parameter:
         self.mesh_axes = mesh_axes
         self.on_host = on_host
         self._data = None
+        self._host_data = None  # host copy retained across evictions when _HOST_WEIGHT_CACHE is on
 
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
         shape = tuple(torch_tensor.shape)
@@ -397,6 +405,19 @@ class Parameter:
         ttnn.dump_tensor(path, self.data)
 
     def load(self, path: str | Path, /) -> None:
+        if _HOST_WEIGHT_CACHE and not self.on_host:
+            # Materialize the host weights once and keep them; a dynamic_load reload then only
+            # re-pushes them to device (~2.4s DMA for the 22B DiT) rather than re-reading and
+            # deserializing the tensorbin each gen. deallocate() frees only the device copy, so the
+            # host copy survives the eviction. memory_config is passed so the pushed tensor matches
+            # the parameter's declared config (to_device's default would fail the _check_data guard).
+            if self._host_data is None:
+                try:
+                    self._host_data = ttnn.load_tensor(path, device=None)
+                except RuntimeError as err:
+                    raise LoadingError(f"TT-NN error «{err}»") from err
+            self.data = ttnn.to_device(self._host_data, self.device, memory_config=self.memory_config)
+            return
         try:
             tensor = ttnn.load_tensor(path, device=None if self.on_host else self.device)
         except RuntimeError as err:

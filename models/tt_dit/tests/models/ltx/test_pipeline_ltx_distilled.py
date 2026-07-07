@@ -327,6 +327,21 @@ def _ffmpeg_frames(path, n):
     return frames
 
 
+def _image_seam_score(path):
+    """Grid-seam strength (same V/H metric as _temporal_seam_score) on a SINGLE still image,
+    so an output seam can be compared against the conditioning image's OWN inherent seam — the
+    metric is content-sensitive, and a busy still can score >1.3 with no device seam present."""
+    from PIL import Image
+
+    f = np.asarray(Image.open(path).convert("L")).astype(float)
+    h, w = f.shape
+    gx = np.abs(np.diff(f, axis=1)).mean(0)
+    gy = np.abs(np.diff(f, axis=0)).mean(1)
+    v = float(np.mean([gx[round(w * i / 4)] for i in (1, 2, 3)]) / np.median(gx))
+    hh = float(gy[round(h / 2)] / np.median(gy))
+    return v, hh
+
+
 def _temporal_seam_score(path):
     """Grid-seam strength at the 2x4 mesh boundaries (W/4,W/2,3W/4 vertical; H/2 horizontal),
     isolated from moving content via the per-column/row TEMPORAL MEDIAN of the gradient (the
@@ -436,6 +451,225 @@ def test_pipeline_distilled_i2v(
 
     assert pcc > 0.85, f"i2v frame-0 does not reproduce the conditioning frame (PCC={pcc:.4f}) — conditioning broken"
     assert v < 1.3 and hh < 1.5, f"i2v grid seam present (V={v:.2f}, H={hh:.2f}) at 1088x1920"
+
+
+# Default conditioning frame for the standalone i2v gate: a real ~1088x1920 frame stored on disk.
+# _load_conditioning_image resizes/crops if dims differ. Override with LTX_I2V_COND_IMAGE.
+_STANDALONE_I2V_COND_IMAGE = os.environ.get(
+    "LTX_I2V_COND_IMAGE", "/home/smarton/tt-metal/tmp/ltx-rt-opt/frames/f_001.png"
+)
+
+
+@pytest.mark.skipif(
+    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+    ],
+    ids=["bh_2x4sp1tp0"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_pipeline_distilled_i2v_standalone(
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+):
+    """STANDALONE E2E I2V: a single distilled i2v gen conditioned on a STORED image on disk,
+    with NO preceding t2v generate() in the same process (and no model switch).
+
+    This is the safe path for repeated / same-image i2v: the conditioning image encode runs
+    exactly ONCE, in the post-warmup device state that ``_warmup_encode`` already exercised (and
+    which is proven to work), instead of after a full t2v trace-replay cycle. Asserts the same
+    quality bars as ``test_pipeline_distilled_i2v``: frame-0 reproduces the conditioning frame
+    (PCC) and the output is free of the VAE 2x4 grid seam."""
+    import subprocess
+
+    from PIL import Image
+
+    cond = _STANDALONE_I2V_COND_IMAGE
+    if not os.path.exists(cond):
+        pytest.skip(f"conditioning image not found: {cond} (set LTX_I2V_COND_IMAGE)")
+
+    ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    num_frames = int(os.environ.get("NUM_FRAMES", "145"))
+    height = int(os.environ.get("HEIGHT", "1088"))  # 1088x1920 -> s1 latent 17x30 (uneven, the fixed case)
+    width = int(os.environ.get("WIDTH", "1920"))
+    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+    seed = int(os.environ.get("SEED", "10"))
+    prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+
+    pipeline = LTXDistilledPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=ckpt,
+        gemma_path=default_ltx_gemma(),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        run_warmup=traced,  # trace capture needs warmup; eager doesn't
+        traced=traced,
+        num_frames=num_frames,
+        height=height,
+        width=width,
+    )
+
+    if int(ttnn.distributed_context_get_rank()) != 0:
+        return
+
+    # SINGLE i2v gen conditioned on the stored image — no preceding t2v generate().
+    i2v = tmp_path / "i2v.mp4"
+    pipeline.generate(
+        prompt,
+        output_path=str(i2v),
+        images=[(cond, 0, 1.0)],
+        num_frames=num_frames,
+        height=height,
+        width=width,
+        seed=seed,
+    )
+
+    # (a) conditioning works: i2v frame-0 reproduces the conditioning frame (VAE roundtrip + CRF,
+    # so not identity — but a far tighter correlation than an unconditioned gen of the same prompt).
+    def _luma0(path):
+        raw = subprocess.run(
+            [_ffmpeg(), "-v", "error", "-i", str(path), "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
+            capture_output=True,
+        ).stdout
+        return torch.from_numpy(
+            np.asarray(Image.open(__import__("io").BytesIO(raw)).convert("L")).astype("float32")
+        ).flatten()
+
+    c, f0 = _luma0(cond), _luma0(str(i2v))
+    pcc = torch.corrcoef(torch.stack([c, f0]))[0, 1].item()
+    print(f"\nI2V_E2E frame0-vs-cond PCC={pcc:.4f}", flush=True)
+
+    # (b) seam-free at the uneven 1088x1920 (the i2v grid-seam fix). Thresholds bracket the
+    # measured clean range (V,H ~<=1.0) below the gridded baseline (V=1.5, H=2.4).
+    v, hh = _temporal_seam_score(str(i2v))
+    print(f"I2V_E2E seam V={v:.2f} H={hh:.2f} (clean<=~1.0, gridded V=1.5/H=2.4)", flush=True)
+
+    if traced:
+        pipeline.release_traces()
+
+    assert pcc > 0.85, f"i2v frame-0 does not reproduce the conditioning frame (PCC={pcc:.4f}) — conditioning broken"
+    assert v < 1.3 and hh < 1.5, f"i2v grid seam present (V={v:.2f}, H={hh:.2f}) at 1088x1920"
+
+
+@pytest.mark.skipif(
+    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+    ],
+    ids=["bh_2x4sp1tp0"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_pipeline_distilled_i2v_two_images(
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+):
+    """JOB-QUEUE STEADY STATE: two i2v gens with DIFFERENT conditioning images back-to-back in
+    one process. Gen B's conditioning encode runs AFTER gen A's traced denoise replay — the exact
+    encode-after-replay case that used to hang the device (a different image each gen defeats the
+    ``_i2v_cond_cache`` memoize, forcing a real eager encode every gen, as a real queue would).
+    Both gens must complete WITHOUT hanging and reproduce their own conditioning frame (PCC).
+
+    The grid-seam metric is content-sensitive, so the seam gate here is RELATIVE: the output seam
+    must not materially exceed the conditioning image's OWN inherent seam (that would indicate a
+    device-induced VAE grid seam). The absolute-seam gate on a clean cond frame lives in
+    ``test_pipeline_distilled_i2v``."""
+    import subprocess
+
+    from PIL import Image
+
+    cond_a = os.environ.get("LTX_I2V_COND_IMAGE_A", "/home/smarton/tt-metal/tmp/ltx-rt-opt/frames/f_001.png")
+    cond_b = os.environ.get("LTX_I2V_COND_IMAGE_B", "/home/smarton/tt-metal/tmp/ltx-rt-opt/frames/f_002.png")
+    for p in (cond_a, cond_b):
+        if not os.path.exists(p):
+            pytest.skip(f"conditioning image not found: {p}")
+
+    ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    num_frames = int(os.environ.get("NUM_FRAMES", "145"))
+    height = int(os.environ.get("HEIGHT", "1088"))
+    width = int(os.environ.get("WIDTH", "1920"))
+    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+    seed = int(os.environ.get("SEED", "10"))
+    prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+
+    pipeline = LTXDistilledPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=ckpt,
+        gemma_path=default_ltx_gemma(),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        run_warmup=traced,
+        traced=traced,
+        num_frames=num_frames,
+        height=height,
+        width=width,
+    )
+
+    if int(ttnn.distributed_context_get_rank()) != 0:
+        return
+
+    def _luma0(path):
+        raw = subprocess.run(
+            [_ffmpeg(), "-v", "error", "-i", str(path), "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
+            capture_output=True,
+        ).stdout
+        return torch.from_numpy(
+            np.asarray(Image.open(__import__("io").BytesIO(raw)).convert("L")).astype("float32")
+        ).flatten()
+
+    results = []
+    for tag, cond in (("A", cond_a), ("B", cond_b)):
+        out = tmp_path / f"i2v_{tag}.mp4"
+        # Different image each gen -> _i2v_cond_cache miss -> a real eager encode; for gen B this
+        # encode runs after gen A's traced replay (the former hang case).
+        pipeline.generate(
+            prompt,
+            output_path=str(out),
+            images=[(cond, 0, 1.0)],
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            seed=seed,
+        )
+        pcc = torch.corrcoef(torch.stack([_luma0(cond), _luma0(str(out))]))[0, 1].item()
+        out_v, out_h = _temporal_seam_score(str(out))
+        in_v, in_h = _image_seam_score(cond)
+        print(
+            f"\nI2V_TWO gen{tag} frame0-vs-cond PCC={pcc:.4f} | out seam V={out_v:.2f} H={out_h:.2f} "
+            f"| cond-image seam V={in_v:.2f} H={in_h:.2f}",
+            flush=True,
+        )
+        results.append((tag, pcc, out_v, out_h, in_v, in_h))
+
+    if traced:
+        pipeline.release_traces()
+
+    # Primary (blocking bug): both gens completed without hang and reproduce their cond frame.
+    for tag, pcc, *_ in results:
+        assert pcc > 0.85, f"gen{tag}: i2v frame-0 does not reproduce the conditioning frame (PCC={pcc:.4f})"
+    # Relative seam: a real device seam pushes the output boundary well past the cond image's own.
+    for tag, _pcc, out_v, out_h, in_v, in_h in results:
+        assert out_v < max(1.3, in_v + 0.4), f"gen{tag}: device V-seam (out={out_v:.2f} vs cond-image={in_v:.2f})"
+        assert out_h < max(1.5, in_h + 0.4), f"gen{tag}: device H-seam (out={out_h:.2f} vs cond-image={in_h:.2f})"
 
 
 @pytest.mark.skipif(

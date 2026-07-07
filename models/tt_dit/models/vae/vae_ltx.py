@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Sequence
 
 import torch
@@ -977,13 +978,45 @@ class LTXSpaceToDepthDownsample(Module):
         return x, new_logical_h, new_logical_w
 
     def _all_gather_hw(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Gather the H/W-sharded tensor to full (replicated) spatial extent on every device."""
+        """Gather the H/W-sharded tensor to full (replicated) spatial extent on every device.
+
+        Uses a HOST round-trip (device->host shard concat, then re-upload replicated) instead of an
+        on-device CCL all_gather. The on-device ``all_gather_async`` DEADLOCKS here when the encode
+        runs after a DiT denoise trace REPLAY (queue steady-state i2v): ``execute_trace`` leaves the
+        fabric/EDM mid-handshake and the eager gather's writer waits forever (watcher iter6:
+        all_gather_async writer stuck at CRBW/NWID). This is the ONLY eager on-device collective in
+        the VAE and the only op that hangs — both the barrier-semaphore and the persistent-buffer
+        all_gather paths deadlock identically at down_block[7]'s first gather (iters 7/8/10), and a
+        preceding ``synchronize_device`` does not clear it. The DECODER never hits this because it
+        gathers to host via ``fast_device_to_host`` — which, on a single-host system, reads each
+        per-device shard by async DMA and concatenates on host with NO fabric collective. Mirror
+        that here. The gathered data is bit-identical to the on-device all_gather, so i2v numerics
+        are unchanged (standalone i2v PCC/quality preserved) and t2v — which never runs the encoder
+        — is untouched.
+        """
         pc = self.parallel_config
-        if pc.height_parallel.factor > 1:
-            x = self.ccl_manager.all_gather(x, dim=2, mesh_axis=pc.height_parallel.mesh_axis, use_hyperparams=False)
-        if pc.width_parallel.factor > 1:
-            x = self.ccl_manager.all_gather(x, dim=3, mesh_axis=pc.width_parallel.mesh_axis, use_hyperparams=False)
-        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        mesh_device = self.ccl_manager.mesh_device
+        _loc = os.environ.get("LTX_ENC_LOCALIZE")
+
+        if pc.height_parallel.factor <= 1 and pc.width_parallel.factor <= 1:
+            return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+        if _loc:
+            logger.warning(f"LTX_ENC_LOCALIZE: host-gather HW pre in_shape={tuple(x.shape)} dtype={x.get_dtype()}")
+
+        # concat_dims[mesh_axis] = the tensor dim that axis shards (H=dim2 on the height axis, W=dim3
+        # on the width axis) — same convention as the decoder's fast_device_to_host gather.
+        concat_dims = [None, None]
+        concat_dims[pc.height_parallel.mesh_axis] = 2
+        concat_dims[pc.width_parallel.mesh_axis] = 3
+        full_host = fast_device_to_host(x, mesh_device, concat_dims, ccl_manager=self.ccl_manager)
+        # Re-upload replicated (mesh_axis=None => no mesh_mapper => every device holds the full extent).
+        x = typed_tensor(full_host, ttnn.bfloat16, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        if _loc:
+            ttnn.synchronize_device(mesh_device)
+            logger.warning(f"LTX_ENC_LOCALIZE: host-gather HW done out_shape={tuple(x.shape)}")
+        return x
 
     def _reshard_hw(self, x: ttnn.Tensor, B: int, d: int, h: int, w: int) -> ttnn.Tensor:
         """Re-shard a replicated (B, d, h, w, C) tensor back across the mesh, zero-padding each
@@ -1014,6 +1047,11 @@ class LTXSpaceToDepthDownsample(Module):
         full extent, fold + residual on the full tensor, and re-shard. Used when a per-device
         spatial dim is not divisible by the stride (patch would straddle a shard boundary)."""
         p1, p2, p3 = self.stride
+        if os.environ.get("LTX_ENC_LOCALIZE"):
+            logger.warning(
+                f"LTX_ENC_LOCALIZE: _forward_gathered stride={self.stride} in_shape={tuple(x_BTHWC.shape)} "
+                f"logical_h={logical_h} logical_w={logical_w}"
+            )
 
         # Conv first, while still sharded (its halo exchange handles shard boundaries correctly).
         x_conv = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
@@ -1289,8 +1327,18 @@ class LTXVideoEncoder(Module):
             dtype=ttnn.bfloat16,
         )
 
+        _loc = os.environ.get("LTX_ENC_LOCALIZE")
+
+        def _mark(tag):
+            # Env-gated op-level hang localizer: block until the device drains so the LAST line
+            # printed before a hang names the op that wedged. Not shippable (adds full syncs).
+            if _loc:
+                ttnn.synchronize_device(self.mesh_device)
+                logger.warning(f"LTX_ENC_LOCALIZE: completed {tag}")
+
         sample_tt = self.conv_in(sample_tt, causal=True, logical_h=logical_h, logical_w=logical_w)
-        for down_block in self.down_blocks:
+        _mark("conv_in")
+        for bi, down_block in enumerate(self.down_blocks):
             # conv3d / space-to-depth blocks require ROW_MAJOR input. LTXSpaceToDepthDownsample
             # (and the conv-only compress blocks) return TILE, and two compress blocks can be
             # adjacent in the encoder, so normalize at every block boundary. Resnet/mid blocks
@@ -1302,10 +1350,13 @@ class LTXVideoEncoder(Module):
                 )
             else:
                 sample_tt = down_block(sample_tt, causal=True, logical_h=logical_h, logical_w=logical_w)
+            _mark(f"down_block[{bi}] ({type(down_block).__name__})")
 
         sample_tt = self.norm_out(sample_tt, compute_kernel_config=self.norm_out_compute_kernel_config)
+        _mark("norm_out")
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
         sample_tt = self.conv_out(sample_tt, causal=True, logical_h=logical_h, logical_w=logical_w)
+        _mark("conv_out")
 
         # Normalize means on device: (x - mean) / std (per-channel stats replicated on the mesh).
         mean = self.per_channel_mean.data
