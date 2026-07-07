@@ -172,3 +172,36 @@ def test_image_edit_e2e(device_params, device, pipe):
     assert pcc_vae >= PCC_TARGET, f"VAE-encode PCC {pcc_vae} < {PCC_TARGET}"
     assert pcc_vis_blocks >= PCC_TARGET, f"vision-tower PCC {pcc_vis_blocks} < {PCC_TARGET}"
     assert pcc_pooler >= PCC_TARGET, f"vision+merger PCC {pcc_pooler} < {PCC_TARGET}"
+
+
+# Full edit-generation gate: TT run_image_edit vs the size-parameterized HF golden. Small
+# target_area / step count keep it a fast on-device gate; override via LONGCAT_EDIT_{AREA,STEPS}.
+_EDIT_AREA = int(os.environ.get("LONGCAT_EDIT_AREA", str(512 * 512)))
+_EDIT_STEPS = int(os.environ.get("LONGCAT_EDIT_STEPS", "3"))
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_image_edit_full_e2e(device_params, device, pipe):
+    """Full Call-2 generation (image + prompt -> edited image) on device vs the HF
+    LongCatImageEditPipeline golden. Runs the whole edit chain — VAE encode -> vision tower +
+    multimodal (image-conditioned) text-encode -> edit-denoise (image latents concatenated onto
+    the noise latents) -> VAE decode — and asserts the edited-image PCC >= 0.95. TT and golden use
+    identical seeded latents (same seed + target_area -> same latent geometry)."""
+    image = _make_test_image()
+    prompt = "change the bright square to a red circle"
+
+    print(f"[edit-full] computing golden (area={_EDIT_AREA}, steps={_EDIT_STEPS}) ...", flush=True)
+    golden = P.hf_reference_image_edit(
+        pipe, image=image, prompt=prompt, negative_prompt="",
+        num_inference_steps=_EDIT_STEPS, guidance_scale=4.5, seed=0, target_area=_EDIT_AREA,
+    )
+    ttp = P.LongCatImagePipelineTT(device, pipe)
+    result = ttp.run_image_edit(
+        image=image, prompt=prompt, negative_prompt="",
+        num_inference_steps=_EDIT_STEPS, guidance_scale=4.5, seed=0, target_area=_EDIT_AREA,
+    )
+    _, pcc_lat = comp_pcc(golden["final_latent_packed"], result["final_latent_packed"].float(), 0.0)
+    _, pcc_img = comp_pcc(golden["image_denorm"], result["image_denorm"].float(), 0.0)
+    print(f"[edit-full] {result['width']}x{result['height']} final-latent PCC={pcc_lat} image PCC={pcc_img}", flush=True)
+    print(f"e2e PCC={pcc_img}")
+    assert pcc_img >= PCC_TARGET, f"edit image PCC {pcc_img} < {PCC_TARGET}"
