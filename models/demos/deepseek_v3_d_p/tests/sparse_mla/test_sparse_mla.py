@@ -565,6 +565,8 @@ def test_sparse_mla_indexer_reuse(
     topology = _topology_from_device_params(device_params)
 
     def _kvpe():
+        # sparse_sdpa reads the KVPE cache natively and requires it uncompressed (bf16 ROW_MAJOR), not
+        # the bfloat8_b/TILE default — mla.py asserts this. Mirror the accuracy case's cache.
         return init_kvpe_cache(
             kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
             mesh_device=mesh_device,
@@ -572,6 +574,8 @@ def test_sparse_mla_indexer_reuse(
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
             num_kvpe_cache_layers=1,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
     common = dict(
