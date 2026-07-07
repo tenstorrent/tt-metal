@@ -96,7 +96,10 @@ def _fit_cores(total_rows, device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1, 2], ids=["b1", "b2"])
-def test_quasar_fold(mesh_device, batch_size):
+# use_transpose_as_fold: True = transpose-chain fold (hits the broken WH transpose on the 2-core grid);
+# False = direct data-movement fold op (ttnn::prim::qsr::fold, no WH transpose) -- the pivot under test.
+@pytest.mark.parametrize("use_transpose_as_fold", [True, False], ids=["xpose", "direct"])
+def test_quasar_fold(mesh_device, batch_size, use_transpose_as_fold):
     device = mesh_device
     torch.manual_seed(0)
 
@@ -132,7 +135,8 @@ def test_quasar_fold(mesh_device, batch_size):
     import time
     import traceback
 
-    log_path = os.environ.get("FOLD_DBG_LOG", os.path.abspath(f"fold_dbg_b{batch_size}.log"))
+    mode = "xpose" if use_transpose_as_fold else "direct"
+    log_path = os.environ.get("FOLD_DBG_LOG", os.path.abspath(f"fold_dbg_b{batch_size}_{mode}.log"))
 
     def _dbg(msg):
         line = f"[fold-dbg b{batch_size} t={time.time():.3f}] {msg}"
@@ -177,7 +181,7 @@ def test_quasar_fold(mesh_device, batch_size):
         )
 
     _dbg(
-        f"START config: N={batch_size} c={c} h={h} w={w} stride={stride_h}x{stride_w} "
+        f"START config: mode={mode} N={batch_size} c={c} h={h} w={w} stride={stride_h}x{stride_w} "
         f"pad_hw={pad_h} pad_c={pad_c} C={C} total_rows={total_rows} num_cores={num_cores} "
         f"grid={grid.x}x{grid.y} log={log_path}"
     )
@@ -197,12 +201,12 @@ def test_quasar_fold(mesh_device, batch_size):
         )
         _dbg("STAGE from_torch: done")
 
-        _dbg("STAGE fold: begin")
+        _dbg(f"STAGE fold: begin (use_transpose_as_fold={use_transpose_as_fold})")
         tt_out = ttnn.experimental.quasar.fold(
             tt_input,
             stride_h,
             stride_w,
-            use_transpose_as_fold=True,
+            use_transpose_as_fold=use_transpose_as_fold,
             padding=[pad_h, pad_h, pad_w, pad_w, 0, pad_c],
             grid_size=shard_grid,
         )
