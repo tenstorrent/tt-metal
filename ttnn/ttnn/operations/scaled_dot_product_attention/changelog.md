@@ -142,3 +142,30 @@
   - Stale JIT cache: the kernel source changed but the JIT cache served an old compiled binary. This caused catastrophic NaN/garbage output on S=1024 shapes. Resolved by clearing the JIT cache. The JIT cache invalidation should have been triggered automatically by the build system but was not — possibly because the kernel file modification time was not updated correctly during the refinement process.
   - Debugging red herring: the DEVICE_PRINT "fix" masked the issue by forcing a recompile, leading to an incorrect race condition diagnosis. The static analyzer's finding (init_cb_constant_f UNPACK race) was also a red herring — the real issue was stale JIT cache, not a TRISC pipeline race.
 - **Tests added**: None (all tests from Refinement 3 are sufficient and pass)
+
+## Refinement 4 — Causal masking
+- **Date**: 2026-07-07
+- **What was done**:
+  - Added `"causal"` to `SUPPORTED["mask_mode"]`.
+  - Added `{"mask_mode": "causal", "attention_kind": "cross"}` to `EXCLUSIONS` — causal requires S_q == S_kv (decoder self-attention only).
+  - Op file: `is_causal` is now threaded from entry point → program descriptor. The existing `validate()` already correctly derives `mask_mode="causal"` from `is_causal=True`, and the `is_causal + attn_mask` mutual exclusion check (ValueError) was already in place from Phase 0.
+  - Program descriptor: added `is_causal` parameter. Mask CB uses `intermediate_format` (Float32 or Float16_b depending on fp32_dest_acc_en) for causal mode — the mask is generated on-device in the reader kernel via direct L1 writes, so it needs to match the score accumulation precision. For custom mask mode, the CB still uses the input dtype (streamed from DRAM).
+  - Reader kernel: generates the triangular causal mask on-device using `fill_causal_mask_tile()` — a template function that writes the lower-triangular pattern directly to L1 CB memory by iterating over the 4 faces of a 32×32 tile. Three regions per (Q-block, KV-block):
+    - Past blocks (kv_tile_idx < q_tile_idx): all-zero mask (no masking needed)
+    - Diagonal block (kv_tile_idx == q_tile_idx): per-element triangular mask (0 on/below diagonal, -1e9 above)
+    - Future blocks (kv_tile_idx > q_tile_idx): all -1e9 mask (entire block masked)
+    The -1e9 value (not -inf) is used to avoid SFPU exp() NaN issues — exp(-1e9) ≈ 0, which the online softmax naturally drops. This matches the existing `NEG_INF_F = -1e38f` pattern used for m_i initialization, but uses the tt-train library's `-1e9f` magnitude for mask values.
+  - Compute kernel: the mask application (`BinaryFpu<Add>`) now triggers for `has_mask || is_causal` instead of just `has_mask`. The compute kernel's CT arg [9] is `is_causal`. No other compute changes needed — the mask is applied the same way as custom mask mode (additive: 0 = attend, -1e9 = mask out).
+  - Advisory deviation: the design doc mentions skipping future blocks entirely ("don't run QK^T/softmax/PV — this block-skip is the causal perf win"). This implementation does NOT skip future blocks — it pushes a full -1e9 mask for them and lets the compute kernel process them normally. The online softmax naturally drops -1e9 scores (exp(-1e9) ≈ 0), so the result is correct. The block-skip optimization is a performance improvement, not a correctness requirement, and is deferred to a future refinement.
+- **Accuracy achieved**:
+  - bf16 + True: PCC ≥ 0.999 on all causal shapes (S up to 4096, D up to 128, multi-head, multi-batch, GQA, MQA)
+  - Causal vs custom triangular mask equivalence: PCC ≥ 0.999 (the on-device generated mask produces the same result as the caller-tensor path)
+  - All-ones input: output = all ones (correct — row i attends to positions 0..i, average of ones = 1.0)
+  - GQA causal: PCC = 0.999996+
+  - MQA causal: PCC = 0.999996+
+  - Long context (S=4096) causal: PCC ≥ 0.995
+- **Golden test progress**: 1494 / 2269 passing (was 1046 / 2269 in prior phase). +448 new passing cells (causal mode across all self-attention shapes × dtype × scale_mode × kv_heads_mode × fp32_dest_acc_en combinations). 16 failures (all pre-existing: 6 OOM float32+D=1024, 10 precision float32+S≥4096). 758 xfailed (non-aligned shapes + causal+cross exclusion + fp32+False exclusion). Zero hangs. Full suite runs in ~161 seconds.
+- **Issues encountered**:
+  - Reader kernel `fill_causal_mask_tile` template: needed to handle both FP32 and BF16 tile formats for the mask CB. Used `mask_tile_bytes >= 4 * 32 * 32` to detect FP32 format at runtime. The BF16 format uses packed uint16 values (2 per uint32 slot).
+  - Mask CB format: originally used input dtype for mask CB. Changed to `intermediate_format` for causal mode so the -1e9 mask values match the score accumulation precision (Float32 when fp32_dest_acc_en=True, Float16_b when False).
+- **Tests added**: test_sdpa_refinement4_causal.py (36 tests covering causal self-attention across shape scaling, multi-head/multi-batch, explicit scale, GQA/MQA, cross-attention exclusion, is_causal+attn_mask mutual exclusion, causal vs custom mask equivalence, sequential state-leak regression, all-ones deterministic input, non-power-of-2 heads, long context)

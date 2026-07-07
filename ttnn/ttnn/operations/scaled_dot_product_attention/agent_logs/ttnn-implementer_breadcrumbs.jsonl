@@ -87,3 +87,7 @@
 {"event":"test_run","test":"test_scaled_dot_product_attention_no_mask[long_context_1024]","status":"pass","note":"Final verification — passes consistently after JIT cache clear. Refinement 3b complete.","ts":"2026-07-07T01:56:54+00:00"}
 {"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find causal mask implementations + SFPU ops","ts":"2026-07-07T02:11:18+00:00"}
 {"event":"test_run","status":"pass","test":"tt-probe causal 128x64","params":"B=1,H=1,S=128,D=64,is_causal=True","result":"PCC >= 0.995","ts":"2026-07-07T02:17:39+00:00"}
+{"event":"test_run","status":"pass","test":"tt-probe causal multi-shape","params":"12 shapes + exclusions","result":"all PASS","ts":"2026-07-07T02:18:49+00:00"}
+{"event":"test_run","status":"pass","test":"acceptance tests","params":"29 tests","result":"all PASS","ts":"2026-07-07T02:19:31+00:00"}
+{"event":"test_run","status":"pass","test":"full golden suite","params":"no -x filter","result":"1494 passed, 16 failed (all pre-existing: 6 OOM D=1024 fp32, 10 precision fp32 S>=4096), 758 xfailed, 0 hangs. Causal: 448/450 pass (2 OOM pre-existing)","ts":"2026-07-07T02:31:35+00:00"}
+{"event":"test_run","status":"pass","test":"refinement-specific tests","params":"36 tests","result":"all PASS","ts":"2026-07-07T02:32:38+00:00"}

@@ -108,7 +108,7 @@ Bullet 2 FAIL: acceptance/refinement tests failing:
 ```
 
 **Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
-### [ ] Refinement 4 — Causal masking
+### [x] Refinement 4 — Causal masking
 
 **Goal**: add `causal` to `SUPPORTED["mask_mode"]` by generating the triangular causal mask on-device (never from a caller tensor or materialized full mask). Three regions per (Q-block, KV-block): blocks entirely in the past are unmasked; blocks entirely in the future are whole-tile -inf and should be skipped; only the block straddling the diagonal needs a per-element triangular mask.
 
