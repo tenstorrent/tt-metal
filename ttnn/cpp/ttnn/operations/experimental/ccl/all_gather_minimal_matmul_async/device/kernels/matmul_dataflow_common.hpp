@@ -162,33 +162,34 @@ void compute_actual_k_block(
     if (wait_for_forwarded_data) {
 #ifdef IS_IN0
 #if MATMUL_ISOLATION_MODE == 0
-    if (device_iter > 0 && is_first_n_block) {
-        // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
-        if (is_injector_core) {
-            if constexpr (IsLinear) {
-                // Linear uni-ring: one slice per iter from "successor" (Dev k+1 normally; for
-                // Dev N-1, from Dev 0 via long send). All sends use out_ready_semaphore_forward
-                // at the receiver -- single sem per iter.
-                //
-                // The sender skips the redundant final relay lap (the last K_blocks_per_device
-                // iters; see dm_in0_sender), so it fires exactly (N-1)*K_blocks_per_device sem
-                // incs per m_block -- precisely the count the receiver waits on here. sem ends each
-                // m_block exactly at sem_target with nothing left in flight, so no compensation
-                // (and no end-of-op drain) is needed.
-                if (device_iter > 0) {
-                    noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
-                    sem_target_forward += 1;
+        if (device_iter > 0 && wait_for_forwarded_data) {
+            // When we are not reading from local, and we are in the first forward pass through n, wait for data to
+            // arrive
+            if (is_injector_core) {
+                if constexpr (IsLinear) {
+                    // Linear uni-ring: one slice per iter from "successor" (Dev k+1 normally; for
+                    // Dev N-1, from Dev 0 via long send). All sends use out_ready_semaphore_forward
+                    // at the receiver -- single sem per iter.
+                    //
+                    // The sender skips the redundant final relay lap (the last K_blocks_per_device
+                    // iters; see dm_in0_sender), so it fires exactly (N-1)*K_blocks_per_device sem
+                    // incs per m_block -- precisely the count the receiver waits on here. sem ends each
+                    // m_block exactly at sem_target with nothing left in flight, so no compensation
+                    // (and no end-of-op drain) is needed.
+                    if (device_iter > 0) {
+                        noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
+                        sem_target_forward += 1;
+                    }
+                } else if (device_iter > 0) {
+                    // Ring: both halves arrive simultaneously from both directions
+                    // (both neighbors always exist for Ring topology by construction).
+                    noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + core_order_size);
+                    sem_target_forward += core_order_size;
+                    noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + core_order_size);
+                    sem_target_backward += core_order_size;
                 }
-            } else if (device_iter > 0) {
-                // Ring: both halves arrive simultaneously from both directions
-                // (both neighbors always exist for Ring topology by construction).
-                noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + core_order_size);
-                sem_target_forward += core_order_size;
-                noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + core_order_size);
-                sem_target_backward += core_order_size;
             }
         }
-    }
 #endif  // IS_IN0 || IS_IN1
 #endif  // MATMUL_ISOLATION_MODE == 0
     }
