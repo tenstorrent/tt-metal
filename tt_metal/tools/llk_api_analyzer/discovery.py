@@ -31,10 +31,6 @@ class KernelArtifacts:
     trisc_elfs: dict[int, Path]  # trisc_id -> elf path
     descriptors_header: Path | None
 
-    @property
-    def is_complete(self) -> bool:
-        return bool(self.trisc_elfs)
-
 
 def discover_compute_kernels(root: str | Path) -> list[KernelArtifacts]:
     """Find all compute-kernel build directories beneath ``root``.

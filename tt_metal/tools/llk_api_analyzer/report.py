@@ -274,55 +274,44 @@ def _classify_cbs_kernel(kernel: KernelAnalysis) -> tuple[set[int], set[int]]:
     return inputs, outputs
 
 
-def _call_io_formats(cb_formats: dict[int, str], call: ApiCall, kernel: KernelAnalysis) -> tuple[str, str]:
-    """Resolve input/output format columns for one LLK call.
+def _resolve_call_cbs(call: ApiCall, kernel: KernelAnalysis, configured_cbs) -> tuple[set[int], set[int]]:
+    """Select the (input, output) CB indices to report for one LLK call.
 
     1. Use CB indices from *this call's* static ``operand*`` / ``output`` args.
     2. If the call names no CBs at all, fall back to the kernel-wide union.
-    3. If that is also empty, fall back to every configured CB in the kernel.
-    4. A direction with no CBs after step 1 is shown as ``-`` (not the fallback).
+    3. If that is also empty, fall back to every configured CB (both directions).
+
+    When the call itself names CBs, a direction it does not name stays empty
+    (rendered as ``-``) rather than borrowing the fallback.
     """
     in_cbs, out_cbs = _classify_cbs_for_call(call)
-    if not in_cbs and not out_cbs:
-        in_cbs, out_cbs = _classify_cbs_kernel(kernel)
-        if not in_cbs and not out_cbs:
-            all_cbs = set(cb_formats)
-            fallback = _formats_for(cb_formats, all_cbs) or "-"
-            return fallback, fallback
+    if in_cbs or out_cbs:
+        return in_cbs, out_cbs
+    in_cbs, out_cbs = _classify_cbs_kernel(kernel)
+    if in_cbs or out_cbs:
+        return in_cbs, out_cbs
+    all_cbs = set(configured_cbs)
+    return all_cbs, all_cbs
 
-    in_fmt = _formats_for(cb_formats, in_cbs) or "-"
-    out_fmt = _formats_for(cb_formats, out_cbs) or "-"
-    return in_fmt, out_fmt
+
+def _call_io_formats(cb_formats: dict[int, str], call: ApiCall, kernel: KernelAnalysis) -> tuple[str, str]:
+    """Resolve the input/output data-format columns for one LLK call."""
+    in_cbs, out_cbs = _resolve_call_cbs(call, kernel, cb_formats)
+    return _cb_column(cb_formats, in_cbs), _cb_column(cb_formats, out_cbs)
 
 
 def _call_tile_dims(cb_tile_dims: dict[int, str], call: ApiCall, kernel: KernelAnalysis) -> str:
-    """Resolve tile-dimension column for one LLK call from its CB operands.
-
-    Uses the same CB-selection rules as :func:`_call_io_formats`, but unions
-    input and output CBs into a single column.
-    """
-    in_cbs, out_cbs = _classify_cbs_for_call(call)
-    if not in_cbs and not out_cbs:
-        in_cbs, out_cbs = _classify_cbs_kernel(kernel)
-        if not in_cbs and not out_cbs:
-            all_cbs = set(cb_tile_dims)
-            return _dims_for(cb_tile_dims, all_cbs) or "-"
-
-    return _dims_for(cb_tile_dims, in_cbs | out_cbs) or "-"
+    """Resolve the tile-dimension column for one LLK call (inputs + outputs)."""
+    in_cbs, out_cbs = _resolve_call_cbs(call, kernel, cb_tile_dims)
+    return _cb_column(cb_tile_dims, in_cbs | out_cbs)
 
 
-def _formats_for(cb_formats: dict[int, str], cbs) -> str:
-    indices = sorted(i for i in cbs if i in cb_formats)
+def _cb_column(cb_values: dict[int, str], cbs) -> str:
+    """Render ``cb<i>=<value>`` for the given CBs, or ``-`` when none apply."""
+    indices = sorted(i for i in cbs if i in cb_values)
     if not indices:
-        return ""
-    return ", ".join(f"cb{i}={cb_formats[i]}" for i in indices)
-
-
-def _dims_for(cb_tile_dims: dict[int, str], cbs) -> str:
-    indices = sorted(i for i in cbs if i in cb_tile_dims)
-    if not indices:
-        return ""
-    return ", ".join(f"cb{i}={cb_tile_dims[i]}" for i in indices)
+        return "-"
+    return ", ".join(f"cb{i}={cb_values[i]}" for i in indices)
 
 
 def _op_args(call: ApiCall) -> str:

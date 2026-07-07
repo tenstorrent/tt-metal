@@ -199,12 +199,6 @@ class FileTable:
             paths.append(f"{directory}/{name}" if directory else name)
         return cls(paths)
 
-    def path_for(self, die: DIE) -> str | None:
-        attr = definition_die(die).attributes.get("DW_AT_decl_file")
-        if attr is None:
-            return None
-        return self.path_for_index(attr.value)
-
 
 class SourceResolver:
     """Resolves the source path of any DIE, across CUs and definition links.
