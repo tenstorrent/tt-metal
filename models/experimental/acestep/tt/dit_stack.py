@@ -40,8 +40,13 @@ class AceStepDiTStack(LightweightModule):
     def from_config(cls, config: AceStepDiTStackConfig):
         return cls(config)
 
-    def forward(self, hidden_states, cos, sin, temb, encoder_hidden_states, sliding_mask=None):
-        for layer, attn_type in zip(self.layers, self.layer_types):
+    def compute_cross_kv(self, encoder_hidden_states):
+        """Precompute every layer's cross-attention K/V from the encoder context (denoise-invariant),
+        for reuse across all denoise steps. Returns a list (per layer) of (k, v) or None."""
+        return [layer.compute_cross_kv(encoder_hidden_states) for layer in self.layers]
+
+    def forward(self, hidden_states, cos, sin, temb, encoder_hidden_states, sliding_mask=None, cross_kv=None):
+        for idx, (layer, attn_type) in enumerate(zip(self.layers, self.layer_types)):
             mask = sliding_mask if attn_type == "sliding_attention" else None
             hidden_states = layer.forward(
                 hidden_states,
@@ -50,5 +55,6 @@ class AceStepDiTStack(LightweightModule):
                 temb,
                 encoder_hidden_states=encoder_hidden_states,
                 attn_mask=mask,
+                cross_kv=cross_kv[idx] if cross_kv is not None else None,
             )
         return hidden_states

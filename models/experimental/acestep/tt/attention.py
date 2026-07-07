@@ -128,7 +128,19 @@ class AceStepAttention(LightweightModule):
         )
         return heads  # [1, n_heads, seq, head_dim]
 
-    def forward(self, hidden_states, cos=None, sin=None, encoder_hidden_states=None, attn_mask=None):
+    def compute_kv(self, encoder_hidden_states):
+        """Project + qk-norm the cross-attention K/V from the encoder context. Cross-attn K/V depend
+        ONLY on the (denoise-invariant) encoder context, not the timestep/latent, so they can be
+        computed ONCE and reused across all denoise steps (matches the reference EncoderDecoderCache
+        cross_attention_cache). Returns (k, v) as [1, n_kv_heads, kv_seq, head_dim]."""
+        cfg = self.config
+        k = self._project_heads(encoder_hidden_states, self.wk, cfg.n_kv_heads)
+        v = self._project_heads(encoder_hidden_states, self.wv, cfg.n_kv_heads)
+        if self.k_norm is not None:
+            k = self.k_norm.forward(k, mode="prefill")
+        return k, v
+
+    def forward(self, hidden_states, cos=None, sin=None, encoder_hidden_states=None, attn_mask=None, kv_cache=None):
         cfg = self.config
 
         if self._fused_qkv is not None:
@@ -140,6 +152,10 @@ class AceStepAttention(LightweightModule):
                 num_kv_heads=cfg.n_kv_heads,
                 transpose_k_heads=False,  # SDPA wants K as [1,nkv,seq,hd], not transposed
             )
+        elif kv_cache is not None:
+            # Cross-attention with a precomputed K/V cache (K/V are denoise-invariant): only project Q.
+            q = self._project_heads(hidden_states, self.wq, cfg.n_heads)  # [1,nq,seq,hd]
+            k, v = kv_cache
         else:
             # Cross-attention: Q from hidden, K/V from encoder (different sources -> keep split path).
             q = self._project_heads(hidden_states, self.wq, cfg.n_heads)  # [1,nq,seq,hd]
@@ -148,9 +164,10 @@ class AceStepAttention(LightweightModule):
             v = self._project_heads(kv_source, self.wv, cfg.n_kv_heads)  # [1,nkv,kv,hd]
 
         # Per-head q/k RMSNorm over head_dim (Qwen3 qk-norm), applied on [1,n,seq,hd].
+        # (Cached cross-attn K is already normed in compute_kv; only norm k when freshly projected.)
         if self.q_norm is not None:
             q = self.q_norm.forward(q, mode="prefill")
-        if self.k_norm is not None:
+        if self.k_norm is not None and kv_cache is None:
             k = self.k_norm.forward(k, mode="prefill")
 
         # RoPE (self-attention only; cross-attention has no positional rotation).

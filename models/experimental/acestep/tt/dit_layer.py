@@ -150,7 +150,14 @@ class AceStepDiTLayer(LightweightModule):
     def from_config(cls, config: AceStepDiTLayerConfig):
         return cls(config)
 
-    def forward(self, hidden_states, cos, sin, temb, encoder_hidden_states=None, attn_mask=None, cross_mask=None):
+    def compute_cross_kv(self, encoder_hidden_states):
+        """Precompute this layer's cross-attention K/V from the (denoise-invariant) encoder context,
+        for reuse across all denoise steps. Returns (k, v) or None if the layer has no cross-attn."""
+        if not self.use_cross_attention:
+            return None
+        return self.cross_attn.compute_kv(encoder_hidden_states)
+
+    def forward(self, hidden_states, cos, sin, temb, encoder_hidden_states=None, attn_mask=None, cross_mask=None, cross_kv=None):
         # Modulation: (scale_shift_table[1,6,dim] + temb[1,6,B,dim]) -> 6 chunks each [1,1,B,dim].
         # scale_shift_table broadcasts over batch; temb carries the per-sample timestep.
         sst = ttnn.reshape(self.scale_shift_table, (1, 6, 1, self.config.dim))
@@ -169,10 +176,13 @@ class AceStepDiTLayer(LightweightModule):
         attn = self.self_attn.forward(n, cos=cos, sin=sin, attn_mask=attn_mask)
         hidden_states = ttnn.add(hidden_states, ttnn.mul(attn, gate_msa))
 
-        # 2. Cross-attention (standard residual, no modulation).
+        # 2. Cross-attention (standard residual, no modulation). cross_kv, when provided, is this
+        # layer's precomputed (denoise-invariant) K/V so only Q is projected per step.
         if self.use_cross_attention:
             n = self.cross_attn_norm.forward(hidden_states, mode="prefill")
-            cattn = self.cross_attn.forward(n, encoder_hidden_states=encoder_hidden_states, attn_mask=cross_mask)
+            cattn = self.cross_attn.forward(
+                n, encoder_hidden_states=encoder_hidden_states, attn_mask=cross_mask, kv_cache=cross_kv
+            )
             hidden_states = ttnn.add(hidden_states, cattn)
 
         # 3. MLP with AdaLN (c_scale row pre-incremented by 1.0 at construction).

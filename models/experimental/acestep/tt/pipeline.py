@@ -248,6 +248,12 @@ class AceStepPipeline:
     ):
         from models.experimental.acestep.tt.apg_guidance import TTMomentumBuffer, apg_forward_ttnn
 
+        # Cross-attention K/V depend only on the (denoise-invariant) cond/uncond contexts, so project
+        # them ONCE and reuse across all steps (reference EncoderDecoderCache). Saves 24 layers of
+        # cross-attn K/V projection x2 contexts x (steps-1) recomputes.
+        cross_kv_cond = self.dit.compute_cross_kv(enc_cond)
+        cross_kv_uncond = self.dit.compute_cross_kv(enc_uncond)
+
         momentum_buffer = TTMomentumBuffer()
         xt = hidden_noise
         for step_idx in range(len(t) - 1):
@@ -255,10 +261,12 @@ class AceStepPipeline:
             t_prev = float(t[step_idx + 1].item())
             t_scalar = torch.tensor([t_curr], dtype=torch.float32)
             vt_cond = self.dit.forward(
-                xt, context_latents, t_scalar, t_scalar, cos_tt, sin_tt, enc_cond, sliding_mask=sliding
+                xt, context_latents, t_scalar, t_scalar, cos_tt, sin_tt, enc_cond, sliding_mask=sliding,
+                cross_kv=cross_kv_cond,
             )
             vt_uncond = self.dit.forward(
-                xt, context_latents, t_scalar, t_scalar, cos_tt, sin_tt, enc_uncond, sliding_mask=sliding
+                xt, context_latents, t_scalar, t_scalar, cos_tt, sin_tt, enc_uncond, sliding_mask=sliding,
+                cross_kv=cross_kv_uncond,
             )
             vt = apg_forward_ttnn(vt_cond, vt_uncond, guidance_scale, momentum_buffer=momentum_buffer, dim=-2)
             xt_new = solver.euler_step(xt, vt, t_curr - t_prev)

@@ -80,8 +80,23 @@ class AceStepDiTModel(LightweightModule):
     def from_config(cls, config: AceStepDiTModelConfig):
         return cls(config)
 
+    def compute_cross_kv(self, encoder_hidden_states):
+        """Precompute the cross-attention K/V for every DiT layer from the encoder context. The context
+        is embedded by condition_embedder then each layer projects its K/V. All denoise-invariant, so
+        this runs ONCE per (cond/uncond) context and is reused across every denoise step (matches the
+        reference EncoderDecoderCache cross_attention_cache). Returns a per-layer list of (k, v)."""
+        cfg = self.config
+        ctx = ttnn.linear(
+            encoder_hidden_states,
+            self.condition_embedder_weight,
+            bias=self.condition_embedder_bias,
+            compute_kernel_config=cfg.compute_kernel_config,
+        )
+        return self.stack.compute_cross_kv(ctx)
+
     def forward(
-        self, hidden_states, context_latents, timestep, timestep_r, cos, sin, encoder_hidden_states, sliding_mask=None
+        self, hidden_states, context_latents, timestep, timestep_r, cos, sin, encoder_hidden_states,
+        sliding_mask=None, cross_kv=None
     ):
         cfg = self.config
 
@@ -95,16 +110,21 @@ class AceStepDiTModel(LightweightModule):
         x = ttnn.concat([context_latents, hidden_states], dim=-1)  # [1,1,T,in_channels]
         x = self.patch_embed.forward(x)  # [1,1,T/p, dim]
 
-        # Condition embedder on encoder context.
-        ctx = ttnn.linear(
-            encoder_hidden_states,
-            self.condition_embedder_weight,
-            bias=self.condition_embedder_bias,
-            compute_kernel_config=cfg.compute_kernel_config,
-        )
+        # Condition embedder on encoder context. Skipped when cross_kv is cached: the embedded context
+        # is only consumed to build the cross-attn K/V, which are already precomputed, so this matmul
+        # (and the encoder_hidden_states input) is redundant per step.
+        ctx = None
+        if cross_kv is None:
+            ctx = ttnn.linear(
+                encoder_hidden_states,
+                self.condition_embedder_weight,
+                bias=self.condition_embedder_bias,
+                compute_kernel_config=cfg.compute_kernel_config,
+            )
 
-        # DiT layer stack.
-        x = self.stack.forward(x, cos, sin, timestep_proj, ctx, sliding_mask=sliding_mask)
+        # DiT layer stack. cross_kv (when provided) supplies precomputed per-layer cross-attn K/V so
+        # each denoise step only projects Q against the cached context K/V.
+        x = self.stack.forward(x, cos, sin, timestep_proj, ctx, sliding_mask=sliding_mask, cross_kv=cross_kv)
 
         # Output head: norm_out AdaLN + de-patchify.
         x = self.output.forward(x, temb)  # [1,1,T, out_channels]
