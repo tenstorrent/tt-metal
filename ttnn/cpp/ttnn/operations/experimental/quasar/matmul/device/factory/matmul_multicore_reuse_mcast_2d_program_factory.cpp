@@ -1123,7 +1123,18 @@ namespace reuse_mcast_optimized_helpers {
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     if (in0_block_sharded) {
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        // A multicast rectangle must be specified with start <= end. Two arch paths:
+        //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+        //  * Quasar (single NOC, non-torus): the rectangle must be ascending regardless of NOC. in0_noc =
+        //    preferred_noc_for_dram_write(arch) returns NOC_1 on Quasar too, so the WH/BH swap would
+        //    degenerate it to [max..min] and the sender would block forever on mcast acks (hang). Force
+        //    ascending via min/max. (#48552)
+        if (device->arch() == tt::ARCH::QUASAR) {
+            uint32_t lo = std::min(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            uint32_t hi = std::max(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            in0_mcast_receiver_grid_diff_coord_start = lo;
+            in0_mcast_receiver_grid_diff_coord_end = hi;
+        } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
     }
@@ -2573,7 +2584,18 @@ create_program_mcast_in0_in1(
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     if (in0_block_sharded) {
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        // A multicast rectangle must be specified with start <= end. Two arch paths:
+        //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+        //  * Quasar (single NOC, non-torus): the rectangle must be ascending regardless of NOC. in0_noc =
+        //    preferred_noc_for_dram_write(arch) returns NOC_1 on Quasar too, so the WH/BH swap would
+        //    degenerate it to [max..min] and the sender would block forever on mcast acks (hang). Force
+        //    ascending via min/max. (#48552)
+        if (device->arch() == tt::ARCH::QUASAR) {
+            uint32_t lo = std::min(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            uint32_t hi = std::max(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            in0_mcast_receiver_grid_diff_coord_start = lo;
+            in0_mcast_receiver_grid_diff_coord_end = hi;
+        } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
     }
@@ -4346,7 +4368,18 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     if (in0_block_sharded) {
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        // A multicast rectangle must be specified with start <= end. Two arch paths:
+        //  * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so swap start/end (unchanged).
+        //  * Quasar (single NOC, non-torus): the rectangle must be ascending regardless of NOC. in0_noc =
+        //    preferred_noc_for_dram_write(arch) returns NOC_1 on Quasar too, so the WH/BH swap would
+        //    degenerate it to [max..min] and the sender would block forever on mcast acks (hang). Force
+        //    ascending via min/max. (#48552)
+        if (device->arch() == tt::ARCH::QUASAR) {
+            uint32_t lo = std::min(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            uint32_t hi = std::max(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
+            in0_mcast_receiver_grid_diff_coord_start = lo;
+            in0_mcast_receiver_grid_diff_coord_end = hi;
+        } else if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
     }
