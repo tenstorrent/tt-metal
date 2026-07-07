@@ -355,30 +355,6 @@ def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
         print(f"    {line}")
 
     kind = _classify_load_error(msg)
-
-    try:
-        from . import reference_loader_resolver as _rlr
-
-        _rfiles = _rlr._repo_files(model_id)
-        _hf_native = any(
-            f
-            in (
-                "model.safetensors",
-                "model.safetensors.index.json",
-                "pytorch_model.bin",
-                "pytorch_model.bin.index.json",
-            )
-            for f in _rfiles
-        )
-        if _rfiles and not _hf_native:
-            print(
-                "  non-transformers checkpoint (repo ships no HF-format weights) — proceeding past\n"
-                "  pre-flight; the reference-loader resolver auto-arms at capture and writes a loader."
-            )
-            return True
-    except Exception:
-        pass
-
     if kind in {"gated", "auth", "missing"}:
         _print_gated_or_auth_guidance(model_id, kind)
         return False
@@ -390,30 +366,34 @@ def _preflight_load_with_autofix(model_id: str, *, allow_fix: bool) -> bool:
             "  torchvision`). Upgrading transformers will not help."
         )
         return False
-    if kind in {"unknown", "version"} or _loader_resolver_available(model_id):
+    _non_hf_native = False
+    try:
+        from . import reference_loader_resolver as _rlr
+
+        _rfiles = _rlr._repo_files(model_id)
+        _non_hf_native = bool(_rfiles) and not any(
+            f
+            in (
+                "model.safetensors",
+                "model.safetensors.index.json",
+                "pytorch_model.bin",
+                "pytorch_model.bin.index.json",
+            )
+            for f in _rfiles
+        )
+    except Exception:
+        _non_hf_native = False
+    if _non_hf_native or kind in {"unknown", "version"} or _loader_resolver_available(model_id):
         _auto_enable_loader_resolver()
         print(
-            "  transformers cannot load this architecture here (no model_type/auto_map,\n"
-            "  or an unrecognized architecture). Auto-enabling the reference-loader path:\n"
-            "  discovery/scaffold/capture build the module tree via the model's own\n"
-            "  package or trust_remote_code code plus a synthesized\n"
-            "  tests/pcc/_reference_loader.py, and every per-component PCC test imports\n"
-            "  it. No flag needed. Correctness stays PCC-gated."
+            "  transformers cannot load this architecture here (no model_type/auto_map, an\n"
+            "  unrecognized architecture, or a non-transformers checkpoint). Auto-enabling the\n"
+            "  reference-loader path: discovery/scaffold/capture build the module tree via the\n"
+            "  model's own package or trust_remote_code code plus a synthesized\n"
+            "  tests/pcc/_reference_loader.py, and every per-component PCC test imports it.\n"
+            "  No flag needed. Correctness stays PCC-gated."
         )
         return True
-    if kind == "unknown":
-        print(
-            "  Could not classify this load failure. Likely causes:\n"
-            "    * Network timeout reaching huggingface.co\n"
-            "    * `trust_remote_code` repo with a broken custom file\n"
-            "    * Disk full / OOM during config download\n"
-            "    * Optional dep that wasn't a clean ImportError\n"
-            "  Not auto-upgrading transformers because there's no\n"
-            "  evidence that's the cause. Re-run with the error above\n"
-            '  fixed manually, OR `pip install -U "' + _TRANSFORMERS_PIN + '"`\n'
-            "  by hand if you suspect a version mismatch."
-        )
-        return False
 
     if not allow_fix:
         print("  --no-env-fix: skipping the automatic upgrade.\n" f'  Manual fix: pip install -U "{_TRANSFORMERS_PIN}"')
