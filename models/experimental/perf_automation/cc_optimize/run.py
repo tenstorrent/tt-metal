@@ -895,6 +895,52 @@ def _decide_parallelism_route(
         print(f"  [optimize/cc] parallelism route decision skipped ({exc})")
 
 
+def _tt_lang_available() -> bool:
+    try:
+        import importlib.util
+
+        return any(importlib.util.find_spec(m) is not None for m in ("ttl", "tt_lang", "ttlang"))
+    except Exception:
+        return False
+
+
+def _print_optimize_stop(pipe, exc) -> None:
+    """On any per-pipeline crash, tell the user — in plain language — why optimize stopped, the exact
+    next step to fix it, and where to see what was accomplished. Never raises."""
+    import re as _re
+    import sys as _sys
+
+    err = f"{type(exc).__name__}: {exc}"
+    low = str(exc).lower()
+    bar = "=" * 78
+    steps = []
+    if isinstance(exc, ModuleNotFoundError) or "no module named" in low:
+        _m = _re.search(r"no module named ['\"]([\w.]+)['\"]", low)
+        pkg = (_m.group(1).split(".")[0] if _m else "") or "<the-missing-package>"
+        steps.append(f"a Python dependency ('{pkg}') is missing — install it, then re-run:")
+        steps.append(f"    {_sys.executable} -m pip install {pkg}")
+    elif "_ttnncpp" in low or "cannot open shared object" in low or ("ttnn" in low and "shared object" in low):
+        steps.append("ttnn is not built for this checkout (its compiled .so is missing) — build it, then re-run:")
+        steps.append("    ./build_metal.sh")
+    elif "transformers" in low and ("flash_attn" in low or "unrecognized" in low or "attn_implementation" in low):
+        steps.append('the model needs a different transformers version — e.g.  pip install "transformers<5"  (in a')
+        steps.append("    dedicated venv if it would conflict with other models), then re-run.")
+    else:
+        steps.append("this is usually a build/env/version mismatch — read the CAUSE above, fix it, and re-run.")
+    try:
+        print("\n" + bar)
+        print(f"  OPTIMIZE STOPPED — pipeline '{(pipe or {}).get('task', '?')}'")
+        print(f"  CAUSE: {err}")
+        print("  NEXT STEPS to make it run:")
+        for i, s in enumerate(steps, 1):
+            print(f"    {i}. {s}" if not s.startswith("    ") else s)
+        print("  What was accomplished so far is preserved — committed speedups are already in git, and")
+        print("  the per-op ledger is at models/experimental/perf_automation/runs/<timestamp>/ledger.jsonl.")
+        print(bar)
+    except Exception:
+        pass
+
+
 def run_cc_optimize(
     demo_dir: Path,
     repo_root: Path,
@@ -953,9 +999,25 @@ def run_cc_optimize(
     if baseline_only or not pipes:
         return {"pipelines": pipes, "is_multimodal": is_mm, "results": []}
     results = []
+    _ttl_ok = _tt_lang_available()
     for pipe in pipes:
         print(f"  [optimize/cc] === optimizing pipeline: {pipe['task']} ===")
-        results.append(optimize_pipeline(repo_root, manifest_path, pipe, devices, metric, model_name, max_rounds))
+        try:
+            results.append(
+                optimize_pipeline(repo_root, manifest_path, pipe, devices, metric, model_name, max_rounds)
+            )
+        except Exception as exc:  # noqa: BLE001 — never let one pipeline's crash kill the whole run silently
+            _print_optimize_stop(pipe, exc)
+            results.append(None)
+    if not _ttl_ok:
+        import sys as _sys
+
+        print(
+            "\n  ⚠ tt-lang was NOT used this run — the ttl toolchain is not installed in this environment\n"
+            "    (commonly a Python-version mismatch). The knob / dtype / C++ / structural levers still ran;\n"
+            "    only the tt-lang kernel rung was skipped. To enable it next time:\n"
+            f'    {_sys.executable} -m pip install "tt-lang==1.0.1" --no-deps   (must match your ttnn)'
+        )
     if sync_catalog:
         catalog_push(repo_root, catalog_remote, catalog_branch)
-    return {"pipelines": pipes, "is_multimodal": is_mm, "results": results}
+    return {"pipelines": pipes, "is_multimodal": is_mm, "results": results, "tt_lang_used": _ttl_ok}

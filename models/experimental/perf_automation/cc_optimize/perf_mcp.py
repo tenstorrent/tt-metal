@@ -290,18 +290,16 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
         )
     if _is_kernel_able(op_code):
         if "tt-lang" not in kinds:
-            if not _ttl_available():
+            if _ttl_available():
                 return (
                     False,
-                    "tt-lang:install-required",
-                    "this op needs a tt-lang kernel but the ttl toolchain is not installed — install "
-                    "tt-lang first (e.g. pip install tt-lang==1.0.1 --no-deps, matching your ttnn)",
+                    "tt-lang",
+                    "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it",
                 )
-            return (
-                False,
-                "tt-lang",
-                "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it",
-            )
+            # tt-lang toolchain unavailable (commonly a Python-version mismatch): DO NOT halt the run
+            # on an un-actionable 'install-required' target. Skip the tt-lang rung and fall through to
+            # the next lever so the run still completes on the levers that DO work. The end-of-run
+            # summary flags that tt-lang was not used this run.
         if "cpp" not in kinds:
             return (
                 False,
