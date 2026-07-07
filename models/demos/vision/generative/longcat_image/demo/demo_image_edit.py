@@ -2,17 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Runnable demo — LongCat-Image Call 2 image-conditioning front-end on Tenstorrent.
+"""Runnable demo — LongCat-Image Call 2 (image + text -> edited image) on Tenstorrent.
 
-Call 2 exercises the graduated modules the text->image path never fires: the
-Qwen2.5-VL VISION TOWER and the VAE ENCODER. This demo takes a real image, runs
-those as real TTNN forwards (via the shared tt/pipeline.py helpers the e2e test
-also calls), emits a real VAE round-trip reconstruction PNG, and prints the
-Source-A parity of each stage.
+Runs the FULL edit pipeline on device via the shared tt/pipeline.py::run_image_edit:
+VAE-encode the input image -> Qwen2.5-VL vision tower + multimodal (image-conditioned)
+text-encode -> MMDiT edit-denoise (image latents concatenated onto the noise latents)
+-> VAE-decode. Emits the edited PNG and, with --compare_golden, the e2e PCC vs the HF
+LongCatImageEditPipeline golden. This fires the vision tower + VAE encoder that the
+text->image path never touches.
 
 Run:
     python -m models.demos.vision.generative.longcat_image.demo.demo_image_edit \
-        --image path/to.jpg --size 256 --compare_golden
+        --image path/to.jpg --prompt "change the cat to a dog" --steps 24
+    # --image is optional (a synthetic test image is used if omitted)
+    # --target_area sets the output size target (default ~1MP, like the reference)
 """
 
 from __future__ import annotations
@@ -50,58 +53,47 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default=None, help="input image path (a synthetic test image is used if omitted)")
     ap.add_argument("--prompt", default="change the square to a bright red circle")
-    ap.add_argument("--size", type=int, default=256)
-    ap.add_argument("--out", default="longcat_image_edit_recon.png")
-    ap.add_argument("--compare_golden", action="store_true")
+    ap.add_argument("--negative_prompt", default="")
+    ap.add_argument("--steps", type=int, default=24)
+    ap.add_argument("--guidance", type=float, default=4.5)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--target_area", type=int, default=1024 * 1024, help="output size target in px^2 (reference ~1MP)")
+    ap.add_argument("--out", default="longcat_image_edit.png")
+    ap.add_argument("--compare_golden", action="store_true", help="also run the HF golden edit + print e2e PCC (slow)")
     args = ap.parse_args()
 
-    from diffusers import LongCatImageEditPipeline, LongCatImagePipeline
+    from diffusers import LongCatImagePipeline
 
     print(f"[demo] loading {HF_MODEL_ID} (bf16) ...", flush=True)
     pipe = LongCatImagePipeline.from_pretrained(HF_MODEL_ID, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
     pipe.set_progress_bar_config(disable=True)
-    editpipe = LongCatImageEditPipeline(
-        scheduler=pipe.scheduler, vae=pipe.vae, text_encoder=pipe.text_encoder,
-        tokenizer=pipe.tokenizer, text_processor=pipe.text_processor, transformer=pipe.transformer,
-    )
 
     if args.image:
         from PIL import Image
 
-        image = Image.open(args.image).convert("RGB").resize((args.size, args.size))
+        image = Image.open(args.image).convert("RGB")
     else:
-        image = _test_image(args.size)
-
-    vl = editpipe.image_processor_vl(images=image, return_tensors="pt")
-    pixel_values, grid_thw = vl["pixel_values"], vl["image_grid_thw"]
-    vae_in = editpipe.image_processor.preprocess(image, args.size, args.size)
+        image = _test_image(512)
 
     device = ttnn.open_device(device_id=0, l1_small_size=24576)
     try:
         ttp = P.LongCatImagePipelineTT(device, pipe)
-
-        # VAE encode (TT) -> latents -> VAE decode (TT) -> reconstruction image
-        z = ttp._tt_vae_encode(vae_in)  # [1,16,h8,w8]
-        recon = ttp._tt_vae_decode(z)  # [1,3,H,W]
-        _save_png((recon / 2 + 0.5).clamp(0, 1), args.out)
-
-        # vision tower (TT) -> merged image embeds
-        image_embeds = ttp._tt_vision_encode(pixel_values, grid_thw)
-        print(f"[demo] TT vision image_embeds shape={tuple(image_embeds.shape)}")
-        print(f"[demo] invoked graduated stubs: {sorted(ttp.invoked)}")
+        result = ttp.run_image_edit(
+            image=image, prompt=args.prompt, negative_prompt=args.negative_prompt,
+            num_inference_steps=args.steps, guidance_scale=args.guidance, seed=args.seed,
+            target_area=args.target_area,
+        )
+        print(f"[demo] edited image {result['width']}x{result['height']}; invoked: {sorted(result['invoked'])}")
+        _save_png(result["image_denorm"], args.out)
 
         if args.compare_golden:
-            with torch.no_grad():
-                pipe.vae = pipe.vae.float()
-                z_gold = pipe.vae.encode(vae_in.float()).latent_dist.mean.float()
-                pipe.vae = pipe.vae.to(torch.bfloat16)
-                v = pipe.text_encoder.model.visual.float()
-                gold_pooler = v(pixel_values.float(), grid_thw).pooler_output.float()
-                pipe.text_encoder.model.visual = pipe.text_encoder.model.visual.to(torch.bfloat16)
-            _, pcc_vae = comp_pcc(z_gold, z.float(), 0.0)
-            _, pcc_vis = comp_pcc(gold_pooler, image_embeds.float(), 0.0)
-            print(f"[demo] VAE-encode PCC={pcc_vae}")
-            print(f"e2e PCC={pcc_vis}")  # vision-tower parity vs HF (Source A)
+            golden = P.hf_reference_image_edit(
+                pipe, image=image, prompt=args.prompt, negative_prompt=args.negative_prompt,
+                num_inference_steps=args.steps, guidance_scale=args.guidance, seed=args.seed,
+                target_area=args.target_area,
+            )
+            _, pcc = comp_pcc(golden["image_denorm"], result["image_denorm"].float(), 0.0)
+            print(f"e2e PCC={pcc}")
     finally:
         ttnn.close_device(device)
 

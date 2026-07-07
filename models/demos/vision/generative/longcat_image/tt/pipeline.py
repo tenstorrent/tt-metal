@@ -193,6 +193,63 @@ def build_text_input_ids(pipe, prompt, max_length):
     return input_ids, attention_mask, prefix_len, suffix_len
 
 
+def build_edit_text_input_ids(editpipe, prompt, image):
+    """Reproduce LongCatImageEditPipeline._encode_prompt's token building WITHOUT running the text
+    encoder: the edit-template prefix (with the <|image_pad|> block expanded to the image's grid
+    size) + padded prompt + suffix. Returns everything the TT edit text-encode needs — input_ids,
+    attention_mask, pixel_values, image_grid_thw, prefix_len (the INDEX of <|vision_start|>, which
+    the reference slices from — not the prefix length), suffix_len, and the contiguous <|image_pad|>
+    block (img_start, img_len) into which the TT vision embeds are spliced. Tokenizer + VL image
+    processor only — deterministic setup, not the forward path."""
+    tok = editpipe.tokenizer
+    raw = editpipe.image_processor_vl(images=image, return_tensors="pt")
+    pixel_values, image_grid_thw = raw["pixel_values"], raw["image_grid_thw"]
+
+    all_tokens = []
+    for clean_sub, matched in split_quotation(prompt):
+        if matched:
+            for sub_word in clean_sub:
+                all_tokens.extend(tok(sub_word, add_special_tokens=False)["input_ids"])
+        else:
+            all_tokens.extend(tok(clean_sub, add_special_tokens=False)["input_ids"])
+    if len(all_tokens) > editpipe.tokenizer_max_length:
+        all_tokens = all_tokens[: editpipe.tokenizer_max_length]
+    padded = tok.pad(
+        {"input_ids": [all_tokens]}, max_length=editpipe.tokenizer_max_length,
+        padding="max_length", return_attention_mask=True, return_tensors="pt",
+    )
+
+    text = editpipe.prompt_template_encode_prefix
+    merge_length = editpipe.image_processor_vl.merge_size**2
+    while editpipe.image_token in text:
+        num_image_tokens = int(image_grid_thw.prod() // merge_length)
+        text = text.replace(editpipe.image_token, "<|placeholder|>" * num_image_tokens, 1)
+    text = text.replace("<|placeholder|>", editpipe.image_token)
+
+    prefix_tokens = tok(text, add_special_tokens=False)["input_ids"]
+    suffix_tokens = tok(editpipe.prompt_template_encode_suffix, add_special_tokens=False)["input_ids"]
+    vision_start_id = tok.convert_tokens_to_ids("<|vision_start|>")
+    prefix_len = prefix_tokens.index(vision_start_id)  # index of <|vision_start|>, matches the reference slice
+    suffix_len = len(suffix_tokens)
+
+    prefix = torch.tensor(prefix_tokens, dtype=padded.input_ids.dtype).unsqueeze(0)
+    suffix = torch.tensor(suffix_tokens, dtype=padded.input_ids.dtype).unsqueeze(0)
+    pmask = torch.ones(1, len(prefix_tokens), dtype=padded.attention_mask.dtype)
+    smask = torch.ones(1, len(suffix_tokens), dtype=padded.attention_mask.dtype)
+    input_ids = torch.cat((prefix, padded.input_ids, suffix), dim=-1)
+    attention_mask = torch.cat((pmask, padded.attention_mask, smask), dim=-1)
+
+    image_pad_id = tok.convert_tokens_to_ids(editpipe.image_token)
+    img_start = input_ids[0].tolist().index(image_pad_id)  # first <|image_pad|> = start of the vision block
+    img_len = int(image_grid_thw.prod() // merge_length)
+    return {
+        "input_ids": input_ids, "attention_mask": attention_mask,
+        "pixel_values": pixel_values, "image_grid_thw": image_grid_thw,
+        "prefix_len": prefix_len, "suffix_len": suffix_len,
+        "img_start": img_start, "img_len": img_len,
+    }
+
+
 # ─────────────────────────── latent packing (host shape ops) ────────────────
 def _pack_latents(latents, batch_size, num_channels_latents, height, width):
     latents = latents.view(batch_size, num_channels_latents, height // 2, 2, width // 2, 2)
@@ -682,6 +739,111 @@ class LongCatImagePipelineTT:
             "invoked": set(self.invoked),
         }
 
+    def run_image_edit(
+        self,
+        image,  # PIL.Image (RGB)
+        prompt,
+        negative_prompt="",
+        num_inference_steps=24,
+        guidance_scale=4.5,
+        seed=0,
+        target_area=1024 * 1024,  # reference targets ~1 MP; reduce for a fast test
+        enable_cfg_renorm=False,  # the EDIT pipeline uses plain CFG (no cfg_renorm, unlike text->image)
+        cfg_renorm_min=0.0,
+        latents_packed=None,
+    ):
+        """Full Call-2 (image + text -> edited image) on device, mirroring
+        LongCatImageEditPipeline.__call__: VAE-encode the input image -> image latents; run the
+        Qwen2.5-VL vision tower + multimodal text-encode (image-conditioned prompt); denoise with
+        the image latents concatenated onto the noise latents along seq (img_ids = latent+image
+        ids); VAE-decode. The edit denoise path is eager (the traced paths cover text->image)."""
+        from diffusers import LongCatImageEditPipeline
+        from diffusers.pipelines.longcat_image.pipeline_longcat_image_edit import calculate_dimensions
+
+        pipe = self.pipe
+        vsf = self.vae_scale_factor
+        editpipe = LongCatImageEditPipeline(
+            scheduler=pipe.scheduler, vae=pipe.vae, text_encoder=pipe.text_encoder,
+            tokenizer=pipe.tokenizer, text_processor=pipe.text_processor, transformer=pipe.transformer,
+        )
+
+        # 1) dimensions from the image aspect ratio, preprocess (full-res for VAE, half-res for vision)
+        iw, ih = image.size
+        calc_w, calc_h = calculate_dimensions(target_area, iw * 1.0 / ih)
+        image_full = editpipe.image_processor.resize(image, calc_h, calc_w)
+        prompt_image = editpipe.image_processor.resize(image_full, calc_h // 2, calc_w // 2)
+        vae_in = editpipe.image_processor.preprocess(image_full, calc_h, calc_w)  # [1,3,H,W] in [-1,1]
+
+        # 2) multimodal text-encode (image-conditioned) for pos (+ neg for CFG)
+        def _encode(prompt_text):
+            t = build_edit_text_input_ids(editpipe, prompt_text, prompt_image)
+            img_embeds = self._tt_vision_encode(t["pixel_values"], t["image_grid_thw"])
+            cos_c, sin_c = self._edit_position_embeddings(
+                t["input_ids"], t["attention_mask"], t["image_grid_thw"], t["pixel_values"]
+            )
+            return self._tt_edit_text_encode(
+                t["input_ids"], t["attention_mask"], img_embeds, t["img_start"], t["img_len"],
+                cos_c, sin_c, t["prefix_len"], t["suffix_len"],
+            )
+
+        prompt_embeds_pos = _encode(prompt)
+        do_cfg = guidance_scale > 1
+        prompt_embeds_neg = _encode(negative_prompt or "") if do_cfg else None
+
+        # 3) VAE-encode the image -> image latents -> normalize -> pack
+        lh = 2 * (int(calc_h) // (vsf * 2))
+        lw = 2 * (int(calc_w) // (vsf * 2))
+        z = self._tt_vae_encode(vae_in)  # [1,16,lh,lw] posterior mean
+        z = (z - pipe.vae.config.shift_factor) * pipe.vae.config.scaling_factor
+        image_latents_packed = _pack_latents(z, 1, self.num_channels_latents, lh, lw)
+
+        # 4) ids: text + noise-latent (mod 1) + image-latent (mod 2); img_ids = concat (matches model_in)
+        txt_len = prompt_embeds_pos.shape[1]
+        text_ids = prepare_pos_ids(modality_id=0, type="text", start=(0, 0), num_token=txt_len)
+        latents_ids = prepare_pos_ids(modality_id=1, type="image", start=(txt_len, txt_len), height=lh // 2, width=lw // 2)
+        image_latents_ids = prepare_pos_ids(modality_id=2, type="image", start=(txt_len, txt_len), height=lh // 2, width=lw // 2)
+        latent_image_ids = torch.cat([latents_ids, image_latents_ids], dim=0)
+
+        # 5) init noise latents (seeded like the reference)
+        if latents_packed is None:
+            gen = torch.Generator("cpu").manual_seed(seed)
+            raw = torch.randn(1, self.num_channels_latents, lh, lw, generator=gen, dtype=torch.float32)
+            latents_packed = _pack_latents(raw, 1, self.num_channels_latents, lh, lw)
+
+        # 6) timesteps/sigmas (mu from the NOISE-latent seq len only, per the reference)
+        sigmas_np = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
+        image_seq_len = latents_packed.shape[1]
+        mu = calculate_shift(
+            image_seq_len,
+            pipe.scheduler.config.get("base_image_seq_len", 256),
+            pipe.scheduler.config.get("max_image_seq_len", 4096),
+            pipe.scheduler.config.get("base_shift", 0.5),
+            pipe.scheduler.config.get("max_shift", 1.15),
+        )
+        timesteps, num_inference_steps = retrieve_timesteps(
+            pipe.scheduler, num_inference_steps, "cpu", sigmas=sigmas_np, mu=mu
+        )
+        sigmas = pipe.scheduler.sigmas.detach().cpu().tolist()
+
+        # 7) denoise with the image latents concatenated (edit path; img_ids covers both blocks)
+        final_latent_packed = self._tt_denoise(
+            latents_packed, prompt_embeds_pos, prompt_embeds_neg, text_ids, latent_image_ids,
+            timesteps, sigmas, guidance_scale, image_seq_len, enable_cfg_renorm, cfg_renorm_min,
+            image_latents_packed=image_latents_packed,
+        )
+
+        # 8) unpack + scale, VAE decode
+        latents_nchw = _unpack_latents(final_latent_packed, calc_h, calc_w, vsf)
+        latents_nchw = (latents_nchw / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
+        image_out = self._tt_vae_decode(latents_nchw).clamp(-1, 1)
+        return {
+            "image": image_out,
+            "image_denorm": (image_out / 2 + 0.5).clamp(0, 1),
+            "final_latent_packed": final_latent_packed,
+            "height": int(calc_h), "width": int(calc_w),
+            "invoked": set(self.invoked),
+        }
+
 
     # ══════════════════ Command 3: trace + 2CQ + host-op contract ══════════════
     # Each PIPELINE_STAGE exposes <stage>_trace_setup / _trace_step / _write_inputs.
@@ -1166,4 +1328,123 @@ def hf_reference_text_to_image(
         "final_latent_packed": final_latent.float(),
         "image": img,
         "image_denorm": (img / 2 + 0.5).clamp(0, 1),
+    }
+
+
+def hf_reference_image_edit(
+    pipe,
+    image,  # PIL.Image
+    prompt,
+    negative_prompt="",
+    num_inference_steps=24,
+    guidance_scale=4.5,
+    seed=0,
+    target_area=1024 * 1024,
+    latents_packed=None,
+):
+    """Golden edited image from the real LongCatImageEditPipeline math (image + text -> image),
+    size-parameterized via target_area so tests can run a smaller reference. Mirrors the text->image
+    golden's precision recipe: bf16 multimodal text encode (fp32 Qwen won't fit host RAM), fp32
+    transformer + fp32 VAE for the denoise/decode. Uses PLAIN CFG (the edit pipeline has no
+    cfg_renorm) and concatenates image latents onto the noise latents each step."""
+    from diffusers import LongCatImageEditPipeline
+    from diffusers.pipelines.longcat_image.pipeline_longcat_image_edit import (
+        calculate_dimensions,
+        retrieve_latents,
+    )
+
+    vsf = pipe.vae_scale_factor
+    do_cfg = guidance_scale > 1
+    editpipe = LongCatImageEditPipeline(
+        scheduler=pipe.scheduler, vae=pipe.vae, text_encoder=pipe.text_encoder,
+        tokenizer=pipe.tokenizer, text_processor=pipe.text_processor, transformer=pipe.transformer,
+    )
+
+    iw, ih = image.size
+    calc_w, calc_h = calculate_dimensions(target_area, iw * 1.0 / ih)
+    image_full = editpipe.image_processor.resize(image, calc_h, calc_w)
+    prompt_image = editpipe.image_processor.resize(image_full, calc_h // 2, calc_w // 2)
+    vae_in = editpipe.image_processor.preprocess(image_full, calc_h, calc_w)
+
+    # 1) golden multimodal prompt embeds (bf16 encoder), upcast to fp32
+    with torch.no_grad():
+        pe_pos, text_ids = editpipe.encode_prompt(prompt=[prompt], image=prompt_image, num_images_per_prompt=1)
+        pe_pos = pe_pos.float()
+        if do_cfg:
+            pe_neg, neg_text_ids = editpipe.encode_prompt(
+                prompt=[negative_prompt], image=prompt_image, num_images_per_prompt=1
+            )
+            pe_neg = pe_neg.float()
+
+    lh = 2 * (int(calc_h) // (vsf * 2))
+    lw = 2 * (int(calc_w) // (vsf * 2))
+
+    # 2) golden VAE-encode (fp32) -> image latents (argmax mode), normalize, pack
+    pipe.vae = pipe.vae.float()
+    try:
+        with torch.no_grad():
+            z = retrieve_latents(pipe.vae.encode(vae_in.float()), sample_mode="argmax")
+            z = (z - pipe.vae.config.shift_factor) * pipe.vae.config.scaling_factor
+            image_latents = editpipe._pack_latents(z, 1, 16, lh, lw)
+    finally:
+        pipe.vae = pipe.vae.to(torch.bfloat16)
+
+    # 3) ids (encode_prompt already returns the text ids; add image-latent ids and concat)
+    txt_len = pe_pos.shape[1]
+    latents_ids = prepare_pos_ids(modality_id=1, type="image", start=(txt_len, txt_len), height=lh // 2, width=lw // 2)
+    image_latents_ids = prepare_pos_ids(modality_id=2, type="image", start=(txt_len, txt_len), height=lh // 2, width=lw // 2)
+    latent_image_ids = torch.cat([latents_ids, image_latents_ids], dim=0)
+
+    if latents_packed is None:
+        gen = torch.Generator("cpu").manual_seed(seed)
+        raw = torch.randn(1, 16, lh, lw, generator=gen, dtype=torch.float32)
+        latents_packed = editpipe._pack_latents(raw, 1, 16, lh, lw)
+    latents = latents_packed.float().clone()
+
+    sigmas_np = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
+    image_seq_len = latents.shape[1]
+    mu = calculate_shift(
+        image_seq_len,
+        pipe.scheduler.config.get("base_image_seq_len", 256),
+        pipe.scheduler.config.get("max_image_seq_len", 4096),
+        pipe.scheduler.config.get("base_shift", 0.5),
+        pipe.scheduler.config.get("max_shift", 1.15),
+    )
+    timesteps, num_inference_steps = retrieve_timesteps(pipe.scheduler, num_inference_steps, "cpu", sigmas=sigmas_np, mu=mu)
+
+    # 4) fp32 golden edit denoise (plain CFG, image latents concatenated), fp32 VAE decode
+    pipe.transformer = pipe.transformer.float()
+    pipe.vae = pipe.vae.float()
+    try:
+        with torch.no_grad():
+            for t in timesteps:
+                timestep = t.expand(latents.shape[0]).to(torch.float32)
+                model_in = torch.cat([latents, image_latents], dim=1)
+                noise_text = pipe.transformer(
+                    hidden_states=model_in, timestep=timestep / 1000, guidance=None,
+                    encoder_hidden_states=pe_pos, txt_ids=text_ids, img_ids=latent_image_ids, return_dict=False,
+                )[0][:, :image_seq_len]
+                if do_cfg:
+                    noise_uncond = pipe.transformer(
+                        hidden_states=model_in, timestep=timestep / 1000,
+                        encoder_hidden_states=pe_neg, txt_ids=neg_text_ids, img_ids=latent_image_ids, return_dict=False,
+                    )[0][:, :image_seq_len]
+                    noise = noise_uncond + guidance_scale * (noise_text - noise_uncond)
+                else:
+                    noise = noise_text
+                latents = pipe.scheduler.step(noise, t, latents, return_dict=False)[0]
+            final_latent = latents
+            lat = _unpack_latents(final_latent.float(), calc_h, calc_w, vsf)
+            lat = lat / pipe.vae.config.scaling_factor + pipe.vae.config.shift_factor
+            img = pipe.vae.decode(lat.float(), return_dict=False)[0].float()
+    finally:
+        pipe.transformer = pipe.transformer.to(torch.bfloat16)
+        pipe.vae = pipe.vae.to(torch.bfloat16)
+    img = img.clamp(-1, 1)
+    return {
+        "image": img,
+        "image_denorm": (img / 2 + 0.5).clamp(0, 1),
+        "final_latent_packed": final_latent.float(),
+        "prompt_embeds": pe_pos.float(),
+        "height": int(calc_h), "width": int(calc_w),
     }
