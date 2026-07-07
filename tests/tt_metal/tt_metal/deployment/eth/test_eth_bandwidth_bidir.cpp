@@ -212,7 +212,7 @@ TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetBandwidthBidir) {
                 sender_device->id(),
                 receiver_device->id());
 
-            for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
+            for (const auto& sender_core : get_intra_cluster_active_eth_cores(sender_device)) {
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
                 if (receiver_device->id() != device_id) {
                     continue;

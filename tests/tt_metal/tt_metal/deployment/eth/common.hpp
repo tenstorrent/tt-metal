@@ -11,7 +11,31 @@
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
+#include <unordered_set>
+
 namespace tt::tt_metal {
+
+// Returns the device's active ethernet cores whose link stays *within* the opened
+// cluster. Cores whose link leaves the cluster to a remote MMIO device (another host /
+// an unopened chip) are excluded: they are derived from get_ethernet_connections(),
+// which only tracks intra-cluster links. Calling get_connected_ethernet_core() on an
+// off-cluster core TT_FATALs ("connects to a remote mmio device") even though the link
+// is up, so callers must iterate this set instead of get_active_ethernet_cores(). Reserved
+// dispatch/tunnel cores stay excluded via get_active_ethernet_cores(true).
+static inline std::unordered_set<CoreCoord> get_intra_cluster_active_eth_cores(IDevice* device) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    std::unordered_set<CoreCoord> intra_cluster;
+    for (const auto& [peer_chip, cores] : cluster.get_ethernet_cores_grouped_by_connected_chips(device->id())) {
+        intra_cluster.insert(cores.begin(), cores.end());
+    }
+    std::unordered_set<CoreCoord> result;
+    for (const auto& core : device->get_active_ethernet_cores(true)) {
+        if (intra_cluster.contains(core)) {
+            result.insert(core);
+        }
+    }
+    return result;
+}
 
 static inline void prepare_sender(
     tt::tt_metal::IDevice* const send_device,
