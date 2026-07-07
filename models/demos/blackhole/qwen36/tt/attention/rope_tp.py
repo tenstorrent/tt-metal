@@ -80,7 +80,14 @@ def rot_mats_prefill(device, rope_dim, seq_len, theta):
 
 
 def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
-    """x: [1, B, n_heads, HD]; cos/sin: [1, B, 1, rope_dim]; rotates first rope_dim dims."""
+    """x: [1, B, n_heads, HD]; cos/sin: [1, B, 1, rope_dim]; rotates first rope_dim dims.
+
+    Manual rotate-half: the fused ttnn.experimental.rotary_embedding_hf decode mode hard-requires
+    HEIGHT_SHARDED input + cos/sin, but qwen36's decode attention runs interleaved (q/k are
+    sharded_to_interleaved right after head-split). Sharding just for RoPE would add reshards on
+    input + both caches — net-negative — so decode stays manual. (Prefill mode accepts interleaved,
+    so apply_partial_rope_prefill uses the fused op.)
+    """
     hd = x.shape[-1]
     B = batch_size
     x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, B, n_heads, rope_dim))
@@ -102,21 +109,23 @@ def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
 
 
 def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
-    """x: [1, n_heads, seq_len, HD]; cos/sin: [1, 1, seq_len, rope_dim]."""
+    """x: [1, n_heads, seq_len, HD]; cos/sin: [1, 1, seq_len, rope_dim].
+
+    Fused HF-convention rotate-half via ttnn.experimental.rotary_embedding_hf (replaces manual
+    slice/neg/concat/mul/add). Partial: only the first rope_dim is rotated; tail passes through.
+    """
     hd = x.shape[-1]
     seq_len = x.shape[-2]
     x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, n_heads, seq_len, rope_dim))
-    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, n_heads, seq_len, hd))
-    r1 = ttnn.slice(x_rope, (0, 0, 0, 0), (1, n_heads, seq_len, rope_dim // 2))
-    r2 = ttnn.slice(x_rope, (0, 0, 0, rope_dim // 2), (1, n_heads, seq_len, rope_dim))
-    x_rot = ttnn.concat([ttnn.neg(r2), r1], dim=-1)
-    ttnn.deallocate(r1)
-    ttnn.deallocate(r2)
-    roped = ttnn.add(ttnn.multiply(x_rope, cos_tt), ttnn.multiply(x_rot, sin_tt))
+    roped = ttnn.experimental.rotary_embedding_hf(
+        x_rope, cos_tt, sin_tt, is_decode_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     ttnn.deallocate(x_rope)
-    ttnn.deallocate(x_rot)
-    roped = ttnn.to_memory_config(roped, ttnn.DRAM_MEMORY_CONFIG)
-    x_pass = ttnn.to_memory_config(x_pass, ttnn.DRAM_MEMORY_CONFIG)
+    if rope_dim == hd:
+        return roped
+    x_pass = ttnn.to_memory_config(
+        ttnn.slice(x, (0, 0, 0, rope_dim), (1, n_heads, seq_len, hd)), ttnn.DRAM_MEMORY_CONFIG
+    )
     result = ttnn.concat([roped, x_pass], dim=-1)
     ttnn.deallocate(roped)
     ttnn.deallocate(x_pass)
