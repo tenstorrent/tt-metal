@@ -33,32 +33,46 @@ Trailing pad rows are causal-masked from the last real token, so padding does no
 token's logits. Two reasons for 512 specifically:
 - Attention shards seqlen across the core grid and each shard must be tile(32)-aligned; a 128-multiple
   can yield 48-row shards → TT_FATAL. 256 satisfies alignment on its own.
-- **But 256 cannot be mixed with ≥512 in one long-lived process** — see *Known limitations* below. The
-  decoder MLP reshapes prefill `x` to `[1, S_pad//512, 512, -1]` only when `S_pad >= 512`; a 256-pad
-  prefill takes the no-reshape path. Interleaving the two paths corrupts the model. Forcing every prefill
-  onto the ≥512 reshape path keeps a single, consistent program shape.
+- **Different 512-buckets cannot be mixed in one long-lived process** — see *Known limitations* below.
+  The decoder MLP reshapes prefill `x` to `[1, S_pad//512, 512, -1]` for `S_pad >= 512`, so different
+  padded lengths differ only in the batch dim `-3`, which the prefill matmul program-cache hash does not
+  distinguish (512→1024 TT_FATALs). Since real prompts are always ≤512 tokens, forcing min-512 pins every
+  request to the single `[1,1,512,d]` program shape and sidesteps the collision.
 
 ## Known limitations
 
-**Length-keyed decoder-state corruption → fixed-length prefill workaround.**
-In the long-lived encoder+decoder server, interleaving requests of *different* real prefill (sequence)
-lengths corrupts the Qwen3 decoder: it "locks" to the first request's length and thereafter emits only
-the language tag + EOS (an empty transcript) for other lengths. Decoder-alone and encoder-alone are each
-stable across lengths in isolation (proven by `tests/test_decoder.py::test_prefill_length_state_regression`
-and `tests/test_audio_encoder.py::test_encoder_length_stability`); the trigger is the encoder/decoder
-interleaving with a *varying* real sequence length — a length-keyed program-cache / KV-shape issue in
-tt-metal, not in this model's code.
+**Length-keyed prefill corruption → fixed-length prefill workaround.**
+Interleaving prefills whose padded lengths fall in *different* 512-buckets corrupts / crashes the decoder
+in one long-lived process. **Root cause (confirmed on device, Blackhole P150, 2026-07-07):** a tt-metal
+**program-cache collision across the MLP prefill reshape**, not a bug in this model's code.
 
-Workarounds shipped here (both keep the prefill length constant so the bug never fires):
-- **Op level** (`tt/qwen3_asr_decoder.py`): pad every prefill to the same 512-multiple bucket.
+`models/tt_transformers/tt/mlp.py` reshapes the prefill activation to `[1, S_pad//512, 512, -1]` when
+`S_pad >= prefill_len_cutoff` (512 on Blackhole). So a 512-pad prefill is `[1, 1, 512, d]` and a 1024-pad
+prefill is `[1, 2, 512, d]` — they differ **only in the batch dim `-3`**, which the downstream matmul's
+(`ttnn.experimental.minimal_matmul` / the attention `wo` matmul) program-cache hash does not distinguish.
+The program compiled for the first bucket is then wrongly reused for the second.
+
+Reproduced (see the repro under the PR discussion):
+- A **1024-token prefill in isolation runs fine** (verified directly, all drivers).
+- A **512-token prefill followed by a 1024-token prefill `TT_FATAL`s** in the attention output matmul
+  (`a_shape[-1] == b_shape[-2]`, "width=3072 height=2048") — the reused program has the wrong shape.
+- On the current tree a 256-pad vs 512-pad mix no longer reproduces corruption (partially improved
+  upstream), but the 512↔1024 collision above is deterministic.
+
+Why the shipped model works despite this: real ASR prompts are always ≤512 tokens (a 14 s clip ≈ 200
+tokens), so every request pads to **exactly** 512 → one program shape → no collision. The workaround is
+therefore effectively "pin to the single 512 bucket", enforced at two layers:
+- **Op level** (`tt/qwen3_asr_decoder.py`): pad every prefill to a 512-multiple, min 512.
 - **Server level** (`server/qwen3_asr_server.py`, `FIXED_INFER_SEC = 14.0`): pin every `_infer` to a
   fixed 14 s audio length (pad short clips with silence, silence-chunk long audio into ≤14 s windows), so
-  every request prefills at exactly one length. Cost: a small accuracy trade-off from more/shorter chunks
+  every request stays in the 512 bucket. Cost: a small accuracy trade-off from more/shorter chunks
   (full-clip CER 0.045 → 0.065, accepted for stability) and wasted compute on padded silence for short
   clips. See `server/LONGFORM_DESIGN.md` for the tiered chunking design.
 
-This should be root-caused and fixed in tt-metal (length-independent prefill program/KV handling) so the
-fixed-length pin can be removed. Tracking issue draft: see the PR description / filed tt-metal issue.
+Removing the fixed-14 s pin (to allow long single-shot / variable-length prefill) requires the tt-metal
+program-cache fix — the batch dim `-3` must be part of the prefill matmul program hash. This cannot be
+fixed at the model layer (bucketing still collides). Tracking issue + repro:
+`docs/prefill_program_cache_collision_issue.md` in this PR.
 
 ## Reference golden
 
