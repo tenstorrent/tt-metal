@@ -671,7 +671,7 @@ class Attention(Module):
                 core_grid=self.get_core_grid(spatial.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
             )
 
-        if sequence_2 is not None:
+        if sequence_2 is not None and sequence_2.shape[2] > 0:
             sequence_2 = ttnn.transformer.concatenate_heads(sequence_2)
             if self.to_add_out is not None:
                 sequence_2 = self.to_add_out.forward_fused_addcmul(
