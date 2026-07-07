@@ -25,6 +25,19 @@ static const mailbox_t mailboxes_arr = reinterpret_cast<mailbox_t>(0x1FFB8U);
 #define ARCH_CYCLE_MICRO_SECOND 1350
 #endif
 
+// Command-mailbox poll cadence. While idle (waiting for the host to issue the
+// next START/RESET) BRISC polls every microsecond so command acknowledgement
+// stays snappy. Once BRISC has released the TRISCs to run a profiled kernel it
+// polls far less often: every command-mailbox load is an L1 access that contends
+// with the TRISCs' unpack/pack traffic and skews the perf measurement running on
+// them. Polling coarsely during the measurement window removes almost all of
+// that periodic contention, so measurements converge to their contention-free
+// value and stop drifting run-to-run. RESET_TRISCS is still
+// observed within one coarse interval (~64us) — orders of magnitude below the
+// host's command timeout — so TRISC hang-recovery is unaffected.
+constexpr std::uint32_t IDLE_POLL_CYCLES        = ARCH_CYCLE_MICRO_SECOND;
+constexpr std::uint32_t MEASUREMENT_POLL_CYCLES = 64 * ARCH_CYCLE_MICRO_SECOND;
+
 static const mailbox_t mailbox_unpack = mailboxes_arr;
 static const mailbox_t mailbox_math   = mailboxes_arr + 1;
 static const mailbox_t mailbox_pack   = mailboxes_arr + 2;
@@ -85,6 +98,10 @@ int main()
     std::uint32_t TRISC_ADDR_CACHE[3] = {};
 #endif
 
+    // Coarse while a profiled kernel is running (set on START), fast while idle
+    // (set on RESET). See IDLE_POLL_CYCLES / MEASUREMENT_POLL_CYCLES above.
+    std::uint32_t poll_cycles = IDLE_POLL_CYCLES;
+
     while (true)
     {
         ckernel::invalidate_data_cache();
@@ -134,6 +151,11 @@ int main()
 
                 reset_state(counter);
                 commit_store(brisc_bread0, counter);
+
+                // TRISCs are now running the profiled kernel: back off to coarse
+                // polling so BRISC stays quiescent on L1 during the measurement
+                // window. The next command will be RESET_TRISCS.
+                poll_cycles = MEASUREMENT_POLL_CYCLES;
                 break;
 
             case BriscCommandState::RESET_TRISCS:
@@ -141,14 +163,19 @@ int main()
 
                 reset_state(counter);
                 commit_store(brisc_bread1, counter);
+
+                // Idle again: poll frequently so the next START is acknowledged
+                // with minimal latency.
+                poll_cycles = IDLE_POLL_CYCLES;
                 break;
 
             default:
                 break;
         }
 
-        // Wait for 1us before polling again
-        ckernel::wait(ARCH_CYCLE_MICRO_SECOND);
+        // Wait before polling the command mailbox again: coarse while a profiled
+        // kernel is running (quiescent BRISC), fine while idle.
+        ckernel::wait(poll_cycles);
     }
 }
 
