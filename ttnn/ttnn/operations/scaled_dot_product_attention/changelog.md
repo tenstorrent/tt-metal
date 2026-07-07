@@ -121,3 +121,24 @@
   - Multi-work-unit deadlock: end-of-Q-block re-init left stale tiles in cb_o. Fixed by moving init to start of Q block.
   - Test-ordering NaN: some golden cells fail with NaN/Inf when run as part of the full suite but pass in isolation. This is a pre-existing flaky test issue from the shared module-scoped device, not a code regression.
 - **Tests added**: test_sdpa_refinement3_gqa_mqa.py (29 tests covering GQA self-attention, MQA self-attention, MQA H_q=71/64 multi-work-unit, GQA/MQA cross-attention, GQA/MQA with mask, GQA/MQA with explicit scale, GQA/MQA long-context, GQA/MQA across dtypes, sequential GQA→MQA state-leak regression, deterministic all-ones input)
+
+## Refinement 3b — GQA / MQA head broadcasting (debug: fix gate violations)
+- **Date**: 2026-07-07
+- **What was done**:
+  - Root cause of acceptance test failure (`long_context_1024` PCC=0.0009): stale JIT cache binary. The Refinement 3 kernel code was correct, but the JIT cache had an old compiled binary from a previous iteration that produced NaN/garbage output. The DEVICE_PRINT "fix" was actually forcing a recompile (different binary hash), not adding timing delays — the race condition hypothesis was a red herring.
+  - No kernel code changes were needed — clearing the JIT cache (`rm -rf ~/.cache/ttnn/ttnn/generated/kernels/`) resolved all failures.
+  - Verified that the Refinement 3 compute kernel (with work-unit loop, init at start of Q block), reader (with GQA/MQA head broadcasting), writer (with multi-work-unit loop), and program descriptor (8×7 grid, core_to_work_units distribution) are all correct.
+  - Investigated and debunked the "test-ordering NaN" claim from Refinement 3's changelog: the 2 bf8b+D256+False cells that were claimed to "pass in isolation" actually fail when tested with old kernels + new PD (incompatible RT arg layouts). With the correct new kernels + new PD, they pass. The previous claim was based on flawed testing.
+- **Accuracy achieved**:
+  - All acceptance tests pass (29/29) at PCC ≥ 0.995
+  - All refinement-specific tests pass (29/29) at PCC ≥ 0.995
+  - GQA/MQA cells pass at PCC ≥ 0.999
+  - bf8b+D256+False cells pass (were failing in prior phase's golden run due to stale JIT cache)
+- **Golden test progress**: 1046 / 2269 passing (was 1040 / 2269 in Refinement 3). +6 new passing cells (2 bf8b+D256+False that were previously failing, plus 4 GQA/MQA cells that were previously xfailed). 14 failures remain — all pre-existing:
+  - 4 OOM (float32 + D=1024) — Refinement 6 territory
+  - 10 precision near-miss (float32 + S≥4096, PCC=0.9999, rms~0.029 > 0.02) — pre-existing accumulation precision
+  - Zero hangs. Full suite runs in ~134 seconds.
+- **Issues encountered**:
+  - Stale JIT cache: the kernel source changed but the JIT cache served an old compiled binary. This caused catastrophic NaN/garbage output on S=1024 shapes. Resolved by clearing the JIT cache. The JIT cache invalidation should have been triggered automatically by the build system but was not — possibly because the kernel file modification time was not updated correctly during the refinement process.
+  - Debugging red herring: the DEVICE_PRINT "fix" masked the issue by forcing a recompile, leading to an incorrect race condition diagnosis. The static analyzer's finding (init_cb_constant_f UNPACK race) was also a red herring — the real issue was stale JIT cache, not a TRISC pipeline race.
+- **Tests added**: None (all tests from Refinement 3 are sufficient and pass)

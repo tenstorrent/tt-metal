@@ -94,6 +94,20 @@ Bullet 3 FAIL: golden responsible cells 10/140 below majority threshold.
 
 **Verifier notes**: The golden test INPUTS already include GQA (4:1, 8:1, 3:1 ratios) and MQA (H_kv=1) shapes. The reference helper handles head broadcasting via `repeat_interleave`. The op needs to either broadcast K/V in the reader kernel or adjust the work distribution so multiple Q-head cores read from the same K/V tiles. Missing values: kv_heads_mode={gqa, mqa}.
 
+
+
+### [x] Refinement 3b — GQA / MQA head broadcasting (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 3 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 2 FAIL: acceptance/refinement tests failing:
+  - tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py::test_scaled_dot_product_attention_no_mask[long_context_1024] - AssertionError: 0.0009244715757906742
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
 ### [ ] Refinement 4 — Causal masking
 
 **Goal**: add `causal` to `SUPPORTED["mask_mode"]` by generating the triangular causal mask on-device (never from a caller tensor or materialized full mask). Three regions per (Q-block, KV-block): blocks entirely in the past are unmasked; blocks entirely in the future are whole-tile -inf and should be skipped; only the block straddling the diagonal needs a per-element triangular mask.
