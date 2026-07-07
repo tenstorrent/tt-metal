@@ -419,6 +419,20 @@ def run_bringup_cc(
         except Exception:
             return set()
 
+    def _prog_row(event, module, gn, total):
+        import time as _t
+
+        _seen.setdefault("t0", _t.monotonic())
+        el = int(_t.monotonic() - _seen["t0"])
+        mmss = f"{el // 60:02d}:{el % 60:02d}"
+        mod = module if len(module) <= 50 else module[:49] + "…"
+        left = max(total - gn, 0)
+        if not _seen.get("hdr"):
+            print(f"  | {'time':<5} | {'event':<13} | {'module':<50} | {'graduated':<9} | {'left':<4} |")
+            print(f"  |{'-'*7}|{'-'*15}|{'-'*52}|{'-'*11}|{'-'*6}|")
+            _seen["hdr"] = True
+        print(f"  | {mmss:<5} | {event:<13} | {mod:<50} | {f'{gn}/{total}':<9} | {left:<4} |")
+
     def _announce_graduations(st):
         cur_g = set(st.get("graduated") or [])
         cur_s = set(st.get("shard_graduated") or [])
@@ -430,22 +444,14 @@ def run_bringup_cc(
         for parent in sorted(decomp - _seen["decomposed"]):
             children = sorted(c for c in (comps - _seen["comps"]) if c != parent)
             k = len(children) if children else max(total - _seen["total"], 0)
-            gn = len(cur_g)
-            print(
-                f"  ⊕ DECOMPOSED `{parent}` → {k} child module(s); parent retired to CPU · "
-                f"total {_seen['total']}→{total} · {gn}/{total} graduated, {total - gn} left"
-            )
-            for ch in children[:12]:
-                print(f"      - {ch}")
+            _prog_row("⊕ DECOMPOSED", f"{parent} → {k} children", len(cur_g), total)
 
         # GRADUATIONS (running count); a component that was decomposed and now graduates = RECOMPOSED parent
         for c in sorted(cur_g - _seen["grad"]):
-            gn = len(cur_g)
-            tag = "↻ RECOMPOSED" if c in (decomp | _seen["decomp_ever"]) else "✓ GRADUATED"
-            extra = " (children folded back into parent)" if tag.startswith("↻") else " to native TTNN (PCC-verified)"
-            print(f"  {tag} `{c}`{extra} · {gn}/{total} graduated, {total - gn} left")
+            recomposed = c in (decomp | _seen["decomp_ever"])
+            _prog_row("↻ RECOMPOSED" if recomposed else "✓ GRADUATED", c, len(cur_g), total)
         for c in sorted(cur_s - _seen["shard"]):
-            print(f"  ✓ `{c}` SHARD-GRADUATED on the mesh (gathered-PCC) · {len(cur_s)} sharded")
+            _prog_row("✓ SHARD-GRAD", c, len(cur_g), total)
 
         _seen["grad"], _seen["shard"] = cur_g, cur_s
         _seen["comps"], _seen["decomposed"], _seen["total"] = comps, decomp, total
