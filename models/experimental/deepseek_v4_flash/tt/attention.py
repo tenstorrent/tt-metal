@@ -3,8 +3,8 @@ from typing import Optional
 import ttnn
 import torch
 
-from .common import DeepSeekV4Module, _HIFI4, _HIFI4_SDPA, _MASK_NEG, _profile, width_sharded_l1_config
-from .layers import DeepSeekV4RMSNorm, Linear, LinearDecode, _rms_norm_unweighted
+from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, width_sharded_l1_config
+from .layers import BatchedLinearDecode, DeepSeekV4RMSNorm, Linear, LinearDecode, _rms_norm_unweighted
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
 
@@ -580,15 +580,22 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             weights["kv_norm.weight"], self.eps, device, cache.file("kv_norm"), sharded=True
         )
 
-        # Grouped output projection (``DeepseekV4GroupedLinear``): block-diagonal
-        # over o_groups. Store the per-group weight as [g, in_per_group, out_per_group]
-        # so a single batched matmul (batch axis = group) does all groups at once.
-        # oa: [g*o_lora_rank, (H*Dh)//g] -> per-group [g, in_per_group, o_lora_rank].
-        oa = _materialize(weights["o_a_proj.weight"], cache.file("o_a_proj"), weight_dtype)
-        in_per_group = (self.num_heads * self.head_dim) // self.o_groups
-        if oa is not None:
-            oa = oa.reshape(self.o_groups, self.o_lora_rank, in_per_group).transpose(1, 2).contiguous()
-        self.o_a_weight = _load_weight(oa, device, cache_file_name=cache.file("o_a_proj"), dtype=weight_dtype)
+        # Grouped output projection (``DeepseekV4GroupedLinear``): block-diagonal over o_groups,
+        # run as a single batched ``matmul_decode`` (batch axis = group). ``BatchedLinearDecode``
+        # folds the weight along BOTH batch (group) and N into the width-sharded layout the op
+        # expects. The raw torch weight is [g*o_lora_rank, (H*Dh)//g]; ``preprocess`` normalizes it
+        # to the per-group [g, K, N] the class folds from (applied only on a cache miss).
+        in_per_group = (self.num_heads * self.head_dim) // self.o_groups  # K
+        self.o_a_proj = BatchedLinearDecode(
+            weights["o_a_proj.weight"],
+            device,
+            cache.file("o_a_proj"),
+            dtype=weight_dtype,
+            batch=self.o_groups,
+            K=in_per_group,
+            N=self.o_lora_rank,
+            preprocess=lambda w: w.reshape(self.o_groups, self.o_lora_rank, in_per_group).transpose(1, 2).contiguous(),
+        )
 
         # sinks live on host (folded into the softmax denominator), so there is
         # no tile cache for them -- always materialise.
@@ -668,15 +675,20 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     def _grouped_output(self, attn: ttnn.Tensor) -> ttnn.Tensor:
         """``DeepseekV4GroupedLinear`` (o_a) + ``o_b_proj``.
 
-        ``attn`` is ``[B, S, H, Dh]``. Reshape to per-group feature blocks, run a
-        batched matmul over the group axis, then mix groups back to hidden.
+        ``attn`` is ``[B, S, H, Dh]``. Reshape to per-group feature blocks, run the
+        batched ``matmul_decode`` over the group axis (batch = o_groups, weights
+        folded along group + N), then mix groups back to hidden via ``o_b_proj``.
         """
         b, s, h, dh = attn.shape
         in_per_group = (h * dh) // self.o_groups
-        x = ttnn.reshape(attn, [b * s, self.o_groups, in_per_group])
-        x = ttnn.permute(x, [1, 0, 2])  # [g, B*S, in_per_group]
-        y = ttnn.matmul(x, self.o_a_weight, compute_kernel_config=_HIFI4)  # [g, B*S, o_lora_rank]
-        y = ttnn.permute(y, [1, 0, 2])  # [B*S, g, o_lora_rank]
+        m = b * s
+        # Rank-4 activation [1, g, M, K] (batch = g = o_groups) for the batched matmul_decode; the
+        # op folds the group axis to match the folded (b_blocks x n_blocks) weight layout.
+        x = ttnn.reshape(attn, [m, self.o_groups, in_per_group])
+        x = ttnn.permute(x, [1, 0, 2])  # [g, M, K]
+        x = ttnn.reshape(x, [1, self.o_groups, m, in_per_group])  # [1, g, M, K]
+        y = self.o_a_proj(x)  # DRAM-interleaved [1, g, M, N]
+        y = ttnn.permute(y, [0, 2, 1, 3])  # [1, M, g, N]
         y = ttnn.reshape(y, [b, s, 1, self.o_groups * self.o_lora_rank])
         return ttnn.to_memory_config(self.o_b_proj(y), ttnn.DRAM_MEMORY_CONFIG)
 
