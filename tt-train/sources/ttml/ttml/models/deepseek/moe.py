@@ -69,33 +69,19 @@ class _GatherTopK(ttml.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, routing_weights, topk_indices_u32, num_experts):
+    def forward(ctx, routing_weights, topk_indices_u32):
         routing_value = routing_weights.get_value()
-        rw_shape = list(routing_value.shape)
-        topk_shape = list(topk_indices_u32.shape)
-        B, _, S, E = rw_shape
-        K = topk_shape[-1]
         ctx.topk_indices_u32 = topk_indices_u32
-        ctx.rw_shape = rw_shape
+        ctx.rw_shape = list(routing_value.shape)
         ctx.rw_layout = routing_value.layout
 
-        # Build a 4D one-hot matrix over flattened (token, k-slot) rows:
-        #   topk_flat      [B,1,S*K,1]
-        #   expert_ids     [1,1,1,E]
-        #   one_hot        [B,1,S*K,E]
-        # Then repeat routing weights along the token axis to match K slots and
-        # reduce over E. This is the gather without per-expert slices.
-        topk_flat = ttnn.reshape(topk_indices_u32, [B, 1, S * K, 1])
-        expert_ids = ttnn.arange(0, num_experts, 1, dtype=ttnn.uint32, device=routing_value.device())
-        expert_ids = ttnn.reshape(expert_ids, [1, 1, 1, E])
-        one_hot = ttnn.eq(topk_flat, expert_ids)
-        one_hot = ttnn.typecast(one_hot, ttnn.bfloat16)
-        one_hot = ttnn.to_layout(one_hot, routing_value.layout)
-
-        routing_repeated = ttnn.repeat_interleave(routing_value, K, dim=2)
-        selected_flat = ttnn.multiply(routing_repeated, one_hot)
-        selected_flat = ttnn.sum(selected_flat, dim=-1, keepdim=True)
-        return ttnn.reshape(selected_flat, [B, 1, S, K])
+        # Gather routing weights at the top-k expert indices with a single
+        # tile-layout gather along the expert axis:
+        #   [B,1,S,E] gather index [B,1,S,K] -> [B,1,S,K]
+        # Avoids materializing a [B,1,S*K,E] one-hot plus the
+        # repeat_interleave / multiply / sum reduction (O(E) -> O(K) per token).
+        index = ttnn.to_layout(topk_indices_u32, routing_value.layout)
+        return ttnn.gather(routing_value, dim=-1, index=index)
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -261,7 +247,7 @@ class MoE(AbstractModuleBase):
         return memory_snapshot(x, f"{label}_FWD", f"{label}_BWD")
 
     def gather_topk_weights(self, routing_weights, topk_indices_u32):
-        return _GatherTopK.apply(routing_weights, topk_indices_u32, self.num_experts)
+        return _GatherTopK.apply(routing_weights, topk_indices_u32)
 
     def prepare_routing_weights(self, scores, topk_indices, *, gather_topk: bool = False):
         """Build routing mask/weights and update token-count state.
