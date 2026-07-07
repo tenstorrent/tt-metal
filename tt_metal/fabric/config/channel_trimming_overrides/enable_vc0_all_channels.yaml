@@ -1,0 +1,16 @@
+# Force-enable ALL VC0 sender + receiver channels, overriding whatever a capture
+# profile trimmed on VC0. Intended for workloads with data-dependent, multi-hop
+# all-to-all traffic (e.g. DeepSeek prefill MoE dispatch/combine) whose VC0
+# forwarding paths cannot be safely inferred from a single capture run.
+#
+# Apply together with a capture profile:
+#   TT_METAL_FABRIC_TRIMMING_PROFILE=<capture>.yaml
+#   TT_METAL_FABRIC_TRIMMING_OVERRIDE=tt_metal/fabric/config/channel_trimming_overrides/enable_vc0_all_channels.yaml
+# VC0 is kept topology-complete (all sender/receiver channels serviced) and the
+# VC0 fast-path collapse (speedy RX / terminal-only / DISABLE_RX_CH0_FORWARDING)
+# is suppressed, because a VC0 global override makes try_derive_vc0_trim_fast_path_info
+# return nullopt. VC1/VC2 are still trimmed per the capture profile.
+channel_trimming_overrides:
+  vc0:
+    force_enable_all_sender_channels: true
+    force_enable_all_receiver_channels: true

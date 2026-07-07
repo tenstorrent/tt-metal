@@ -205,6 +205,13 @@ void export_channel_trimming_capture(tt::tt_metal::MetalEnvImpl& env) {
 
     YAML::Emitter emitter;
     emitter << YAML::BeginMap;
+    // Stamp preserve_vc0_forwarding so applying this capture keeps VC0 topology-complete.
+    // Needed for data-dependent all-to-all workloads (e.g. MoE dispatch/combine) whose VC0
+    // forwarding paths a single capture run cannot fully cover; opt in via
+    // TT_METAL_FABRIC_TRIMMING_PRESERVE_VC0_FORWARDING=1.
+    if (rtoptions.get_preserve_vc0_forwarding_in_capture()) {
+        emitter << YAML::Key << "preserve_vc0_forwarding" << YAML::Value << true;
+    }
     emitter << YAML::Key << "channel_trimming_capture" << YAML::Value << YAML::BeginMap;
 
     auto& umd_cluster = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
