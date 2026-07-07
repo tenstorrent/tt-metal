@@ -21,6 +21,8 @@ from tracy.noc_bandwidth import (
     aggregate_noc_links_per_op,
     all_gather_bytes_per_link,
     all_gather_fabric_bw,
+    collective_bytes_per_link,
+    collective_fabric_bw,
     eth_bw_util_pct,
     noc_bw_util_pct,
     noc_bytes_from_trace_dir,
@@ -215,3 +217,30 @@ def test_all_gather_fabric_bw_reproduces_43pct_and_scales_with_real_peak():
     assert pct_np is None
     # Missing duration -> nothing at all.
     assert all_gather_fabric_bw(output_bytes, 2, 2, False, 0, 50.0) == (None, None)
+
+
+def test_reduce_scatter_is_all_gather_dual():
+    """Reduce-scatter moves the same wire bytes as all-gather (they are duals), but its OUTPUT is the
+    1/N scattered chunk — so passing chunk-sized output_bytes to the reduce_scatter model reproduces
+    the all-gather per-link bytes computed from the full tensor."""
+    full = 9696 * 4096 * 2  # full tensor bytes (an all-gather's output)
+    N = 2
+    ag = collective_bytes_per_link(full, num_devices=N, num_links=2, is_ring=False, kind="all_gather")
+    # Reduce-scatter's output tensor is the 1/N chunk of the full tensor.
+    rs = collective_bytes_per_link(full // N, num_devices=N, num_links=2, is_ring=False, kind="reduce_scatter")
+    assert rs == pytest.approx(ag)
+    # Unknown kind never fabricates traffic.
+    assert collective_bytes_per_link(full, N, 2, False, kind="broadcast") == 0.0
+
+
+def test_all_reduce_moves_twice_the_gather_traffic():
+    """All-reduce = reduce-scatter + all-gather, so it moves 2x an all-gather's per-link bytes for
+    the same full tensor (canonical 2(N-1)/N busbw factor), and %util scales accordingly."""
+    full = 9696 * 4096 * 2
+    ag = collective_bytes_per_link(full, num_devices=2, num_links=2, is_ring=False, kind="all_gather")
+    ar = collective_bytes_per_link(full, num_devices=2, num_links=2, is_ring=False, kind="all_reduce")
+    assert ar == pytest.approx(2 * ag)
+    gbps_ag, pct_ag = collective_fabric_bw(full, 2, 2, False, 924_000, 50.0, kind="all_gather")
+    gbps_ar, pct_ar = collective_fabric_bw(full, 2, 2, False, 924_000, 50.0, kind="all_reduce")
+    assert gbps_ar == pytest.approx(2 * gbps_ag)
+    assert pct_ar == pytest.approx(2 * pct_ag)

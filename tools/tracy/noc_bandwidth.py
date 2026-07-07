@@ -186,38 +186,62 @@ def eth_bw_util_pct(fabric_bytes, duration_ns, per_link_gbps, num_links):
     return achieved_gbps / (per_link_gbps * num_links) * 100.0
 
 
-def all_gather_bytes_per_link(output_bytes, num_devices, num_links, is_ring):
-    """Per-link ethernet bytes an all-gather pushes across the fabric (canonical tt-metal formula).
+# Algorithm-BW "wire factor" per collective: the multiple of the FULL tensor each rank moves across
+# the fabric. all-gather and reduce-scatter are duals that each move (N-1)/N; all-reduce = the two
+# back to back, so 2·(N-1)/N. (Canonical NCCL/tt-metal busbw factors — the same the all-gather sweep
+# perf tests use.) 'output_bytes' means the op's OUTPUT tensor: for all-gather / all-reduce that is
+# the full tensor, but reduce-scatter's output is the 1/N scattered chunk, so its full tensor is
+# output_bytes·N (handled in collective_bytes_per_link).
+_COLLECTIVE_ALG_FACTOR = {"all_gather": 1.0, "reduce_scatter": 1.0, "all_reduce": 2.0}
 
-    An all-gather leaves the full output replicated on every device, so each device must *receive*
-    the (N-1)/N of the output it does not already own; that traffic is spread across ``num_links``
-    (and both directions of a ring, hence the /2 for ring topologies). This matches the algorithm-BW
-    definition used by tests/ttnn/multidevice_perf_tests/test_all_gather_hyperparameter_sweep_perf_*.
 
-    The count is exact from shape + topology alone -- which is the whole point: a full-grid gather
-    emits ~11.6k markers/core and overflows the noc-trace DRAM buffer, so its fabric bytes can NOT be
-    read back from a noc-trace. Returns 0.0 for a degenerate 1-device gather or missing link count.
+def collective_bytes_per_link(output_bytes, num_devices, num_links, is_ring, kind="all_gather"):
+    """Per-link ethernet bytes a collective pushes across the fabric (exact from shape + topology).
+
+    Exact from shape + topology alone — the point being that a full-grid collective emits ~11.6k
+    markers/core and overflows the noc-trace DRAM buffer, so its fabric bytes can NOT be read back
+    from a noc-trace. The traffic is spread across ``num_links`` and both directions of a ring (the
+    /2 ring divisor, applied to every collective so the per-link numbers are comparable). Returns 0.0
+    for a degenerate 1-device collective, missing links, or an unknown kind.
     """
+    if kind not in _COLLECTIVE_ALG_FACTOR:
+        return 0.0
     if not num_devices or num_devices <= 1 or not num_links or num_links <= 0:
         return 0.0
+    # reduce-scatter's output is the 1/N chunk; every other kind's output is the full tensor.
+    full_bytes = output_bytes * num_devices if kind == "reduce_scatter" else output_bytes
+    factor = _COLLECTIVE_ALG_FACTOR[kind] * (num_devices - 1) / num_devices
     ring_div = 2 if is_ring else 1
-    return output_bytes * ((num_devices - 1) / num_devices) / num_links / ring_div
+    return full_bytes * factor / num_links / ring_div
 
 
-def all_gather_fabric_bw(output_bytes, num_devices, num_links, is_ring, duration_ns, per_link_peak_gbps):
-    """(achieved per-link GB/s, % of trained peak) for an all-gather -- analytical, no noc-traces.
+def collective_fabric_bw(
+    output_bytes, num_devices, num_links, is_ring, duration_ns, per_link_peak_gbps, kind="all_gather"
+):
+    """(achieved per-link GB/s, % of trained peak) for a collective — analytical, no noc-traces.
 
-    Bytes come from all_gather_bytes_per_link (shape+topology), duration from the op's measured
-    device-FW time, and the peak from the fabric's *trained* per-link speed (fabric_link_bw sidecar)
-    so the % is honest on any machine (200/400/800G). (None, None) when bytes/duration are missing;
-    the % is None (blank, never fabricated) when the trained peak could not be sourced.
+    Bytes from collective_bytes_per_link (shape+topology), duration from the op's measured device-FW
+    time, peak from the fabric's *trained* per-link speed so the % is honest on any machine. (None,
+    None) when bytes/duration are missing; % is None (blank, never fabricated) when no trained peak.
     """
-    moved = all_gather_bytes_per_link(output_bytes, num_devices, num_links, is_ring)
+    moved = collective_bytes_per_link(output_bytes, num_devices, num_links, is_ring, kind)
     if not moved or not duration_ns or duration_ns <= 0:
         return None, None
     achieved_gbps = moved / (duration_ns * 1e-9) / 1e9
     pct = (achieved_gbps / per_link_peak_gbps * 100.0) if per_link_peak_gbps else None
     return achieved_gbps, pct
+
+
+def all_gather_bytes_per_link(output_bytes, num_devices, num_links, is_ring):
+    """Back-compat wrapper: per-link bytes for an all-gather (see collective_bytes_per_link)."""
+    return collective_bytes_per_link(output_bytes, num_devices, num_links, is_ring, kind="all_gather")
+
+
+def all_gather_fabric_bw(output_bytes, num_devices, num_links, is_ring, duration_ns, per_link_peak_gbps):
+    """Back-compat wrapper: analytical all-gather fabric BW (see collective_fabric_bw)."""
+    return collective_fabric_bw(
+        output_bytes, num_devices, num_links, is_ring, duration_ns, per_link_peak_gbps, kind="all_gather"
+    )
 
 
 def _load_trace_events(log_folder):

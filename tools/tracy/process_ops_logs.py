@@ -40,7 +40,7 @@ from tracy.common import (
 from tracy import device_post_proc_config
 from tracy.perf_counter_scope import sample_cores_per_op
 from tracy.noc_bandwidth import (
-    all_gather_fabric_bw,
+    collective_fabric_bw,
     eth_bw_util_pct,
     fabric_bytes_from_trace_dir,
     noc_bw_util_pct,
@@ -146,9 +146,10 @@ OPS_CSV_HEADER = [
     # NaN (blank) when the peak can't be sourced -- never a fabricated number.
     "NOC BW UTIL FROM COUNTERS (%)",
     "ETH BW UTIL FROM COUNTERS (%)",
-    # Analytical fabric BW for collective (CCL) ops: a gather's bytes are exact from shape+topology,
-    # so this is computed WITHOUT --collect-noc-traces (a full-grid gather overflows the marker
-    # buffer) and against the fabric's real trained per-link speed. Blank for non-CCL ops.
+    # Analytical fabric BW for collective (CCL) ops — all-gather, reduce-scatter, all-reduce: the
+    # bytes are exact from shape+topology, so this is computed WITHOUT --collect-noc-traces (a
+    # full-grid collective overflows the marker buffer) and against the fabric's real trained
+    # per-link speed. Blank for non-CCL ops.
     "CCL FABRIC BW [GB/s]",
     "CCL FABRIC BW UTIL (%)",
 ]
@@ -1129,17 +1130,36 @@ def _int_attr(attrs, key):
         return None
 
 
-def _analytical_ccl_bw(active_op_record, duration_ns, per_link_gbps):
-    """(achieved per-link GB/s, %util) for an all-gather op; (None, None) for anything else.
+def _collective_kind(op_code):
+    """Map an op code to the fabric collective it implements, or None if it is not a collective.
 
-    Fabric bytes for a gather are exact from output shape + ring_size + topology, so the BW is
-    computed here WITHOUT --collect-noc-traces (a full-grid gather overflows the profiler marker
-    buffer, corrupting any trace-derived byte count). Only all-gather is modeled; other collectives
-    return (None, None) rather than a fabricated number. duration_ns is the op's measured device-FW
-    time; per_link_gbps is the fabric's real trained per-link speed, so %util is honest across machines.
+    Bytes moved differ by collective (all-gather / reduce-scatter each move (N-1)/N of the full
+    tensor, all-reduce moves 2x that), and reduce-scatter's OUTPUT is the 1/N scattered chunk — so
+    the kind is what lets the analytical model pick the right formula from the same op record.
     """
-    op_code = str(active_op_record.get("op_code", ""))
-    if "AllGather" not in op_code and "all_gather" not in op_code:
+    c = op_code
+    if "AllGather" in c or "all_gather" in c:
+        return "all_gather"
+    if "ReduceScatter" in c or "reduce_scatter" in c:
+        return "reduce_scatter"
+    # AllReduce, but not the Reduce that is a plain non-collective reduction.
+    if "AllReduce" in c or "all_reduce" in c:
+        return "all_reduce"
+    return None
+
+
+def _analytical_ccl_bw(active_op_record, duration_ns, per_link_gbps):
+    """(achieved per-link GB/s, %util) for a CCL collective op; (None, None) for anything else.
+
+    Fabric bytes for a collective are exact from output shape + ring_size + topology, so the BW is
+    computed here WITHOUT --collect-noc-traces (a full-grid collective overflows the profiler marker
+    buffer, corrupting any trace-derived byte count). Covers all-gather, reduce-scatter and
+    all-reduce; anything else returns (None, None) rather than a fabricated number. duration_ns is
+    the op's measured device-FW time; per_link_gbps is the fabric's real trained per-link speed, so
+    %util is honest across machines.
+    """
+    kind = _collective_kind(str(active_op_record.get("op_code", "")))
+    if kind is None:
         return None, None
     outs = active_op_record.get("output_tensors") or []
     attrs = active_op_record.get("attributes") or {}
@@ -1161,13 +1181,14 @@ def _analytical_ccl_bw(active_op_record, duration_ns, per_link_gbps):
         duration_ns = float(duration_ns) if duration_ns is not None else None
     except (TypeError, ValueError):
         duration_ns = None
-    return all_gather_fabric_bw(
+    return collective_fabric_bw(
         output_bytes,
         num_devices=_int_attr(attrs, "ring_size"),
         num_links=_int_attr(attrs, "num_links"),
         is_ring="Ring" in str(attrs.get("topology", "")),
         duration_ns=duration_ns,
         per_link_peak_gbps=per_link_gbps,
+        kind=kind,
     )
 
 
@@ -1982,9 +2003,10 @@ def generate_reports(
                         except ZeroDivisionError:
                             csv_row["PM FPU UTIL (%)"] = 0.0
 
-                # Analytical CCL fabric BW (all-gather): exact from output shape + topology, so it
-                # needs no --collect-noc-traces (a full-grid gather overflows the marker buffer).
-                # Blank for non-CCL ops; %util blank when the trained link speed can't be sourced.
+                # Analytical CCL fabric BW (all-gather / reduce-scatter / all-reduce): exact from
+                # output shape + topology, so it needs no --collect-noc-traces (a full-grid
+                # collective overflows the marker buffer). Blank for non-CCL ops; %util blank when
+                # the trained link speed can't be sourced.
                 ccl_bw_gbps, ccl_bw_pct = _analytical_ccl_bw(
                     active_op_record, csv_row.get("DEVICE FW DURATION [ns]"), ccl_link_gbps
                 )
