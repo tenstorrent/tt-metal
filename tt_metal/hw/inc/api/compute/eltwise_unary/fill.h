@@ -6,9 +6,9 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #ifndef ARCH_QUASAR
 #include "sfpu/ckernel_sfpu_fill.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #else
 #include "llk_sfpu/ckernel_sfpu_fill.h"
 #endif
