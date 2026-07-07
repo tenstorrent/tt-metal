@@ -17,7 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
+from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline, pixel_to_latent_frame
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_PROMPT,
     default_ltx_checkpoint,
@@ -670,6 +670,138 @@ def test_pipeline_distilled_i2v_two_images(
     for tag, _pcc, out_v, out_h, in_v, in_h in results:
         assert out_v < max(1.3, in_v + 0.4), f"gen{tag}: device V-seam (out={out_v:.2f} vs cond-image={in_v:.2f})"
         assert out_h < max(1.5, in_h + 0.4), f"gen{tag}: device H-seam (out={out_h:.2f} vs cond-image={in_h:.2f})"
+
+
+@pytest.mark.skipif(
+    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+    ],
+    ids=["bh_2x4sp1tp0"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_pipeline_distilled_i2v_arbitrary_frame(
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+):
+    """ARBITRARY-FRAME I2V: four consecutive gens in ONE process exercising the generalized
+    conditioning — first frame, last frame, last frame again (traced-replay steady state), and a
+    two-keyframe [first, last] gen. Each conditioning image pins its owning latent frame; the pin
+    is position-agnostic so the same trace serves every case. Gates: no hang across all gens, the
+    conditioned frame reproduces its image (PCC), and the last-again gen stays clean (the static /
+    speckle replay gate — three consecutive conditioned gens with zero collapse). NUM_FRAMES sets
+    the clip length so this doubles as the 10s (241f) i2v check; the last latent index is logged."""
+    import subprocess
+
+    from PIL import Image
+
+    cond_a = os.environ.get("LTX_I2V_COND_IMAGE_A", "/home/smarton/tt-metal/tmp/ltx-rt-opt/frames/f_001.png")
+    cond_b = os.environ.get("LTX_I2V_COND_IMAGE_B", "/home/smarton/tt-metal/tmp/ltx-rt-opt/frames/f_002.png")
+    for p in (cond_a, cond_b):
+        if not os.path.exists(p):
+            pytest.skip(f"conditioning image not found: {p}")
+
+    ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    num_frames = int(os.environ.get("NUM_FRAMES", "145"))
+    height = int(os.environ.get("HEIGHT", "1088"))
+    width = int(os.environ.get("WIDTH", "1920"))
+    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+    seed = int(os.environ.get("SEED", "10"))
+    prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+    last_frame = num_frames - 1
+    last_lat = pixel_to_latent_frame(last_frame, num_frames)
+    print(
+        f"\nI2V_ARB config: {num_frames}f {height}x{width} last_pixel={last_frame} -> last_latent={last_lat}",
+        flush=True,
+    )
+
+    pipeline = LTXDistilledPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=ckpt,
+        gemma_path=default_ltx_gemma(),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        run_warmup=traced,
+        traced=traced,
+        num_frames=num_frames,
+        height=height,
+        width=width,
+    )
+
+    if int(ttnn.distributed_context_get_rank()) != 0:
+        return
+
+    def _luma_png(path):
+        return torch.from_numpy(np.asarray(Image.open(path).convert("L")).astype("float32")).flatten()
+
+    def _luma_first(path):
+        raw = subprocess.run(
+            [_ffmpeg(), "-v", "error", "-i", str(path), "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
+            capture_output=True,
+        ).stdout
+        return torch.from_numpy(
+            np.asarray(Image.open(__import__("io").BytesIO(raw)).convert("L")).astype("float32")
+        ).flatten()
+
+    def _luma_last(path):
+        # -update 1 overwrites per decoded frame, so the tail seek leaves the true final frame.
+        dst = str(path) + ".last.png"
+        subprocess.run(
+            [_ffmpeg(), "-v", "error", "-sseof", "-0.5", "-i", str(path), "-update", "1", "-y", dst], check=True
+        )
+        return _luma_png(dst)
+
+    def _pcc(a, b):
+        n = min(a.numel(), b.numel())
+        return torch.corrcoef(torch.stack([a[:n], b[:n]]))[0, 1].item()
+
+    la, lb = _luma_png(cond_a), _luma_png(cond_b)
+
+    def _gen(images):
+        out = tmp_path / "arb.mp4"
+        pipeline.generate(
+            prompt, output_path=str(out), images=images, num_frames=num_frames, height=height, width=width, seed=seed
+        )
+        return out
+
+    # 1) first frame, 2) last frame, 3) last frame again (replay/static gate), 4) two keyframes.
+    o0 = _gen([(cond_a, 0, 1.0)])
+    p0 = _pcc(la, _luma_first(str(o0)))
+    print(f"I2V_ARB gen0 FIRST(A@0): first-vs-A PCC={p0:.4f}", flush=True)
+
+    o1 = _gen([(cond_a, last_frame, 1.0)])
+    p1 = _pcc(la, _luma_last(str(o1)))
+    print(f"I2V_ARB gen1 LAST(A@{last_frame}->lat{last_lat}): last-vs-A PCC={p1:.4f}", flush=True)
+
+    o2 = _gen([(cond_a, last_frame, 1.0)])
+    p2 = _pcc(la, _luma_last(str(o2)))
+    print(f"I2V_ARB gen2 LAST-AGAIN(A@{last_frame}): last-vs-A PCC={p2:.4f} (static/replay gate)", flush=True)
+
+    o3 = _gen([(cond_a, 0, 1.0), (cond_b, last_frame, 1.0)])
+    p3f = _pcc(la, _luma_first(str(o3)))
+    p3l = _pcc(lb, _luma_last(str(o3)))
+    print(f"I2V_ARB gen3 MULTI(A@0,B@{last_frame}): first-vs-A PCC={p3f:.4f} last-vs-B PCC={p3l:.4f}", flush=True)
+
+    if traced:
+        pipeline.release_traces()
+
+    # Frame-0 pin reproduces its image tightly; last/keyframe pins are looser (temporal drift +
+    # CRF) but must clearly track their conditioning — an unpinned frame would not correlate.
+    assert p0 > 0.85, f"gen0 first-frame does not reproduce cond A (PCC={p0:.4f})"
+    assert p1 > 0.5, f"gen1 last-frame does not track cond A (PCC={p1:.4f}) — last-frame pin broken"
+    assert p2 > 0.5, f"gen2 last-frame-again collapsed (PCC={p2:.4f}) — static/replay regression"
+    assert p3f > 0.7, f"gen3 keyframe first-frame lost cond A (PCC={p3f:.4f})"
+    assert p3l > 0.5, f"gen3 keyframe last-frame lost cond B (PCC={p3l:.4f})"
 
 
 @pytest.mark.skipif(
