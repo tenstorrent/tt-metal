@@ -323,6 +323,10 @@ def scaled_model_heads_for_mesh(model: ModelConfig, mesh_config: MeshConfig) -> 
 # Accuracy threshold constants
 DEFAULT_PCC_THRESHOLD = 0.994
 DEFAULT_RMSE_THRESHOLD = 0.05
+# fp32_dest_acc_en=True routes cb_sum_A/B and cb_qk_im through fp32 CBs so the running
+# softmax denominator and QK intermediates keep fp32 precision through the ring loop.
+# The tighter threshold catches regressions that would silently drop those CBs back to bf16.
+DEFAULT_PCC_THRESHOLD_FP32 = 0.997
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 
 from tests.nightly.sdpa_perf_utils import (
@@ -486,7 +490,7 @@ class RingJointSDPARuntime:
     compute_kernel_config: object
 
 
-def open_ring_joint_sdpa_runtime(mesh_config):
+def open_ring_joint_sdpa_runtime(mesh_config, *, fp32_dest_acc_en: bool = False):
     use_ring = mesh_config.sp_size > 2
     fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
     topology = Topology.Ring if use_ring else Topology.Linear
@@ -536,7 +540,7 @@ def open_ring_joint_sdpa_runtime(mesh_config):
                 mesh_device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
-                fp32_dest_acc_en=False,
+                fp32_dest_acc_en=fp32_dest_acc_en,
                 packer_l1_acc=False,
             ),
         )
@@ -993,6 +997,7 @@ def run_ring_joint_sdpa_model_configs(
     do_check=True,
     num_iterations=1,
     runtime: RingJointSDPARuntime = None,
+    fp32_dest_acc_en: bool = False,
 ):
     """Run all q/k configs for one model while reusing shared inputs, mesh setup, and reference data."""
     qk_configs = list(qk_configs)
@@ -1021,7 +1026,7 @@ def run_ring_joint_sdpa_model_configs(
 
     owns_runtime = runtime is None
     if runtime is None:
-        runtime = open_ring_joint_sdpa_runtime(mesh_config)
+        runtime = open_ring_joint_sdpa_runtime(mesh_config, fp32_dest_acc_en=fp32_dest_acc_en)
 
     mesh_device = runtime.mesh_device
     topology = runtime.topology
@@ -1247,6 +1252,7 @@ def run_ring_mla_sdpa(
     num_iterations=1,
     kv_cache_batch_idx=None,
     cache_batch=2,
+    fp32_dest_acc_en: bool = False,
 ):
     """Run ring_mla where V is the first d_v columns of the single KV tensor."""
     if mesh_config.sp_size < 2:
@@ -1256,7 +1262,7 @@ def run_ring_mla_sdpa(
 
     torch.manual_seed(1234)
 
-    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, fp32_dest_acc_en=fp32_dest_acc_en)
     mesh_device = runtime.mesh_device
     topology = runtime.topology
     sp_axis = runtime.sp_axis
@@ -1402,6 +1408,7 @@ CHUNKED_PREFILL_N_CHUNKS = 11
 CHUNKED_PREFILL_CHUNK_SIZE = CHUNKED_PREFILL_PER_DEVICE_CHUNK * MESH_CONFIG.sp_size
 CHUNKED_PREFILL_TOTAL_SEQ = CHUNKED_PREFILL_CHUNK_SIZE * CHUNKED_PREFILL_N_CHUNKS
 CHUNKED_PREFILL_PCC_THRESHOLD = 0.99
+CHUNKED_PREFILL_PCC_THRESHOLD_FP32 = 0.994
 # Q/V heads are sharded across tp_axis, so every device in a ring holds the same
 # head shard => heads-per-ring == heads-per-device. nhq/nhv below are PER RING; the
 # run multiplies by tp_size for the total head count (e.g. 16 per ring => 64 total on
@@ -1446,6 +1453,7 @@ def run_ring_joint_sdpa_chunked(
     use_ring_mla: bool = False,
     do_check: bool = True,
     reuse_kv_buffer: bool = False,
+    fp32_dest_acc_en: bool = False,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1526,7 +1534,7 @@ def run_ring_joint_sdpa_chunked(
 
     b = BATCH_SIZE
 
-    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, fp32_dest_acc_en=fp32_dest_acc_en)
     mesh_device = runtime.mesh_device
     topology = runtime.topology
     sp_axis = runtime.sp_axis
@@ -2842,7 +2850,8 @@ def run_ring_mla_sdpa_chunked_indexed_kv_cache(
         close_ring_joint_sdpa_runtime(runtime)
 
 
-def test_ring_joint_attention_chunked_nd_sharded_indexed_kv_cache_accuracy():
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
+def test_ring_joint_attention_chunked_nd_sharded_indexed_kv_cache_accuracy(fp32_dest_acc_en):
     """Validate chunked direct ND-sharded K/V cache inputs selected by kv_cache_batch_idx."""
     mesh_config = MESH_CONFIG
     local_heads = 4
@@ -2864,16 +2873,18 @@ def test_ring_joint_attention_chunked_nd_sharded_indexed_kv_cache_accuracy():
         seq_len=total_seq_len,
     )
 
+    pcc_threshold = DEFAULT_PCC_THRESHOLD_FP32 if fp32_dest_acc_en else DEFAULT_PCC_THRESHOLD
     run_ring_joint_sdpa_chunked(
         mesh_config,
         model,
         chunk_size=chunk_seq_len * mesh_config.sp_size,
         total_seq=total_seq_len * mesh_config.sp_size,
-        pcc_threshold=DEFAULT_PCC_THRESHOLD,
+        pcc_threshold=pcc_threshold,
         rmse_threshold=DEFAULT_RMSE_THRESHOLD,
         q_chunk_size=model.q_chunk_sizes[0],
         k_chunk_size=model.k_chunk_sizes[0],
         indexed_nd_sharded_kv_cache=True,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
@@ -3109,8 +3120,9 @@ def test_ring_mla_sweep_perf_impl(
 
 
 # === TEST 2: ACCURACY VERIFICATION ===
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
 @pytest.mark.parametrize("model_name", TEST_CONFIG_MODELS)
-def test_ring_joint_attention_sdpa_accuracy(model_name):
+def test_ring_joint_attention_sdpa_accuracy(model_name, fp32_dest_acc_en):
     """
     Accuracy verification for every q/k chunk-size config in a model.
 
@@ -3119,12 +3131,14 @@ def test_ring_joint_attention_sdpa_accuracy(model_name):
     - RMSE (Root Mean Square Error): Measures absolute error magnitude
 
     THRESHOLD RATIONALE:
-    - PCC = 0.994: Relaxed for joint attention complexity
+    - PCC = 0.994 (bf16), 0.997 (fp32 dest): fp32 CBs preserve softmax denominator
+      and QK precision through the ring loop, so the fp32 branch must clear a
+      strictly tighter floor to catch regressions that silently drop back to bf16.
     """
     mesh_config = MESH_CONFIG
     model = MODEL_CONFIGS[model_name]
 
-    pcc_threshold = DEFAULT_PCC_THRESHOLD
+    pcc_threshold = DEFAULT_PCC_THRESHOLD_FP32 if fp32_dest_acc_en else DEFAULT_PCC_THRESHOLD
     rmse_threshold = DEFAULT_RMSE_THRESHOLD
     run_ring_joint_sdpa_model_configs(
         mesh_config,
@@ -3132,9 +3146,11 @@ def test_ring_joint_attention_sdpa_accuracy(model_name):
         get_model_qk_configs(model),
         pcc_threshold=pcc_threshold,
         rmse_threshold=rmse_threshold,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
 @pytest.mark.parametrize(
     "b,sq,nhq,nhk,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_balanced,q_dtype,kv_dtype",
     RING_MLA_TEST_CONFIGS,
@@ -3153,7 +3169,9 @@ def test_ring_mla_accuracy(
     is_balanced,
     q_dtype,
     kv_dtype,
+    fp32_dest_acc_en,
 ):
+    pcc_threshold = DEFAULT_PCC_THRESHOLD_FP32 if fp32_dest_acc_en else DEFAULT_PCC_THRESHOLD
     run_ring_mla_sdpa(
         MESH_CONFIG,
         b,
@@ -3168,6 +3186,8 @@ def test_ring_mla_accuracy(
         q_dtype,
         kv_dtype,
         is_balanced=is_balanced,
+        pcc_threshold=pcc_threshold,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
@@ -3719,22 +3739,26 @@ MINIMAX3_GQA_CHUNKED_ACCURACY_CHUNK_SIZE = CHUNKED_PREFILL_CHUNK_SIZE
 MINIMAX3_GQA_CHUNKED_ACCURACY_TOTAL_SEQ = 3 * MINIMAX3_GQA_CHUNKED_ACCURACY_CHUNK_SIZE
 
 
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(
     "model_name,qk_configs",
     CHUNKED_TEST_CONFIGS,
     ids=CHUNKED_TEST_CONFIG_IDS,
 )
-def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, qk_configs, chunk_size):
+def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, qk_configs, chunk_size, fp32_dest_acc_en):
     """Validate ring joint SDPA chunked prefill with reusable max-sized K/V buffers."""
     mesh_config = MESH_CONFIG
 
+    pcc_threshold = CHUNKED_PREFILL_PCC_THRESHOLD_FP32 if fp32_dest_acc_en else CHUNKED_PREFILL_PCC_THRESHOLD
     run_ring_joint_sdpa_chunked(
         mesh_config,
         CHUNKED_PREFILL_MODEL_CONFIGS[model_name],
         chunk_size=chunk_size,
         qk_configs=qk_configs,
         persistent_buffer_mode="reuse_max",
+        pcc_threshold=pcc_threshold,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
