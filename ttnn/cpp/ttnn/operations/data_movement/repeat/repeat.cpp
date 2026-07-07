@@ -16,6 +16,8 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "device/repeat_codegen_device_operation.hpp"
+#include "device/repeat_codegen_supported.hpp"
 #include "device/repeat_device_operation.hpp"
 #include "device/repeat_utils.hpp"
 #include "repeat.hpp"
@@ -119,7 +121,11 @@ bool is_tile_repeat_eligible(const ttnn::Tensor& tensor) {
 }
 
 ttnn::Tensor repeat_dim_tile(
-    const ttnn::Tensor& tensor, const uint32_t dim, const uint32_t repetitions, const MemoryConfig& output_mem_config) {
+    const ttnn::Tensor& tensor,
+    const uint32_t dim,
+    const uint32_t repetitions,
+    const MemoryConfig& output_mem_config,
+    ttnn::operations::data_movement::repeat::ImplementationSelector implementation) {
     const auto& shape = tensor.logical_shape();
     const auto rank = shape.rank();
 
@@ -150,8 +156,46 @@ ttnn::Tensor repeat_dim_tile(
         lower = lower_elements * h_tiles * w_tiles;
     }
 
-    return ttnn::prim::repeat_tile(
-        tensor, repetitions, dim, output_mem_config, higher, rep_dim_pages, lower, tile_page_size);
+    // Routing: higher/rep_dim_pages/lower are computed identically to repeat_codegen's own host
+    // math for dim in {0, 1, 2} on a rank-4 tensor, so both prims can share this one geometry
+    // calculation above — only the final dispatch differs. See repeat_codegen_supported.hpp.
+    using ttnn::operations::data_movement::repeat::ImplementationSelector;
+    const bool codegen_ok = ttnn::prim::supported_by_codegen(tensor, static_cast<int32_t>(dim));
+    switch (implementation) {
+        case ImplementationSelector::Codegen:
+            TT_FATAL(
+                codegen_ok,
+                "repeat: implementation=\"codegen\" requested but dim {} is not codegen-eligible (requires "
+                "unsharded 4D TILE bfloat16, dim in {{0,1,2}}, H/W tile-aligned)",
+                dim);
+            return ttnn::prim::repeat_codegen(
+                tensor,
+                repetitions,
+                static_cast<int32_t>(dim),
+                output_mem_config,
+                higher,
+                rep_dim_pages,
+                lower,
+                tile_page_size);
+        case ImplementationSelector::Native:
+            return ttnn::prim::repeat_tile(
+                tensor, repetitions, dim, output_mem_config, higher, rep_dim_pages, lower, tile_page_size);
+        case ImplementationSelector::Auto:
+        default:
+            if (codegen_ok) {
+                return ttnn::prim::repeat_codegen(
+                    tensor,
+                    repetitions,
+                    static_cast<int32_t>(dim),
+                    output_mem_config,
+                    higher,
+                    rep_dim_pages,
+                    lower,
+                    tile_page_size);
+            }
+            return ttnn::prim::repeat_tile(
+                tensor, repetitions, dim, output_mem_config, higher, rep_dim_pages, lower, tile_page_size);
+    }
 }
 
 }  // namespace ttnn::operations::data_movement::detail
@@ -161,7 +205,9 @@ namespace ttnn {
 ttnn::Tensor repeat(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<uint32_t>& repetition_vector,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<std::string>& implementation) {
+    const auto selector = operations::data_movement::repeat::parse_implementation(implementation);
     auto [working_tensor, working_repetition_vector] =
         operations::data_movement::detail::match_input_rank(input_tensor, repetition_vector);
     // Strip shard_spec from sharded input; device op re-derives for new output shape.
@@ -196,6 +242,22 @@ ttnn::Tensor repeat(
     if (std::all_of(
             working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](auto x) { return x == 1; })) {
         return input_tensor;
+    }
+
+    // Early fail for implementation="codegen": RM-layout / sub-tile-aligned inputs never reach
+    // repeat_dim_tile (they take the RM branch below) and would otherwise silently succeed via
+    // native instead of honoring the forced selector. Check every repeated dim up front.
+    if (selector == operations::data_movement::repeat::ImplementationSelector::Codegen) {
+        for (size_t i = 0; i < working_repetition_vector.size(); ++i) {
+            if (working_repetition_vector[i] == 1) {
+                continue;
+            }
+            TT_FATAL(
+                ttnn::prim::supported_by_codegen(working_tensor, static_cast<int32_t>(i)),
+                "repeat: implementation=\"codegen\" requested but dim {} is not codegen-eligible (requires "
+                "unsharded 4D TILE bfloat16, dim in {{0,1,2}}, H/W tile-aligned)",
+                i);
+        }
     }
 
     // Native path: sharded input, single-axis repeat, predicate accepts. Else composite.
@@ -243,8 +305,8 @@ ttnn::Tensor repeat(
                 continue;
             }
             auto dim = working_repetition_vector.crend() - it - 1;
-            working_tensor =
-                operations::data_movement::detail::repeat_dim_tile(working_tensor, dim, *it, working_output_mem_config);
+            working_tensor = operations::data_movement::detail::repeat_dim_tile(
+                working_tensor, dim, *it, working_output_mem_config, selector);
         }
     } else {
         // RM path: TILE->RM, repeat, RM->TILE.
@@ -289,9 +351,13 @@ ttnn::Tensor repeat(
     return working_tensor;
 }
 
-ttnn::Tensor repeat(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims) {
+ttnn::Tensor repeat(
+    const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims, const std::optional<std::string>& implementation) {
     return ttnn::repeat(
-        input_tensor, ttsl::SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt);
+        input_tensor,
+        ttsl::SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()),
+        std::nullopt,
+        implementation);
 }
 
 }  // namespace ttnn

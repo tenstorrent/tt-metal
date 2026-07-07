@@ -121,7 +121,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/data_movement/pad/pad_nanobind.cpp
     cpp/ttnn/operations/data_movement/permute/permute_nanobind.cpp
     cpp/ttnn/operations/data_movement/repeat/repeat_nanobind.cpp
-    cpp/ttnn/operations/data_movement/repeat_codegen/repeat_codegen_nanobind.cpp
     cpp/ttnn/operations/data_movement/repeat_interleave/repeat_interleave_nanobind.cpp
     cpp/ttnn/operations/data_movement/reshape_view/reshape_nanobind.cpp
     cpp/ttnn/operations/data_movement/reshape_on_device/reshape_nanobind.cpp

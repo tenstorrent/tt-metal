@@ -6,7 +6,7 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 
-#include "ttnn/operations/data_movement/repeat_codegen/device/repeat_codegen_device_operation_types.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_codegen_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {

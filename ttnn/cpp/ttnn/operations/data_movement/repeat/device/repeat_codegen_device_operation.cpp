@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/data_movement/repeat_codegen/device/repeat_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_codegen_device_operation.hpp"
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_codegen_supported.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::prim {
@@ -19,10 +20,15 @@ void RepeatCodegenDeviceOperation::validate_on_program_cache_miss(
     const Tensor& input = tensor_args.input;
     TT_FATAL(input.storage_type() == tt::tt_metal::StorageType::DEVICE, "repeat_codegen: input must be on device");
     TT_FATAL(input.buffer() != nullptr, "repeat_codegen: input must be allocated");
-    TT_FATAL(input.layout() == tt::tt_metal::Layout::TILE, "repeat_codegen: TILE layout only");
-    TT_FATAL(input.dtype() == tt::tt_metal::DataType::BFLOAT16, "repeat_codegen: bfloat16 only");
     TT_FATAL(operation_attributes.m_tile_page_size_bytes > 0, "repeat_codegen: tile page params not set");
-    TT_FATAL(operation_attributes.m_repeat_dim >= 0, "repeat_codegen: repeat_dim must be >= 0");
+    // Same predicate the ttnn::repeat() host routing branch uses (review-checklist R4 agreement
+    // rule) — this prim must never be reached on an ineligible input except via forced
+    // implementation="codegen", in which case the host already TT_FATALs with a clearer message
+    // before dispatch. This is defense in depth, not the primary error surface.
+    TT_FATAL(
+        ttnn::prim::supported_by_codegen(input, operation_attributes.m_repeat_dim),
+        "repeat_codegen: input is not codegen-eligible (requires unsharded 4D TILE bfloat16, dim in "
+        "{{0,1,2}}, H/W tile-aligned) — this prim must not be reached directly on unsupported inputs");
 }
 
 RepeatCodegenDeviceOperation::spec_return_value_t RepeatCodegenDeviceOperation::compute_output_specs(
