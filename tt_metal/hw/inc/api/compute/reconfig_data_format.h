@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "common_globals.h"
 #include "sanitizer/api.h"
 
@@ -23,7 +24,7 @@ namespace ckernel {
  * operand pair before the next unpack operation.
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
-ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format<
@@ -40,10 +41,10 @@ ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t s
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format(
-    const uint32_t srca_old_operand,
-    const uint32_t srca_new_operand,
-    const uint32_t srcb_old_operand,
-    const uint32_t srcb_new_operand) {
+    const std::uint32_t srca_old_operand,
+    const std::uint32_t srca_new_operand,
+    const std::uint32_t srcb_old_operand,
+    const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format<
@@ -58,7 +59,7 @@ ALWI void reconfig_data_format(
  * Helper function to reconfigure srca data format.
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
-ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
+ALWI void reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srca<
@@ -72,7 +73,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
  * Helper function to reconfigure srca input data format, only if it differs from existing format.
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
-ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+ALWI void reconfig_data_format_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srca<
@@ -86,7 +87,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint3
  * Helper function to reconfigure srcb input data format.
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
-ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srcb<
@@ -100,7 +101,7 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
  * Helper function to reconfigure srcb input data format, only if it differs from existing format.
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
-ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srcb<
@@ -121,7 +122,12 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
  * not change. Callers pass the operands in natural order (in0_cb_id, in1_cb_id); the reversed SrcA/SrcB
  * assignment is handled inside this helper (SrcA tile size <- in1, SrcB tile size <- in0), matching the
  * GPR-fed base-address auto-increment the matmul MOP performs (TILE_SIZE_A drives the SrcA stream,
- * TILE_SIZE_B drives the SrcB stream). It re-asserts only tile-dimension state, never data formats.
+ * TILE_SIZE_B drives the SrcB stream). The tile-descriptor format *value* is left unchanged, but this
+ * is not a zero-footprint call for a reconfig/hazard audit: it runs the full
+ * llk_unpack/llk_math_reconfig_data_format_src* paths, so the unpack THCON src/dst format fields are
+ * rewritten (to their existing values), each unpack call issues TTI_STALLWAIT(STALL_CFG, UNPACK*), and
+ * on WH the MATH pipe additionally RMWs ALU_FORMAT_SPEC_REG0/1_Src* and drains via
+ * TTI_STALLWAIT(STALL_CFG, MATH | WAIT_SFPU).
  *
  * NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed into the unpack MOP at op init, so this
  * helper is a no-op; re-call matmul_init(in0_cb_id, in1_cb_id) for the new operand pair instead.
@@ -134,17 +140,20 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
  * | Function   | in1_cb_id | Second matmul input CB (maps to SrcA)         | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void reconfig_matmul_tile_dims(const uint32_t in0_cb_id, const uint32_t in1_cb_id) {
+ALWI void reconfig_matmul_tile_dims(const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     // Matmul reverses the operand -> source mapping (in0 -> SrcB, in1 -> SrcA), so the SrcA tile
     // descriptor / TILE_SIZE_A must come from in1 and the SrcB tile descriptor / TILE_SIZE_B from in0.
-    // FACE_ROW_MAJOR selects the tile-dim reconfig path (re-asserts TILE_SIZE + Z-stride / x_end);
-    // to_from_int8 is false because the data formats are unchanged.
+    // On the two UNPACK calls, FACE_ROW_MAJOR selects the tile-dim reconfig path, which re-asserts
+    // TILE_SIZE plus the tile x_dim, Z-stride and Z-dim/num_faces descriptor fields; to_from_int8 is
+    // false because the data formats are unchanged.
     UNPACK(
         (llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::FACE_ROW_MAJOR, false>(in1_cb_id)));
     UNPACK(
         (llk_unpack_reconfig_data_format_srcb<DST_ACCUM_MODE, p_dim_stride_target::FACE_ROW_MAJOR, false>(in0_cb_id)));
+    // The MATH calls take <is_fp32_dest_acc_en, to_from_int8> only -- there is no tile-dim path here;
+    // with to_from_int8 false they re-assert the (unchanged) SrcA/SrcB math format state.
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE, false>(in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, false>(in0_cb_id)));
 #endif
@@ -173,7 +182,7 @@ ALWI void reconfig_matmul_tile_dims(const uint32_t in0_cb_id, const uint32_t in1
  */
 // clang-format on
 template <bool is_tile_dim_reconfig_en = false>
-ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
+ALWI void pack_reconfig_data_format(const std::uint32_t new_cb_id) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     static_assert(
@@ -213,7 +222,7 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
  */
 // clang-format on
 template <bool is_tile_dim_reconfig_en = false>
-ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new_cb_id) {
+ALWI void pack_reconfig_data_format(const std::uint32_t old_cb_id, const std::uint32_t new_cb_id) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     static_assert(
