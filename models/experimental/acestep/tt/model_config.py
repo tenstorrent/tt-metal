@@ -336,16 +336,18 @@ def build_condition_encoder(args: AceStepModelConfig, mesh_device) -> AceStepCon
     )
 
 
-def _text_encoder_layer_config(rl, args, device, compute_kernel_config=None):
+def _text_encoder_layer_config(rl, args, device, compute_kernel_config=None, fp32_residual=False):
     """AceStepEncoderLayerConfig for a Qwen3 text-encoder layer (full attention, causal via mask).
 
     compute_kernel_config: optional matmul fidelity override (None keeps the attention/MLP HiFi2
     defaults; the LM planner passes HiFi4+fp32-acc since its fp32 reference rewards higher precision).
+    fp32_residual: carry the residual stream in fp32 (LM only; preserves its massive-activation ch).
     """
     a = rl.self_attn
     dt = args.weight_dtype
     return AceStepEncoderLayerConfig(
         compute_kernel_config=compute_kernel_config,
+        fp32_residual=fp32_residual,
         input_layernorm_weight=lazy_norm(rl.input_layernorm.weight, device, dt),
         post_attention_layernorm_weight=lazy_norm(rl.post_attention_layernorm.weight, device, dt),
         wq=lazy_wT(a.q_proj.weight, device, dt),
@@ -365,7 +367,7 @@ def _text_encoder_layer_config(rl, args, device, compute_kernel_config=None):
     )
 
 
-def _build_qwen3_encoder(mesh_device, subdir: str, *, dtype=None, compute_kernel_config=None):
+def _build_qwen3_encoder(mesh_device, subdir: str, *, dtype=None, compute_kernel_config=None, fp32_residual=False):
     """Build a TT AceStepTextEncoder from a causal Qwen3Model checkpoint in the pipeline bundle.
 
     Both the ACE-Step text encoder (Qwen3-Embedding-0.6B) and the 5Hz LM planner
@@ -390,7 +392,9 @@ def _build_qwen3_encoder(mesh_device, subdir: str, *, dtype=None, compute_kernel
         embed_tokens=hf_te.embed_tokens.weight.detach(),
         norm_weight=lazy_norm(hf_te.norm.weight, mesh_device, dt),
         layer_configs=[
-            _text_encoder_layer_config(rl, args, mesh_device, compute_kernel_config=compute_kernel_config)
+            _text_encoder_layer_config(
+                rl, args, mesh_device, compute_kernel_config=compute_kernel_config, fp32_residual=fp32_residual
+            )
             for rl in hf_te.layers
         ],
         hidden_size=hf_te.config.hidden_size,
@@ -423,7 +427,9 @@ def build_lm_planner(mesh_device, *, dtype=None):
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
-    return _build_qwen3_encoder(mesh_device, "acestep-5Hz-lm-1.7B", dtype=dtype, compute_kernel_config=ckc)
+    return _build_qwen3_encoder(
+        mesh_device, "acestep-5Hz-lm-1.7B", dtype=dtype, compute_kernel_config=ckc, fp32_residual=True
+    )
 
 
 def build_vae_decoder(mesh_device, *, dtype=None):

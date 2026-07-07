@@ -60,6 +60,10 @@ class AceStepEncoderLayerConfig:
     # The LM planner passes HiFi4+fp32-acc here (its fp32 reference rewards higher precision, unlike
     # the DiT-vs-bf16-reference regime); the text encoder leaves it None (unchanged HiFi2).
     compute_kernel_config: object | None = None
+    # Carry the residual stream in fp32. The LM has a massive-activation channel (ch 1999) that grows
+    # to absmax ~28000 across 24 layers; in bf16 (quant step ~128 at that magnitude) it corrupts the
+    # residual. fp32 residual preserves it. LM sets True; text encoder leaves False (bf16, unchanged).
+    fp32_residual: bool = False
 
 
 class AceStepEncoderLayer(LightweightModule):
@@ -118,13 +122,21 @@ class AceStepEncoderLayer(LightweightModule):
         return cls(config)
 
     def forward(self, hidden_states, cos, sin, attn_mask=None):
+        # fp32_residual: carry the residual accumulator in fp32 so the massive-activation channel
+        # (ch 1999, grows to absmax ~28000 over 24 layers) doesn't compound bf16 rounding each add.
+        # The RMSNorm still reads it (rms_norm accepts fp32) and produces bf16 for attn/MLP (which
+        # require bf16). Only the residual add + norm input stay fp32.
+        fp32r = self.config.fp32_residual
+        dt = ttnn.float32 if fp32r else None
         residual = hidden_states
-        x = self.input_layernorm.forward(hidden_states, mode="prefill")
+        norm_in = ttnn.typecast(hidden_states, ttnn.bfloat16) if fp32r else hidden_states
+        x = self.input_layernorm.forward(norm_in, mode="prefill")
         x = self.self_attn.forward(x, cos=cos, sin=sin, attn_mask=attn_mask)
-        hidden_states = ttnn.add(residual, x)
+        hidden_states = ttnn.add(residual, x, dtype=dt)
 
         residual = hidden_states
-        x = self.post_attention_layernorm.forward(hidden_states, mode="prefill")
+        norm_in = ttnn.typecast(hidden_states, ttnn.bfloat16) if fp32r else hidden_states
+        x = self.post_attention_layernorm.forward(norm_in, mode="prefill")
         # MLP1D is position-wise but flattens [B,1,seq,H] -> [1,1,B*seq,H] (it assumes a single
         # sequence). For batch>1, flatten batch into the seq dim explicitly (math-identical since the
         # MLP acts per-position), run, then restore [B,1,seq,H] to match the residual.
@@ -136,5 +148,5 @@ class AceStepEncoderLayer(LightweightModule):
             x = ttnn.reshape(x, (b, 1, seq, h))
         else:
             x = self.mlp.forward(x, mode="prefill")
-        hidden_states = ttnn.add(residual, x)
+        hidden_states = ttnn.add(residual, x, dtype=dt)
         return hidden_states
