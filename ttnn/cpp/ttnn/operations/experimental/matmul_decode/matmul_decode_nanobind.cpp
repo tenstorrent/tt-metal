@@ -21,13 +21,15 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         Returns the matrix product of two tensors.
 
         Args:
-            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied.
+            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. A rank-3 tensor
+                ([batch, M, K]) selects the batched program factory; the fold geometry is inferred
+                from the operand shapes.
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied.
 
         Keyword Args:
             partial_width_sharded (bool, optional): force the partial width-sharded program
                 factory, where B is sharded along both K and N and the K-partials are reduced
-                across cores. Defaults to False (factory chosen automatically).
+                across cores. Ignored for rank-3 (batched) A. Defaults to False.
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to None.
             output_mem_config (ttnn.MemoryConfig, optional): memory config for the output tensor.
                 Defaults to None.
