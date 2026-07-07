@@ -97,6 +97,10 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
+    # TEMPORARY (revert after Kimi cache generation): the job-level timeout defaults to 360 (6h), which
+    # would kill the ~8h Kimi cache-gen leg before its 480-min step timeout. Raise the job ceiling to 9h.
+    # Applies to every matrix leg, but the others finish in minutes so only the generation leg is affected.
+    timeout-minutes: 540
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -107,7 +111,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - /mnt/MLPerf:/mnt/MLPerf
       options: "--device /dev/tenstorrent"
     defaults:
       run:

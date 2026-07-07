@@ -176,16 +176,30 @@
   owner_id: U08RL15T4N8
   team: models
 
+# TEMPORARY (revert after Kimi cache generation): runs the full 61-layer model from the dequantized HF
+# weights so this test generates and persists the Kimi ttnn cache into PREFILL_TTNN_CACHE. Only the single
+# deepest scenario runs -- its runner builds all 61 layers at startup and writes the full cache, so one
+# scenario suffices and stays within the step ceiling. Cache generation happens during runner startup, so
+# the harness readiness timeout (PREFILL_CI_RUNNER_READY_TIMEOUT_S) is raised too, not just pytest
+# --timeout (~8h ceiling). The weights dir basename has a ".", which the transformers trust_remote_code
+# import cannot handle, so we expose a dot-free symlink under /tmp and point PREFILL_HF_MODEL at it.
+# IMPORTANT: keep this cmd free of apostrophes -- the impl workflow embeds the matrix in single quotes
+# (MATRIX=...), so an apostrophe in any cmd breaks the load-test-matrix step with a bash syntax error.
 - name: "(Galaxy) Kimi prefill runner e2e tests"
   cmd: |
     export PREFILL_MODEL=kimi_k2_6
+    export PREFILL_NUM_LAYERS=61
+    ln -sfn /mnt/MLPerf/huggingface/hub/Kimi-K2.6-dequantized /tmp/Kimi-K2_6-dequantized
+    export PREFILL_HF_MODEL=/tmp/Kimi-K2_6-dequantized
     export PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/moonshotai/Kimi-K2.6-Cache/CI/ PREFILL_TRACE_DIR=/mnt/MLPerf/kimi-prefill-cache/vllm-kimi-k26-codedebug-56320 MESH_DEVICE=TG
-    EXPECT_NUM_TESTS=3 pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py -vvv --tb=short --timeout=2400
+    export PREFILL_CI_RUNNER_READY_TIMEOUT_S=28800 PREFILL_CI_PRODUCER_TIMEOUT_S=28800
+    EXPECT_NUM_TESTS=1 pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py -k single_user_full_depth -vvv --tb=short --timeout=28800
   test_type: prefill_runner
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 60
+      # TEMPORARY: 480 (8h) for one-shot 61-layer cache generation; revert to 60 after.
+      timeout: 480
   owner_id: U09L76N1MAT # Nenad Babin
   team: models
 
