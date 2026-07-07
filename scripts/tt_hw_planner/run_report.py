@@ -22,6 +22,14 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+_REPORT_EMITTED = False
+
+
+def reset_run_report() -> None:
+    """Clear the emit-once guard at the start of a bring-up run."""
+    global _REPORT_EMITTED
+    _REPORT_EMITTED = False
+
 
 def emit_run_report(
     model_id: str,
@@ -31,21 +39,38 @@ def emit_run_report(
     iterations_run: Optional[int] = None,
     demo_emit_status: Optional[str] = None,
     demo_pytest_status: Optional[str] = None,
+    stop_reason: str = "",
+    echo_terminal: bool = True,
 ) -> Optional[Path]:
-    """Write ``<demo_dir>/RUN_REPORT.md`` summarizing the run.
+    """Write ``<demo_dir>/RUN_REPORT.md`` summarizing the run, and (when
+    ``echo_terminal``) print a concise version to the terminal.
+
+    This is the SINGLE end-of-run report for auto-up/up/promote — module
+    placement + per-module pytest + why-not-graduated + reproduce commands
+    (the markdown file) plus, on the terminal, the stop reason, any BLOCKER
+    (what to install), and the NEXT STEPS (promote / emit-e2e).
 
     Returns the path written, or ``None`` if write failed (failure is
-    non-fatal — never propagates).
+    non-fatal — never propagates). Emit-once per run: a second call in the
+    same run is a no-op (so run_bringup_cc, the up/promote wrappers, and the
+    fsm loop can all call it without producing duplicate reports).
     """
+    global _REPORT_EMITTED
+    if _REPORT_EMITTED:
+        return None
     try:
-        return _emit_run_report_impl(
+        _p = _emit_run_report_impl(
             model_id,
             demo_dir,
             converged=converged,
             iterations_run=iterations_run,
             demo_emit_status=demo_emit_status,
             demo_pytest_status=demo_pytest_status,
+            stop_reason=stop_reason,
+            echo_terminal=echo_terminal,
         )
+        _REPORT_EMITTED = True
+        return _p
     except Exception as exc:
         import sys
 
@@ -61,6 +86,8 @@ def _emit_run_report_impl(
     iterations_run: Optional[int],
     demo_emit_status: Optional[str],
     demo_pytest_status: Optional[str],
+    stop_reason: str = "",
+    echo_terminal: bool = True,
 ) -> Path:
     from .final_categorization import build_final_categorization
     from .overlay_manager import load_persistent_skips
@@ -83,10 +110,23 @@ def _emit_run_report_impl(
         lines.append(f"**Did not converge** after {iterations_run or '?'} iteration(s).")
     else:
         lines.append("Run state: report generated outside the auto-iterate loop.")
+    if stop_reason:
+        lines.append(f"- Run ended: {stop_reason}")
     if demo_emit_status:
         lines.append(f"- Demo emission: `{demo_emit_status}`")
     if demo_pytest_status:
         lines.append(f"- Demo pytest:   `{demo_pytest_status}`")
+    blocker_text = ""
+    try:
+        blocker_text = (demo_dir / ".loader_blocker.txt").read_text().strip()
+    except Exception:
+        blocker_text = ""
+    if blocker_text:
+        lines.append("")
+        lines.append("### Blocker — what to install / do")
+        lines.append("")
+        for bl in blocker_text.splitlines():
+            lines.append(f"  {bl}")
     lines.append("")
 
     lines.append("## Placement summary")
@@ -137,12 +177,12 @@ def _emit_run_report_impl(
     lines.append("")
 
     # --- Reproduce: exact commands to re-run every reported result ---
-    _demo_files = [
-        p for p in sorted((demo_dir / "demo").glob("*.py")) if p.name != "__init__.py"
-    ] if (demo_dir / "demo").is_dir() else []
-    _e2e_files = (
-        sorted((demo_dir / "tests" / "e2e").glob("test_*.py")) if (demo_dir / "tests" / "e2e").is_dir() else []
+    _demo_files = (
+        [p for p in sorted((demo_dir / "demo").glob("*.py")) if p.name != "__init__.py"]
+        if (demo_dir / "demo").is_dir()
+        else []
     )
+    _e2e_files = sorted((demo_dir / "tests" / "e2e").glob("test_*.py")) if (demo_dir / "tests" / "e2e").is_dir() else []
     lines.append("## Reproduce")
     lines.append("")
     lines.append("Run from the repo root. Per-component PCC (on device):")
@@ -199,8 +239,42 @@ def _emit_run_report_impl(
             f"- **{tool_bugs} TOOL_BUG entry** — fix the scaffolder, then run "
             f"`overlay-clear-skips --category TOOL_BUG {model_id}`"
         )
+    _ungraduated = len(cat_report.kernel_missing) + len(cat_report.pending)
+    if _ungraduated:
+        lines.append(
+            f"- **{_ungraduated} component(s) not graduated** — resume where it left off (already-graduated "
+            f"components are kept):"
+        )
+        lines.append(f"  - `python -m scripts.tt_hw_planner promote {model_id} --box <BOX> --mesh <MESH>`")
+    elif cat_report.on_device:
+        lines.append("- **All components graduated** — wire the end-to-end pipeline:")
+        lines.append(f"  - `python -m scripts.tt_hw_planner emit-e2e {model_id}`")
     lines.append("")
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(lines))
+
+    if echo_terminal:
+        bar = "=" * 78
+        print("\n" + bar)
+        print(f"  BRING-UP REPORT — {model_id}")
+        if stop_reason:
+            print(f"  RUN ENDED: {stop_reason}")
+        print(
+            f"  on device: {len(cat_report.on_device)}   kernel-missing: {len(cat_report.kernel_missing)}   "
+            f"pending: {len(cat_report.pending)}"
+        )
+        if blocker_text:
+            print("  " + "-" * 74)
+            for bl in blocker_text.splitlines():
+                print(f"  {bl}")
+            print("  " + "-" * 74)
+        if _ungraduated:
+            print(f"  NEXT STEP: resume the {_ungraduated} not-graduated component(s):")
+            print(f"    python -m scripts.tt_hw_planner promote {model_id} --box <BOX> --mesh <MESH>")
+        elif cat_report.on_device:
+            print("  NEXT STEP: wire the pipeline:")
+            print(f"    python -m scripts.tt_hw_planner emit-e2e {model_id}")
+        print(f"  full report + per-module pytest → {report_path}")
+        print(bar)
     return report_path

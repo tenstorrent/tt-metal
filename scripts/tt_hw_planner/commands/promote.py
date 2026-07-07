@@ -151,14 +151,6 @@ def _cmd_promote_impl(args) -> int:
             mesh=getattr(args, "mesh", None),
             max_attempts=getattr(args, "auto_max_attempts_per_component", 2),
         )
-        try:
-            from ..run_report import emit_run_report
-
-            _rp = emit_run_report(MODEL, demo_dir, converged=(_cc_rc == 0))
-            if _rp:
-                print(f"  [run-report] wrote {_rp}")
-        except Exception:
-            pass
         return _cc_rc
 
     mem_fit_rc = _enforce_memory_fit_or_abort(
