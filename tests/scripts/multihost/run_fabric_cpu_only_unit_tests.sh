@@ -87,12 +87,12 @@ TT_RUN_FLAGS=(--force-rediscovery)
 # _MAPPING marks a mock-cluster-rank-binding mapping (no suffix = a single-host cluster_desc yaml).
 SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revAB_aisleD/SC16_32x4_revAB_aisleD_mapping.yaml"
 SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revAB_aisleD/SC16_32x4_revAB_aisleD_single_pod_mapping.yaml"
-# revAB subtorus / system-120 (bh-glx-120-*). tt-cluster-descriptors keeps the directory name
-# SC36_32x4_revAB_aisleC until issue #48868 lands; tt-metal uses subtorus naming below.
-SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revAB_aisleC"
-SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="${SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE}/SC20_32x4_revAB_aisleC_mapping.yaml"
+# revAB subtorus / system-120 (bh-glx-120-*). tt-cluster-descriptors renamed this set to
+# SC36_32x4_revAB_subtorus_aisleC (tt-cluster-descriptors#9, issue #48868), matching tt-metal's subtorus naming.
+SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revAB_subtorus_aisleC"
+SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="${SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE}/SC20_32x4_revAB_subtorus_aisleC_mapping.yaml"
 # SC4 revAB single-pod (4-rank) mock: column-1 single-pod subset of the revAB subtorus Aisle C set.
-SC4_REVAB_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING="${SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE}/SC4_32x4_revAB_aisleC_mapping.yaml"
+SC4_REVAB_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING="${SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE}/SC4_32x4_revAB_subtorus_aisleC_mapping.yaml"
 # Full 20-host SC20 revC subtorus galaxy (system-110, hosts bh-glx-110-c01..c10). Used for the 80-stage Blitz
 # decode ring, which needs the subtorus wrap-around to close (the revAB subtorus mock above cannot).
 SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC20_32x4_revC_subtorus_aisleC_mapping.yaml"
