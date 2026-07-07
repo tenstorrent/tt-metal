@@ -80,15 +80,10 @@ CATEGORIES = {
     # Link health (traffic/data tests)
     "unhealthy": (r"Found Unhealthy Links|FAULTY LINKS REPORT", "RED", "Unhealthy links"),
     # Connectivity issues
-    "missing_ports": (
-        r"missing port/cable connections",
+    "missing_connections": (
+        r"missing port/cable connections|missing channel connections",
         "BLUE",
-        "Missing port connections",
-    ),
-    "missing_channels": (
-        r"missing channel connections",
-        "BLUE",
-        "Missing channel connections",
+        "Missing connections",
     ),
     "recovered_connections": (
         r"Rediscovering ethernet links after successful link retraining",
@@ -150,6 +145,10 @@ def get_category_label(cat: str) -> str:
         return CATEGORIES[cat][2]
     if cat == "inconclusive":
         return "Inconclusive"
+    if cat == "retrain_success":
+        return "Successful retrain"
+    if cat == "failed_retrain":
+        return "Missing connections"
     return cat
 
 
@@ -288,7 +287,7 @@ def parse_int(s: str) -> int:
 def _has_qsfp_connections(analyses: list[LogAnalysis]) -> bool:
     """Check if any missing port connections are QSFP."""
     for a in analyses:
-        if "missing_ports" not in a.categories:
+        if "missing_connections" not in a.categories:
             continue
         for conn in a.missing_connections:
             if conn[0] == "port":
@@ -498,8 +497,19 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
 
     if "unhealthy" in result.categories:
         result.faulty_links = parse_faulty_links(content)
-    if "missing_ports" in result.categories or "missing_channels" in result.categories:
+    if "missing_connections" in result.categories:
         result.missing_connections = parse_missing_connections(content)
+        # Classify the retrain outcome based on whether traffic eventually passed
+        if "healthy" in result.categories:
+            result.categories.append("retrain_success")
+        else:
+            result.categories.append("failed_retrain")
+        result.categories = [c for c in result.categories if c not in ("missing_connections", "recovered_connections")]
+
+    # AICLK timeout warnings appear even on successful runs - only count as failure if not healthy
+    if "aiclk_timeout" in result.categories and "healthy" in result.categories:
+        result.categories.remove("aiclk_timeout")
+        del result.matched_lines["aiclk_timeout"]
 
     if not result.categories:
         if any(pattern.search(line) for pattern in DETECTION_PATTERNS_COMPILED.values() for line in lines):
@@ -553,6 +563,9 @@ def calculate_metrics(analyses: list[LogAnalysis]) -> dict:
     timeout_count = len(cat_counts.get("workload_timeout", []))
     timeout_rate = (timeout_count / total * 100) if total > 0 else 0
 
+    retrain_count = len(cat_counts.get("retrain_success", []))
+    failed_retrain_count = len(cat_counts.get("failed_retrain", []))
+
     return {
         "total": total,
         "cat_counts": cat_counts,
@@ -560,6 +573,8 @@ def calculate_metrics(analyses: list[LogAnalysis]) -> dict:
         "success_rate": success_rate,
         "timeout_count": timeout_count,
         "timeout_rate": timeout_rate,
+        "retrain_count": retrain_count,
+        "failed_retrain_count": failed_retrain_count,
     }
 
 
@@ -592,12 +607,20 @@ def print_summary(analyses: list[LogAnalysis], metrics: dict, show_files: bool =
         print(f"{Colors.YELLOW}Warning: Expected {EXPECTED_ITERATIONS} iterations, found {total}{Colors.NC}")
     print()
 
+    # Print healthy count, noting how many were successful retrains
+    retrain_count = metrics.get("retrain_count", 0)
+    healthy_files = cat_counts.get("healthy", [])
+    healthy_count_display = len(healthy_files)
+    retrain_suffix = f" (retrains: {retrain_count})" if retrain_count > 0 else ""
+    healthy_color = get_color(CATEGORIES["healthy"][1])
+    print(f"{healthy_color}Healthy links:{Colors.NC} {healthy_count_display}{retrain_suffix} / {total}")
+    if show_files and 0 < healthy_count_display <= MAX_DISPLAY_FILES:
+        for f in healthy_files:
+            print(f"    {os.path.basename(f)}")
+
     display_order = [
-        "healthy",
         "unhealthy",
-        "missing_ports",
-        "missing_channels",
-        "recovered_connections",
+        "failed_retrain",
         "extra_connections",
         "workload_timeout",
         "dram_failure",
@@ -610,18 +633,22 @@ def print_summary(analyses: list[LogAnalysis], metrics: dict, show_files: bool =
         "inconclusive",
     ]
     for cat in display_order:
-        if cat not in CATEGORIES and cat != "inconclusive":
+        if cat not in CATEGORIES and cat not in ("inconclusive", "failed_retrain"):
             continue
         if cat == "inconclusive":
             color = Colors.CYAN
             label = "Inconclusive"
+        elif cat == "failed_retrain":
+            color = Colors.RED
+            label = "Missing connections"
         else:
             color = get_color(CATEGORIES[cat][1])
             label = CATEGORIES[cat][2]
-        count = len(cat_counts.get(cat, []))
+        files = cat_counts.get(cat, [])
+        count = len(files)
         print(f"{color}{label}:{Colors.NC} {count} / {total}")
         if show_files and 0 < count <= MAX_DISPLAY_FILES:
-            for f in cat_counts[cat]:
+            for f in files:
                 print(f"    {os.path.basename(f)}")
     print()
 
@@ -806,32 +833,24 @@ def register_recommendation(category: str):
     return decorator
 
 
-@register_recommendation("missing_ports")
-@register_recommendation("missing_channels")
-def _recommend_missing_connections(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
-    if not (cats.get("missing_ports") or cats.get("missing_channels")):
+@register_recommendation("failed_retrain")
+def _recommend_failed_retrain(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
+    if not cats.get("failed_retrain"):
         return []
 
-    port_count, chan_count = cats.get("missing_ports", 0), cats.get("missing_channels", 0)
-    logs_with_missing = sum(
-        1 for a in analyses if "missing_ports" in a.categories or "missing_channels" in a.categories
-    )
-    is_transient = logs_with_missing < total
+    count = cats["failed_retrain"]
+    is_transient = count < total
     has_qsfp = _has_qsfp_connections(analyses)
 
-    msg_parts = [f"- {Colors.BLUE}Missing connections:{Colors.NC}"]
-
-    if port_count and chan_count:
-        msg_parts.append(f"Port ({port_count} logs) + Channel ({chan_count} logs).")
-    elif port_count:
-        msg_parts.append(f"Port connections ({port_count} logs).")
-    elif chan_count:
-        msg_parts.append(f"Channel connections ({chan_count} logs).")
+    msg_parts = [f"- {Colors.RED}Missing connections:{Colors.NC}"]
 
     if is_transient:
         msg_parts.append(
-            "Missing connections are transient (tests fail some of the time) - " "Factory System Descriptor is correct."
+            f"Links failed to retrain in {count}/{total} iterations (transient) - "
+            "Factory System Descriptor is correct."
         )
+    else:
+        msg_parts.append(f"Links failed to retrain in all {count}/{total} iterations.")
 
     if has_qsfp:
         msg_parts.append("If missing connections are over QSFP, check cable seating.")
@@ -943,8 +962,7 @@ def print_recommendations(analyses: list[LogAnalysis]) -> None:
 
     processed_generators = set()
     category_order = [
-        "missing_ports",
-        "missing_channels",
+        "failed_retrain",
         "extra_connections",
         "workload_timeout",
         "dram_failure",
@@ -1019,9 +1037,7 @@ def print_timeline(analyses: list[LogAnalysis]) -> None:
             icons.append(("F", Colors.RED))
         elif "mgd_error" in a.categories:
             icons.append(("G", Colors.RED))
-        elif "missing_ports" in a.categories:
-            icons.append(("○", Colors.BLUE))
-        elif "missing_channels" in a.categories:
+        elif "failed_retrain" in a.categories:
             icons.append(("○", Colors.BLUE))
         elif "extra_connections" in a.categories:
             icons.append(("+", Colors.YELLOW))
@@ -1040,7 +1056,7 @@ def print_timeline(analyses: list[LogAnalysis]) -> None:
     print(
         f"Legend: {Colors.GREEN}✓{Colors.NC}=healthy "
         f"{Colors.RED}✗{Colors.NC}=unhealthy "
-        f"{Colors.BLUE}○{Colors.NC}=missing "
+        f"{Colors.BLUE}○{Colors.NC}=missing connections "
         f"{Colors.YELLOW}+{Colors.NC}=extra "
         f"{Colors.YELLOW}⏱{Colors.NC}=timeout "
         f"{Colors.RED}!{Colors.NC}=dram "
@@ -1398,15 +1414,13 @@ def count_validation_issues(analyses: list[LogAnalysis]) -> dict[str, dict]:
                 "priority": 3,
             }
 
-    # Count missing connections (missing ports/channels)
-    missing_connections_count = len(
-        [a for a in analyses if "missing_ports" in a.categories or "missing_channels" in a.categories]
-    )
-    if missing_connections_count > 0:
-        issue_counts["missing_connections"] = {
-            "count": missing_connections_count,
+    # Count failed retrains (missing connections that could not be recovered)
+    failed_retrain_count = len([a for a in analyses if "failed_retrain" in a.categories])
+    if failed_retrain_count > 0:
+        issue_counts["failed_retrain"] = {
+            "count": failed_retrain_count,
             "exit_code": EXIT_CODE_MISSING_CONNECTIONS,
-            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} MISSING CONNECTIONS detected in {missing_connections_count}/{total} runs.",
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} FAILED LINK RETRAINS detected in {failed_retrain_count}/{total} runs.",
             "priority": 10,
         }
 
