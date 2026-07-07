@@ -212,20 +212,34 @@ jobs:
             $TRAY_MAPPING_ARG \
             --mesh-descriptor ${{ matrix.mesh_descriptor }} \
             --container-prefix ${{ matrix.container_prefix }}
-      - name: Run Docker Compose
-        timeout-minutes: 10
+      - name: Pull container image
+        # Pull the dev image up-front so its (multi-minute) download does not eat
+        # into the container-readiness wait budget below. Previously the image
+        # pull happened inside `docker compose up -d` while the readiness timer
+        # was already running, so a slow pull timed the wait out on its first
+        # iteration before any container could write its marker file.
+        timeout-minutes: 15
         run: |
+          docker compose -p multi-user -f multi-user-dc.yaml pull
+      - name: Run Docker Compose
+        timeout-minutes: 15
+        run: |
+          shopt -s nullglob
           CONTAINERS_DIR=".multi-user-galaxy-docker-files"
           REQUIRED_CONTAINERS=${{ matrix.num_containers }}
-          TIMEOUT=300
+          # Budget covers only in-container dependency install (uv pip install)
+          # across all containers, not the image pull (done in the previous step).
+          TIMEOUT=600
           CONTAINER_PREFIX="${{ matrix.container_prefix }}"
 
           rm -rf "$CONTAINERS_DIR"
           mkdir -p "$CONTAINERS_DIR"
 
-          EPOCH_START=$(date +%s)
-
           docker compose -p multi-user -f multi-user-dc.yaml up -d
+
+          # Start timing only after containers are up, so the wait measures
+          # container readiness rather than image-pull latency.
+          EPOCH_START=$(date +%s)
 
           # wait for container marker files to appear (with timeout)
           while true; do
