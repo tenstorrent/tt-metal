@@ -14,11 +14,10 @@ namespace ttnn::operations::ccl {
 
 struct AllGatherMulticastFactory {
     struct shared_variables_t {
-        std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
-        tt::tt_metal::KernelHandle worker_sender_reader_kernel_id{};
-        tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
+        std::vector<tt::tt_metal::CoreCoord> worker_cores;
+        tt::tt_metal::KernelHandle reader_kernel_id{};
+        tt::tt_metal::KernelHandle writer_kernel_id{};
         tt::tt_metal::GlobalSemaphore barrier_sem;
-        uint32_t ring_index = 0;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

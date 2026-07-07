@@ -187,14 +187,11 @@ private:
     static constexpr uint32_t pages_per_packet = std::min(packet_size / page_size, max_pages_per_packet);  // div_down
     // When page_size > packet_size
     static constexpr uint32_t packets_per_page = (page_size + packet_size - 1) / packet_size;  // div_up
-    // Use scatter_write or unicast_write
-    // Note: currently, scatter_write imposes a min chunk_count
+    // Use scatter_write or unicast_write (currently scatter_write imposes a min chunk_count)
     static constexpr bool use_scatter_write = pages_per_packet >= min_pages_per_packet;
-    // Steady-state payload size.
-    // Note: (pages_per_packet * page_size) does not necessarily equal packet_size
+    // Steady-state payload size. Note (pages_per_packet * page_size) may not equal packet_size.
     static constexpr uint32_t payload_size = use_scatter_write ? (pages_per_packet * page_size) : packet_size;
-    // Last payload size for the (page_size >= packet_size) case, where we send multiple packets for
-    // a single page.
+    // Last payload for the page_size >= packet_size case (a page sent as multiple packets).
     static constexpr uint32_t last_payload_size = page_size - ((packets_per_page - 1) * packet_size);
 
     const Noc& noc;
@@ -205,6 +202,6 @@ private:
     uint8_t unicast_route_id_2;
     bool use_route_1;  // toggle to alternate between route_1 and route_2
     NocUnicastScatterCommandHeader scatter_header;
-    uint8_t chunk_count;     // accumulate chunks to send them in a single packet
-    uint32_t start_l1_addr;  // start address of contiguous chunks to send in a single packet
+    uint8_t chunk_count;     // accumulated chunks not yet sent in a packet
+    uint32_t start_l1_addr;  // start address of the accumulated contiguous chunks
 };

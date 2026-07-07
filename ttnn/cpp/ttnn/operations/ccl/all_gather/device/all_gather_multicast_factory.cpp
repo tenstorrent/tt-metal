@@ -120,24 +120,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         e_coord.has_value() || w_coord.has_value() || n_coord.has_value() || s_coord.has_value(),
         "No neighboring devices");
 
-    // We allocate one worker core per link, but not per axis.
-    // Each worker handles both dirs (forward and backward) and also both axes (N/S and E/W).
-    // Known limitation: when the two axes have unequal link counts, the larger axis's extra links
-    // go unused. If this is ever a real use-case, we need to allocate separate worker cores per axis.
-    const uint32_t links0 = operation_attributes.axis_num_links[0];
-    const uint32_t links1 = operation_attributes.axis_num_links[1];
-    const uint32_t min_num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
-
-    // Get worker cores
-    uint32_t num_workers_per_link = 1;
-    auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
-        min_num_links,
-        num_workers_per_link,
-        input_tensor.device(),
-        operation_attributes.subdevice_id,
-        /*core_grid_offset=*/CoreCoord{0, 0},
-        operation_attributes.sub_core_grid);
-
     const uint32_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
     // Kernel alternates between ranges[] and ranges_alt[] hops on every packet send.
@@ -148,6 +130,28 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // matters when the output is freshly allocated by the op; a persistent/preallocated
     // output is guaranteed to already exist on every device before op kernel begins.
     const bool do_init_barrier = !tensor_args.persistent_output_tensor.has_value();
+
+    ////////////////////////////////////////////////////////////////
+    // Core selection
+    ////////////////////////////////////////////////////////////////
+
+    // We allocate one worker core per link, but not per axis.
+    // Each worker handles both dirs (forward and backward) and also both axes (N/S and E/W).
+    // Known limitation: when the two axes have unequal link counts, the larger axis's extra links
+    // go unused. If this is ever a real use-case, we need to allocate separate worker cores per axis.
+    const uint32_t links0 = operation_attributes.axis_num_links[0];
+    const uint32_t links1 = operation_attributes.axis_num_links[1];
+    const uint32_t min_num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
+
+    // Get worker cores
+    uint32_t num_workers_per_link = 1;
+    auto [worker_core_range, worker_cores] = ttnn::ccl::choose_worker_cores(
+        min_num_links,
+        num_workers_per_link,
+        input_tensor.device(),
+        operation_attributes.subdevice_id,
+        /*core_grid_offset=*/CoreCoord{0, 0},
+        operation_attributes.sub_core_grid);
 
     ////////////////////////////////////////////////////////////////
     // Page indexing
@@ -267,13 +271,13 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Circular Buffer and Kernel creation
     ////////////////////////////////////////////////////////////////
 
-    // L1 Scratch CB Creation
+    // Input CB
     uint32_t cb0_id = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_depth * cb_page_size, {{cb0_id, df}}).set_page_size(cb0_id, cb_page_size);
 
-    CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
     // KERNEL CREATION
     // Reader (covers forward directions E-line + S-rect)
@@ -309,23 +313,26 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
-    auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
+    auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/multicast_reader.cpp",
-        sender_worker_core_range,
+        worker_core_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
     // Writer
-    auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
+    auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/multicast_writer.cpp",
-        sender_worker_core_range,
+        worker_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
-    // Kernel Runtime Args
+    ////////////////////////////////////////////////////////////////
+    // Runtime args
+    ////////////////////////////////////////////////////////////////
+
     auto* mesh_device = input_tensor.device();
     for (uint32_t link = 0; link < min_num_links; link++) {
-        CoreCoord core = sender_worker_cores[link];
+        CoreCoord core = worker_cores[link];
         CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
         // Set runtime args
@@ -397,7 +404,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
                 reader_dst_nodes,
                 {link},
                 program,
-                worker_sender_reader_kernel_id,
+                reader_kernel_id,
                 {core},
                 reader_rt_args,
                 fabric_is_2d ? tt::tt_fabric::FabricApiType::Mesh : tt::tt_fabric::FabricApiType::Linear);
@@ -438,22 +445,21 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
                 writer_dst_nodes,
                 {link},
                 program,
-                worker_sender_writer_kernel_id,
+                writer_kernel_id,
                 {core},
                 writer_rt_args,
                 fabric_is_2d ? tt::tt_fabric::FabricApiType::Mesh : tt::tt_fabric::FabricApiType::Linear);
         }
 
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
     }
 
     shared_variables_t shared_variables{
-        .sender_worker_cores = sender_worker_cores,
-        .worker_sender_reader_kernel_id = worker_sender_reader_kernel_id,
-        .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
+        .worker_cores = worker_cores,
+        .reader_kernel_id = reader_kernel_id,
+        .writer_kernel_id = writer_kernel_id,
         .barrier_sem = barrier_sem,
-        .ring_index = device_idx,
     };
 
     return {std::move(program), std::move(shared_variables)};
@@ -464,25 +470,25 @@ void AllGatherMulticastFactory::override_runtime_arguments(
     const AllGatherParams& /*operation_attributes*/,
     const AllGatherInputs& tensor_args,
     Tensor& output_tensor) {
+    const uint32_t input_addr = tensor_args.input_tensor.buffer()->address();
+    const uint32_t output_addr = output_tensor.buffer()->address();
+
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
         const uint32_t barrier_sem_addr = shared_vars.barrier_sem.address();
-        auto& worker_reader_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_reader_kernel_id);
-        auto& worker_writer_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_writer_kernel_id);
 
-        for (const auto& core : shared_vars.sender_worker_cores) {
+        auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
+        auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
+        for (const auto& core : shared_vars.worker_cores) {
             // reader: [0]=input_addr, [1]=output_addr, [10]=barrier_sem
-            auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
-            worker_reader_sender_runtime_args[1] = output_tensor.buffer()->address();
-            worker_reader_sender_runtime_args[10] = barrier_sem_addr;
+            auto& reader_args = reader_args_by_core[core.x][core.y];
+            reader_args[0] = input_addr;
+            reader_args[1] = output_addr;
+            reader_args[10] = barrier_sem_addr;
             // writer: [0]=output_addr, [7]=barrier_sem
-            auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-            worker_writer_sender_runtime_args[0] = output_tensor.buffer()->address();
-            worker_writer_sender_runtime_args[7] = barrier_sem_addr;
+            auto& writer_args = writer_args_by_core[core.x][core.y];
+            writer_args[0] = output_addr;
+            writer_args[7] = barrier_sem_addr;
         }
     }
 }
