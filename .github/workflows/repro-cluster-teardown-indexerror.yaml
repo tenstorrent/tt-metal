@@ -1,9 +1,11 @@
 # THROWAWAY diagnostic workflow — safe to delete after the investigation closes.
-# Reproduces the "IndexError: unordered_map::at" seen in Galaxy DeepSeek Prefill
-# CI failures (see run 28753760978). Does not touch the production test matrix
-# or its Slack alerting. Triggers on push to this branch only — workflow_dispatch
-# isn't usable here because new workflow files aren't dispatchable until they
-# exist on the default branch, which this intentionally never touches.
+# Round 2: the synthetic requires_mesh_topology repro (round 1) did not reproduce
+# the crash, and a follow-up check found most of the real failing test files
+# (test_mla.py, test_kv_cache_table.py, sparse_mla/test_sparse_mla.py) don't
+# even use that marker. This round instruments the real ttnn device-probe
+# entry points (see conftest.py pytest_sessionstart) and repeatedly runs the
+# actual production "MLA Chunked" test to catch a live failure with a full
+# call trace. Triggers on push to this branch only, same reasoning as before.
 name: "[investigation] Repro cluster-teardown IndexError"
 
 on:
@@ -31,17 +33,9 @@ jobs:
 
   repro:
     needs: [check-harbor, build-artifact]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - sku: bh_galaxy
-            runs_on: [arch-blackhole, pipeline-functional, topology-6u, in-service]
-          - sku: wh_galaxy
-            runs_on: [arch-wormhole_b0, pipeline-functional, topology-6u, in-service]
-    name: "repro (${{ matrix.sku }})"
-    runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 25
+    name: "repro (bh_galaxy, instrumented)"
+    runs-on: [arch-blackhole, pipeline-functional, topology-6u, in-service]
+    timeout-minutes: 40
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -49,9 +43,12 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
+        REPRO_INSTRUMENT_DEVICE_CALLS: "1"
+        MESH_DEVICE: TG
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -74,58 +71,43 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-      - name: Run control + trigger arms, 5x each, and evaluate
+      - name: Run production MLA Chunked test 8x with instrumentation
         id: repro
         run: |
           set -uo pipefail
-          TESTS_DIR="models/demos/deepseek_v3_d_p/tests"
-          CONTROL="$TESTS_DIR/test_repro_cluster_teardown_control.py"
-          TRIGGER="$TESTS_DIR/test_repro_cluster_teardown_trigger.py"
-          RUNS=5
+          RUNS=8
+          fail_count=0
+          repro_count=0
           mkdir -p /tmp/repro_logs
 
-          control_pass=0
           for i in $(seq 1 $RUNS); do
-            echo "::group::control run $i/$RUNS"
-            if pytest "$CONTROL" -q --tb=short > "/tmp/repro_logs/control_$i.log" 2>&1; then
-              control_pass=$((control_pass+1))
-            fi
-            cat "/tmp/repro_logs/control_$i.log"
-            echo "::endgroup::"
-          done
-
-          trigger_repro=0
-          trigger_pass=0
-          trigger_other_fail=0
-          for i in $(seq 1 $RUNS); do
-            echo "::group::trigger run $i/$RUNS"
-            if pytest "$TRIGGER" -q --tb=short > "/tmp/repro_logs/trigger_$i.log" 2>&1; then
-              trigger_pass=$((trigger_pass+1))
-            elif grep -q "IndexError: unordered_map::at" "/tmp/repro_logs/trigger_$i.log"; then
-              trigger_repro=$((trigger_repro+1))
+            echo "::group::run $i/$RUNS"
+            if pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill \
+                -k "maxedge-1u and cpu and 8x4 and fabric2d" -vvv --tb=long \
+                > "/tmp/repro_logs/run_$i.log" 2>&1; then
+              echo "run $i: PASSED"
             else
-              trigger_other_fail=$((trigger_other_fail+1))
+              fail_count=$((fail_count+1))
+              if grep -q "IndexError: unordered_map::at" "/tmp/repro_logs/run_$i.log"; then
+                repro_count=$((repro_count+1))
+                echo "run $i: FAILED — reproduced the IndexError"
+              else
+                echo "run $i: FAILED — different error"
+              fi
             fi
-            cat "/tmp/repro_logs/trigger_$i.log"
+            cat "/tmp/repro_logs/run_$i.log"
             echo "::endgroup::"
           done
 
           {
-            echo "## Cluster-teardown IndexError repro — ${{ matrix.sku }}"
+            echo "## Instrumented MLA Chunked repro"
             echo ""
-            echo "| Arm | Result |"
-            echo "|---|---|"
-            echo "| control (0 collection-time probes) | $control_pass/$RUNS passed |"
-            echo "| trigger (3 collection-time probes) | $trigger_repro/$RUNS reproduced the IndexError, $trigger_pass/$RUNS unexpectedly passed, $trigger_other_fail/$RUNS failed a different way |"
+            echo "Ran the real production test $RUNS times: $repro_count/$RUNS reproduced the IndexError, $fail_count/$RUNS failed total."
+            if [ "$repro_count" -eq 0 ]; then
+              echo ""
+              echo "Did not reproduce this round either. See full run logs above (job log) for the [REPRO-INSTRUMENT] call trace on every run regardless of pass/fail."
+            fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
-
-          if [ "$control_pass" -eq "$RUNS" ] && [ "$trigger_repro" -eq "$RUNS" ]; then
-            echo "RESULT: HYPOTHESIS CONFIRMED on ${{ matrix.sku }} — deterministic ${RUNS}/${RUNS} both arms."
-            exit 0
-          else
-            echo "RESULT: HYPOTHESIS NOT CONFIRMED on ${{ matrix.sku }} — see counts above."
-            exit 1
-          fi
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

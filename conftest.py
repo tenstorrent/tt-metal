@@ -1306,3 +1306,48 @@ def pytest_configure(config):
         new_filename = f"{os.path.splitext(filename)[0]}_{timestamp}{os.path.splitext(filename)[1]}"
         new_xmlpath = os.path.join(directory, new_filename)
         config.option.xmlpath = new_xmlpath
+
+
+def pytest_sessionstart(session):
+    # TEMPORARY instrumentation for investigating the intermittent
+    # "IndexError: unordered_map::at" in Galaxy DeepSeek Prefill CI (run
+    # 28753760978). Wraps the device-probe entry points so every call is
+    # logged with its caller, to see exactly what precedes a real failure.
+    # Safe to revert once the investigation closes.
+    if os.getenv("REPRO_INSTRUMENT_DEVICE_CALLS") != "1":
+        return
+
+    import traceback
+
+    import ttnn
+
+    def make_wrapper(original, label):
+        def wrapper(*args, **kwargs):
+            caller = traceback.extract_stack()[-2]
+            logger.warning(f"[REPRO-INSTRUMENT] -> {label} from {caller.filename}:{caller.lineno}")
+            try:
+                result = original(*args, **kwargs)
+                logger.warning(f"[REPRO-INSTRUMENT] <- {label} returned {result!r}")
+                return result
+            except BaseException as e:
+                logger.warning(f"[REPRO-INSTRUMENT] <- {label} RAISED {type(e).__name__}: {e}")
+                raise
+
+        return wrapper
+
+    targets = [
+        (ttnn, "get_num_devices"),
+        (ttnn, "get_pcie_device_ids"),
+        (ttnn, "open_mesh_device"),
+        (ttnn, "close_mesh_device"),
+        (ttnn, "get_arch_name"),
+        (ttnn.cluster, "get_cluster_type"),
+        (ttnn._ttnn.device, "GetNumPCIeDevices"),
+        (ttnn._ttnn.device, "GetNumAvailableDevices"),
+    ]
+    for obj, name in targets:
+        if not hasattr(obj, name):
+            logger.warning(f"[REPRO-INSTRUMENT] skip missing {obj}.{name}")
+            continue
+        setattr(obj, name, make_wrapper(getattr(obj, name), f"{obj}.{name}"))
+    logger.warning(f"[REPRO-INSTRUMENT] instrumentation installed for pid {os.getpid()}")
