@@ -390,11 +390,12 @@ _CARD_TYPE_LABEL_FALLBACK: tuple[tuple[str, str], ...] = (
 
 def _card_type_from_sku_config(labels: list[str]) -> Optional[str]:
     """
-    Match job labels to a root pipeline SKU from sku_config.yaml.
+    Match job labels to a pipeline SKU from sku_config.yaml.
 
     Every SKU whose runs_on labels are present on the job is a match (sim_* SKUs are
-    skipped). Each match is mapped to the shortest prefix SKU name in sku_config; when
-    multiple roots match, the first root alphabetically is returned.
+    skipped). When exactly one SKU matches, that SKU name is returned. When multiple
+    SKUs match, each is mapped to its root SKU and the first root alphabetically is
+    returned.
     """
     label_set = set(labels)
     matching_skus: list[str] = []
@@ -412,6 +413,9 @@ def _card_type_from_sku_config(labels: list[str]) -> Optional[str]:
 
     if not matching_skus:
         return None
+
+    if len(matching_skus) == 1:
+        return matching_skus[0]
 
     roots = {_root_sku_for(sku_name) for sku_name in matching_skus}
     return sorted(roots)[0]
@@ -439,7 +443,7 @@ def _card_type_from_job_labels(labels: list[str]) -> Optional[str]:
             return card_type
         return None
 
-    logger.info(f"Matched job labels to root SKU {card_type!r}")
+    logger.info(f"Matched job labels to SKU {card_type!r}")
     return card_type
 
 
