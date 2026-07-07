@@ -23,6 +23,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     core_grid,
     matmul_program_config,
     MATMUL_1D_SEQ_THRESHOLD,
+    pick_largest_height_shard_nhw_cores,
     to_torch_replicated_first_shard,
 )
 
@@ -141,8 +142,18 @@ def _vocoder_dram_slice_count(input_length: int) -> int:
     il = int(input_length)
     if il <= MATMUL_1D_SEQ_THRESHOLD:
         return 16
-    target_rows = 48
+    target_rows = 128
     return min(128, max(16, (il + target_rows - 1) // target_rows))
+
+
+def _vocoder_dram_slice_pad_h(input_length: int, *, in_channels: int = 0) -> int:
+    """Tile-aligned padded height for DRAM height-sliced transpose conv."""
+    num_slices = _vocoder_dram_slice_count(input_length)
+    pad_h = ((int(input_length) + num_slices - 1) // num_slices) * num_slices
+    if int(in_channels) >= 512:
+        align = _VOCODER_ACT_BLOCK_H_ALIGN
+        pad_h = ((pad_h + align - 1) // align) * align
+    return pad_h
 
 
 def _as_batch_time_2d(x: ttnn.Tensor, *, batch: int, seq: int) -> ttnn.Tensor:
@@ -214,23 +225,111 @@ def _fused_activation_token(activation: Optional[ttnn.UnaryWithParam]) -> str:
     return str(op)
 
 
-# HEIGHT sharding when K fits; None lets the device auto-pick.
+# HEIGHT sharding when K fits and timeline is short enough; None lets the device auto-pick.
 _HEIGHT_SHARD_K_MAX = 4096
-_CONV_PRE_SHARD = None
-_RESBLOCK_SHARD = None
+# Long conv1d timelines + forced HEIGHT shard → DRAM auto-slice failure (BH S2ST @ 4096).
+_HEIGHT_SHARD_MAX_TLEN = 2048
+_CONV_PRE_SHARD = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+_RESBLOCK_SHARD = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 # Upsample transpose: HEIGHT per DRAM slice when slice count is small enough.
 _UPSAMPLE_SHARD = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-_UPSAMPLE_HEIGHT_MAX_SLICES = 48
+_UPSAMPLE_HEIGHT_MAX_SLICES = 128
+# Wide conv act_block_h=64 needs padded_output_height_ntiles_per_core % 2 == 0; pad timelines to this.
+_VOCODER_ACT_BLOCK_H_ALIGN = 128
 
 
 def _resolve_conv_shard_layout(
-    prefer: Optional[ttnn.TensorMemoryLayout], *, in_channels: int, kernel_size: int
+    prefer: Optional[ttnn.TensorMemoryLayout],
+    *,
+    in_channels: int,
+    kernel_size: int,
+    input_length: int = 0,
 ) -> Optional[ttnn.TensorMemoryLayout]:
     if prefer is None:
         return None
-    if prefer == ttnn.TensorMemoryLayout.HEIGHT_SHARDED and int(in_channels) * int(kernel_size) > _HEIGHT_SHARD_K_MAX:
-        return None
+    if prefer == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        if int(in_channels) * int(kernel_size) > _HEIGHT_SHARD_K_MAX:
+            return None
+        if int(input_length) > _HEIGHT_SHARD_MAX_TLEN:
+            return None
     return prefer
+
+
+def _vocoder_act_block_h_override(input_length: int, in_channels: int) -> Optional[int]:
+    """Pick act_block_h_override only when TTNN divisibility is likely to accept it."""
+    il = int(input_length)
+    if int(in_channels) >= 512:
+        if il > 64 and il % _VOCODER_ACT_BLOCK_H_ALIGN == 0:
+            return 64
+        if il > 64:
+            return 32
+        return None
+    if il > 64:
+        return 32
+    return None
+
+
+def _vocoder_conv_nhw_tiles(timeline_length: int, *, batch: int = 1) -> int:
+    """Output NHW tile count for conv1d mapped to conv2d (``H=timeline``, ``W=1``)."""
+    return (int(batch) * int(timeline_length) + TILE - 1) // TILE
+
+
+def _vocoder_tiles_per_core(timeline_length: int, nhw_cores: int, *, batch: int = 1) -> int:
+    """Per-core output height in tiles after TTNN height padding (``create_sharded_memory_config`` recipe)."""
+    nhw = int(batch) * int(timeline_length)
+    cores = max(1, int(nhw_cores))
+    nhw_padded = ((nhw + cores * TILE - 1) // (cores * TILE)) * (cores * TILE)
+    return nhw_padded // (cores * TILE)
+
+
+def _pick_vocoder_height_shard_nhw_cores(
+    timeline_length: int,
+    device: ttnn.Device,
+    *,
+    batch: int = 1,
+    act_block_h: Optional[int] = None,
+) -> int:
+    """Pick NHW core count for HEIGHT-sharded vocoder conv1d (speech-encoder recipe + even tiles for act_block_h=64)."""
+    grid = device.compute_with_storage_grid_size()
+    max_cores = max(1, int(grid.x) * int(grid.y))
+    nhw_tiles = _vocoder_conv_nhw_tiles(timeline_length, batch=batch)
+    cap = min(max_cores, max(1, nhw_tiles))
+    prefer_even_tp = act_block_h is not None and int(act_block_h) >= 64
+
+    def acceptable(cores: int) -> bool:
+        if cores < 1 or cores > cap:
+            return False
+        tp = _vocoder_tiles_per_core(timeline_length, cores, batch=batch)
+        if tp <= 0:
+            return False
+        return not (prefer_even_tp and tp % 2 != 0)
+
+    for cores in range(cap, 2, -1):
+        if acceptable(cores):
+            return cores
+    if acceptable(2):
+        return 2
+    return pick_largest_height_shard_nhw_cores(nhw_tiles, device)
+
+
+def _vocoder_apply_height_shard_core_override(
+    conv_kwargs: dict,
+    device: ttnn.Device,
+    *,
+    input_length: int,
+    batch: int,
+    shard_layout: Optional[ttnn.TensorMemoryLayout],
+    act_block_h: Optional[int],
+) -> None:
+    """Set ``override_sharding_config`` + ``core_grid`` for conv_pre / resblock HEIGHT sharding."""
+    if shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        return
+    nhw_cores = _pick_vocoder_height_shard_nhw_cores(input_length, device, batch=batch, act_block_h=act_block_h)
+    if nhw_cores <= 2:
+        return
+    grid = device.compute_with_storage_grid_size()
+    conv_kwargs["override_sharding_config"] = True
+    conv_kwargs["core_grid"] = ttnn.num_cores_to_corerangeset(nhw_cores, grid, row_wise=True)
 
 
 def _vocoder_conv1d_config(
@@ -241,6 +340,8 @@ def _vocoder_conv1d_config(
     shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
     timeline_chunked: bool = False,
     row_major_output: bool = False,
+    device: Optional[ttnn.Device] = None,
+    batch: int = 1,
 ) -> ttnn.Conv1dConfig:
     # Match T2U conv1d L1 recipe: deallocate activations and cap act block height on long/wide ops.
     conv_kwargs: dict = dict(
@@ -252,8 +353,21 @@ def _vocoder_conv1d_config(
     )
     if fused_post_activation is not None:
         conv_kwargs["activation"] = fused_post_activation
-    if int(input_length) > 64 or int(in_channels) >= 512:
-        conv_kwargs["act_block_h_override"] = 32
+    act_block_h = _vocoder_act_block_h_override(input_length, in_channels)
+    if act_block_h is not None:
+        conv_kwargs["act_block_h_override"] = act_block_h
+    # Forced shard layouts may need config tensors in DRAM when L1_SMALL is tight.
+    if shard_layout is not None:
+        conv_kwargs["config_tensors_in_dram"] = True
+    if device is not None:
+        _vocoder_apply_height_shard_core_override(
+            conv_kwargs,
+            device,
+            input_length=input_length,
+            batch=batch,
+            shard_layout=shard_layout,
+            act_block_h=act_block_h,
+        )
     # Chunked HiFi-GAN timelines: spill conv indices to DRAM (frees L1_SMALL for wider interiors)
     # and emit ROW_MAJOR activations so chunk stitch avoids per-chunk untilize/tilize (vocoder5 TM).
     if timeline_chunked:
@@ -285,8 +399,9 @@ def _vocoder_conv2d_config(
         conv_kwargs["enable_weights_double_buffer"] = False
         conv_kwargs["enable_act_double_buffer"] = False
     # ``act_block_h_override`` must be a multiple of TILE (32); 8 → 0 ntiles and SIGFPE in conv2d.
-    if il > 64 or int(in_channels) >= 512:
-        conv_kwargs["act_block_h_override"] = 32
+    act_block_h = _vocoder_act_block_h_override(il, in_channels)
+    if act_block_h is not None:
+        conv_kwargs["act_block_h_override"] = act_block_h
     return ttnn.Conv2dConfig(**conv_kwargs)
 
 
@@ -491,6 +606,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         fused_post_activation: Optional[ttnn.UnaryWithParam],
         timeline_chunked: bool = False,
         row_major_output: bool = False,
+        shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
     ) -> Tuple[Any, ...]:
         return (
             _conv1d_prep_tensor_id(weight),
@@ -506,6 +622,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             _fused_activation_token(fused_post_activation),
             bool(timeline_chunked),
             bool(row_major_output),
+            shard_layout,
         )
 
     def _prepare_conv1d_weights_for_prewarm(
@@ -542,6 +659,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             fused_post_activation=fused_post_activation,
             timeline_chunked=timeline_chunked,
             row_major_output=row_major_output,
+            shard_layout=shard_layout,
         )
         if cache_key in self._conv1d_prepared_cache:
             return
@@ -553,6 +671,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
             shard_layout=shard_layout,
             timeline_chunked=timeline_chunked,
             row_major_output=row_major_output,
+            device=self.device,
+            batch=batch,
         )
         prep_w = ttnn.prepare_conv_weights(
             weight_tensor=weight,
@@ -647,7 +767,10 @@ class TTSeamlessM4Tv2CodeHifiGan:
             kernel_size=int(cp.kernel_size),
             padding=int(cp.padding),
             shard_layout=_resolve_conv_shard_layout(
-                _CONV_PRE_SHARD, in_channels=int(cp.in_channels), kernel_size=int(cp.kernel_size)
+                _CONV_PRE_SHARD,
+                in_channels=int(cp.in_channels),
+                kernel_size=int(cp.kernel_size),
+                input_length=tlen,
             ),
         )
         tlen = _host_conv_out_length(tlen, int(cp.kernel_size), 1, int(cp.padding))
@@ -676,7 +799,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
                         padding=p1,
                         dilation=d1,
                         fused_post_activation=_fused_leaky_relu(self.leaky_slope),
-                        shard_layout=_resolve_conv_shard_layout(_RESBLOCK_SHARD, in_channels=channels, kernel_size=k1),
+                        shard_layout=_resolve_conv_shard_layout(
+                            _RESBLOCK_SHARD, in_channels=channels, kernel_size=k1, input_length=t_rb
+                        ),
                     )
                     t_rb = _host_conv_out_length(t_rb, k1, 1, p1, dilation=d1)
                     k2 = int(c2p["kernel_size"])
@@ -692,7 +817,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
                         kernel_size=k2,
                         padding=p2,
                         dilation=d2,
-                        shard_layout=_resolve_conv_shard_layout(_RESBLOCK_SHARD, in_channels=channels, kernel_size=k2),
+                        shard_layout=_resolve_conv_shard_layout(
+                            _RESBLOCK_SHARD, in_channels=channels, kernel_size=k2, input_length=t_rb
+                        ),
                     )
                     t_rb = _host_conv_out_length(t_rb, k2, 1, p2, dilation=d2)
 
@@ -763,6 +890,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
             shard_layout=shard_layout,
             timeline_chunked=timeline_chunked,
             row_major_output=row_major_output,
+            device=self.device,
+            batch=batch,
         )
         cache_key = self._conv1d_prep_cache_key(
             weight=weight,
@@ -778,6 +907,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             fused_post_activation=fused_post_activation,
             timeline_chunked=timeline_chunked,
             row_major_output=row_major_output,
+            shard_layout=shard_layout,
         )
         cached = self._conv1d_prepared_cache.get(cache_key) if use_prepared_weights else None
         weight_tensor = cached[0] if cached is not None else weight
@@ -1087,7 +1217,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         weight = layer["weight"]
         bias = layer["bias"]
         num_slices = _vocoder_dram_slice_count(input_length)
-        pad_h = ((int(input_length) + num_slices - 1) // num_slices) * num_slices
+        pad_h = _vocoder_dram_slice_pad_h(input_length, in_channels=in_channels)
         x_work, padded = self._pad_nlc_time(
             x_nlc,
             batch=batch,
@@ -1178,10 +1308,17 @@ class TTSeamlessM4Tv2CodeHifiGan:
         sliced = int(input_length) > 64
         num_slices = _vocoder_dram_slice_count(input_length) if sliced else 0
         prefer = _UPSAMPLE_SHARD if (not sliced or num_slices <= _UPSAMPLE_HEIGHT_MAX_SLICES) else None
+        config_len = (
+            _vocoder_dram_slice_pad_h(input_length, in_channels=in_channels)
+            if sliced and int(in_channels) >= 512
+            else input_length
+        )
         conv_config = _vocoder_conv2d_config(
-            input_length=input_length,
+            input_length=config_len,
             in_channels=in_channels,
-            shard_layout=_resolve_conv_shard_layout(prefer, in_channels=in_channels, kernel_size=k),
+            shard_layout=_resolve_conv_shard_layout(
+                prefer, in_channels=in_channels, kernel_size=k, input_length=input_length
+            ),
         )
         if sliced:
             out_nlc, out_h = self._conv_transpose1d_nlc_dram_sliced(
@@ -1292,7 +1429,10 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 dilation=int(c1p["dilation"]),
                 fused_post_activation=_fused_leaky_relu(self.leaky_slope),
                 shard_layout=_resolve_conv_shard_layout(
-                    _RESBLOCK_SHARD, in_channels=channels, kernel_size=int(c1p["kernel_size"])
+                    _RESBLOCK_SHARD,
+                    in_channels=channels,
+                    kernel_size=int(c1p["kernel_size"]),
+                    input_length=tlen,
                 ),
                 keep_sharded_output=True,
             )
@@ -1310,7 +1450,10 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 groups=1,
                 dilation=int(c2p["dilation"]),
                 shard_layout=_resolve_conv_shard_layout(
-                    _RESBLOCK_SHARD, in_channels=channels, kernel_size=int(c2p["kernel_size"])
+                    _RESBLOCK_SHARD,
+                    in_channels=channels,
+                    kernel_size=int(c2p["kernel_size"]),
+                    input_length=tlen,
                 ),
                 accept_sharded_input=True,
             )
@@ -1349,7 +1492,10 @@ class TTSeamlessM4Tv2CodeHifiGan:
             padding=int(cp.padding),
             groups=1,
             shard_layout=_resolve_conv_shard_layout(
-                _CONV_PRE_SHARD, in_channels=int(cp.in_channels), kernel_size=int(cp.kernel_size)
+                _CONV_PRE_SHARD,
+                in_channels=int(cp.in_channels),
+                kernel_size=int(cp.kernel_size),
+                input_length=tlen,
             ),
         )
         ttnn.deallocate(x_nlc)
