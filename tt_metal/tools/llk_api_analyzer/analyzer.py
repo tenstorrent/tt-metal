@@ -67,10 +67,17 @@ class LlkAnalyzer:
                 result.descriptors = parse_descriptors(artifacts.descriptors_header, format_names)
             except Exception as exc:  # noqa: BLE001 - keep going, just record it
                 result.errors.append(f"descriptor parse failed: {exc}")
+        else:
+            result.errors.append(
+                "chlkc_descriptors.h not found beside the ELFs; "
+                "data-format/tile/config information is unavailable for this kernel"
+            )
 
         return result
 
     def _analyze_elf(self, elf_path: Path, thread: ComputeThread) -> tuple[list[ApiCall], dict[int, str]]:
+        if not elf_path.is_file():
+            raise FileNotFoundError(f"ELF not found: {elf_path}")
         with open(elf_path, "rb") as handle:
             elffile = ELFFile(handle)
             if not elffile.has_dwarf_info():

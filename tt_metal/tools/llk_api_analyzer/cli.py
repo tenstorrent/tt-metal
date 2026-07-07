@@ -125,7 +125,11 @@ def main(argv: list[str] | None = None) -> int:
     run_result = None
     if args.run:
         runner = ModelRunner(cache_dir=args.cache_dir, working_directory=args.run_cwd)
-        run_result = runner.run(args.run)
+        try:
+            run_result = runner.run(args.run)
+        except FileNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
         analyze_target = str(run_result.cache_dir)
     else:
         analyze_target = args.path or str(_DEFAULT_CACHE)

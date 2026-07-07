@@ -54,6 +54,10 @@ class ModelRunner:
         Output is streamed to this process's stdout/stderr so the user sees the
         model run live.
         """
+
+        if self._working_directory is not None and not self._working_directory.is_dir():
+            raise FileNotFoundError(f"--run-cwd directory does not exist: {self._working_directory}")
+
         cache_dir, is_temporary = self._prepare_cache_dir()
 
         try:

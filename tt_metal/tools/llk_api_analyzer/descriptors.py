@@ -79,9 +79,26 @@ def parse_descriptors(path: str | Path, format_names: dict[int, str] | None = No
     own tensix ``DataFormat`` enum, so the codes decode correctly per
     architecture. Codes not present in that enum are reported as
     ``Unknown(<code>)``.
+
+    Raises ``FileNotFoundError`` if ``path`` does not exist and ``ValueError``
+    if the file exists but is not a recognizable ``chlkc_descriptors.h`` (i.e.
+    it is missing the circular-buffer format arrays), so a moved/renamed header
+    or an unexpected file shape fails loudly instead of yielding empty config.
     """
-    source = Path(path).read_text()
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"descriptor header not found: {path}")
+    source = path.read_text()
     arrays = {name: _parse_int_array(body) for name, body in _ARRAY_RE.findall(source)}
+
+    # The generated header always defines these L1-format arrays. Their absence
+    # means the file is not the expected shape (wrong file, truncated, or a
+    # format change), so fail explicitly rather than silently reporting no CBs.
+    if "unpack_src_format" not in arrays and "pack_dst_format" not in arrays:
+        raise ValueError(
+            f"{path} is missing the expected unpack_src_format/pack_dst_format arrays; "
+            "not a recognizable chlkc_descriptors.h"
+        )
 
     descriptors = KernelDescriptors()
 
