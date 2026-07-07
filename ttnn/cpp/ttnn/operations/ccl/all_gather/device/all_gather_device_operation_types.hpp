@@ -27,13 +27,15 @@ struct AllGatherParams {
     int32_t dim = 0;
     MemoryConfig output_mem_config;
     std::optional<uint32_t> cluster_axis;
-    // Per-axis info.
-    // An inactive axis has num_devices = 1, num_links = 0, and Linear topology.
+
+    // Fabric setup info
+    // Per-axis info (an inactive axis has num_devices = 1, num_links = 0, and Linear topology)
     std::array<tt::tt_fabric::Topology, 2> axis_topology{};
     std::array<uint32_t, 2> axis_num_devices{};
     std::array<uint32_t, 2> axis_num_links{};
-    // Number of devices participating in the collective
-    uint32_t num_devices = 0;
+    uint32_t num_devices = 0;  // number of devices participating in the collective
+    size_t packet_size = 0;
+
     // Worker-core selection.
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
     std::optional<CoreRangeSet> sub_core_grid;

@@ -134,7 +134,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const bool ring_even_split = is_ring && (num_devices % 2 == 0);
     const bool do_init_barrier = !tensor_args.persistent_output_tensor.has_value();
 
-    const uint32_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t packet_size = operation_attributes.packet_size;
 
     ////////////////////////////////////////////////////////////////
     // Core selection

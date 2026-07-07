@@ -120,7 +120,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         e_coord.has_value() || w_coord.has_value() || n_coord.has_value() || s_coord.has_value(),
         "No neighboring devices");
 
-    const uint32_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t packet_size = operation_attributes.packet_size;
 
     // Kernel alternates between ranges[] and ranges_alt[] hops on every packet send.
     // Enabled if any axis is an even-sized ring.

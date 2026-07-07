@@ -234,7 +234,9 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    // Query the machine and Fabric setup
+    // Query the machine and Fabric setup info.
+    // This info is also effectively part of CCL args and hence should be in the program-cache hash,
+    // so we include it in AllGatherParams.
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor should be on device for all_gather operation");
     const auto mesh_shape = mesh_device->shape();
@@ -254,8 +256,8 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
         axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
         axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
     }
-    // Devices participating in the collective
-    const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];
+    const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];  // devices partaking in the collective
+    const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
     // Resolve negative gather dim
     uint32_t rank = input_tensor.logical_shape().rank();
@@ -270,6 +272,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             axis_num_devices,
             axis_num_links,
             num_devices,
+            packet_size,
             subdevice_id,
             sub_core_grid},
         AllGatherInputs{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor}};
