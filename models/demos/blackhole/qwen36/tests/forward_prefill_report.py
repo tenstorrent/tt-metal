@@ -5,9 +5,9 @@
 
 Companion to test_forward_prefill_perf.py. Reads the merged ops report
 (ops_perf_results*.csv), keeps only the ops inside each MEASURE_T{T} .. _END
-window, and buckets DEVICE KERNEL DURATION [ns] by the PF_* signpost that
-precedes them (PF_proj / PF_conv / PF_gdn_core / PF_state_carry / PF_gate_norm /
-PF_out_proj / PF_all_reduce). Also prints a coarse op-CATEGORY split
+window, and buckets DEVICE KERNEL DURATION [ns] by the stage signpost that
+precedes them (proj / conv / gdn_core / state_carry / gate_norm / out_proj /
+all_reduce; a legacy "PF_" prefix is stripped for older captures). Also prints a coarse op-CATEGORY split
 (matmul / elementwise / layout-churn / reduce / norm / scan / ccl / other)
 across the whole window, mirroring handoff §0b.
 
@@ -38,14 +38,14 @@ COL_TYPE = "OP TYPE"
 COL_DUR = "DEVICE KERNEL DURATION [ns]"
 
 # Logical forward_prefill stages, in data-flow order (matches gdn/tp.py _sp() markers).
-PF_ORDER = [
-    "PF_proj",
-    "PF_conv",
-    "PF_gdn_core",
-    "PF_state_carry",
-    "PF_gate_norm",
-    "PF_out_proj",
-    "PF_all_reduce",
+STAGE_ORDER = [
+    "proj",
+    "conv",
+    "gdn_core",
+    "state_carry",
+    "gate_norm",
+    "out_proj",
+    "all_reduce",
 ]
 
 # Coarse op-category heuristics on OP CODE (substring, case-insensitive). Order matters:
@@ -159,21 +159,22 @@ def parse(csv_path):
                 m = re.fullmatch(r"MEASURE_T(\d+)", code)
                 if m:
                     cur_T = int(m.group(1))
-                    cur_pf = "PF_(pre)"
+                    cur_pf = "(pre)"
                     windows.setdefault(cur_T, {"regions": defaultdict(list), "cats": defaultdict(list)})
                     continue
                 if code.startswith("MEASURE_T") and code.endswith("_END"):
                     cur_T = None
                     cur_pf = None
                     continue
-                if code.startswith("PF_"):
-                    cur_pf = code
+                # Any other signpost is a data-flow stage marker; strip an optional
+                # legacy "PF_" prefix so pre-rename captures still bucket correctly.
+                cur_pf = code[3:] if code.startswith("PF_") else code
                 continue
             # a real op
             if cur_T is None:
                 continue  # outside any MEASURE window (warmup / other tests)
             ns = _dur(r.get(COL_DUR))
-            windows[cur_T]["regions"][cur_pf or "PF_(pre)"].append((code, ns))
+            windows[cur_T]["regions"][cur_pf or "(pre)"].append((code, ns))
             windows[cur_T]["cats"][categorize(code)].append((code, ns))
     return windows
 
@@ -201,7 +202,7 @@ def report(windows, top=0):
         # ---- per-stage (PF_* signpost) breakdown, in data-flow order ----
         print("  stage (signpost)         ms        %      ops")
         print("  " + "-" * 48)
-        ordered = [p for p in PF_ORDER if p in regions] + [p for p in regions if p not in PF_ORDER]
+        ordered = [p for p in STAGE_ORDER if p in regions] + [p for p in regions if p not in STAGE_ORDER]
         for pf in ordered:
             lst = regions[pf]
             s = sum(ns for _, ns in lst)
