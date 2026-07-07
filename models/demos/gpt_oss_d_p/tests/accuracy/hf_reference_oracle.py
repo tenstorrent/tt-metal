@@ -76,6 +76,15 @@ def main():
         default=None,
         help="limit layer capture to first N layers (default: all layers)",
     )
+    ap.add_argument(
+        "--check-kv-rope",
+        action="store_true",
+        help=(
+            "diagnostic: for layer 0, compute K manually from the weight projection and compare "
+            "against past_key_values[0][0] to determine whether HF stores pre- or post-RoPE K. "
+            "Prints cosine similarity; exits after the check."
+        ),
+    )
     args = ap.parse_args()
     prompts = args.prompt or ["What are the prime factors of 1?"]
 
@@ -140,11 +149,59 @@ def main():
             for i in range(num_capture):
                 hooks.append(model.model.layers[i].register_forward_hook(make_hook(i)))
 
+        # Capture the post-layernorm hidden state that feeds into layer-0 self_attn,
+        # so we can manually reproduce pre-RoPE K and compare against past_key_values.
+        layer0_attn_input: list[torch.Tensor] = []
+        if args.check_kv_rope:
+
+            def _capture_l0_attn_input(module, args):
+                layer0_attn_input.append(args[0].detach().float())
+
+            _h0 = model.model.layers[0].self_attn.register_forward_pre_hook(_capture_l0_attn_input)
+
         with torch.no_grad():
             out = model(input_ids=input_ids, use_cache=True)
 
         for h in hooks:
             h.remove()
+
+        if args.check_kv_rope:
+            _h0.remove()
+            # Manually compute pre-RoPE K for layer 0.
+            attn0 = model.model.layers[0].self_attn
+            hs_in = layer0_attn_input[0]  # [1, seq_len, hidden_size], float32 (post-layernorm)
+            with torch.no_grad():
+                k_manual = (
+                    torch.nn.functional.linear(
+                        hs_in.bfloat16(),
+                        attn0.k_proj.weight,
+                        attn0.k_proj.bias,
+                    )
+                    .float()
+                    .squeeze(0)
+                )  # [seq_len, num_kv_heads * head_dim]
+            head_dim = attn0.head_dim
+            num_kv = attn0.num_key_value_heads
+            k_manual = k_manual.reshape(-1, num_kv, head_dim).permute(1, 0, 2)  # [num_kv, seq, head_dim]
+
+            k_cached = out.past_key_values[0][0][0].float()  # [num_kv, seq, head_dim]
+
+            def _cosim(a, b):
+                a, b = a.flatten(), b.flatten()
+                return float((a * b).sum() / (a.norm() * b.norm() + 1e-8))
+
+            cos = _cosim(k_manual, k_cached)
+            print(
+                f"[oracle] --check-kv-rope layer 0: cosine_sim(manual_pre_rope_K, past_key_values_K) = {cos:.4f}",
+                flush=True,
+            )
+            if cos > 0.9:
+                print("[oracle] => past_key_values stores PRE-RoPE K (cos≈1 means no rotation applied yet)", flush=True)
+            elif cos < 0.1:
+                print("[oracle] => past_key_values stores POST-RoPE K (cos≈0 means K has been rotated)", flush=True)
+            else:
+                print(f"[oracle] => ambiguous (cos={cos:.4f}); investigate further", flush=True)
+            return 0
 
         logits = out.logits[0, last, :].float()  # [vocab]
         top = torch.topk(logits, 5)
