@@ -87,10 +87,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-l",
         "--layers",
-        default="llk_core,llk_api",
+        default="llk_api",
         help=(
-            "Comma-separated API layers to collect, from "
-            f"{{{','.join(sorted(_LAYER_CHOICES))}}} (default: llk_core,llk_api)."
+            "Comma-separated API layers to collect, from " f"{{{','.join(sorted(_LAYER_CHOICES))}}} (default: llk_api)."
         ),
     )
     return parser

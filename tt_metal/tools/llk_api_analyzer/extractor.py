@@ -44,7 +44,7 @@ _COMPUTE_API_PATH_HINTS = ("/api/compute/", "compute_kernel_api")
 class ExtractorConfig:
     """Controls which call layers are collected. LLKs are the default focus."""
 
-    include_layers: frozenset[ApiLayer] = frozenset({ApiLayer.LLK_CORE, ApiLayer.LLK_API})
+    include_layers: frozenset[ApiLayer] = frozenset({ApiLayer.LLK_API})
 
 
 class LlkApiExtractor:

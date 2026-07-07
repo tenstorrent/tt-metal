@@ -137,7 +137,7 @@ the kernels must have been built with `TT_METAL_RISCV_DEBUG_INFO=1`.)
 | `--keep-cache` | Keep the temporary `--run` cache after analysis. |
 | `-f, --format {text,json,table,csv}` | Output format (default `text`). `table`/`csv` collapse the run into one row per LLK call. |
 | `-o, --output FILE` | Write to a file instead of stdout. |
-| `-l, --layers L1,L2,...` | Layers to collect from `llk_core,llk_api,compute_api,other` (default `llk_core,llk_api`). |
+| `-l, --layers L1,L2,...` | Layers to collect from `llk_core,llk_api,compute_api,other` (default `llk_api`). Use `llk_core,llk_api` to include internal `_llk_*` calls. |
 
 ### Collapsed table (`-f table` / `-f csv`)
 
