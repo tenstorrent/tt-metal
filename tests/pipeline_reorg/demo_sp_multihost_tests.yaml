@@ -18,7 +18,9 @@
 # todo)) proven to work by itself but mess up SP1 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
 - name: "Single Galaxy - Host I/O Loopback (DeepSeek V3 B1)"
   cmd: |
-    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    TTRUN_DIR=/etc/ttop
+    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/one_galaxy"
     cp "${SCALEOUT_CONFIG_DIR}/rank_bindings_mapping.yaml" .
     cp "${SCALEOUT_CONFIG_DIR}/rank0_binding.yaml" .
@@ -26,12 +28,11 @@
     cp "${SCALEOUT_CONFIG_DIR}/rank2_binding.yaml" .
     cp "${SCALEOUT_CONFIG_DIR}/rank3_binding.yaml" .
     cp "${SCALEOUT_CONFIG_DIR}/mesh_graph_descriptor.textproto" .
-    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
 
-    TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --rank-bindings-mapping rank_bindings_mapping.yaml \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by slot --bind-to none --tag-output" \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
       python3 -m pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io_decoder_sweep_chunked_trace.py::test_run_host_io_decoder_sweep_chunked_trace_world_size_4 \
       --timeout=1200
   skus:
@@ -45,7 +46,7 @@
   cmd: |
     export MLA_CHUNKED_TRACE_PATH=/mnt/models/deepseek-prefill-cache/golden/mla_sdpa_traces/kimi_metal_56320_sdpa_mla/
     export KIMI_K2_6_HF_MODEL=/data/nbabin/Kimi-K2_6-dequantized
-    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    python3 -m pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k '8x4 and line and trace and kimi and deep-50k+5k' -vvv --tb=short
   skus:
     bh_spsg:
