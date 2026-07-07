@@ -1298,8 +1298,47 @@ def test_group_norm_negative_tests(
         )
 
 
+def test_group_norm_rejects_non_tile_aligned_spatial(device, expect_error):
+    # group_norm reduces over the flattened spatial dimension (N*H*W) in 32-row
+    # tiles, so that dimension must be a whole number of tiles -- otherwise the
+    # trailing partial tile would be silently dropped from the mean/variance,
+    # producing wrong results. Here N*H*W = 16, which is not a multiple of 32.
+    #
+    # A TILE input cannot exercise this (TILE pads the row dim up to 32), and a
+    # ROW_MAJOR interleaved input is rejected earlier as unsupported on the
+    # non-sharded path. A sharded input keeps the unpadded row dim and reaches the
+    # invariant check, so use that to cover it.
+    C, HW, num_groups = 320, 16, 32
+    torch_input_tensor = torch.rand((1, 1, HW, C), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (HW, C), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+
+    with expect_error(RuntimeError, "must be divisible by the tile size"):
+        ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            memory_config=sharded_mem_config,
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+        )
+
+
 def test_group_norm_rejects_host_input_mask(device, expect_error):
-    input_tensor = ttnn.empty((1, 1, 32, 320), device=device)
+    # TILE layout: a ROW_MAJOR interleaved input is rejected earlier (it is unsupported
+    # on the non-sharded path), which would pre-empt the host-input-mask check this test
+    # targets.
+    input_tensor = ttnn.empty((1, 1, 32, 320), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     input_mask = ttnn.create_group_norm_input_mask(320, 32, 1, ttnn.DataType.BFLOAT16)
 
     with expect_error(RuntimeError, "Input mask must be on device"):
