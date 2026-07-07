@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -19,6 +21,11 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
+
+# gen#0 self-warms the DiT via a prep_run=True capture instead of the warmup denoise. Off by default:
+# it is only safe when the inner_step @traced_function captures with prep_run under this flag, which it
+# does not, so enabling it skips warmup with no self-warm and compiles the DiT cold in the reserved window.
+LTX_DIT_PREP_RUN = os.environ.get("LTX_DIT_PREP_RUN", "0") in ("1", "true", "True")
 
 
 class LTXTransformerBlock(Module):

@@ -406,6 +406,10 @@ class Vocoder(Module):
         for tracer in self._traces.values():
             tracer.release_trace()
         self._traces.clear()
+        # _warmed_shapes gates the eager first-decode that warms the lazy device-graph state
+        # (snake α/β, CCL buffers). Clearing traces without clearing it would skip that warm on the
+        # next decode and capture unwarmed state — so reset it too, so re-warming actually re-warms.
+        self._warmed_shapes.clear()
 
     def _host_to_device(self, mel_spec: torch.Tensor) -> ttnn.Tensor:
         """Host preprocessing + upload. Returns the ROW_MAJOR full-T device tensor that

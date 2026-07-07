@@ -28,6 +28,8 @@ class LTXOneStagePipeline(LTXPipeline):
         height: int,
         width: int,
         num_inference_steps: int = 2,
+        capture_all: bool = False,  # accepted for the shared cold-start dance; this warmup is already complete
+        in_capture_pass: bool = False,  # accepted for the shared cold-start dance; no prep_run=False decoder here
     ) -> None:
         """Compile the ``call_av`` + VAE-decode programs (``ge_gamma=0`` skips the GE branch)."""
         t0 = time.time()
