@@ -485,11 +485,16 @@ constexpr size_t receiver_log_buffer_addr = NAMED_CT_ARG("RECEIVER_LOG_BUFFER_AD
 // receiver region so the sender and receiver traces never alias, even if one eRisc services both roles.
 constexpr size_t sender_log_buffer_addr = NAMED_CT_ARG("SENDER_LOG_BUFFER_ADDR");
 
-// [debug] Per-router DRAM log-buffer sizes (bytes). The matching DRAM base addresses arrive as runtime
-// args (receiver_log_dram_addr / sender_log_dram_addr, packed at the end of the runtime args by the
-// builder). Parsed but NOT yet consumed.
-constexpr size_t receiver_log_dram_buffer_size = NAMED_CT_ARG("RECEIVER_LOG_DRAM_BUFFER_SIZE");
+// [debug] Per-router DRAM log-buffer geometry. Base addresses are fixed per-bank byte offsets (same for
+// every eth core); log_dram_bank_id is the per-core DRAM bank the two buffers live in (spread across banks
+// to distribute the debug NOC writes). The kernel forms a DRAM NOC address as
+// get_noc_addr_from_bank_id<true>(log_dram_bank_id, {sender,receiver}_log_dram_buffer_base + write_offset)
+// and bulk-flushes each full L1 log region there, advancing write_offset until the buffer size is reached.
+constexpr size_t sender_log_dram_buffer_base = NAMED_CT_ARG("SENDER_LOG_DRAM_BUFFER_BASE");
+constexpr size_t receiver_log_dram_buffer_base = NAMED_CT_ARG("RECEIVER_LOG_DRAM_BUFFER_BASE");
 constexpr size_t sender_log_dram_buffer_size = NAMED_CT_ARG("SENDER_LOG_DRAM_BUFFER_SIZE");
+constexpr size_t receiver_log_dram_buffer_size = NAMED_CT_ARG("RECEIVER_LOG_DRAM_BUFFER_SIZE");
+constexpr uint32_t log_dram_bank_id = NAMED_CT_ARG("LOG_DRAM_BANK_ID");
 
 // ============================================================================
 // Code Profiling

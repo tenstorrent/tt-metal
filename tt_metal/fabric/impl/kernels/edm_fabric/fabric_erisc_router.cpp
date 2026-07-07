@@ -639,6 +639,11 @@ struct ReceiverLog {
     uint32_t base_ack_gap;
     uint32_t base_wr_sent_gap;
     uint32_t base_wr_flush_gap;
+    // [debug] DRAM flush state (see flush_log_region_to_dram). dram_write_offset is the next byte offset into
+    // this router's DRAM receiver-log buffer; dram_records is the running total of records flushed to DRAM
+    // this window (reported at the STOP marker).
+    uint32_t dram_write_offset;
+    uint32_t dram_records;
     ReceiverLogRecord records[RECEIVER_LOG_CAPACITY];
 };
 static_assert(sizeof(ReceiverLog) <= 4096, "ReceiverLog exceeds the carved receiver_log_buffer region");
@@ -666,6 +671,8 @@ FORCE_INLINE void reset_receiver_log(
     log->count = 0;
     log->dropped = 0;
     log->spare = 0;
+    log->dram_write_offset = 0;
+    log->dram_records = 0;
     log->last_ts = window_start_cycles;
     log->last_iter = iter;
     log->last_ready = ready;
@@ -679,6 +686,32 @@ FORCE_INLINE void reset_receiver_log(
     log->base_ack_gap = ack >= completion ? ack - completion : 0;
     log->base_wr_sent_gap = wr_sent >= completion ? wr_sent - completion : 0;
     log->base_wr_flush_gap = wr_flush >= completion ? wr_flush - completion : 0;
+}
+
+// [debug] Fixed flush granularity: one whole L1 log region (header + records) per bulk write. Both L1 log
+// regions are carved at 4096 B by the builder, so a flush writes 4096 B and advances the DRAM cursor by the
+// same amount. 4096 is a multiple of the 16 B Blackhole NOC write alignment and the region base is aligned,
+// so the transfer is legal; writing the whole region avoids any per-record offset-alignment fixups.
+constexpr uint32_t LOG_DRAM_FLUSH_CHUNK_BYTES = 4096;
+
+// [debug] Blocking bulk-flush of one L1 log region to its per-router DRAM buffer. The DRAM buffer lives in a
+// single bank (bank), at a fixed per-bank byte offset (dram_base); the write targets exactly that bank via
+// get_noc_addr_from_bank_id, so the buffer never straddles a bank boundary. Advances *dram_write_offset by
+// one chunk and returns true; returns false WITHOUT writing once the buffer would overflow (dram_size), so
+// the caller can fall back to dropping. Plain blocking noc_async_write: flushes happen only when an L1 buffer
+// fills (every few hundred logged state-changes = dozens+ of tokens), so the stall is rare and coarse enough
+// not to materially perturb the flow-control timing being measured.
+FORCE_INLINE bool flush_log_region_to_dram(
+    uint32_t l1_src, uint32_t dram_base, uint32_t dram_size, uint32_t bank, volatile uint32_t* dram_write_offset) {
+    uint32_t off = *dram_write_offset;
+    if (off + LOG_DRAM_FLUSH_CHUNK_BYTES > dram_size) {
+        return false;  // DRAM buffer full -> caller drops
+    }
+    uint64_t dst = get_noc_addr_from_bank_id<true>(bank, dram_base + off);
+    noc_async_write(l1_src, dst, LOG_DRAM_FLUSH_CHUNK_BYTES);
+    noc_async_write_barrier();
+    *dram_write_offset = off + LOG_DRAM_FLUSH_CHUNK_BYTES;
+    return true;
 }
 
 // [debug] Append a record iff the flow-control state changed since the last recorded row. Gated by the caller
@@ -696,10 +729,23 @@ FORCE_INLINE void record_receiver_flow_state(
 
     uint32_t idx = log->count;
     if (idx >= RECEIVER_LOG_CAPACITY) {
-        // Buffer full: count the drop for honest truncation reporting and leave last_* frozen so the stored
-        // rows keep a self-consistent delta chain (drops only happen after the records are already captured).
-        log->dropped++;
-        return;
+        // L1 buffer full: bulk-flush the whole region to DRAM and wrap in place, preserving the delta
+        // baseline (last_*/base_*_gap) so the reconstructed counter chain continues seamlessly across the
+        // flushed chunk boundary. If the DRAM buffer is also full, fall back to dropping (leaving last_*
+        // frozen keeps the stored rows self-consistent).
+        if (flush_log_region_to_dram(
+                static_cast<uint32_t>(receiver_log_buffer_addr),
+                static_cast<uint32_t>(receiver_log_dram_buffer_base),
+                static_cast<uint32_t>(receiver_log_dram_buffer_size),
+                log_dram_bank_id,
+                &log->dram_write_offset)) {
+            log->dram_records += RECEIVER_LOG_CAPACITY;
+            log->count = 0;
+            idx = 0;
+        } else {
+            log->dropped++;
+            return;
+        }
     }
     uint32_t now = get_timestamp_32b();
 
@@ -808,6 +854,10 @@ struct SenderLog {
     // occupancy. Good enough to keep sent >= acked >= cmpl and the (acked - cmpl) in-rx-buffer estimate sane.
     uint32_t base_sent_gap[SENDER_LOG_NUM_CHANNELS];
     uint32_t base_acked_gap[SENDER_LOG_NUM_CHANNELS];
+    // [debug] DRAM flush state (see flush_log_region_to_dram): next byte offset into this router's DRAM
+    // sender-log buffer, and the running total of records flushed to DRAM this window.
+    uint32_t dram_write_offset;
+    uint32_t dram_records;
     SenderLogRecord records[SENDER_LOG_CAPACITY];
 };
 static_assert(sizeof(SenderLog) <= 4096, "SenderLog exceeds the carved sender_log_buffer region");
@@ -846,6 +896,8 @@ __attribute__((noinline)) void reset_sender_log(uint32_t window_start_cycles, ui
     log->count = 0;
     log->dropped = 0;
     log->spare = 0;
+    log->dram_write_offset = 0;
+    log->dram_records = 0;
     log->last_ts = window_start_cycles;
     log->last_iter = iter;
     log->last_dn_credits = log->dn_credits;
@@ -880,8 +932,21 @@ __attribute__((noinline)) void record_sender_flow_state(uint32_t iter) {
 
     uint32_t idx = log->count;
     if (idx >= SENDER_LOG_CAPACITY) {
-        log->dropped++;  // full: count the drop, leave last_* frozen so stored rows keep a consistent chain
-        return;
+        // L1 full: bulk-flush the whole region to DRAM and wrap in place, preserving the delta baseline so
+        // the reconstructed chain stays continuous across the chunk boundary. Drop only if DRAM is full too.
+        if (flush_log_region_to_dram(
+                static_cast<uint32_t>(sender_log_buffer_addr),
+                static_cast<uint32_t>(sender_log_dram_buffer_base),
+                static_cast<uint32_t>(sender_log_dram_buffer_size),
+                log_dram_bank_id,
+                &log->dram_write_offset)) {
+            log->dram_records += SENDER_LOG_CAPACITY;
+            log->count = 0;
+            idx = 0;
+        } else {
+            log->dropped++;
+            return;
+        }
     }
     uint32_t now = get_timestamp_32b();
     uint32_t ts_d = now - log->last_ts;
@@ -931,30 +996,56 @@ __attribute__((noinline)) void record_sender_flow_state(uint32_t iter) {
 static __attribute__((noinline)) void dump_receiver_log() {
     if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
         volatile ReceiverLog* rlog = receiver_log();
-        uint32_t nslots = static_cast<uint32_t>(RECEIVER_NUM_BUFFERS_ARRAY[VC0_RECEIVER_CHANNEL]);
-        DEVICE_PRINT("[rxlog] n={} drop={} slots={}\n", rlog->count, rlog->dropped, nslots);
-        uint32_t iter_acc = 0, cmpl_acc = 0;
-        uint32_t ack_acc = rlog->base_ack_gap, wsent_acc = rlog->base_wr_sent_gap, wflush_acc = rlog->base_wr_flush_gap;
-        for (uint32_t r = 0; r < rlog->count; r++) {
-            volatile ReceiverLogRecord* rec = &rlog->records[r];
-            iter_acc += rec->iter_delta;
-            ack_acc += rec->ack_delta;
-            wsent_acc += rec->wr_sent_delta;
-            wflush_acc += rec->wr_flush_delta;
-            cmpl_acc += rec->completion_delta;
-            uint32_t rdy = rec->ready;
-            uint32_t occupied = rdy + (ack_acc - cmpl_acc);
-            uint32_t free_slots = occupied <= nslots ? nslots - occupied : 0;
-            DEVICE_PRINT(
-                "[rxlog] iter={} dt={} rdy={} ack={} wsent={} wflush={} cmpl={} free={}\n",
-                iter_acc,
-                static_cast<uint32_t>(rec->ts_delta),
-                rdy,
-                ack_acc,
-                wsent_acc,
-                wflush_acc,
-                cmpl_acc,
-                free_slots);
+        // If the whole window fit in one L1 buffer (nothing flushed), the delta chain is self-contained and
+        // still reconstructable inline below. Once any chunk has been flushed the chain spans DRAM chunks and
+        // reconstruction moves host-side (reading the DRAM buffer). Capture this before the tail flush.
+        bool fit_entirely_in_l1 = (rlog->dram_records == 0);
+        // Flush the final partial chunk so the DRAM buffer holds the complete trace, then report totals.
+        if (rlog->count > 0) {
+            if (flush_log_region_to_dram(
+                    static_cast<uint32_t>(receiver_log_buffer_addr),
+                    static_cast<uint32_t>(receiver_log_dram_buffer_base),
+                    static_cast<uint32_t>(receiver_log_dram_buffer_size),
+                    log_dram_bank_id,
+                    &rlog->dram_write_offset)) {
+                rlog->dram_records += rlog->count;
+            } else {
+                rlog->dropped += rlog->count;
+            }
+        }
+        DEVICE_PRINT(
+            "[rxlog] dram_records={} dropped={} bank={} base={} bytes={}\n",
+            rlog->dram_records,
+            rlog->dropped,
+            static_cast<uint32_t>(log_dram_bank_id),
+            static_cast<uint32_t>(receiver_log_dram_buffer_base),
+            rlog->dram_write_offset);
+        if (fit_entirely_in_l1) {
+            uint32_t nslots = static_cast<uint32_t>(RECEIVER_NUM_BUFFERS_ARRAY[VC0_RECEIVER_CHANNEL]);
+            uint32_t iter_acc = 0, cmpl_acc = 0;
+            uint32_t ack_acc = rlog->base_ack_gap, wsent_acc = rlog->base_wr_sent_gap,
+                     wflush_acc = rlog->base_wr_flush_gap;
+            for (uint32_t r = 0; r < rlog->count; r++) {
+                volatile ReceiverLogRecord* rec = &rlog->records[r];
+                iter_acc += rec->iter_delta;
+                ack_acc += rec->ack_delta;
+                wsent_acc += rec->wr_sent_delta;
+                wflush_acc += rec->wr_flush_delta;
+                cmpl_acc += rec->completion_delta;
+                uint32_t rdy = rec->ready;
+                uint32_t occupied = rdy + (ack_acc - cmpl_acc);
+                uint32_t free_slots = occupied <= nslots ? nslots - occupied : 0;
+                DEVICE_PRINT(
+                    "[rxlog] iter={} dt={} rdy={} ack={} wsent={} wflush={} cmpl={} free={}\n",
+                    iter_acc,
+                    static_cast<uint32_t>(rec->ts_delta),
+                    rdy,
+                    ack_acc,
+                    wsent_acc,
+                    wflush_acc,
+                    cmpl_acc,
+                    free_slots);
+            }
         }
     }
 }
@@ -969,50 +1060,66 @@ static __attribute__((noinline)) void dump_receiver_log() {
 static __attribute__((noinline)) void dump_sender_log() {
     if constexpr (sender_log_enabled()) {
         volatile SenderLog* slog = sender_log();
+        bool fit_entirely_in_l1 = (slog->dram_records == 0);
+        // Flush the final partial chunk so the DRAM buffer holds the complete trace, then report totals.
+        if (slog->count > 0) {
+            if (flush_log_region_to_dram(
+                    static_cast<uint32_t>(sender_log_buffer_addr),
+                    static_cast<uint32_t>(sender_log_dram_buffer_base),
+                    static_cast<uint32_t>(sender_log_dram_buffer_size),
+                    log_dram_bank_id,
+                    &slog->dram_write_offset)) {
+                slog->dram_records += slog->count;
+            } else {
+                slog->dropped += slog->count;
+            }
+        }
         DEVICE_PRINT(
-            "[txlog] n={} drop={} nbuf0={} nbuf1={} dn_slots={}\n",
-            slog->count,
+            "[txlog] dram_records={} dropped={} bank={} base={} bytes={}\n",
+            slog->dram_records,
             slog->dropped,
-            static_cast<uint32_t>(SENDER_NUM_BUFFERS_ARRAY[0]),
-            static_cast<uint32_t>(SENDER_NUM_BUFFERS_ARRAY[1]),
-            static_cast<uint32_t>(REMOTE_RECEIVER_NUM_BUFFERS_ARRAY[VC0_RECEIVER_CHANNEL]));
-        uint32_t iter_acc = 0;
-        // Seed per-channel accumulators with the base gaps so all three counters are rebased to a common
-        // completion baseline (sent >= ack >= cmpl) even if the window opened non-quiescent (see base_*_gap).
-        uint32_t sent0 = slog->base_sent_gap[0], ack0 = slog->base_acked_gap[0], cmpl0 = 0;
-        uint32_t sent1 = slog->base_sent_gap[1], ack1 = slog->base_acked_gap[1], cmpl1 = 0;
-        for (uint32_t r = 0; r < slog->count; r++) {
-            volatile SenderLogRecord* rec = &slog->records[r];
-            iter_acc += rec->iter_delta;
-            sent0 += rec->ch0_sent_delta;
-            ack0 += rec->ch0_acked_delta;
-            cmpl0 += rec->ch0_cmpl_delta;
-            sent1 += rec->ch1_sent_delta;
-            ack1 += rec->ch1_acked_delta;
-            cmpl1 += rec->ch1_cmpl_delta;
-            uint32_t f = rec->ch_flags;
-            uint32_t dncr = rec->dn_credits;
-            DEVICE_PRINT(
-                "[txlog] iter={} dt={} ch=0 occ={} sent={} ack={} cmpl={} dncr={} r={} cn={}\n",
-                iter_acc,
-                static_cast<uint32_t>(rec->ts_delta),
-                static_cast<uint32_t>(rec->ch0_local_occ),
-                sent0,
-                ack0,
-                cmpl0,
-                dncr,
-                f & 0x7,
-                (f >> 3) & 0x1);
-            DEVICE_PRINT(
-                "[txlog] iter={} dt=0 ch=1 occ={} sent={} ack={} cmpl={} dncr={} r={} cn={}\n",
-                iter_acc,
-                static_cast<uint32_t>(rec->ch1_local_occ),
-                sent1,
-                ack1,
-                cmpl1,
-                dncr,
-                (f >> 4) & 0x7,
-                (f >> 7) & 0x1);
+            static_cast<uint32_t>(log_dram_bank_id),
+            static_cast<uint32_t>(sender_log_dram_buffer_base),
+            slog->dram_write_offset);
+        if (fit_entirely_in_l1) {
+            uint32_t iter_acc = 0;
+            // Seed per-channel accumulators with the base gaps so all three counters are rebased to a common
+            // completion baseline (sent >= ack >= cmpl) even if the window opened non-quiescent (see base_*_gap).
+            uint32_t sent0 = slog->base_sent_gap[0], ack0 = slog->base_acked_gap[0], cmpl0 = 0;
+            uint32_t sent1 = slog->base_sent_gap[1], ack1 = slog->base_acked_gap[1], cmpl1 = 0;
+            for (uint32_t r = 0; r < slog->count; r++) {
+                volatile SenderLogRecord* rec = &slog->records[r];
+                iter_acc += rec->iter_delta;
+                sent0 += rec->ch0_sent_delta;
+                ack0 += rec->ch0_acked_delta;
+                cmpl0 += rec->ch0_cmpl_delta;
+                sent1 += rec->ch1_sent_delta;
+                ack1 += rec->ch1_acked_delta;
+                cmpl1 += rec->ch1_cmpl_delta;
+                uint32_t f = rec->ch_flags;
+                uint32_t dncr = rec->dn_credits;
+                DEVICE_PRINT(
+                    "[txlog] iter={} dt={} ch=0 occ={} sent={} ack={} cmpl={} dncr={} r={} cn={}\n",
+                    iter_acc,
+                    static_cast<uint32_t>(rec->ts_delta),
+                    static_cast<uint32_t>(rec->ch0_local_occ),
+                    sent0,
+                    ack0,
+                    cmpl0,
+                    dncr,
+                    f & 0x7,
+                    (f >> 3) & 0x1);
+                DEVICE_PRINT(
+                    "[txlog] iter={} dt=0 ch=1 occ={} sent={} ack={} cmpl={} dncr={} r={} cn={}\n",
+                    iter_acc,
+                    static_cast<uint32_t>(rec->ch1_local_occ),
+                    sent1,
+                    ack1,
+                    cmpl1,
+                    dncr,
+                    (f >> 4) & 0x7,
+                    (f >> 7) & 0x1);
+            }
         }
     }
 }
@@ -3919,16 +4026,6 @@ void kernel_main() {
             local_tensix_relay_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
         }
     }
-
-    ///////////////////////////////////////////////
-    // [debug] DRAM log-buffer base addresses
-    // Packed at the very end of the runtime args by FabricEriscDatamoverBuilder::get_runtime_args:
-    // receiver-log DRAM base address, then sender-log DRAM base address. Sizes come from the
-    // receiver_log_dram_buffer_size / sender_log_dram_buffer_size compile-time args. Parsed but NOT yet
-    // consumed.
-    ///////////////////////////////////////////////
-    [[maybe_unused]] const auto receiver_log_dram_addr = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const auto sender_log_dram_addr = get_arg_val<uint32_t>(arg_idx++);
 
     //  initialize the statically allocated "semaphores"
     [&]<size_t... Is>(std::index_sequence<Is...>) {
