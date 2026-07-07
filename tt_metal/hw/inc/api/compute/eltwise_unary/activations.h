@@ -34,7 +34,7 @@ ALWI void hardsigmoid_tile(uint32_t idst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_activation,
-        (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */),
+        (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */, DST_ACCUM_MODE),
         idst,
         VectorMode::RC));
 }
@@ -44,7 +44,7 @@ ALWI void hardsigmoid_tile_pack(uint32_t idst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_activation,
-        (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */),
+        (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */, DST_ACCUM_MODE),
         idst,
         VectorMode::RC));
 }

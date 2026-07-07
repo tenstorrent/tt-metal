@@ -243,7 +243,8 @@ ALWI void tanh_tile(uint32_t idst) {
 // clang-format on
 ALWI void square_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX, 8 /*ITERATIONS*/, DST_ACCUM_MODE), idst, VectorMode::RC));
 #else
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (SFPU_ITERATIONS), idst, VectorMode::RC));
 #endif
