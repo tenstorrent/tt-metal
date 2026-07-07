@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include "tt-metalium/constants.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -21,6 +22,38 @@ void generate_tile_with_packed_bfloat16_values(uint32_t cb_id, uint32_t packed_b
         *ptr++ = packed_bf16_value;
     }
     cb.push_back(1);
+}
+
+// Load one row-major gamma/beta stick (TILE_WIDTH datums) into the first row of a tile's two 16x16 faces;
+// byte offsets scale with datum size (2B bf16 / 4B fp32). Blackhole (64B-granular DRAM reads): read the full
+// row into face 0 then L1->L1-copy its second half-row into face 1; else two direct reads, one per face.
+template <typename AccessorType>
+void async_read_row_to_tile(
+    const Noc& noc, const AccessorType& accessor, uint32_t page_id, uint32_t l1_dst_addr, uint32_t element_bytes) {
+    const uint32_t face_bytes = tt::constants::FACE_HW * element_bytes;
+    const uint32_t half_row_bytes = tt::constants::FACE_WIDTH * element_bytes;
+#ifdef ARCH_BLACKHOLE
+    // Blackhole DRAM reads need 64B granularity: read both face-rows into face 0, then rearrange the
+    // second face-row into face 1 with an L1->L1 copy (legal at 16B alignment on BH once resident in L1).
+    noc.async_read(accessor, CoreLocalMem<uint32_t>(l1_dst_addr), 2 * half_row_bytes, {.page_id = page_id}, {});
+    noc.async_read_barrier();
+    UnicastEndpoint self;
+    noc.async_read(
+        self,
+        CoreLocalMem<uint32_t>(l1_dst_addr + face_bytes),
+        half_row_bytes,
+        {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_dst_addr + half_row_bytes},
+        {});
+#else
+    // Two direct DRAM reads: face-row 0 -> face 0, face-row 1 -> face 1.
+    noc.async_read(accessor, CoreLocalMem<uint32_t>(l1_dst_addr), half_row_bytes, {.page_id = page_id}, {});
+    noc.async_read(
+        accessor,
+        CoreLocalMem<uint32_t>(l1_dst_addr + face_bytes),
+        half_row_bytes,
+        {.page_id = page_id, .offset_bytes = half_row_bytes},
+        {});
+#endif
 }
 
 void kernel_main() {
@@ -148,41 +181,14 @@ void kernel_main() {
 
                 if constexpr (fuse_gamma) {
                     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_id);
+                    const uint32_t gamma_element_bytes = gamma_tile_bytes / tt::constants::TILE_HW;
                     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
                     cb_gamma.reserve_back(num_cols_tile_gamma_beta);
                     uint32_t l1_write_addr_gamma = cb_gamma.get_write_ptr();
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-                        uint32_t tile_id = gamma_tile_start_id + w;
-#ifdef ARCH_BLACKHOLE
-                        noc.async_read(
-                            gamma,
-                            CoreLocalMem<uint32_t>(l1_write_addr_gamma),
-                            32 * 2,
-                            {.page_id = tile_id},
-                            {});
-                        noc.async_read_barrier();
-                        UnicastEndpoint self_ep;
-                        noc.async_read(
-                            self_ep,
-                            CoreLocalMem<uint32_t>(l1_write_addr_gamma + 512),
-                            32,
-                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + 32},
-                            {});
-#else
-                        noc.async_read(
-                            gamma,
-                            CoreLocalMem<uint32_t>(l1_write_addr_gamma),
-                            32,
-                            {.page_id = tile_id},
-                            {});
-                        noc.async_read(
-                            gamma,
-                            CoreLocalMem<uint32_t>(l1_write_addr_gamma + 512),
-                            32,
-                            {.page_id = tile_id, .offset_bytes = 32},
-                            {});
-#endif
+                        async_read_row_to_tile(
+                            noc, gamma, gamma_tile_start_id + w, l1_write_addr_gamma, gamma_element_bytes);
                         l1_write_addr_gamma += gamma_tile_bytes;
                     }
                     noc.async_read_barrier();
@@ -191,41 +197,14 @@ void kernel_main() {
 
                 if constexpr (fuse_beta) {
                     const uint32_t beta_tile_bytes = get_tile_size(cb_beta_id);
+                    const uint32_t beta_element_bytes = beta_tile_bytes / tt::constants::TILE_HW;
                     const auto beta = TensorAccessor(beta_args, beta_addr);
 
                     uint32_t l1_write_addr_beta = cb_beta.get_write_ptr();
                     cb_beta.reserve_back(num_cols_tile_gamma_beta);
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-                        uint32_t tile_id = beta_tile_start_id + w;
-#ifdef ARCH_BLACKHOLE
-                        noc.async_read(
-                            beta,
-                            CoreLocalMem<uint32_t>(l1_write_addr_beta),
-                            32 * 2,
-                            {.page_id = tile_id},
-                            {});
-                        noc.async_read_barrier();
-                        UnicastEndpoint self_ep;
-                        noc.async_read(
-                            self_ep,
-                            CoreLocalMem<uint32_t>(l1_write_addr_beta + 512),
-                            32,
-                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + 32},
-                            {});
-#else
-                        noc.async_read(
-                            beta,
-                            CoreLocalMem<uint32_t>(l1_write_addr_beta),
-                            32,
-                            {.page_id = tile_id},
-                            {});
-                        noc.async_read(
-                            beta,
-                            CoreLocalMem<uint32_t>(l1_write_addr_beta + 512),
-                            32,
-                            {.page_id = tile_id, .offset_bytes = 32},
-                            {});
-#endif
+                        async_read_row_to_tile(
+                            noc, beta, beta_tile_start_id + w, l1_write_addr_beta, beta_element_bytes);
                         l1_write_addr_beta += beta_tile_bytes;
                     }
                     noc.async_read_barrier();

@@ -26,6 +26,31 @@ HEIGHT_SHARDED_SHAPES = [
     (1, 320, 32, 32, 16),
 ]
 
+# GroupNorm coverage shapes for the fp32/bf16 all-config tests. Interleaved shapes are
+# (N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x); sharded shapes are
+# (N, C, H, W, num_groups, grid_y, grid_x) where grid_y == 1 is height-sharded and grid_y > 1 is
+# block-sharded. Chosen to cover single-core, sub-tile group widths, batch > 1, and num_out_blocks
+# slicing (see also GN_INTERLEAVED_SHAPES in test_group_norm_DRAM.py).
+GN_INTERLEAVED_SHAPES = [
+    (1, 320, 32, 32, 16, 1, 1, 8),  # base config (original single-shape test)
+    (1, 480, 1, 64, 8, 1, 1, 1),  # single core, last group ends less than max tile span
+    (1, 768, 1, 512, 32, 2, 8, 8),  # group channel count less than tile size
+    (2, 768, 1, 512, 32, 2, 8, 8),  # batch 2 (still multicast), num_out_blocks 2
+    (1, 2560, 1, 512, 32, 2, 8, 8),  # mcast num_out_blocks 2
+    (1, 128, 1, 512, 32, 2, 4, 4),  # all groups on core fit in less than one tile
+    (8, 768, 1, 512, 32, 3, 8, 8),  # batch 8 (no multicast), uneven num_out_blocks divisor
+]
+
+GN_SHARDED_SHAPES = [
+    (1, 320, 32, 32, 16, 1, 8),  # base config (original single-shape test), height-sharded
+    (1, 256, 1, 256, 16, 1, 1),  # single core height-sharded, sub-tile group width (16 ch/group)
+    (1, 128, 1, 512, 16, 1, 4),  # height-sharded, groups on core fit in less than one tile
+    #   (num_groups <= 16 per core is required by the welford sharded path)
+    (1, 1280, 1, 512, 32, 8, 8),  # block-sharded 8x8
+    (2, 512, 32, 32, 32, 8, 8),  # block-sharded 8x8, batch 2 (C/grid_y = 64, tile-aligned)
+    (1, 1280, 16, 16, 32, 4, 8),  # block-sharded 8x4
+]
+
 BLOCK_SHARDED_V2_8X4_SHAPES = [
     (1, 1280, 16, 16, 32),
     (1, 320, 1, 8192, 32),
@@ -1273,47 +1298,8 @@ def test_group_norm_negative_tests(
         )
 
 
-def test_group_norm_rejects_non_tile_aligned_spatial(device, expect_error):
-    # group_norm reduces over the flattened spatial dimension (N*H*W) in 32-row
-    # tiles, so that dimension must be a whole number of tiles -- otherwise the
-    # trailing partial tile would be silently dropped from the mean/variance,
-    # producing wrong results. Here N*H*W = 16, which is not a multiple of 32.
-    #
-    # A TILE input cannot exercise this (TILE pads the row dim up to 32), and a
-    # ROW_MAJOR interleaved input is rejected earlier as unsupported on the
-    # non-sharded path. A sharded input keeps the unpadded row dim and reaches the
-    # invariant check, so use that to cover it.
-    C, HW, num_groups = 320, 16, 32
-    torch_input_tensor = torch.rand((1, 1, HW, C), dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    shard_spec = ttnn.ShardSpec(shard_grid, (HW, C), ttnn.ShardOrientation.ROW_MAJOR)
-    sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
-    input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
-
-    with expect_error(RuntimeError, "must be divisible by the tile size"):
-        ttnn.group_norm(
-            input_tensor,
-            num_groups=num_groups,
-            memory_config=sharded_mem_config,
-            core_grid=ttnn.CoreGrid(y=1, x=1),
-        )
-
-
 def test_group_norm_rejects_host_input_mask(device, expect_error):
-    # TILE layout: a ROW_MAJOR interleaved input is rejected earlier (it is unsupported
-    # on the non-sharded path), which would pre-empt the host-input-mask check this test
-    # targets.
-    input_tensor = ttnn.empty((1, 1, 32, 320), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.empty((1, 1, 32, 320), device=device)
     input_mask = ttnn.create_group_norm_input_mask(320, 32, 1, ttnn.DataType.BFLOAT16)
 
     with expect_error(RuntimeError, "Input mask must be on device"):
@@ -1533,6 +1519,228 @@ def test_group_norm_optional_weight_bias(
     assert_numeric_metrics(
         torch_output,
         tt_output,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_SHARDED_SHAPES)
+@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
+def test_group_norm_sharded_welford_all_config(
+    device, layout, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x
+):
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    torch.manual_seed(0)
+    x = torch.rand((N, C, H, W), dtype=torch.float32)
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x, num_groups, weight=w, bias=b).permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for FP32 on the Welford path
+        packer_l1_acc=False,
+    )
+
+    xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    xt = ttnn.from_torch(xt, dtype=in_dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, grid.y, ttnn.DataType.BFLOAT8_B), device)
+    gamma = ttnn.create_group_norm_weight_bias_rm(w, C, grid.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(b, C, grid.y)
+    gt = ttnn.from_torch(
+        gamma, dtype=gb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bt = ttnn.from_torch(
+        beta, dtype=gb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    shard_shape = N * H * W // grid.x, C // grid.y
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    tensor_memory_layout = (
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED if grid.y == 1 else ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+    )
+    mem = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
+    xt = ttnn.to_memory_config(xt, mem)
+
+    out = ttnn.group_norm(
+        xt,
+        num_groups=num_groups,
+        input_mask=mask,
+        weight=gt,
+        bias=bt,
+        memory_config=mem,
+        core_grid=grid,
+        dtype=in_dtype,
+        compute_kernel_config=ck,
+        use_welford=True,
+        output_layout=layout,
+        inplace=(layout == ttnn.ROW_MAJOR_LAYOUT),  # in-place only valid for sharded ROW_MAJOR
+    )
+    out = (
+        ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))).float().reshape(ref.shape)
+    )
+
+    # Thresholds branch on the input dtype (bf16 input is the dominant error source);
+    # each bound sits ~1.4x above the worst observed value across the shape/gamma-beta/layout matrix.
+    if in_dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.06, 0.015
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.02, 0.004
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_SHARDED_SHAPES)
+@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+def test_group_norm_sharded_legacy_all_config(device, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x):
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    torch.manual_seed(0)
+    x = torch.rand((N, C, H, W), dtype=torch.float32)
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x, num_groups, weight=w, bias=b).permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for legacy FP32 (fp32 DEST accumulation)
+        packer_l1_acc=False,
+    )
+
+    xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    xt = ttnn.from_torch(
+        xt, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, grid.y, ttnn.DataType.BFLOAT8_B), device)
+    gamma = ttnn.create_group_norm_weight_bias_rm(w, C, grid.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(b, C, grid.y)
+    gt = ttnn.from_torch(
+        gamma, dtype=gb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bt = ttnn.from_torch(
+        beta, dtype=gb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    shard_shape = N * H * W // grid.x, C // grid.y
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    tensor_memory_layout = (
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED if grid.y == 1 else ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+    )
+    mem = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
+    xt = ttnn.to_memory_config(xt, mem)
+
+    out = ttnn.group_norm(
+        xt,
+        num_groups=num_groups,
+        input_mask=mask,
+        weight=gt,
+        bias=bt,
+        memory_config=mem,
+        core_grid=grid,
+        dtype=in_dtype,
+        compute_kernel_config=ck,
+        use_welford=False,
+        output_layout=ttnn.TILE_LAYOUT,
+        inplace=False,
+    )
+    out = (
+        ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))).float().reshape(ref.shape)
+    )
+
+    # Thresholds branch on the input dtype (bf16 input is the dominant error source);
+    # each bound sits ~1.4x above the worst observed value across the shape/gamma-beta matrix.
+    if in_dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.09, 0.035
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.08, 0.035
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_INTERLEAVED_SHAPES)
+@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+def test_group_norm_interleaved_legacy_all_config(
+    device, N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x, in_dtype, gb_dtype
+):
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    torch.manual_seed(0)
+    x = torch.rand((N, C, H, W), dtype=torch.float32)
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x, num_groups, weight=w, bias=b).permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for legacy FP32 (fp32 DEST accumulation)
+        packer_l1_acc=False,
+    )
+
+    xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    xt = ttnn.from_torch(
+        xt, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, grid.y, ttnn.DataType.BFLOAT8_B), device)
+    gamma = ttnn.create_group_norm_weight_bias_rm(w, C, grid.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(b, C, grid.y)
+    gt = ttnn.from_torch(
+        gamma, dtype=gb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bt = ttnn.from_torch(
+        beta, dtype=gb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    out = ttnn.group_norm(
+        xt,
+        num_groups=num_groups,
+        input_mask=mask,
+        weight=gt,
+        bias=bt,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        core_grid=grid,
+        dtype=in_dtype,
+        compute_kernel_config=ck,
+        use_welford=False,
+        output_layout=ttnn.TILE_LAYOUT,
+        num_out_blocks=num_out_blocks,
+        inplace=False,
+    )
+    out = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
+    # Thresholds branch on the input dtype (bf16 input is the dominant error source);
+    # each bound sits ~1.4x above the worst observed value across the shape/gamma-beta matrix.
+    if in_dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.10, 0.03
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.03, 0.01
+    assert_numeric_metrics(
+        ref,
+        out,
         pcc_threshold=pcc_threshold,
         rtol=rtol,
         atol=atol,

@@ -523,3 +523,76 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
         atol=0.09,
         frobenius_threshold=0.03,
     )
+
+
+GN_INTERLEAVED_SHAPES = [
+    (1, 320, 32, 32, 16, 1, 1, 8),  # base config (original single-shape test)
+    (1, 480, 1, 64, 8, 1, 1, 1),  # single core, last group ends less than max tile span
+    (1, 768, 1, 512, 32, 2, 8, 8),  # group channel count less than tile size
+    (2, 768, 1, 512, 32, 2, 8, 8),  # batch 2 (still multicast), num_out_blocks 2
+    (1, 2560, 1, 512, 32, 2, 8, 8),  # mcast num_out_blocks 2
+    (1, 128, 1, 512, 32, 2, 4, 4),  # all groups on core fit in less than one tile
+    (8, 768, 1, 512, 32, 3, 8, 8),  # batch 8 (no multicast), uneven num_out_blocks divisor
+]
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_INTERLEAVED_SHAPES)
+@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+def test_group_norm_interleaved_welford_all_config(
+    device, N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x, in_dtype, gb_dtype
+):
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    torch.manual_seed(0)
+    x = torch.rand((N, C, H, W), dtype=torch.float32)
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x, num_groups, weight=w, bias=b).permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for FP32 on the Welford path
+        packer_l1_acc=False,
+    )
+
+    xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    xt = ttnn.from_torch(
+        xt, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    [gt, bt], mask = ttnn.dram_group_norm_params_from_torch(
+        [w, b], C, num_groups, device, core_grid=grid, return_mask=True, dtype=gb_dtype
+    )
+
+    out = ttnn.group_norm(
+        xt,
+        num_groups=num_groups,
+        input_mask=mask,
+        weight=gt,
+        bias=bt,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        core_grid=grid,
+        dtype=in_dtype,
+        compute_kernel_config=ck,
+        use_welford=True,
+        num_out_blocks=num_out_blocks,
+        inplace=False,
+    )
+    out = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
+
+    # Thresholds branch on the input dtype (bf16 input is the dominant error source);
+    # each bound sits ~1.4x above the worst observed value across the shape/gamma-beta matrix.
+    if in_dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.06, 0.015
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.02, 0.004
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
