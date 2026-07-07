@@ -22,16 +22,10 @@
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/one_galaxy"
-    cp "${SCALEOUT_CONFIG_DIR}/rank_bindings_mapping.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/rank0_binding.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/rank1_binding.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/rank2_binding.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/rank3_binding.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/mesh_graph_descriptor.textproto" .
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --rank-bindings-mapping rank_bindings_mapping.yaml \
+      --rank-bindings-mapping "${SCALEOUT_CONFIG_DIR}/rank_bindings_mapping.yaml" \
       --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
       python3 -m pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io_decoder_sweep_chunked_trace.py::test_run_host_io_decoder_sweep_chunked_trace_world_size_4 \
       --timeout=1200
