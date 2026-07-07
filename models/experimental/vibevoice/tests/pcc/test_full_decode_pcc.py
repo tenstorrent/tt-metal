@@ -1,38 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full VibeVoice decode-chain PCC vs HuggingFace reference (teacher-forced).
+"""Decode PCC: pinned reference diffusion conditions vs TT post-diffusion chain.
 
-Decode counterpart to ``test_full_prefill_pcc.py``.  Where the prefill test gates the
-LM ``last_hidden_state`` after the voice-clone prefill, this test gates the LM hidden
-state produced by the *autoregressive decode* steps.
-
-METHOD — teacher forcing over a shared orchestration
-----------------------------------------------------
-The teacher token stream comes from the reference's own ``generate()`` (the authoritative
-path, as in ``test_e2e_generate_pcc.py``).  We then replay that **same** ``forced_token_ids``
-through the **same** ``TTVibeVoiceGenerator`` decode loop on two backends:
-
-  * reference-backed generator (``ref_inference`` set → CPU-fp32 HuggingFace LM + the
-    reference diffusion head / acoustic+semantic tokenizers / connectors) — the teacher,
-  * pure-TT generator (all TTNN kernels).
-
-Both consume an identical token sequence so their KV caches stay position-aligned.  We
-capture the positive LM decode hidden state at every step from each backend and compare
-per step.
-
-WHAT IS GATED, AND WHY ONLY THE FIRST FRAME
--------------------------------------------
-The input to a speech-diffusion decode step is the *fused embed* built from that frame's
-diffusion latent (acoustic + semantic connectors).  The fp32 reference diffusion and the
-bf16 TT diffusion (drawing independent reparameterization noise) produce slightly
-different latents, so as fused embeds feed back the per-step hidden state **compounds** —
-the same effect documented in ``test_e2e_generate_pcc.py`` (frame0≈0.996, later frames
-decay).  The first decode step carries only a single frame of divergence, so it is the
-reliable, minimally-compounded gate (>= 0.99) — the decode analog of the prefill
-last_hidden gate and the e2e frame-0 audio gate.  Per-step PCC for the whole stream is
-printed for information (the gradual decay is expected model chaos, not a port defect —
-component parity is covered by the per-module PCC tests).
+``test_decode_ref_cond_frame_pcc`` pins reference LM conditions (pos/neg hidden) and shared
+initial noise at each diffusion frame, then runs the TT post-diffusion chain (acoustic decode
+→ semantic encode → connectors → LM) and gates fused embed and per-frame LM hidden vs the
+reference-backed run under the same pinned diffusion inputs.
 """
 
 import sys
@@ -46,6 +20,10 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.vibevoice.common.config import MODEL_PATH, TEXT_EXAMPLES_DIR, VOICES_DIR
 from models.experimental.vibevoice.common.resource_utils import load_script
 from models.experimental.vibevoice.tests.pcc.lm_pcc_common import PCC_THRESHOLD
+from models.experimental.vibevoice.tt.ttnn_dpm_scheduler import (
+    TTDPMSolverMultistepScheduler,
+    sample_speech_latents,
+)
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
 
 _VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -90,6 +68,31 @@ def _build_processor_batch():
 def _hidden_to_flat(hidden: ttnn.Tensor) -> torch.Tensor:
     """Single decode-position LM hidden (ttnn [1,1,1,H] or [1,1,H]) → 1-D float32 [H]."""
     return ttnn.to_torch(hidden).to(torch.float32).reshape(-1)
+
+
+def _fused_to_flat(fused: ttnn.Tensor) -> torch.Tensor:
+    """Fused next-step embed (ttnn [1,1,1,H]) → 1-D float32 [H]."""
+    return ttnn.to_torch(fused).to(torch.float32).reshape(-1).clone()
+
+
+def _predraw_diffusion_noises(num_slots: int, latent_size: int = 64) -> list[torch.Tensor]:
+    """Pre-draw ``[2, 1, 1, latent_size]`` bf16 noise tensors (fp32 draw → bf16 cast)."""
+    rng = torch.Generator()
+    rng.manual_seed(0)
+    return [
+        torch.randn(2, 1, 1, latent_size, dtype=torch.float32, generator=rng).to(torch.bfloat16).clone()
+        for _ in range(num_slots)
+    ]
+
+
+def _latent_to_tt(lat: torch.Tensor, device, latent_size: int = 64) -> ttnn.Tensor:
+    return ttnn.as_tensor(
+        lat.view(1, 1, 1, latent_size).to(torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
 
 def _wrap_capture(generator):
@@ -140,11 +143,207 @@ def _run_backend(generator, *, input_ids, attention_mask, speech_input_mask, pre
     return captured, out.sequences
 
 
+def _condition_to_torch(condition: ttnn.Tensor) -> torch.Tensor:
+    """LM hidden slice used as diffusion condition → float32 [H]."""
+    return ttnn.to_torch(condition).to(torch.float32).reshape(-1).clone()
+
+
+def _condition_to_tt(condition: torch.Tensor, device) -> ttnn.Tensor:
+    return ttnn.as_tensor(
+        condition.reshape(1, 1, 1, -1).to(torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+@torch.no_grad()
+def _reference_sample_speech_latents(
+    prediction_head,
+    noise_scheduler,
+    cond_pos: torch.Tensor,
+    cond_neg: torch.Tensor,
+    initial_noise: torch.Tensor,
+    cfg_scale: float,
+    num_steps: int,
+) -> torch.Tensor:
+    """Full DPM loop on the reference head — mirrors ``sample_speech_tokens`` with injected noise."""
+    noise_scheduler.set_timesteps(num_steps)
+    head_device = next(prediction_head.parameters()).device
+    cond_pos = cond_pos.reshape(-1).to(device=head_device, dtype=torch.float32)
+    cond_neg = cond_neg.reshape(-1).to(device=head_device, dtype=torch.float32)
+    condition = torch.stack([cond_pos, cond_neg], dim=0)
+
+    initial_noise = initial_noise.reshape(-1).to(device=head_device, dtype=torch.float32)
+    latent_size = initial_noise.numel()
+    speech = torch.empty(2, latent_size, device=head_device, dtype=torch.float32)
+    speech[0] = initial_noise
+    speech[1] = initial_noise
+
+    for t in noise_scheduler.timesteps:
+        half = speech[:1]
+        combined = torch.cat([half, half], dim=0)
+        # Match ``sample_speech_tokens``: cast timesteps to the latent dtype (float32).
+        # ``TimestepEmbedder`` ends with ``embedding.to(t.dtype)`` — if t stays long, cos/sin
+        # truncate to zero and the head sees all-zero timestep features.
+        t_rep = t.repeat(combined.shape[0]).to(device=combined.device, dtype=combined.dtype)
+        eps = prediction_head(combined, t_rep, condition=condition)
+        cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
+        half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
+        eps = torch.cat([half_eps, half_eps], dim=0)
+        speech = noise_scheduler.step(eps, t, speech).prev_sample
+
+    return speech[:1].reshape(-1)
+
+
+def _tt_sample_speech_latents(
+    diffusion_head,
+    device,
+    cond_pos: torch.Tensor,
+    cond_neg: torch.Tensor,
+    initial_noise_bf16: torch.Tensor,
+    cfg_scale: float,
+    num_steps: int,
+) -> ttnn.Tensor:
+    """Full DPM loop on TT head + scheduler with the same conditions/noise as the reference path."""
+    scheduler = TTDPMSolverMultistepScheduler(
+        num_train_timesteps=1000,
+        beta_schedule="cosine",
+        solver_order=2,
+        prediction_type="v_prediction",
+    )
+    cond_pos_tt = _condition_to_tt(cond_pos, device)
+    cond_neg_tt = _condition_to_tt(cond_neg, device)
+    initial_tt = ttnn.as_tensor(
+        initial_noise_bf16.view(1, 1, 1, -1),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return sample_speech_latents(
+        diffusion_head,
+        cond_pos_tt,
+        cond_neg_tt,
+        scheduler,
+        initial_tt,
+        cfg_scale=cfg_scale,
+        num_steps=num_steps,
+    )
+
+
+def _capture_ref_diffusion_pipeline(ref_gen, *, common, forced, ref_model, pre_noises):
+    """Reference-backed forced decode: per-frame pos/neg/noise/latent/fused/hidden."""
+    frames = []
+    after_fused = [False]
+    noise_idx = [0]
+    prediction_head = ref_model.model.prediction_head
+    noise_scheduler = ref_model.model.noise_scheduler
+
+    orig_post = ref_gen._post_diffusion_embeds
+    orig_step = ref_gen._lm_step
+
+    def diff(condition, neg_condition, latent_size=64, noise_2x=None, rng=None):
+        i = noise_idx[0]
+        noise_idx[0] += 1
+        noise = pre_noises[i]
+        pos = _condition_to_torch(condition)
+        neg = _condition_to_torch(neg_condition)
+        lat = _reference_sample_speech_latents(
+            prediction_head,
+            noise_scheduler,
+            pos,
+            neg,
+            noise[:1].to(torch.float32).reshape(-1),
+            ref_gen.cfg_scale,
+            ref_gen.num_diffusion_steps,
+        )
+        frames.append({"pos": pos, "neg": neg, "noise": noise.clone(), "ref_latent": lat.clone()})
+        return _latent_to_tt(lat, ref_gen.device, latent_size)
+
+    def post(lat):
+        fused, audio = orig_post(lat)
+        frames[-1]["ref_fused"] = _fused_to_flat(fused)
+        after_fused[0] = True
+        return fused, audio
+
+    def step(inputs_embeds, start_pos, kv_cache):
+        logits, hidden = orig_step(inputs_embeds, start_pos, kv_cache)
+        if after_fused[0]:
+            frames[-1]["ref_hidden"] = _hidden_to_flat(hidden)
+            after_fused[0] = False
+        return logits, hidden
+
+    ref_gen._run_speech_diffusion = diff
+    ref_gen._post_diffusion_embeds = post
+    ref_gen._lm_step = step
+    torch.manual_seed(0)
+    ref_gen.generate(forced_token_ids=forced, max_new_tokens=None, **common)
+    return frames
+
+
+def _capture_tt_pinned_ref_conditions(tt_gen, ref_frames, *, common, forced):
+    """Pure-TT forced decode with diffusion inputs pinned to reference frames."""
+    frames = []
+    after_fused = [False]
+    pin_idx = [0]
+
+    orig_post = tt_gen._post_diffusion_embeds
+    orig_step = tt_gen._lm_step
+
+    def diff(condition, neg_condition, latent_size=64, noise_2x=None, rng=None):
+        i = pin_idx[0]
+        pin_idx[0] += 1
+        fr = ref_frames[i]
+        lat_tt = _tt_sample_speech_latents(
+            tt_gen.diffusion_head,
+            tt_gen.device,
+            fr["pos"],
+            fr["neg"],
+            fr["noise"][:1],
+            tt_gen.cfg_scale,
+            tt_gen.num_diffusion_steps,
+        )
+        frames.append({})
+        return lat_tt
+
+    def post(lat):
+        fused, audio = orig_post(lat)
+        frames[-1]["tt_fused"] = _fused_to_flat(fused)
+        after_fused[0] = True
+        return fused, audio
+
+    def step(inputs_embeds, start_pos, kv_cache):
+        logits, hidden = orig_step(inputs_embeds, start_pos, kv_cache)
+        if after_fused[0]:
+            frames[-1]["tt_hidden"] = _hidden_to_flat(hidden)
+            after_fused[0] = False
+        return logits, hidden
+
+    tt_gen._run_speech_diffusion = diff
+    tt_gen._post_diffusion_embeds = post
+    tt_gen._lm_step = step
+    torch.manual_seed(0)
+    tt_gen.generate(forced_token_ids=forced, max_new_tokens=None, **common)
+    return frames
+
+
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_full_decode_chain_pcc(mesh_device):
-    """Teacher-forced per-step LM decode-hidden PCC: TT vs reference-backed decode."""
+def test_decode_ref_cond_frame_pcc(mesh_device):
+    """Pinned reference diffusion conditions → TT post-diffusion fused embed / hidden PCC.
+
+    For each ``speech_diffusion_id`` frame in a teacher-forced decode:
+      1. Reference-backed run records the live ref pos/neg LM hidden states, shared initial
+         noise, and the reference post-diffusion fused embed + LM hidden.
+      2. Pure-TT run replays the same token stream but pins diffusion to those reference
+         conditions/noise, then runs the TT acoustic decode → semantic encode → connectors
+         → LM on the TT denoised latent.
+      3. Gate per-frame fused-embed PCC (>= 0.99) and LM-hidden PCC (>= 0.99) — isolates
+         post-diffusion drift while keeping diffusion inputs identical.
+    """
     from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
 
     processor, inputs = _build_processor_batch()
@@ -158,12 +357,8 @@ def test_full_decode_chain_pcc(mesh_device):
     )
     ref_model.eval()
     ref_model.set_ddpm_inference_steps(num_steps=NUM_DIFFUSION_STEPS)
-    # Deterministic VAE mode for the voice-clone prefill embeds (see test_full_prefill_pcc):
-    # the non-persistent ``fix_std`` buffer is nondeterministic garbage under transformers 5.x.
     ref_model.model.acoustic_tokenizer.std_dist_type = "none"
 
-    # Aligned prefill: reference speech embeds (deterministic mode) fed to BOTH backends so the
-    # prefill KV state is identical before decode.
     with torch.no_grad():
         _, prefill_speech_embeds = ref_model._process_speech_inputs(
             inputs["speech_tensors"].to(ref_model.dtype),
@@ -189,175 +384,18 @@ def test_full_decode_chain_pcc(mesh_device):
         prefill_speech_embeds=prefill_speech_embeds,
     )
 
-    # 1) Pure-TT greedy decode — the proven speech stream (the demo path).  Produces the teacher
-    #    token stream AND the TT per-step hidden.  (The vendored reference ``generate()`` is not
-    #    transformers-5.x compatible, so we source the stream from the TT decode instead; the
-    #    per-step hidden comparison at identical forced positions is direction-agnostic.)
     tt_gen = tt_model._make_generator(
         processor.tokenizer,
         cfg_scale=CFG_SCALE,
         num_diffusion_steps=NUM_DIFFUSION_STEPS,
         max_new_tokens=MAX_NEW_TOKENS,
     )
-    tt_capture, tt_sequences = _run_backend(tt_gen, forced=None, **common)
-    forced = tt_sequences[0, prefill_len:].reshape(-1)
-    assert forced.numel() > 0, "TT greedy decode produced no tokens"
-
-    # 2) Reference-backed decode replaying the same token stream — capture reference hidden.
-    ref_gen = tt_model._make_generator(
-        processor.tokenizer,
-        cfg_scale=CFG_SCALE,
-        num_diffusion_steps=NUM_DIFFUSION_STEPS,
-        max_new_tokens=None,
-        ref_inference=ref_model,
-    )
-    ref_capture, _ = _run_backend(ref_gen, forced=forced, **common)
-
-    ref_hiddens = ref_capture["decode"]
-    tt_hiddens = tt_capture["decode"]
-    n_steps = min(len(ref_hiddens), len(tt_hiddens))
-    assert n_steps > 0, "no decode steps captured"
-
-    forced_list = forced.tolist()
-    diffusion_id = processor.tokenizer.speech_diffusion_id
-    per_step = [comp_pcc(ref_hiddens[i], tt_hiddens[i], pcc=0.0)[1] for i in range(n_steps)]
-
-    # Frame-0 gate: the first decode step carries a single frame of diffusion divergence and is
-    # the reliable, minimally-compounded signal (analogous to the e2e frame-0 audio gate and the
-    # prefill last_hidden gate).  Later steps accumulate the fp32-ref-vs-bf16-TT diffusion
-    # fused-embed differences and decay — reported for information, not gated.
-    step0_pcc = per_step[0]
-    n_diffusion = sum(1 for t in forced_list if t == diffusion_id)
-    print(
-        f"[test_full_decode_pcc] forced={forced.numel()} tok ({n_diffusion} speech-diffusion) "
-        f"steps={n_steps} | GATE step0 PCC={step0_pcc:.6f} (>={PCC_THRESHOLD}) | "
-        f"mean_PCC={sum(per_step) / n_steps:.4f} min_PCC={min(per_step):.4f}"
-    )
-    print("[test_full_decode_pcc] per-step PCC: " + " ".join(f"{i}:{p:.4f}" for i, p in enumerate(per_step)))
-    print(f"[test_full_decode_pcc] first forced token ids: {forced_list[:8]} (speech_diffusion_id={diffusion_id})")
-
-    assert step0_pcc >= PCC_THRESHOLD, (
-        f"first decode-frame hidden PCC {step0_pcc:.6f} < {PCC_THRESHOLD} — a real decode-path "
-        f"regression (LM decode / diffusion head / connectors / post-diffusion).  Later steps "
-        f"compound via the diffusion fused-embed feedback and are reported for information only."
-    )
-
-
-def _run_ref_capture_inputs(ref_gen, ref_model, *, common, forced):
-    """Reference-backed decode (forced); capture per-step (LM input embed [1,1,1,H], LM hidden).
-
-    The input to a diffusion step is the reference *fused embed* (``_lm_step``); the input to a
-    non-diffusion step is the reference token embedding (re-derived for ``_lm_decode_token``).
-    """
-    ref_inputs, ref_hiddens = [], []
-    orig_step = ref_gen._lm_step
-    orig_decode = ref_gen._lm_decode_token
-    embed = ref_model.model.get_input_embeddings()
-
-    def step(inputs_embeds, start_pos, kv_cache):
-        logits, hidden = orig_step(inputs_embeds, start_pos, kv_cache)
-        ref_inputs.append(ttnn.to_torch(inputs_embeds).to(torch.float32).reshape(1, 1, 1, -1))
-        ref_hiddens.append(_hidden_to_flat(hidden))
-        return logits, hidden
-
-    def decode_token(token_id, start_pos, kv_cache):
-        logits, hidden = orig_decode(token_id, start_pos, kv_cache)
-        with torch.no_grad():
-            emb = embed(torch.tensor([[token_id]], dtype=torch.long)).to(torch.float32).reshape(1, 1, 1, -1)
-        ref_inputs.append(emb)
-        ref_hiddens.append(_hidden_to_flat(hidden))
-        return logits, hidden
-
-    ref_gen._lm_step = step
-    ref_gen._lm_decode_token = decode_token
-    torch.manual_seed(0)
-    ref_gen.generate(max_new_tokens=None, forced_token_ids=forced, **common)
-    return ref_inputs, ref_hiddens
-
-
-def _tt_lm_decode_forced_inputs(
-    tt_gen, ref_inputs, *, input_ids, speech_input_mask, prefill_speech_embeds, prefill_len
-):
-    """Replay the reference per-step LM input embeds through the TT LM decode; capture hidden.
-
-    Bypasses TT's diffusion/connectors entirely (every step is fed the reference's fused embed),
-    so there is no fused-embed feedback and the comparison isolates the TT LM decode kernels.
-    """
-    dev = tt_gen.device
-    inputs_embeds = tt_gen._build_prefill_embeds(
-        input_ids, None, None, speech_input_mask, prefill_speech_embeds=prefill_speech_embeds
-    )
-    kv = tt_gen.lm.alloc_kv_cache(prefill_len + len(ref_inputs) + 8)
-    tt_gen.lm.prefill_embeds(inputs_embeds, kv_cache=kv, return_last_hidden=True)
-
-    tt_hiddens = []
-    for i, emb in enumerate(ref_inputs):
-        emb_tt = ttnn.as_tensor(
-            emb, device=dev, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        _, hidden = tt_gen.lm.forward(emb_tt, start_pos=prefill_len + i, kv_cache=kv, return_last_hidden=True)
-        tt_hiddens.append(_hidden_to_flat(hidden))
-    return tt_hiddens
-
-
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_full_decode_lm_pcc(mesh_device):
-    """LM-decode isolation: replay the reference per-step LM inputs through the TT LM decode.
-
-    Complements ``test_full_decode_chain_pcc``.  By feeding the reference's fused embeds to the
-    TT LM at every step (instead of letting TT compute its own), there is no diffusion fused-embed
-    feedback and therefore no compounding — so *every* decode step is gated at >= 0.99.  This
-    pinpoints whether the full-chain test's per-step decay comes from the LM decode (it should not)
-    or from the diffusion/connector/post-diffusion chain (covered by their own module PCC tests).
-    """
-    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
-
-    processor, inputs = _build_processor_batch()
-    prefill_len = inputs["input_ids"].shape[1]
-
-    ref_model = VibeVoiceForConditionalGenerationInference.from_pretrained(
-        MODEL_PATH,
-        torch_dtype=torch.float32,
-        device_map="cpu",
-        attn_implementation="sdpa",
-    )
-    ref_model.eval()
-    ref_model.set_ddpm_inference_steps(num_steps=NUM_DIFFUSION_STEPS)
-    ref_model.model.acoustic_tokenizer.std_dist_type = "none"  # deterministic VAE mode (prefill embeds)
-
-    with torch.no_grad():
-        _, prefill_speech_embeds = ref_model._process_speech_inputs(
-            inputs["speech_tensors"].to(ref_model.dtype),
-            inputs["speech_masks"],
-        )
-    prefill_speech_embeds = prefill_speech_embeds.to(torch.float32)
-
-    tt_model = TTVibeVoiceModel.from_checkpoint(
-        mesh_device, MODEL_PATH, cfg_scale=CFG_SCALE, num_diffusion_steps=NUM_DIFFUSION_STEPS
-    )
-    tt_model.set_speech_scale_bias(
-        ref_model.model.speech_scaling_factor.item(),
-        ref_model.model.speech_bias_factor.item(),
-    )
-
-    common = dict(
-        input_ids=inputs["input_ids"],
-        attention_mask=inputs["attention_mask"],
-        speech_input_mask=inputs["speech_input_mask"],
-        prefill_speech_embeds=prefill_speech_embeds,
-    )
-
-    # Teacher token stream from the proven TT greedy decode (reference generate() is not 5.x-safe).
-    tt_gen = tt_model._make_generator(
-        processor.tokenizer, cfg_scale=CFG_SCALE, num_diffusion_steps=NUM_DIFFUSION_STEPS, max_new_tokens=MAX_NEW_TOKENS
-    )
     _, tt_sequences = _run_backend(tt_gen, forced=None, **common)
     forced = tt_sequences[0, prefill_len:].reshape(-1)
     assert forced.numel() > 0, "TT greedy decode produced no tokens"
 
-    # Reference-backed decode: capture the per-step LM input embeds AND the reference hidden.
+    pre_noises = _predraw_diffusion_noises(MAX_NEW_TOKENS + 8)
+
     ref_gen = tt_model._make_generator(
         processor.tokenizer,
         cfg_scale=CFG_SCALE,
@@ -365,166 +403,56 @@ def test_full_decode_lm_pcc(mesh_device):
         max_new_tokens=None,
         ref_inference=ref_model,
     )
-    ref_inputs, ref_hiddens = _run_ref_capture_inputs(ref_gen, ref_model, common=common, forced=forced)
+    ref_frames = _capture_ref_diffusion_pipeline(
+        ref_gen, common=common, forced=forced, ref_model=ref_model, pre_noises=pre_noises
+    )
 
-    # Replay those exact inputs through the TT LM decode (fresh generator → fresh KV cache).
     tt_gen2 = tt_model._make_generator(
-        processor.tokenizer, cfg_scale=CFG_SCALE, num_diffusion_steps=NUM_DIFFUSION_STEPS, max_new_tokens=None
-    )
-    tt_hiddens = _tt_lm_decode_forced_inputs(
-        tt_gen2,
-        ref_inputs,
-        input_ids=inputs["input_ids"],
-        speech_input_mask=inputs["speech_input_mask"],
-        prefill_speech_embeds=prefill_speech_embeds,
-        prefill_len=prefill_len,
-    )
-
-    n_steps = min(len(ref_hiddens), len(tt_hiddens))
-    assert n_steps > 0, "no decode steps captured"
-    per_step = [comp_pcc(ref_hiddens[i], tt_hiddens[i], pcc=0.0)[1] for i in range(n_steps)]
-    min_pcc = min(per_step)
-
-    print(
-        f"[test_full_decode_lm_pcc] steps={n_steps} (identical inputs, no compounding) | "
-        f"min_PCC={min_pcc:.6f} mean_PCC={sum(per_step) / n_steps:.6f} threshold={PCC_THRESHOLD}"
-    )
-    print("[test_full_decode_lm_pcc] per-step PCC: " + " ".join(f"{i}:{p:.4f}" for i, p in enumerate(per_step)))
-
-    assert min_pcc >= PCC_THRESHOLD, (
-        f"TT LM decode hidden PCC {min_pcc:.6f} < {PCC_THRESHOLD} given reference inputs — a real "
-        f"LM decode-kernel regression (inputs are forced identical every step, so this cannot be "
-        f"diffusion/connector compounding)."
-    )
-
-
-def _run_ref_capture_hidden_latents(ref_gen, *, common, forced):
-    """Reference-backed decode (forced); capture per-step LM hidden AND per-frame diffusion latent."""
-    captured = _wrap_capture(ref_gen)
-    latents = []
-    orig_diff = ref_gen._run_speech_diffusion
-
-    def diff(condition, neg_condition, latent_size=64, noise_2x=None, rng=None):
-        lat = orig_diff(condition, neg_condition, latent_size=latent_size, noise_2x=noise_2x, rng=rng)
-        latents.append(ttnn.to_torch(lat).to(torch.float32).reshape(1, 1, 1, -1).clone())
-        return lat
-
-    ref_gen._run_speech_diffusion = diff
-    torch.manual_seed(0)
-    ref_gen.generate(max_new_tokens=None, forced_token_ids=forced, **common)
-    return captured["decode"], latents
-
-
-def _run_tt_inject_latents(tt_gen, ref_latents, *, common, forced):
-    """Pure-TT decode (forced) but with the diffusion head's output replaced by the reference latent
-    each frame; everything else (post-diffusion + LM) stays TT.  Capture per-step LM hidden."""
-    captured = _wrap_capture(tt_gen)
-    dev = tt_gen.device
-    idx = [0]
-    latent_size = ref_latents[0].shape[-1] if ref_latents else 64
-
-    def diff(condition, neg_condition, latent_size=64, noise_2x=None, rng=None):
-        lat = ref_latents[idx[0]]
-        idx[0] += 1
-        return ttnn.as_tensor(
-            lat.view(1, 1, 1, latent_size).to(torch.bfloat16),
-            device=dev,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-    tt_gen._run_speech_diffusion = diff
-    torch.manual_seed(0)
-    tt_gen.generate(max_new_tokens=None, forced_token_ids=forced, **common)
-    return captured["decode"]
-
-
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_full_decode_ref_diffusion_pcc(mesh_device):
-    """Isolate the diffusion head as the drift driver: run the full TT decode chain but replace ONLY
-    the diffusion latent with the reference's each frame (TT post-diffusion + LM otherwise), and
-    compare per-step LM hidden to the reference-backed run.
-
-    If the head is the dominant contributor, removing it as an error source should lift the per-step
-    PCC far above the full-chain curve (which decays to ~0.78) — ideally back to >= 0.99 across all
-    steps.  Any residual decay is attributable to the remaining TT post-diffusion chain (semantic
-    tokenizer / acoustic decode), not the diffusion head.
-    """
-    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
-
-    processor, inputs = _build_processor_batch()
-    prefill_len = inputs["input_ids"].shape[1]
-
-    ref_model = VibeVoiceForConditionalGenerationInference.from_pretrained(
-        MODEL_PATH, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa"
-    )
-    ref_model.eval()
-    ref_model.set_ddpm_inference_steps(num_steps=NUM_DIFFUSION_STEPS)
-    ref_model.model.acoustic_tokenizer.std_dist_type = "none"
-
-    with torch.no_grad():
-        _, prefill_speech_embeds = ref_model._process_speech_inputs(
-            inputs["speech_tensors"].to(ref_model.dtype), inputs["speech_masks"]
-        )
-    prefill_speech_embeds = prefill_speech_embeds.to(torch.float32)
-
-    tt_model = TTVibeVoiceModel.from_checkpoint(
-        mesh_device, MODEL_PATH, cfg_scale=CFG_SCALE, num_diffusion_steps=NUM_DIFFUSION_STEPS
-    )
-    tt_model.set_speech_scale_bias(
-        ref_model.model.speech_scaling_factor.item(), ref_model.model.speech_bias_factor.item()
-    )
-
-    common = dict(
-        input_ids=inputs["input_ids"],
-        attention_mask=inputs["attention_mask"],
-        speech_input_mask=inputs["speech_input_mask"],
-        prefill_speech_embeds=prefill_speech_embeds,
-    )
-
-    # Teacher stream from the TT greedy decode.
-    tt_gen = tt_model._make_generator(
-        processor.tokenizer, cfg_scale=CFG_SCALE, num_diffusion_steps=NUM_DIFFUSION_STEPS, max_new_tokens=MAX_NEW_TOKENS
-    )
-    _, tt_sequences = _run_backend(tt_gen, forced=None, **common)
-    forced = tt_sequences[0, prefill_len:].reshape(-1)
-    assert forced.numel() > 0, "TT greedy decode produced no tokens"
-
-    # Reference-backed decode: capture reference per-step hidden + per-frame diffusion latents.
-    ref_gen = tt_model._make_generator(
         processor.tokenizer,
         cfg_scale=CFG_SCALE,
         num_diffusion_steps=NUM_DIFFUSION_STEPS,
         max_new_tokens=None,
-        ref_inference=ref_model,
     )
-    ref_hiddens, ref_latents = _run_ref_capture_hidden_latents(ref_gen, common=common, forced=forced)
+    tt_frames = _capture_tt_pinned_ref_conditions(tt_gen2, ref_frames, common=common, forced=forced)
 
-    # Pure-TT decode with the diffusion latent pinned to the reference's each frame.
-    tt_gen2 = tt_model._make_generator(
-        processor.tokenizer, cfg_scale=CFG_SCALE, num_diffusion_steps=NUM_DIFFUSION_STEPS, max_new_tokens=None
-    )
-    tt_hiddens = _run_tt_inject_latents(tt_gen2, ref_latents, common=common, forced=forced)
+    n_frames = min(len(ref_frames), len(tt_frames))
+    assert n_frames > 0, "no diffusion frames captured"
+    assert len(ref_frames) == len(
+        tt_frames
+    ), f"ref/TT diffusion frame count mismatch: {len(ref_frames)} vs {len(tt_frames)}"
 
-    n_steps = min(len(ref_hiddens), len(tt_hiddens))
-    assert n_steps > 0, "no decode steps captured"
-    per_step = [comp_pcc(ref_hiddens[i], tt_hiddens[i], pcc=0.0)[1] for i in range(n_steps)]
-    step0, min_pcc, mean_pcc = per_step[0], min(per_step), sum(per_step) / n_steps
+    fused_pccs = []
+    hidden_pccs = []
+    for i in range(n_frames):
+        assert "ref_fused" in ref_frames[i] and "tt_fused" in tt_frames[i]
+        fused_pccs.append(comp_pcc(ref_frames[i]["ref_fused"], tt_frames[i]["tt_fused"], pcc=0.0)[1])
+        assert "ref_hidden" in ref_frames[i] and "tt_hidden" in tt_frames[i]
+        hidden_pccs.append(comp_pcc(ref_frames[i]["ref_hidden"], tt_frames[i]["tt_hidden"], pcc=0.0)[1])
+
+    min_fused = min(fused_pccs)
+    min_hidden = min(hidden_pccs)
+    mean_fused = sum(fused_pccs) / len(fused_pccs)
+    mean_hidden = sum(hidden_pccs) / len(hidden_pccs)
 
     print(
-        f"[test_full_decode_ref_diffusion_pcc] steps={n_steps} frames={len(ref_latents)} "
-        f"(TT chain, diffusion latent pinned to reference) | "
-        f"step0={step0:.6f} min_PCC={min_pcc:.6f} mean_PCC={mean_pcc:.6f} threshold={PCC_THRESHOLD}"
+        f"[test_decode_ref_cond_frame_pcc] frames={n_frames} steps={NUM_DIFFUSION_STEPS} "
+        f"min_fused_PCC={min_fused:.6f} mean_fused_PCC={mean_fused:.6f} "
+        f"min_hidden_PCC={min_hidden:.6f} mean_hidden_PCC={mean_hidden:.6f} threshold={PCC_THRESHOLD}"
     )
     print(
-        "[test_full_decode_ref_diffusion_pcc] per-step PCC: " + " ".join(f"{i}:{p:.4f}" for i, p in enumerate(per_step))
+        "[test_decode_ref_cond_frame_pcc] per-frame fused PCC: "
+        + " ".join(f"{i}:{p:.4f}" for i, p in enumerate(fused_pccs))
+    )
+    print(
+        "[test_decode_ref_cond_frame_pcc] per-frame hidden PCC: "
+        + " ".join(f"{i}:{p:.4f}" for i, p in enumerate(hidden_pccs))
     )
 
-    assert min_pcc >= PCC_THRESHOLD, (
-        f"per-step decode-hidden PCC {min_pcc:.6f} < {PCC_THRESHOLD} even with the diffusion latent "
-        f"pinned to the reference — residual drift is from the TT post-diffusion chain (semantic "
-        f"tokenizer / acoustic decode), not the diffusion head."
+    assert min_fused >= PCC_THRESHOLD, (
+        f"pinned-ref-cond fused-embed min PCC {min_fused:.6f} < {PCC_THRESHOLD} "
+        f"(TT post-diffusion chain: acoustic decode / semantic encode / connectors)"
+    )
+    assert min_hidden >= PCC_THRESHOLD, (
+        f"pinned-ref-cond LM hidden min PCC {min_hidden:.6f} < {PCC_THRESHOLD} "
+        f"(TT LM on TT fused embed vs ref LM on ref fused embed, same pinned diffusion inputs)"
     )
