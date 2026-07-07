@@ -507,6 +507,46 @@ class CCLManager:
         )
         return halo_buf
 
+    def neighbor_pad_halo_scatter(
+        self,
+        tensor: ttnn.Tensor,
+        *,
+        dims: list,
+        pad_left: list,
+        pad_right: list,
+        axes: list,
+        neighbor_sems: list,
+        num_links: list,
+        padding_mode: str = "zeros",
+        input_pad_h: int = 0,
+        input_pad_w: int = 0,
+        border_only: bool = False,
+    ) -> ttnn.Tensor:
+        """Fused halo op: fabric halo exchange (into the compact buffer) then local scatter into a padded
+        [.,H+2pH,W+2pW,C] buffer, returned ready for a plain (pad=0) conv3d. Folds neighbor_pad_halo_only
+        + halo_scatter into one call.
+
+        border_only: `tensor` already carries a padded interior (previous conv's padded output), so only
+        the border is written in place (copy-free). Otherwise the padded buffer is allocated and both
+        interior (from `tensor`) and border (from the exchange) are filled."""
+        compact = self.neighbor_pad_halo_only(
+            tensor,
+            dims=dims,
+            pad_left=pad_left,
+            pad_right=pad_right,
+            axes=axes,
+            neighbor_sems=neighbor_sems,
+            num_links=num_links,
+            padding_mode=padding_mode,
+            input_pad_h=input_pad_h,
+            input_pad_w=input_pad_w,
+        )
+        pH = pad_left[0]
+        pW = pad_left[1] if len(pad_left) > 1 else 0
+        return ttnn.experimental.halo_scatter(
+            compact, tensor, np_padding_h=pH, np_padding_w=pW, border_only=border_only
+        )
+
     def get_barrier_semaphore(self, mesh_axis):
         """
         Get semaphore for barrier operations.

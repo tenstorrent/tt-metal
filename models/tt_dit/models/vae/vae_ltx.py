@@ -29,13 +29,6 @@ from ...utils.conv3d import (
 )
 from ...utils.tensor import typed_tensor, typed_tensor_2dshard
 
-# Fold each resnet block's terminal residual-add into the next block's norm1 (dual-output RMSNorm) within
-# a mid-block chain. OFF by default: the decode's RM-input norm at non-tile-aligned spatial dims hits a
-# base-op TILIZE_IN+FUSE_PRE_ADD row-misalignment bug (wiki NP_CONV3D_FUSED §4i), so the RM-native path is
-# blocked. LTX_FUSE_NORM_ADD=1 re-enables the chain (only correct once that base-op bug is fixed or the
-# chain is switched to feed the op TILE input).
-_FUSE_MIDBLOCK_NORM_ADD = os.environ.get("LTX_FUSE_NORM_ADD", "0") != "0"
-
 
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
     """Cached mask that zeros width-padding columns beyond logical_w (neighbor_pad has no W mask)."""
@@ -83,22 +76,6 @@ def _get_pad_offset(cache, x_BTHWC, parallel_config, mesh_device, sub_h=0, sub_w
             dtype=ttnn.uint32,
         )
     return cache[key]
-
-
-def _pad_hw(x_BTHWC, pH, pW):
-    """Pad a [B,T,H,W,C] row-major tensor's H,W by pH/pW each side (border 0). ttnn.pad on a rank-5
-    tensor drops the H pad, so reshape to rank-4 [B*T,H,W,C] (both paddable) and reshape back. Copy-free
-    chaining uses this once per stage entry; the conv's halo+border-scatter overwrites the zero border."""
-    b, t, h, w, c = (x_BTHWC.shape[i] for i in range(5))
-    x4 = ttnn.reshape(x_BTHWC, [b * t, h, w, c])
-    x4 = ttnn.pad(x4, [(0, 0), (pH, pH), (pW, pW), (0, 0)], value=0.0)
-    return ttnn.reshape(x4, [b, t, h + 2 * pH, w + 2 * pW, c])
-
-
-def _crop_hw(x_BTHWC, pH, pW):
-    """Crop the padded border back off: [B,T,Hp,Wp,C] -> [B,T,Hp-2pH,Wp-2pW,C] (stage exit)."""
-    hp, wp = x_BTHWC.shape[2], x_BTHWC.shape[3]
-    return x_BTHWC[:, :, pH : hp - pH, pW : wp - pW, :]
 
 
 class LTXCausalConv3d(Module):
@@ -428,7 +405,9 @@ class LTXCausalConv3d(Module):
                         sub_h=(pHe if cf_input_padded else 0),
                         sub_w=(pWe if cf_input_padded else 0),
                     )
-                compact = self.ccl_manager.neighbor_pad_halo_only(
+                # Fused exchange+scatter. cf_input_padded: x already carries the padded interior (prev
+                # conv's padded output) -> border-only in place. Else: allocate padded, fill interior+border.
+                padded = self.ccl_manager.neighbor_pad_halo_scatter(
                     x_BTHWC,
                     dims=dims,
                     pad_left=pad_left,
@@ -439,15 +418,8 @@ class LTXCausalConv3d(Module):
                     padding_mode="zeros",
                     input_pad_h=(pHe if cf_input_padded else 0),
                     input_pad_w=(pWe if cf_input_padded else 0),
+                    border_only=cf_input_padded,
                 )
-                if cf_input_padded:
-                    # Interior already in x (prev conv's padded output); write ONLY the border in place.
-                    padded = ttnn.experimental.halo_scatter(
-                        compact, x_BTHWC, np_padding_h=pHe, np_padding_w=pWe, border_only=True
-                    )
-                else:
-                    # Repack: allocate padded, fill interior (from x) + border (from compact).
-                    padded = ttnn.experimental.halo_scatter(compact, x_BTHWC, np_padding_h=pHe, np_padding_w=pWe)
                 return ttnn.experimental.conv3d(
                     input_tensor=padded,
                     weight_tensor=self.weight.data,
@@ -628,107 +600,32 @@ class LTXResnetBlock3D(Module):
         for k in keys_to_remove:
             del state[k]
 
-    def _resnet_halves(
-        self,
-        x_or_h: ttnn.Tensor,
-        residual_in: ttnn.Tensor | None,
-        causal: bool,
-        logical_h: int,
-        logical_w: int,
-        input_padded: bool = False,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """The block's two pre-add halves (h, residual); the block output is residual + h.
-
-        When residual_in is None, x_or_h is this block's materialized input. Otherwise x_or_h is the
-        previous block's h-half and residual_in its residual-half, and their sum is this block's input —
-        folded into norm1 (dual-output), which also returns that sum as the new residual. This is how a
-        chain of blocks avoids materializing every intermediate residual add.
-
-        input_padded (chain mode, TT_LTX_CHAIN): x_or_h/residual_in are padded [.,Hp,Wp,.]; BOTH convs
-        run copy-free (input+output padded), so the block output stays padded and the next block chains
-        with no ttnn.pad — conv1's per-block interior copy is eliminated too. Residual/shortcut flow on
-        the padded tensor (per-position norm; 1x1 shortcut preserves the border)."""
-        if residual_in is None:
-            h = self.norm1(x_or_h, compute_kernel_config=self.norm_compute_kernel_config)
-            residual = x_or_h
-        else:
-            # forward_residual_sum is TILE-only and requires x and residual to share padded shape. The
-            # carried residual_in is TILE (forward_deferred), but x_or_h (the previous block's h) is the
-            # conv2 output in ROW_MAJOR — convert it so the tile-padded shapes match (else the residual-add
-            # layernorm FATALs on non-tile-aligned W: RM W-pad != TILE W-pad).
-            if x_or_h.layout != ttnn.TILE_LAYOUT:
-                x_or_h = ttnn.to_layout(x_or_h, ttnn.TILE_LAYOUT)
-            h, residual = self.norm1.forward_residual_sum(
-                x_or_h, residual_in, compute_kernel_config=self.norm_compute_kernel_config
-            )
-
-        # Main path: (norm+silu fused) → conv → (norm+silu fused) → conv. The fused norm outputs
-        # TILE; conv3d needs ROW_MAJOR. Copy-free (TT_LTX_COPYFREE): conv1 writes a PADDED output, norm2
-        # runs on it (per-position; border garbage), and conv2 reads it copy-free (halo interior read +
-        # border-scatter in place). Chain mode additionally makes conv1 read padded (input_padded) and
-        # conv2 write padded, so the whole stage stays padded (no per-block conv1 copy).
-        cf = os.environ.get("TT_LTX_NO_COPYFREE") is None
-        chain = input_padded  # only the mid-block sets input_padded, and only when it's chaining
-        h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
-        h = self.conv1(
-            h,
-            causal=causal,
-            logical_h=logical_h,
-            logical_w=logical_w,
-            cf_input_padded=chain,
-            cf_output_padded=(cf or chain),
-        )
-
-        h = self.norm2(h, compute_kernel_config=self.norm_compute_kernel_config)
-        h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
-        h = self.conv2(
-            h,
-            causal=causal,
-            logical_h=logical_h,
-            logical_w=logical_w,
-            cf_input_padded=(cf or chain),
-            cf_output_padded=chain,
-        )
-
-        # Skip connection
-        if self.has_shortcut:
-            residual = ttnn.layer_norm(residual, weight=self.norm3_weight.data, bias=self.norm3_bias.data)
-            residual = (
-                ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
-                if residual.layout != ttnn.ROW_MAJOR_LAYOUT
-                else residual
-            )
-            residual = self.conv_shortcut(residual, causal=causal, logical_h=logical_h, logical_w=logical_w)
-
-        return h, residual
-
     def forward(
         self,
         x_BTHWC: ttnn.Tensor,
         causal: bool = True,
         logical_h: int = 0,
         logical_w: int = 0,
-        input_padded: bool = False,
     ) -> ttnn.Tensor:
-        h, residual = self._resnet_halves(x_BTHWC, None, causal, logical_h, logical_w, input_padded=input_padded)
-        return ttnn.add(residual, h)
+        # Copy-free: conv1 writes a PADDED output, norm2 runs on it (per-position; border is garbage),
+        # and conv2 reads it copy-free (halo interior read + border-scatter in place) — no interior copy
+        # between the two convs. norm outputs TILE; conv3d needs ROW_MAJOR.
+        residual = x_BTHWC
+        h = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
+        h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
+        h = self.conv1(h, causal=causal, logical_h=logical_h, logical_w=logical_w, cf_output_padded=True)
 
-    def forward_deferred(
-        self,
-        x_or_h: ttnn.Tensor,
-        residual_in: ttnn.Tensor | None,
-        causal: bool = True,
-        logical_h: int = 0,
-        logical_w: int = 0,
-        input_padded: bool = False,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Returns (h, residual) without materializing this block's `residual + h` add — the next block
-        folds it into its norm1. residual is returned TILE (the layout norm1's fused residual input
-        requires)."""
-        h, residual = self._resnet_halves(x_or_h, residual_in, causal, logical_h, logical_w, input_padded=input_padded)
-        if residual.layout != ttnn.TILE_LAYOUT:
-            residual = ttnn.to_layout(residual, ttnn.TILE_LAYOUT)
-        return h, residual
+        h = self.norm2(h, compute_kernel_config=self.norm_compute_kernel_config)
+        h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
+        h = self.conv2(h, causal=causal, logical_h=logical_h, logical_w=logical_w, cf_input_padded=True)
+
+        if self.has_shortcut:
+            residual = ttnn.layer_norm(residual, weight=self.norm3_weight.data, bias=self.norm3_bias.data)
+            if residual.layout != ttnn.ROW_MAJOR_LAYOUT:
+                residual = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
+            residual = self.conv_shortcut(residual, causal=causal, logical_h=logical_h, logical_w=logical_w)
+
+        return ttnn.add(residual, h)
 
 
 class LTXUNetMidBlock3D(Module):
@@ -768,56 +665,10 @@ class LTXUNetMidBlock3D(Module):
         causal: bool = True,
         logical_h: int = 0,
         logical_w: int = 0,
-        input_prepadded: bool = False,
     ) -> ttnn.Tensor:
-        # Deferred path: fold each block's terminal residual-add into the next block's norm1 (dual-output
-        # RMSNorm) so only the chain's final add is materialized. Same channels throughout (no shortcut),
-        # so the carried residual is just the running block input.
-        # Chain mode: pad the stage input once, run every block copy-free on the padded layout (conv1 too
-        # — no per-block interior copy), crop once at exit. input_prepadded means the producer already
-        # wrote the padded interior, so even the entry pad is skipped.
-        c1 = self.res_blocks[0].conv1
-        chain = (
-            os.environ.get("TT_LTX_CHAIN") is not None
-            and _FUSE_MIDBLOCK_NORM_ADD
-            and len(self.res_blocks) > 1
-            and getattr(c1, "_use_halo_conv", False)
-            and getattr(c1, "_persist_pad", False)
-        )
-
-        # A prepadded input (producer wrote a padded interior) MUST be consumed as padded (chain) or
-        # cropped back to unpadded here (non-chain). Otherwise its border padding is treated as real
-        # signal, flows downstream uncropped, and compounds (double-pads) at the next upsample.
-        if input_prepadded and not chain:
-            pHe0, pWe0 = c1.external_padding[1], c1.external_padding[2]
-            x_BTHWC = _crop_hw(x_BTHWC, pHe0, pWe0)
-            input_prepadded = False
-
-        if not _FUSE_MIDBLOCK_NORM_ADD or len(self.res_blocks) == 1:
-            for block in self.res_blocks:
-                x_BTHWC = block(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
-            return x_BTHWC
-
-        pHe = pWe = 0
-        if chain:
-            pHe, pWe = c1.external_padding[1], c1.external_padding[2]
-            if not input_prepadded:
-                x_BTHWC = _pad_hw(x_BTHWC, pHe, pWe)
-
-        h, residual = None, None
-        for i, block in enumerate(self.res_blocks):
-            if i == 0:
-                h, residual = block.forward_deferred(
-                    x_BTHWC, None, causal=causal, logical_h=logical_h, logical_w=logical_w, input_padded=chain
-                )
-            else:
-                h, residual = block.forward_deferred(
-                    h, residual, causal=causal, logical_h=logical_h, logical_w=logical_w, input_padded=chain
-                )
-        # Materialize the last block's output for the next up_block (ROW_MAJOR); residual is TILE here.
-        residual = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
-        out = ttnn.add(residual, h)
-        return _crop_hw(out, pHe, pWe) if chain else out
+        for block in self.res_blocks:
+            x_BTHWC = block(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
+        return x_BTHWC
 
 
 class LTXDepthToSpaceUpsample(Module):
@@ -888,30 +739,14 @@ class LTXDepthToSpaceUpsample(Module):
         causal: bool = True,
         logical_h: int = 0,
         logical_w: int = 0,
-        chain: bool = False,
-    ) -> tuple[ttnn.Tensor, int, int, bool]:
-        """Upsample by `stride`; returns (out, new_logical_h, new_logical_w, out_prepadded) scaled by p2/p3.
-
-        Copy-free chaining (chain, non-residual only): fuse the depth-to-space + pad into one op
-        (depth_to_space_pad) that writes the result straight into a padded buffer's interior — no dense
-        intermediate, no separate entry-pad at the next stage. The next res_x stage reads it border-only.
-        """
+    ) -> tuple[ttnn.Tensor, int, int]:
+        """Upsample by `stride`; returns (out, new_logical_h, new_logical_w) scaled by p2/p3."""
         import math
 
         B, T, H, W, _ = x_BTHWC.shape
         p1, p2, p3 = self.stride
         new_logical_h = logical_h * p2 if logical_h else 0
         new_logical_w = logical_w * p3 if logical_w else 0
-
-        # Copy-free fused depth-to-space+pad. Only for the non-residual path (all prod upsamples).
-        use_d2s_pad = chain and not self.residual
-        if use_d2s_pad:
-            conv_out = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
-            pHe, pWe = self.conv.external_padding[1], self.conv.external_padding[2]
-            padded = ttnn.experimental.depth_to_space_pad(
-                conv_out, p1, p2, p3, np_padding_h=pHe, np_padding_w=pWe, drop_first=(p1 == 2)
-            )
-            return padded, new_logical_h, new_logical_w, True
 
         # Residual path: depth-to-space the input, repeat channels to match conv output.
         if self.residual:
@@ -934,7 +769,7 @@ class LTXDepthToSpaceUpsample(Module):
         if self.residual:
             x = ttnn.add(x, x_in)
 
-        return x, new_logical_h, new_logical_w, False
+        return x, new_logical_h, new_logical_w
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         pass  # Conv handles its own state via LTXCausalConv3d._prepare_torch_state
@@ -1167,40 +1002,14 @@ class LTXVideoDecoder(Module):
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
 
         # logical_h/logical_w scale up through each upsample so later convs mask the right region.
-        # Copy-free chaining: conv_in writes a padded interior so the first res_x stage skips its entry
-        # pad (reads border-only). Guarded to the same persist-pad halo condition the mid-block uses.
-        chain = (
-            os.environ.get("TT_LTX_CHAIN") is not None
-            and _FUSE_MIDBLOCK_NORM_ADD
-            and getattr(self.conv_in, "_use_halo_conv", False)
-            and getattr(self.conv_in, "_persist_pad", False)
-            and len(self.up_blocks) > 0
-            and isinstance(self.up_blocks[0], LTXUNetMidBlock3D)
-            and len(self.up_blocks[0].res_blocks) > 1
-        )
-        sample_tt = self.conv_in(
-            sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w, cf_output_padded=chain
-        )
-        # prepad_next: the current block's input already carries a padded interior (conv_in or an
-        # upsample's fused depth_to_space_pad wrote it), so the next res_x stage skips its entry pad.
-        prepad_next = chain
+        sample_tt = self.conv_in(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
         for up_block in self.up_blocks:
             if isinstance(up_block, LTXDepthToSpaceUpsample):
-                sample_tt, logical_h, logical_w, prepad_next = up_block(
-                    sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w, chain=chain
+                sample_tt, logical_h, logical_w = up_block(
+                    sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w
                 )
-            elif isinstance(up_block, LTXUNetMidBlock3D):
-                sample_tt = up_block(
-                    sample_tt,
-                    causal=self.causal,
-                    logical_h=logical_h,
-                    logical_w=logical_w,
-                    input_prepadded=prepad_next,
-                )
-                prepad_next = False  # res_x crops at exit → unpadded output
             else:
                 sample_tt = up_block(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
-                prepad_next = False
 
         sample_tt = self.norm_out(sample_tt, compute_kernel_config=self.norm_out_compute_kernel_config)
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
