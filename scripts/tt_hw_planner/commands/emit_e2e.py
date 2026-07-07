@@ -125,6 +125,160 @@ def _render_compute_split(model_id: str) -> None:
             print(ln)
 
 
+def _e2e_cell(rel: str, sub: str, f) -> str:
+    return f"`{rel}/{sub}/{f.name}`" if f else "(none)"
+
+
+def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
+    """Consolidated end-of-emit-e2e report: the on-device vs CPU-fallback split, and
+    per task/demo the real-input demo + full-model e2e PCC test + trace+2CQ perf test
+    (with reproduce commands). Prints a terminal table AND writes <demo>/E2E_REPORT.md.
+    Multimodal: one row per demo/task. Non-fatal — never raises."""
+    import time as _time
+    from pathlib import Path as _P
+
+    try:
+        demo_dir = _P(demo_dir)
+        _dd = str(demo_dir)
+        _mi = _dd.rfind("/models/")
+        rel = _dd[_mi + 1 :] if _mi >= 0 else demo_dir.name
+
+        split_lines = []
+        try:
+            from ..cli import _format_compute_split, _format_op_split
+
+            split_lines += _format_compute_split(model_id, label="components")
+            split_lines += _format_op_split(model_id, label="operations")
+        except Exception:
+            pass
+        fallback = []
+        try:
+            from ..final_categorization import build_final_categorization
+
+            _cat = build_final_categorization(model_id=model_id, demo_dir=demo_dir)
+            fallback = sorted(
+                list(getattr(_cat, "kernel_missing", []) or []) + list(getattr(_cat, "pending", []) or [])
+            )
+        except Exception:
+            fallback = []
+
+        demo_files = sorted((demo_dir / "demo").glob("demo_*.py")) if (demo_dir / "demo").is_dir() else []
+        e2e_dir = demo_dir / "tests" / "e2e"
+        all_e2e = sorted(e2e_dir.glob("test_*.py")) if e2e_dir.is_dir() else []
+
+        pcc_by_key = {}
+        try:
+            rep = json.loads((demo_dir / "grader_report.json").read_text())
+            for c in rep.get("calls") or []:
+                pccs = c.get("final_pcc") or []
+                try:
+                    pcc_by_key[str(c.get("call", "")).lower()] = min(float(x) for x in pccs) if pccs else None
+                except Exception:
+                    pcc_by_key[str(c.get("call", "")).lower()] = None
+        except Exception:
+            pass
+
+        def _match(task, want_perf):
+            for f in all_e2e:
+                if task in f.name.lower() and (("perf" in f.name.lower()) == want_perf):
+                    return f
+            return None
+
+        rows = []
+        if demo_files:
+            for dfp in demo_files:
+                task = dfp.stem[len("demo_") :] if dfp.stem.startswith("demo_") else dfp.stem
+                rows.append(
+                    (task, dfp, pcc_by_key.get(task.lower()), _match(task.lower(), False), _match(task.lower(), True))
+                )
+        else:
+            _pcc = None
+            if pcc_by_key and all(v is not None for v in pcc_by_key.values()):
+                _pcc = min(pcc_by_key.values())
+            rows.append(
+                (
+                    "e2e",
+                    None,
+                    _pcc,
+                    next((f for f in all_e2e if "perf" not in f.name.lower()), None),
+                    next((f for f in all_e2e if "perf" in f.name.lower()), None),
+                )
+            )
+
+        bar = "=" * 78
+        print("\n" + bar)
+        print(f"  E2E REPORT — {model_id}")
+        print(f"  Verdict: {verdict}")
+        print(bar)
+        print("  PIPELINE PLACEMENT (on-device vs CPU fallback):")
+        for ln in split_lines:
+            print(ln)
+        print(f"    CPU-fallback modules: {', '.join(fallback) if fallback else '(none — fully on device)'}")
+        print("  " + "-" * 74)
+        print(f"    {'task':<12} {'e2e PCC':<9} {'demo (real I/O)':<26} trace+2CQ perf test")
+        for task, dfp, pcc, pcc_test, perf_test in rows:
+            pcc_s = f"{pcc:.4f}" if isinstance(pcc, float) else "n/a"
+            demo_s = (f"demo/{dfp.name}" if dfp else "(none)")[:26]
+            print(f"    {task[:12]:<12} {pcc_s:<9} {demo_s:<26} {perf_test.name if perf_test else '(none)'}")
+        print("  " + "-" * 74)
+        print("  REPRODUCE (per task):")
+        for task, dfp, pcc, pcc_test, perf_test in rows:
+            print(f"    {task}:")
+            if dfp:
+                print(f"      demo   → python {rel}/demo/{dfp.name}")
+            if pcc_test:
+                print(f"      pcc    → pytest {rel}/tests/e2e/{pcc_test.name} -svv")
+            if perf_test:
+                print(f"      trace  → pytest {rel}/tests/e2e/{perf_test.name} -svv")
+        print(f"  full report → {rel}/E2E_REPORT.md")
+        print(bar)
+
+        md = [
+            f"# E2E report — `{model_id}`",
+            "",
+            f"_Generated: {_time.strftime('%Y-%m-%d %H:%M:%S %Z')}_",
+            "",
+            f"**Verdict: {verdict}**",
+            "",
+            "## Pipeline placement (on-device vs CPU fallback)",
+            "",
+        ]
+        for ln in split_lines:
+            md.append(f"- {ln.strip()}")
+        md.append(
+            "- CPU-fallback modules: "
+            + (", ".join(f"`{m}`" for m in fallback) if fallback else "(none — fully on device)")
+        )
+        md += [
+            "",
+            "## Per task / demo",
+            "",
+            "| task | e2e PCC | demo (real input→output) | e2e PCC test | trace+2CQ perf test |",
+            "|---|---|---|---|---|",
+        ]
+        for task, dfp, pcc, pcc_test, perf_test in rows:
+            pcc_s = f"{pcc:.4f}" if isinstance(pcc, float) else "n/a"
+            md.append(
+                f"| `{task}` | {pcc_s} | {_e2e_cell(rel, 'demo', dfp)} | "
+                f"{_e2e_cell(rel, 'tests/e2e', pcc_test)} | {_e2e_cell(rel, 'tests/e2e', perf_test)} |"
+            )
+        md += ["", "## Reproduce", ""]
+        for task, dfp, pcc, pcc_test, perf_test in rows:
+            md.append(f"### {task}")
+            md.append("```bash")
+            if dfp:
+                md.append(f"python {rel}/demo/{dfp.name}")
+            if pcc_test:
+                md.append(f"pytest {rel}/tests/e2e/{pcc_test.name} -svv")
+            if perf_test:
+                md.append(f"pytest {rel}/tests/e2e/{perf_test.name} -svv")
+            md.append("```")
+            md.append("")
+        (demo_dir / "E2E_REPORT.md").write_text("\n".join(md))
+    except Exception as exc:
+        print(f"  [e2e-report] skipped: {type(exc).__name__}: {exc}")
+
+
 _G1_TORCH_DELEGATION = (
     r"self\._torch_module\s*\(",
     r"self\.torch_module\s*\(",
@@ -932,7 +1086,7 @@ def _emit_e2e_phase_a(args) -> int:
         # No grader report to render; show a clean (markdown-stripped) build summary.
         if (build_final or "").strip():
             print(_md_to_terminal(build_final))
-        _render_compute_split(model_id)
+        emit_e2e_report(model_id, demo_dir, verdict="(no-grade)")
         return 0
 
     rule = "  " + "─" * 74
@@ -950,6 +1104,7 @@ def _emit_e2e_phase_a(args) -> int:
             print("\n" + sep)
             print(f"  ✓ TOOL-ENFORCED GATES: PASS (round {rnd}) — verdict computed by the tool")
             print(sep)
+            emit_e2e_report(model_id, demo_dir, verdict="PASS")
             return 0
         if rnd == max_grade_rounds:
             break
