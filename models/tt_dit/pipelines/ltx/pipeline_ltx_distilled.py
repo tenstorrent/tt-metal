@@ -43,7 +43,6 @@ class LTXDistilledPipeline(LTXPipeline):
     """Distilled 2-stage AV pipeline: half-res denoise → upsample → full-res refine."""
 
     HAS_UPSAMPLER = True
-    SUPPORTS_IMAGE_CONDITIONING = True
 
     @staticmethod
     def _post_process_latent_tt(
