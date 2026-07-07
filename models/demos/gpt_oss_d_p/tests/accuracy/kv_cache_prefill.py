@@ -246,13 +246,17 @@ def main():
         if sp > 1:
             # Each SP row needs RoPE for its own position range [r*seq_len, (r+1)*seq_len).
             # Pull the full matrices to CPU, slice per row, then reshard across mesh rows.
-            cos_cpu = ttnn.to_torch(model.rope_setup.cos_matrix_prefill)  # [1, 1, max_seq, rope_dim]
-            sin_cpu = ttnn.to_torch(model.rope_setup.sin_matrix_prefill)
+            # Rope matrices are replicated — read from a single device to avoid the
+            # mesh_composer requirement of ttnn.to_torch on a multi-device tensor.
+            cos_dev0 = ttnn.get_device_tensors(model.rope_setup.cos_matrix_prefill)[0]
+            sin_dev0 = ttnn.get_device_tensors(model.rope_setup.sin_matrix_prefill)[0]
+            cos_cpu = ttnn.to_torch(cos_dev0)  # [1, 1, max_seq, rope_dim]
+            sin_cpu = ttnn.to_torch(sin_dev0)
+            rope_dtype = cos_dev0.dtype
             cos_rows = torch.cat(
                 [cos_cpu[..., row * seq_len : (row + 1) * seq_len, :] for row in range(sp)], dim=0
             )  # [sp, 1, seq_len, rope_dim]
             sin_rows = torch.cat([sin_cpu[..., row * seq_len : (row + 1) * seq_len, :] for row in range(sp)], dim=0)
-            rope_dtype = ttnn.get_dtype(model.rope_setup.cos_matrix_prefill)
             rope_mats = [
                 ttnn.from_torch(
                     cos_rows,
