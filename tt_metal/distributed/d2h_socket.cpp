@@ -204,6 +204,13 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
+    // Mock chips have no TLB manager (MockChip::get_tlb_manager() == nullptr) and no
+    // runtime data path. Skip TLB window setup: pcie_writer_ stays unset, which is fine
+    // because it is only used by read_tensor()/write_tensor(), not by socket construction / JIT.
+    if (cluster.is_mock_or_emulated()) {
+        return;
+    }
+
     if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);

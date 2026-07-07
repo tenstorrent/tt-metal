@@ -196,6 +196,13 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
+    // Mock chips have no TLB manager (MockChip::get_tlb_manager() == nullptr) and no
+    // runtime data path. Skip TLB window setup: pcie_writer stays unset, which is fine
+    // because it is only used by write_tensor(), not by socket construction / JIT.
+    if (cluster.is_mock_or_emulated()) {
+        return;
+    }
+
     if (mesh_device) {
         recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
         recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core_.core_coord);
