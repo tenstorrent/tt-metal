@@ -160,7 +160,7 @@ class _Transformer:
             self._lin[key] = (
                 ttnn.from_torch(
                     tm.weight.detach().to(tdt),
-                    dtype=self.wdtype,
+                    dtype=ttnn.bfloat8_b,  # [perf] bf8_b weights: half the DRAM bandwidth of bf16 for the DRAM-bound linears (bias/activations stay bf16)
                     layout=TILE,
                     device=self.device,
                     memory_config=DRAM,
