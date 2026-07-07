@@ -11,7 +11,10 @@ from models.experimental.audiox.demo import validate as validate_mod
 
 
 def test_infer_conditioning_mode_variants():
-    assert validate_mod._infer_conditioning_mode("piano loop", video_path=None, image_path=None, audio_path=None) == "text-to-audio"
+    assert (
+        validate_mod._infer_conditioning_mode("piano loop", video_path=None, image_path=None, audio_path=None)
+        == "text-to-audio"
+    )
     assert (
         validate_mod._infer_conditioning_mode("crowd", video_path=Path("/tmp/in.mp4"), image_path=None, audio_path=None)
         == "visual+text-to-audio"
@@ -25,7 +28,9 @@ def test_infer_conditioning_mode_variants():
         == "image-to-audio"
     )
     assert (
-        validate_mod._infer_conditioning_mode("soft pad", video_path=None, image_path=None, audio_path=Path("/tmp/in.wav"))
+        validate_mod._infer_conditioning_mode(
+            "soft pad", video_path=None, image_path=None, audio_path=Path("/tmp/in.wav")
+        )
         == "audio+text-to-audio"
     )
 

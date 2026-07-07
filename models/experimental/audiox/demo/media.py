@@ -143,7 +143,9 @@ def load_image_prompt(path: Path, *, target_frames: int, image_size: int = 224) 
     return prepare_video_prompt(frames_tchw, target_frames=target_frames, image_size=image_size)
 
 
-def load_audio_prompt(path: Path, *, target_sample_rate: int, target_samples: int, target_channels: int = 2) -> torch.Tensor:
+def load_audio_prompt(
+    path: Path, *, target_sample_rate: int, target_samples: int, target_channels: int = 2
+) -> torch.Tensor:
     """Load an audio file into AudioX's audio conditioner input format."""
     import torchaudio
 
