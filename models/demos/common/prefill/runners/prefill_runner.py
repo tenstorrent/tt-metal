@@ -536,19 +536,7 @@ def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=
             kv_actual = c * cfg.chunk_size
             inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
             meta = {"slot_id": slot_id, "actual_start": kv_actual, "actual_end": kv_actual + cfg.chunk_size}
-            md = ttnn.from_torch(
-                torch.tensor([meta["slot_id"], meta["actual_start"], meta["actual_end"]], dtype=torch.int32).reshape(
-                    1, 1, 1, -1
-                ),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=runtime.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.create_mesh_mapper(
-                    runtime.mesh_device,
-                    ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
-                ),
-            )
+            md = None
         else:
             inp, meta, md = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
