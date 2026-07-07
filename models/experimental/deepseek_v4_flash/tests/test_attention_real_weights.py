@@ -200,7 +200,9 @@ import ttnn  # noqa: E402
 from models.common.utility_functions import comp_allclose, comp_pcc  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.attention import (  # noqa: E402
     DeepSeekV4Attention,
-    _LayerKVCache,
+    build_static_layer_cache,
+    host_decode_mask,
+    int32_pos_tensor,
     make_rope_table,
 )
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache  # noqa: E402
@@ -349,18 +351,21 @@ def test_attention_real_weights_decode(
     split = seq_len - steps
     cr = cfg.compress_rates[layer_type] if is_compressor else None
 
-    kv_cache = _LayerKVCache(cfg.sliding_window, is_compressor)
+    kv_cache = build_static_layer_cache(
+        device, cfg.sliding_window, layer_type, cfg.head_dim, seq_len, cfg.compress_rates
+    )
     print("seq_len: ", seq_len)
     for pos in range(seq_len):
         cos_d, sin_d, neg_sin_d = _rope_rows(bundle["cos_q"][pos : pos + 1], bundle["sin_q"][pos : pos + 1], device)
         cos_win_d = sin_win_d = None
         print("pos: ", pos)
-        if is_compressor and (pos + 1) // cr > 0:
-            n_win = (pos + 1) // cr
-            cw, sw = make_rope_table(bundle["cos_win"][:n_win], bundle["sin_win"][:n_win])
+        if is_compressor:
+            n_win_cap = seq_len // cr
+            cw, sw = make_rope_table(bundle["cos_win"][:n_win_cap], bundle["sin_win"][:n_win_cap])
             cos_win_d = _to_tt(cw, device)
             sin_win_d = _to_tt(sw, device)
 
+        mask = host_decode_mask(cfg.sliding_window, layer_type, cr, pos, seq_len, device)
         out_tt = attn.decode(
             _to_tt(hidden[:, pos : pos + 1].reshape(batch_size, 1, 1, cfg.hidden_size), device),
             cos_d,
@@ -368,7 +373,10 @@ def test_attention_real_weights_decode(
             neg_sin_d,
             cos_win_d,
             sin_win_d,
+            mask,
             kv_cache,
+            int32_pos_tensor(pos % cfg.sliding_window, device),
+            int32_pos_tensor(pos, device),
         )
         if pos < split:
             continue  # seeding the cache; no reference row to compare yet

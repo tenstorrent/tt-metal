@@ -4,7 +4,8 @@ import torch
 import ttnn
 from loguru import logger
 
-from .attention import _LayerKVCache, _StaticLayerCache, make_rope_table
+from .attention import _StaticLayerCache, build_static_layer_cache, host_decode_mask, int32_pos_tensor, make_rope_table
+from .paged_cache import PagedCacheConfig, build_page_table, build_paged_sliding_pool, page_table_row_to_tt
 from .common import DeepSeekV4Module, _MASK_NEG, _profile, _trace_capture_guard
 from .decoder_layer import DeepSeekV4DecoderLayer
 from .embedding import DeepSeekV4Embedding
@@ -228,9 +229,17 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if self.layer_devices:
             self.last_device = self.layer_devices[-1]
 
-        # Per-layer decode state (sliding K=V + optional compressor projections).
+        # Per-layer decode state (paged in-place sliding K=V + optional compressor projections).
         self.sliding_window = config.sliding_window
-        self.kv_caches: list[_LayerKVCache] = self._new_caches()
+        self._decode_max_seq: Optional[int] = None
+        self.kv_caches: list[_StaticLayerCache] = []
+        # Multi-user paged decode (optional; see :meth:`reset_multi_user_paged_caches`).
+        self._multi_user: bool = False
+        self._paged_cfg: Optional[PagedCacheConfig] = None
+        self._page_table_host: Optional[torch.Tensor] = None
+        self._user_kv_caches: list[list[_StaticLayerCache]] = []
+        self._paged_sliding_pools: list[dict[int, ttnn.Tensor]] = []  # per-layer: device_id -> pool
+        self._page_tables_tt: dict[int, ttnn.Tensor] = {}  # device_id -> [num_users, blocks_per_user]
 
         self.hc_head = DeepSeekV4HyperHead(
             config,
@@ -317,15 +326,148 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return DeepSeekV4HashRouter(self.config, weights, this_device)
 
     # -- decode KV-cache state -------------------------------------------------- #
-    def _new_caches(self) -> list["_LayerKVCache"]:
-        return [
-            _LayerKVCache(self.sliding_window, self.config.layer_types[li] != "sliding_attention")
+    def reset_caches(self, max_seq: int) -> None:
+        """Allocate empty fixed-size paged decode buffers for a fresh sequence.
+
+        ``max_seq`` is the longest absolute position + 1 the caller will decode
+        (prompt + generation), padded to tile / compress-rate multiples as needed.
+        """
+        self._decode_max_seq = max_seq
+        self.kv_caches = [
+            build_static_layer_cache(
+                self.layer_devices[li],
+                self.sliding_window,
+                self.config.layer_types[li],
+                self.config.head_dim,
+                max_seq,
+                self.config.compress_rates,
+            )
             for li in range(self.num_layers)
         ]
+        self._multi_user = False
+        self._paged_cfg = None
+        self._page_table_host = None
+        self._user_kv_caches = []
+        self._paged_sliding_pools = []
+        self._page_tables_tt = {}
 
-    def reset_caches(self) -> None:
-        """Drop all per-layer decode state (call before decoding a fresh sequence)."""
-        self.kv_caches = self._new_caches()
+    def reset_multi_user_paged_caches(self, max_seq: int, num_users: int = 2, block_size: int = 64) -> None:
+        """Allocate per-user decode state plus shared paged sliding pools (block_size tokens/block).
+
+        Each user gets isolated compressor projections (CSA/HCA) and a ``page_table`` row
+        mapping into a shared ``[num_users * blocks_per_user, 1, block_size, Dh]`` pool
+        per sliding-attention layer. Switching users reuses the same physical pool without
+        overwriting another user's blocks.
+        """
+        self._decode_max_seq = max_seq
+        self._multi_user = True
+        self._paged_cfg = PagedCacheConfig(
+            num_users=num_users,
+            max_seq=max_seq,
+            block_size=block_size,
+            sliding_window=self.sliding_window,
+        )
+        self._page_table_host = build_page_table(self._paged_cfg)
+        self.kv_caches = []
+
+        self._user_kv_caches = [
+            [
+                build_static_layer_cache(
+                    self.layer_devices[li],
+                    self.sliding_window,
+                    self.config.layer_types[li],
+                    self.config.head_dim,
+                    max_seq,
+                    self.config.compress_rates,
+                )
+                for li in range(self.num_layers)
+            ]
+            for _ in range(num_users)
+        ]
+
+        self._paged_sliding_pools = []
+        for li in range(self.num_layers):
+            if self.config.layer_types[li] != "sliding_attention":
+                self._paged_sliding_pools.append({})
+                continue
+            dev = self.layer_devices[li]
+            pool = build_paged_sliding_pool(dev, self._paged_cfg, self.config.head_dim)
+            self._paged_sliding_pools.append({dev.id(): pool})
+            if dev.id() not in self._page_tables_tt:
+                self._page_tables_tt[dev.id()] = ttnn.from_torch(
+                    self._page_table_host,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=dev,
+                )
+
+    def decode_user(self, user_id: int, token_id: int, pos: int, rope: dict) -> ttnn.Tensor:
+        """Single-token decode for ``user_id`` (requires :meth:`reset_multi_user_paged_caches`)."""
+        if not self._multi_user:
+            raise RuntimeError("call reset_multi_user_paged_caches() before decode_user()")
+        assert self._paged_cfg is not None
+        if user_id < 0 or user_id >= self._paged_cfg.num_users:
+            raise ValueError(f"user_id {user_id} out of range [0, {self._paged_cfg.num_users})")
+
+        ids = torch.tensor([[token_id]], dtype=torch.long)
+        ids_tt = ttnn.from_torch(
+            ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.first_device
+        )
+        inputs_embeds = self.embed_tokens(ids_tt)
+        b, s, d = inputs_embeds.shape
+        streams = ttnn.reshape(inputs_embeds, [b, s, 1, d])
+        streams = ttnn.repeat(streams, ttnn.Shape([1, 1, self.config.hc_mult, 1]))
+
+        rope_cache: dict = {}
+        last_submesh_id = 0
+        w = self.sliding_window
+        user_caches = self._user_kv_caches[user_id]
+
+        for li, layer in enumerate(self.layers):
+            if self.use_submeshes:
+                current_submesh_id = self._submesh_id_for_layer(li)
+                if current_submesh_id != last_submesh_id:
+                    streams = self._copy_streams_between_submeshes(streams, last_submesh_id, current_submesh_id)
+                this_device = self.submeshes[current_submesh_id]
+            else:
+                this_device = self.first_device
+            layer_type = self.config.layer_types[li]
+            compress_rate = None if layer_type == "sliding_attention" else self.config.compress_rates[layer_type]
+            cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt = self._rope_rows_decode(
+                rope, pos, layer_type, compress_rate, rope_cache, this_device
+            )
+            mask = host_decode_mask(w, layer_type, compress_rate, pos, self._decode_max_seq, this_device)
+
+            paged_pool = None
+            page_row = None
+            if layer_type == "sliding_attention":
+                pools = self._paged_sliding_pools[li]
+                paged_pool = pools.get(this_device.id())
+                if paged_pool is not None:
+                    page_row = page_table_row_to_tt(self._page_table_host, user_id, this_device)
+
+            streams = layer.decode(
+                streams,
+                cos_tt,
+                sin_tt,
+                neg_sin_tt,
+                cos_win_tt,
+                sin_win_tt,
+                mask,
+                user_caches[li],
+                int32_pos_tensor(pos % w, this_device),
+                int32_pos_tensor(pos, this_device),
+                input_ids=ids,
+                paged_sliding_pool=paged_pool,
+                page_table=page_row,
+            )
+            last_submesh_id = current_submesh_id
+            _profile(this_device)
+            next_layer_for_device_id = li + self.pipeline_stages
+            if next_layer_for_device_id < self.num_layers:
+                next_layer = self.layers[next_layer_for_device_id]
+                next_layer.self_attn.prefetch_weights()
+        return self.norm(self.hc_head(streams))
 
     # -- per-layer RoPE tables / masks ------------------------------------------ #
     def _to_tt(self, t: torch.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -340,8 +482,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         Returns ``(cos, sin, neg_sin, cos_win, sin_win)`` where ``cos/sin/neg_sin``
         are the one ``[1,1,1,Rd]`` rows at absolute position ``pos`` and the window
-        tables cover the ``(pos + 1) // compress_rate`` currently-emittable windows
-        (``None`` when none / a sliding layer).
+        tables cover every compressor window in the fixed paged buffer (``None`` for
+        sliding layers).
         """
         key = f'{"sliding" if layer_type == "sliding_attention" else compress_rate}_{device.id()}'
         if key in cache:
@@ -355,10 +497,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         cos_win_tt = sin_win_tt = None
         if layer_type != "sliding_attention":
-            n_win = (pos + 1) // compress_rate
-            if n_win > 0:
+            assert self._decode_max_seq is not None
+            n_win_cap = self._decode_max_seq // compress_rate
+            if n_win_cap > 0:
                 cw_h, sw_h = rope["win"][compress_rate]
-                cw, sw = make_rope_table(cw_h[:n_win], sw_h[:n_win])
+                cw, sw = make_rope_table(cw_h[:n_win_cap], sw_h[:n_win_cap])
                 cos_win_tt = self._to_tt(cw, device)
                 sin_win_tt = self._to_tt(sw, device)
         out = (cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt)
@@ -400,6 +543,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         rope_cache: dict = {}
         last_submesh_id = 0
+        w = self.sliding_window
+        if not self.kv_caches:
+            raise RuntimeError("call reset_caches(max_seq) before decode()")
         for li, layer in enumerate(self.layers):
             if self.use_submeshes:
                 current_submesh_id = self._submesh_id_for_layer(li)
@@ -413,6 +559,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt = self._rope_rows_decode(
                 rope, pos, layer_type, compress_rate, rope_cache, this_device
             )
+            mask = host_decode_mask(w, layer_type, compress_rate, pos, self._decode_max_seq, this_device)
             streams = layer.decode(
                 streams,
                 cos_tt,
@@ -420,11 +567,21 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 neg_sin_tt,
                 cos_win_tt,
                 sin_win_tt,
+                mask,
                 self.kv_caches[li],
+                int32_pos_tensor(pos % w, this_device),
+                int32_pos_tensor(pos, this_device),
                 input_ids=ids,
             )
             last_submesh_id = current_submesh_id
             _profile(this_device)
+            next_layer_for_device_id = li + self.pipeline_stages
+            if next_layer_for_device_id < self.num_layers:
+                assert (
+                    self._submesh_id_for_layer(next_layer_for_device_id) == current_submesh_id
+                ), "Next layer is not on the same submesh"
+                next_layer = self.layers[next_layer_for_device_id]
+                next_layer.self_attn.prefetch_weights()
         return self.norm(self.hc_head(streams))
 
     # ------------------------------------------------------------------ #
@@ -448,43 +605,16 @@ class DeepSeekV4Model(DeepSeekV4Module):
     # ------------------------------------------------------------------ #
 
     def _build_static_layer_cache(self, li: int, device: ttnn.MeshDevice) -> "_StaticLayerCache":
-        """Allocate a layer's fixed-size in-place caches *empty* (all-zero).
-
-        There is no prefill: the prompt is fed one token at a time through
-        :meth:`decode_traced`, which writes each token's K=V / compressor
-        projection into these buffers in place at its absolute position. Unwritten
-        ring slots / windows stay zero and are dropped by the per-step decode mask.
-        """
-        dh = self.config.head_dim
-        w = self.sliding_window
-        sliding = ttnn.from_torch(
-            torch.zeros(1, 1, w, dh),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        """Allocate a layer's fixed-size in-place caches *empty* (all-zero)."""
+        assert self._decode_max_seq is not None, "set max_seq via reset_caches or prepare_static_decode first"
+        return build_static_layer_cache(
+            device,
+            self.sliding_window,
+            self.config.layer_types[li],
+            self.config.head_dim,
+            self._decode_max_seq,
+            self.config.compress_rates,
         )
-        ckv = cgate = None
-        layer_type = self.config.layer_types[li]
-        if layer_type != "sliding_attention":
-            cr = self.config.compress_rates[layer_type]
-            cap = self._cr_caps[cr][0]
-            feat = (2 if layer_type == "compressed_sparse_attention" else 1) * dh
-            ckv = ttnn.from_torch(
-                torch.zeros(1, 1, cap, feat),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            cgate = ttnn.from_torch(
-                torch.zeros(1, 1, cap, feat),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        return _StaticLayerCache(sliding, ckv, cgate)
 
     def prepare_static_decode(self, rope: dict, max_seq: int, lm_head=None) -> None:
         """Allocate the traced-decode state (the prompt is prefilled by replaying
@@ -506,6 +636,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             assert max_seq % cr == 0, f"max_seq ({max_seq}) must be a multiple of compress_rate {cr}"
         self._traced_rope = rope
         self._lm_head_traced = lm_head
+        self._decode_max_seq = max_seq
         self._cr_caps = {
             cr: (max_seq, max_seq // cr)
             for cr in {cfg.compress_rates[t] for t in cfg.layer_types[: self.num_layers] if t != "sliding_attention"}
@@ -784,6 +915,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 sender_socket, _ = self.submesh_socket_pairs[(k, next_k)]
                 ttnn.experimental.send_direct_async(streams, sender_socket)
                 ttnn.experimental.send_direct_async(pkt, sender_socket)
+                streams.deallocate()
+                next_layer_for_device_id = li + self.pipeline_stages
+                if next_layer_for_device_id < self.num_layers:
+                    next_layer = self.layers[next_layer_for_device_id]
+                    next_layer.self_attn.prefetch_weights()
         return out if out is not None else streams
 
     def _build_packet(self, token_id: int, pos: int) -> ttnn.Tensor:
