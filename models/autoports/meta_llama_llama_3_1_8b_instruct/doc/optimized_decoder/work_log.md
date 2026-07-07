@@ -445,3 +445,5 @@ Final review summary:
 - Required work: none.
 - Scope inspected: `tt/optimized_decoder.py`, `tests/test_optimized_decoder.py`, `doc/context_contract.json`, and `doc/optimized_decoder/*`.
 - Residual non-blocking notes: local `tt-smi` is unavailable, and real-weight tests may skip when local HF weights are absent; recorded hardware, Tracy/perf, watcher, and real-weight PCC evidence are present in this log and the artifact files.
+
+Local implementation commit: `1b0c85ed0a73089e88a1ff5eb4911df503caca63`.
