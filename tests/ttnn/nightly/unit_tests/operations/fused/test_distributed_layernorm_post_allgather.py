@@ -158,14 +158,9 @@ def run_layernorm_part_2(
 @pytest.mark.parametrize(
     "inp_shape",
     [
-        # Large (8192-wide) shapes for bf16/bf8.
         (1, 1, 2048, 8192),
         (1, 1, 128, 8192),
         (2, 1, 128, 8192),
-        # Small (2048-wide) shapes for FP32: FP32 doubles tile size, so the 8192-wide shapes
-        # exceed L1 for layernorm (2 stats tiles + beta). FP32 runs only on these.
-        (1, 1, 128, 2048),
-        (2, 1, 128, 2048),
     ],
 )
 @pytest.mark.parametrize(
@@ -186,21 +181,22 @@ def test_layernorm_part_2_with_program_cache(
     inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, gamma_beta_dtype, fp32_enabled, device
 ):
     """Post-all-gather correctness matrix, covering FP32 (input + FP32 stats + bf16/fp32 gamma/beta)
-    alongside the bf16/bf8 cases. FP32 requires fp32_dest_acc_en=True and -- because it doubles tile
-    size -- only fits on the 2048-wide shapes; bf16/bf8 run on the 8192-wide shapes. The guard-skips
-    below keep each dtype on the shapes/flags it supports (this produces many skipped param IDs)."""
+    alongside the bf16/bf8 cases. The kernel processes inp_shape[-1] // n_devices per device, so L1
+    usage is driven by that per-device width, not the full width -- FP32 runs on the same 8192-wide
+    shapes as bf16/bf8. FP32 doubles tile size, and the one combination that overflows L1 is FP32
+    layernorm at per-device width 2048 (8192-wide / 4 devices: 2 stats tiles + beta), skipped below."""
     is_fp32 = input_dtype == ttnn.float32
-    is_small_shape = inp_shape[-1] <= 2048
+    per_device_width = inp_shape[-1] // n_devices
 
-    # FP32 -> small shapes (L1); everything else -> large shapes.
-    if is_fp32 != is_small_shape:
-        pytest.skip("FP32 runs on the 2048-wide shapes (L1); bf16/bf8 on the 8192-wide shapes")
     # FP32 requires fp32_dest_acc_en.
     if is_fp32 and not fp32_enabled:
         pytest.skip("FP32 input requires fp32_dest_acc_en=True")
     # FP32 gamma/beta is only exercised with FP32 input; bf16/bf8 keep bf16 gamma/beta.
     if gamma_beta_dtype == ttnn.float32 and not is_fp32:
         pytest.skip("fp32 gamma/beta only exercised with FP32 input")
+    # FP32 layernorm needs 2 stats tiles + beta in double-size tiles; per-device width 2048 overflows L1.
+    if is_fp32 and not is_rmsnorm and per_device_width >= 2048:
+        pytest.skip("FP32 layernorm overflows L1 at per-device width >= 2048")
 
     run_layernorm_part_2(
         inp_shape,
