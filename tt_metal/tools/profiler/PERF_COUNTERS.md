@@ -182,7 +182,98 @@ capture is scoped (fewer ops / `--dump-device-data-mid-run` to drain mid-run).
   remote is not pushable from here, so the submodule pointer stays at upstream to
   keep the branch buildable). Apply the patch + rebuild Tracy to see the tooltip.
 
+## LTX per-stage visibility toolchain (`tools/tracy`)
+
+Three pure-Python tools (no build; run against any tree's CSVs) turn the per-op CSV into a
+served-latency budget. See each script's module docstring for the full contract.
+
+### `ltx_stage_bottlenecks.py` — per-stage rollup + host rows + e2e budget
+
+Rolls the per-op CSV into the canonical LTX stages, ranks the dominant ops per stage, tags each
+compute/bandwidth/dispatch-bound, and checks the total against an e2e budget. **Host phases are
+first-class rows**, not footnotes: the pipeline's own wall-clock timers (`Transformer prepare` = DiT
+reload ~2.1s, `VAE prepare`, `Latent upsample`, `Video export` ~1.6s, I2V `Image encode`) are parsed
+from the generate() stderr (`--log`) and shown next to the device stages, so the dominant served
+levers (reload + export) are visible in the same budget. Host stages carry no device op — they show
+`—` for device time and count only toward the wall-clock budget.
+
+```bash
+python tools/tracy/ltx_stage_bottlenecks.py \
+  --csv "Stage 2 denoise=ops_perf_results_*.csv" --log gen.stderr.log \
+  --budget 6.0 --stage-budgets "Stage 2 denoise=1.5" --html rollup.html
+```
+
+**Budget / regression gate.** `--save-baseline base.json` snapshots per-stage device ms + wall;
+a later run with `--baseline base.json` shows a Δ% column and flags any stage whose device time (or
+wall, for a host stage) grew past `--regress-tol` (default 5%). `--gate` exits nonzero on any
+over-budget or regressed stage, so a loop can detect a per-iteration regression.
+
+### `test_ltx_stage_scoped.py` — stage-segmented capture selector
+
+`LTX_PROFILE_STAGES=vae,audio,upsample` generalizes the single-op `test_ccl_allgather_scoped` to
+whole stages: the harness runs each selected decode-tail stage on a synthetic served-shape latent
+and **drains the profiler (`ttnn.ReadDeviceProfiler`) at each stage boundary**, so the chosen stages'
+perf-counter markers land in the CSV instead of being dropped when a dense block overflows the marker
+DRAM buffer. `audio` alone builds an audio-only pipeline (no 22B transformer). The dense denoise
+blocks (`s1`/`stage2`) need a transformer forward and overflow even alone — the harness skips them
+with a message; capture them from the full gen (drained per stage) or `test_transformer_ltx`.
+
+### `ltx_profile_all.py` — multi-profile merge (whole pipeline from several captures)
+
+`merge` stitches N scoped per-op CSVs (`STAGE=path`) into one whole-pipeline table — rebasing GLOBAL
+CALL COUNT into per-stage bands so a stage from one run never collides with another, tagging each row
+with its STAGE, last-capture-wins per stage — then feeds it to `ltx_stage_bottlenecks` for a single
+rollup. `plan` prints the prewarmed per-segment capture commands that cover the pipeline.
+
+```bash
+python tools/tracy/ltx_profile_all.py merge \
+  --csv "Stage 1 denoise=s1.csv" --csv "Stage 2 denoise=s2.csv" \
+  --csv "VAE decode=vae.csv" --csv "Audio decode=audio.csv" \
+  --out merged_pipeline.csv --log gen.stderr.log --html whole_pipeline.html
+```
+
+## Segmentation map — which stages fit one perf-counter pass
+
+The counter marker buffer overflows on a full denoise block, so the capture must be scoped. Measured
+per-device op/zone counts (bh_2x4sp1tp0, 1088×1920, LTX_FAST) and whether they fit one counter pass:
+
+| Segment | Stages | Ops/device | Fits one pass | How to capture |
+|---|---|---:|---|---|
+| decode-tail | VAE decode + Audio decode (+ Latent upsample) | see capture | yes (drained per stage) | `test_ltx_stage_scoped.py LTX_PROFILE_STAGES=vae,audio` |
+| one transformer block | Stage-1 **or** Stage-2 denoise, single block | 354 | marginal — 1 block only | `test_transformer_ltx` block harness |
+| full denoise | Stage-1 or Stage-2, all steps | 354 × N_steps | **no — overflows** | full-gen device-time CSV (no counters), or per-block scoped |
+
+Rule of thumb: one transformer block ≈ 354 device ops (≈ 5.8k noc markers/core for its stage-2
+AllGather alone — two overflow the ~11.7k/core buffer). The decode tail is light and, drained per
+stage boundary, fits one counter pass; each dense denoise block is captured on its own. The merge
+driver stitches a decode-tail counter capture with the denoise device-time capture into one ranking.
+
+## Analytical CCL BW % — all-gather, reduce-scatter, all-reduce
+
+The analytical fabric-BW model (`noc_bandwidth.collective_fabric_bw`, exact from output shape +
+`ring_size` + topology, no `--collect-noc-traces`) now covers all three collectives, not just
+all-gather. All-gather and reduce-scatter are duals that each move `(N-1)/N` of the full tensor;
+all-reduce moves `2·(N-1)/N`. Reduce-scatter's OUTPUT is the `1/N` scattered chunk, so its full
+tensor is `output·N` — the kind (`_collective_kind` in `process_ops_logs.py`) is what lets one op
+record pick the right formula. Device-validated on a real `ReduceScatterMinimalAsyncDeviceOperation`
+(LTX stage-2, 2×4 BH, ring_size 2, 2 links, Linear): 37.6 GB/s/link ≈ 75% of a 50 GB/s link — a
+column that was blank before. Unit coverage in `tests/ttnn/tracy/test_noc_bandwidth.py`.
+
+## Host-zone Tracy timeline — proposed, not delivered (needs a serving-tree rebuild)
+
+Wrapping the Python generate() phases in real Tracy HOST zones (dispatch gaps visible alongside
+device zones) is feasible but **out of scope for a no-rebuild deliverable**: tt-metal's host-zone
+path (`tracy::ScopedZone` / the `TracyCZone` C macros) is C++, reachable from Python only via a
+pybind shim that does not exist today, so adding it means new C++ bindings + a rebuild of the LIVE
+serving tree. The wall-clock host rows above already surface the same dominant phases (reload,
+export) from the existing stderr timers with zero pipeline change; the Tracy host timeline would add
+intra-phase dispatch-gap detail only. Deliver it in a dedicated instrumentation change when the
+serving tree is next rebuilt.
+
 ## Open items (not yet implemented)
 
 - **Readback-time** core restriction — deferred; correct per-op-grid selection
   needs op→grid association that only exists in post-process.
+- **Denoise per-op counters in one pass** — a full block overflows; today scoped
+  to one block or captured as device-time only. A mid-run drain hook per block
+  (like `prof_girl_decode`) would extend counter coverage to full denoise.
