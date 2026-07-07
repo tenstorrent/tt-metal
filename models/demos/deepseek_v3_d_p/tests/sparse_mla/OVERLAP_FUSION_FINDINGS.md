@@ -197,3 +197,53 @@ intrinsic head-sum floor (RS+tilize ~14.8 ms) — which is exactly what A1 remov
 - `ttnn/cpp/ttnn/operations/ccl/{all_broadcast,all_gather_async,reduce_scatter_minimal_async}/`, `.../ccl_op_fusion.hpp`, `.../ring_fusion.hpp`.
 - `ttnn/cpp/ttnn/operations/experimental/topk_large_indices/` · `.../transformer/sdpa/device/.../sparse_sdpa_gather.hpp`.
 - Test: `tests/sparse_mla/test_sparse_mla_perf.py` (`DS_PERF_SCENARIO`=warm|cold|long).
+
+---
+
+## 9. Implementation status (autonomous session, 2026-07-07 night)
+
+Branch `skrstic/sparse-mla-ccl-optimizations`. Every code commit is gated on
+`test_sparse_mla_chunked` (output PCC ≥ 0.98; baseline deepseek_v32 = 0.99607, glm_5_1 = 0.99634).
+
+### LANDED
+- **B2 — native AllGather for the KVPE prefix gather** (commit `perf(sparse-mla): native AllGather ...`).
+  Measured on Galaxy: **long −10.7 ms (−12%), warm −1.2 ms, cold −12.8 ms.** Accuracy: output PCC
+  **bit-identical** to baseline (the tilize/AG/untilize round-trip is a lossless reordering). Verified & pushed.
+
+### NOT LANDED — need interactive development (do NOT land unattended); precise plans + blockers below
+
+- **A2 — RS-only + distributed per-shard top-k (~25 ms long).** Feasible but has real correctness landmines
+  that must be validated step-by-step with a human watching intermediate PCCs. Concrete blockers found this session:
+  1. **Merge stage cannot use `ttnn.topk`** — it is hard-capped at **K ≤ 64** (`topk_device_operation.cpp:42,75`).
+     Both stages (local over T/4, merge over 4·2048=8192) must use `topk_large_indices` (indices-only).
+  2. **`topk_large_indices` returns indices only** → need a `ttnn.gather` of the head-summed logit VALUES at the
+     local indices to have something to merge on. `ttnn.gather` requires the index tensor be **UINT32/UINT16**
+     (`gather_device_operation.cpp:56`) — `topk_large_indices` uint32 output is compatible.
+  3. **Sentinel OOB hazard:** future/pad columns yield `0xFFFFFFFF` sentinel indices; gathering values at those
+     reads out-of-bounds (silent PCC corruption OR device hang). Needs: clamp sentinel→0 before gather, mask those
+     values to −inf after, and carry the sentinel (un-offset) through the merge so sparse_mla still drops them.
+  4. **uint32 elementwise support unverified** — the global-index offset (`local_idx + tp_rank·(T/4)`) and the
+     sentinel `where/eq` are on uint32; confirm ttnn supports these (or typecast) before relying on them.
+  5. **Scatter-column mapping must be verified** — the `tp_rank·(T/4)` offset assumes `reduce_scatter(dim=3)` gives
+     chip `r` the contiguous column slab `[r·T/4, (r+1)·T/4)` in mesh-coord order. Verify empirically (PCC).
+  Recommended enabler that removes #2/#3: extend `topk_large_indices` to optionally emit top-k VALUES.
+  Timing probe already measured (rs_only=True, indices-only): **long 87.5 → 60.6 ms**; full correct version
+  adds back ~0.8 ms candidate-AllGather + ~0.3 ms merge → **~25 ms realistic**.
+
+- **A1 — reshard indexer by query-rows (~35 ms long).** Bigger ceiling (also deletes the RS head-sum), but needs a
+  `device_causal_geometry` change in `indexer_score_program_factory.cpp:88,119-125` (query pos offset by SP coord
+  only; row-slicing corrupts the causal mask + breaks `Sq==chunk_local`). Device-kernel work — not unattended-safe.
+
+- **B1 — sub-device overlap of the KVPE gather ∥ indexer branch (~16 ms; ~10 ms after B2).** Needs a
+  `SubDeviceManager` grid split (MoE precedent `tt_moe.py:285-306`) + kept-alive buffers to avoid the all_broadcast
+  fresh-alloc aliasing hazard (`tt_shared_expert.py:478-511`). Orchestration + aliasing risk — not unattended-safe.
+
+- **num_links 2→4 (~15–18 ms, measured linear scaling).** Blocked on BH-Galaxy fabric enablement
+  (only 2 routing planes today, `tt_ccl.py:337`). Infra, no model code.
+
+- **fp8 KVPE cache (B3).** Blocked: `ttnn.copy` rejects FP8_E4M3 (`assert.hpp:104`).
+
+### Recommended next actions (with the user)
+1. Land **A2** together (validate the 5 items above with intermediate-PCC checks) — biggest measured lever.
+2. In parallel, request the `topk_large_indices` values-output enabler and BH 4-link fabric enablement.
+3. **A1** and **B1** as follow-on kernel/orchestration projects.
