@@ -16,6 +16,7 @@
 #include <functional>
 #include <unordered_set>
 #include <fmt/base.h>
+#include <fmt/ranges.h>
 #include <google/protobuf/text_format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/caseless_comparison.hpp>
@@ -785,7 +786,8 @@ void populate_deployment_hosts(
             .rack = proto_host.rack(),
             .shelf_u = proto_host.shelf_u(),
             .motherboard = node_templates.at(proto_host.node_type()).motherboard,
-            .node_type = proto_host.node_type()});
+            .node_type = proto_host.node_type(),
+            .group_name = proto_host.group_name()});
     }
 }
 
@@ -1479,12 +1481,115 @@ const std::vector<LogicalChannelConnection>& CablingGenerator::get_chip_connecti
     return chip_connections_;
 }
 
+// Validate deployment-provided host group_name labels against the actual eth connectivity.
+//
+// A "group" is the set of hosts sharing the same non-empty group_name. Grouping is defined over
+// the transitive closure of host-to-host eth connections (connected components). Two invariants
+// are enforced:
+//   1. Completeness within a group: all hosts sharing a group_name must be mutually connected
+//      (i.e. belong to a single connected component).
+//   2. Group isolation: a host in a group must not be connected to any host that has a different
+//      group_name or no group_name at all.
+// Throws std::runtime_error listing every violation if either invariant is broken.
+static void validate_host_groups(
+    const std::vector<Host>& deployment_hosts, const std::vector<LogicalChannelConnection>& chip_connections) {
+    const uint32_t num_hosts = static_cast<uint32_t>(deployment_hosts.size());
+    if (num_hosts == 0) {
+        return;
+    }
+
+    // Union-find over host_ids to compute connected components from the eth connectivity graph.
+    std::vector<uint32_t> parent(num_hosts);
+    for (uint32_t i = 0; i < num_hosts; ++i) {
+        parent[i] = i;
+    }
+    auto find = [&parent](uint32_t x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];  // path halving
+            x = parent[x];
+        }
+        return x;
+    };
+    auto unite = [&](uint32_t a, uint32_t b) { parent[find(a)] = find(b); };
+
+    for (const auto& [start, end] : chip_connections) {
+        if (*start.host_id >= num_hosts || *end.host_id >= num_hosts) {
+            continue;
+        }
+        unite(*start.host_id, *end.host_id);
+    }
+
+    // Per component: which distinct non-empty group_names appear, and whether any ungrouped host is present.
+    std::map<uint32_t, std::set<std::string>> component_groups;
+    std::map<uint32_t, std::vector<uint32_t>> component_ungrouped_hosts;
+    // Per group_name: the set of components it spans (to detect a group split across components).
+    std::map<std::string, std::set<uint32_t>> group_components;
+
+    for (uint32_t h = 0; h < num_hosts; ++h) {
+        const uint32_t root = find(h);
+        const std::string& group = deployment_hosts[h].group_name;
+        if (group.empty()) {
+            component_ungrouped_hosts[root].push_back(h);
+        } else {
+            component_groups[root].insert(group);
+            group_components[group].insert(root);
+        }
+    }
+
+    std::vector<std::string> errors;
+
+    // Invariant 2: each component may contain at most one group, and a grouped component must be pure.
+    for (const auto& [root, groups] : component_groups) {
+        if (groups.size() > 1) {
+            errors.push_back(fmt::format(
+                "Hosts with different group_names are connected in a single component: {}", fmt::join(groups, ", ")));
+        }
+        auto ungrouped_it = component_ungrouped_hosts.find(root);
+        if (ungrouped_it != component_ungrouped_hosts.end() && !ungrouped_it->second.empty()) {
+            std::vector<std::string> hostnames;
+            hostnames.reserve(ungrouped_it->second.size());
+            for (uint32_t h : ungrouped_it->second) {
+                hostnames.push_back(deployment_hosts[h].hostname);
+            }
+            errors.push_back(fmt::format(
+                "Ungrouped host(s) [{}] are connected to group '{}'",
+                fmt::join(hostnames, ", "),
+                fmt::join(groups, ", ")));
+        }
+    }
+
+    // Invariant 1: every group_name must be confined to a single connected component.
+    for (const auto& [group, roots] : group_components) {
+        if (roots.size() > 1) {
+            std::vector<std::string> hostnames;
+            for (uint32_t h = 0; h < num_hosts; ++h) {
+                if (deployment_hosts[h].group_name == group) {
+                    hostnames.push_back(deployment_hosts[h].hostname);
+                }
+            }
+            errors.push_back(fmt::format(
+                "Group '{}' is not fully connected: its hosts [{}] span {} disconnected components",
+                group,
+                fmt::join(hostnames, ", "),
+                roots.size()));
+        }
+    }
+
+    if (!errors.empty()) {
+        throw std::runtime_error(
+            "Host group_name validation failed:\n  - " + fmt::format("{}", fmt::join(errors, "\n  - ")));
+    }
+}
+
 // Helper function to build factory system descriptor protobuf (shared between emit and generate_string methods)
 static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_system_descriptor(
     const std::vector<Host>& deployment_hosts,
     const std::map<HostId, Node*>& host_id_to_node,
     const std::vector<LogicalChannelConnection>& chip_connections) {
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd;
+
+    // Verify deployment-provided host groups are consistent with the actual connectivity before emitting.
+    validate_host_groups(deployment_hosts, chip_connections);
 
     // Add host information from deployment hosts (indexed by host_id)
     for (const auto& deployment_host : deployment_hosts) {
@@ -1495,6 +1600,7 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
         host->set_rack(deployment_host.rack);
         host->set_shelf_u(deployment_host.shelf_u);
         host->set_motherboard(deployment_host.motherboard);
+        host->set_group_name(deployment_host.group_name);
     }
 
     // Only include board types and connections for hosts present in the deployment.
@@ -1665,6 +1771,7 @@ void CablingGenerator::emit_deployment_descriptor(const std::string& output_path
         proto_host->set_shelf_u(host.shelf_u);
         proto_host->set_node_type(host.node_type);
         proto_host->set_host(host.hostname);
+        proto_host->set_group_name(host.group_name);
     }
 
     std::filesystem::path output_file_path(output_path);

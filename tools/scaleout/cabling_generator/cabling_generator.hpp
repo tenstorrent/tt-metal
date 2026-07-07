@@ -42,10 +42,12 @@ struct Host {
     uint32_t shelf_u = 0;
     std::string motherboard;
     std::string node_type;
+    std::string group_name;
 
     bool operator==(const Host& other) const {
         return hostname == other.hostname && hall == other.hall && aisle == other.aisle && rack == other.rack &&
-               shelf_u == other.shelf_u && motherboard == other.motherboard && node_type == other.node_type;
+               shelf_u == other.shelf_u && motherboard == other.motherboard && node_type == other.node_type &&
+               group_name == other.group_name;
     }
 };
 

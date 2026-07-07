@@ -11,6 +11,7 @@ message Host {
   uint32 shelf_u = 4;
   string node_type = 5;
   string host = 6;
+  string group_name = 7;
 }
 
 // Represents the overall deployment configuration
