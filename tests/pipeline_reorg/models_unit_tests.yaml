@@ -654,7 +654,11 @@
 
 - name: TT-DiT common unit tests, shared amongst all models.
   cmd: |
-    pytest --timeout 10000 models/tt_dit/tests/unit/
+    # Deselect the multi-node topology cases (wh_glx / wh_t3k / bh_glx) that runtime-skip
+    # on bh_quietbox_2 / wh_n150 anyway — ~1100 skips of log spam that push real failures
+    # past GitHub's log-truncation limit (a genuine crash/hang was being hidden). No change
+    # to what actually executes on these SKUs.
+    pytest --timeout 10000 models/tt_dit/tests/unit/ -k "not wh_glx and not wh_t3k and not bh_glx"
   model: dit-common
   skus:
     wh_n150:
@@ -708,7 +712,7 @@
   model: flux.1-schnell
   skus:
     bh_quietbox_2:
-      timeout: 20
+      timeout: 30  # was 20: full Flux pipeline+transformer exceeds 20 min on bh_quietbox_2
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -723,7 +727,7 @@
   model: flux.1-dev
   skus:
     bh_quietbox_2:
-      timeout: 20
+      timeout: 30  # was 20: full Flux pipeline+transformer exceeds 20 min (07-07: 22m50s) on bh_quietbox_2
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
