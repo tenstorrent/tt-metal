@@ -16,6 +16,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapt
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla import (
     DeepSeekV32Adapter,
     GLM51Adapter,
+    GLM52Adapter,
     SparseMLAPrefillAdapter,
 )
 
@@ -26,4 +27,5 @@ __all__ = [
     "SparseMLAPrefillAdapter",
     "DeepSeekV32Adapter",
     "GLM51Adapter",
+    "GLM52Adapter",
 ]

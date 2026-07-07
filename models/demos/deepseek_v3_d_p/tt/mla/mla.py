@@ -12,7 +12,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import NullIndexer, TtIndexer, resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import NullIndexer, ReuseIndexer, TtIndexer, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
@@ -415,6 +415,14 @@ class ttMLA:
             weight_cache_path=self.weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.mla",
         )
+        # GLM-5.2 indexer reuse: a "shared" layer (per config.indexer_types[layer_idx]) is sparse but owns
+        # no indexer weights — it reuses the most recent "full" layer's top-k indices, injected at
+        # forward. It binds a weight-less ReuseIndexer (never computes). Absent indexer_types
+        # (v3.1 / v3.2 / GLM-5.1) every layer is "full" -> current behavior, unchanged.
+        _indexer_types = getattr(config, "indexer_types", None)
+        self._indexer_reuse = (
+            bool(_indexer_types) and layer_idx < len(_indexer_types) and _indexer_types[layer_idx] == "shared"
+        )
         if self._has_indexer:
             # The indexer assumes natural-order SP sharding (contiguous per-chip query blocks: its
             # device RoPE and the indexer_score per-device causal offset both index positions as
@@ -423,28 +431,32 @@ class ttMLA:
             # kv_only (last-layer KV-only fast path) skips Q/SDPA AND the indexer K-cache write, so a
             # sparse decode would read an unpopulated indexer cache. Not implemented — fail at construction.
             assert not self.kv_only, "DSA sparse path does not support kv_only (skips the indexer K-cache write)"
-            # TtIndexer warns (does not raise) if given neither host weights nor a complete cache —
-            # mirroring dense MLA's lenient placeholder load, but loudly. The layer still stays sparse
-            # (binds TtIndexer), so it never silently falls back to dense.
-            self._indexer = TtIndexer(
-                idx_host if idx_host else None,  # None → TtIndexer loads cache-only placeholders
-                config=config,
-                mesh_device=self.mesh_device,
-                sp_axis=self.sp_axis,
-                tp_axis=self.tp_axis,
-                default_compute_kernel_config=self.default_compute_kernel_config,
-                hifi4_fp32_compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
-                weight_cache_path=self.weight_cache_path,
-                layer_idx=self.layer_idx,
-                tt_ccl=self.tt_ccl,
-                ccl_num_links=self.ccl_num_links,
-                ccl_topology=self.ccl_topology,
-                seq_len=seq_len,
-                slot_num=slot_num,
-                is_chunked=is_chunked,
-            )
+            if self._indexer_reuse:
+                self._indexer = ReuseIndexer()  # shared layer: reused indices injected at forward
+            else:
+                # TtIndexer warns (does not raise) if given neither host weights nor a complete cache —
+                # mirroring dense MLA's lenient placeholder load, but loudly. The layer still stays sparse
+                # (binds TtIndexer), so it never silently falls back to dense.
+                self._indexer = TtIndexer(
+                    idx_host if idx_host else None,  # None → TtIndexer loads cache-only placeholders
+                    config=config,
+                    mesh_device=self.mesh_device,
+                    sp_axis=self.sp_axis,
+                    tp_axis=self.tp_axis,
+                    default_compute_kernel_config=self.default_compute_kernel_config,
+                    hifi4_fp32_compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
+                    weight_cache_path=self.weight_cache_path,
+                    layer_idx=self.layer_idx,
+                    tt_ccl=self.tt_ccl,
+                    ccl_num_links=self.ccl_num_links,
+                    ccl_topology=self.ccl_topology,
+                    seq_len=seq_len,
+                    slot_num=slot_num,
+                    is_chunked=is_chunked,
+                )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
+            self._indexer_reuse = False
 
         # Bind the attention core once, by config — sparsity (self._has_indexer) × chunking
         # (self.is_chunked) — exactly as self._apply_rope is bound above. forward() then calls
@@ -981,6 +993,8 @@ class ttMLA:
         cache_user_id: int = 0,
         return_kv_intermediates: bool = False,
         index_kv_cache: Optional[ttnn.Tensor] = None,
+        indexer_indices: Optional[ttnn.Tensor] = None,
+        return_indexer_indices: bool = False,
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, Optional[dict]]":
         if self.kv_only:
             return self._forward_kv_only(
@@ -1031,14 +1045,20 @@ class ttMLA:
         # indexer top-k simply selects all available causal keys, so sparse is numerically equal to dense
         # there.) The indexer's forward also writes its K-cache (a no-op on the dense null-indexer), so no
         # separate warm-up write is needed.
-        indices = self._indexer.forward(
-            hidden_states,
-            qr,
-            seq_len_local,
-            start_pos=kv_actual_isl or 0,
-            rope_tensors=rope_tensors,
-            cache_user_id=cache_user_id,
-            index_kv_cache=index_kv_cache,
+        # GLM-5.2 reuse: a shared layer receives a prior full layer's top-k indices and skips its own
+        # indexer (its ReuseIndexer.forward would raise). Absent injection -> compute as usual.
+        indices = (
+            indexer_indices
+            if indexer_indices is not None
+            else self._indexer.forward(
+                hidden_states,
+                qr,
+                seq_len_local,
+                start_pos=kv_actual_isl or 0,
+                rope_tensors=rope_tensors,
+                cache_user_id=cache_user_id,
+                index_kv_cache=index_kv_cache,
+            )
         )
 
         tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local)
@@ -1065,8 +1085,14 @@ class ttMLA:
 
         out = self._o_proj_epilogue(attn_out, seq_len_local)
         signpost(header="MLA_END")
+        # ``indices`` survives _sparse_mla (it deallocs only re-sharded copies), so it is safe to return
+        # for a "full" layer to hand to downstream "shared" layers (GLM-5.2 reuse).
+        if return_kv_intermediates and return_indexer_indices:
+            return out, kv_intermediates, indices
         if return_kv_intermediates:
             return out, kv_intermediates
+        if return_indexer_indices:
+            return out, indices
         return out
 
     # Attention core variants, one bound to self._attention at construction (sparsity × chunking).

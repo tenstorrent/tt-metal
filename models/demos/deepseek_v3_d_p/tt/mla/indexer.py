@@ -637,6 +637,20 @@ class NullIndexer:
         return None
 
 
+class ReuseIndexer:
+    """GLM-5.2 ``shared`` DSA layer stand-in: owns no indexer weights and never computes. The layer is
+    still sparse (top-k SDPA) but reuses a prior ``full`` layer's top-k indices, injected at
+    ttMLA.forward(indexer_indices=...). forward() is unreachable there (the injected indices short-
+    circuit it); it raises if ever called, so a shared layer missing its reused indices fails loudly
+    instead of silently going dense."""
+
+    def forward(self, *args, **kwargs):
+        raise RuntimeError(
+            "ReuseIndexer.forward called: a GLM-5.2 shared DSA layer must receive reused top-k indices "
+            "via MLA.forward(indexer_indices=...)."
+        )
+
+
 # Back-compat alias; TtIndexer.WEIGHT_NAMES is the single source of truth.
 INDEXER_WEIGHT_NAMES = TtIndexer.WEIGHT_NAMES
 

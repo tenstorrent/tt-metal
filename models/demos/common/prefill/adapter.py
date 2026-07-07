@@ -220,6 +220,7 @@ ADAPTER_PATHS = {
     # no prefill serving runtime wired). See adapters/sparse_mla.py.
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
     "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:GLM51Adapter",
+    "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:GLM52Adapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

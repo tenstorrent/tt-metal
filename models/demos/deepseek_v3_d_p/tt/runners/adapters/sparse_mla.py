@@ -26,6 +26,7 @@ from typing import Callable
 from models.demos.common.prefill.adapter import PrefillRunParams
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
 
 
@@ -112,3 +113,27 @@ class GLM51Adapter(SparseMLAPrefillAdapter):
         from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import glm_hf_config
 
         return glm_hf_config
+
+
+class GLM52Adapter(SparseMLAPrefillAdapter):
+    # --- identity ---
+    name = "glm_5_2"
+    model_config = GLM52Config
+
+    # --- test metadata ---
+    # GLM-5.2 adds cross-layer DSA indexer reuse; geometry otherwise matches 5.1. FP8 repo, mirroring
+    # GLM-5.1 (a bf16 checkout would diverge from an FP8-derived trace).
+    hf_repo_id = "zai-org/GLM-5.2-FP8"
+    env_var = "GLM52_HF_MODEL"
+    mla_ref_cache_env = "GLM52_MLA_REF_CACHE"
+    mla_pcc_threshold = 0.995
+    moe_pcc_threshold = 0.971
+
+    # supports_pretrained stays False until the real-weight path is wired (per-layer indexer weights:
+    # shared layers carry none). Bring-up (sparse-MLA + block) runs on random weights.
+
+    @property
+    def config_builder(self) -> Callable:
+        from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import glm_5_2_hf_config
+
+        return glm_5_2_hf_config

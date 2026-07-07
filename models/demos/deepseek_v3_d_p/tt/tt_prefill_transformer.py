@@ -149,6 +149,11 @@ class TtPrefillTransformer(LightweightModule):
         # instance builds the whole model unchanged.
         self.is_first_rank = is_first_rank
         self.is_last_rank = is_last_rank
+        # GLM-5.2 indexer reuse: global per-layer full/shared map (None on models without it -> every
+        # layer computes its own indexer, i.e. current behavior). first_layer_idx maps this rank's
+        # local layer slice onto the global map.
+        self.first_layer_idx = first_layer_idx
+        self.indexer_types = getattr(config, "indexer_types", None)
 
         if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
             raise ValueError(
@@ -352,9 +357,16 @@ class TtPrefillTransformer(LightweightModule):
             # [1, 1, seq_per_chip, emb_dim/tp]. No embedding on this rank.
             h = token_ids
 
+        # GLM-5.2 reuse: hold the most recent "full" layer's top-k indices and inject them into the
+        # following "shared" layers. reuse=False (no indexer_types) leaves the call + 2-tuple return
+        # exactly as before.
+        reuse = self.indexer_types is not None
+        indexer_indices = None
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
-            h, _ = layer(
+            mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"
+            inject = indexer_indices if (reuse and mode == "shared") else None
+            ret = layer(
                 h,
                 rope_tensors,
                 kvpe_cache,
@@ -366,8 +378,20 @@ class TtPrefillTransformer(LightweightModule):
                 cache_user_id=cache_user_id,
                 actual_isl=actual_isl,
                 padding_side=self.padding_side,
+                indexer_indices=inject,
+                return_indexer_indices=reuse,
             )
+            if reuse:
+                h, _, new_idx = ret
+                if mode == "full":
+                    if indexer_indices is not None:
+                        ttnn.deallocate(indexer_indices)
+                    indexer_indices = new_idx
+            else:
+                h, _ = ret
             signpost(f"forward_layer_{i}_end")
+        if reuse and indexer_indices is not None:
+            ttnn.deallocate(indexer_indices)
             if self.kv_only_last_layer and i == len(self.layers) - 1:
                 # Last layer was kv-only — KV cache filled, migration callback
                 # fired, no hidden state flowing forward. Skip norm + lm_head +

@@ -36,7 +36,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 SPARSE_OUTPUT_PCC = 0.98
 SPARSE_KVPE_PCC = 0.99
-SPARSE_VARIANTS = ["deepseek_v32", "glm_5_1"]
+SPARSE_VARIANTS = ["deepseek_v32", "glm_5_1", "glm_5_2"]
 
 # ---------------------------------------------------------------------------
 # TEST MATRIX — single source of truth (see _sparse_cases for how it expands)
