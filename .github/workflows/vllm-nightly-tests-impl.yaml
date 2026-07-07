@@ -143,7 +143,7 @@ jobs:
               "runner-label": "N150",
               "arch": "arch-wormhole_b0",
               "mesh-device": "N150",
-              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "additional-server-args": "--async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -157,7 +157,7 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 400000000}",
-              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "additional-server-args": "--async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -171,7 +171,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 200000000}",
-              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "additional-server-args": "--async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -185,7 +185,7 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 300000000}",
-              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "additional-server-args": "--async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -560,8 +560,9 @@ jobs:
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
           fi
 
-          # Gemma4 trace-region tuning for this benchmark (random-input-len 100,
-          # single-stream max_num_seqs=1):
+          # Gemma4 trace-region tuning for this benchmark (random-input-len 100;
+          # max_num_seqs left at the vLLM default so the server can batch
+          # concurrent requests rather than serving them one at a time):
           #   * The prefill trace bucket sweep (128..4096) is the dominant trace
           #     consumer — the 4096 bucket alone is ~0.5 GB on 26B-A4B — yet a
           #     100-token prompt only ever replays the 128 bucket. Limit it so the
