@@ -336,11 +336,16 @@ def build_condition_encoder(args: AceStepModelConfig, mesh_device) -> AceStepCon
     )
 
 
-def _text_encoder_layer_config(rl, args, device):
-    """AceStepEncoderLayerConfig for a Qwen3 text-encoder layer (full attention, causal via mask)."""
+def _text_encoder_layer_config(rl, args, device, compute_kernel_config=None):
+    """AceStepEncoderLayerConfig for a Qwen3 text-encoder layer (full attention, causal via mask).
+
+    compute_kernel_config: optional matmul fidelity override (None keeps the attention/MLP HiFi2
+    defaults; the LM planner passes HiFi4+fp32-acc since its fp32 reference rewards higher precision).
+    """
     a = rl.self_attn
     dt = args.weight_dtype
     return AceStepEncoderLayerConfig(
+        compute_kernel_config=compute_kernel_config,
         input_layernorm_weight=lazy_norm(rl.input_layernorm.weight, device, dt),
         post_attention_layernorm_weight=lazy_norm(rl.post_attention_layernorm.weight, device, dt),
         wq=lazy_wT(a.q_proj.weight, device, dt),
@@ -360,7 +365,7 @@ def _text_encoder_layer_config(rl, args, device):
     )
 
 
-def _build_qwen3_encoder(mesh_device, subdir: str, *, dtype=None):
+def _build_qwen3_encoder(mesh_device, subdir: str, *, dtype=None, compute_kernel_config=None):
     """Build a TT AceStepTextEncoder from a causal Qwen3Model checkpoint in the pipeline bundle.
 
     Both the ACE-Step text encoder (Qwen3-Embedding-0.6B) and the 5Hz LM planner
@@ -384,7 +389,10 @@ def _build_qwen3_encoder(mesh_device, subdir: str, *, dtype=None):
     cfg = AceStepTextEncoderConfig(
         embed_tokens=hf_te.embed_tokens.weight.detach(),
         norm_weight=lazy_norm(hf_te.norm.weight, mesh_device, dt),
-        layer_configs=[_text_encoder_layer_config(rl, args, mesh_device) for rl in hf_te.layers],
+        layer_configs=[
+            _text_encoder_layer_config(rl, args, mesh_device, compute_kernel_config=compute_kernel_config)
+            for rl in hf_te.layers
+        ],
         hidden_size=hf_te.config.hidden_size,
         eps=hf_te.config.rms_norm_eps,
     )
@@ -401,8 +409,20 @@ def build_lm_planner(mesh_device, *, dtype=None):
 
     Reuses the exact same Qwen3-encoder path as the text encoder (same layer structure). Returns
     the last_hidden_state model; the tied-embedding LM head (logits) is a separate projection.
+
+    The LM has massive activations (absmax ~200+) that bf16 mis-represents; unlike the DiT (whose
+    reference is bf16-regime), the LM reference is fp32 last_hidden_state, so HiFi4 math fidelity +
+    fp32 accumulate move TOWARD the reference. Applied to every LM layer's matmuls.
     """
-    return _build_qwen3_encoder(mesh_device, "acestep-5Hz-lm-1.7B", dtype=dtype)
+    import ttnn as _ttnn
+
+    ckc = _ttnn.WormholeComputeKernelConfig(
+        math_fidelity=_ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    return _build_qwen3_encoder(mesh_device, "acestep-5Hz-lm-1.7B", dtype=dtype, compute_kernel_config=ckc)
 
 
 def build_vae_decoder(mesh_device, *, dtype=None):

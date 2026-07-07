@@ -27,7 +27,7 @@ from dataclasses import dataclass
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight
-from models.common.modules.mlp.mlp_1d import MLP1D
+from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
 from models.experimental.acestep.tt.attention import AceStepAttention, AceStepAttentionConfig
 
@@ -56,6 +56,10 @@ class AceStepEncoderLayerConfig:
     head_dim: int = 128
     eps: float = 1e-6
     sliding_window: int | None = None
+    # Optional matmul compute-kernel config. None -> attention/MLP use their own defaults (HiFi2).
+    # The LM planner passes HiFi4+fp32-acc here (its fp32 reference rewards higher precision, unlike
+    # the DiT-vs-bf16-reference regime); the text encoder leaves it None (unchanged HiFi2).
+    compute_kernel_config: object | None = None
 
 
 class AceStepEncoderLayer(LightweightModule):
@@ -83,9 +87,23 @@ class AceStepEncoderLayer(LightweightModule):
                 eps=cfg.eps,
                 is_cross_attention=False,
                 sliding_window=cfg.sliding_window,
+                compute_kernel_config=cfg.compute_kernel_config,
             )
         )
-        self.mlp = MLP1D(w1=cfg.w1, w2=cfg.w2, w3=cfg.w3)
+        if cfg.compute_kernel_config is not None:
+            self.mlp = MLP1D.from_config(
+                MLP1DConfig(
+                    w1=cfg.w1,
+                    w2=cfg.w2,
+                    w3=cfg.w3,
+                    ff1_3_compute_kernel_cfg=cfg.compute_kernel_config,
+                    ff2_compute_kernel_cfg=cfg.compute_kernel_config,
+                    decode_ff1_3_compute_kernel_cfg=cfg.compute_kernel_config,
+                    decode_ff2_compute_kernel_cfg=cfg.compute_kernel_config,
+                )
+            )
+        else:
+            self.mlp = MLP1D(w1=cfg.w1, w2=cfg.w2, w3=cfg.w3)
 
     @classmethod
     def from_config(cls, config: AceStepEncoderLayerConfig):
