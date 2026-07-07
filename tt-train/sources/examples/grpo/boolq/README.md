@@ -25,9 +25,9 @@ to the other every step.
 
   rank 0 (TTML)                    rank 1 (TTT)
   ───────────────                   ──────────────
-  ttml.Llama policy                 tt-transformers Transformer
-  GRPOTrainer + optimizer           TttGenerationWorker
-  mesh: [1, N] (DDP)                mesh: [1, 1]
+  ttml.Llama policy                 4x tt-transformers Transformer
+  GRPOTrainer + optimizer           4x TttGenerationWorker
+  mesh: [1, 4] (DDP)                mesh: [1, 4] -> 4x [1, 1] submesh
        │                                ▲
        │  MPIRolloutClient    OP_GENERATE / OP_TRANSFER / OP_SHUTDOWN
        └──────────────► MPI ───────────► MPIRolloutServer
@@ -162,35 +162,44 @@ finally:
 import ttnn
 from utils.mpi_rollout import MPIRolloutServer
 from utils.ttt_generation_worker import TttGenerationWorker
+from utils.weight_bridge import HostWeightBridge
 from utils.llama_ttt_presets import (
     bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad,
 )
 
 ttnn.init_distributed_context()
-mesh_device = ttnn.open_mesh_device(
-    mesh_shape=ttnn.MeshShape(1, 1),
+parent_mesh = ttnn.open_mesh_device(
+    mesh_shape=ttnn.MeshShape(1, 4),
     offset=ttnn.MeshCoordinate(0, 0),
 )
+submeshes = parent_mesh.create_submeshes(ttnn.MeshShape(1, 1))   # four [1, 1] submeshes
 
 stop_token_ids, pad_token_id = llama_stop_and_pad("meta-llama/Llama-3.2-1B-Instruct")
 
-worker = TttGenerationWorker(
-    mesh_device=mesh_device,
-    model_source="meta-llama/Llama-3.2-1B-Instruct",
-    max_batch_size=32,
-    max_seq_len=2048,
-    instruct=True,
-    optimizations=bf16_attn_bfp8_mlp_optimizations,
-    stop_token_ids=stop_token_ids,
-    pad_token_id=pad_token_id,
-    temperature=0.7, top_k=0, top_p=1.0, seed=None,
-)
+workers = [
+    TttGenerationWorker(
+        mesh_device=submesh,
+        model_source="meta-llama/Llama-3.2-1B-Instruct",
+        max_batch_size=32,
+        max_seq_len=2048,
+        instruct=True,
+        optimizations=bf16_attn_bfp8_mlp_optimizations,
+        stop_token_ids=stop_token_ids,
+        pad_token_id=pad_token_id,
+        temperature=0.7, top_k=0, top_p=1.0, seed=None,
+    )
+    for submesh in submeshes
+]
 
+# The bridge replicates each transferred policy onto every submesh.
+bridge = HostWeightBridge.init_receiver(mesh=parent_mesh, peer_rank=0, submeshes=submeshes)
 server = MPIRolloutServer(
     peer_rank=0,
-    device=mesh_device,
-    generate_fn=worker.generate,
-    on_weights_received=worker.update_weights,
+    bridge=bridge,
+    generate_fn=workers[0].generate,          # generation served by submesh 0
+    on_weights_received=lambda per_submesh: [
+        w.update_weights(d) for w, d in zip(workers, per_submesh)
+    ],
 )
 server.serve_forever()                    # blocks until rank 0 sends OP_SHUTDOWN
 ```
@@ -221,9 +230,12 @@ HF_TOKEN=hf_... ./runner.sh
 `runner.sh` invokes `tt-run` with `world_size == 2` and dispatches the
 two ranks into `boolq_training_example.py`. Mesh / DDP configuration
 for the TTML rank is read from
-[`grpo_boolq_llama_2dev_ddp_gas_4.yaml`](../../../../configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_4.yaml)
-(`mesh_shape: [1, 2]`, `enable_ddp: true`). The TTT rank uses a fixed
-`[1, 1]` mesh hardcoded in the entrypoint.
+[`grpo_boolq_llama_4dev_ddp.yaml`](../../../../configs/training_configs/grpo_boolq_llama_4dev_ddp.yaml)
+(`mesh_shape: [1, 4]`, `enable_ddp: true`). The TTT rank opens a
+`[1, 4]` parent mesh and splits it into four `[1, 1]` submeshes (one
+`TttGenerationWorker` each), hardcoded in the entrypoint. The default
+`configurations/local8` bindings pin rank 0 to boards `0,1` and rank 1
+to boards `2,3` — 8 chips total (a T3000-class host).
 
 ### Outputs
 
