@@ -28,7 +28,7 @@ You can delete the repo snapshot and the service keeps running. You cannot delet
 
 | Input | Where to get it | Goes into |
 |---|---|---|
-| Claude Enterprise login | Run `claude` once interactively and log in via your org (SSO) | `~/.claude/.credentials.json` (OAuth, auto-managed) |
+| Long-lived Claude OAuth token | Run `claude setup-token` (requires an active Claude subscription; SSO in browser) | `~/.sdpa-watch/oauth_token` (chmod 600) |
 | GitHub PAT (`ghp_...`, scope `public_repo`) | https://github.com/settings/tokens | `gh auth login --with-token` |
 | Slack incoming webhook URL | https://api.slack.com/apps → existing `sdpa-watch` app → Incoming Webhooks (or create a new app + admin approval) | `~/.sdpa-watch/slack_webhook` (chmod 600) |
 | Path to your tt-metal clone | `pwd` inside the clone | `TT_METAL_DIR=` in `~/.sdpa-watch/config.sh` |
@@ -46,9 +46,10 @@ cp /path/to/tt-metal/.sdpa-watch/{config.sh,watch.sh,agent_prompt.txt,README.md,
 chmod +x ~/.sdpa-watch/watch.sh
 echo '{}' > ~/.sdpa-watch/state.json
 
-# 3. Authenticate claude (Claude Enterprise OAuth) + drop in the 2 secrets
-claude   # run once, log in via your org SSO; writes ~/.claude/.credentials.json
+# 3. Mint a long-lived Claude OAuth token + drop in the 2 secrets
 umask 077
+claude setup-token   # SSO in browser; prints an sk-ant-oat... token
+printf '%s' 'sk-ant-oat-YOUR-TOKEN' > ~/.sdpa-watch/oauth_token   # long-lived, headless auth
 printf 'https://hooks.slack.com/...' > ~/.sdpa-watch/slack_webhook && chmod 600 ~/.sdpa-watch/slack_webhook
 echo 'ghp_YOUR-PAT' | gh auth login --with-token
 
@@ -178,7 +179,7 @@ Edit `MODEL=` in `config.sh`:
 | `~/.sdpa-watch/watch.sh` | The driver. Runs once per tick. |
 | `~/.sdpa-watch/agent_prompt.txt` | Global LLM policy. |
 | `~/.sdpa-watch/state.json` | Per-pipeline cache. |
-| `~/.claude/.credentials.json` | Claude Enterprise OAuth token (auto-managed by `claude`; not under `.sdpa-watch/`). |
+| `~/.sdpa-watch/oauth_token` | Long-lived Claude OAuth token from `claude setup-token` (chmod 600); exported as `CLAUDE_CODE_OAUTH_TOKEN`. |
 | `~/.sdpa-watch/slack_webhook` | Slack webhook URL (chmod 600). |
 | `~/.sdpa-watch/watch.log` | Append-only tick log. |
 | `~/.sdpa-watch/agent_errors.log` | Stderr from `claude -p` (only useful on agent errors). |
@@ -194,7 +195,7 @@ See "Where things live" at the top of this README for the runtime-vs-snapshot di
 |---|---|---|
 | No Slack message at expected time | cron daemon stopped | `service cron status`; `sudo service cron start` |
 | Slack response not "ok" in log | Webhook revoked or rate-limited | Reinstall the app, replace `~/.sdpa-watch/slack_webhook` |
-| Block says `(agent error — see <url>)` | `claude -p` failed | `cat ~/.sdpa-watch/agent_errors.log`. Usually auth: run `env -u ANTHROPIC_API_KEY claude -p <<<hi` to check the Enterprise OAuth token; re-login with `claude` if it 401s. A stale `ANTHROPIC_API_KEY` in the env also 401s (watch.sh unsets it). |
+| `🟡 agent error` block, or `FATAL: OAuth token preflight failed` in `watch.log` | `claude -p` failed, usually auth | `cat ~/.sdpa-watch/agent_errors.log`. Most common: the long-lived token expired/revoked — re-mint with `claude setup-token` and overwrite `~/.sdpa-watch/oauth_token`. Test: `CLAUDE_CODE_OAUTH_TOKEN="$(cat ~/.sdpa-watch/oauth_token)" env -u ANTHROPIC_API_KEY claude -p <<<hi`. NOTE: do **not** rely on `~/.claude/.credentials.json` (interactive `/login`) for cron — that token is ~8h and headless `claude -p` never refreshes it, so ticks fail once it lapses. |
 | `gh: HTTP 401` in `watch.log` | GitHub PAT expired | `gh auth login --with-token` with a fresh PAT (scope `public_repo`) |
 | Same message every tick | Cache is doing its job; nothing changed upstream | Expected. Use `rm state.json` if you want to force fresh. |
 | Digest is huge | Too many pipelines or too many failures listed | Trim `PIPELINES=()` or tighten an in-scope hint |
