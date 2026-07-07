@@ -532,7 +532,7 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
 # Shapes are (N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x) to exercise the mcast/no_mcast
 # factory split, num_out_blocks slicing, single-core, and sub-tile group widths under FP32.
 # ---------------------------------------------------------------------------------------------
-GN_FP32_INTERLEAVED_SHAPES = [
+GN_INTERLEAVED_SHAPES = [
     (1, 320, 32, 32, 16, 1, 1, 8),  # base config (original single-shape test)
     (1, 480, 1, 64, 8, 1, 1, 1),  # single core, last group ends less than max tile span
     (1, 768, 1, 512, 32, 2, 8, 8),  # group channel count less than tile size
@@ -543,7 +543,7 @@ GN_FP32_INTERLEAVED_SHAPES = [
 ]
 
 
-@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_FP32_INTERLEAVED_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_INTERLEAVED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
 def test_group_norm_interleaved_welford_all_config(

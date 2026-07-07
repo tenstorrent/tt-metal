@@ -26,12 +26,12 @@ HEIGHT_SHARDED_SHAPES = [
     (1, 320, 32, 32, 16),
 ]
 
-# FP32 GroupNorm coverage shapes. Interleaved shapes are
+# GroupNorm coverage shapes for the fp32/bf16 all-config tests. Interleaved shapes are
 # (N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x); sharded shapes are
 # (N, C, H, W, num_groups, grid_y, grid_x) where grid_y == 1 is height-sharded and grid_y > 1 is
 # block-sharded. Chosen to cover single-core, sub-tile group widths, batch > 1, and num_out_blocks
-# slicing under FP32 (see also GN_FP32_INTERLEAVED_SHAPES in test_group_norm_DRAM.py).
-GN_FP32_INTERLEAVED_SHAPES = [
+# slicing (see also GN_INTERLEAVED_SHAPES in test_group_norm_DRAM.py).
+GN_INTERLEAVED_SHAPES = [
     (1, 320, 32, 32, 16, 1, 1, 8),  # base config (original single-shape test)
     (1, 480, 1, 64, 8, 1, 1, 1),  # single core, last group ends less than max tile span
     (1, 768, 1, 512, 32, 2, 8, 8),  # group channel count less than tile size
@@ -41,7 +41,7 @@ GN_FP32_INTERLEAVED_SHAPES = [
     (8, 768, 1, 512, 32, 3, 8, 8),  # batch 8 (no multicast), uneven num_out_blocks divisor
 ]
 
-GN_FP32_SHARDED_SHAPES = [
+GN_SHARDED_SHAPES = [
     (1, 320, 32, 32, 16, 1, 8),  # base config (original single-shape test), height-sharded
     (1, 256, 1, 256, 16, 1, 1),  # single core height-sharded, sub-tile group width (16 ch/group)
     (1, 128, 1, 512, 16, 1, 4),  # height-sharded, groups on core fit in less than one tile
@@ -1529,7 +1529,7 @@ def test_group_norm_optional_weight_bias(
 # SrcA and is validation-rejected) and requires fp32_dest_acc_en=True. Shapes cover height-sharded
 # (grid_y == 1) and block-sharded (grid_y > 1) layouts.
 # ---------------------------------------------------------------------------------------------
-@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_FP32_SHARDED_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_SHARDED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
@@ -1615,7 +1615,7 @@ def test_group_norm_sharded_welford_all_config(
 # TF32-limited on biased inputs (the FPU reads x via SrcA at TF32) -- so this test uses unbiased
 # (offset 0) data, matching the LayerNorm legacy fp32 contract.
 # ---------------------------------------------------------------------------------------------
-@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_FP32_SHARDED_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_SHARDED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
 def test_group_norm_sharded_legacy_all_config(device, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x):
@@ -1697,7 +1697,7 @@ def test_group_norm_sharded_legacy_all_config(device, in_dtype, gb_dtype, N, C, 
 # interleaved instead of sharded. Requires fp32_dest_acc_en=True; unbiased data (FPU reads x via
 # SrcA at TF32). Shapes are (N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x) to exercise the
 # mcast/no_mcast factory split, num_out_blocks slicing, single-core, and sub-tile group widths.
-@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_FP32_INTERLEAVED_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_INTERLEAVED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
 def test_group_norm_interleaved_legacy_all_config(
