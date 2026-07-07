@@ -14,7 +14,6 @@
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_halo/neighbor_pad_halo.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_halo/halo_scatter.hpp"
-#include "ttnn/operations/experimental/ccl/neighbor_pad_halo/depth_to_space_pad.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/types.hpp"
@@ -112,45 +111,6 @@ void bind_halo_scatter(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("border_only") = false);
-}
-
-void bind_depth_to_space_pad(nb::module_& mod) {
-    ttnn::bind_function<"depth_to_space_pad", "ttnn.experimental.">(
-        mod,
-        R"doc(
-        Fused depth-to-space + pad for the persistent-padded activation pipeline.
-
-        Takes a conv output [B,T,H,W, p1*p2*p3*C] (channel order p1,p2,p3,C) and writes the
-        depth-to-space result DIRECTLY into a newly-allocated padded buffer
-        [B, T*p1-drop_first, H*p2+2pH, W*p3+2pW, C] interior — no dense depth-to-space intermediate and
-        no separate pad copy. The border is left uninitialized for a later neighbor_pad_halo +
-        halo_scatter(border_only) to fill. Eliminates the upsample-boundary interior copy.
-
-        Args:
-            conv_out (ttnn.Tensor): conv output [B,T,H,W, p1*p2*p3*C] row-major.
-            p1 (int): temporal depth-to-space stride.
-            p2 (int): height depth-to-space stride.
-            p3 (int): width depth-to-space stride.
-            np_padding_h (int): H halo padding per side for the output.
-            np_padding_w (int): W halo padding per side for the output.
-
-        Keyword Args:
-            drop_first (bool): drop first output frame (causal temporal-upsample artifact); needs p1==2.
-            memory_config (ttnn.MemoryConfig, optional): Output memory config.
-
-        Returns:
-            ttnn.Tensor: The padded buffer with the depth-to-space interior written.
-        )doc",
-        &ttnn::experimental::depth_to_space_pad,
-        nb::arg("conv_out"),
-        nb::arg("p1"),
-        nb::arg("p2"),
-        nb::arg("p3"),
-        nb::arg("np_padding_h"),
-        nb::arg("np_padding_w"),
-        nb::kw_only(),
-        nb::arg("drop_first") = false,
-        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

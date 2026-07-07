@@ -20,9 +20,6 @@ target_sources(
         halo_scatter.cpp
         device/halo_scatter_device_operation.cpp
         device/halo_scatter_program_factory.cpp
-        depth_to_space_pad.cpp
-        device/depth_to_space_pad_device_operation.cpp
-        device/depth_to_space_pad_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_neighbor_pad_halo PRIVATE ${FixmeOpIncDirs})
