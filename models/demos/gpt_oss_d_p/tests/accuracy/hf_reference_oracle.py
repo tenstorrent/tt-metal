@@ -154,8 +154,14 @@ def main():
         layer0_attn_input: list[torch.Tensor] = []
         if args.check_kv_rope:
 
-            def _capture_l0_attn_input(module, args):
-                layer0_attn_input.append(args[0].detach().float())
+            def _capture_l0_attn_input(module, args, kwargs=None):
+                if args:
+                    hs = args[0]
+                else:
+                    hs = (kwargs or {}).get("hidden_states")
+                if hs is None:
+                    raise RuntimeError("Could not capture hidden_states from self_attn pre-hook")
+                layer0_attn_input.append(hs.detach().float())
 
             _h0 = model.model.layers[0].self_attn.register_forward_pre_hook(_capture_l0_attn_input)
 
