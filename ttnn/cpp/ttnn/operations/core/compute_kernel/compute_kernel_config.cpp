@@ -109,23 +109,19 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     tt::ARCH arch, const ComputeKernelConfig& config) {
     // The four knobs are common to both generations; select the alternative matching the target arch.
-    auto accumulator_width = config.fp32_dest_acc_en ? tt::tt_metal::experimental::AccumulatorWidth::Wide
-                                                     : tt::tt_metal::experimental::AccumulatorWidth::Standard;
-    auto accumulator_buffering = config.dst_full_sync_en ? tt::tt_metal::experimental::AccumulatorBuffering::MaxCapacity
-                                                         : tt::tt_metal::experimental::AccumulatorBuffering::Pipelined;
     if (arch == tt::ARCH::QUASAR) {
         return tt::tt_metal::experimental::ComputeGen2Config{
             .math_fidelity = config.math_fidelity,
-            .accumulator_width = accumulator_width,
-            .accumulator_buffering = accumulator_buffering,
+            .fp32_dest_acc_en = config.fp32_dest_acc_en,
+            .dst_full_sync_en = config.dst_full_sync_en,
             .math_approx_mode = config.math_approx_mode,
             // Omitted fields use defaults: enable_2x_src_format, unpack_to_dest_en, unpack_to_dest_mode
         };
     }
     return tt::tt_metal::experimental::ComputeGen1Config{
         .math_fidelity = config.math_fidelity,
-        .accumulator_width = accumulator_width,
-        .accumulator_buffering = accumulator_buffering,
+        .fp32_dest_acc_en = config.fp32_dest_acc_en,
+        .dst_full_sync_en = config.dst_full_sync_en,
         .math_approx_mode = config.math_approx_mode,
         // Omitted fields use defaults: bfp8_pack_precise, unpack_to_dest_mode
     };

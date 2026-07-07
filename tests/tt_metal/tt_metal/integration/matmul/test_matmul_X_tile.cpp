@@ -337,18 +337,14 @@ static void matmul_tile_block(
     if (mesh_device->arch() == ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .math_fidelity = cfg.math_fidelity,
-            .accumulator_width =
-                cfg.fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide : experimental::AccumulatorWidth::Standard,
-            .accumulator_buffering = cfg.dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
-                                                          : experimental::AccumulatorBuffering::Pipelined,
+            .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
+            .dst_full_sync_en = cfg.dst_full_sync_en,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
             .math_fidelity = cfg.math_fidelity,
-            .accumulator_width =
-                cfg.fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide : experimental::AccumulatorWidth::Standard,
-            .accumulator_buffering = cfg.dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
-                                                          : experimental::AccumulatorBuffering::Pipelined,
+            .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
+            .dst_full_sync_en = cfg.dst_full_sync_en,
         };
     }
     experimental::KernelSpec compute_spec{

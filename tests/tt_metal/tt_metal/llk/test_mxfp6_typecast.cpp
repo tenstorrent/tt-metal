@@ -140,8 +140,7 @@ static vector<uint32_t> run_mxfp6_typecast(
         .hw_config =
             experimental::ComputeHardwareConfig{
                 experimental::ComputeGen2Config{
-                    .accumulator_width = fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide
-                                                          : experimental::AccumulatorWidth::Standard,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
                 },
             },
     };

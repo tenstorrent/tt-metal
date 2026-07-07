@@ -428,19 +428,15 @@ void run_single_core_reduce_program(
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .math_fidelity = test_config.math_fidelity,
-            .accumulator_width = test_config.fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide
-                                                              : experimental::AccumulatorWidth::Standard,
-            .accumulator_buffering = test_config.dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
-                                                                  : experimental::AccumulatorBuffering::Pipelined,
+            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
             .enable_2x_src_format = test_config.enable_2x_src_format,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
             .math_fidelity = test_config.math_fidelity,
-            .accumulator_width = test_config.fp32_dest_acc_en ? experimental::AccumulatorWidth::Wide
-                                                              : experimental::AccumulatorWidth::Standard,
-            .accumulator_buffering = test_config.dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
-                                                                  : experimental::AccumulatorBuffering::Pipelined,
+            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
         };
     }
     experimental::KernelSpec compute_spec{

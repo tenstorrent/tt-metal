@@ -730,22 +730,16 @@ std::vector<uint32_t> run_sfpu_pipeline(
             : experimental::ComputeUnpackToDestModes{};
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .accumulator_width = (test_config.en_32bit_dest || test_config.unpack_to_dest_fp32)
-                                     ? experimental::AccumulatorWidth::Wide
-                                     : experimental::AccumulatorWidth::Standard,
-            .accumulator_buffering = test_config.dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
-                                                                  : experimental::AccumulatorBuffering::Pipelined,
+            .fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
             .math_approx_mode = test_config.approx_mode,
             .unpack_to_dest_en = test_config.unpack_to_dest_fp32 || test_config.unpack_to_dest_en,
             .unpack_to_dest_mode = unpack_modes,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .accumulator_width = (test_config.en_32bit_dest || test_config.unpack_to_dest_fp32)
-                                     ? experimental::AccumulatorWidth::Wide
-                                     : experimental::AccumulatorWidth::Standard,
-            .accumulator_buffering = test_config.dst_full_sync_en ? experimental::AccumulatorBuffering::MaxCapacity
-                                                                  : experimental::AccumulatorBuffering::Pipelined,
+            .fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
             .math_approx_mode = test_config.approx_mode,
             .unpack_to_dest_mode = unpack_modes,
         };
@@ -1048,14 +1042,12 @@ bool run_sfpu_binary_two_input_buffer(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .accumulator_width =
-                is_int8_op ? experimental::AccumulatorWidth::Wide : experimental::AccumulatorWidth::Standard,
+            .fp32_dest_acc_en = is_int8_op,
             .math_approx_mode = test_config.approx_mode,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .accumulator_width =
-                is_int8_op ? experimental::AccumulatorWidth::Wide : experimental::AccumulatorWidth::Standard,
+            .fp32_dest_acc_en = is_int8_op,
             .math_approx_mode = test_config.approx_mode,
         };
     }
