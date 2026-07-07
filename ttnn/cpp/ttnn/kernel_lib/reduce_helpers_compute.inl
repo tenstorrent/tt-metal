@@ -25,7 +25,7 @@ namespace compute_kernel_lib {
 
 namespace detail {
 
-// SFPU MAX fold (also used by reduce_{h,w}_neg for -MAX(-x) MIN).
+// SFPU MAX fold
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_init() {
     static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
@@ -36,6 +36,19 @@ template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
     binary_max_int32_tile(a, b, out);
+}
+
+// SFPU MIN fold
+template <DataFormat format>
+ALWI void sfpu_reduce_min_fold_init() {
+    static_assert(format == DataFormat::Int32, "SFPU reduce MIN fold: Int32 only");
+    binary_min_int32_tile_init();
+}
+
+template <DataFormat format>
+ALWI void sfpu_reduce_min_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
+    static_assert(format == DataFormat::Int32, "SFPU reduce MIN fold: Int32 only");
+    binary_min_int32_tile(a, b, out);
 }
 
 // SFPU cross-tile add. Int32 uses add_int_tile; Float32 uses add_binary_tile for
@@ -67,19 +80,21 @@ ALWI void sfpu_reduce_sum_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     }
 }
 
-// Pool-type dispatched cross-tile fold init (MAX -> binary_max, SUM -> add_int).
-// Used only by compute_kernel_lib::reduce(); the _neg kernels call the MAX fold directly.
+// Pool-type dispatched cross-tile fold init (MAX -> binary_max, MIN -> binary_min, SUM -> add_int).
+// Used by compute_kernel_lib::reduce() for the Int32 SFPU path.
 template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_fold_init() {
     if constexpr (pool_type == PoolType::SUM) {
         sfpu_reduce_sum_fold_init<format>();
+    } else if constexpr (pool_type == PoolType::MIN) {
+        sfpu_reduce_min_fold_init<format>();
     } else {
         sfpu_reduce_max_fold_init<format>();
     }
 }
 
 // Copy one input tile into DST and fold into the running accumulator (first tile seeds dst_idx
-// directly). Fold op is selected by pool_type: MAX -> running max, SUM -> running sum.
+// directly). Fold op is selected by pool_type: MAX -> running max, MIN -> running min, SUM -> running sum.
 template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_copy_and_fold(
     uint32_t input_cb_id, uint32_t tile_idx, uint32_t dst_idx, uint32_t work_dst, bool is_first_tile) {
@@ -89,6 +104,8 @@ ALWI void sfpu_copy_and_fold(
         copy_tile(input_cb_id, tile_idx, work_dst);
         if constexpr (pool_type == PoolType::SUM) {
             sfpu_reduce_sum_fold_tile<format>(dst_idx, work_dst, dst_idx);
+        } else if constexpr (pool_type == PoolType::MIN) {
+            sfpu_reduce_min_fold_tile<format>(dst_idx, work_dst, dst_idx);
         } else {
             sfpu_reduce_max_fold_tile<format>(dst_idx, work_dst, dst_idx);
         }

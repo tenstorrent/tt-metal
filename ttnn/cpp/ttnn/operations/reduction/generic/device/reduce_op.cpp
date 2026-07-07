@@ -29,6 +29,7 @@ std::map<std::string, std::string> get_defines(
     }
     switch (reduce_op) {
         case tt::tt_metal::ReduceOpMath::MAX: defines["REDUCE_OP"] = "ckernel::PoolType::MAX"; break;
+        case tt::tt_metal::ReduceOpMath::MIN: defines["REDUCE_OP"] = "ckernel::PoolType::MIN"; break;
         case tt::tt_metal::ReduceOpMath::AVG: defines["REDUCE_OP"] = "ckernel::PoolType::AVG"; break;
         default: defines["REDUCE_OP"] = "ckernel::PoolType::SUM"; break;
     }
@@ -86,7 +87,7 @@ Tensor reduce(
     bool negate,
     bool use_row_major_support,
     bool fast_and_approximate_mode) {
-    if (reduce_math == tt::tt_metal::ReduceOpMath::MIN) {
+    if (reduce_math == tt::tt_metal::ReduceOpMath::MIN && input_tensor.dtype() != tt::tt_metal::DataType::INT32) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
     }
 
@@ -204,13 +205,14 @@ Tensor reduce(
     //
     // INT32 SFPU reduce has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
     // W-then-H. Float32 max HW can use single-core REDUCE_SCALAR (FPU) when num_tiles == 1;
-    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to MAX/SUM and MIN (MIN via negate).
+    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to Int32 MAX/SUM/MIN.
     // The accurate fp32 SFPU mean (AVG) likewise has no SFPU REDUCE_SCALAR, so it must decompose HW
     // into W-then-H regardless of tile count; forcing the two-step keeps it off the single-core path.
     const bool use_two_step_hw_sfpu_reduce =
         (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
         ((tilized_input.dtype() == tt::tt_metal::DataType::INT32 &&
-          (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM)) ||
+          (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
+           reduce_math == tt::tt_metal::ReduceOpMath::MIN)) ||
          use_sfpu_fp32_mean);
 
     if (is_multicore_hw || use_two_step_hw_sfpu_reduce ||
