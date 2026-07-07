@@ -73,12 +73,13 @@ def _sp_shard_embed(mesh, model, padded_ids, sp, isl_per_row):
     return emb
 
 
-def _gather_kv_cache(cache_tensor, mesh, real_len):
+def _gather_kv_cache(cache_tensor, mesh, real_len, isl_per_row):
     """Read K or V cache back to CPU as float32 [num_kv_heads, real_len, head_dim].
 
-    The cache is TP-sharded: column i holds heads [i*local_kv_heads, (i+1)*local_kv_heads).
-    All mesh rows hold identical copies for non-users_row_sharded caches (batch=1), so we
-    read only row-0 and concatenate along the heads dim (dim 1).
+    TP-sharded: column j holds heads [j*local_kv_heads, (j+1)*local_kv_heads).
+    SP-sharded: each row r independently filled positions 0..isl_per_row-1 with its
+    shard of the sequence (fill_cache always writes starting at position 0 locally).
+    Row r's shard corresponds to global positions [r*isl_per_row, (r+1)*isl_per_row).
 
     cache_tensor per device shape: [batch, local_kv_heads, max_seq_len, head_dim]
     """
@@ -86,10 +87,15 @@ def _gather_kv_cache(cache_tensor, mesh, real_len):
     device_tensors = ttnn.get_device_tensors(cache_tensor)
     col_slices = []
     for col in range(tp):
-        t = ttnn.to_torch(device_tensors[col]).float()  # [batch, local_kv_heads, max_seq, head_dim]
-        col_slices.append(t[0])  # [local_kv_heads, max_seq, head_dim]
-    full = torch.cat(col_slices, dim=0)  # [num_kv_heads, max_seq, head_dim]
-    return full[:, :real_len, :]  # [num_kv_heads, real_len, head_dim]
+        row_shards = []
+        for row in range(sp):
+            shard_len = min(isl_per_row, max(0, real_len - row * isl_per_row))
+            if shard_len == 0:
+                break
+            t = ttnn.to_torch(device_tensors[row * tp + col]).float()
+            row_shards.append(t[0, :, :shard_len, :])  # [local_kv_heads, shard_len, head_dim]
+        col_slices.append(torch.cat(row_shards, dim=1))  # [local_kv_heads, real_len, head_dim]
+    return torch.cat(col_slices, dim=0)  # [num_kv_heads, real_len, head_dim]
 
 
 def main():
