@@ -287,7 +287,8 @@ void kernel_main() {
         dfb_ex_global.wait_front(2 * num_groups);
         dfb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
-        // fp32: reset SrcA to cb_ex_global (bf16 var) else the fp32-configured SrcA misreads it; no-op for bf16.
+        // fp32: cb_ex_global is fp32 (var), cb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
+        // Reset both srcs so they match the operands read below. no-op for bf16.
         reconfig_data_format_srca(dfb_ex_global_id);
         reconfig_data_format_srcb(dfb_eps_id);
         add_tiles_init(dfb_ex_global_id, dfb_eps_id);
@@ -441,6 +442,8 @@ void kernel_main() {
                 ++tile_id;
 
                 if constexpr (do_gamma) {
+                    // fp32: reset SrcA to cb_x (fp32); no-op for bf16.
+                    reconfig_data_format_srca(dfb_x_id);
                     reconfig_data_format_srcb(dfb_xmm_id, dfb_gamma_id);
                     mul_bcast_rows_init_short(dfb_x_id, dfb_gamma_id);
 
@@ -457,6 +460,8 @@ void kernel_main() {
                 }
 
                 if constexpr (do_beta) {
+                    // fp32: reset SrcA to cb_x (fp32); no-op for bf16.
+                    reconfig_data_format_srca(dfb_x_id);
                     reconfig_data_format_srcb(do_gamma ? dfb_gamma_id : dfb_xmm_id, dfb_beta_id);
                     add_bcast_rows_init_short(dfb_x_id, dfb_beta_id);
 
@@ -473,6 +478,8 @@ void kernel_main() {
                 }
 
                 // Write out the final output
+                // fp32: reset SrcA to cb_x (fp32); no-op for bf16.
+                reconfig_data_format_srca(dfb_x_id);
                 reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
                 copy_tile_init(dfb_x_id);
 
