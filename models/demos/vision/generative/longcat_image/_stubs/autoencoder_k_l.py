@@ -64,12 +64,33 @@ class _AutoencoderKL:
         # 4-pass decomposition — more accurate than native fp32 weights on WH),
         # but fp32 conv OUTPUT so the residual stream never suffers per-layer
         # bf16 truncation. fp32-accumulate compute config throughout.
-        key = id(tm)
+        # Pre-PREPARE (tilize/reformat) the conv weights ONCE and cache them, so
+        # the traced forward calls conv2d with already-prepared weights and does
+        # NO host->device write inside begin/end_trace_capture. Passing a raw
+        # ROW_MAJOR weight makes conv2d re-prepare (and write) on every call,
+        # which trips "TT_FATAL: Writes are not supported during trace capture"
+        # in the VAE-decode stage. Keyed by (module, input geometry) because the
+        # prepared layout depends on input_height/width/memory_config/dtype.
+        cfg = ttnn.Conv2dConfig(weights_dtype=BF16)
+        ck = self._ck()
+        key = (id(tm), int(h), int(w))
         if key not in self._cw:
-            self._cw[key] = (
-                ttnn.from_torch(tm.weight.detach().to(torch.bfloat16), dtype=BF16, layout=RM),
-                ttnn.from_torch(tm.bias.detach().reshape(1, 1, 1, out_ch).to(torch.bfloat16), dtype=BF16, layout=RM),
+            w_raw = ttnn.from_torch(tm.weight.detach().to(torch.bfloat16), dtype=BF16, layout=RM)
+            b_raw = ttnn.from_torch(tm.bias.detach().reshape(1, 1, 1, out_ch).to(torch.bfloat16), dtype=BF16, layout=RM)
+            pw = ttnn.prepare_conv_weights(
+                weight_tensor=w_raw, input_memory_config=x.memory_config(), input_layout=x.layout,
+                weights_format="OIHW", in_channels=in_ch, out_channels=out_ch, batch_size=1,
+                input_height=h, input_width=w, kernel_size=(k, k), stride=(s, s), padding=pad,
+                dilation=(1, 1), has_bias=True, groups=1, input_dtype=x.dtype, device=self.device,
+                conv_config=cfg, compute_config=ck,
             )
+            pb = ttnn.prepare_conv_bias(
+                bias_tensor=b_raw, input_memory_config=x.memory_config(), input_layout=x.layout,
+                in_channels=in_ch, out_channels=out_ch, batch_size=1, input_height=h, input_width=w,
+                kernel_size=(k, k), stride=(s, s), padding=pad, dilation=(1, 1), groups=1,
+                input_dtype=x.dtype, device=self.device, conv_config=cfg, compute_config=ck,
+            )
+            self._cw[key] = (pw, pb)
         wt, bt = self._cw[key]
         return ttnn.conv2d(
             input_tensor=x,
@@ -86,8 +107,8 @@ class _AutoencoderKL:
             padding=pad,
             dilation=(1, 1),
             groups=1,
-            conv_config=ttnn.Conv2dConfig(weights_dtype=BF16),
-            compute_config=self._ck(),
+            conv_config=cfg,
+            compute_config=ck,
             dtype=F32,
             memory_config=DRAM,
         )

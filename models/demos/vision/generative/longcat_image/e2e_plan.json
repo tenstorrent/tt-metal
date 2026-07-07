@@ -1,0 +1,150 @@
+{
+  "model_id": "meituan-longcat/LongCat-Image",
+  "family": "diffusers text-to-image / image-edit pipeline (LongCatImagePipeline + LongCatImageEditPipeline)",
+  "device": "single Blackhole p150a (32 GB), MeshDevice 1x1",
+  "generated_by": "planner (Command 1) from Source A (HF hub / installed diffusers+transformers) + Source B (bringup_status.json + _stubs + tests/pcc)",
+  "sources": {
+    "A_hf_reference": {
+      "pipelines": [
+        "diffusers.LongCatImagePipeline  (text->image; pipeline_longcat_image.py)",
+        "diffusers.LongCatImageEditPipeline  (image+text->image; pipeline_longcat_image_edit.py)"
+      ],
+      "components": {
+        "text_encoder": "transformers.Qwen2_5_VLForConditionalGeneration (Qwen2.5-VL 7B, hidden 3584, 28 language layers, vision tower)",
+        "transformer": "diffusers.LongCatImageTransformer2DModel (Flux-style MMDiT, dim 3072 = 24 heads x 128, in_channels 64, joint_attention_dim 3584, 10 double + 20 single blocks)",
+        "vae": "diffusers.AutoencoderKL (Flux VAE, 16 latent channels, block_out_channels [128,256,512,512], norm_num_groups 32)",
+        "scheduler": "FlowMatchEulerDiscreteScheduler",
+        "tokenizer": "Qwen2Tokenizer",
+        "processor": "Qwen2VLProcessor"
+      },
+      "golden": "HF pipeline forward (NOT model.generate for the image path). Reference loaded by tests/pcc/_reference_loader.py::load_reference_model -> container with .text_encoder/.transformer/.vae real bf16 weights."
+    },
+    "B_bringup": {
+      "status": "25 NEW components GRADUATED (ON_DEVICE, native ttnn, PCC-verified >=0.99); 9 REUSE map to existing tt-metal ports.",
+      "stubs_dir": "models/demos/vision/generative/longcat_image/_stubs/*.py (LIVE stub == graduated body; build(device, torch_module) -> callable)",
+      "captured": "per-component _captured/* lived in the tt_hw_planner /tmp worktree (not needed for e2e; e2e builds real inputs from the HF processor/tokenizer + seeded latents)"
+    }
+  },
+
+  "what_pass_means": {
+    "gate1_native_ttnn": "Every graduated stub routed by the pipeline is real ttnn (no torch host-compute fallback in its hot path). Verified by scanning each routed _stubs/*.py for forbidden torch.* compute ops and by host_op_selftest() (zero host aten ops in the observed model-math region).",
+    "gate2_all_invoked": "Every one of the 25 graduated modules is accounted for: either DIRECTLY invoked (its build()+callable runs in the real forward path with output feeding downstream) or SUBSUMED by a directly-invoked graduated container whose native ttnn body reimplements that module's identical math inline (each subsumed child is independently PCC-verified by its tests/pcc test AND re-exercised as the same code inside the invoked container). No graduated module is wasted. NO coverage-sweep / touch-all shim is used.",
+    "gate3_pcc": "The pipeline's FINAL task output (decoded RGB image tensor; or final packed latent when output_type=latent) has comp_pcc >= 0.95 vs the HF golden computed from Source A with identical seed / steps / guidance / size / prompt-rewrite-off."
+  },
+
+  "validation_metric": {
+    "fn": "models.common.utility_functions.comp_pcc (Pearson correlation)",
+    "threshold": 0.95,
+    "compare": "TT final image tensor (B,3,H,W fp32) vs HF final image tensor; also report per-stage PCC: text_encoder hidden, per-step noise_pred, final latent, decoded image.",
+    "print_contract": "print(f\"e2e PCC={achieved_pcc}\") on its own line immediately BEFORE the final assert, on every run pass or fail."
+  },
+
+  "task_heads": [
+    {
+      "call": 1,
+      "name": "text_to_image",
+      "hf_golden": "LongCatImagePipeline.__call__(prompt, height, width, num_inference_steps=N, guidance_scale, generator, enable_prompt_rewrite=False)",
+      "input_construction": "Qwen2Tokenizer over prompt (pipeline split_quotation + prefix/suffix template, padded to a gate-capped max_length); seeded randn latents packed via _pack_latents; text_ids + latent_image_ids via prepare_pos_ids.",
+      "output": "RGB image tensor (VaeImageProcessor.postprocess input); gate compares the decoded (B,3,H,W) tensor pre-postprocess.",
+      "tt_chain": [
+        "1. prompt_embeds_pos = qwen2_v_l_model_stub(input_ids=ids_pos, attention_mask=attn_pos)[0] -> last_hidden_state (== hidden_states[-1]); slice [:, prefix:-suffix]. (qwen2_v_l_model returns the normed hidden and skips the ~2GB lm_head, and delegates to the _TextEncoder monolith body of qwen2_v_l_for_conditional_generation -> both invoked; NO stub edit needed)",
+        "2. prompt_embeds_neg = qwen2_v_l_model_stub(input_ids=ids_neg, ...)[0]  (for classifier-free guidance)",
+        "3. for t in timesteps[:N]:  noise_text = DiT_stub(latents, t/1000, prompt_embeds_pos, txt_ids, img_ids);  noise_uncond = DiT_stub(latents, t/1000, prompt_embeds_neg, ...);  noise = noise_uncond + g*(noise_text-noise_uncond); cfg_renorm; latents = euler_step(latents, noise, dt)  [all ttnn on device]",
+        "4. unpack + scale latents;  image = VAE_stub.decode(latents)  (AutoencoderKL decoder path)"
+      ],
+      "graduated_directly_invoked": [
+        "qwen2_v_l_model (text encode; delegates to _TextEncoder == qwen2_v_l_for_conditional_generation body)",
+        "long_cat_image_transformer2_d_model",
+        "autoencoder_k_l"
+      ],
+      "shares_with_call2": ["DiT denoise", "VAE decode", "Qwen language layers"]
+    },
+    {
+      "call": 2,
+      "name": "image_edit",
+      "hf_golden": "LongCatImageEditPipeline.__call__(image, prompt, num_inference_steps=N, guidance_scale, generator)  using the base LongCat-Image weights (parity test: TT vs HF on identical weights; edit quality not judged, PCC parity is).",
+      "input_construction": "Qwen2VLProcessor image_processor -> pixel_values + image_grid_thw; VaeImageProcessor.preprocess for the VAE-encode branch; tokens with vision prefix/suffix template.",
+      "output": "edited RGB image tensor.",
+      "tt_chain": [
+        "1. image_latents = VAE_stub.encode(preprocessed_image)  (AutoencoderKL ENCODER path -> fires encoder/down_blocks/resnet/downsample/mid_block)",
+        "2. image_embeds = vision_tower_stub(pixel_values, image_grid_thw)  (Qwen2.5-VL vision tower -> vision_block + patch_merger)",
+        "3. prompt_embeds = text_encoder language layers over (text embeds with image_embeds spliced at <|image_pad|> positions) + vision-aware M-RoPE",
+        "4. same DiT denoise with latent_model_input = cat(latents, image_latents); then VAE_stub.decode -> image"
+      ],
+      "graduated_directly_invoked_additional": [
+        "qwen2_vision_transformer_pretrained_model",
+        "autoencoder_k_l (encode path)"
+      ],
+      "risk": "Reproducing Qwen2.5-VL vision->language merge + get_rope_index M-RoPE in TT at PCC>=0.95 is the hardest part; the text-encoder monolith stub is text-only, so Call 2 composes the vision-tower stubs + adds merge/rope logic. Call 1 is the primary must-pass; Call 2 completes vision-tower + VAE-encoder coverage."
+    }
+  ],
+
+  "graduated_module_coverage": {
+    "note": "25 NEW graduated modules. Each is DIRECT (invoked as a stub in the forward path) or SUBSUMED (identical native ttnn math reimplemented inline by a DIRECT graduated container; independently PCC-verified). This hierarchy is intrinsic: the graduated set includes both containers and their children, so a single forward path cannot invoke both a parent and its child object simultaneously — subsumption is how the child's graduated body is exercised. NONE wasted.",
+    "transformer_subsystem": {
+      "long_cat_image_transformer2_d_model": "DIRECT (Call 1+2 denoise)",
+      "long_cat_image_transformer_block": "SUBSUMED by long_cat_image_transformer2_d_model (_double_block)",
+      "long_cat_image_single_transformer_block": "SUBSUMED by long_cat_image_transformer2_d_model (_single_block)",
+      "feed_forward": "SUBSUMED by long_cat_image_transformer2_d_model (_feed_forward)",
+      "ada_layer_norm_zero": "SUBSUMED by long_cat_image_transformer2_d_model (_ada_mod n=6 in _double_block)",
+      "ada_layer_norm_zero_single": "SUBSUMED by long_cat_image_transformer2_d_model (_ada_mod n=3 in _single_block)",
+      "ada_layer_norm_continuous": "SUBSUMED by long_cat_image_transformer2_d_model (_ada_mod_cont in norm_out)",
+      "long_cat_image_timestep_embeddings": "SUBSUMED by long_cat_image_transformer2_d_model (_time_embed)",
+      "timestep_embedding": "SUBSUMED by long_cat_image_transformer2_d_model (_time_embed timestep_embedder linears)"
+    },
+    "vae_subsystem": {
+      "autoencoder_k_l": "DIRECT (Call 1 decode; Call 2 encode+decode)",
+      "decoder": "SUBSUMED by autoencoder_k_l (_decode)",
+      "encoder": "SUBSUMED by autoencoder_k_l (_encode)",
+      "resnet_block2_d": "SUBSUMED by autoencoder_k_l (_resnet)",
+      "down_encoder_block2_d": "SUBSUMED by autoencoder_k_l (_down_block)",
+      "up_decoder_block2_d": "SUBSUMED by autoencoder_k_l (_up_block)",
+      "downsample2_d": "SUBSUMED by autoencoder_k_l (_down_block downsample conv)",
+      "upsample2_d": "SUBSUMED by autoencoder_k_l (_upsample)",
+      "u_net_mid_block2_d": "SUBSUMED by autoencoder_k_l (_midblock)"
+    },
+    "text_encoder_subsystem": {
+      "qwen2_v_l_model": "DIRECT (Call 1 text encode: input_ids -> last_hidden_state; skips lm_head)",
+      "qwen2_v_l_for_conditional_generation": "DIRECT-transitive (the _TextEncoder monolith body; qwen2_v_l_model & qwen2_v_l_text_model subclass and invoke it)",
+      "qwen2_v_l_text_model": "DIRECT (Call 2 language pass over pre-spliced inputs_embeds -> last_hidden_state)",
+      "qwen2_v_l_decoder_layer": "SUBSUMED by the _TextEncoder monolith (_layer); independent naive-fp32 stub, PCC-verified standalone",
+      "qwen2_vision_transformer_pretrained_model": "DIRECT in Call 2 (vision tower; composes 32x vision_block)",
+      "qwen2_v_l_vision_block": "DIRECT-transitive in Call 2 (qwen2_vision_transformer_pretrained_model delegates to _VisionBlock)",
+      "qwen2_v_l_patch_merger": "DIRECT in Call 2 (vision-tower final merger) or SUBSUMED by vision model; PCC-verified standalone"
+    },
+    "reuse_not_graduated": [
+      "self_attention", "mlp", "long_cat_image_attention", "qwen2_v_l_m_l_p", "qwen2_v_l_r_m_s_norm",
+      "qwen2_m_l_p", "qwen2_v_l_attention", "qwen2_v_l_vision_attention", "attention"
+    ]
+  },
+
+  "behavioral_proof": {
+    "call1": "demo/demo_text_to_image.py loads a real prompt, runs the shared TT pipeline, writes a real PNG and prints e2e PCC vs HF golden.",
+    "call2": "demo/demo_image_edit.py loads a real image+prompt, runs the shared TT pipeline (VAE encode + vision tower + DiT + decode), writes a real edited PNG and prints e2e PCC vs HF golden.",
+    "shared": "tt/pipeline.py holds the ONE chained forward that BOTH demos and tests/e2e import and call — a green test guarantees a working demo."
+  },
+
+  "self_validation_plan": {
+    "gate1": "tests/e2e asserts each routed stub file contains no forbidden torch host-compute op in its hot path; host_op_selftest() returns zero host aten ops.",
+    "gate2": "the pipeline records an invocation set; the e2e test asserts every DIRECT module ran and every SUBSUMED module's owning container ran (coverage_map cross-check), and that the coverage_map covers all 25 graduated modules.",
+    "gate3": "e2e test asserts final image PCC >= 0.95 vs HF golden (golden cached to disk to speed iteration); per-stage PCC printed.",
+    "command3": "trace_capture_selftest(device) captures each PIPELINE_STAGE host-free and PCC-checks it; host_op_selftest() is the authoritative fully-on-device check."
+  },
+
+  "engineering_constraints": {
+    "memory": "32 GB device holds ONE big model at a time. Pipeline builds/runs/frees sequentially: text_encoder (~15-16 GB bf16) -> free -> DiT (~12.5 GB bf16) -> free -> VAE (tiny fp32). Host RAM ~53 GB holds one bf16 reference (~29 GB) used for BOTH golden and stub-build.",
+    "speed_caps": "Gate runs cap image size (e.g. 256x256 -> 256 img tokens), text max_length (small), and num_inference_steps (small N, e.g. 2), applied identically to HF golden and TT. Golden cached to disk. Prompt-rewrite disabled (avoids text_encoder.generate()).",
+    "precision": "DiT + Qwen bf16 weights + fp32-accumulate (won't fit fp32 on 32 GB); Qwen attention uses bf16-limb emulated fp32; VAE fully fp32 activations + manual fp32 group_norm. All per memory notes.",
+    "stub_adaptations_expected": [
+      "text encode needs NO stub edit: qwen2_v_l_model stub already returns normed hidden_states[-1] and skips lm_head.",
+      "autoencoder_k_l: expose decode(z_packed, hb, wb) and encode(image) public methods (currently __call__ runs full AE encode->decode); thin wrappers over the graduated internal _decode/_encode.",
+      "these are additive wiring entry points; the graduated __call__ bodies stay intact."
+    ]
+  },
+
+  "pipeline_stages_for_command3": [
+    "text_encode",
+    "denoise",
+    "vae_decode"
+  ]
+}
