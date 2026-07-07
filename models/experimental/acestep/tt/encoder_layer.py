@@ -69,9 +69,17 @@ class AceStepEncoderLayer(LightweightModule):
         self.config = config
         cfg = config
 
-        self.input_layernorm = RMSNorm1D.from_config(RMSNorm1DConfig(weight=cfg.input_layernorm_weight, eps=cfg.eps))
+        self.input_layernorm = RMSNorm1D.from_config(
+            RMSNorm1DConfig(
+                weight=cfg.input_layernorm_weight, eps=cfg.eps, compute_kernel_config=cfg.compute_kernel_config
+            )
+        )
         self.post_attention_layernorm = RMSNorm1D.from_config(
-            RMSNorm1DConfig(weight=cfg.post_attention_layernorm_weight, eps=cfg.eps)
+            RMSNorm1DConfig(
+                weight=cfg.post_attention_layernorm_weight,
+                eps=cfg.eps,
+                compute_kernel_config=cfg.compute_kernel_config,
+            )
         )
         self.self_attn = AceStepAttention(
             AceStepAttentionConfig(
