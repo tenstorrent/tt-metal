@@ -840,6 +840,7 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     target.extra_link_objs = extra_link_objs_;
     target.firmware_is_kernel_object = firmware_is_kernel_object_;
     target.weakened_firmware_name = fs::path(weakened_firmware_name_).filename().string();
+    target.build_state_hash = build_state_hash_;
 
     for (const auto& src : srcs_) {
         target.srcs.push_back(src);

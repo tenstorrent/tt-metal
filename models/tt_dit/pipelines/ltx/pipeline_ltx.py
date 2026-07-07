@@ -440,7 +440,50 @@ class LTXPipeline:
             if (run_warmup or traced) and valid_shape and not audio_only:
                 if traced and not run_warmup:
                     logger.info("traced=True: forcing warmup (trace capture requires precompiled kernels)")
-                self.warmup_buffers(num_frames=num_frames, height=height, width=width)
+                # In-process cold-start: on a cold build_key, run one capture-only warmup to record the
+                # kernel manifest (genfiles only, no gcc, no dispatch), batch-compile it off-device
+                # in-process, then let the real warmup below hit a warm cache -- so the reserved window
+                # never holds the device for the ~500s op-by-op compile. Warm build_keys (in-run prewarm
+                # already handling them) skip straight to the real warmup. Tracing is suppressed for the
+                # capture pass: capture-only skips dispatch, so trace capture must wait for the real pass.
+                _kp = ttnn._ttnn.device
+                _cold = _kp.kernel_prewarm_cold_start_needed()
+                if _cold:
+                    logger.info("cold build_key: capturing kernel manifest for off-device batch compile")
+                    _kp.kernel_prewarm_set_capture_only(True)
+                    _saved_traced, self._traced = self._traced, False
+                    try:
+                        # capture_all records every kernel the real run uses (even ones iter_fast /
+                        # prep_run defers to gen#0). in_capture_pass skips the audio decode: its mel-VAE /
+                        # BWE / vocoder lazily warm persistent device state on first dispatch, which a
+                        # capture-only (dispatch-skipped) run leaves corrupted -- capturing it produces
+                        # wrong audio. The audio path (~small) instead compiles op-by-op in the warm real
+                        # warmup; the DiT/VAE bulk is what the off-device batch buys back.
+                        self.warmup_buffers(
+                            num_frames=num_frames,
+                            height=height,
+                            width=width,
+                            capture_all=True,
+                            in_capture_pass=True,
+                        )
+                    finally:
+                        self._traced = _saved_traced
+                        _kp.kernel_prewarm_set_capture_only(False)
+                    _built = _kp.kernel_prewarm_offline_compile()
+                    logger.info(f"cold build_key: batch-compiled {_built} kernels off-device in-process")
+                    # The capture pass ran the pipeline under capture-only (no gcc, no dispatch), leaving
+                    # in-memory state the real run must NOT reuse: binary-less programs in the program
+                    # cache (Kernel::binaries() would assert empty) and per-component trace/tracer state
+                    # left half-initialized because dispatch was skipped. Reset both so the real warmup
+                    # rebuilds cleanly from the freshly batch-compiled on-disk binaries. Separate
+                    # processes never shared this state; one process must reset it.
+                    self.release_traces()
+                    self.mesh_device.clear_program_cache()
+                # On cold-start the real warmup runs capture_all so it dispatches AND trace-captures every
+                # component (denoise/VAE/vocoder) while warm -- gen then replays instead of doing a
+                # first-time capture that would write device statics an iter_fast warmup never initialized
+                # (vocoder prep_run=False). Warm runs keep the normal iter_fast warmup.
+                self.warmup_buffers(num_frames=num_frames, height=height, width=width, capture_all=_cold)
             elif traced:
                 logger.warning(
                     f"traced=True but invalid shape ({num_frames=}, {height=}, {width=}); "
