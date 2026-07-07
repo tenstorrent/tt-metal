@@ -84,8 +84,8 @@ def test_summarize_run_details_prefers_sampling_window_for_diffusion_tps(tmp_pat
     assert summary["meets_stage1_generation_time_lt_30s"] is True
 
 
-def test_parse_args_requires_at_least_one_conditioner_input():
-    with pytest.raises(SystemExit) as exc:
+def test_parse_args_requires_at_least_one_conditioner_input(expect_error):
+    with expect_error(SystemExit, "2") as exc:
         validate_mod._parse_args(["--checkpoint", "/tmp/fake.safetensors"])
     assert exc.value.code == 2
 
@@ -175,8 +175,8 @@ def test_parse_args_accepts_duration_override():
     assert args.duration_seconds == 30
 
 
-def test_parse_args_tt_only_requires_tt():
-    with pytest.raises(SystemExit) as exc:
+def test_parse_args_tt_only_requires_tt(expect_error):
+    with expect_error(SystemExit, "2") as exc:
         validate_mod._parse_args(
             [
                 "--checkpoint",

@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 from torch import nn
 
@@ -65,10 +64,10 @@ def test_multi_conditioner_unwraps_singleton_list():
     assert cond.last_inputs == ["only"]
 
 
-def test_multi_conditioner_raises_on_missing_key():
+def test_multi_conditioner_raises_on_missing_key(expect_error):
     cond = _StubConditioner(output_dim=8, seq_len=4)
     multi = MultiConditioner({"text_prompt": cond})
-    with pytest.raises(ValueError, match="text_prompt"):
+    with expect_error(ValueError, "text_prompt"):
         multi([{"other": "x"}], "cpu")
 
 
