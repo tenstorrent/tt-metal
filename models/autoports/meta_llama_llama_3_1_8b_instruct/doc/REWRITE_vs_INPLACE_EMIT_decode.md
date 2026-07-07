@@ -162,74 +162,90 @@ Across the decoder stack LOCAL runs **≈39% fewer ops** — all glue, not math.
 
 ---
 
-## 5. Decode optimizations, lever by lever
+## 5. Decode optimizations — every change, graded
 
-Scoped to **decode only** for LOCAL (its prefill path is excluded here), against
-GRAPH's decode-only emit.
+Every decode change each run **actually tried**, from the trial CSVs
+(`optimized_decoder/*.csv`, LOCAL) and GRAPH's summary. Only LOCAL's decode path is
+included (prefill excluded). Grades:
 
-### Lever by lever
+- 🟢 **great** — big win, kept
+- 🟡 **ok** — small/moderate win, kept
+- ⚪ **enabling** — bring-up/correctness fix, not a perf change
+- 🔴 **rejected** — tried and reverted
 
-| Lever | LOCAL (decode) | GRAPH (decode) |
-| --- | --- | --- |
-| Precision | **BFP4** attn + MLP weights, LoFi — its dominant win | left as emitted (BFP8 attn/down/LM-head, BFP4 gate/up); BFP4 lowering explicitly declined |
-| QKV projection | packed, DRAM-interleaved | **DRAM width-sharded** — its dominant win |
-| MLP down matmul | DRAM-sharded, `in0_block_w=14` (kept) | tried DRAM-sharding → **rejected** (regressed to 20.8 ms) |
-| Gate/up matmul | separate (unpacked) after A/B | left as emitted |
-| KV cache | BF8_B paged | emitted paged cache |
-| Attention | paged flash SDPA decode | emitted SDPA decode |
-| Layout / glue | leaner hand-built single-layer graph | legalized emit; removed redundant logits reshape + L1 copy |
+Each number is that run's own decode metric (LOCAL = traced-decode host ms; GRAPH =
+reduced-window / full-step). ⚠️ LOCAL and GRAPH numbers are **not comparable** across
+runs (different scope — see section 3).
 
-### Contribution to decode
+### 5a. LOCAL (rewrite) — decode changes
 
-| | LOCAL | GRAPH |
-| --- | --- | --- |
-| Headline metric | **−32%** device time per decoder layer | **−4.8%** full-model e2e (−40% on reduced 1-layer window) |
-| Dominant lever | BFP4 precision (≈26% of decode from BFP4 MLP alone) | QKV DRAM-sharding |
-| Op graph | ≈39% leaner (37 vs 61 ops/layer) | emitted op count, legalized |
-| Scope proven | one decoder layer, batch 1 | full 32-layer, batch 32, measured e2e |
-| Correctness | PCC 0.99999 (BFP4) | PCC 1.0 (precision preserved) |
-
-### Rejected during decode search
-
-| LOCAL | GRAPH |
+| Change | Decode effect |
 | --- | --- |
-| <ul><li>L1 input movement (slower)</li><li>packed gate/up</li><li>separate decode QKV</li><li>HiFi2</li><li>BF16 cache</li></ul> | <ul><li>remove-logits-copy-only (no gain)</li><li>reuse DRAM logits tensor (slower)</li><li>`create_qkv_heads` on sharded output (compile fail)</li><li>pre-reshape sharded QKV (broke rotary)</li><li>**MLP-down DRAM-sharding (regressed to 20.8 ms)**</li><li>**broad precision lowering (declined as unsafe)**</li></ul> |
+| 🟢 BFP4 **MLP** weights (LoFi) | **1.845 → 1.373 ms (−25.6%)** |
+| 🟡 Packed decode QKV (vs separate) | 1.413 → 1.294 ms (−8.5%) |
+| 🟡 BFP4 **attention** weights (LoFi) | 1.373 → 1.287 ms (−6.3%, on top of BFP4 MLP) |
+| 🟡 Separate gate/up (vs packed) | 1.333 → 1.289 ms (−3.4%) |
+| 🟡 `down_proj` `in0_block_w=14` tune | 1.298 → 1.286 ms (≈−1% across sweep) |
+| 🟡 BF8_B KV cache (vs BF16) | 1.285 → 1.276 ms (−0.7%) |
+| 🟡 DRAM-sharded `down_proj` (vs interleaved) | kept, but **never A/B'd vs interleaved** — gain unquantified |
+| 🔴 Separate **decode** QKV | +9% slower than packed |
+| 🔴 Packed gate/up | +3.5% slower than separate |
+| 🔴 HiFi2 fidelity (attn and/or MLP) | no gain or slower |
+| 🔴 BF16 KV cache | slower than BF8_B |
+| 🔴 `down_proj` `in0_block_w` 28 / 56 | 28 slower; 56 L1 circular-buffer clash |
+| 🔴 L1 input movement | 1.283 → 1.307 ms (+1.9%) |
 
-### Explored by one, never even attempted by the other
+### 5b. GRAPH (in-place emit) — decode changes
 
-Drawn from LOCAL's `work_log.md` trial artifacts and GRAPH's summary. This is about
-what each **searched**, independent of what it kept.
+| Change | Decode effect |
+| --- | --- |
+| 🟢 **QKV DRAM width-sharding** | QKV row 128 → 107 μs; roofline 28.2 → 47.2%; **0.0831 → 0.0791 s/step (−4.8%)** |
+| 🟡 Tail reshape + redundant L1 copy removal | reduced window 8.435 → 5.048 ms, 71 → 69 ops |
+| ⚪ Harness entrypoint fix (`main()`) | made the graph runnable at all |
+| ⚪ PCC gate `==` → `>=` | correctness hygiene |
+| ⚪ Shard / core-grid legalization for 8×8 | defines the runnable baseline |
+| 🔴 Remove-only the unused logits copy | 0.0831 s before & after (no gain) |
+| 🔴 Reuse DRAM logits tensor for reshape | 0.0837 vs 0.0831 s (slower) |
+| 🔴 `create_qkv_heads` on sharded output | compile fail (4D shape contract) |
+| 🔴 Pre-reshape sharded QKV `[1,1,32,6144]` | broke rotary (saw seq len 8, not 1) |
+| 🔴 MLP-down DRAM-sharding | regressed reduced replay to 20.8 ms |
 
-**LOCAL explored, GRAPH never attempted**
+### 5c. How many iterations before aborting a rejected idea
 
-- Weight precision sweep BFP8 → BFP4 (`precision_trials.csv`) — GRAPH declined precision lowering *without trialing* it
-- Math-fidelity sweep LoFi vs HiFi2 (`fidelity_cache_trials.csv`)
-- KV-cache dtype sweep BF16 vs BF8_B
-- Projection topology A/B: packed vs separate QKV, and packed vs separate gate/up
-- The **entire prefill path** + K/V core-geometry sweep (GRAPH's emit is decode-only)
-- `down_proj` `in0_block_w` geometry sweep (14 vs 56)
+Both runs mostly treated rejection as a **one-shot A/B**: measure the candidate once,
+and if it doesn't beat the baseline, revert and move on. Neither re-tuned a losing idea
+in the hope of rescuing it — with two exceptions, both on GRAPH's side.
 
-**GRAPH explored, LOCAL never attempted**
+| Rejected idea | Iterations before abort |
+| --- | --- |
+| LOCAL: separate decode QKV / packed gate/up / L1 movement | 1 each (single trial row, reverted) |
+| LOCAL: HiFi2 fidelity, BF16 cache | measured once each inside the 6-point `fidelity_cache` sweep — losing points not retried |
+| LOCAL: `down_proj in0_block_w` 28 / 56 | measured once each inside the `4,7,8,14,28,56` sweep |
+| GRAPH: remove-only logits copy / reuse DRAM logits tensor | 1 run each, reverted |
+| **GRAPH: sharded-QKV head creation** | **2** — direct `create_qkv_heads` (compile fail) → pre-reshape `[1,1,32,6144]` (broke rotary) → abandoned |
+| **GRAPH: MLP-down DRAM-sharding** | **<1** — aborted after one reduced run, *"rejecting it without a full run"* |
 
-- **DRAM width-sharding the QKV projection** (its headline win) — LOCAL only sharded `down_proj`
-- `create_qkv_heads` on sharded output / pre-reshaping sharded QKV
-- Graph-tail cleanup: removing redundant logits reshape + L1 copy, reusing the DRAM logits tensor
-- Emit legalization for the 8×8 grid, entrypoint fix, PCC gate `==`→`>=`
+**Takeaway:** the only genuine "try → fail → try again → abort" sequence in either run
+is GRAPH's two-step attempt to feed sharded QKV into head-creation. LOCAL's multi-point
+sweeps (fidelity, down geometry) look like many trials, but each losing point was
+measured exactly once — it swept a grid rather than iterating on a failure.
 
-**The asymmetry:** LOCAL explored the *numerical* axes (precision, fidelity, cache
+### 5d. Named but never actually tried
+
+- **LOCAL:** did not attempt QKV DRAM-sharding at all (only `down_proj`).
+- **GRAPH:** **o-proj DRAM-sharding** was named in the log as remaining advice but
+  **never implemented or measured**; **precision lowering** was considered and
+  **declined without any trial**.
+
+### 5e. What only one side ever explored
+
+| Only LOCAL explored | Only GRAPH explored |
+| --- | --- |
+| <ul><li>precision sweep BFP8 → BFP4</li><li>fidelity sweep LoFi vs HiFi2</li><li>KV-cache dtype BF16 vs BF8_B</li><li>packed vs separate QKV / gate-up</li><li>the whole prefill path + K/V geometry</li><li>`down_proj` `in0_block_w` sweep</li></ul> | <ul><li>DRAM width-sharding the QKV projection</li><li>`create_qkv_heads` on sharded output</li><li>pre-reshaping sharded QKV</li><li>graph-tail cleanup (logits reshape / L1 copy)</li><li>emit legalization for the 8×8 grid</li><li>harness fixes (entrypoint, PCC gate)</li></ul> |
+
+**The pattern:** LOCAL explored the *numerical* axes (precision, fidelity, cache
 dtype) + a whole prefill path; GRAPH explored *layout/sharding + emit-cleanup* axes.
-The one lever each deliberately avoided is the other's headline win — precision (LOCAL
-swept, GRAPH declined) and QKV sharding (GRAPH pushed, LOCAL never tried).
-
-### The two headline wins don't overlap
-
-Same tool (`tt-perf-report`) pointed both at DRAM-bound decode matmuls, but they
-reached **opposite conclusions** on which projection benefits from DRAM-sharding:
-
-- **GRAPH never touched precision** (declined BFP4) — that is LOCAL's biggest decode win.
-- **LOCAL never DRAM-sharded QKV for decode** (kept it packed) — that is GRAPH's biggest win.
-
-Precision (LOCAL) + QKV DRAM-sharding (GRAPH) are **complementary and non-overlapping**.
+Each left the other's headline lever completely untouched.
 
 ---
 
