@@ -237,21 +237,17 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
-    // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
-    // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
-    // UnpackToDestFp32 writes into. Without fp32 DEST, UnpackToDestFp32 can't be enabled
-    // and inputs are silently truncated to TF32 (10 mantissa bits) on the way through SrcA.
+    // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
+    //  - Welford: prerequisite for UnpackToDestFp32 (set below), which bypasses the unpacker's
+    //    Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
+    //    UnpackToDestFp32 writes into.
+    //  - Legacy (non-welford): intermediates are stored fp32 (im_data_format=Float32) and
+    //    accumulated in the fp32 DEST register, which requires fp32_dest_acc_en.
+    // Without fp32 DEST, inputs are silently truncated to TF32 (10 mantissa bits) through SrcA.
     TT_FATAL(
-        !(use_welford && in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
-        "group_norm welford with Float32 input requires fp32_dest_acc_en=true in the compute "
-        "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
-    // Legacy (non-welford) fp32 stores intermediates fp32 (im_data_format=Float32) and accumulates
-    // in the fp32 DEST register; that requires fp32_dest_acc_en. Mirrors the sharded legacy gate.
-    TT_FATAL(
-        !(!use_welford && in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
-        "group_norm (legacy, non-welford) with Float32 input requires fp32_dest_acc_en=true in the "
-        "compute kernel config; otherwise precision is silently lost in the unpacker format conversion.");
+        !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "group_norm with Float32 input requires fp32_dest_acc_en=true in the compute kernel config; "
+        "otherwise precision is silently lost in the unpacker format conversion.");
 
     // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_wh_tile
     // reads from a CB that carries UnpackToDestFp32, regardless of which CB is used: c_29

@@ -740,25 +740,20 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
 
-    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
-    // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
-    // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
-    // UnpackToDestFp32 writes into. Without fp32 DEST, UnpackToDestFp32 can't be enabled
-    // and inputs are silently truncated to TF32 (10 mantissa bits) on the way through SrcA.
+    // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
+    //  - Welford: prerequisite for UnpackToDestFp32 (set below), which bypasses the unpacker's
+    //    Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
+    //    UnpackToDestFp32 writes into.
+    //  - Legacy (non-welford): mirrors LayerNorm's legacy fp32 — the reduction accumulates in the
+    //    fp32 DEST register and stores intermediates fp32 (im_data_format=Float32), which requires
+    //    fp32_dest_acc_en.
+    // Without fp32 DEST, inputs are silently truncated to TF32 (10 mantissa bits) on SrcA. The host
+    // op defaults fp32_dest_acc_en=true for fp32 input, so this only fires when a user-supplied
+    // compute_kernel_config explicitly disables it.
     TT_FATAL(
-        !(use_welford && in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
-        "group_norm welford with Float32 input requires fp32_dest_acc_en=true in the compute "
-        "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
-
-    // Legacy (non-welford) fp32 mirrors LayerNorm's legacy fp32 path: the reduction accumulates
-    // in the fp32 DEST register and stores intermediates fp32 (im_data_format=Float32). That
-    // requires fp32_dest_acc_en; without it, fp32 input is silently truncated to TF32 on SrcA and
-    // accumulated in bf16 DEST. The host op defaults fp32_dest_acc_en=true for fp32 input, so this
-    // only fires when a user-supplied compute_kernel_config explicitly disables it.
-    TT_FATAL(
-        !(!use_welford && in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
-        "group_norm (legacy, non-welford) with Float32 input requires fp32_dest_acc_en=true in the "
-        "compute kernel config; otherwise precision is silently lost in the unpacker format conversion.");
+        !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "group_norm with Float32 input requires fp32_dest_acc_en=true in the compute kernel config; "
+        "otherwise precision is silently lost in the unpacker format conversion.");
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
     // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode).
@@ -1136,7 +1131,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_ones_index),
             .data_format = scalar_cb_data_format,
-            lets.page_size = scalar_single_tile_size,
+            .page_size = scalar_single_tile_size,
         }}},
     });
 
