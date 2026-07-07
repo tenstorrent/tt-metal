@@ -92,10 +92,6 @@
   team: runtime
 
 # --- LLK + SFPI Tests ---
-# WH timeout raised from 8→12 min: full LLK+SFPI suite exceeds 8 min wall clock on wh_n150_civ2.
-# BH timeout raised from 8→12 min: #48778 - runtime_llk [bh_p150b_civ2] intermittently
-# times out at 8 min with no test failure; testing whether it's a wall-clock budget
-# issue (like the WH case above) rather than a real device hang.
 - name: runtime_llk
   # 4 tests disabled by #44767.
   disabled_llk_filter: &disabled_llk 'LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3:MeshDeviceFixture.Top32RmDevPipelineCompletes'
