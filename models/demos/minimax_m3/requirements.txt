@@ -1,1 +1,5 @@
-transformers==4.57.1
+# MiniMax-M3 is a trust_remote_code model whose modeling code (minimax_m3_vl) lives in
+# transformers main. We were pinning transformers==4.57.1, but PR security blocks merging a
+# fixed vulnerable pin. It is fine to just update transformers locally for dev, e.g.:
+#     pip install -U transformers
+# (or install from transformers main if minimax_m3_vl is not yet in your release).
