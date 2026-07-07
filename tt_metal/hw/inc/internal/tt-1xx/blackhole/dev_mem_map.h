@@ -232,7 +232,7 @@
 // [debug] Bumped from (25 * 1024) to fit the fabric router kernel with the receiver/sender flow-control
 // traces ([rxlog]/[txlog]) compiled in. eth L1 is 512 KB with ample headroom here, so the extra 3 KB does not
 // collide with the top-of-L1 reserved regions. NOT for check-in -- revert to (25 * 1024) for production
-#define MEM_ERISC_KERNEL_CONFIG_SIZE (28 * 1024)
+#define MEM_ERISC_KERNEL_CONFIG_SIZE (29 * 1024)
 #define MEM_ERISC_BASE 0
 
 // From the top of L1. Common.
