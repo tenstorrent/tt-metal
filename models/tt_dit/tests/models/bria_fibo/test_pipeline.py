@@ -47,9 +47,108 @@ def test_fibo_pipeline_smoke(*, mesh_device):
     imgs = pipe("a luxury sports car", num_inference_steps=30, guidance_scale=5.0, seed=0)
 
     arr = np.asarray(imgs[0])
-    assert arr.shape[:2] == (1024, 1024), f"unexpected image shape {arr.shape}"
-    assert np.isfinite(arr).all(), "image contains non-finite values"
+    # (1024,1024,3) AND non-degenerate: `np.isfinite` on a uint8 array is vacuously true, so instead
+    # assert the image has real variation (a black/uniform frame would fail both bounds below).
+    assert arr.shape == (1024, 1024, 3), f"unexpected image shape {arr.shape}"
+    assert arr.std() > 1.0, f"image looks degenerate (std={arr.std():.4f})"
+    assert np.unique(arr).size > 16, f"image looks degenerate ({np.unique(arr).size} unique values)"
     imgs[0].save("fibo_smoke.png")
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    indirect=["device_params"],
+)
+def test_fibo_pipeline_latent_pcc(*, mesh_device):
+    """Core end-to-end gate: the tt ``BriaFiboPipeline`` reproduces the diffusers reference
+    ``BriaFiboPipeline``'s pre-VAE latent trajectory (PCC-gated) on the 2x2 Blackhole mesh.
+
+    Both pipelines run the SAME prompt / negative_prompt / guidance_scale / steps / resolution and are
+    fed IDENTICAL initial noise via latent INJECTION (a host-built tensor passed as ``latents=`` to
+    both) -- this sidesteps the host/device RNG mismatch (``torch.manual_seed``+float32-randn->bf16 will
+    NOT bit-match the reference's ``randn_tensor(generator, dtype=...)``). Both return the pre-VAE latent
+    (``output_type="latent"``); the two ``(1, h*w, 48)`` latents are compared with ``assert_quality``.
+
+    Reduced config (spec §5, §7 risk 2): height=width=512 -> 32x32 = 1024 spatial tokens. 1024 ==
+    k_chunk_size(512) * sp_factor(2), so the spatial sequence needs NO attention padding (the pipeline
+    has none) -- the smallest clean reduced resolution. The glue (noise->pack->rope->CFG->solver->latent)
+    is resolution-independent and every component is already PCC-validated, so this faithfully exercises
+    the wiring while keeping the CPU reference (8B transformer x2 CFG branches) tractable. steps=4
+    (the whole test runs in ~3 min; 4 steps exercises 4 distinct sigma/timestep transitions).
+
+    Threshold 0.99: a real wiring bug (wrong pack transpose, rope split, CFG sign, solver index,
+    sigma/timestep mismatch) craters PCC; bf16-vs-fp32 drift over a few steps does not.
+    """
+    import gc
+
+    import torch
+
+    from models.tt_dit.utils.check import assert_quality
+
+    ckpt = _fibo_local()
+
+    steps = 4
+    guidance_scale = 5.0
+    height = width = 512
+    in_channels = 48
+    latent_h = height // 16
+    latent_w = width // 16
+    # A realistic-length caption: short/empty prompts have a known ~1% position-0 causal-LM encoder PCC
+    # gap (see test_wrapper_encode_matches_reference) that would confound the glue signal here.
+    prompt = (
+        "A luxury sports car in vivid detail: sleek aerodynamic silver bodywork with sharp creases, "
+        "large matte black alloy wheels, low ground clearance, glowing LED headlights, parked on a wet "
+        "city street at night reflecting neon signs, cinematic photography, shallow depth of field, ultra "
+        "realistic, 8k resolution, dramatic lighting, professional automotive advertisement style."
+    )
+
+    # Shared initial noise: built on host in the reference's UNPACKED (1, C, h, w) form, then packed to
+    # the (1, h*w, C) layout that BOTH pipelines' ``latents=`` expects (reference `_pack_latents_no_patch`;
+    # the reference returns injected ``latents`` as-is, so it must already be packed).
+    torch.manual_seed(0)
+    init_bchw = torch.randn(1, in_channels, latent_h, latent_w, dtype=torch.float32)
+    init_packed = init_bchw.permute(0, 2, 3, 1).reshape(1, latent_h * latent_w, in_channels).contiguous()
+
+    # --- Reference (diffusers, host CPU, fp32) — run first, then free ~44 GB before the tt build. ---
+    from diffusers import BriaFiboPipeline as RefBriaFiboPipeline
+
+    ref = RefBriaFiboPipeline.from_pretrained(ckpt, torch_dtype=torch.float32)
+    ref_latent = ref(
+        prompt,
+        negative_prompt="",
+        height=height,
+        width=width,
+        num_inference_steps=steps,
+        guidance_scale=guidance_scale,
+        latents=init_packed.clone(),
+        output_type="latent",
+    ).images  # (1, h*w, 48) packed pre-VAE latent
+    ref_latent = ref_latent.detach().float().cpu()
+    del ref
+    gc.collect()
+
+    # --- TT pipeline (2x2 Blackhole mesh) ---
+    from models.tt_dit.pipelines.bria_fibo.pipeline_bria_fibo import BriaFiboPipeline, BriaFiboPipelineConfig
+
+    pipe = BriaFiboPipeline(
+        device=mesh_device,
+        config=BriaFiboPipelineConfig.default(mesh_shape=mesh_device.shape, checkpoint_name=ckpt),
+    )
+    tt_latent = pipe(
+        prompt,
+        negative_prompt="",
+        height=height,
+        width=width,
+        num_inference_steps=steps,
+        guidance_scale=guidance_scale,
+        latents=init_packed.clone(),
+        output_type="latent",
+    )
+
+    assert tuple(tt_latent.shape) == tuple(ref_latent.shape), f"{tt_latent.shape} != {ref_latent.shape}"
+    assert_quality(ref_latent, tt_latent.float(), pcc=0.99)
 
 
 def test_build_text_encoder_layers_pads_37_to_46():

@@ -38,6 +38,7 @@ from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from loguru import logger
 
 import ttnn
+from models.tt_dit.layers.module import LoadingError
 from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboCheckpoint
 from models.tt_dit.models.vae.vae_wan2_1 import WanVAEDecoderAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
@@ -174,8 +175,9 @@ class BriaFiboPipeline:
         num_inference_steps: int = 30,
         guidance_scale: float = 5.0,
         seed: int = 0,
+        latents: torch.Tensor | None = None,
         output_type: str = "pil",
-    ) -> list[Image.Image]:
+    ) -> list[Image.Image] | torch.Tensor:
         height = height if height is not None else self._height
         width = width if width is not None else self._width
         submesh = self._submesh
@@ -207,8 +209,10 @@ class BriaFiboPipeline:
         timesteps = self._scheduler.timesteps
 
         # 3. Latents (no 2x2 pack): (1, 48, h, w) -> (1, h*w, 48), sequence-sharded on sp.
+        #    ``latents`` (if given) injects a fixed initial noise in the same packed layout, so a
+        #    reference comparison can feed BOTH pipelines identical noise (host/device RNG differ).
         logger.info("preparing latents...")
-        latent = self._random_latents(height=height, width=width, seed=seed)
+        latent = self._random_latents(height=height, width=width, seed=seed, latents=latents)
 
         # 4. Denoise loop: two per-branch forwards per step, combined via CFG.
         logger.info("denoising...")
@@ -233,7 +237,10 @@ class BriaFiboPipeline:
 
             ttnn.synchronize_device(submesh)
 
-        # 5. Decode.
+        # 5. Return the pre-VAE latent (PCC gate) or decode to an image.
+        if output_type == "latent":
+            logger.info("returning pre-VAE latent...")
+            return self._gather_latent(latent)
         logger.info("decoding image...")
         return self._decode_latents(latent, height=height, width=width, output_type=output_type)
 
@@ -291,17 +298,42 @@ class BriaFiboPipeline:
             prompt_sequence_length=branch["prompt_sequence_length"],
         )
 
-    def _random_latents(self, *, height: int, width: int, seed: int) -> ttnn.Tensor:
-        torch.manual_seed(seed)
+    def _random_latents(
+        self, *, height: int, width: int, seed: int, latents: torch.Tensor | None = None
+    ) -> ttnn.Tensor:
         latent_h = height // _VAE_SCALE_FACTOR
         latent_w = width // _VAE_SCALE_FACTOR
+        packed_shape = (1, latent_h * latent_w, self._in_channels)
 
-        latents = torch.randn(1, self._in_channels, latent_h, latent_w, dtype=torch.float32)
-        # No 2x2 pack: (1, C, h, w) -> (1, h*w, C).
-        latents = latents.permute(0, 2, 3, 1).reshape(1, latent_h * latent_w, self._in_channels)
+        if latents is None:
+            torch.manual_seed(seed)
+            latents = torch.randn(1, self._in_channels, latent_h, latent_w, dtype=torch.float32)
+            # No 2x2 pack: (1, C, h, w) -> (1, h*w, C).
+            latents = latents.permute(0, 2, 3, 1).reshape(*packed_shape)
+        elif tuple(latents.shape) != packed_shape:
+            # Injected noise must already be in the reference's packed ``_pack_latents_no_patch`` layout.
+            msg = (
+                f"injected `latents` must be packed {packed_shape} (1, h*w, in_channels) to match the "
+                f"reference latent layout, got {tuple(latents.shape)}"
+            )
+            raise ValueError(msg)
 
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
         return tt_tensor.from_torch(latents.to(torch.bfloat16), device=self._submesh, mesh_axes=[None, sp_axis, None])
+
+    def _gather_latent(self, latent: ttnn.Tensor) -> torch.Tensor:
+        """All-gather the sp-sharded pre-VAE latent to a host ``(1, h*w, 48)`` float32 tensor.
+
+        Matches the reference ``BriaFiboPipeline.__call__(output_type="latent")`` layout: the reference
+        returns ``latents`` *without* unpacking (the packed ``(1, h*w, 48)`` form), so we do the same.
+        """
+        submesh = self._submesh
+        sp_axis = self._parallel_config.sequence_parallel.mesh_axis
+
+        ttnn.synchronize_device(submesh)
+        latent = self._ccl_manager.all_gather_persistent_buffer(latent, dim=1, mesh_axis=sp_axis, use_hyperparams=True)
+        torch_latents = ttnn.to_torch(ttnn.get_device_tensors(latent)[0])  # (1, h*w, 48)
+        return torch_latents.to(torch.float32)
 
     def _decode_latents(self, latent: ttnn.Tensor, *, height: int, width: int, output_type: str) -> list[Image.Image]:
         submesh = self._submesh
@@ -329,16 +361,22 @@ class BriaFiboPipeline:
 
         Primary path: the on-device ``WanVAEDecoderAdapter`` (returns raw 12-ch patchified pixels;
         we ``unpatchify(patch_size=2)`` + ``clamp`` to match sp3's ``test_vae`` post-processing).
-        Fallback: the host reference ``AutoencoderKLWan.decode`` (documented in the task brief) if the
-        residual decoder's hw-parallel path fails on the mesh.
+        Fallback: the host reference ``AutoencoderKLWan.decode`` (documented in the task brief) ONLY for
+        the known Wan hw-parallel *residual* decoder weight-load failure (a ``LoadingError`` at
+        ``decoder.conv_in.weight``: builds (1728, 640) but the state-dict prep yields (1728, 1024)).
+        Any other failure -- OOM (a ``RuntimeError``), a real device/shape bug, etc. -- propagates
+        rather than being silently routed to the slow host path.
         """
         try:
             out = self._vae.decode(latents_bcthw, output_type="pt")  # (1, C>=12, 1, H/2, W/2)
             out = out[:, : self._vae.config.out_channels]  # trim any conv channel padding to 12
             out = unpatchify(out, patch_size=self._vae.config.patch_size)  # (1, 3, 1, H, W)
             return torch.clamp(out, min=-1.0, max=1.0)
-        except Exception as e:  # noqa: BLE001 - documented host fallback for the VAE decode.
-            logger.warning(f"on-device VAE decode failed ({type(e).__name__}: {e}); falling back to host torch VAE")
+        except LoadingError as e:
+            logger.warning(
+                f"on-device VAE weight load failed ({type(e).__name__}: {e}); falling back to host torch "
+                "VAE (known Wan hw-parallel residual conv_in mismatch)"
+            )
             return self._host_decode_vae(latents_bcthw)
 
     def _host_decode_vae(self, latents_bcthw: torch.Tensor) -> torch.Tensor:
