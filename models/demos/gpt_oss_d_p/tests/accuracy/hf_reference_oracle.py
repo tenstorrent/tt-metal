@@ -155,10 +155,6 @@ def main():
         sdpa_call_idx = [0]
         original_F_sdpa = F.scaled_dot_product_attention
 
-        attn_cls = type(model.model.layers[0].self_attn)
-        attn_mod = sys.modules.get(attn_cls.__module__)
-        original_mod_sdpa = getattr(attn_mod, "scaled_dot_product_attention", None) if attn_mod else None
-
         save_kv = args.save_kv  # avoid late-binding in closure
 
         def _capturing_sdpa(q, k, v, *a, **kw):
@@ -169,16 +165,27 @@ def main():
                 kv_captures[idx] = (k[0].detach().float(), v[0].detach().float())
             return original_F_sdpa(q, k, v, *a, **kw)
 
+        # Patch every module that holds a direct binding of the real SDPA function.
+        # trust_remote_code models can import SDPA into helper modules via
+        # `from torch.nn.functional import scaled_dot_product_attention`, creating
+        # a local binding that patching only torch.nn.functional or one specific
+        # module would miss.
+        extra_patched: list[tuple] = []
+        for _mod in list(sys.modules.values()):
+            if _mod is None or _mod is F:
+                continue
+            if getattr(_mod, "scaled_dot_product_attention", None) is original_F_sdpa:
+                _mod.scaled_dot_product_attention = _capturing_sdpa
+                extra_patched.append(_mod)
+
         F.scaled_dot_product_attention = _capturing_sdpa
-        if attn_mod is not None and original_mod_sdpa is not None:
-            attn_mod.scaled_dot_product_attention = _capturing_sdpa
         try:
             with torch.no_grad():
                 out = model(input_ids=input_ids, use_cache=True)
         finally:
             F.scaled_dot_product_attention = original_F_sdpa
-            if attn_mod is not None and original_mod_sdpa is not None:
-                attn_mod.scaled_dot_product_attention = original_mod_sdpa
+            for _mod in extra_patched:
+                _mod.scaled_dot_product_attention = original_F_sdpa
 
         for h in hooks:
             h.remove()
