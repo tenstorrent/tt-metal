@@ -74,7 +74,11 @@ class XttsReferenceGptModel(nn.Module):
         self.text_head = nn.Linear(HIDDEN_SIZE, NUM_TEXT_TOKENS)
         self.mel_head = nn.Linear(HIDDEN_SIZE, NUM_AUDIO_TOKENS)
 
-    def forward(self, text_ids, mel_ids):
+    def forward(self, text_ids, mel_ids, cond_latents=None):
+        """``cond_latents`` (optional) are the audio conditioning latents
+        ``[b, n_cond, hidden]`` prepended as the GPT prompt (coqui ``get_logits``
+        with ``prompt``). They condition the stream but are stripped (via
+        ``offset``) before the heads."""
         text_len, mel_len = text_ids.shape[1], mel_ids.shape[1]
         text_pos = torch.arange(text_len, device=text_ids.device)
         mel_pos = torch.arange(mel_len, device=mel_ids.device)
@@ -82,8 +86,14 @@ class XttsReferenceGptModel(nn.Module):
         text_emb = self.text_embedding(text_ids) + self.text_pos_embedding(text_pos)
         mel_emb = self.mel_embedding(mel_ids) + self.mel_pos_embedding(mel_pos)
 
-        emb = torch.cat([text_emb, mel_emb], dim=1)  # [b, text_len + mel_len, hidden]
+        parts, offset = [text_emb, mel_emb], 0
+        if cond_latents is not None:
+            parts = [cond_latents] + parts
+            offset = cond_latents.shape[1]
+
+        emb = torch.cat(parts, dim=1)  # [b, (n_cond +) text_len + mel_len, hidden]
         enc = self.stack(emb)  # 30 blocks + ln_f
+        enc = enc[:, offset:]  # strip the conditioning prompt
         enc = self.final_norm(enc)
 
         text_logits = self.text_head(enc[:, :text_len])
