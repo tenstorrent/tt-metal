@@ -864,7 +864,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         // Writer-only: exit semaphore address (separate from init_semaphore to avoid
         // init/exit reuse race where a fast peer's exit-inc lands during the post-init
         // set(0) window).
-        writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
+        writer_runtime_args.push_back(
+            (uint32_t)exit_semaphore.address());  // smuggled-rta-ok: persistent GlobalSemaphore (created once in
+                                                  // TT_CCL, reused) — L1 address stable across program-cache hits
 
         // ===== Sender writer (tile-layout): handshake + per-entry fabric send + credit =====
         // Shared single-id semaphores (one per-core slot on each untilizer): pushed once.
@@ -1407,12 +1409,17 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         // Reader-only: padding_config address at index 13 (right after the 13 base args). The
         // promote helper rebinds it to a Buffer* so it refreshes on cache hit.
         if (has_padding_config) {
-            reader_runtime_args.push_back((uint32_t)tensor_args.padding_config.value().buffer()->address());
+            reader_runtime_args.push_back((uint32_t)tensor_args.padding_config.value()
+                                              .buffer()
+                                              ->address());  // smuggled-rta-ok: promoted to a Buffer* binding at reader
+                                                             // index 13 below — refreshes on cache hit
         }
 
         // Writer-only: exit semaphore address (separate from init_semaphore to avoid
         // init/exit reuse race; mirrors the combine fix).
-        writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
+        writer_runtime_args.push_back(
+            (uint32_t)exit_semaphore.address());  // smuggled-rta-ok: persistent GlobalSemaphore (created once in
+                                                  // TT_CCL, reused) — L1 address stable across program-cache hits
 
         if (operation_attributes.num_links > 0) {
             // Dispatch-axis neighbors (each a distinct fabric direction) as fabric nodes.
