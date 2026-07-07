@@ -23,6 +23,8 @@ import torch
 import torch.nn.functional as F
 
 from models.experimental.xtts.reference.xtts_hifigan import build_reference_waveform_decoder
+from models.experimental.xtts.reference.xtts_mel import build_reference_mel_frontend
+from models.experimental.xtts.reference.xtts_speaker_encoder import build_reference_speaker_encoder
 
 # HifiDecoder hyper-parameters (coqui/XTTS-v2).
 AR_MEL_LENGTH_COMPRESSION = 1024
@@ -67,3 +69,24 @@ class XttsHifiDecoderReference(torch.nn.Module):
         if OUTPUT_SAMPLE_RATE != INPUT_SAMPLE_RATE:
             z = F.interpolate(z, scale_factor=[SR_SCALE], mode="linear")
         return self.waveform_decoder(z, g)
+
+
+class XttsHifiDecoderFull(torch.nn.Module):
+    """Full XTTS-v2 ``HifiDecoder``: reference audio -> speaker embedding, then
+    (GPT latents + embedding) -> waveform. Bundles the mel frontend + speaker
+    encoder (the conditioning path) with the latent-upsample + generator."""
+
+    def __init__(self, state_dict):
+        super().__init__()
+        self.mel_frontend = build_reference_mel_frontend(state_dict)
+        self.speaker_encoder = build_reference_speaker_encoder(state_dict)
+        self.decoder = XttsHifiDecoderReference(state_dict)
+
+    @torch.no_grad()
+    def speaker_embedding(self, ref_wav):  # ref_wav [B, samples] -> g [B, 512, 1]
+        mel = self.mel_frontend(ref_wav)
+        return self.speaker_encoder(mel).unsqueeze(-1)
+
+    @torch.no_grad()
+    def forward(self, latents, ref_wav):  # -> waveform [B, 1, T_out]
+        return self.decoder(latents, self.speaker_embedding(ref_wav))
