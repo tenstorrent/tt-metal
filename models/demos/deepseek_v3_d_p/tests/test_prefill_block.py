@@ -783,7 +783,9 @@ def _glm_random_moe_weights(hidden, moe_intermediate, n_routed, seed):
 
 
 def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
-    """Load layer-``layer_idx`` host weights from a local checkpoint dir (bf16 GLM-5.1: no FP8 dequant)."""
+    """Load layer-``layer_idx`` host weights from a local checkpoint dir; fp8 tensors are block-dequantized."""
+    from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.weights import _dequant_fp8
+
     model_dir = str(model_dir)
     prefix = f"model.layers.{layer_idx}."
     # MLA + indexer via the sparse-MLA loader (resolve this layer's local shards; dequant is a no-op for bf16).
@@ -811,7 +813,15 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
     f = load_hf_state_dict_filtered(
         model_dir, [f"{prefix}mlp.gate_proj.", f"{prefix}mlp.up_proj.", f"{prefix}mlp.down_proj."]
     )
-    ffn_weights = {p: f[f"{prefix}mlp.{p}.weight"].to(torch.bfloat16) for p in ("gate_proj", "up_proj", "down_proj")}
+
+    def _ffn(p):
+        # The device cache stores dequantized weights; the reference must match, so undo the fp8 block-scale here.
+        w = f[f"{prefix}mlp.{p}.weight"]
+        if w.dtype == torch.float8_e4m3fn:
+            w = _dequant_fp8(w, f[f"{prefix}mlp.{p}.weight_scale_inv"])
+        return w.to(torch.bfloat16)
+
+    ffn_weights = {p: _ffn(p) for p in ("gate_proj", "up_proj", "down_proj")}
     return mla_weights, attn_norm_w, ffn_norm_w, None, ffn_weights
 
 
