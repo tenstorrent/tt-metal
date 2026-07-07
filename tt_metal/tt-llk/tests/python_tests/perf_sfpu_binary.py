@@ -7,6 +7,7 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
+    BroadcastType,
     DestAccumulation,
     MathOperation,
     PerfRunType,
@@ -56,6 +57,7 @@ def get_dest_accum_modes(formats):
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
     ],
+    bcast_dim=[BroadcastType.None_],
     dest_acc=[
         DestAccumulation.Yes,
         DestAccumulation.No,
@@ -75,6 +77,7 @@ def test_perf_sfpu_binary_float(
     formats,
     mathop,
     approx_mode,
+    bcast_dim,
     dest_acc,
     loop_factor,
     iterations,

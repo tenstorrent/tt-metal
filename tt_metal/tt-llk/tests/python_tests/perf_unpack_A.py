@@ -5,7 +5,13 @@
 
 import pytest
 from helpers.format_config import DataFormat
-from helpers.llk_params import PerfRunType, Transpose
+from helpers.llk_params import (
+    BroadcastType,
+    EltwiseBinaryReuseDestType,
+    PerfRunType,
+    StochasticRounding,
+    Transpose,
+)
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
@@ -18,17 +24,35 @@ from helpers.test_variant_parameters import (
 
 @pytest.mark.perf
 @parametrize(
+    testname=["sources/unpack_transpose_perf.cpp"],
     formats=input_output_formats(
         [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Int32],
     ),
+    broadcast_type=[BroadcastType.None_],
+    disable_src_zero=[False],
+    acc_to_dest=[False],
+    stochastic_rnd=[StochasticRounding.No],
+    reuse_dest=[EltwiseBinaryReuseDestType.NONE],
     transpose_of_faces=[Transpose.No, Transpose.Yes],
     within_face_16x16_transpose=[Transpose.No, Transpose.Yes],
+    num_faces=[4],
+    face_r_dim=[16],
+    input_dimensions=[[256, 256]],
 )
 def test_perf_unpack_comprehensive(
     perf_report,
+    testname,
     formats,
+    broadcast_type,
+    disable_src_zero,
+    acc_to_dest,
+    stochastic_rnd,
+    reuse_dest,
     transpose_of_faces,
     within_face_16x16_transpose,
+    num_faces,
+    face_r_dim,
+    input_dimensions,
 ):
     # Int32 format restrictions
     if formats.input_format == DataFormat.Int32:
@@ -64,7 +88,7 @@ def test_perf_unpack_comprehensive(
     tile_count = 16
 
     configuration = PerfConfig(
-        "sources/unpack_transpose_perf.cpp",
+        testname,
         formats,
         run_types=[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE],
         templates=[],

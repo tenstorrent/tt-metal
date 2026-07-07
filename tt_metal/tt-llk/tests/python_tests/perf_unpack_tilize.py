@@ -24,12 +24,14 @@ from helpers.test_variant_parameters import (
             DataFormat.Bfp8_b,
         ]
     ),
+    num_faces=[4],
     rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
     ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
 )
 def test_perf_unpack_tilize_float(
     perf_report,
     formats,
+    num_faces,
     rt_dim,
     ct_dim,
 ):
@@ -47,12 +49,14 @@ def test_perf_unpack_tilize_float(
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
+    num_faces=[4],
     rt_dim=[1, 2],
     ct_dim=[1, 2],
 )
 def test_perf_unpack_tilize_int(
     perf_report,
     formats,
+    num_faces,
     rt_dim,
     ct_dim,
 ):

@@ -26,12 +26,22 @@ from helpers.test_variant_parameters import (
     formats=input_output_formats(
         [DataFormat.Float16_b, DataFormat.Int32],
     ),
+    dest_acc=lambda formats: [
+        (
+            DestAccumulation.Yes
+            if formats.input_format.is_32_bit()
+            else DestAccumulation.No
+        )
+    ],
+    unpack_to_dest=lambda formats: [formats.input_format.is_32_bit()],
     unpack_transpose_faces=[Transpose.No, Transpose.Yes],
     math_transpose_faces=[Transpose.No, Transpose.Yes],
 )
 def test_perf_transpose_dest_float(
     perf_report,
     formats,
+    dest_acc,
+    unpack_to_dest,
     unpack_transpose_faces,
     math_transpose_faces,
 ):
@@ -72,12 +82,8 @@ def test_perf_transpose_dest_float(
             tile_count_B=tile_count,
             tile_count_res=tile_count,
         ),
-        unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=(
-            DestAccumulation.Yes
-            if formats.input_format.is_32_bit()
-            else DestAccumulation.No
-        ),
+        unpack_to_dest=unpack_to_dest,
+        dest_acc=dest_acc,
     )
 
     configuration.run(perf_report)

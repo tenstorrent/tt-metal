@@ -76,7 +76,13 @@ def _is_block_float(fmt: DataFormat) -> bool:
 
 @pytest.mark.perf
 @parametrize(
-    typecast_case=_TYPECAST_PERF_CASES,
+    combo_idx=list(range(len(_TYPECAST_PERF_CASES))),
+    formats=lambda combo_idx: [
+        InputOutputFormat(
+            _TYPECAST_PERF_CASES[combo_idx][0], _TYPECAST_PERF_CASES[combo_idx][1]
+        )
+    ],
+    dest_acc=lambda combo_idx: [_TYPECAST_PERF_CASES[combo_idx][2]],
     approx_mode=[ApproximationMode.No],
     loop_factor=[
         16,
@@ -90,14 +96,15 @@ def _is_block_float(fmt: DataFormat) -> bool:
 )
 def test_perf_eltwise_unary_typecast(
     perf_report,
-    typecast_case,
+    combo_idx,
+    formats,
+    dest_acc,
     approx_mode,
     loop_factor,
     iterations,
     input_dimensions,
 ):
-    input_format, output_format, dest_acc = typecast_case
-    formats = InputOutputFormat(input_format, output_format)
+    input_format, output_format = formats.input_format, formats.output_format
 
     # Calculate tile count from input dimensions
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(

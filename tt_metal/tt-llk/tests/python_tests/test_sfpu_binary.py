@@ -14,8 +14,15 @@ from helpers.golden_generators import (
     BroadcastGolden,
     get_golden_generator,
 )
+from helpers.llk_params import (
+    ApproximationMode,
+)
 from helpers.llk_params import BroadcastType as LlkBroadcastType
-from helpers.llk_params import DestAccumulation, MathOperation, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    MathOperation,
+    format_dict,
+)
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -113,12 +120,14 @@ def test_sfpu_binary_float(
         MathOperation.SfpuElwLe,
         MathOperation.SfpuElwGe,
     ],
+    approx_mode=[ApproximationMode.No],
     dest_acc=[DestAccumulation.Yes],
 )
 def test_sfpu_binary_int(
     formats,
     dest_acc,
     mathop,
+    approx_mode,
 ):
     sfpu_binary(
         formats,

@@ -55,7 +55,7 @@ class CT_DIM(TemplateParameter):
             DataFormat.Float16_b,
         ]
     ),
-    mathop=[MathOperation.Elwsub, MathOperation.Elwmul],
+    math_op=[MathOperation.Elwsub, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No],
     math_fidelity=[
         MathFidelity.LoFi,
@@ -66,23 +66,25 @@ class CT_DIM(TemplateParameter):
     broadcast_type=[BroadcastType.Column],
     input_dimensions_A=[[32, w] for w in range(32, 257, 32)],
     input_dimensions_B=[[32, 32]],
+    ct_dim=lambda input_dimensions_A: [input_dimensions_A[1] // 32],
 )
 def test_eltwise_bcast_col_custom(
     cpp_source,
     formats,
-    mathop,
+    math_op,
     dest_acc,
     math_fidelity,
     broadcast_type,
     input_dimensions_A,
     input_dimensions_B,
+    ct_dim,
 ):
-    if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
+    if math_op != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
     # The MUL instantiation of the blocked bcast-col reuse scaffold exists only on Blackhole
     # (Wormhole has just the SUB-named wrapper).
     if (
-        mathop == MathOperation.Elwmul
+        math_op == MathOperation.Elwmul
         and get_chip_architecture() != ChipArchitecture.BLACKHOLE
     ):
         pytest.skip("MUL bcast-col reuse scaffold is Blackhole-only")
@@ -129,7 +131,7 @@ def test_eltwise_bcast_col_custom(
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
     golden_tensor = generate_golden(
-        mathop, src_A, src_B_golden_expanded, formats.output_format, math_fidelity
+        math_op, src_A, src_B_golden_expanded, formats.output_format, math_fidelity
     )
 
     configuration = TestConfig(
@@ -138,7 +140,7 @@ def test_eltwise_bcast_col_custom(
         templates=[
             MATH_FIDELITY(math_fidelity),
             generate_input_dim(input_dimensions_A, input_dimensions_A),
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             BROADCAST_TYPE(broadcast_type),
             CT_DIM(ct_dim),
         ],

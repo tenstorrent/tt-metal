@@ -95,22 +95,30 @@ def generate_transpose_dest_float_combinations(formats_list):
     return combinations
 
 
+_TRANSPOSE_DEST_FLOAT_COMBOS = generate_transpose_dest_float_combinations(
+    TRANSPOSE_DEST_FLOAT_FORMATS
+)
+
+
 @parametrize(
-    fmt_dest_acc_math_transp_unpack_to_dest=generate_transpose_dest_float_combinations(
-        TRANSPOSE_DEST_FLOAT_FORMATS
-    ),
+    combo_idx=list(range(len(_TRANSPOSE_DEST_FLOAT_COMBOS))),
+    formats=lambda combo_idx: [_TRANSPOSE_DEST_FLOAT_COMBOS[combo_idx][0]],
+    dest_acc=lambda combo_idx: [_TRANSPOSE_DEST_FLOAT_COMBOS[combo_idx][1]],
+    math_transpose_faces=lambda combo_idx: [_TRANSPOSE_DEST_FLOAT_COMBOS[combo_idx][2]],
+    unpack_to_dest=lambda combo_idx: [_TRANSPOSE_DEST_FLOAT_COMBOS[combo_idx][3]],
 )
 def test_transpose_dest_float(
-    fmt_dest_acc_math_transp_unpack_to_dest,
+    combo_idx,
+    formats,
+    dest_acc,
+    math_transpose_faces,
+    unpack_to_dest,
 ):
-
-    fmt_dest_acc_math_transp_unpack_to_dest = fmt_dest_acc_math_transp_unpack_to_dest[0]
-
     transpose_dest(
-        formats=fmt_dest_acc_math_transp_unpack_to_dest[0],
-        dest_acc=fmt_dest_acc_math_transp_unpack_to_dest[1],
-        math_transpose_faces=fmt_dest_acc_math_transp_unpack_to_dest[2],
-        unpack_to_dest=fmt_dest_acc_math_transp_unpack_to_dest[3],
+        formats=formats,
+        dest_acc=dest_acc,
+        math_transpose_faces=math_transpose_faces,
+        unpack_to_dest=unpack_to_dest,
     )
 
 

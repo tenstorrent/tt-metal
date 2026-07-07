@@ -8,9 +8,11 @@ from helpers.constraints import (
 )
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    BroadcastType,
     MathFidelity,
     MathOperation,
     PerfRunType,
+    Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfConfig
@@ -27,22 +29,28 @@ from helpers.test_variant_parameters import (
     formats=input_output_formats(
         [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
     ),
-    mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    broadcast_type=[BroadcastType.None_],
+    transpose_srca=[Transpose.No],
+    tile_dimensions=[[32, 32]],
     tile_count=16,
-    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(
-        formats, mathop, PERF_RUN=True
+    math_fidelity=lambda formats, math_op: get_valid_math_fidelities(
+        formats, math_op, PERF_RUN=True
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
 )
 def test_perf_eltwise_binary(
     perf_report,
     formats,
-    mathop,
+    math_op,
+    broadcast_type,
+    transpose_srca,
+    tile_dimensions,
     tile_count,
     math_fidelity,
     dest_acc,
 ):
-    if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
+    if math_op != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
     configuration = PerfConfig(
@@ -55,7 +63,7 @@ def test_perf_eltwise_binary(
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[MATH_FIDELITY(math_fidelity), MATH_OP(mathop=mathop)],
+        templates=[MATH_FIDELITY(math_fidelity), MATH_OP(mathop=math_op)],
         runtimes=[TILE_COUNT(tile_count)],
         variant_stimuli=StimuliConfig(
             None,

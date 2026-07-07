@@ -15,6 +15,15 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
+FAST_TILIZE_PERF_FORMATS = [
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Bfp8_b),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
+]
+
 
 def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
     """
@@ -52,22 +61,18 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
 @skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
-    input_format=[DataFormat.Float32, DataFormat.Float16_b],
-    output_format=[DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b],
+    formats=FAST_TILIZE_PERF_FORMATS,
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
-    input_dimensions=generate_input_dimensions(16),
+    dimensions=generate_input_dimensions(16),
 )
 def test_perf_fast_tilize(
     perf_report,
-    input_format,
-    output_format,
+    formats,
     dest_acc,
-    input_dimensions,
+    dimensions,
 ):
-    tile_count = input_dimensions[0] * input_dimensions[1]
-    input_dimensions = (input_dimensions[0] * 32, input_dimensions[1] * 32)
-
-    formats = InputOutputFormat(input_format, output_format)
+    tile_count = dimensions[0] * dimensions[1]
+    pixel_dimensions = (dimensions[0] * 32, dimensions[1] * 32)
 
     configuration = PerfConfig(
         "sources/fast_tilize_test.cpp",
@@ -75,7 +80,7 @@ def test_perf_fast_tilize(
         run_types=[PerfRunType.L1_TO_L1],
         templates=[],
         runtimes=[
-            generate_input_dim(input_dimensions, input_dimensions),
+            generate_input_dim(pixel_dimensions, pixel_dimensions),
             TILE_COUNT(tile_count),
             LOOP_FACTOR(1024),
             NUM_FACES(4),

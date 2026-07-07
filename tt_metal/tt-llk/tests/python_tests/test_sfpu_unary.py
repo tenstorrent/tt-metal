@@ -20,6 +20,7 @@ from helpers.llk_params import (
     DestAccumulation,
     FastMode,
     MathOperation,
+    StableSort,
     format_dict,
 )
 from helpers.param_config import (
@@ -163,6 +164,10 @@ FLOAT_TEST_PARAMS = list(
     "input_dimensions",
     [[64, 64], [128, 256]],
 )
+@pytest.mark.parametrize(
+    "stable_sort",
+    [StableSort.No],
+)
 def test_eltwise_unary_sfpu_float(
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
@@ -170,6 +175,7 @@ def test_eltwise_unary_sfpu_float(
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
+    stable_sort: StableSort,
 ):
     if TestConfig.WITH_COVERAGE and mathop in [
         MathOperation.Acosh,

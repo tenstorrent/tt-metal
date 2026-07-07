@@ -35,22 +35,28 @@ class CT_DIM(TemplateParameter):
 
 @pytest.mark.perf
 @parametrize(
+    cpp_source=["sources/multiple_tiles_eltwise_custom_test.cpp"],
     formats=input_output_formats([DataFormat.Float16_b]),
-    mathop=[MathOperation.Elwsub],
+    math_op=[MathOperation.Elwsub],
     dest_acc=[DestAccumulation.No],
     math_fidelity=[MathFidelity.LoFi],
     broadcast_type=[BroadcastType.Column],
     ct_dim=[1, 8],
+    input_dimensions_A=lambda ct_dim: [[32, 32 * ct_dim]],
+    input_dimensions_B=[[32, 32]],
     loop_factor=[16],
 )
 def test_perf_eltwise_bcast_col_custom(
     perf_report,
+    cpp_source,
     formats,
-    mathop,
+    math_op,
     dest_acc,
     math_fidelity,
     broadcast_type,
     ct_dim,
+    input_dimensions_A,
+    input_dimensions_B,
     loop_factor,
 ):
     configuration = PerfConfig(
@@ -64,7 +70,7 @@ def test_perf_eltwise_bcast_col_custom(
         ],
         templates=[
             MATH_FIDELITY(math_fidelity),
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             BROADCAST_TYPE(broadcast_type),
             CT_DIM(ct_dim),
         ],

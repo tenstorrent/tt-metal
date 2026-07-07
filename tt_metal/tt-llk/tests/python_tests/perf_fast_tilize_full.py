@@ -11,7 +11,7 @@ fast-tilize numbers are directly comparable in the nightly perf dashboard.
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
@@ -31,10 +31,11 @@ from helpers.test_variant_parameters import (
 @skip_for_quasar
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
-    rt_dim=[1],
-    ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
+    dest_acc=[DestAccumulation.No],
+    dimensions=[(1, ct) for ct in range(1, 9)],
 )
-def test_perf_fast_tilize_full(perf_report, formats, rt_dim, ct_dim):
+def test_perf_fast_tilize_full(perf_report, formats, dest_acc, dimensions):
+    rt_dim, ct_dim = dimensions
     # Width 1 uses standard tilize fallback — not representative of fast path
     if ct_dim < 2:
         pytest.skip("ct_dim < 2 uses standard tilize fallback")
@@ -56,10 +57,11 @@ def test_perf_fast_tilize_full(perf_report, formats, rt_dim, ct_dim):
         InputOutputFormat(DataFormat.Float32, DataFormat.Bfp8_b),
         InputOutputFormat(DataFormat.Float32, DataFormat.Bfp4_b),
     ],
-    rt_dim=[1],
-    ct_dim=[2, 4, 8],
+    dest_acc=[DestAccumulation.No],
+    dimensions=[(1, 2), (1, 4), (1, 8)],
 )
-def test_perf_fast_tilize_bfp(perf_report, formats, rt_dim, ct_dim):
+def test_perf_fast_tilize_bfp(perf_report, formats, dest_acc, dimensions):
+    rt_dim, ct_dim = dimensions
     _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim)
 
 
