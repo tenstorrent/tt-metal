@@ -29,9 +29,12 @@ The analyzer reads the DWARF with [`pyelftools`] and walks the
    `math_fidelity=LoFi`). Enum values are resolved to names via the DWARF
    enumeration tables.
 3. **Runtime args.** Each call's `DW_TAG_formal_parameter` children give the
-   argument names; constants the optimizer propagated (`DW_AT_const_value`) are
-   reported as static values, the rest are flagged dynamic (live in registers at
-   runtime and not statically recoverable).
+   argument names; constants the optimizer propagated are reported as static
+   values, the rest are flagged dynamic (live in registers at runtime and not
+   statically recoverable). At `-O3` these constants are rarely emitted as
+   `DW_AT_const_value`; most are recovered by evaluating the parameter's
+   constant location expression (`DW_OP_litN` / `DW_OP_constNu` …
+   `DW_OP_stack_value`).
 4. **Data formats / tile sizes** are additionally parsed from the generated
    `chlkc_descriptors.h` next to the ELFs, since the LLKs read those from
    per-circular-buffer arrays at runtime rather than as template args.
@@ -60,14 +63,14 @@ occurrences each), followed by any arguments that stay dynamic at runtime:
 
 - The kernels must have been built with DWARF debug info:
   `export TT_METAL_RISCV_DEBUG_INFO=1` before the run.
-- Python environment with `pyelftools`. Should also have ttnn
+- Python environment with [`pyelftools`] and [`tabulate`]. Should also have ttnn
   and dependencies if you want to run a model.
 
 ```bash
 ./create_venv.sh
 source python_env/bin/activate
 python -m ensurepip
-python -m pip install pyelftools
+python -m pip install pyelftools tabulate
 ```
 
 ## Usage
@@ -189,7 +192,8 @@ ModelRunner.cleanup(result)
 | `runner.py` | Run a model command with an isolated, debug-info-enabled cache. |
 | `analyzer.py` | Orchestrate discovery + extraction → `RunAnalysis`. |
 | `model.py` | Result dataclasses (+ JSON serialization). |
-| `report.py` | Text / JSON rendering. |
+| `report.py` | Text / JSON / Markdown / CSV rendering. |
 | `cli.py` | Command-line entry point. |
 
 [`pyelftools`]: https://github.com/eliben/pyelftools
+[`tabulate`]: https://github.com/astanin/python-tabulate

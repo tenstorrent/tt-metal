@@ -10,6 +10,8 @@ import io
 import json
 from collections import Counter, defaultdict
 
+from tabulate import tabulate
+
 from .descriptors import KernelDescriptors
 from .model import ApiCall, KernelAnalysis, RunAnalysis, format_function_display
 
@@ -177,10 +179,9 @@ def collapse_rows(analysis: RunAnalysis) -> list[list[str]]:
                 accum,
                 sync,
             )
+            ops_for_key = merged[key]  # ensure the row exists even with no op
             if call.operation:
-                merged[key].add(call.operation)
-            else:
-                merged[key]  # ensure the row exists even with no op
+                ops_for_key.add(call.operation)
 
     rows: list[list[str]] = []
     for key, ops in merged.items():
@@ -192,15 +193,13 @@ def collapse_rows(analysis: RunAnalysis) -> list[list[str]]:
 
 
 def render_table(analysis: RunAnalysis) -> str:
-    """Render the collapsed analysis as a Markdown pipe table."""
-    rows = collapse_rows(analysis)
-    lines = [
-        "| " + " | ".join(TABLE_COLUMNS) + " |",
-        "|" + "|".join("---" for _ in TABLE_COLUMNS) + "|",
-    ]
-    for row in rows:
-        lines.append("| " + " | ".join(_md_cell(c) for c in row) + " |")
-    return "\n".join(lines)
+    """Render the collapsed analysis as a Markdown (GitHub) pipe table.
+
+    Cells are pre-escaped (:func:`_md_cell`) because ``tabulate`` does not
+    escape ``|`` inside cells, which would otherwise break the pipe table.
+    """
+    rows = [[_md_cell(c) for c in row] for row in collapse_rows(analysis)]
+    return tabulate(rows, headers=TABLE_COLUMNS, tablefmt="github")
 
 
 def render_csv(analysis: RunAnalysis) -> str:
