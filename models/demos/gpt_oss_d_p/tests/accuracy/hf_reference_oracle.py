@@ -140,52 +140,8 @@ def main():
             for i in range(num_capture):
                 hooks.append(model.model.layers[i].register_forward_hook(make_hook(i)))
 
-        # Hook scaled_dot_product_attention to capture post-RoPE K and V.
-        # past_key_values stores pre-RoPE keys in many modern HF models; SDPA inputs
-        # are post-RoPE and match what TT writes into fill_cache.
-        #
-        # trust_remote_code models import sdpa into their own module namespace at
-        # load time, so patching torch.nn.functional.F alone is insufficient — we
-        # also patch it in the attention module's namespace directly.
-        import sys
-
-        import torch.nn.functional as F
-
-        kv_captures: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
-        sdpa_call_idx = [0]
-        original_F_sdpa = F.scaled_dot_product_attention
-
-        save_kv = args.save_kv  # avoid late-binding in closure
-
-        def _capturing_sdpa(q, k, v, *a, **kw):
-            idx = sdpa_call_idx[0]
-            sdpa_call_idx[0] += 1
-            if save_kv and idx < num_capture:
-                # k shape: [batch, num_kv_heads, seq_len, head_dim]
-                kv_captures[idx] = (k[0].detach().float(), v[0].detach().float())
-            return original_F_sdpa(q, k, v, *a, **kw)
-
-        # Patch every module that holds a direct binding of the real SDPA function.
-        # trust_remote_code models can import SDPA into helper modules via
-        # `from torch.nn.functional import scaled_dot_product_attention`, creating
-        # a local binding that patching only torch.nn.functional or one specific
-        # module would miss.
-        extra_patched: list[tuple] = []
-        for _mod in list(sys.modules.values()):
-            if _mod is None or _mod is F:
-                continue
-            if getattr(_mod, "scaled_dot_product_attention", None) is original_F_sdpa:
-                _mod.scaled_dot_product_attention = _capturing_sdpa
-                extra_patched.append(_mod)
-
-        F.scaled_dot_product_attention = _capturing_sdpa
-        try:
-            with torch.no_grad():
-                out = model(input_ids=input_ids, use_cache=True)
-        finally:
-            F.scaled_dot_product_attention = original_F_sdpa
-            for _mod in extra_patched:
-                _mod.scaled_dot_product_attention = original_F_sdpa
+        with torch.no_grad():
+            out = model(input_ids=input_ids, use_cache=True)
 
         for h in hooks:
             h.remove()
@@ -206,13 +162,35 @@ def main():
             print(f"[oracle] saved {len(layer_files)} layer activation file(s)", flush=True)
 
         kv_files: dict[str, dict[str, str]] = {}
-        if kv_captures:
-            for i, (cap_k, cap_v) in kv_captures.items():
-                # cap_k / cap_v: [num_kv_heads, seq_len, head_dim] float32, post-RoPE
+        if args.save_kv and out.past_key_values is not None:
+            # past_key_values stores pre-RoPE K; apply RoPE here to match what TT
+            # writes into fill_cache (post-RoPE).  Use the model's own rotary_emb so
+            # frequencies / scaling are identical to the forward pass.
+            position_ids = torch.arange(len(ids), dtype=torch.long).unsqueeze(0)
+            rope_emb = model.model.layers[0].self_attn.rotary_emb
+            dummy = torch.zeros(1, len(ids), model.config.hidden_size)
+            cos, sin = rope_emb(dummy, position_ids)
+            # cos/sin: [1, seq_len, head_dim//2] (HF unique-values format)
+            # Duplicate each value to get Meta-interleaved [1, 1, seq_len, head_dim]
+            cos = cos.unsqueeze(1).repeat_interleave(2, dim=-1).float()  # [1, 1, seq_len, head_dim]
+            sin = sin.unsqueeze(1).repeat_interleave(2, dim=-1).float()
+
+            def _rotate_half(x):
+                # Meta/Llama-style: swap and negate adjacent pairs
+                x1, x2 = x[..., ::2], x[..., 1::2]
+                return torch.stack((-x2, x1), dim=-1).flatten(-2)
+
+            for i, (k, v) in enumerate(out.past_key_values):
+                if i >= num_capture:
+                    break
+                # k: [batch, num_kv_heads, seq_len, head_dim] bfloat16, pre-RoPE
+                k_float = k[0].float()  # [num_kv_heads, seq_len, head_dim]
+                k_post_rope = k_float * cos[0] + _rotate_half(k_float) * sin[0]
+                v_float = v[0].float()  # V is not RoPE-rotated
                 k_fname = f"kv_k_{i}_{key}.npy"
                 v_fname = f"kv_v_{i}_{key}.npy"
-                np.save(outdir / k_fname, cap_k.numpy())
-                np.save(outdir / v_fname, cap_v.numpy())
+                np.save(outdir / k_fname, k_post_rope.numpy())
+                np.save(outdir / v_fname, v_float.numpy())
                 kv_files[str(i)] = {"k": k_fname, "v": v_fname}
             print(f"[oracle] saved {len(kv_files)} KV cache layer(s)", flush=True)
 
