@@ -38,6 +38,12 @@ def adjust_shapes_for_testing(config, mesh_device):
     _, n_tp_devices = mesh_device.shape
     if n_tp_devices != 4:
         config.dim = config.dim // (4 // n_tp_devices)
+    # The gate input/weight are width-sharded across the TP axis, so the per-device width
+    # (config.dim / n_tp_devices) must be tile-aligned (a multiple of 32). Round the model dim up to
+    # a multiple of 32 * n_tp_devices when it does not divide evenly (e.g. GPT-OSS 2880 -> 720/device,
+    # which is 22.5 tiles). This is a no-op for models whose per-device width is already tile-aligned.
+    tile_multiple = 32 * n_tp_devices
+    config.dim = ((config.dim + tile_multiple - 1) // tile_multiple) * tile_multiple
 
 
 def get_input_mem_config(config, mesh_shape):

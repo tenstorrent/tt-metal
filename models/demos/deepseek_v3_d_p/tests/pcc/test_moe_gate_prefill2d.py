@@ -17,6 +17,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -31,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     ValidationResult,
     compare_pcc,
     compare_recall,
+    gpt_topk_softmax_golden,
     grouped_gate_golden_act,
     score_activation,
     validate_composed,
@@ -47,6 +49,7 @@ GATE_MODELS = {
     "kimi": KimiK26Config,
     "glm_5_1": GLM51Config,
     "minimax_m2_7": MiniMaxM27Config,
+    "gpt_oss_120b": GptOss120BConfig,
     "dsv4_pro": DeepSeekV4ProConfig,
     "dsv4_flash": DeepSeekV4FlashConfig,
 }
@@ -187,6 +190,8 @@ REGULAR_GATE_CASES = [
     pytest.param("glm_5_1", GateComputeMode.DEVICE_FP32, id="glm_5_1-device_fp32"),
     pytest.param("minimax_m2_7", GateComputeMode.HOST_ALL, id="minimax_m2_7-host_all"),
     pytest.param("minimax_m2_7", GateComputeMode.DEVICE_FP32, id="minimax_m2_7-device_fp32"),
+    pytest.param("gpt_oss_120b", GateComputeMode.GPT_HOST, id="gpt_oss_120b-gpt_host"),
+    pytest.param("gpt_oss_120b", GateComputeMode.GPT_DEVICE, id="gpt_oss_120b-gpt_device"),
     pytest.param("dsv4_pro", GateComputeMode.DEVICE_FP32, id="dsv4_pro-device_fp32"),
     pytest.param("dsv4_flash", GateComputeMode.DEVICE_FP32, id="dsv4_flash-device_fp32"),
 ]
@@ -328,7 +333,15 @@ def test_forward_pass(
     # Reference forward pass: V4 (sqrtsoftplus) routes through the activation-parametrized grouped
     # gate (single group -> plain top-k, matching the V4 reference router); V3/Kimi use the V3 gate.
     reference_logits = torch_input @ gate_w["weight"].T
-    if config.score_func == "sqrtsoftplus":
+    if gate_fallback_mode in (GateComputeMode.GPT_HOST, GateComputeMode.GPT_DEVICE):
+        # GPT-OSS: top-k on (x@W + bias) raw logits, then softmax over the selected top-k values.
+        logits_fp32 = torch_input.float() @ gate_w["weight"].float().T
+        reference_topk_indices, reference_topk_scores = gpt_topk_softmax_golden(
+            logits_fp32,
+            gate_w["e_score_correction_bias"],
+            config.n_activated_experts,
+        )
+    elif config.score_func == "sqrtsoftplus":
         logits_fp32 = torch_input.float() @ gate_w["weight"].float().T
         reference_topk_indices, reference_topk_scores = grouped_gate_golden_act(
             logits_fp32,
@@ -371,9 +384,17 @@ def test_forward_pass(
     )
     tt_topk_scores, tt_topk_indices, tt_logits = tt_model(tt_input)
 
-    # Validation thresholds depend on gate compute mode
+    # Validation thresholds depend on gate compute mode. Host modes (exact torch top-k) use the tight
+    # set; on-device modes are looser because bf16 matmul shifts near-tie top-k selection and weights.
     if gate_fallback_mode == GateComputeMode.HOST_ALL:
         recall_threshold = 0.997
+        logits_pcc_threshold = 0.997
+        scores_pcc_threshold = 0.99
+    elif gate_fallback_mode == GateComputeMode.GPT_HOST:
+        # GPT_HOST runs the matmul on device (bf16) and only the top-k/softmax on host, so top-k
+        # selection recall is bf16-limited like the on-device modes, while the softmax weights (given
+        # the selection) stay exact and keep the tight scores threshold.
+        recall_threshold = 0.95
         logits_pcc_threshold = 0.997
         scores_pcc_threshold = 0.99
     else:
