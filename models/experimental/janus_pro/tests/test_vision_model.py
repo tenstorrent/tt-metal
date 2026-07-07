@@ -50,11 +50,14 @@ def test_janus_vision_model(
 
     input_tensor = torch.rand((bsz, in_channels, image_size, image_size))
 
-    # HF reference: aligner(vision_model(pixel_values).last_hidden_state) -> (B, 576, 4096)
+    # HF reference: aligner(vision_model(pixel_values).last_hidden_state) -> (B, 576, 4096).
+    # Depending on the transformers version, get_image_features returns either the aligned
+    # features tensor directly or a BaseModelOutputWithPooling whose pooler_output holds them.
     reference_model = model_args.reference_vision_transformer(wrap=False)
     reference_model.eval()
     with torch.no_grad():
-        reference_output = reference_model.model.get_image_features(input_tensor)
+        image_features = reference_model.model.get_image_features(input_tensor)
+    reference_output = getattr(image_features, "pooler_output", image_features)
 
     tt_model = TtJanusProTransformerVision(
         mesh_device,
