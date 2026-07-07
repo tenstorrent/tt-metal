@@ -4,7 +4,11 @@ import pathlib
 from infra.data_collection.github import workflows
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis
 from infra.data_collection.models import InfraErrorV1, TestErrorV1
-from infra.data_collection.github.utils import get_job_failure_signature_, _card_type_from_job_labels, _load_sku_config_skus
+from infra.data_collection.github.utils import (
+    get_job_failure_signature_,
+    _card_type_from_job_labels,
+    _load_sku_config_skus,
+)
 from infra.data_collection.pydantic_models import JobStatus
 from infra.data_collection.pydantic_models import Step
 from loguru import logger
@@ -316,9 +320,15 @@ def test_non_checkout_git_failure_stays_generic():
 
 @pytest.fixture(autouse=True)
 def clear_sku_config_cache():
+    from infra.data_collection.github.utils import _root_sku_for, _sku_config_sku_names
+
     _load_sku_config_skus.cache_clear()
+    _sku_config_sku_names.cache_clear()
+    _root_sku_for.cache_clear()
     yield
     _load_sku_config_skus.cache_clear()
+    _sku_config_sku_names.cache_clear()
+    _root_sku_for.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -330,7 +340,7 @@ def clear_sku_config_cache():
             ["P300-viommu", "arch-blackhole", "in-service", "pipeline-yyz2-lfc"],
             "bh_p300",
         ),
-        (["P300-viommu", "in-service", "pipeline-yyz2-lfc"], "bh_p300_viommu"),
+        (["P300-viommu", "in-service", "pipeline-yyz2-lfc"], "bh_p300"),
         (
             ["P150", "arch-blackhole", "in-service", "pipeline-functional"],
             "bh_p150",
@@ -340,8 +350,16 @@ def clear_sku_config_cache():
             ["config-t3000", "arch-wormhole_b0", "in-service", "pipeline-functional"],
             "wh_llmbox",
         ),
-        # tm-fabric-style runs_on is a strict subset of bh_p300 runs_on in sku_config
-        (["P300-viommu", "arch-blackhole", "in-service"], None),
+        (
+            ["arch-wormhole_b0", "topology-6u", "in-service", "pipeline-perf"],
+            "wh_galaxy",
+        ),
+        # tm-fabric-style runs_on: strict match fails, label fallback applies
+        (["P300-viommu", "arch-blackhole", "in-service"], "bh_p300"),
+        # model perf-style runs_on: missing arch-blackhole for bh_p150_perf
+        (["P150", "pipeline-perf", "bare-metal", "in-service"], "bh_p150"),
+        # legacy partial wh_n300 labels
+        (["N300", "in-service"], "wh_n300"),
         (["build", "in-service"], None),
         (["ubuntu-latest"], None),
     ],
@@ -350,9 +368,12 @@ def test_card_type_from_job_labels(labels, expected_card_type):
     assert _card_type_from_job_labels(labels) == expected_card_type
 
 
-def test_card_type_prefers_more_specific_sku():
+def test_card_type_groups_p300_variants_under_root_sku():
     labels = ["P300-viommu", "arch-blackhole", "in-service", "pipeline-yyz2-lfc"]
     assert _card_type_from_job_labels(labels) == "bh_p300"
+
+    viommu_only_labels = ["P300-viommu", "in-service", "pipeline-yyz2-lfc"]
+    assert _card_type_from_job_labels(viommu_only_labels) == "bh_p300"
 
 
 def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_environment):
@@ -360,9 +381,7 @@ def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_
 
     wh_n300_labels = {"N300", "cloud-virtual-machine", "in-service"}
     full_wh_n300_jobs = [
-        job
-        for job in pipeline.jobs
-        if job.job_label and wh_n300_labels.issubset(set(job.job_label.split(",")))
+        job for job in pipeline.jobs if job.job_label and wh_n300_labels.issubset(set(job.job_label.split(",")))
     ]
     assert full_wh_n300_jobs
     assert all(job.card_type == "wh_n300" for job in full_wh_n300_jobs)
@@ -376,4 +395,4 @@ def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_
         and "cloud-virtual-machine" not in job.job_label.split(",")
     ]
     assert partial_n300_jobs
-    assert all(job.card_type is None for job in partial_n300_jobs)
+    assert all(job.card_type == "wh_n300" for job in partial_n300_jobs)

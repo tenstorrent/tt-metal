@@ -358,16 +358,46 @@ def _load_sku_config_skus() -> dict:
     return config.get("skus") or {}
 
 
-def _card_type_from_job_labels(labels: list[str]) -> Optional[str]:
-    """
-    Map GitHub job runner labels to a pipeline SKU from sku_config.yaml.
+@functools.lru_cache(maxsize=1)
+def _sku_config_sku_names() -> tuple[str, ...]:
+    return tuple(_load_sku_config_skus().keys())
 
-    A SKU matches when every label in its runs_on list is present on the job (the job
-    may have additional labels). When multiple SKUs match, the most specific SKU wins
-    (the one with the largest runs_on list). Ties break lexicographically on SKU name.
+
+def _is_sku_name_prefix(prefix: str, sku_name: str) -> bool:
+    if sku_name == prefix:
+        return True
+    if len(prefix) >= len(sku_name) or not sku_name.startswith(prefix):
+        return False
+    return sku_name[len(prefix)] in "_-"
+
+
+@functools.lru_cache(maxsize=128)
+def _root_sku_for(sku_name: str) -> str:
+    candidates = [name for name in _sku_config_sku_names() if _is_sku_name_prefix(name, sku_name)]
+    return min(candidates, key=lambda name: (len(name), name))
+
+
+# Runner labels checked in order when strict sku_config matching fails.
+_CARD_TYPE_LABEL_FALLBACK: tuple[tuple[str, str], ...] = (
+    ("P300-viommu", "bh_p300"),
+    ("P300", "bh_p300"),
+    ("P150", "bh_p150"),
+    ("P100", "bh_p100"),
+    ("N300", "wh_n300"),
+    ("N150", "wh_n150"),
+)
+
+
+def _card_type_from_sku_config(labels: list[str]) -> Optional[str]:
+    """
+    Match job labels to a root pipeline SKU from sku_config.yaml.
+
+    Every SKU whose runs_on labels are present on the job is a match (sim_* SKUs are
+    skipped). Each match is mapped to the shortest prefix SKU name in sku_config; when
+    multiple roots match, the first root alphabetically is returned.
     """
     label_set = set(labels)
-    matches: list[tuple[int, str]] = []
+    matching_skus: list[str] = []
 
     for sku_name, sku_entry in _load_sku_config_skus().items():
         if sku_name.startswith("sim_"):
@@ -377,18 +407,39 @@ def _card_type_from_job_labels(labels: list[str]) -> Optional[str]:
         if not runs_on:
             continue
 
-        required_labels = frozenset(runs_on)
-        if not required_labels.issubset(label_set):
-            continue
+        if frozenset(runs_on).issubset(label_set):
+            matching_skus.append(sku_name)
 
-        matches.append((len(required_labels), sku_name))
-
-    if not matches:
+    if not matching_skus:
         return None
 
-    matches.sort(key=lambda match: (-match[0], match[1]))
-    card_type = matches[0][1]
-    logger.info(f"Matched job labels to SKU {card_type!r}")
+    roots = {_root_sku_for(sku_name) for sku_name in matching_skus}
+    return sorted(roots)[0]
+
+
+def _card_type_fallback_from_job_labels(labels: list[str]) -> Optional[str]:
+    """
+    Best-effort card type when sku_config has no full runs_on match.
+
+    Maps a single hardware runner label to the corresponding root SKU.
+    """
+    label_set = set(labels)
+    for runner_label, card_type in _CARD_TYPE_LABEL_FALLBACK:
+        if runner_label in label_set:
+            return card_type
+    return None
+
+
+def _card_type_from_job_labels(labels: list[str]) -> Optional[str]:
+    card_type = _card_type_from_sku_config(labels)
+    if card_type is None:
+        card_type = _card_type_fallback_from_job_labels(labels)
+        if card_type is not None:
+            logger.info(f"Matched job labels to SKU {card_type!r} via label fallback")
+            return card_type
+        return None
+
+    logger.info(f"Matched job labels to root SKU {card_type!r}")
     return card_type
 
 
