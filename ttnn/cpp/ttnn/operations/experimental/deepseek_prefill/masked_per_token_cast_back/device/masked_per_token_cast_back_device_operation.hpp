@@ -4,20 +4,21 @@
 
 #pragma once
 
+#include <cstdint>
 #include <variant>
 
-#include "per_token_cast_back_device_operation_types.hpp"
-#include "per_token_cast_back_program_factory.hpp"
+#include "masked_per_token_cast_back_device_operation_types.hpp"
+#include "masked_per_token_cast_back_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::experimental::prim::per_token_cast_back {
+namespace ttnn::experimental::prim::masked_per_token_cast_back {
 
-struct PerTokenCastBackDeviceOperation {
-    using operation_attributes_t = PerTokenCastBackParams;
-    using tensor_args_t = PerTokenCastBackInputs;
+struct MaskedPerTokenCastBackDeviceOperation {
+    using operation_attributes_t = MaskedPerTokenCastBackParams;
+    using tensor_args_t = MaskedPerTokenCastBackInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<PerTokenCastBackProgramFactory>;
+    using program_factory_t = std::variant<MaskedPerTokenCastBackProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -27,12 +28,16 @@ struct PerTokenCastBackDeviceOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::experimental::prim::per_token_cast_back
+}  // namespace ttnn::experimental::prim::masked_per_token_cast_back
 
 namespace ttnn::prim {
-ttnn::Tensor per_token_cast_back(
+ttnn::Tensor masked_per_token_cast_back(
     const Tensor& input_e4m3,
     const Tensor& input_scale,
+    const Tensor& expert_region_offsets,
+    const Tensor& expert_token_counts,
+    const Tensor& global_expert_idx_table,
+    uint32_t experts_per_chip,
     tt::tt_metal::DataType output_dtype,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 }  // namespace ttnn::prim

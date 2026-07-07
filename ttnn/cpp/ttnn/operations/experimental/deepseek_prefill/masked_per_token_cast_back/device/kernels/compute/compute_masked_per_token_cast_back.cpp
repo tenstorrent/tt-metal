@@ -2,14 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// per_token_cast_back: out = decode(input_e4m3) * scale, where scale is one fp32
-// scalar per token (row) per 128-wide block. A 128-element block spans
-// 4 consecutive 32x32 tiles; within any tile the scale is a per-row scalar (constant across columns),
-// so we broadcast it with mul_tiles_bcast_cols (BroadcastType::COL = filled column 0, per notes §6).
-//
-// The reader builds one bcast operand tile in cb_scale_bcast with column 0 = scale[:, block_idx]
-// (face-aware). There is no in-kernel column-shift LLK on Blackhole (notes §6), so the per-block
-// column selection lives in the reader's data layout, not a shift here.
+// masked_per_token_cast_back: same math as per_token_cast_back (out = decode(input_e4m3) * scale, with
+// scale broadcast over each 128-wide block's columns), but the per-core num_blocks loop count is
+// computed by the reader (from the device-resident per-expert counts) and delivered here via the
+// cb_control mailbox (read_tile_value distributes the UNPACK read to MATH/PACK so all three threads
+// agree on the loop bound).
 //
 // Per block = tile_h rows x 128 cols = 4 tiles for default 32-wide tiles:
 //   Phase 1 : input_e4m3 RM -> fp32 RM      (copy_tile, index 0)
@@ -26,6 +23,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_input_e4m3_id = get_compile_time_arg_val(0);
@@ -43,6 +41,8 @@ void kernel_main() {
     // Tile dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(6);
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_control_id = get_compile_time_arg_val(8);
+    CircularBuffer cb_control(cb_control_id);
     constexpr uint32_t block_w = 128;                // BlockW
     constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
     constexpr uint32_t block_ht = 1;                 // BlockHt
@@ -50,12 +50,16 @@ void kernel_main() {
 
     constexpr uint32_t IDST0 = 0;
 
-    uint32_t num_blocks = get_arg_val<uint32_t>(0);  // tile_h x 128 blocks for this core
-
     compute_kernel_hw_startup(cb_input_e4m3_id, cb_out_fp32_id);
+
+    // num_blocks is computed by the reader and delivered via the control mailbox.
+    cb_control.wait_front(1);
+    uint32_t num_blocks = cb_control.read_tile_value(0, 0);
+    cb_control.pop_front(1);
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
+            DeviceZoneScopedN("compute_phase");
             // ----- Phase 1: input_e4m3 row-major -> fp32 row-major (one tile at a time, index 0) -----
             reconfig_data_format_srca(cb_input_e4m3_id);
             pack_reconfig_data_format(cb_in_rm_id);
