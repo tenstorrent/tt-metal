@@ -77,6 +77,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
+#include "impl/program/kernel_prewarm.hpp"
 #ifdef GENERATE_HASH_LOG
 #include <fstream>
 #endif
@@ -2120,6 +2121,31 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         "dependent on information that is set during device initialization.",
         this->get_id());
 
+    // Opt-in kernel prewarm (TT_METAL_KERNEL_PREWARM_MANIFEST): a background batch launched at device
+    // init populates the JIT cache for the *model* kernels during the host-idle weight-load/warmup
+    // window. Precise barrier: only block here if THIS program compiles a kernel the batch is warming
+    // -- i.e. one whose out_dir the batch may be writing right now (FileRenamer temp names are
+    // per-process, so a concurrent same-out_dir build would corrupt the ELF). Device-init dispatch/
+    // fabric programs build a disjoint kernel set the batch intentionally skips, so they compile
+    // concurrently with the batch instead of serializing behind it. No-op when the flag is unset.
+    if (kernel_prewarm::prewarm_enabled()) {
+        bool warms_this_program = false;
+        for (const auto& kernels : kernels_) {
+            for (const auto& [id, kernel] : kernels) {
+                if (kernel_prewarm::prewarm_warms_kernel(kernel->name())) {
+                    warms_this_program = true;
+                    break;
+                }
+            }
+            if (warms_this_program) {
+                break;
+            }
+        }
+        if (warms_this_program) {
+            kernel_prewarm::wait_for_prewarm();
+        }
+    }
+
     bool remote_enabled = jit_server::JitCompileRpcClient::enabled();
     std::vector<std::shared_future<void>> events;
 
@@ -2207,6 +2233,19 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         kernel->read_binaries(device, binary_root);
                         kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
                         Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+                        // Record this kernel in the self-bootstrapping prewarm manifest (default-on;
+                        // TT_METAL_KERNEL_PREWARM=0 opts out). capture_needed() dedups against the
+                        // on-disk manifest from the cheap (build_key, name/hash) key, so only kernels
+                        // not already recorded pay the build_kernel_descriptor read -- a cold cache
+                        // records the full set, warm runs add only new kernels. Read-only on the
+                        // genfiles: ensure_kernel_binaries() above already (re)generated them, and
+                        // regenerating here would race parallel device-init builds sharing dispatch
+                        // kernels (transient "Cannot read file").
+                        if (kernel_prewarm::capture_needed(
+                                build_env.build_key(), kernel->name() + "/" + std::to_string(kernel_hash))) {
+                            kernel_prewarm::append_manifest_entry(
+                                build_kernel_descriptor(device, kernel, build_options, kernel_hash).request);
+                        }
                     },
                     events);
             }
