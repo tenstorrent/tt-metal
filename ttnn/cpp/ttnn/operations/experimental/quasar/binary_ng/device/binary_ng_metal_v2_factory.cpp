@@ -537,19 +537,16 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // Compute: consumes pre_lhs/pre_rhs, produces out. When an operand has activations, the kernel both
     // produces (PREPROCESS writes) and consumes (binary op reads) its post DFB — a self-loop pair
-    // (one PRODUCER + one CONSUMER binding), declared INTRA (intra-thread; the only supported mode).
+    // (one PRODUCER + one CONSUMER binding on the same DFB, resolved intra-thread by default).
     m2::Group<m2::DFBBinding> compute_dfb_bindings = {
         m2::ConsumerOf(IN0, "pre_lhs"), m2::ConsumerOf(IN1, "pre_rhs"), m2::ProducerOf(OUT, "out")};
-    m2::KernelAdvancedOptions compute_adv;
     if (has_lhs_act) {
         compute_dfb_bindings.push_back(m2::ProducerOf(POST_LHS, "post_lhs"));
         compute_dfb_bindings.push_back(m2::ConsumerOf(POST_LHS, "post_lhs"));
-        compute_adv.dfb_self_loop_connectivities.emplace(POST_LHS, m2::DFBSelfLoopConnectivity::INTRA);
     }
     if (has_rhs_act) {
         compute_dfb_bindings.push_back(m2::ProducerOf(POST_RHS, "post_rhs"));
         compute_dfb_bindings.push_back(m2::ConsumerOf(POST_RHS, "post_rhs"));
-        compute_adv.dfb_self_loop_connectivities.emplace(POST_RHS, m2::DFBSelfLoopConnectivity::INTRA);
     }
 
     m2::Group<std::string> compute_rt_names = {"num_tiles"};
@@ -574,7 +571,6 @@ ProgramArtifacts create_no_bcast_artifacts(
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
             },
-        .advanced_options = compute_adv,
     };
 
     // --- Placement + per-core runtime args (mirrors the descriptor factory's per-core loop). Sharded:
