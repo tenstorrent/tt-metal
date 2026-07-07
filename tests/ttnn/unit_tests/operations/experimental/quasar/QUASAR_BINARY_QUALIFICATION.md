@@ -133,6 +133,9 @@ even on a first run with no baseline.
 
 ## Pointers
 
+- **LLK-facing gap inventory** — the binary ops + activations Wormhole has that Quasar lacks, written for
+  the LLK team (classes, per-primitive file:line, fix pattern, priorities): `QUASAR_LLK_GAPS.md` (this dir).
+  It is the curated snapshot of the two discovery folds above; keep it in sync on foundation bumps.
 - Op parity inventory & known gaps: `QUASAR_PARITY_GAPS.md` (in the op dir,
   `ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/`).
 - Foundation CI: craq-sim `.github/workflows/quasar-llk.yml` (LLK on sim), `quasar-ops.yml` (op lane,
