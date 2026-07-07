@@ -70,6 +70,7 @@ ResolvedBindings resolve_bindings(
         }
         std::unordered_set<Buffer*> input_buffers;   // buffers seen in the input region
         std::unordered_set<Buffer*> output_buffers;  // buffers seen in the output/workload region
+        std::unordered_set<Buffer*> inplace_alias_used;  // output buffers already granted one input-region skip
         for (size_t i = 0; i < tensor_buffers.size(); ++i) {
             Buffer* buf = tensor_buffers[i];
             if (!buf) {
@@ -80,9 +81,11 @@ ResolvedBindings resolve_bindings(
             if (!is_input && input_buffers.contains(buf)) {
                 continue;
             }
-            // An input-region entry that is also an output buffer is the op's output (an in-place
-            // alias, e.g. output_tensor carried in tensor_args), not a distinct second input — safe.
-            if (is_input && output_region.contains(buf)) {
+            // An output buffer carried in the input region (the op's output_tensor) is an in-place
+            // alias, not a distinct input — skip it ONCE. A second input-region occurrence means the
+            // buffer genuinely repeats across input positions (e.g. op(X, X, out=X)); fall through so
+            // it still bails, else a later same-shape op(X, Y, out=X) hit would patch input-b to X.
+            if (is_input && output_region.contains(buf) && inplace_alias_used.insert(buf).second) {
                 continue;
             }
             // Otherwise a repeat is ambiguous (matmul(X, X), or a repeated output) — bail to slow path.
