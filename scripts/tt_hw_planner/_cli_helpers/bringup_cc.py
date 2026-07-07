@@ -394,7 +394,7 @@ def run_bringup_cc(
         print(f"  [loader-resolver] pre-flight skipped: {type(_pf_exc).__name__}: {_pf_exc}")
     prompt = _bringup_cc_prompt(model_id, Path(demo_dir), pcc)
     sep = "=" * 78
-    _seen = {"grad": set(), "shard": set()}
+    _seen = {"grad": set(), "shard": set(), "comps": set(), "decomposed": set(), "decomp_ever": set(), "total": 0}
 
     def _banner(title):
         print()
@@ -402,14 +402,54 @@ def run_bringup_cc(
         print(f"  {title}")
         print(sep)
 
+    def _read_components():
+        try:
+            data = json.loads((Path(demo_dir) / "bringup_status.json").read_text())
+            return {
+                str(c.get("name", "")).strip()
+                for c in (data.get("components") or [])
+                if str(c.get("name", "")).strip()
+            }
+        except Exception:
+            return set()
+
+    def _read_decomposed():
+        try:
+            return set(json.loads(Path(state_path).read_text()).get("decomposed") or [])
+        except Exception:
+            return set()
+
     def _announce_graduations(st):
         cur_g = set(st.get("graduated") or [])
         cur_s = set(st.get("shard_graduated") or [])
+        comps = _read_components()
+        total = len(comps) if comps else max(_seen["total"], len(cur_g))
+        decomp = _read_decomposed()
+
+        # DECOMPOSITION: a parent newly entered the decomposed set (children spawned -> total grew)
+        for parent in sorted(decomp - _seen["decomposed"]):
+            children = sorted(c for c in (comps - _seen["comps"]) if c != parent)
+            k = len(children) if children else max(total - _seen["total"], 0)
+            gn = len(cur_g)
+            print(
+                f"  ⊕ DECOMPOSED `{parent}` → {k} child module(s); parent retired to CPU · "
+                f"total {_seen['total']}→{total} · {gn}/{total} graduated, {total - gn} left"
+            )
+            for ch in children[:12]:
+                print(f"      - {ch}")
+
+        # GRADUATIONS (running count); a component that was decomposed and now graduates = RECOMPOSED parent
         for c in sorted(cur_g - _seen["grad"]):
-            print(f"  ✓ `{c}` GRADUATED to native TTNN (PCC-verified)")
+            gn = len(cur_g)
+            tag = "↻ RECOMPOSED" if c in (decomp | _seen["decomp_ever"]) else "✓ GRADUATED"
+            extra = " (children folded back into parent)" if tag.startswith("↻") else " to native TTNN (PCC-verified)"
+            print(f"  {tag} `{c}`{extra} · {gn}/{total} graduated, {total - gn} left")
         for c in sorted(cur_s - _seen["shard"]):
-            print(f"  ✓ `{c}` SHARD-GRADUATED on the mesh (gathered-PCC)")
+            print(f"  ✓ `{c}` SHARD-GRADUATED on the mesh (gathered-PCC) · {len(cur_s)} sharded")
+
         _seen["grad"], _seen["shard"] = cur_g, cur_s
+        _seen["comps"], _seen["decomposed"], _seen["total"] = comps, decomp, total
+        _seen["decomp_ever"] |= decomp
 
     def _pre_round(round_no, st):
         _announce_graduations(st)
