@@ -25,12 +25,22 @@
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-6u
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-single-galaxy
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-dual-galaxy
-    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-misc
   skus:
     cpu_medium:
-      # bh-pod-pipeline (now resolvable after the SC36 subtorus rename) adds ~30 per-host-sliced pod
-      # combos on top of the single-galaxy slices, pushing this shard past the old 15-min cap.
+      timeout: 25
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
+# Split out of bh-slices: bh-pod-pipeline is now resolvable after the SC36 subtorus rename and runs ~30
+# per-host-sliced pod combos across 4 single-pod mocks, which pushed the combined bh-slices shard past
+# even a 40-min cap on CI. Kept as its own shard.
+- id: fabric-cpu-bh-pod-pipeline
+  name: fabric cpu unit tests (bh-pod-pipeline)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline
+  skus:
+    cpu_medium:
       timeout: 40
   team: scaleout
   arch: wormhole_b0
