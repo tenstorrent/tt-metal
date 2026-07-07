@@ -28,6 +28,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.janus_pro.tt.janus_pro_vision_model import TtJanusProTransformerVision
+from models.experimental.janus_pro.tt.load_checkpoints import convert_vision_hf_to_meta
 from models.experimental.janus_pro.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
