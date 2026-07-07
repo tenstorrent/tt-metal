@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_hc_sharded_program_factory.hpp"
+#include "ttnn/operations/data_movement/transpose/device/transpose_device_operation.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
