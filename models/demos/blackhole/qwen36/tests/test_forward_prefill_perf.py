@@ -42,6 +42,20 @@ No-checkpoint mode (GDN_PERF_RANDOM_WEIGHTS=1):
     GDN_PERF_RANDOM_WEIGHTS=1 HF_MODEL=/path/to/qwen36-config-only-dir \
     MESH_DEVICE=P150x4 python -m tracy -r -p -m pytest \
       models/demos/blackhole/qwen36/tests/test_forward_prefill_perf.py -k T2048 -s
+
+Single-card TP-shape simulation (GDN_PERF_SIM_TP=n):
+  On a 1x1 mesh, reproduce the shapes ONE card sees inside an n-way tensor-parallel
+  split (e.g. n=4 -> the per-27B-card shapes: Nv_tp=12, Nk_tp=4, quarter-width
+  projections, GDN-core batch BH=12). Without it, single-device profiling builds the
+  FULL layer (all 48 value heads) -> 4x the GDN-core batch of a real TP-4 card. The
+  simulation is faithful for every COMPUTE stage and for the per-card L1/DRAM working
+  set, but PF_all_reduce is a no-op at 1x1 (reduce-scatter needs real multi-card
+  fabric) and the output is a pre-all-reduce partial. Forces synthesized weights
+  (the checkpoint holds full, unsharded heads). Runs on ONE card:
+
+    GDN_PROFILE=1 GDN_PERF_SIM_TP=4 MESH_DEVICE=P150 HF_MODEL=Qwen/Qwen3.6-27B \
+    python -m tracy -r -p -m pytest \
+      models/demos/blackhole/qwen36/tests/test_forward_prefill_perf.py -k T2048 -s
 """
 import os
 
@@ -138,24 +152,55 @@ def test_forward_prefill_perf(mesh_device, T, window, reset_seeds, ensure_gc, re
     # GDN state is O(1), so the ISL never appears as a single tensor dim).
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=max(256, window + 128))
     nd = mesh_device.get_num_devices()
-    # Qwen36ModelArgs gates the TP config (gdn_*_tp dims) on nd>1. For single-device profiling
-    # (chosen because the 4-card Tracy path has a device->host clock-sync bug that corrupts
-    # multi-core op durations), force it so TPGatedDeltaNet builds with tp=1 (each "shard" = full
-    # tensor; all_reduce short-circuits at mesh_shape==[1,1]). Clean per-stage COMPUTE timing;
-    # the only stage this misses is the all_reduce (a no-op at 1x1).
-    if nd == 1 and not hasattr(args, "gdn_nk_tp"):
+    sim_tp = int(os.environ.get("GDN_PERF_SIM_TP", "0") or "0")
+    if sim_tp > 1 and nd > 1:
+        logger.warning(f"GDN_PERF_SIM_TP={sim_tp} ignored: only applies on a single card (got {nd} devices, real TP)")
+        sim_tp = 0
+    # Qwen36ModelArgs gates the TP config (gdn_*_tp dims) on nd>1. On a single card we force it:
+    #   * default (sim_tp<=1): tp=1 -> each "shard" = the FULL tensor (all 48 value heads). Clean
+    #     per-stage COMPUTE timing (all_reduce is a no-op at 1x1), but 4x the GDN-core batch of a
+    #     real 27B TP-4 card. Single-device profiling is used because the 4-card Tracy path had a
+    #     device->host clock-sync bug (fixed in fw 19.7.0; see handoff).
+    #   * GDN_PERF_SIM_TP=n: reproduce the shapes ONE card sees inside an n-way TP split. Derive the
+    #     tp=n sharded dims (num_devices swap around _init_tp_config), then COLLAPSE the "full" gdn_*
+    #     dims to those per-shard sizes -> a consistent tp=1 model of a single shard, so
+    #     _synth_gdn_sd + load_gdn_weights_tp (incl. the row-parallel out-proj) build per-shard
+    #     weights with no production-code changes. Faithful for every stage EXCEPT PF_all_reduce
+    #     (no-op at 1x1) and for the per-card L1/DRAM working set.
+    if nd == 1 and sim_tp > 1:
+        assert args.linear_num_value_heads % sim_tp == 0 and args.linear_num_key_heads % sim_tp == 0, (
+            f"GDN_PERF_SIM_TP={sim_tp} must divide GDN head counts "
+            f"(value={args.linear_num_value_heads}, key={args.linear_num_key_heads})"
+        )
+        args.num_devices = sim_tp
+        args._init_tp_config(mesh_device)  # derive gdn_*_tp as if tp=sim_tp
+        args.num_devices = 1  # physical truth: one card, 1x1 mesh (all_reduce short-circuits)
+        # Collapse full gdn_* dims -> the per-shard (_tp) sizes: a consistent single-shard tp=1
+        # model, so the unmodified synth + weight loader build per-shard-width weights.
+        args.gdn_nk = args.gdn_nk_tp
+        args.gdn_nv = args.gdn_nv_tp
+        args.gdn_key_dim = args.gdn_key_dim_tp
+        args.gdn_value_dim = args.gdn_value_dim_tp
+        args.gdn_qkv_dim = args.gdn_qkv_dim_tp
+        args.gdn_z_dim = args.gdn_z_dim_tp
+        args._gdn_sim_tp = sim_tp
+    elif nd == 1 and not hasattr(args, "gdn_nk_tp"):
         args._init_tp_config(mesh_device)
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     logger.info(
-        f"forward_prefill perf: devices={nd} gdn_layer={li} ISL={T} window={window} nwin={nwin} "
-        f"Nk_tp={args.gdn_nk_tp} Nv_tp={args.gdn_nv_tp} dim={args.dim}"
+        f"forward_prefill perf: devices={nd}{f' SIM_TP={sim_tp}' if sim_tp > 1 else ''} gdn_layer={li} "
+        f"ISL={T} window={window} nwin={nwin} Nk_tp={args.gdn_nk_tp} Nv_tp={args.gdn_nv_tp} dim={args.dim}"
     )
 
     # Weights: real (FP8 checkpoint) or synthesized. Timing is data-independent for
     # these ops, so weight *values* don't affect the profile — GDN_PERF_RANDOM_WEIGHTS
-    # skips the shard read entirely (see module docstring).
-    if os.environ.get("GDN_PERF_RANDOM_WEIGHTS") == "1":
-        logger.info("GDN_PERF_RANDOM_WEIGHTS=1 -> synthesizing random GDN weights (no checkpoint shard read)")
+    # skips the shard read entirely (see module docstring). SIM_TP always synthesizes:
+    # the checkpoint holds full, unsharded heads that don't fit the collapsed per-shard dims.
+    if sim_tp > 1 and os.environ.get("GDN_PERF_RANDOM_WEIGHTS") != "1":
+        logger.info(f"GDN_PERF_SIM_TP={sim_tp} -> synthesizing per-shard GDN weights (checkpoint holds full heads)")
+    if sim_tp > 1 or os.environ.get("GDN_PERF_RANDOM_WEIGHTS") == "1":
+        if sim_tp <= 1:
+            logger.info("GDN_PERF_RANDOM_WEIGHTS=1 -> synthesizing random GDN weights (no checkpoint shard read)")
         sd = _synth_gdn_sd(args)
     else:
         sd = load_gdn_layer(args.CKPT_DIR, li)
