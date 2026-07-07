@@ -140,10 +140,14 @@ class LlkApiExtractor:
 
     @staticmethod
     def _template_value_arg(child: DIE, enums: EnumTable) -> TemplateArg:
-        const = child.attributes.get("DW_AT_const_value")
-        raw_value = const.value if const is not None else 0
         type_die = strip_type_qualifiers(follow_ref(child, "DW_AT_type"))
         type_str = type_name(type_die) if type_die is not None else None
+        name = attr_str(child, "DW_AT_name") or "?"
+
+        const = child.attributes.get("DW_AT_const_value")
+        if const is None or not isinstance(const.value, int):
+            return TemplateArg(name=name, value="?", type_name=type_str)
+        raw_value = const.value
 
         enum_name = None
         value: int | bool | str = raw_value
@@ -153,7 +157,7 @@ class LlkApiExtractor:
             value = bool(raw_value)
 
         return TemplateArg(
-            name=attr_str(child, "DW_AT_name") or "?",
+            name=name,
             value=value,
             type_name=type_str,
             enum_name=enum_name,

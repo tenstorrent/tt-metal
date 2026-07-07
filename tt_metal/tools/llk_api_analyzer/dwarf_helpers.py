@@ -148,7 +148,12 @@ def type_name(type_die: DIE | None, _depth: int = 0) -> str:
 
 @dataclass
 class FileTable:
-    """Resolves ``DW_AT_decl_file`` indices to source paths for one CU."""
+    """Resolves ``DW_AT_decl_file`` indices to source paths for one CU.
+
+    Assumes DWARF 5, whose file and directory indices are both 0-based into the
+    line program's tables (the toolchain that builds these kernels emits DWARF
+    5). ``DW_AT_decl_file`` therefore indexes ``files`` directly.
+    """
 
     files: list[str] = field(default_factory=list)
 
@@ -164,19 +169,11 @@ class FileTable:
             return cls()
         header = line_program.header
         include_dirs = [d.decode("utf-8", "replace") for d in header["include_directory"]]
-        version = header["version"]
         paths: list[str] = []
         for entry in header["file_entry"]:
             name = entry.name.decode("utf-8", "replace")
             dir_index = entry["dir_index"]
-            # DWARF<=4 directory indices are 1-based (0 == compilation dir);
-            # DWARF5 indices are 0-based into the directory table.
-            directory = ""
-            if version >= 5:
-                if 0 <= dir_index < len(include_dirs):
-                    directory = include_dirs[dir_index]
-            elif dir_index > 0 and dir_index <= len(include_dirs):
-                directory = include_dirs[dir_index - 1]
+            directory = include_dirs[dir_index] if 0 <= dir_index < len(include_dirs) else ""
             paths.append(f"{directory}/{name}" if directory else name)
         return cls(paths)
 
