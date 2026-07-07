@@ -31,46 +31,81 @@
 }
 
 :root {
-  --color-background: #edeff9;
-  --color-background-alt: #d7dbeb;
-  --color-background-alt2: #ccd2f9;
-  --color-foreground: #202020;
-  --color-accent: #5164e0;
+  --color-background: #F1F8F8;
+  --color-background-alt: #C7D9D8;
+  --color-background-alt2: #DCF0EE;
+  --color-foreground: #092221;
+  --color-accent: #1B8EB1;
+
+  /* Figma design tokens */
+  --background-inverse: #092221;
+  --stone-900: #092221;
+  --border: #C7D9D8;
+  --button-primary-background: #1B8EB1;
+  --text-inverse: #D9E8E5;
+  --text-default: #092221;
+  --text-secondary: #3A5452;
+  --text-accent: #1E86A9;
+  --background-1: #F1F8F8;
+  --border-subtle: #C7D9D8;
+  --Half: 2px;
+  --space-2: 8px;
+  --text-base: 16px;
+  --text-sm: 14px;
+  --text-xs: 12px;
+  --wide: 0.25px;
+  --widest: 0.75px;
+  --space-4: 16px;
+
+  /* navbar */
+  --tt-navbar-height: 72px;
+  --tt-navbar-bg: #092221;
+  --tt-right-toc-width: 280px;
 
   --color-purple: var(--color-accent);
-  --color-dark-purple: #7584e6;
-  --color-red: #fa512e;
-  --color-orange: var(--color-red);
+  --color-dark-purple: #5BBAD5;
+  --color-teal-plus-plus: #c7f1ff;
+  --color-teal-plus: #9bdbf0;
+  --color-teal: #74c5df;
+  --color-red-plus-plus: #f4d8d2;
+  --color-red-plus: #eab1a5;
+  --color-red: #ff9e8a;
+  --color-red-accent: #fa512e;
+  --color-orange: var(--color-red-accent);
+  --color-green-plus-plus: #c7efe8;
+  --color-green-plus: #92c9bf;
   --color-green: #6faba0;
   --color-dark-green: #3a3433;
-  --color-yellow: #f9c80e;
+  --color-yellow-plus-plus: #f5e2ba;
+  --color-yellow-plus: #f9d68e;
+  --color-yellow: #f6bc42;
 
   --color-main: var(--color-foreground);
 
-  --color-background-20: #d7dbeb33;
-  --color-background-40: #d7dbeb66;
-  --color-background-60: #d7dbeb99;
-  --color-background-80: #d7dbebcc;
-  --color-background-100: #d7dbebff;
+  --color-background-20: #C7D9D833;
+  --color-background-40: #C7D9D866;
+  --color-background-60: #C7D9D899;
+  --color-background-80: #C7D9D8cc;
+  --color-background-100: #C7D9D8ff;
 
   --base-text-size: 16px;
 
-  --font-main: "Degular", sans-serif;
-  --font-display: "DegularDisplay", sans-serif;
-  --font-mono: "RMMono", monospace;
+  --font-main: "Neue Haas Unica Pro", "Degular", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Degular Display", "DegularDisplay", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "Berkeley Mono", "RMMono", "SF Mono", "Cascadia Code", "Consolas", "Liberation Mono", Menlo, monospace;
 
   --transition-duration: 150ms;
   --transition-timing: cubic-bezier(0.4, 0, 0.2, 1);
 
   --transition-color: color var(--transition-duration) var(--transition-timing);
-  --transition-background: background var(--transition-duration)
-    var(--transition-timing);
+  --transition-background: background var(--transition-duration) var(--transition-timing);
   --transition-all: all var(--transition-duration) var(--transition-timing);
 }
 
 body {
   font-family: var(--font-main);
-  font-size: var(--base-text-size); /* 1rem */
+  font-size: var(--base-text-size);
+  /* 1rem */
   font-weight: 400;
 }
 
@@ -81,7 +116,7 @@ h3 {
   font-weight: 400;
 }
 
-.rst-content .toctree-wrapper > p.caption,
+.rst-content .toctree-wrapper>p.caption,
 h4,
 h5,
 h6,
@@ -129,21 +164,283 @@ a:hover {
 }
 
 a:visited {
-  color: var(--color-dark-purple);
+  color: var(--color-accent);
 }
 
 i {
   font-style: italic;
 }
 
-/* Nav */
+/* ── Top Navbar ─────────────────────────────────────────────── */
+
+.tt-top-nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 300;
+  display: flex;
+  height: var(--tt-navbar-height);
+  padding: 0 24px;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--tt-navbar-bg);
+  border-bottom: 1px solid rgba(199, 217, 216, 0.3);
+  box-sizing: border-box;
+}
+
+.tt-top-nav-left {
+  display: flex;
+  gap: 32px;
+  align-items: center;
+}
+
+.tt-nav-logo {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  text-decoration: none !important;
+  flex-shrink: 0;
+  border-bottom: none !important;
+}
+
+.tt-nav-logo img {
+  height: 24px;
+  width: auto;
+}
+
+.tt-nav-logo span {
+  color: #D9E8E5;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.tt-nav-links {
+  display: flex;
+  gap: 4px;
+  list-style: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.tt-nav-links li {
+  list-style: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  position: relative;
+}
+
+.tt-nav-links li::before {
+  display: none !important;
+}
+
+.tt-nav-links > li > a {
+  display: flex;
+  height: 32px;
+  padding: 0 8px;
+  align-items: center;
+  color: #D9E8E5 !important;
+  text-decoration: none !important;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: var(--wide);
+  border-radius: 4px;
+  white-space: nowrap;
+  border-bottom: none !important;
+  transition: background 150ms ease;
+}
+
+.tt-nav-links > li > a:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff !important;
+}
+
+/* Dropdown */
+.tt-nav-links li.has-dropdown {
+  position: relative;
+}
+
+.tt-nav-dropdown {
+  position: absolute;
+  top: calc(100% + 0px);
+  left: 0;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 220px;
+  z-index: 400;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, visibility 120ms ease;
+}
+
+.tt-nav-links li.has-dropdown:hover .tt-nav-dropdown {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.tt-nav-dropdown a {
+  display: flex;
+  height: 32px;
+  padding: 0 12px;
+  align-items: center;
+  border-radius: 4px;
+  color: #092221 !important;
+  text-decoration: none !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  letter-spacing: var(--wide);
+  white-space: nowrap;
+  border-bottom: none !important;
+  transition: background 120ms ease;
+}
+
+.tt-nav-dropdown a:hover {
+  background: #E5F2F1;
+  color: #092221 !important;
+}
+
+.tt-top-nav-right {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+}
+
+.tt-nav-search-form {
+  display: flex;
+  width: 220px;
+  height: 32px;
+  align-items: center;
+  border-radius: 2px;
+  border: 1px solid rgba(199, 217, 216, 0.5);
+  background: rgba(241, 248, 248, 0.1);
+}
+
+.tt-nav-search-form input {
+  width: 100%;
+  font-family: var(--font-main);
+  font-size: 14px;
+  color: #D9E8E5;
+  letter-spacing: var(--wide);
+}
+
+.tt-nav-search-form input::placeholder {
+  color: #678583;
+}
+
+.tt-nav-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.tt-nav-btn-cta {
+  display: flex;
+  height: 32px;
+  padding: 0 12px;
+  align-items: center;
+  background: var(--button-primary-background);
+  color: var(--background-1) !important;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: var(--wide);
+  text-decoration: none !important;
+  border-bottom: none !important;
+  white-space: nowrap;
+  transition: background 150ms ease;
+}
+
+.tt-nav-btn-cta:hover {
+  background: #1a7fa0;
+  color: var(--background-1) !important;
+}
+
+.tt-nav-btn-github {
+  display: flex;
+  height: 32px;
+  padding: 0 8px;
+  align-items: center;
+  gap: 6px;
+  color: #D9E8E5 !important;
+  text-decoration: none !important;
+  border-bottom: none !important;
+  font-size: 14px;
+  letter-spacing: var(--wide);
+  border-radius: 4px;
+  transition: color 150ms ease;
+}
+
+.tt-nav-btn-github:hover {
+  color: #fff !important;
+}
+
+.tt-nav-btn-github svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
+.tt-nav-hamburger {
+  display: none;
+  color: #D9E8E5;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+@media screen and (max-width: 768px) {
+  /* Navbar: collapse desktop links/search, show hamburger */
+  .tt-nav-links { display: none; }
+  .tt-nav-search-form { display: none; }
+  .tt-nav-actions { display: none; }
+  .tt-nav-hamburger { display: block; }
+  .tt-top-nav { padding: 0 16px; }
+  .tt-top-nav-right { gap: 12px; }
+}
+/* NOTE: mobile layout overrides (content offset, sidebar slide-in) live in the
+   consolidated block at the END of this file so they win source order over the
+   desktop .wy-nav-side / .wy-nav-content-wrap rules below. */
+
+/* ── Nav layout offsets ─────────────────────────────────────── */
+
+/* Sidebar pushed below navbar */
 .wy-nav-side {
-  background-color: var(--color-background);
+  top: var(--tt-navbar-height) !important;
+  height: calc(100vh - var(--tt-navbar-height)) !important;
+  background-color: #E5F2F1 !important;
+  width: 308px !important;
+}
+
+/* Content area pushed below navbar, offset for 308px sidebar */
+.wy-nav-content-wrap {
+  padding-top: var(--tt-navbar-height);
+  margin-left: 308px !important;
 }
 
 .wy-nav-content {
   max-width: 1200px !important;
   min-height: 100vh;
+  background: #fff;
+}
+
+/* On wide screens, make room for right TOC */
+@media screen and (min-width: 1400px) {
+  .wy-nav-content-wrap {
+    padding-right: var(--tt-right-toc-width);
+  }
 }
 
 @media screen and (min-width: 1100px) {
@@ -158,127 +455,184 @@ i {
   display: flex;
   align-items: flex-start;
   flex-direction: column;
-  gap: 1rem;
-  padding-top: 1rem;
+  padding: 0 24px;
+  border-bottom: none !important;
 }
 
+/* Hide logo image — navbar already has it */
 .wy-side-nav-search img {
-  /* logo */
-  width: 200px !important;
-  height: auto;
-  padding: 0;
+  display: none !important;
 }
 
+/* Project title */
 .wy-side-nav-search a {
   color: var(--color-foreground);
-  font-family: var(--font-display);
-  font-size: 2.5rem;
-  font-weight: 400;
-  line-height: 100%;
+  font-family: var(--font-main);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: var(--wide);
+  border-bottom: none !important;
+  padding: 9px 10px;
+  padding-left: 0;
 }
 
 .wy-side-nav-search a:hover {
   background-color: transparent;
-  font-weight: 400;
 }
 
-.wy-side-nav-search a:nth-child(2) {
-  /* give the repository title some space */
-  margin-top: 1rem;
-}
-
-.wy-side-nav-search .wy-dropdown > a,
-.wy-side-nav-search > a {
+.wy-side-nav-search .wy-dropdown>a,
+.wy-side-nav-search>a {
   margin-bottom: 0;
 }
 
-.wy-side-nav-search > div, /* search container */
-  .wy-side-nav-search > div > form /* search form */ {
-  width: 100%;
-}
-
 .wy-menu-vertical {
-  padding-bottom: 2rem; /* add space to accommodate version bar */
+  padding: 0 24px 6rem;
 }
 
+/* 4px gap between items (Figma: gap-[4px]) */
+.wy-menu-vertical ul {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 5px;
+}
+
+.wy-menu-vertical li.current ul {
+  padding-left: 15px;
+}
+
+/* Section group headers (captions) — Figma: Berkeley Mono 12px, #3A5452, py-12px */
 .wy-menu-vertical header,
 .wy-menu-vertical p.caption {
-  color: var(--color-main);
+  color: #3A5452;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: var(--widest);
+  text-transform: uppercase;
+  padding: 12px 0 4px;
+  margin: 0;
+  border-top: none;
+  pointer-events: none;
+  cursor: default;
+  line-height: 1;
 }
 
+.wy-menu-vertical header:hover,
+.wy-menu-vertical p.caption:hover,
+.wy-menu-vertical header span,
+.wy-menu-vertical p.caption span {
+  background: transparent !important;
+  color: #3A5452 !important;
+}
+
+/* Hide RTD's default expand toggle (span and button variants) */
+/* Nav items — Figma: Neue Haas Unica Pro 14px, padding 8px 8px 8px 12px, border-radius 4px */
 .wy-menu-vertical a {
   color: var(--color-foreground);
-}
-
-/* Search input */
-#rtd-search-form > input[type="text"] {
-  background-color: transparent;
-  border: 2px solid var(--color-dark-purple);
-  border-radius: 0;
-  color: var(--color-foreground);
-  font-family: var(--font-main);
-  padding: 0.5rem;
-  font-size: 1rem;
+  font-size: 14px;
   font-weight: 400;
-  outline: none;
-  font-family: var(--font-main);
-  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: var(--wide);
+  padding: 8px 8px 8px 8px !important;
+  margin: 0;
+  border-radius: 4px;
+  display: flex !important;
+  align-items: center;
 }
 
-#rtd-search-form > input[type="text"]:focus {
-  border-color: var(--color-accent);
+/* Hide RTD's default expand toggle */
+.wy-menu-vertical li span.toctree-expand,
+.wy-menu-vertical li button.toctree-expand {
+  display: none !important;
 }
 
-/* Nav: open headers */
+/* Chevron › pushed to the right via margin-left: auto */
+.wy-menu-vertical li:has(> ul) > a::after {
+  content: "›";
+  font-size: 18px;
+  line-height: 1;
+  color: #3A5452;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 8px;
+}
 
-.wy-menu-vertical li.current > a,
+/* Sub-items — keep the 12px text inset so hover/active bg never glues to text */
+.wy-menu-vertical .toctree-l2 a {
+  padding-left: 12px !important;
+  font-size: 13px;
+}
+
+.wy-menu-vertical .toctree-l3 a {
+  padding-left: 12px !important;
+  font-size: 13px;
+}
+
+.wy-menu-vertical .toctree-l4 a,
+.wy-menu-vertical .toctree-l5 a {
+  padding-left: 12px !important;
+  font-size: 12px;
+}
+
+/* Search form hidden — search is in the top navbar */
+#rtd-search-form {
+  display: none !important;
+}
+
+/* Nav: active/hover items */
+
+.wy-menu-vertical li.current>a,
 .wy-menu-vertical li.on a {
-  font-weight: bold;
+  font-weight: 600;
 }
 
-.toctree-l1 a:hover {
-  background: var(--color-background-alt2);
-  color: var(--color-foreground);
+.wy-menu-vertical a:hover {
+  background: rgba(103, 133, 131, 0.1) !important;
+  color: var(--color-foreground) !important;
   transition: var(--transition-all);
 }
 
-.wy-menu-vertical li.current a,
-li.toctree-l1.current > a {
-  background-color: var(--color-background-20);
+/* No underline for custom toctree-style link lists */
+.rst-content .toctree-no-underline a,
+.wy-menu-vertical .toctree-no-underline a {
+  text-decoration: none !important;
   border-bottom: none !important;
-  border-top: none !important;
-  border-left: none !important;
+}
+
+/* Active item — Figma: rgba(103,133,131,0.1) bg, border-radius 4px, no border */
+.wy-menu-vertical li.current>a,
+li.toctree-l1.current>a,
+.wy-menu-vertical li.on a,
+.wy-menu-vertical li.toctree-l2.current>a,
+.wy-menu-vertical li.toctree-l2.current li.toctree-l3>a,
+.wy-menu-vertical li.toctree-l3.current>a,
+.wy-menu-vertical li.toctree-l3.current li.toctree-l4>a,
+.wy-menu-vertical li.toctree-l4.current>a {
+  background-color: rgba(103, 133, 131, 0.1) !important;
+  border: none !important;
   border-right: none !important;
-  color: var(--color-main);
+  color: var(--color-foreground) !important;
+  font-weight: 500;
+  padding-left: 12px !important;
+}
+
+/* Also remove border-right from any current link */
+.wy-menu-vertical li.current a {
+  border-right: none !important;
 }
 
 .wy-menu-vertical li.current,
-.wy-menu-vertical li.toctree-l2.current > a,
-.wy-menu-vertical li.toctree-l2.current li.toctree-l3 > a {
-  background: var(--color-background-40);
-}
-
-.wy-menu-vertical li.current,
-.wy-menu-vertical li.toctree-l3.current > a,
-.wy-menu-vertical li.toctree-l3.current li.toctree-l4 > a {
-  background: var(--color-background-60);
-}
-
-.wy-menu-vertical li.current,
-.wy-menu-vertical li.toctree-l4.current > a,
-.wy-menu-vertical li.toctree-l4.current li.toctree-l5 > a {
-  background: var(--color-background-80);
+.wy-menu-vertical li.toctree-l2.current,
+.wy-menu-vertical li.toctree-l3.current,
+.wy-menu-vertical li.toctree-l4.current {
+  background: transparent;
 }
 
 .wy-menu-vertical li.current a:hover,
-.wy-menu-vertical li.toctree-l2.current > a:hover,
-.wy-menu-vertical li.toctree-l2.current li.toctree-l3 > a:hover,
-.wy-menu-vertical li.toctree-l3.current > a:hover,
-.wy-menu-vertical li.toctree-l3.current li.toctree-l4 > a:hover,
-.wy-menu-vertical li.toctree-l4.current > a:hover,
-.wy-menu-vertical li.toctree-l4.current li.toctree-l5 > a:hover,
 .wy-menu-vertical li.on a:hover {
-  background: var(--color-background-alt2);
+  background: rgba(103, 133, 131, 0.15) !important;
   transition: var(--transition-background);
 }
 
@@ -295,67 +649,65 @@ li.toctree-l1.current > a {
   color: var(--color-main);
 }
 
-.fa .fa-caret-down {
-  color: var(--color-accent);
+/* Nav: mobile — hide native RTD top bar, our tt-top-nav handles mobile */
+.wy-nav-top {
+  display: none !important;
+  height: 0 !important;
 }
 
-/* Nav: mobile */
-
-@media screen and (max-width: 768px) {
-  .wy-nav-top {
-    background: var(--color-background);
-    display: flex;
-    position: relative;
-    justify-content: space-between;
-  }
-}
-
-.wy-nav-top > i {
-  position: absolute;
-  top: 0;
-  left: 1.5rem;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding-top: 0;
-  color: var(--color-main);
-}
-
-.wy-nav-top > .fa,
-.wy-nav-top > .fa-bars {
-  color: var(--color-main);
-}
-
-.wy-nav-top > .fa:before,
-.wy-nav-top > .fa-bars:before {
-  font-weight: 300 !important;
-}
-
-.wy-nav-top > a {
-  color: var(--color-main);
-  font-family: var(--font-display);
-  font-weight: 400;
-  font-size: 2rem;
-}
-
-.wy-nav-content > .rst-content {
+.wy-nav-content>.rst-content {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
   min-height: -webkit-fill-available;
 }
 
-.rst-content > .document {
+.rst-content>.document {
   /* grow document to push footer to bottom of page */
   flex-grow: 1;
 }
 
 .rst-footer-buttons {
-  margin-top: 2rem; /* give footer buttons a little bit of space */
+  margin-top: 2rem;
+  clear: both;
+  width: 100%;
+  flex-shrink: 0;
 }
 
 /* Document styling */
+
+/* After float-left figures, restore full-width flow for the next heading/section */
+.tt-float-clear {
+  clear: both;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Bold inside italic in body copy (MyST nested * ** * can under-render) */
+.rst-content .document em strong,
+.rst-content .document em b {
+  font-weight: 700;
+}
+
+/* Tight list spacing inside table cells (inline spec tables with <ul>) */
+.rst-content td ul.tt-spec-cell-list,
+.rst-content th ul.tt-spec-cell-list {
+  margin: 0;
+  padding-left: 1.15em;
+  line-height: 1.4;
+}
+.rst-content td ul.tt-spec-cell-list > li,
+.rst-content th ul.tt-spec-cell-list > li {
+  margin: 0;
+  padding: 0;
+}
+.rst-content td ul.tt-spec-cell-list li > p,
+.rst-content th ul.tt-spec-cell-list li > p {
+  margin: 0;
+  line-height: inherit;
+}
 
 .document * h1,
 .document * h2,
@@ -374,7 +726,8 @@ li.toctree-l1.current > a {
 /* inline codeblocks */
 .rst-content code.literal,
 .rst-content tt.literal {
-  color: var(--color-red);
+  color: var(--color-red-accent);
+  vertical-align: middle;
 }
 
 pre {
@@ -397,13 +750,8 @@ dl.cpp.function {
   max-width: 100%;
 }
 
-html.writer-html4 .rst-content dl:not(.docutils) > dt,
-html.writer-html5
-  .rst-content
-  dl[class]:not(.option-list):not(.field-list):not(.footnote):not(
-    .citation
-  ):not(.glossary):not(.simple)
-  > dt {
+html.writer-html4 .rst-content dl:not(.docutils)>dt,
+html.writer-html5 .rst-content dl[class]:not(.option-list):not(.field-list):not(.footnote):not(.citation):not(.glossary):not(.simple)>dt {
   background: var(--color-background-alt);
   color: var(--color-accent);
   border-top: 3px solid var(--color-accent);
@@ -434,7 +782,7 @@ html.writer-html5
   box-shadow: none;
 }
 
-.btn > .fa {
+.btn>.fa {
   /* hide arrows */
   display: none;
 }
@@ -454,20 +802,779 @@ html.writer-html5
   color: var(--color-foreground) !important;
 }
 
-.rst-versions.shift-up {
+
+/* Style all admonition block */
+.admonition {
+  color: var(--color-foreground);
+}
+
+/* Style all admonition block titles */
+.admonition>.admonition-title {
+  color: var(--color-foreground);
+  font-weight: bold;
+}
+
+
+/* Style the warning admonition block */
+.admonition.warning {
+  background-color: var(--color-yellow-plus-plus);
+}
+
+/* Style the title of the warning block */
+.admonition.warning>.admonition-title {
+  background: var(--color-yellow);
+}
+
+/* Style the danger admonition block */
+.admonition.danger {
+  background-color: var(--color-red-plus-plus);
+}
+
+/* Style the title of the danger block */
+.admonition.danger>.admonition-title {
+  background: var(--color-red);
+}
+
+/* Style the note admonition block */
+.admonition.note {
+  background-color: var(--color-teal-plus-plus);
+}
+
+/* Style the title of the note block */
+.admonition.note>.admonition-title {
+  background: var(--color-teal);
+}
+
+/* Style the important admonition block */
+.admonition.important {
+  background-color: var(--color-green-plus-plus);
+}
+
+/* Style the title of the important block */
+.admonition.important>.admonition-title {
+  background: var(--color-green);
+}
+
+/* ── Index cards (list-table with class tt-index-cards) ─────── */
+
+.rst-content table.tt-index-cards,
+.rst-content table.tt-index-cards.docutils {
+  border: none !important;
+  border-collapse: separate !important;
+  border-spacing: 20px 20px !important;
+  width: 100% !important;
+  margin: 16px 0 !important;
+  table-layout: fixed !important;
+  box-shadow: none !important;
+}
+
+.rst-content table.tt-index-cards thead,
+.rst-content table.tt-index-cards colgroup {
+  display: none !important;
+}
+
+.rst-content table.tt-index-cards td {
+  background: #ffffff !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  padding: 20px 24px !important;
+  vertical-align: top !important;
+  /* max-width: 0 forces table-layout:fixed to honour col widths */
+  max-width: 0;
+  overflow-wrap: break-word !important;
+  word-wrap: break-word !important;
+  word-break: break-word !important;
+  overflow: hidden !important;
+  white-space: normal !important;
+}
+
+/* Empty second cell in a row (placeholder) */
+.rst-content table.tt-index-cards td:empty {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+}
+
+/* Link in first paragraph = card title */
+.rst-content table.tt-index-cards td > p:first-child > a,
+.rst-content table.tt-index-cards td > p:first-child > a:visited {
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  color: var(--color-foreground) !important;
+  text-decoration: none !important;
+  border-bottom: none !important;
+  letter-spacing: 0;
+}
+
+.rst-content table.tt-index-cards td > p:first-child > a:hover {
+  color: var(--color-accent) !important;
+}
+
+/* Description paragraph */
+.rst-content table.tt-index-cards td > p:not(:first-child) {
+  font-size: 13px !important;
+  color: var(--text-secondary) !important;
+  margin: 8px 0 0 !important;
+  line-height: 1.5 !important;
+  letter-spacing: var(--wide);
+}
+
+/* Card hover */
+.rst-content table.tt-index-cards td:not(:empty) {
+  transition: box-shadow 150ms ease;
+}
+
+.rst-content table.tt-index-cards td:not(:empty):hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* Hide loudbox-bh from sidebar and page content unless viewing that section */
+.wy-menu-vertical li:has(> a[href*="loudbox-bh"]):not(.current) {
+  display: none;
+}
+.rst-content .toctree-wrapper li:has(> a[href*="loudbox-bh"]) {
+  display: none;
+}
+
+/* ── Right-side page TOC ────────────────────────────────────── */
+
+.tt-page-toc {
+  display: none;
+  position: fixed;
+  top: var(--tt-navbar-height);
+  right: 0;
+  width: var(--tt-right-toc-width);
+  height: calc(100vh - var(--tt-navbar-height));
   overflow-y: auto;
+  padding: 28px 20px 32px 16px;
+  background: var(--color-background);
+  border-left: 1px solid var(--border);
+  box-sizing: border-box;
+  z-index: 100;
 }
 
-.project-versions {
-  font-size: small;
+.tt-page-toc ul {
+  list-style: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-/*
-Fix for horizontal stacking weirdness in the RTD theme with Python properties:
-https://github.com/readthedocs/sphinx_rtd_theme/issues/1301
-*/
-.py.property {
+.tt-page-toc li {
+  list-style: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.tt-page-toc li::before {
+  display: none !important;
+}
+
+.tt-page-toc a {
+  display: block;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-secondary) !important;
+  text-decoration: none !important;
+  border-bottom: none !important;
+  border-left: 2px solid transparent;
+  border-radius: 0 2px 2px 0;
+  letter-spacing: var(--wide);
+  line-height: 1.4;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.tt-page-toc a:hover {
+  color: var(--color-foreground) !important;
+  border-left-color: var(--border);
+}
+
+.tt-page-toc a.active {
+  color: var(--color-accent) !important;
+  font-weight: 600;
+  border-left-color: var(--color-accent);
+}
+
+/* h3 items indented */
+.tt-page-toc li.toc-h3 a {
+  padding-left: 20px;
+  font-size: 12px;
+}
+
+@media screen and (min-width: 1400px) {
+  .tt-page-toc {
+    display: block;
+  }
+}
+
+/* ── Content area background ────────────────────────────────── */
+
+.wy-nav-content-wrap {
+  background: var(--color-background);
+}
+
+.wy-nav-content {
+  background: var(--color-background) !important;
+}
+
+/* Breadcrumbs */
+/* ── Breadcrumbs — Figma node 239:8072 ──────────────────────── */
+div[role="navigation"][aria-label="Page navigation"] {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 0 16px !important;
+}
+
+.wy-breadcrumbs {
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 0 !important;
+  list-style: none !important;
+  font-size: 0 !important; /* zero font-size on container, set on children */
+}
+
+.wy-breadcrumbs > li {
+  display: inline-flex !important;
+  align-items: center !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-family: var(--font-main) !important;
+  font-size: 12px !important;
+  font-weight: 400 !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0.25px !important;
+  color: #293d3b !important;
+  list-style: none !important;
+}
+
+/* Separator " / " between items */
+.wy-breadcrumbs > li + li:not(.wy-breadcrumbs-aside)::before {
+  content: " / " !important;
+  color: #293d3b !important;
+  font-size: 12px !important;
+  font-family: var(--font-main) !important;
+  padding: 0 2px !important;
+}
+
+/* Regular links */
+.wy-breadcrumbs > li a,
+.wy-breadcrumbs > li a:visited {
+  color: #293d3b !important;
+  font-size: 12px !important;
+  font-family: var(--font-main) !important;
+  font-weight: 400 !important;
+  text-decoration: none !important;
+  border-bottom: none !important;
+  background: transparent !important;
+}
+
+.wy-breadcrumbs > li a:hover {
+  color: #1e86a9 !important;
+}
+
+/* Active (current page) item — teal + medium weight */
+.wy-breadcrumbs > li.breadcrumb-item.active {
+  color: #1e86a9 !important;
+  font-weight: 500 !important;
+}
+
+/* Hide "View page source" */
+.wy-breadcrumbs-aside {
+  display: none !important;
+}
+
+/* Remove hr below breadcrumbs */
+div[role="navigation"] hr,
+.wy-breadcrumbs ~ hr {
+  display: none !important;
+}
+
+/* Inline links — use lighter underline */
+.rst-content p a {
+  border-bottom: 1px solid var(--color-accent) !important;
+}
+
+/* Buttons */
+.btn,
+.btn-neutral {
+  background-color: var(--color-foreground) !important;
+  background: var(--color-foreground) !important;
+  color: var(--color-background) !important;
+}
+
+.btn-neutral:hover {
+  background-color: var(--color-background-alt2) !important;
+  background: var(--color-background-alt2) !important;
+  color: var(--color-foreground) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   API FUNCTION PAGES — Figma design: node 238:7535
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Content area: light teal background (Figma: #F1F8F8) */
+.wy-nav-content {
+  background: var(--color-background) !important;
+}
+
+/* H1 on API pages: Degular Display Light 40px */
+.rst-content section > h1 {
+  font-family: var(--font-display) !important;
+  font-weight: 300 !important;
+  font-size: 40px !important;
+  line-height: 1.2 !important;
+  color: #092221 !important;
+  letter-spacing: 0 !important;
+  margin-bottom: 8px !important;
+  margin-top: 0 !important;
   display: block !important;
+}
+
+/* ── Signature code box ─────────────────────────────────────── */
+
+/* Reset the generic bright-accent dt styling for cpp/py functions */
+html.writer-html4 .rst-content dl.cpp > dt,
+html.writer-html5 .rst-content dl.cpp > dt,
+html.writer-html4 .rst-content dl.py > dt,
+html.writer-html5 .rst-content dl.py > dt {
+  background: #ffffff !important;
+  border-top: none !important;
+  color: #092221 !important;
+}
+
+/* Signature box — display:block so inline spans flow naturally */
+/* Supports C++ (breathe) and Python (autodoc) including dl.py.data (ttnn) */
+.rst-content dl.cpp.function > dt.sig,
+.rst-content dl.py.function > dt.sig,
+.rst-content dl.py.class > dt.sig,
+.rst-content dl.py.data > dt.sig,
+.rst-content dl.py.method > dt.sig {
+  display: block !important;
+  position: relative !important;
+  background: #ffffff !important;
+  border: 1px solid #c7d9d8 !important;
+  border-radius: 8px !important;
+  padding: 16px !important;
+  padding-right: 52px !important;  /* room for copy button */
+  font-family: var(--font-mono) !important;
+  font-size: 14px !important;
+  line-height: 1.7 !important;
+  color: #092221 !important;
+  margin: 0 0 24px !important;
+  overflow-x: auto !important;
+  white-space: nowrap !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* Hide the trailing <br> Sphinx inserts inside dt */
+.rst-content dl.cpp.function > dt.sig > br,
+.rst-content dl.py.function > dt.sig > br,
+.rst-content dl.py.class > dt.sig > br,
+.rst-content dl.py.data > dt.sig > br,
+.rst-content dl.py.method > dt.sig > br {
+  display: none !important;
+}
+
+/* All spans inside signature: inline monospace */
+.rst-content dt.tt-api-sig-box span,
+.rst-content dt.tt-api-sig-box * {
+  font-family: var(--font-mono) !important;
+  font-size: 14px !important;
+  display: inline !important;
+}
+
+/* Python sig colours */
+.rst-content dt.tt-api-sig-box .sig-prename { color: #3a5452 !important; }
+.rst-content dt.tt-api-sig-box .sig-name    { color: #1e86a9 !important; }
+.rst-content dt.tt-api-sig-box .sig-paren,
+.rst-content dt.tt-api-sig-box .p           { color: #092221 !important; }
+.rst-content dt.tt-api-sig-box .sig-param   { color: #092221 !important; }
+/* Property value (= <nanobind.nb_func object>) */
+.rst-content dt.tt-api-sig-box em.property  { color: #3a5452 !important; font-style: normal !important; }
+
+/* Copy button: absolute top-right */
+.tt-api-copy-btn {
+  position: absolute !important;
+  right: 16px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  background: none !important;
+  border: none !important;
+  cursor: pointer !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  opacity: 0.7 !important;
+  transition: opacity 120ms ease !important;
+}
+.tt-api-copy-btn:hover { opacity: 1 !important; }
+
+/* ── dl reset (all API types) ───────────────────────────────── */
+.rst-content dl.cpp.function,
+.rst-content dl.py.function,
+.rst-content dl.py.class,
+.rst-content dl.py.data,
+.rst-content dl.py.method {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.rst-content dl.cpp.function > dd,
+.rst-content dl.py.function > dd,
+.rst-content dl.py.class > dd,
+.rst-content dl.py.data > dd,
+.rst-content dl.py.method > dd {
+  margin: 0 !important;
+  padding: 0 !important;
+  border-left: none !important;
+}
+
+/* ── Description paragraph ──────────────────────────────────── */
+p.tt-api-description {
+  font-size: 16px !important;
+  font-weight: 400 !important;
+  color: #092221 !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0.25px !important;
+  margin: 0 0 40px !important;
+}
+
+/* Hide the raw field-list (replaced by JS sections) */
+.rst-content dl.py > dd dl.field-list {
+  display: none !important;
+}
+
+/* ── Section headings (Parameters / Returns) added by JS ────── */
+.tt-api-section {
+  margin-bottom: 40px;
+}
+
+.tt-api-section-heading,
+h2.tt-api-section-heading {
+  font-family: "Neue Haas Unica Pro", "Degular", -apple-system, BlinkMacSystemFont, sans-serif !important;
+  font-weight: 500 !important;
+  font-size: 22px !important;
+  line-height: 1.3 !important;
+  color: #092221 !important;
+  letter-spacing: 0 !important;
+  margin: 0 0 24px !important;
+  display: block !important;
+  align-items: unset !important;
+  gap: unset !important;
+}
+
+/* ── Parameter list ─────────────────────────────────────────── */
+.tt-api-param-list {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.tt-api-param-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 0 16px;
+  border-bottom: 1px solid #c7d9d8;
+  margin-bottom: 16px;
+}
+
+.tt-api-param-name {
+  font-size: 16px !important;
+  line-height: 1.35 !important;
+  margin: 0 !important;
+  letter-spacing: 0 !important;
+}
+
+.tt-param-name {
+  font-weight: 500 !important;
+  color: #092221 !important;
+}
+
+.tt-param-type {
+  font-weight: 400 !important;
+  color: #3a5452 !important;
+  letter-spacing: 0.25px !important;
+}
+
+.tt-api-param-desc {
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  color: #092221 !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0.25px !important;
+  margin: 0 !important;
+}
+
+/* Hide raw docutils table (replaced by JS list) */
+.rst-content dl.cpp.function table.docutils,
+.rst-content dl.py.function table.docutils,
+.rst-content dl.py.class table.docutils {
+  display: none !important;
+}
+
+/* Hide field-list via CSS too (JS also removes from DOM) */
+.rst-content dl.py > dd > dl.field-list {
+  display: none !important;
+}
+
+/* Hide headerlink in h1 */
+.rst-content section > h1 > a.headerlink {
+  display: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   EXAMPLE BLOCK — Figma node 240:8481
+   ═══════════════════════════════════════════════════════════════ */
+
+.tt-example-block {
+  border: 1px solid #c7d9d8 !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  width: 100% !important;
+  margin-top: 40px !important;
+  box-sizing: border-box !important;
+}
+
+.tt-example-header {
+  background: #e5f2f1 !important;
+  padding: 10px 16px !important;
+  font-family: var(--font-main) !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  color: #092221 !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0.25px !important;
+  border-bottom: 1px solid #c7d9d8 !important;
+}
+
+.tt-example-block .highlight,
+.tt-example-block .doctest,
+.tt-example-block .highlight-default {
+  background: #ffffff !important;
+  padding: 16px 20px !important;
+  position: relative !important;
+  margin: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Override RTD theme borders on highlight divs and literal blocks globally */
+.rst-content div[class^="highlight"],
+.rst-content div[class*=" highlight"],
+.rst-content pre.literal-block,
+.rst-content .linenodiv pre,
+.rst-content .highlight-default,
+.rst-content .doctest {
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Kill ALL borders/backgrounds Sphinx/RTD puts on pre/code inside example */
+.tt-example-block pre,
+.tt-example-block code,
+.tt-example-block .highlight pre,
+.tt-example-block .doctest pre {
+  font-family: var(--font-mono) !important;
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+  color: #092221 !important;
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow-x: auto !important;
+  white-space: pre !important;
+}
+
+/* Line numbers table — built by JS */
+.tt-example-table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  border: none !important;
+  padding: 0 !important;
+  display: table !important;
+  box-sizing: border-box !important;
+}
+
+.tt-example-table tr {
+  border: none !important;
+  background: transparent !important;
+}
+
+.tt-example-table td {
+  border: none !important;
+  padding: 0 !important;
+  vertical-align: top !important;
+  line-height: 1.4 !important;
+  font-family: var(--font-mono) !important;
+  font-size: 13px !important;
+  background: transparent !important;
+}
+
+.tt-example-table td.tt-lineno {
+  color: #678583 !important;
+  text-align: right !important;
+  padding: 0 20px 0 4px !important;
+  user-select: none !important;
+  white-space: nowrap !important;
+  width: 1% !important;
+  min-width: 2ch !important;
+  border-right: 1px solid #e5f2f1 !important;
+}
+
+.tt-example-table td.tt-codeline {
+  color: #092221 !important;
+  white-space: pre !important;
+  width: 100% !important;
+  padding: 0 0 0 20px !important;
+}
+
+/* Keep >>> prompts gray, rest dark */
+.tt-example-block .gp { color: #678583 !important; }
+.tt-example-block .go { color: #678583 !important; }  /* output */
+.tt-example-block .n,
+.tt-example-block .nb,
+.tt-example-block .mi,
+.tt-example-block .o,
+.tt-example-block .p { color: #092221 !important; }
+
+/* Copy button for example block — 32×32 bordered button, top-right of code area */
+.tt-example-copy-btn {
+  position: absolute !important;
+  top: 20px !important;
+  right: 20px !important;
+  width: 32px !important;
+  height: 32px !important;
+  border: 1px solid #c7d9d8 !important;
+  border-radius: 6px !important;
+  background: #ffffff !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 !important;
+  opacity: 0.8 !important;
+  transition: opacity 120ms ease !important;
+  box-sizing: border-box !important;
+}
+
+.tt-example-copy-btn:hover {
+  opacity: 1 !important;
+  border-color: #092221 !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   API INDEX CARDS (Figma 55-4153) — autosummary tables → cards
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Section headings (h2) on API index pages */
+.rst-content section > h2 {
+  font-family: var(--font-main) !important;
+  font-weight: 500 !important;
+  font-size: 22px !important;
+  line-height: 1.3 !important;
+  color: #092221 !important;
+  letter-spacing: 0 !important;
+  margin: 40px 0 16px !important;
+}
+
+.tt-api-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 40px;
+}
+
+.tt-api-card {
+  background: #ffffff;
+  border: 1px solid #c7d9d8;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tt-api-card-name {
+  font-family: var(--font-mono) !important;
+  font-size: 14px !important;
+  line-height: 1.7 !important;
+}
+
+.tt-api-card-name a,
+.tt-api-card-name a:visited {
+  color: #1e86a9 !important;
+  text-decoration: none !important;
+  border-bottom: none !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+}
+
+.tt-api-card-name a:hover {
+  text-decoration: underline !important;
+}
+
+.tt-api-card-desc {
+  font-family: var(--font-main) !important;
+  font-size: 14px !important;
+  color: #3a5452 !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0.25px !important;
+}
+
+/* ── Mobile layout (consolidated, must stay last to win source order) ── */
+
+@media screen and (max-width: 768px) {
+  /* Prevent any stray horizontal scroll on small screens. The RTD grid is
+     position:absolute, so it needs its own overflow clamp. */
+  html, body { overflow-x: hidden; max-width: 100%; }
+  .wy-grid-for-nav { overflow-x: hidden; }
+
+  /* Drop the desktop sidebar offset so the page is full-width */
+  .wy-nav-content-wrap {
+    margin-left: 0 !important;
+    padding-right: 0 !important;
+    max-width: 100% !important;
+    overflow-x: hidden;
+  }
+  .wy-nav-content {
+    max-width: 100% !important;
+    padding: 1.6rem 1.2rem !important;
+    box-sizing: border-box;
+  }
+
+  /* Doc sidebar slides in from the left, below the fixed navbar */
+  .wy-nav-side {
+    left: -308px !important;
+    width: 308px !important;
+    top: var(--tt-navbar-height) !important;
+    height: calc(100% - var(--tt-navbar-height)) !important;
+    transition: left 200ms var(--transition-timing);
+    z-index: 250;
+  }
+  .wy-nav-side.shift {
+    left: 0 !important;
+  }
+
+  /* Right-side page TOC never shows on mobile */
+  .tt-page-toc {
+    display: none !important;
+  }
 }
 
 /* Version warning banner for old docs */
