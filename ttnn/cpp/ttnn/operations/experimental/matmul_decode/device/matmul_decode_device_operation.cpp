@@ -16,7 +16,7 @@ MatmulDecodeDeviceOperation::program_factory_t MatmulDecodeDeviceOperation::sele
     // A rank-4 activation ([d0, d1, M, K]) is a batched matmul; dispatch to the batched
     // factory (weights folded along batch and N). The partial_width_sharded flag only
     // selects between the two rank-2 factories.
-    if (tensor_args.input_tensor_a.logical_shape().rank() == 4) {
+    if (tensor_args.input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1) {
         return BatchedWidthSharded{};
     }
     if (operation_attributes.partial_width_sharded) {
@@ -47,7 +47,7 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.logical_shape()[-2] == operation_attributes.M,
         "Input tensor A must have the same M dimension as the operation attributes");
 
-    if (input_tensor_a.logical_shape().rank() == 4) {
+    if (input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1) {
         // Batched matmul: A is [d0, d1, M, K] and the batch is the product of the two leading
         // dims (batch = d0 * d1). The weights are folded along BOTH the batch and N dimensions
         // across b_blocks * n_blocks cores. The caller reshapes/permutes the [batch, K, N]
@@ -382,57 +382,59 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
                 "batched matmul_decode with batch {} > 1 requires rank-4 weights, but got rank {}",
                 batch,
                 input_tensor_b.logical_shape().rank());
+            const int weight_height = input_tensor_b.logical_shape()[-2];  // = Bc * K
+            const int weight_width = input_tensor_b.logical_shape()[-1];   // = b_blocks * N
+            TT_FATAL(
+                K > 0 && weight_height % K == 0,
+                "batched matmul_decode: weight height {} must be a multiple of K {} (weight height = Bc * K)",
+                weight_height,
+                K);
+            const int Bc = weight_height / K;
+            TT_FATAL(
+                Bc > 0 && batch % Bc == 0,
+                "batched matmul_decode: batch {} must be a multiple of Bc {} (Bc = weight_height / K)",
+                batch,
+                Bc);
+            const int b_blocks = batch / Bc;
+            TT_FATAL(
+                weight_width % b_blocks == 0,
+                "batched matmul_decode: weight width {} must be a multiple of b_blocks {} (weight width = b_blocks * "
+                "N)",
+                weight_width,
+                b_blocks);
+            const int N = weight_width / b_blocks;
+            const int num_B_cores =
+                static_cast<int>(input_tensor_b.memory_config().shard_spec().value().grid.num_cores());
+            TT_FATAL(
+                num_B_cores % b_blocks == 0,
+                "batched matmul_decode: number of weight cores {} must be a multiple of b_blocks {}",
+                num_B_cores,
+                b_blocks);
+            const int n_blocks = num_B_cores / b_blocks;
+            log_debug(
+                tt::LogOp,
+                "matmul_decode (batched) batch={}, M={}, N={}, K={}, Bc={}, b_blocks={}, n_blocks={}",
+                batch,
+                M,
+                N,
+                K,
+                Bc,
+                b_blocks,
+                n_blocks);
+            auto operation_attributes = OperationType::operation_attributes_t{
+                M,
+                N,
+                K,
+                output_mem_config,
+                dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
+                /*partial_width_sharded=*/false,
+                batch,
+                b_blocks,
+                n_blocks,
+            };
+            auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
+            return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
         }
-        const int weight_height = input_tensor_b.logical_shape()[-2];  // = Bc * K
-        const int weight_width = input_tensor_b.logical_shape()[-1];   // = b_blocks * N
-        TT_FATAL(
-            K > 0 && weight_height % K == 0,
-            "batched matmul_decode: weight height {} must be a multiple of K {} (weight height = Bc * K)",
-            weight_height,
-            K);
-        const int Bc = weight_height / K;
-        TT_FATAL(
-            Bc > 0 && batch % Bc == 0,
-            "batched matmul_decode: batch {} must be a multiple of Bc {} (Bc = weight_height / K)",
-            batch,
-            Bc);
-        const int b_blocks = batch / Bc;
-        TT_FATAL(
-            weight_width % b_blocks == 0,
-            "batched matmul_decode: weight width {} must be a multiple of b_blocks {} (weight width = b_blocks * N)",
-            weight_width,
-            b_blocks);
-        const int N = weight_width / b_blocks;
-        const int num_B_cores = static_cast<int>(input_tensor_b.memory_config().shard_spec().value().grid.num_cores());
-        TT_FATAL(
-            num_B_cores % b_blocks == 0,
-            "batched matmul_decode: number of weight cores {} must be a multiple of b_blocks {}",
-            num_B_cores,
-            b_blocks);
-        const int n_blocks = num_B_cores / b_blocks;
-        log_debug(
-            tt::LogOp,
-            "matmul_decode (batched) batch={}, M={}, N={}, K={}, Bc={}, b_blocks={}, n_blocks={}",
-            batch,
-            M,
-            N,
-            K,
-            Bc,
-            b_blocks,
-            n_blocks);
-        auto operation_attributes = OperationType::operation_attributes_t{
-            M,
-            N,
-            K,
-            output_mem_config,
-            dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
-            /*partial_width_sharded=*/false,
-            batch,
-            b_blocks,
-            n_blocks,
-        };
-        auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
-        return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
     }
 
     // For the partial width-sharded layout the caller reshapes/permutes B so that its last
