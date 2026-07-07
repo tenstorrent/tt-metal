@@ -43,7 +43,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (
 )
 
 _DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark"
-_DEFAULT_TEXT = "Tell me the name of the top 10 songs of all time."
+_DEFAULT_TEXT = "Tell me the name of the top 10 movies of all time. Also list out the top 10 worst movies of all time. Give me details of why you choose those movies. Try to make your response as humours as possible."
 if int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "1024")) < 10:
     _DEFAULT_TEXT = "Tell"
 _WEIGHT_DTYPE = ttnn.bfloat4_b
@@ -160,7 +160,7 @@ def _build_and_prefill(mesh_device, text: str):
         model.prepare_static_decode(rope, max_seq, lm_head=lm_head)
         logger.info("traced decode: prepared empty static buffers; trace captured on first prefill step")
     else:
-        model.reset_caches()
+        model.reset_caches(max_seq)
 
     next_id = pad_id
     for pos in range(real_len):
@@ -252,89 +252,3 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
     assert generated, "no tokens were generated"
     logger.info(f"PROMPT    : {tokenizer.decode(prompt_ids)!r}")
     logger.info(f"GENERATED : {tokenizer.decode(generated)!r}  ({len(generated)} tokens)")
-
-
-@pytest.mark.skip(reason="perf benchmark; run explicitly with DEEPSEEK_V4_PERF_ITERS set")
-@pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
-@pytest.mark.timeout(14400)  # heavy: bf4 conversion of every expert + trace capture
-@torch.no_grad()
-@pytest.mark.parametrize(
-    "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2})],
-    indirect=["device_params"],
-    ids=["fabric_2d"],
-)
-@pytest.mark.parametrize("text", (_DEFAULT_TEXT,))
-def test_full_model_decode_max_perf(mesh_device, reset_seeds, text: str) -> None:
-    """Measure the traced-decode throughput ceiling.
-
-    Replays the captured trace back-to-back with a *fixed* input at a fixed
-    position, never reading the output. This drops the autoregressive dependency
-    (host argmax + device->host sync per step) so the device runs the trace
-    uninterrupted. Skipped by default; enable by setting ``DEEPSEEK_V4_PERF_ITERS``.
-    """
-    import time
-
-    state = _build_and_prefill(mesh_device, text)
-    model, real_len, next_id, traced = state["model"], state["real_len"], state["next_id"], state["traced"]
-    assert traced, "max-perf measurement requires the traced decode path"
-
-    perf_iters = int(os.environ.get("DEEPSEEK_V4_PERF_ITERS", "100"))
-    fixed_pos = real_len  # any valid in-range position; correctness is irrelevant here
-    model._set_step_inputs(next_id, fixed_pos)  # write the (fixed) inputs once
-    if not model._traced_captured:
-        model._capture_traces()
-
-    def _replay() -> None:
-        for sm in model.submeshes_io:
-            ttnn.execute_trace(sm["device"], sm["tid"], cq_id=0, blocking=False)
-
-    def _sync() -> None:
-        for sm in model.submeshes_io:
-            ttnn.synchronize_device(sm["device"])
-
-    _replay()  # warmup
-    _sync()
-    t0 = time.perf_counter()
-    for _ in range(perf_iters):
-        _replay()
-    _sync()  # single host sync after all replays
-    dt = time.perf_counter() - t0
-    logger.info(f"MAX PERF: {perf_iters / dt:.2f} tok/s ({perf_iters} iters in {dt:.3f}s)")
-
-
-@pytest.mark.skip("Test disabled by default")
-@pytest.mark.timeout(14400)  # heavy: bf4 conversion of every expert + trace capture
-@torch.no_grad()
-@pytest.mark.parametrize(
-    "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2})],
-    indirect=["device_params"],
-    ids=["fabric_2d"],
-)
-@pytest.mark.parametrize("text", (_DEFAULT_TEXT,))
-def test_full_model_decode_on_device_sampling(mesh_device, reset_seeds, text: str) -> None:
-    """Greedy (top-1) sampling done on device, fed back without going to host.
-
-    After prefill, runs a burst of decode steps where each step argmaxes the logits
-    on device and copies the sampled id straight back into the embedding input
-    buffer (no per-step device->host round trip). All sampled token ids are read
-    back to the host in a single transfer at the end.
-    """
-    import time
-
-    n_iters = int(os.environ.get("DEEPSEEK_V4_SAMPLE_ITERS", "25"))
-
-    state = _build_and_prefill(mesh_device, text)
-    model, tokenizer = state["model"], state["tokenizer"]
-    real_len, next_id, traced = state["real_len"], state["next_id"], state["traced"]
-    assert traced, "on-device sampling requires the traced decode path"
-
-    t0 = time.perf_counter()
-    tokens = model.decode_sampled_burst(next_id, real_len, n_iters)  # single host transfer at the end
-    dt = time.perf_counter() - t0
-
-    assert len(tokens) == n_iters
-    logger.info(f"on-device sampling: {n_iters} tokens in {dt:.3f}s ({n_iters / dt:.2f} tok/s)")
-    logger.info(f"SAMPLED IDS : {tokens}")
-    logger.info(f"SAMPLED TEXT: {tokenizer.decode(tokens)!r}")
