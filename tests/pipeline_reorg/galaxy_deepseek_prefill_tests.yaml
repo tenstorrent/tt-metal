@@ -262,7 +262,7 @@
     export MESH_DEVICE=TG
     export KIMI_K2_6_HF_MODEL=/mnt/MLPerf/huggingface/hub/Kimi-K2.6-dequantized
     export PREFILL_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache/golden/structured_traces/kimi_longbook_55k_vllm
-    pytest "models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_no_pcc[blackhole-kimi-mesh-8x4-L61-chunks5-ten_iters-nosvc-margin5pct]" -xvs
+    pytest "models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_no_pcc[blackhole-kimi-mesh-8x4-L61-chunks5-ten_iters-margin5pct]" -xvs
   test_type: kimi_chunked
   test_group: module
   skus:

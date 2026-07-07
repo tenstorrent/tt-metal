@@ -37,7 +37,6 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole, profiler
-from models.demos.common.prefill.runners.runner_utils import build_h2d_service
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
@@ -53,16 +52,6 @@ SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # Larger KV cache for the no-PCC perf sweep only (up to 100k ISL = 20 chunks). Kept separate from
 # SEQ_CACHE so the PCC tests and the _PADDED_FULL_55K split (which assert against 55*1024) are untouched.
 SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
-
-# H2D stream-service constants (mirror prefill_runner.py). Used by the with-service variant of the
-# no-PCC test: build the H2D service so its persistent receiver kernel spins on its worker core during
-# the whole prefill, reproducing the request-loop's service-presence dispatch tax WITHOUT any producer
-# or socket (tokens still come from the local path). See run_chunked_transformer_no_pcc(with_h2d_service).
-H2D_METADATA_SIZE_BYTES = 12
-H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
-    placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()],
-)
-H2D_SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 
 
 def _resolve_trace_dir(variant) -> Path:
@@ -112,15 +101,15 @@ LAYER_PCC_THRESHOLD = 0.88
 GATED_LAYER_DEPTH = 10
 
 # Per-chunk baseline medians (seconds) for the no-PCC perf gate, pulled from a known-good CI run. Keyed
-# by (num_layers, n_chunks, num_iters, with_h2d_service) so only the exact config we have a CI number
-# for is gated; every other combo in the no-PCC sweep stays record-only. Each list has one entry per
-# chunk (index c == chunk c). A single margin (the perf_margin pytest arg) is applied to every chunk.
-# Recalibrate by re-reading the "chunk timing stats" table from a fresh green CI run.
+# by (num_layers, n_chunks, num_iters) so only the exact config we have a CI number for is gated; every
+# other combo in the no-PCC sweep stays record-only. Each list has one entry per chunk (index c ==
+# chunk c). A single margin (the perf_margin pytest arg) is applied to every chunk. Recalibrate by
+# re-reading the "chunk timing stats" table from a fresh green CI run.
 KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S = {
-    # test_kimi_prefill_transformer_chunked_no_pcc[...-L61-chunks5-ten_iters-nosvc]
+    # test_kimi_prefill_transformer_chunked_no_pcc[...-L61-chunks5-ten_iters]
     # Baseline from https://github.com/tenstorrent/tt-metal/actions/runs/28753487696 (run attempt 2):
     # the per-chunk median column of the "chunk timing stats" table (9 post-warmup iters, iter 0 omitted).
-    (61, 5, 10, False): [1.330, 1.326, 1.326, 1.340, 1.369],
+    (61, 5, 10): [1.330, 1.326, 1.326, 1.340, 1.369],
 }
 # Default +/- tolerance band around each baseline chunk median (fraction). Overridable per test via the
 # perf_margin pytest argument (see test_prefill_block_perf.py's `margin` column for the design).
@@ -857,8 +846,6 @@ def run_chunked_transformer_no_pcc(
     num_links,
     topology,
     num_iters,
-    with_h2d_service=False,
-    h2d_isolated_claim=False,
     routing_use_l1_small_for_semaphores=False,
     baseline_chunk_times_s=None,
     perf_margin=None,
@@ -866,11 +853,8 @@ def run_chunked_transformer_no_pcc(
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
     readback, no PCC). Tokens are the real (longbook) ids from the golden trace when present, else a
-    deterministic in-vocab pattern, so this is trace-optional. With with_h2d_service the H2D stream
-    service is built so its persistent receiver kernel spins on its worker core for the whole prefill,
-    reproducing the request-loop's service-presence dispatch tax WITHOUT any producer or socket (the
-    service is never fed). The KV cache is reused across iterations (each chunk overwrites the same
-    [0, total_len) region in order).
+    deterministic in-vocab pattern, so this is trace-optional. The KV cache is reused across iterations
+    (each chunk overwrites the same [0, total_len) region in order).
 
     Perf gate: when `baseline_chunk_times_s` is provided (a per-chunk list of baseline medians pulled
     from a known-good CI run), each chunk's measured median must stay within +/- `perf_margin` of its
@@ -966,8 +950,7 @@ def run_chunked_transformer_no_pcc(
 
     logger.info(
         f"chunked transformer (no-PCC): num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
-        f"total_len={total_len} cache={SEQ_CACHE_NOPCC} chunk={CHUNK} num_iters={num_iters} "
-        f"with_h2d_service={with_h2d_service}"
+        f"total_len={total_len} cache={SEQ_CACHE_NOPCC} chunk={CHUNK} num_iters={num_iters}"
     )
 
     iteration_chunk_times: list[list[float]] = []
@@ -1049,28 +1032,6 @@ def run_chunked_transformer_no_pcc(
 
     mesh_device.enable_program_cache()
 
-    # Background H2D-service variant: build the H2D stream service so its persistent receiver kernel
-    # spins for the whole prefill, reproducing the request-loop's service-presence dispatch tax WITHOUT
-    # a producer or socket (tokens still come from the local path; the service is never fed). Mirrors
-    # prefill_runner request-mode: clear the model's custom sub-device manager first so the service's
-    # init program validates against the whole-chip default. isolated_claim (h2dsvc_isolated variant)
-    # needs a source-side change not ported to this branch; only nosvc / h2dsvc_regular run here.
-    bg_h2d_service = None
-    if with_h2d_service:
-        mesh_device.clear_loaded_sub_device_manager()
-        bg_h2d_service = build_h2d_service(
-            mesh_device,
-            mesh_shape=tuple(mesh_shape),
-            chunk_size=CHUNK,
-            mapper_config=H2D_MAPPER_CONFIG,
-            worker_cores=H2D_SYNC_WORKER_CORES,
-            metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
-        )
-        logger.info(
-            f"[h2d-bg] H2D service built and spinning in the background (unused; no producer/socket); "
-            f"isolated_claim={h2d_isolated_claim}"
-        )
-
     # Profiling warmup: run chunk 0 once through all layers so every kernel is JIT-compiled and the
     # program cache is populated BEFORE the measured region. Gated by TT_PREFILL_PROFILE_WARMUP so
     # normal runs are unaffected. Bracketed by PROFILE_WARMUP_START / PROFILE_MEASURE_START signposts;
@@ -1135,17 +1096,9 @@ def run_chunked_transformer_no_pcc(
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
     profiler.end("tt_forward")
 
-    # Release the H2D service while the mesh + command queues + service core are still alive (its dtor
-    # frees a command queue and the service-core L1; running it after mesh close aborts).
-    if bg_h2d_service is not None:
-        del bg_h2d_service
-        gc.collect()
-        logger.info("[h2d-bg] H2D service released")
-
     profiler.end("total_test_time")
     logger.success(
-        f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, "
-        f"num_iters={num_iters}, with_h2d_service={with_h2d_service})"
+        f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, " f"num_iters={num_iters})"
     )
     perf_failures = print_duration_table(iteration_chunk_times)
     for key in profiler.times:
@@ -1157,15 +1110,8 @@ def run_chunked_transformer_no_pcc(
 
 # No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
 # trace dependency, no intermediate readback, and no PCC. Requires only the Kimi TTNN weight cache (set
-# TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is optional. Service modes:
-#   nosvc           - no H2D stream service (baseline)
-#   h2dsvc_regular  - resident H2D service, legacy claim -> per-op dispatch tax on every model op
+# TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is optional.
 @pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin5pct"])
-@pytest.mark.parametrize(
-    "with_h2d_service, h2d_isolated_claim",
-    [(False, False), (True, False), (True, True)],
-    ids=["nosvc", "h2dsvc_regular", "h2dsvc_isolated"],
-)
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
 )
@@ -1206,15 +1152,13 @@ def test_kimi_prefill_transformer_chunked_no_pcc(
     num_layers,
     n_chunks,
     num_iters,
-    with_h2d_service,
-    h2d_isolated_claim,
     num_links,
     topology,
     perf_margin,
 ):
     # Gate against the CI baseline only for the exact config we have a recorded number for; every other
     # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert).
-    baseline_chunk_times_s = KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters, with_h2d_service))
+    baseline_chunk_times_s = KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters))
     run_chunked_transformer_no_pcc(
         variant,
         config_only,
@@ -1226,8 +1170,6 @@ def test_kimi_prefill_transformer_chunked_no_pcc(
         num_links,
         topology,
         num_iters,
-        with_h2d_service=with_h2d_service,
-        h2d_isolated_claim=h2d_isolated_claim,
         routing_use_l1_small_for_semaphores=True,
         baseline_chunk_times_s=baseline_chunk_times_s,
         perf_margin=perf_margin,
@@ -1236,12 +1178,7 @@ def test_kimi_prefill_transformer_chunked_no_pcc(
 
 # DeepSeek counterpart of the no-PCC perf sweep above: same chunked driver, deepseek_v3_d_p variant
 # (DeepSeekV3Config fabric payload, no L1_SMALL routing semaphores). Used to compare DeepSeek vs Kimi
-# chunked-prefill perf at matched ISL (n_chunks x CHUNK), num_layers, and service mode.
-@pytest.mark.parametrize(
-    "with_h2d_service, h2d_isolated_claim",
-    [(False, False), (True, False), (True, True)],
-    ids=["nosvc", "h2dsvc_regular", "h2dsvc_isolated"],
-)
+# chunked-prefill perf at matched ISL (n_chunks x CHUNK) and num_layers.
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
 )
@@ -1282,8 +1219,6 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     num_layers,
     n_chunks,
     num_iters,
-    with_h2d_service,
-    h2d_isolated_claim,
     num_links,
     topology,
 ):
@@ -1298,7 +1233,5 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         num_links,
         topology,
         num_iters,
-        with_h2d_service=with_h2d_service,
-        h2d_isolated_claim=h2d_isolated_claim,
         routing_use_l1_small_for_semaphores=False,
     )
