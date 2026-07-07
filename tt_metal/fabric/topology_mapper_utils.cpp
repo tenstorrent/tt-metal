@@ -2109,7 +2109,7 @@ std::size_t add_pgd_pinning_preferred_constraints(
         }
         std::set<tt::tt_metal::AsicID> preferred_asics;
         for (const auto& asic_id : pos_it->second) {
-            if (physical_mesh_node_set.find(asic_id) != physical_mesh_node_set.end()) {
+            if (physical_mesh_node_set.contains(asic_id)) {
                 preferred_asics.insert(asic_id);
             }
         }

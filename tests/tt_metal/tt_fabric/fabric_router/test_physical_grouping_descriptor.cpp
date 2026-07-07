@@ -2569,19 +2569,6 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     const auto placements = pgd.find_all_in_psd(committed_groupings, psd);
     ASSERT_FALSE(placements.empty()) << "Should find at least one PSD placement for the 4x4 mesh";
 
-    std::cout << "find_all_in_psd returned " << placements.size() << " placement(s):\n";
-    for (std::size_t i = 0; i < placements.size(); ++i) {
-        const auto& placement = placements[i];
-        std::cout << "  [" << i << "] grouping='" << placement.grouping.name << "'"
-                  << " asic_count=" << placement.asics.size() << "\n";
-        std::cout << "      mesh_node_to_asic_position (chip_id -> tray/asic):";
-        for (const auto& [chip_id, asic_position] : placement.grouping.mesh_node_to_asic_position) {
-            std::cout << " " << chip_id << "->(" << asic_position.first.get() << "," << asic_position.second.get()
-                      << ")";
-        }
-        std::cout << std::endl;
-    }
-
     for (const auto& placement : placements) {
         EXPECT_EQ(placement.asics.size(), 16u) << "Each 4x4 placement should cover 16 ASICs";
         EXPECT_EQ(count_distinct_hosts_for_asics(psd, placement.asics), 1u)

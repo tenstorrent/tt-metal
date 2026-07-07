@@ -29,7 +29,9 @@
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-misc
   skus:
     cpu_medium:
-      timeout: 15
+      # bh-pod-pipeline (now resolvable after the SC36 subtorus rename) adds ~30 per-host-sliced pod
+      # combos on top of the single-galaxy slices, pushing this shard past the old 15-min cap.
+      timeout: 40
   team: scaleout
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song
@@ -61,7 +63,9 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc20
   skus:
     cpu_medium:
-      timeout: 15
+      # 20-host SC20 rings on 2 mocks: 80-stage 2x4 (x2), 40-stage 4x4, 20-stage 8x4, and the 160-node
+      # 32x4 5-group ring — the slowest CPU-only shard; 15 min timed out on CI.
+      timeout: 40
   team: scaleout
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song
