@@ -17,14 +17,17 @@ The worker hosts a ``tt-transformers`` ``Transformer`` on a single
 
 Design choices:
 
-* ``dummy_weights=True`` is passed straight to ``ModelArgs.__init__`` so
-  the worker boots fast: no HF tokenizer load (line 640 of
-  ``model_config.py`` short-circuits), no HF Hub safetensors download
-  (the bundled ``model_params/<model_name>/`` directory backs the
-  ``AutoConfig`` lookup instead). The very first
-  :meth:`update_weights` call is expected to overwrite the dummy state
-  with real weights pushed from the ttml peer; until then any
-  :meth:`generate` output is meaningless.
+* ``dummy_weights`` (constructor kwarg, default ``True``) is passed
+  straight to ``ModelArgs.__init__``. With the default the worker boots
+  fast: no HF tokenizer load (line 640 of ``model_config.py``
+  short-circuits), no HF Hub safetensors download (the bundled
+  ``model_params/<model_name>/`` directory backs the ``AutoConfig``
+  lookup instead). The very first :meth:`update_weights` call is
+  expected to overwrite the dummy state with real weights pushed from
+  the ttml peer; until then any :meth:`generate` output is meaningless.
+  Pass ``dummy_weights=False`` to load the real HF checkpoint (and
+  tokenizer) at construction -- used by the ``.update()`` unit tests,
+  which need a real model as ground truth.
 * ``disable_disk_cache=True`` is hard-coded because the dump_tensor
   flatbuffer collective inside the on-disk cache writer deadlocks
   against an asymmetric peer mesh shape on ``MPI_COMM_WORLD``
@@ -92,6 +95,7 @@ class TttGenerationWorker:
         seed: Optional[int] = None,
         paged_block_size: int = 32,
         min_num_blocks: int = 1024,
+        dummy_weights: bool = True,
     ) -> None:
         import torch
 
@@ -111,10 +115,12 @@ class TttGenerationWorker:
         # and tokenizer paths. The worker owns the env var while it lives.
         os.environ["HF_MODEL"] = model_source
 
-        # dummy_weights=True passed to the ctor:
+        # dummy_weights (default True) passed straight through to the ctor.
+        # When True it:
         #   - skips AutoTokenizer.from_pretrained (line 640 of model_config.py)
         #   - swaps _set_hf_params over to LOCAL_HF_PARAMS[self.model_name]
         #     so no HF Hub round-trip is needed for the arch config either
+        # When False, ModelArgs loads the real HF checkpoint + tokenizer.
         # disable_disk_cache=True: short-circuits the dump_tensor_flatbuffer
         # collective that would otherwise deadlock with an asymmetric peer.
         self.model_args = ModelArgs(
@@ -125,7 +131,7 @@ class TttGenerationWorker:
             max_seq_len=max_seq_len,
             cache_hf=True,
             disable_disk_cache=True,
-            dummy_weights=True,
+            dummy_weights=dummy_weights,
         )
         self.model_args.lm_head_dtype = ttnn.bfloat16
         self.model_args.ccl_dtype = ttnn.bfloat16
@@ -144,7 +150,7 @@ class TttGenerationWorker:
         self._paged_cache_max_seq_len = paged_block_size * blocks_per_user
         self.page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, blocks_per_user)
 
-        state_dict = self.model_args.load_state_dict()  # dummy weights
+        state_dict = self.model_args.load_state_dict()  # dummy or real per dummy_weights
 
         self.model = Transformer(
             args=self.model_args,
@@ -156,8 +162,8 @@ class TttGenerationWorker:
         )
         self.kv_cache = [layer.attention.layer_past for layer in self.model.layers]
 
-        # tokenizer=None: ModelArgs.tokenizer is already None (dummy_weights),
-        # and Generator only reads its tokenizer from multimodal helpers we
+        # tokenizer=None: the worker holds no tokenizer of its own, and
+        # Generator only reads its tokenizer from multimodal helpers we
         # don't call. Stop/pad IDs live on this class instead.
         self.generator = Generator(
             model=[self.model],

@@ -11,14 +11,20 @@ extras it needs (e.g. yielding a specific layer or sub-module).
 from __future__ import annotations
 
 import contextlib
+import functools
 import gc
 import os
 from pathlib import Path
 from typing import Any
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
-TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml"
+TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1dev_gas_16.yaml"
 MAX_SEQ_LEN = 2048
+
+# tt-transformers generation captures an on-device decode trace, so the mesh
+# must be opened with a nonzero trace region. 50 MB matches the tt-transformers
+# demo default (models/tt_transformers/demo/simple_text_demo.py::_trace_region_size).
+_TRACE_REGION_SIZE = 50_000_000
 
 REPO_ROOT = Path(__file__).resolve().parents[5]  # .../tt-metal
 
@@ -42,8 +48,8 @@ def open_device(device_config) -> Any:
     """Open the ttml ``AutoContext`` device for the given config.
 
     Enables fabric (when multi-device) and opens the AutoContext mesh.
-    Returns the ``ttnn.MeshDevice`` handle that can be passed to both
-    :class:`LlamaCompleterTtt` and :class:`LlamaCompleterTtml`.
+    Returns the ``ttnn.MeshDevice`` handle that :func:`build_completer`
+    passes to the :class:`~utils.ttt_generation_worker.TttGenerationWorker`.
 
     Caller owns the lifetime: pair every ``open_device`` with a
     matching :func:`close_device` in a ``try/finally``.
@@ -64,6 +70,46 @@ def close_device() -> None:
     ttml.autograd.AutoContext.get_instance().close_device()
 
 
+class _TttCompleter:
+    """Test-only adapter over :class:`TttGenerationWorker`.
+
+    These tests were written against the old ``LlamaCompleterTtt``, which
+    exposed ``.model`` / ``.model_args`` / ``.mesh_device`` / ``.generate``
+    *and* a ``.tokenizer``. ``TttGenerationWorker`` provides everything but
+    the tokenizer (it deliberately holds none -- stop/pad IDs are passed to
+    its constructor instead). This thin wrapper forwards the worker's
+    attributes and adds a **lazily** loaded ``.tokenizer`` so the
+    dummy-weight tests that never tokenise (``test_attention_update`` and the
+    mlp/rmsnorm zero-forward tests) don't trigger a gated-tokenizer download
+    and stay HF-auth-free; only tests that actually touch ``.tokenizer`` (or
+    that load real weights) pay for it.
+    """
+
+    def __init__(self, worker: Any, model_source: str) -> None:
+        self._worker = worker
+        self._model_source = model_source
+
+    @functools.cached_property
+    def tokenizer(self) -> Any:
+        # Reuse the real tokenizer ModelArgs already loaded for real weights;
+        # otherwise load it on demand (needed by test_lm_head_zero_forward,
+        # which tokenises even though it runs under dummy weights).
+        tok = getattr(self._worker.model_args, "tokenizer", None)
+        if tok is not None:
+            return tok
+        from transformers import AutoTokenizer
+
+        return AutoTokenizer.from_pretrained(self._model_source)
+
+    def __getattr__(self, name: str) -> Any:
+        # Only fires for names not found on the wrapper (model, model_args,
+        # mesh_device, generate, ...) -> forward them to the worker. Guard
+        # ``_worker`` to avoid recursion before __init__ has set it.
+        if name == "_worker":
+            raise AttributeError(name)
+        return getattr(self._worker, name)
+
+
 def build_completer(
     mesh_device: Any,
     *,
@@ -73,22 +119,48 @@ def build_completer(
     model_source: str = MODEL_ID,
     instruct: bool = True,
 ):
-    """Construct a fresh :class:`LlamaCompleterTtt` on ``mesh_device``.
+    """Construct a fresh TTT completer on ``mesh_device``.
+
+    Builds a :class:`TttGenerationWorker` (the current tt-transformers
+    generation worker) and wraps it in :class:`_TttCompleter` so the
+    update-method tests keep their ``.model`` / ``.model_args`` /
+    ``.mesh_device`` / ``.tokenizer`` / ``.generate`` contract.
 
     Heavy when ``dummy_weights=False``: loads real HF weights for
     ``model_source`` (default Llama-3.2-1B-Instruct). Tests should call
     this from a module-scoped fixture so the cost is paid once per file.
     """
-    from utils.llama_completer_ttt import LlamaCompleterTtt
+    from utils.llama_ttt_presets import (
+        bf16_attn_bfp8_mlp_optimizations,
+        llama_stop_and_pad,
+    )
+    from utils.ttt_generation_worker import TttGenerationWorker
 
-    return LlamaCompleterTtt(
+    if dummy_weights:
+        # Avoid loading the (gated) HF tokenizer just to derive stop/pad IDs:
+        # the dummy-weight tests either don't generate at all or generate
+        # under synthetic weights where these IDs are immaterial.
+        stop_token_ids: Any = ()
+        pad_token_id = 0
+    else:
+        stop_token_ids, pad_token_id = llama_stop_and_pad(model_source)
+
+    worker = TttGenerationWorker(
         mesh_device=mesh_device,
         model_source=model_source,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
         instruct=instruct,
+        optimizations=bf16_attn_bfp8_mlp_optimizations,
+        stop_token_ids=stop_token_ids,
+        pad_token_id=pad_token_id,
+        temperature=0.0,  # greedy; the worker ignores per-call temperature
+        top_k=0,
+        top_p=1.0,
+        seed=0,
         dummy_weights=dummy_weights,
     )
+    return _TttCompleter(worker, model_source)
 
 
 @contextlib.contextmanager
@@ -104,9 +176,9 @@ def open_completer(
     and tears both down on exit.
 
     Cleanup runs in dependency order: drop the completer (freeing its
-    on-device tensors), GC, then close the AutoContext mesh. Safe on
-    construction failure (a partially-built completer is still dropped
-    before close_device).
+    on-device tensors), GC, then close the mesh. Safe on construction
+    failure (a partially-built completer is still dropped before the mesh
+    is closed).
 
     Usage::
 
@@ -115,8 +187,26 @@ def open_completer(
             with open_completer(dummy_weights=True) as c:
                 yield c.model.layers[0].attention
     """
+    import ttnn
+
     device_config, _ = load_device_config()
-    mesh_device = open_device(device_config)
+    # Open the mesh via ttnn directly, NOT ttml's AutoContext. tt-transformers
+    # needs the full 8x8 Wormhole compute grid, but AutoContext hardcodes the
+    # raw C++ DispatchCoreConfig{} (WORKER/tensix dispatch), which reserves a
+    # tensix row on a 2-harvested N300 die and leaves only 8x7 -> ops trip
+    # `compute_with_storage_grid_size (8,8) must fit within device grid (8,7)`.
+    # Force ETH dispatch: it puts command dispatch on idle ethernet cores and
+    # keeps the full 8x8 tensix grid (what tt-transformers relies on via cluster
+    # autodetection; forcing it is robust even if a [1,1] open autodetects as a
+    # lone N150). ttnn also lets us request the trace region the decode trace
+    # needs, which AutoContext always leaves at 0. Safe here because these tests
+    # build only tt-transformers models (never ttml), so there is no
+    # AutoContext-owned device to conflict with.
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(*device_config.mesh_shape),
+        trace_region_size=_TRACE_REGION_SIZE,
+        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.device.DispatchCoreType.ETH),
+    )
     completer = None
     try:
         completer = build_completer(
@@ -131,7 +221,7 @@ def open_completer(
     finally:
         completer = None
         gc.collect()
-        close_device()
+        ttnn.close_mesh_device(mesh_device)
 
 
 def as_update_input(t, mesh_device):
