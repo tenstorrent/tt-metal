@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import torch
 import ttnn
 
 
-def to_tt(t: torch.Tensor, mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
+def to_tt(t: torch.Tensor, mesh_device, dtype=None, layout=None) -> ttnn.Tensor:
+    dtype = ttnn.bfloat16 if dtype is None else dtype
+    layout = ttnn.TILE_LAYOUT if layout is None else layout
     return ttnn.from_torch(t, dtype=dtype, layout=layout, device=mesh_device)
 
 

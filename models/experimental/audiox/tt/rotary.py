@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import torch
 import ttnn
 
@@ -14,11 +16,12 @@ def precompute_rotary_cos_sin(
     base: int = 10000,
     base_rescale_factor: float = 1.0,
     interpolation_factor: float = 1.0,
-    dtype=ttnn.bfloat16,
+    dtype=None,
 ):
     """Precompute rotary cos/sin tables (use_xpos=False path). Returns
     (cos, sin) ttnn tensors of shape [1, 1, seq_len, dim] ready to broadcast
     against a [batch, heads, seq_len, head_dim] activation."""
+    dtype = ttnn.bfloat16 if dtype is None else dtype
     base = base * (base_rescale_factor ** (dim / (dim - 2)))
     inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
     t = torch.arange(seq_len, dtype=torch.float32) / interpolation_factor

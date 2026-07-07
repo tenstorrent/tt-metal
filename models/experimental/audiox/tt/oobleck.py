@@ -11,6 +11,8 @@ TTNN has no native ``conv_transpose1d``, so the decoder upsample is emulated
 with ``conv_transpose2d`` over a degenerate width-1 dim — mathematically
 identical to the 1D op, kernel ``(2*stride, 1)`` and stride ``(stride, 1)``."""
 
+from __future__ import annotations
+
 import os
 import time
 
