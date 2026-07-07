@@ -129,6 +129,69 @@ def _emit_run_report_impl(
             lines.append(f"  {bl}")
     lines.append("")
 
+    # --- Backend & template match --------------------------------------------
+    # Same four items the terminal prints in Step 1 (`cli.py::pick_backend_with_quality`
+    # + `_emit_backend_match_line`) — hoisted here so RUN_REPORT.md doesn't need the
+    # (ephemeral) full log to answer "what backend did the tool pick, and how good was
+    # the match". Pure read-side: reads bringup_status.json (already on disk from
+    # scaffold time). Best-effort: any parse failure just skips the section, never
+    # blocks the rest of the report.
+    _backend_lines: List[str] = []
+    try:
+        _bs_path = demo_dir / "bringup_status.json"
+        if _bs_path.is_file():
+            _bs = json.loads(_bs_path.read_text())
+            _be = _bs.get("backend") or {}
+            _new_mt = _bs.get("new_model_type")
+            _sib_hf = _bs.get("sibling_hf_id")
+            _sib_mt = _bs.get("sibling_model_type")
+            _be_name = _be.get("name")
+            _be_path = _be.get("demo_path")
+            # Derive match quality from what we know (model_type equality is the
+            # single strongest signal `pick_backend_with_quality` uses; distinct
+            # model_types => sibling-template fallback, i.e. CATEGORY-DEFAULT).
+            _quality: Optional[str] = None
+            if _new_mt and _sib_mt:
+                if _new_mt == _sib_mt:
+                    _quality = "EXACT (model_type match)"
+                else:
+                    _quality = "TEMPLATE-FALLBACK (model_type mismatch — closest sibling by category)"
+            if _be_name or _new_mt or _sib_hf:
+                _backend_lines.append("## Backend & template match")
+                _backend_lines.append("")
+                if _be_name:
+                    _tail = f"  ({_quality})" if _quality else ""
+                    _backend_lines.append(f"- **Backend picked:** `{_be_name}`{_tail}")
+                if _be_path:
+                    _backend_lines.append(f"- **Closest template:** `{_be_path}`")
+                if _new_mt:
+                    _backend_lines.append(f"- **Target model_type:** `{_new_mt}`")
+                if _sib_hf or _sib_mt:
+                    _sib_tail = f" (model_type=`{_sib_mt}`)" if _sib_mt else ""
+                    _backend_lines.append(f"- **Sibling / template base:** `{_sib_hf or '?'}`{_sib_tail}")
+    except Exception:
+        _backend_lines = []
+    # Optional: cheaper alternatives from a persisted meta-plan verdict, if the
+    # meta-planner ran and wrote its JSON (`.meta_plan_verdict.json`). Silent if
+    # not present — meta-plan is opt-in and doesn't run in every bring-up.
+    try:
+        _mp_path = demo_dir / ".meta_plan_verdict.json"
+        if _mp_path.is_file():
+            _mp = json.loads(_mp_path.read_text())
+            _alts = [str(a).strip() for a in (_mp.get("cheaper_alternatives") or []) if str(a).strip()]
+            if _alts:
+                if not _backend_lines:
+                    _backend_lines.append("## Backend & template match")
+                    _backend_lines.append("")
+                _backend_lines.append(
+                    f"- **Cheaper alternatives (meta-plan):** " + ", ".join(f"`{a}`" for a in _alts[:4])
+                )
+    except Exception:
+        pass
+    if _backend_lines:
+        lines.extend(_backend_lines)
+        lines.append("")
+
     lines.append("## Placement summary")
     lines.append("")
     lines.append(f"- **ON_DEVICE** ({len(cat_report.on_device)}): graduated, native ttnn, PCC verified")
