@@ -1,12 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import torch
 import ttnn
 
 
-def _broadcast_t(t_value, batch, mesh_device, dtype=ttnn.bfloat16):
+def _broadcast_t(t_value, batch, mesh_device, dtype=None):
     """Broadcast a scalar timestep to a [batch] ttnn tensor."""
+    dtype = ttnn.bfloat16 if dtype is None else dtype
     t = torch.full((batch,), float(t_value), dtype=torch.float32)
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device)
 
