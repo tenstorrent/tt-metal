@@ -41,11 +41,9 @@ public:
 
     // Signal the reader thread to exit and join it. Idempotent.
     //
-    // NOTE: read_metadata() blocks in the underlying socket read until the device
-    // sends the next record. If no further record will arrive, the reader thread
-    // stays parked inside read_metadata() and stop() blocks on the join until it
-    // returns. Callers that want a bounded stop() must ensure a final record is
-    // sent (or drop this thread on teardown).
+    // The reader thread calls read_metadata() only after every socket reports
+    // has_data(), so it never parks inside a blocking read. stop() therefore
+    // joins promptly (within one poll tick) even when no further record arrives.
     void stop();
 
 private:
