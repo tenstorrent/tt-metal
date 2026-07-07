@@ -10,7 +10,7 @@
 #include "experimental/kernel_args.h"
 #include <ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/pool_kernels_common.hpp>
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 0  // [DEBUG] test DM-core DPRINT capture (remove after)
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
@@ -166,6 +166,9 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
  * Pool 2D (Max pool 2D and Avg pool 2D)
  */
 void kernel_main() {
+#if ENABLE_DEBUG_PRINT == 1
+    DPRINT("READER_ENTER (data-movement kernel_main reached)\n");
+#endif
     constexpr uint32_t reader_nindices = get_arg(args::reader_nindices);
     constexpr uint32_t kernel_h = get_arg(args::kernel_h);
     constexpr uint32_t kernel_w = get_arg(args::kernel_w);
@@ -195,6 +198,12 @@ void kernel_main() {
     // DFBs bound under the same accessor names, so the kernel references one name regardless
     // of reader_id (the host binds the right DFB per reader KernelSpec).
     constexpr uint32_t in_cb_id = dfb::in_cb;
+    // [DEBUG scratch->DM] this reader's scratch CB (reader0->scratch_cb_0, reader1->scratch_cb_1; the
+    // factory routes dfb::scratch_cb per reader). Compute produces it; we consume it and NoC-copy row 0
+    // into out_shard_cb (borrowed OUTPUT view), working around the broken narrow pack.
+    constexpr uint32_t scratch_cb_id = dfb::scratch_cb;
+    constexpr uint32_t out_shard_cb_id = dfb::out_shard_cb;
+    constexpr uint32_t out_row_bytes = get_arg(args::out_row_bytes);
     constexpr uint32_t in_shard_cb_id = dfb::in_shard_cb;
     constexpr uint32_t in_reader_indices_cb_id = dfb::reader_indices_cb;
     constexpr uint32_t in_scalar_cb_id = dfb::in_scalar_cb;
@@ -245,6 +254,11 @@ void kernel_main() {
     DataflowBuffer clear_value_cb(clear_value_cb_id);
     DataflowBuffer in_scalar_cb(in_scalar_cb_id);
     DataflowBuffer in_shard_cb(in_shard_cb_id);
+    DataflowBuffer scratch_cb(scratch_cb_id);      // [DEBUG scratch->DM]
+    DataflowBuffer out_shard_cb(out_shard_cb_id);  // [DEBUG scratch->out] borrowed OUTPUT view (NoC dest)
+    // Compute reserves/pushes the WHOLE scratch CB per output stick; wait/pop the same whole-CB count so
+    // the single-tile scratch serializes and we never read a partially/overlapping-written tile.
+    constexpr uint32_t scratch_npages = get_arg(args::scratch_npages);
     DataflowBuffer reader_indices_cb(in_reader_indices_cb_id);
 #ifdef HAS_CONFIG
     DataflowBuffer config_cb(config_cb_id);
@@ -349,6 +363,12 @@ void kernel_main() {
         (uint32_t)kernel_h,
         (uint32_t)kernel_w);
 
+    // [DEBUG scratch->out] NoC handle + this reader's output-stick counter. With split reader, reader0
+    // writes even output rows, reader1 writes odd, so global row = 2*counter + reader_id.
+    Noc out_noc;
+    UnicastEndpoint out_self_ep;
+    uint32_t out_stick_counter = 0;
+
     while (num_segments--) {
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
         uint16_t start = start_end_segment & 0xffff;
@@ -394,6 +414,72 @@ void kernel_main() {
                 zero_pages,
                 in_cb_sz,
                 bf16_init_value>(ind, in_l1_read_base_addr);
+#if ENABLE_DEBUG_PRINT == 1
+            // [DIAG] Peek THIS reader's just-filled input CB (reader is producer; on DM get_read_ptr still
+            // points at the base page it filled, before compute pops). Tilized face0 row0 = first 16
+            // channels of the window's first row -> should read 1..16 for the deterministic input. If
+            // reader1's in_cb_1 reads 0 while reader0's in_cb_0 reads 1..16, the split reader1 input feed
+            // is the bug (not the pack). Only the first stick is reliable (rd_ptr stays at base after).
+            if (out_stick_counter == 0) {
+                DataflowBuffer in_cb_peek(in_cb_id);
+                volatile tt_l1_ptr uint16_t* ip =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_cb_peek.get_read_ptr());
+                // face0 = tilized rows 0..15, each row = 16 channels; ip[r*16+0] = row r channel 0.
+                // Window rows (the 9 sticks) should read the input value (channel 0 -> 1); cleared/tail
+                // rows read the pool identity (-inf). Shows whether reader1 fills its window rows at all.
+                DPRINT(
+                    "INCB rdr={} ind={} in_cb_base={} face0 col0 rows0..15: ",
+                    (uint32_t)reader_id,
+                    (uint32_t)ind,
+                    in_cb_peek.get_read_ptr());
+                for (uint32_t r = 0; r < 16; ++r) {
+                    DPRINT("{} ", bf16_t(ip[r * 16]));
+                }
+                DPRINT("\n");
+            }
+#endif
+            // [DEBUG scratch->out workaround] We just fed the input for this output stick; compute reduces
+            // it and packs the CORRECT full-tile reduced DEST into our scratch CB (row 0 = all channels).
+            // wait_front blocks until that push (ordering for free via the SPSC credit). Then, from this DM
+            // core (the only reliable L1 path on the sim), NoC-copy scratch row 0 -> the output tensor at
+            // this stick's row, bypassing the broken narrow pack entirely. Then release the scratch page.
+            scratch_cb.wait_front(scratch_npages);
+            {
+                const uint32_t global_stick =
+                    use_split_reader ? (2u * out_stick_counter + reader_id) : out_stick_counter;
+                const uint32_t scratch_row0_addr = scratch_cb.get_read_ptr();  // untilized row 0 = the result
+                out_noc.async_read(
+                    out_self_ep,
+                    out_shard_cb,
+                    out_row_bytes,
+                    experimental::local_addr(scratch_row0_addr),
+                    {.offset_bytes = global_stick * out_row_bytes});
+                out_noc.async_read_barrier();
+#if ENABLE_DEBUG_PRINT == 1
+                // Sample scratch row 0 (the reduced result) so unpack correctness is separable from
+                // routing: for input c->c+1, a correct reduce gives ch0..7 = 1..8 and ch60..63 = 61..64;
+                // a partial-face (3x3) unpack leak would show values != c+1 (often inflated).
+                {
+                    volatile tt_l1_ptr uint16_t* rp = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch_row0_addr);
+                    DPRINT(
+                        "SCRATCH2OUT rdr={} gstick={} rdptr={} npages={} row0[0..7]: ",
+                        (uint32_t)reader_id,
+                        global_stick,
+                        scratch_row0_addr,
+                        (uint32_t)scratch_npages);
+                    for (uint32_t j = 0; j < 8; ++j) {
+                        DPRINT("{} ", bf16_t(rp[j]));
+                    }
+                    DPRINT(" [60..63]: ");
+                    for (uint32_t j = 60; j < 64; ++j) {
+                        DPRINT("{} ", bf16_t(rp[j]));
+                    }
+                    DPRINT("\n");
+                }
+#endif
+            }
+            scratch_cb.pop_front(scratch_npages);
+            out_stick_counter++;
             if (use_split_reader && ind == end) {
                 first_row_value = false;
             }
