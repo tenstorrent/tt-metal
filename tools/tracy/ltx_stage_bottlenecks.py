@@ -39,15 +39,22 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-# The six canonical LTX fast-pipeline stages, in execution order.
+# The canonical LTX fast-pipeline stages, in execution order. HOST_STAGES have no device op
+# signature: they are host/dispatch phases (weight reload, mux export) whose only truth is the
+# pipeline wall-clock timer. They are first-class budget rows, not footnotes, because on the served
+# path DiT reload (~2.1s) and video export (~1.6s) are dominant latency levers next to device stages.
 CANONICAL_STAGES = [
     "text-encode",
+    "Transformer prepare",
     "Stage 1 denoise",
+    "Latent upsample",
     "Stage 2 denoise",
+    "VAE prepare",
     "VAE decode",
     "Audio decode",
     "Video export",
 ]
+HOST_STAGES = {"Image encode", "Transformer prepare", "VAE prepare", "Video export"}
 
 # CSV columns consumed. Names track process_ops_logs.py OPS_CSV_HEADER; a run without
 # --collect-noc-traces / perf counters leaves the util cells blank, which is handled as "n/a".
@@ -128,6 +135,12 @@ class StageRoll:
     ops: list[Op] = field(default_factory=list)
     wall_s: float | None = None  # from --log timers, if present
     budget_s: float | None = None
+    base_device_ms: float | None = None  # saved-baseline device ms for regression compare
+    base_wall_s: float | None = None
+
+    @property
+    def is_host(self) -> bool:
+        return self.name in HOST_STAGES
 
     @property
     def device_ms(self) -> float:
@@ -282,21 +295,27 @@ def assign_stages(
 
 # --- pipeline stderr timers ------------------------------------------------------------
 
-# Each canonical stage's wall-clock line as emitted by pipeline_ltx_distilled.py. The last
-# match wins (warm gen; warmup lines are skipped explicitly). Aux timers are shown but are
-# not device-mapped stages.
+# Each canonical stage's wall-clock line as emitted by pipeline_ltx_distilled.py generate(). The
+# last match wins (warm gen; warmup lines are skipped explicitly). The host phases (Transformer
+# prepare = DiT weight reload, VAE prepare, Video export, Image encode) are first-class budget
+# stages here, not aux footnotes: they carry no device op but dominate served latency, and only the
+# wall-clock timer sees them. Image encode + Transformer/VAE prepare fire only in their modes (I2V,
+# dynamic_load); absent lines simply leave the row out.
 TIMER_PATTERNS = {
     "text-encode": re.compile(r"Encoding \([^)]*\):\s*([\d.]+)s"),
+    "Image encode": re.compile(r"Image encode:\s*([\d.]+)s"),
+    "Transformer prepare": re.compile(r"Transformer prepare:\s*([\d.]+)s"),
     "Stage 1 denoise": re.compile(r"Stage 1 denoise:\s*([\d.]+)s"),
+    "Latent upsample": re.compile(r"Latent upsample:\s*([\d.]+)s"),
     "Stage 2 denoise": re.compile(r"Stage 2 denoise:\s*([\d.]+)s"),
+    "VAE prepare": re.compile(r"VAE prepare:\s*([\d.]+)s"),
     "VAE decode": re.compile(r"VAE decode \(forward\):\s*([\d.]+)s"),
     "Audio decode": re.compile(r"Audio decode:\s*([\d.]+)s"),
     "Video export": re.compile(r"Video export:\s*([\d.]+)s"),
 }
+# Non-stage timers: reported for context but never a budget row (they overlap or nest stages).
 AUX_TIMER_PATTERNS = {
-    "Transformer prepare": re.compile(r"Transformer prepare:\s*([\d.]+)s"),
-    "Latent upsample": re.compile(r"Latent upsample:\s*([\d.]+)s"),
-    "VAE prepare": re.compile(r"VAE prepare:\s*([\d.]+)s"),
+    "Total (compute)": re.compile(r"Total \(compute\):\s*([\d.]+)s"),
 }
 
 
@@ -358,6 +377,38 @@ def _util(v: float | None) -> str:
     return "n/a" if v is None else f"{v:.0f}%"
 
 
+def gate_report(active: list[StageRoll], total_wall_s: float, budget_s: float, regress_tol: float) -> list[str]:
+    """Budget + regression gate lines a loop can act on. A stage is flagged OVER when its wall-clock
+    exceeds its --stage-budget; REGRESSED when a --baseline was loaded and device ms (or wall, for a
+    host stage with no device op) grew by more than regress_tol fraction. Empty list => clean."""
+    out: list[str] = []
+    for r in active:
+        if r.wall_s is not None and r.budget_s is not None and r.wall_s - r.budget_s > 0:
+            out.append(
+                f"OVER-BUDGET {r.name}: {r.wall_s:.2f}s vs target {r.budget_s:.2f}s (+{r.wall_s - r.budget_s:.2f}s)"
+            )
+    if total_wall_s and total_wall_s - budget_s > 0:
+        out.append(f"OVER-BUDGET e2e: {total_wall_s:.2f}s vs budget {budget_s:.2f}s (+{total_wall_s - budget_s:.2f}s)")
+    for r in active:
+        # Prefer the device-ms delta; for a host stage (no device op) regress on wall-clock instead.
+        cur, base = (r.wall_s, r.base_wall_s) if r.is_host else (r.device_ms, r.base_device_ms)
+        if base and cur is not None and base > 0 and (cur - base) / base > regress_tol:
+            unit = "s" if r.is_host else "ms"
+            out.append(
+                f"REGRESSED {r.name}: {cur:.2f}{unit} vs baseline {base:.2f}{unit} "
+                f"(+{100 * (cur - base) / base:.0f}%)"
+            )
+    return out
+
+
+def _delta_cell(cur: float, base: float | None, unit: str) -> str:
+    """'  (+12%)' style delta vs baseline, or '' when no baseline for the stage."""
+    if not base or base <= 0:
+        return ""
+    d = cur - base
+    return f" ({'+' if d >= 0 else ''}{100 * d / base:.0f}%)"
+
+
 def build_report(
     rolls: dict[str, StageRoll],
     aux_wall: dict[str, float],
@@ -366,20 +417,24 @@ def build_report(
     fpu_thresh: float,
     bw_thresh: float,
     provenance: str,
-) -> tuple[str, str]:
-    """Return (plaintext, html). Ordered by CANONICAL_STAGES then any extra stages."""
+    regress_tol: float = 0.05,
+    has_baseline: bool = False,
+) -> tuple[str, str, list[str]]:
+    """Return (plaintext, html, gate_lines). Ordered by CANONICAL_STAGES then any extra stages."""
     order = [n for n in CANONICAL_STAGES if n in rolls] + [n for n in rolls if n not in CANONICAL_STAGES]
     active = [rolls[n] for n in order if rolls[n].ops or (rolls[n].wall_s or 0) > 0]
 
     total_device_ms = sum(r.device_ms for r in active) or 1.0
     total_wall_s = sum((r.wall_s or 0.0) for r in active)
+    gate_lines = gate_report(active, total_wall_s, budget_s, regress_tol)
 
     # ---- plaintext ----
     lines = []
     lines.append("LTX per-stage bottleneck rollup")
     lines.append(provenance)
     lines.append("")
-    hdr = f"{'stage':<20} {'device ms':>10} {'% dev':>6} {'wall s':>8} {'% e2e':>6} {'budget':>7}"
+    dhdr = "device ms" + ("  Δbase" if has_baseline else "")
+    hdr = f"{'stage':<20} {'host?':>5} {dhdr:>18} {'% dev':>6} {'wall s':>8} {'% e2e':>6} {'budget':>7}"
     lines.append(hdr)
     lines.append("-" * len(hdr))
     for r in active:
@@ -390,22 +445,38 @@ def build_report(
         if r.wall_s is not None and r.budget_s is not None:
             d = r.wall_s - r.budget_s
             over = f"{'+' if d >= 0 else ''}{d:.2f}s"
-        lines.append(f"{r.name:<20} {r.device_ms:10.2f} {pct_dev:5.0f}% {wall:>8} {pct_e2e:>6} {over:>7}")
+        # Host stages carry no device op: show a dash, not a misleading 0.00 ms / 0% share.
+        if r.is_host:
+            dev_cell = f"{'—':>10}{'':>8}" if has_baseline else f"{'—':>10}"
+            pct_cell = f"{'—':>5}%"
+        else:
+            delta = _delta_cell(r.device_ms, r.base_device_ms, "ms") if has_baseline else ""
+            dev_cell = f"{r.device_ms:10.2f}{delta:>8}" if has_baseline else f"{r.device_ms:10.2f}"
+            pct_cell = f"{pct_dev:5.0f}%"
+        host_tag = "host" if r.is_host else ""
+        lines.append(f"{r.name:<20} {host_tag:>5} {dev_cell:>18} {pct_cell:>6} {wall:>8} {pct_e2e:>6} {over:>7}")
     lines.append("-" * len(hdr))
     lines.append(
-        f"{'TOTAL':<20} {total_device_ms:10.2f} {'100%':>6} " f"{total_wall_s:8.2f} {'':>6} budget={budget_s:.2f}s"
+        f"{'TOTAL':<20} {'':>5} {total_device_ms:10.2f} {'':>7} {'100%':>6} "
+        f"{total_wall_s:8.2f} {'':>6} budget={budget_s:.2f}s"
     )
     if total_wall_s:
         d = total_wall_s - budget_s
         verdict = f"OVER by {d:.2f}s (need -{100 * d / total_wall_s:.0f}%)" if d > 0 else f"under by {-d:.2f}s"
         lines.append(f"{'':<20} e2e wall {total_wall_s:.2f}s vs budget {budget_s:.2f}s -> {verdict}")
+    if gate_lines:
+        lines.append("")
+        lines.append("GATE:")
+        for g in gate_lines:
+            lines.append(f"  ! {g}")
     if aux_wall:
         lines.append("aux timers: " + ", ".join(f"{k} {v:.2f}s" for k, v in aux_wall.items()))
     lines.append("")
 
     for r in active:
         if not r.ops:
-            lines.append(f"[{r.name}] no device ops (host/dispatch stage; time from log)")
+            kind = "HOST stage — wall-clock only, no device op" if r.is_host else "no device ops (time from log)"
+            lines.append(f"[{r.name}] {kind}")
             lines.append("")
             continue
         agg: dict[str, list[Op]] = defaultdict(list)
@@ -425,9 +496,19 @@ def build_report(
 
     text = "\n".join(lines)
     html_doc = _html(
-        active, aux_wall, budget_s, total_device_ms, total_wall_s, top_n, fpu_thresh, bw_thresh, provenance
+        active,
+        aux_wall,
+        budget_s,
+        total_device_ms,
+        total_wall_s,
+        top_n,
+        fpu_thresh,
+        bw_thresh,
+        provenance,
+        gate_lines,
+        has_baseline,
     )
-    return text, html_doc
+    return text, html_doc, gate_lines
 
 
 def _bar(pct: float, cls: str) -> str:
@@ -435,10 +516,27 @@ def _bar(pct: float, cls: str) -> str:
     return f'<div class="bar"><span class="{cls}" style="width:{pct:.1f}%"></span></div>'
 
 
-def _html(active, aux_wall, budget_s, total_device_ms, total_wall_s, top_n, fpu_thresh, bw_thresh, provenance):
+def _html(
+    active,
+    aux_wall,
+    budget_s,
+    total_device_ms,
+    total_wall_s,
+    top_n,
+    fpu_thresh,
+    bw_thresh,
+    provenance,
+    gate_lines=None,
+    has_baseline=False,
+):
     e = html.escape
+    gate_lines = gate_lines or []
     peak_ms = max((r.device_ms for r in active), default=1.0) or 1.0
     over = total_wall_s - budget_s if total_wall_s else 0.0
+    gate_banner = ""
+    if gate_lines:
+        items = "".join(f"<li>{e(g)}</li>" for g in gate_lines)
+        gate_banner = f"<div class='note gate'><strong>GATE — {len(gate_lines)} issue(s)</strong><ul>{items}</ul></div>"
 
     cards = []
     cards.append(
@@ -475,10 +573,21 @@ def _html(active, aux_wall, budget_s, total_device_ms, total_wall_s, top_n, fpu_
             d = r.wall_s - r.budget_s
             cls = "bad" if d > 0 else "ok"
             budget_cell = f"{'+' if d >= 0 else ''}{d:.2f} s vs {r.budget_s:.2f}"
+        name_cell = f"<strong>{e(r.name)}</strong>" + (" <span class='pill disp'>host</span>" if r.is_host else "")
+        if r.is_host:
+            dev_cell, bar_cell = "<span class='muted'>—</span>", ""
+        else:
+            delta = ""
+            if has_baseline and r.base_device_ms:
+                dd = r.device_ms - r.base_device_ms
+                dcls = "bad" if dd > 0 else "good"
+                delta = f" <span class='small {dcls}'>{'+' if dd >= 0 else ''}{100 * dd / r.base_device_ms:.0f}%</span>"
+            dev_cell = f"{r.device_ms:.2f} ms{delta}"
+            bar_cell = _bar(100 * r.device_ms / peak_ms, "cmp")
         rows.append(
-            f"<tr><td><strong>{e(r.name)}</strong></td>"
-            f"<td class='num'>{r.device_ms:.2f} ms</td>"
-            f"<td>{_bar(100 * r.device_ms / peak_ms, 'cmp')}</td>"
+            f"<tr><td>{name_cell}</td>"
+            f"<td class='num'>{dev_cell}</td>"
+            f"<td>{bar_cell}</td>"
             f"<td class='num'>{wall}</td>"
             f"<td class='num'>{pct_e2e:.0f}%</td>"
             f"<td class='num {cls}'>{budget_cell}</td></tr>"
@@ -509,8 +618,14 @@ def _html(active, aux_wall, budget_s, total_device_ms, total_wall_s, top_n, fpu_
     sections = []
     for r in active:
         if not r.ops:
+            note = (
+                "HOST stage — wall-clock only, no device op (weight reload / mux export)."
+                if r.is_host
+                else "No device ops — time from the pipeline log only."
+            )
+            wall_note = f" · {r.wall_s:.2f}s wall" if r.wall_s else ""
             sections.append(
-                f"<h3>{e(r.name)}</h3><p class='muted'>No device ops — host/dispatch stage; time from the pipeline log only.</p>"
+                f"<h3>{e(r.name)}<span class='muted small'>{wall_note}</span></h3><p class='muted'>{note}</p>"
             )
             continue
         agg = defaultdict(list)
@@ -539,6 +654,7 @@ def _html(active, aux_wall, budget_s, total_device_ms, total_wall_s, top_n, fpu_
 
     return _TEMPLATE.format(
         cards="".join(cards),
+        gate_banner=gate_banner,
         stage_rows="".join(rows) + budget_row,
         aux=aux,
         sections="".join(sections),
@@ -594,11 +710,13 @@ _TEMPLATE = """<!DOCTYPE html>
  .pill.bw{{background:rgba(210,153,34,.16);color:var(--warn);}}
  .pill.disp{{background:rgba(139,148,158,.18);color:var(--disp);}}
  .note{{background:var(--panel2);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;padding:12px 16px;margin:14px 0;font-size:13.5px;}}
+ .note.gate{{border-left-color:var(--bad);}} .note.gate ul{{margin:6px 0 0;padding-left:20px;}} .note.gate li{{color:var(--bad);}}
  .foot{{color:var(--muted);font-size:12.5px;margin-top:40px;border-top:1px solid var(--border);padding-top:14px;}}
 </style></head><body><div class="wrap">
  <h1>LTX per-stage bottlenecks</h1>
  <p class="sub">nsight ops-perf rollup · critical-path device time + per-stage wall-clock budget</p>
  <div class="note">{provenance}</div>
+ {gate_banner}
  <div class="grid">{cards}</div>
  <h2>Stage rollup &amp; e2e budget</h2>
  <div class="tablewrap"><table>
@@ -643,6 +761,14 @@ def main(argv=None):
     ap.add_argument("--fpu-thresh", type=float, default=30.0, help="FPU%% at/above which an op is compute-bound")
     ap.add_argument("--bw-thresh", type=float, default=20.0, help="NoC/CCL%% at/above which an op is bandwidth-bound")
     ap.add_argument("--html", help="write the HTML report here")
+    ap.add_argument("--save-baseline", metavar="PATH", help="write per-stage device ms + wall as a JSON baseline")
+    ap.add_argument("--baseline", metavar="PATH", help="compare against a saved baseline; show Δ + flag regressions")
+    ap.add_argument(
+        "--regress-tol", type=float, default=0.05, help="regression threshold as a fraction (default 0.05 = 5%%)"
+    )
+    ap.add_argument(
+        "--gate", action="store_true", help="exit nonzero if any stage is over-budget or regressed (loop gate)"
+    )
     args = ap.parse_args(argv)
 
     boundaries = parse_boundaries(args.boundaries) if args.boundaries else None
@@ -681,24 +807,67 @@ def main(argv=None):
         for name, r in rolls.items():
             merged.setdefault(name, StageRoll(name)).ops.extend(r.ops)
 
+    baseline = _load_baseline(args.baseline) if args.baseline else None
     for name, r in merged.items():
         if name in stage_wall:
             r.wall_s = stage_wall[name]
         if name in sb:
             r.budget_s = sb[name]
+        if baseline and name in baseline:
+            r.base_device_ms = baseline[name].get("device_ms")
+            r.base_wall_s = baseline[name].get("wall_s")
 
     provenance = f"Source CSV(s): {', '.join(srcs)}"
     if args.log:
         provenance += f" · log: {args.log}"
     provenance += f" · rollup: {'device ' + str(args.device) if args.device is not None else 'mesh critical-path'}"
+    if baseline:
+        provenance += f" · baseline: {args.baseline}"
 
-    text, html_doc = build_report(merged, aux_wall, args.budget, args.top, args.fpu_thresh, args.bw_thresh, provenance)
+    text, html_doc, gate_lines = build_report(
+        merged,
+        aux_wall,
+        args.budget,
+        args.top,
+        args.fpu_thresh,
+        args.bw_thresh,
+        provenance,
+        regress_tol=args.regress_tol,
+        has_baseline=bool(baseline),
+    )
     print(text)
     if args.html:
         with open(args.html, "w") as fh:
             fh.write(html_doc)
         print(f"\nHTML report -> {args.html}")
+    if args.save_baseline:
+        _save_baseline(args.save_baseline, merged)
+        print(f"baseline saved -> {args.save_baseline}")
+    if args.gate and gate_lines:
+        print(f"\nGATE FAILED: {len(gate_lines)} issue(s) — see GATE section above", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _load_baseline(path: str) -> dict[str, dict]:
+    import json
+
+    with open(path) as fh:
+        return json.load(fh).get("stages", {})
+
+
+def _save_baseline(path: str, rolls: dict[str, StageRoll]) -> None:
+    """Persist per-stage device ms + wall for a later --baseline regression compare."""
+    import json
+
+    stages = {
+        r.name: {"device_ms": round(r.device_ms, 4), "wall_s": r.wall_s}
+        for r in rolls.values()
+        if r.ops or (r.wall_s or 0) > 0
+    }
+    with open(path, "w") as fh:
+        json.dump({"stages": stages}, fh, indent=2)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

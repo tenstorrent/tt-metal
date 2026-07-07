@@ -9,6 +9,7 @@
 
 import ast
 import os
+import re
 import csv
 from pathlib import Path
 import json
@@ -37,6 +38,16 @@ from tracy.common import (
     generate_reports_folder,
 )
 from tracy import device_post_proc_config
+from tracy.perf_counter_scope import sample_cores_per_op
+from tracy.noc_bandwidth import (
+    collective_fabric_bw,
+    eth_bw_util_pct,
+    fabric_bytes_from_trace_dir,
+    noc_bw_util_pct,
+    noc_links_from_trace_dir,
+    noc_port_peak_gbps,
+    read_trained_link_bw_gbps,
+)
 from tracy.perf_counter_analysis import (
     PERF_COUNTER_CSV_HEADERS,
     compute_device_only_metrics,
@@ -127,6 +138,20 @@ OPS_CSV_HEADER = [
     "DRAM BW UTIL PER CTRL (%)",
     "ETH BW UTIL (%)",
     "NPE CONG IMPACT (%)",
+    # On-device NoC bytes per op (sum over the op's cores), independent of tt-npe.
+    "NOC BYTES FROM COUNTERS",
+    # Counter-derived BW-util %, computed against REAL peaks so the number is honest
+    # across machines: NoC vs the per-port peak from the op's measured AICLK, ETH vs
+    # the per-link speed the fabric actually trained to (fabric_link_bw_<id>.json).
+    # NaN (blank) when the peak can't be sourced -- never a fabricated number.
+    "NOC BW UTIL FROM COUNTERS (%)",
+    "ETH BW UTIL FROM COUNTERS (%)",
+    # Analytical fabric BW for collective (CCL) ops — all-gather, reduce-scatter, all-reduce: the
+    # bytes are exact from shape+topology, so this is computed WITHOUT --collect-noc-traces (a
+    # full-grid collective overflows the marker buffer) and against the fabric's real trained
+    # per-link speed. Blank for non-CCL ops.
+    "CCL FABRIC BW [GB/s]",
+    "CCL FABRIC BW UTIL (%)",
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
@@ -208,6 +233,22 @@ def build_sub_device_id_lookup_from_device_csv(
     device_log_path = Path(device_log_path)
     if not device_log_path.is_file():
         return lookup
+
+    # profile_log_device.csv is tens of GB of per-core timeseries; the sub_device_id
+    # meta is sparse and absent in the common (no sub-device) case, where a full
+    # pd.read_csv + row scan costs minutes to build an empty lookup. Cheaply byte-scan
+    # for the marker first and skip the parse entirely when it never appears.
+    with open(device_log_path, "rb") as fh:
+        marker = b"sub_device_id"
+        tail = b""
+        present = False
+        while chunk := fh.read(1 << 24):  # 16 MiB
+            if marker in tail + chunk:
+                present = True
+                break
+            tail = chunk[-(len(marker) - 1) :]
+        if not present:
+            return lookup
 
     df = pd.read_csv(device_log_path, skiprows=1, header=0, na_filter=False)
     for row in df.itertuples():
@@ -444,10 +485,30 @@ def import_tracy_op_logs(
     for opData in opsData:
         ops[opData["global_call_count"]] = opData
 
+    # tracy_ops_times.csv is dominated by per-call zone rows this import discards: only rows
+    # whose `name` is a TT_DNN/TT_METAL op (host_time) or whose `special_parent_text` carries
+    # an "id:" parent tag (child_calls) are used — ~1% on a big-mesh capture; the other ~99%
+    # (e.g. SetRuntimeArgs zones) are parsed then thrown away (a 25GB / ~200M-row capture takes
+    # minutes). Pre-filter with a streaming grep so pandas parses only the rows that matter; the
+    # exact column filtering below still runs, so the grep is a safe (superset) pre-pass.
+    import subprocess
+    import tempfile
+
+    with open(tracyOpTimesLog) as _f:
+        _header = _f.readline()
+    _tmp = tempfile.NamedTemporaryFile("w", suffix=".csv", dir=os.path.dirname(tracyOpTimesLog), delete=False)
     try:
-        df = pd.read_csv(tracyOpTimesLog, engine="pyarrow")
-    except (ImportError, ValueError):
-        df = pd.read_csv(tracyOpTimesLog)
+        _tmp.write(_header)
+        _tmp.flush()
+        # grep exits 1 when there are no matches — not an error here.
+        subprocess.run(["grep", "-E", "TT_DNN|TT_METAL|id:", tracyOpTimesLog], stdout=_tmp, check=False)
+        _tmp.close()
+        try:
+            df = pd.read_csv(_tmp.name, engine="pyarrow")
+        except (ImportError, ValueError):
+            df = pd.read_csv(_tmp.name)
+    finally:
+        os.remove(_tmp.name)
 
     # Filter and update host_time for TT_DNN/TT_METAL ops
     # Ensure name is string type before using .str accessor
@@ -567,15 +628,27 @@ def _convert_device_op_entry(device_op_time: Dict[str, Any], freq: int) -> OpDic
     return device_op
 
 
+class PerfCsvIncomplete(Exception):
+    """The C++ cpp_device_perf_report.csv fast path cannot cover every host op.
+
+    Raised when the perf CSV is stale or partial (e.g. a report left in .logs by an
+    earlier run, or a run where the C++ post-process didn't emit every op). It signals
+    append_device_data to fall back to the complete, proven legacy device-log path so
+    the report is built from real device data rather than crashing or silently dropping
+    ops. The fast path stays a pure optimization: correct when whole, deferential when not.
+    """
+
+
 def _enrich_ops_from_perf_csv(
     host_ops_by_device: DeviceOpsDict,
     device_perf_by_device: Dict[int, Dict[Tuple[int, Optional[int], Optional[int]], Dict[str, Any]]],
     trace_replays: Optional[TraceReplayDict],
 ) -> DeviceOpsDict:
     for device_id in host_ops_by_device:
-        assert (
-            device_id in device_perf_by_device
-        ), f"Device {device_id} present in host logs but missing from {PROFILER_CPP_DEVICE_PERF_REPORT}"
+        if device_id not in device_perf_by_device:
+            raise PerfCsvIncomplete(
+                f"Device {device_id} present in host logs but missing from {PROFILER_CPP_DEVICE_PERF_REPORT}"
+            )
 
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
@@ -603,15 +676,21 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                raise PerfCsvIncomplete(
+                    f"Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                    f"for device {device_id} (trace_id={host_trace_id}); report is stale or partial"
+                )
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
+            # Only top-level keys are added below, and host_op is consumed here (its list
+            # is replaced by enriched_ops), so the single-row case — the vast majority —
+            # reuses host_op in place: no per-op deepcopy (the merge's dominant cost at
+            # ~100k+ ops). Multiple rows (trace replays) still need independent copies.
+            single = len(candidates) == 1
             for perf_row in candidates:
                 perf_row = perf_row.copy()
-                enriched_op = copy.deepcopy(host_op)
+                enriched_op = host_op if single else copy.deepcopy(host_op)
 
                 core_count = perf_row.get("CORE COUNT")
                 if core_count is not None:
@@ -791,6 +870,14 @@ def _enrich_ops_from_device_logs(
         perf_counter_df = None
         if "events" in risc_data and "perf_counter_data" in risc_data["events"]:
             perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"])
+
+            # Opt-in compute-core sampling: shrink the per-core row count by
+            # keeping a few cores per op-grid before aggregation. SPMD compute
+            # is uniform across cores, so the util numbers survive; NoC counters
+            # are aggregated separately and never sampled.
+            compute_core_sample = os.environ.get("TT_METAL_PROFILER_COMPUTE_CORE_SAMPLE")
+            if perf_counter_df is not None and not perf_counter_df.empty and compute_core_sample:
+                perf_counter_df = sample_cores_per_op(perf_counter_df, int(compute_core_sample))
 
             # Print statistics for captured counter data
             if perf_counter_df is not None and not perf_counter_df.empty:
@@ -994,6 +1081,157 @@ def _build_trace_ops_mapping(host_ops_by_device: DeviceOpsDict, ops: Dict[int, O
     return trace_ops_by_augmented_id
 
 
+def _op_measured_fw_timing(op) -> Tuple[Optional[float], Optional[float]]:
+    """(device_fw duration_ns, AICLK MHz) from the op's C++ perf row (_device_perf_row).
+
+    Uses the same measured start/end cycles + duration the CSV clock column is built from (via
+    compute_ns_per_cycle), so the BW% denominator is a REAL per-op peak -- never a hardcoded
+    clock. (None, None) when the op carries no device perf row (e.g. a host-only op).
+    """
+    perf_row = op.get("_device_perf_row")
+    if not perf_row:
+        return None, None
+    duration_ns = perf_row.get("DEVICE FW DURATION [ns]")
+    ns_per_cycle = compute_ns_per_cycle(perf_row)
+    if not duration_ns or not ns_per_cycle:
+        return None, None
+    return duration_ns, 1000.0 / ns_per_cycle  # ns/cycle -> MHz
+
+
+# Bytes/element as data actually moves on the wire, per ttnn DataType. Block-float pack a shared
+# 8-bit exponent per 16-datum face on top of the mantissa (bf8: 1 + 1/16; bf4: 0.5 + 1/16).
+_DTYPE_BYTES = {
+    "FLOAT32": 4.0,
+    "UINT32": 4.0,
+    "INT32": 4.0,
+    "BFLOAT16": 2.0,
+    "UINT16": 2.0,
+    "UINT8": 1.0,
+    "BFLOAT8_B": 1.0625,
+    "BFLOAT4_B": 0.5625,
+}
+
+
+def _lead_int(v):
+    """Leading integer of a shape cell that may be an int or a 'padded[logical]' string."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    m = re.match(r"\s*(\d+)", str(v))
+    return int(m.group(1)) if m else None
+
+
+def _int_attr(attrs, key):
+    """Integer value of an op attribute that is stored as a string (e.g. ring_size='2')."""
+    try:
+        return int(str(attrs.get(key)).strip())
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _collective_kind(op_code):
+    """Map an op code to the fabric collective it implements, or None if it is not a collective.
+
+    Bytes moved differ by collective (all-gather / reduce-scatter each move (N-1)/N of the full
+    tensor, all-reduce moves 2x that), and reduce-scatter's OUTPUT is the 1/N scattered chunk — so
+    the kind is what lets the analytical model pick the right formula from the same op record.
+    """
+    c = op_code
+    if "AllGather" in c or "all_gather" in c:
+        return "all_gather"
+    if "ReduceScatter" in c or "reduce_scatter" in c:
+        return "reduce_scatter"
+    # AllReduce, but not the Reduce that is a plain non-collective reduction.
+    if "AllReduce" in c or "all_reduce" in c:
+        return "all_reduce"
+    return None
+
+
+def _analytical_ccl_bw(active_op_record, duration_ns, per_link_gbps):
+    """(achieved per-link GB/s, %util) for a CCL collective op; (None, None) for anything else.
+
+    Fabric bytes for a collective are exact from output shape + ring_size + topology, so the BW is
+    computed here WITHOUT --collect-noc-traces (a full-grid collective overflows the profiler marker
+    buffer, corrupting any trace-derived byte count). Covers all-gather, reduce-scatter and
+    all-reduce; anything else returns (None, None) rather than a fabricated number. duration_ns is
+    the op's measured device-FW time; per_link_gbps is the fabric's real trained per-link speed, so
+    %util is honest across machines.
+    """
+    kind = _collective_kind(str(active_op_record.get("op_code", "")))
+    if kind is None:
+        return None, None
+    outs = active_op_record.get("output_tensors") or []
+    attrs = active_op_record.get("attributes") or {}
+    if not outs or not isinstance(attrs, dict):
+        return None, None
+    shape = outs[0].get("shape") or {}
+    dims = [_lead_int(shape.get(k)) for k in ("W", "Z", "Y", "X")]
+    if any(d is None for d in dims):
+        return None, None
+    dtype = str(outs[0].get("dtype", "")).upper().split("::")[-1]
+    bytes_per_elem = _DTYPE_BYTES.get(dtype)
+    if not bytes_per_elem:
+        return None, None
+    output_bytes = 1
+    for d in dims:
+        output_bytes *= d
+    output_bytes *= bytes_per_elem
+    try:
+        duration_ns = float(duration_ns) if duration_ns is not None else None
+    except (TypeError, ValueError):
+        duration_ns = None
+    return collective_fabric_bw(
+        output_bytes,
+        num_devices=_int_attr(attrs, "ring_size"),
+        num_links=_int_attr(attrs, "num_links"),
+        is_ring="Ring" in str(attrs.get("topology", "")),
+        duration_ns=duration_ns,
+        per_link_peak_gbps=per_link_gbps,
+        kind=kind,
+    )
+
+
+def _attach_counter_derived_bw(ops_iter, logFolder: Path) -> int:
+    """Attach counter-derived NoC/ETH bytes + BW-util % from the profiler's own noc-trace JSON.
+
+    Independent of tt-npe and computed against REAL peaks so the % is honest on any machine:
+    NoC vs the per-port peak derived from each op's *measured* AICLK (never a hardcoded GB/s), and
+    ETH vs the per-link speed the fabric actually trained to (the fabric_link_bw_<id>.json sidecar,
+    200/400/800G). No-ops when no noc-trace JSON is present; a missing peak or duration leaves the
+    column blank rather than printing a fabricated number. Returns the count of ops touched.
+    """
+    noc = noc_links_from_trace_dir(logFolder)
+    fabric = fabric_bytes_from_trace_dir(logFolder)
+    if not noc and not fabric:
+        return 0
+    link_gbps = read_trained_link_bw_gbps(logFolder)  # real trained per-link GB/s, or None
+    found = 0
+    for op in ops_iter:
+        run_host_id = op["global_call_count"] & ((1 << TRACE_OP_ID_BITSHIFT) - 1)
+        nb = noc.get(run_host_id)
+        fb = fabric.get(run_host_id)
+        if nb is None and fb is None:
+            continue
+        found += 1
+        # Duration + AICLK from the op's C++ perf row (present at this stage; the CSV-stage
+        # "DEVICE FW DURATION [ns]"/"freq" keys and device_time are not populated yet). Reading
+        # the measured cycles is what makes the % honest -- a real per-op peak, never a hardcoded clock.
+        duration_ns, aiclk_mhz = _op_measured_fw_timing(op)
+        if nb is not None:
+            op["NOC BYTES FROM COUNTERS"] = nb["bytes"]
+            port_peak = noc_port_peak_gbps(aiclk_mhz)
+            if port_peak:
+                pct = noc_bw_util_pct(nb["bytes"], duration_ns, port_peak * nb["links"])
+                if not isnan(pct):
+                    op["NOC BW UTIL FROM COUNTERS (%)"] = round(pct, 1)
+        if fb is not None and link_gbps:
+            pct = eth_bw_util_pct(fb["bytes"], duration_ns, link_gbps, fb["links"])
+            if not isnan(pct):
+                op["ETH BW UTIL FROM COUNTERS (%)"] = round(pct, 1)
+    return found
+
+
 # Append device data to device ops and return the list of mapped device op ref list
 def append_device_data(
     ops: Dict[int, OpDict],
@@ -1017,7 +1255,19 @@ def append_device_data(
                 "device_analysis_types is not supported when using cpp_device_perf_report.csv; ignoring option."
             )
         device_perf_by_device = load_device_perf_report(device_perf_report)
-        host_ops_by_device = _enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, traceReplays)
+        try:
+            host_ops_by_device = _enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, traceReplays)
+        except PerfCsvIncomplete as e:
+            logger.warning(
+                f"{PROFILER_CPP_DEVICE_PERF_REPORT} is stale or partial ({e}); "
+                f"falling back to complete legacy device-log parsing so device timings stay real."
+            )
+            use_perf_csv = False
+            # The fast path may have mutated host_ops_by_device in place before raising; re-derive a clean copy.
+            host_ops_by_device, _ = get_device_op_data(ops, host_device_op_compare)
+            host_ops_by_device = _enrich_ops_from_device_logs(
+                host_ops_by_device, logFolder, device_analysis_types, traceReplays
+            )
     else:
         if device_perf_report.is_file() and force_legacy_device_logs:
             logger.info(
@@ -1058,6 +1308,16 @@ def append_device_data(
                     op["ETH BW UTIL (%)"] = op_npe_stats.result.getEthBwUtilPerCoreStr()
                     op["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
+
+        # Always attach the counter-derived bytes + BW-util % from the profiler's own noc-trace
+        # JSON, whether or not tt-npe ran. These use real peaks (measured AICLK for NoC, trained
+        # link speed for ETH) so they are the honest cross-machine number and cover the tt-npe-absent
+        # host; tt-npe's own columns (which assume a fixed link model) stay next to them for compare.
+        counter_ops = _attach_counter_derived_bw(
+            chain(*host_ops_by_device.values(), trace_ops_by_augmented_id.values()), logFolder
+        )
+        if counter_ops:
+            logger.info(f"Attached counter-derived NoC/ETH BW-util % to {counter_ops} operations.")
 
     return host_ops_by_device, trace_ops_by_augmented_id
 
@@ -1370,6 +1630,10 @@ def generate_reports(
     allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
     with open(allOpsCSVPath, "w") as allOpsCSV:
         csv_rows = []
+
+        # Real trained per-link fabric speed (fabric_link_bw sidecar), for analytical CCL BW%. None
+        # off-fabric or on a host without the sidecar -> the GB/s column still fills, %util stays blank.
+        ccl_link_gbps = read_trained_link_bw_gbps(logFolder)
 
         prev_device_kernel_end_cycle = {}
         prev_device_dm_start_cycle = {}
@@ -1738,6 +2002,18 @@ def generate_reports(
                             csv_row["PM FPU UTIL (%)"] = round(fpu_util, 3)
                         except ZeroDivisionError:
                             csv_row["PM FPU UTIL (%)"] = 0.0
+
+                # Analytical CCL fabric BW (all-gather / reduce-scatter / all-reduce): exact from
+                # output shape + topology, so it needs no --collect-noc-traces (a full-grid
+                # collective overflows the marker buffer). Blank for non-CCL ops; %util blank when
+                # the trained link speed can't be sourced.
+                ccl_bw_gbps, ccl_bw_pct = _analytical_ccl_bw(
+                    active_op_record, csv_row.get("DEVICE FW DURATION [ns]"), ccl_link_gbps
+                )
+                if ccl_bw_gbps is not None:
+                    csv_row["CCL FABRIC BW [GB/s]"] = round(ccl_bw_gbps, 2)
+                    if ccl_bw_pct is not None:
+                        csv_row["CCL FABRIC BW UTIL (%)"] = round(ccl_bw_pct, 1)
 
             csv_rows.append(csv_row)
 
