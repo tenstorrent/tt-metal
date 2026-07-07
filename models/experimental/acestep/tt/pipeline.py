@@ -52,6 +52,35 @@ def _shifted_timesteps(infer_steps: int, shift: float, device, dtype=torch.float
     return t
 
 
+def _set_dit_fidelity(module, fidelity, _seen=None):
+    """Recursively set math_fidelity on every compute_kernel_config held in a module tree.
+
+    Used to raise the DiT to HiFi4 ONLY for the CFG denoise path (guidance amplifies the per-step
+    matmul error ~6x, so HiFi4 measurably improves the CFG latent PCC). The shipped no-CFG path never
+    enters this and stays at its built HiFi2, so its e2e gate is unaffected. Returns the list of
+    (config, previous_fidelity) pairs so the caller can restore afterwards."""
+    if _seen is None:
+        _seen = set()
+    changed = []
+    if id(module) in _seen:
+        return changed
+    _seen.add(id(module))
+    cfg = getattr(module, "config", None)
+    ck = getattr(cfg, "compute_kernel_config", None) if cfg is not None else None
+    if ck is not None and hasattr(ck, "math_fidelity"):
+        changed.append((ck, ck.math_fidelity))
+        ck.math_fidelity = fidelity
+    if hasattr(module, "__dict__"):
+        for attr in vars(module).values():
+            if hasattr(attr, "config") and hasattr(attr, "__dict__"):
+                changed.extend(_set_dit_fidelity(attr, fidelity, _seen))
+            elif isinstance(attr, (list, tuple)):
+                for item in attr:
+                    if hasattr(item, "config") and hasattr(item, "__dict__"):
+                        changed.extend(_set_dit_fidelity(item, fidelity, _seen))
+    return changed
+
+
 @dataclass
 class AceStepPipeline:
     """Assembled TT pipeline: text encoder + condition encoder + DiT denoiser + Oobleck VAE.
@@ -186,6 +215,24 @@ class AceStepPipeline:
         round-trip -> the whole loop is on-device (trace-safe). The APG momentum running-average is a
         resident device buffer updated in place per step.
         """
+        from models.experimental.acestep.tt.apg_guidance import TTMomentumBuffer, apg_forward_ttnn
+
+        # HiFi4 for the CFG path only: guidance amplifies the per-step matmul error ~6x, so higher
+        # matmul fidelity measurably improves the CFG latent PCC (0.956 -> 0.972 at the test config).
+        # The no-CFG path never enters here, so its HiFi2 e2e gate (0.9695) is untouched. Restored in
+        # the finally block. All bf16 tensors; HiFi4 is matmul accumulation fidelity, not fp32 tensors.
+        _restore = _set_dit_fidelity(self.dit, ttnn.MathFidelity.HiFi4)
+        try:
+            return self._generate_cfg_impl(
+                hidden_noise, context_latents, enc_cond, enc_uncond, cos_tt, sin_tt, sliding, solver, t, guidance_scale
+            )
+        finally:
+            for ck, prev in _restore:
+                ck.math_fidelity = prev
+
+    def _generate_cfg_impl(
+        self, hidden_noise, context_latents, enc_cond, enc_uncond, cos_tt, sin_tt, sliding, solver, t, guidance_scale
+    ):
         from models.experimental.acestep.tt.apg_guidance import TTMomentumBuffer, apg_forward_ttnn
 
         momentum_buffer = TTMomentumBuffer()
