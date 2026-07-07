@@ -20,7 +20,9 @@ namespace ckernel {
 /**
  * Initializes the packer to pack tiles into the specified output circular buffer.
  *
- * Call this function before using `pack_tile` or `pack_block`.
+ * This explicit init is only needed when packing without an op-specific init. `pack_tile` /
+ * `pack_block` do not require it once a preceding op-specific init (`tilize_init`, `reduce_init`,
+ * etc.) has already configured the packer — see the NOTE on `pack_tile`.
  *
  * Return value: None
  *
