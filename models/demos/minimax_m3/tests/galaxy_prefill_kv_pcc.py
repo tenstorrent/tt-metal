@@ -63,15 +63,21 @@ def _raise_nproc_limit():
             )
 
 
+# MSA (sparse) layers 3-59 pick the top-TOPK_BLOCKS of BLOCK_SIZE-token blocks; topk_large_indices
+# aborts unless at least that many blocks exist, so the sparse path floors the sequence here. Keep in
+# sync with TOPK_BLOCKS * BLOCK_SIZE in models/demos/minimax_m3/tt/attention/msa.py.
+MSA_MIN_TOKENS = 16 * 128  # = 2048
+
+
 def plan(n_tokens, chunk_size, chunked):
     """Resolve (n_chunks, chunk, total). chunked: full chunk_size chunks (tail padded). one-shot:
-    a single chunk == total, padded up to a multiple of 1024 (MSA needs S%1024==0, S>=2048; 1024 is
-    also a multiple of sp=8 so the SP shard stays tile-aligned)."""
+    a single chunk == total, padded up to a multiple of 1024 and at least MSA_MIN_TOKENS (MSA needs
+    S%1024==0 and S>=2048; 1024 is also a multiple of sp=8 so the SP shard stays tile-aligned)."""
     if chunked:
         chunk = chunk_size
         n_chunks = max(1, math.ceil(n_tokens / chunk))
     else:
-        chunk = max(1024, math.ceil(n_tokens / 1024) * 1024)
+        chunk = max(MSA_MIN_TOKENS, math.ceil(n_tokens / 1024) * 1024)
         n_chunks = 1
     return n_chunks, chunk, n_chunks * chunk
 
@@ -146,10 +152,25 @@ def main():
         f"tps_iters={tps_iters}",
         flush=True,
     )
-    if not chunked and total < 2048:
+    if not chunked and n_tokens < MSA_MIN_TOKENS:
+        bang = "!" * 80
         print(
-            f"[prefill-pcc] WARNING: one-shot total={total} < 2048 — MSA (sparse) layers 3-59 require "
-            f"S>=2048 and S%1024==0 and will fail. Use PREFILL_CHUNKED=1 instead.",
+            f"\n{bang}\n"
+            f"[prefill-pcc] WARNING: prompt is only {n_tokens} tokens, below the MSA sparse floor of\n"
+            f"  {MSA_MIN_TOKENS} (TOPK_BLOCKS*BLOCK_SIZE = 16*128). Layers 3-59 select the top-16 of\n"
+            f"  128-token blocks, and topk_large_indices aborts with fewer than 16 blocks. PADDING the\n"
+            f"  sequence {n_tokens} -> {total} tokens (token 0) so the sparse path can run.\n"
+            f"  * ACCURACY IS STILL VALID: KV PCC compares only the first {n_tokens} real tokens, and\n"
+            f"    causal masking keeps the trailing pad (positionally future) from touching them.\n"
+            f"  * THROUGHPUT IS NOT: tok/s below is dominated by {total - n_tokens} pad tokens — ignore it\n"
+            f"    for tiny prompts and measure perf on a >= {MSA_MIN_TOKENS}-token trace instead.\n"
+            f"{bang}\n",
+            flush=True,
+        )
+    if chunked and chunk < MSA_MIN_TOKENS:
+        print(
+            f"[prefill-pcc] WARNING: chunked chunk={chunk} < MSA floor {MSA_MIN_TOKENS}; the first chunk "
+            f"(cache empty) has < 16 blocks and MSA topk will abort. Use PREFILL_CHUNK_SIZE >= {MSA_MIN_TOKENS}.",
             flush=True,
         )
 
