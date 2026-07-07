@@ -541,6 +541,31 @@ class LongCatImagePipelineTT:
         ts = torch.tensor([float(timestep)], dtype=torch.float32)
         c["temb"] = stub._time_embed(ts * 1000.0)
 
+    # ── decode contract (perf trace-replay via perf_automation PipelineDecodeAdapter) ──
+    # The dominant, repeated unit of this diffusion model is ONE denoise (DiT) step; it
+    # runs `num_inference_steps` times per image, so it's what `optimize` should profile
+    # and tune. Expose the already-traced denoise stage as the tool's decode contract
+    # (decode_prefill/decode_step/decode_write_inputs) so `measure_adapter` can capture ONE
+    # host-op-free step as a trace, replay it, and report device-honest per-step latency.
+    def decode_prefill(self, prompt_ids=None):
+        """Build the denoise stage's persistent on-device buffers once (OUTSIDE any trace)."""
+        inputs = self._stage_inputs("denoise", max_length=32, size=128)
+        self.denoise_trace_setup(inputs)
+        self._perf_denoise_inputs = inputs
+        return {"step": 0}
+
+    def decode_step(self, state):
+        """Exactly one steady-state denoise step — pure ttnn, reads only persistent buffers
+        (host-op-free, trace-capturable). Returns state unchanged (perf replay reuses the trace)."""
+        self.denoise_trace_step()
+        return state
+
+    def decode_write_inputs(self, state):
+        """Stage the next step's latents on CQ1 (enables the 2CQ replay path; measure_adapter
+        auto-degrades to single-CQ if the device was opened with one command queue)."""
+        inp = self._perf_denoise_inputs
+        self.denoise_write_inputs(inp["latents_packed"], inp["timestep"])
+
     # ── vae_decode stage ─────────────────────────────────────────────────────
     def vae_decode_trace_setup(self, inputs):
         """inputs: dict(latents_nchw)."""
