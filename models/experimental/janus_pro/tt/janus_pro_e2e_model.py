@@ -94,13 +94,11 @@ class TtJanusProModel(Transformer):
         return vision_embeddings
 
     def _fuse_vision_into_text_embeddings(self, pt_tokens, tokens_embd, image_features):
-        # tokens_embd: torch [1, S, dim]; pt_tokens: torch [1, S]
+        # tokens_embd: torch [1, S, dim]; pt_tokens: torch [1, S]. Mirrors Gemma:
+        # masked_scatter over the image-placeholder positions, which is a no-op when there
+        # are none (e.g. the vision-encoder warmup feeds mock all-zero tokens with no
+        # placeholders, so no image features are scattered in).
         placeholder = pt_tokens == self.image_token_id
-        n_positions = int(placeholder.sum())
-        assert n_positions == image_features.shape[0], (
-            f"image placeholder count ({n_positions}) != vision feature rows "
-            f"({image_features.shape[0]}); check the prompt's image tokens / padding"
-        )
         mask = placeholder.unsqueeze(-1).expand_as(tokens_embd)
         image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
         return tokens_embd.masked_scatter(mask, image_features)

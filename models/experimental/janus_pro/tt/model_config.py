@@ -2,12 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 
 from loguru import logger
 
 import ttnn
 from models.experimental.janus_pro.tt.load_checkpoints import convert_vision_hf_to_meta
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.load_checkpoints import convert_meta_to_hf
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
 
@@ -42,6 +44,68 @@ class ModelArgs(TTModelArgs):
             optimizations=optimizations,
             cache_hf=cache_hf,
         )
+
+    def get_attn_qkv_program_config(self, mode, seq_len=1, prefetcher=None):
+        # The base config hardcodes per_core_M=7 on P150 regardless of seq_len. For
+        # Janus's wide MHA QKV (qkv_size=12288 -> per_core_N=55) that overflows P150's
+        # 1.5MB L1 on the seq_len<=128 prefill warmup (the only path that reaches the
+        # MatmulMultiCoreReuseMultiCast branch; seq_len>128 uses minimal_matmul). Scale
+        # per_core_M with seq_len like the non-P150 branch does, keeping the P150 cap of 7.
+        # NOTE: mirrors the else-branch of TTModelArgs.get_attn_qkv_program_config; keep in
+        # sync if the base per_core_N / fuse_batch logic changes.
+        if mode == Mode.PREFILL and self.device_name == "P150" and not self.use_minimal_qkv_prefill_matmul(seq_len):
+            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 10),  # blackhole
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=max(
+                    1,
+                    7 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / ttnn.TILE_SIZE / 8),
+                ),
+                per_core_N=math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width),
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
+            )
+
+        # Decode QKV is a DRAM-sharded matmul whose core count the base picks from k (dim)
+        # alone -> 32 cores -> per_core_N = ceil(qkv_size / (32*32)). Janus's wide MHA qkv
+        # (12288) makes per_core_N = 12, whose CBs overflow P150's L1. Pick the grid from
+        # both k AND n so more cores (64) share the wide output -> per_core_N = 6. The decode
+        # output mem config is a generic L1_WIDTH_SHARDED, so it adapts to this grid.
+        if mode == Mode.DECODE and prefetcher is None:
+            n = self.qkv_size // self.num_devices
+            return self.dram_matmul_config(
+                m=self.tile_padded_batch_rows,
+                k=self.dim,
+                n=n,
+                num_cores=self.dram_shard_core_grid_for_k_and_n(self.dim, n).num_cores,
+            )
+        return super().get_attn_qkv_program_config(mode, seq_len, prefetcher)
+
+    def _dram_decode_num_cores(self, k):
+        # Largest core count (<=64) that evenly shards k tiles for a DRAM-sharded decode matmul.
+        # The base grid divides by both k and n; for Janus's 11008 hidden_dim that collapses to
+        # 8 cores (344 = 8*43, 43 prime), making per_core_N ~43 tiles whose CBs overflow P150 L1.
+        # Sharding by k alone gives many more cores -> small per_core_N (n just pads to the grid).
+        k_tiles = k // ttnn.TILE_SIZE
+        for cores in range(min(64, k_tiles), 0, -1):
+            if k_tiles % cores == 0:
+                return cores
+        return 1
+
+    def get_mlp_ff1_3_prg_config(self, mode, seq_len=1, prefetcher=None):
+        # Decode MLP w1/w3 (dim -> hidden_dim); see _dram_decode_num_cores for why P150 needs
+        # more cores than the base k/n grid for Janus's wide hidden_dim.
+        if mode == Mode.DECODE and prefetcher is None and not self.is_galaxy:
+            return self.dram_matmul_config(
+                m=self.tile_padded_batch_rows,
+                k=self.dim,
+                n=self.hidden_dim // self.cluster_shape[1],
+                num_cores=self._dram_decode_num_cores(self.dim),
+            )
+        return super().get_mlp_ff1_3_prg_config(mode, seq_len, prefetcher)
 
     @staticmethod
     def _resolve_hf_snapshot(hf_model_name):
