@@ -216,7 +216,11 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
         // bakes in as the compile-time constants TYPECAST_IN_FORMAT / TYPECAST_OUT_FORMAT (set
         // by the TYPECAST_FORMATS variant). The functor picks the conversion sequence from the
         // pair at compile time.
+#if defined(TYPECAST_IN_FORMAT) && defined(TYPECAST_OUT_FORMAT)
         _llk_math_eltwise_unary_sfpu_params_(calculate_typecast<TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS>, dst_index);
+#else
+        LLK_ASSERT(false, "Typecast requires TYPECAST_IN_FORMAT and TYPECAST_OUT_FORMAT to be defined");
+#endif
     }
     else
     {

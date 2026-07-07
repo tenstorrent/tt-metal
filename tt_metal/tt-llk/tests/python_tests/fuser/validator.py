@@ -228,7 +228,9 @@ class FpuMathSchemaBase(BaseModel):
 
     def to_node(self, operands):
         src_a = operands.get(self.src_a)
+        src_a.is_input = True
         src_b = operands.get(self.src_b)
+        src_b.is_input = True
 
         factory, checks = type(self)._fpu_map[self.operation]
 

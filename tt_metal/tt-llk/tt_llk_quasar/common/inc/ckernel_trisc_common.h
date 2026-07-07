@@ -272,6 +272,7 @@ struct semaphore
     // - MATH_PACK = math->pack
     // - UNPACK_MATH = unpack->math
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
+    constexpr static std::uint32_t PACK_DONE   = 2;
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)

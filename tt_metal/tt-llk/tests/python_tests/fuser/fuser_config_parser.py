@@ -186,6 +186,22 @@ class FuserConfigSchema(BaseModel):
             for op in self.operations
         ]
 
+        num_stages = len(pipeline)
+        for i, operation in enumerate(pipeline):
+            operation.stage_id = i + 1
+            operation.num_stages = num_stages
+            operation.needs_pack_sync = any(
+                node.src_a.is_output
+                or (node.src_b is not None and node.src_b.is_output)
+                for node in operation.math.math_nodes
+                if hasattr(node, "unpacker") and node.unpacker is not None
+            )
+
+        for i, operation in enumerate(pipeline):
+            operation.has_pack_consumer = any(
+                pipeline[j].needs_pack_sync for j in range(i + 1, num_stages)
+            )
+
         return FuserConfig(
             pipeline=pipeline,
             global_config=GlobalConfig(
@@ -209,6 +225,8 @@ class FuserConfigSchema(BaseModel):
     @classmethod
     def load(cls, test_name: str):
         yaml_path = (FUSER_CONFIG_DIR / f"{test_name}.yaml").resolve()
+        if not yaml_path.exists():
+            yaml_path = (FUSER_CONFIG_DIR / arch.value / f"{test_name}.yaml").resolve()
         if not yaml_path.is_relative_to(FUSER_CONFIG_DIR.resolve()):
             raise ValueError(f"Invalid test name: {test_name}")
         if not yaml_path.exists():

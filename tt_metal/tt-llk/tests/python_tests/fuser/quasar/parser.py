@@ -5,10 +5,10 @@
 """Quasar fuser config parser.
 
 Supports: eltwise binary (Elwadd/Elwmul/Elwsub), datacopy, matmul, reduce,
-unary SFPU, binary SFPU.
+unary SFPU, binary SFPU, eltwise broadcast (COL/ROW/SCALAR).
 Unsupported on Quasar: MatmulNoMop, ReduceBlockMax, ReduceBlockMaxRuntime,
 SubBcastColCustom.
-No broadcast, no transpose.
+No datacopy broadcast, no transpose.
 """
 
 from typing import Annotated, ClassVar, List, Union
@@ -74,12 +74,25 @@ _eltwise_unpacker_default = (
     "Eltwise: unpacker must be UnpackerAB",
 )
 
+_no_broadcast_reuse_dest = (
+    lambda s, a, b: s.broadcast_type != BroadcastType.None_
+    and s.reuse_dest != EltwiseBinaryReuseDestType.NONE,
+    "Quasar broadcast does not support reuse_dest",
+)
+
+_no_broadcast_acc_to_dest = (
+    lambda s, a, b: s.broadcast_type != BroadcastType.None_
+    and s.acc_to_dest == AccToDest.Yes,
+    "Quasar broadcast does not support acc_to_dest",
+)
+
 _eltwise_checks = [
-    _no_broadcast,
     _no_transpose,
     _dest_to_srca_needs_acc,
     _eltwise_unpacker_reuse,
     _eltwise_unpacker_default,
+    _no_broadcast_reuse_dest,
+    _no_broadcast_acc_to_dest,
 ]
 
 _lofi_only = (
@@ -123,11 +136,11 @@ _reduce_params = (
 UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(),
-        [_no_broadcast, _no_transpose],
+        [_no_transpose],
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
-        [_no_broadcast, _no_transpose],
+        [_no_transpose],
     ),
     "MatmulUnpacker": (
         lambda s: MatmulUnpacker(),
@@ -268,8 +281,6 @@ class OperationSchema(OperationSchemaBase):
     def _arch_validate(self):
         for m in self.math:
             if isinstance(m, FpuMathSchema):
-                if m.broadcast_type != BroadcastType.None_:
-                    raise ValueError("Quasar does not support broadcast in fuser")
                 if (
                     m.unpack_transpose_faces == Transpose.Yes
                     or m.unpack_transpose_within_face == Transpose.Yes

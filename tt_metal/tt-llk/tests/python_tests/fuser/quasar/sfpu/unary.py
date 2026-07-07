@@ -102,7 +102,7 @@ class UnarySfpu(Sfpu):
         sfpu_format = config.sentinel._math_format.cpp_enum_value
         return (
             f"    test_utils::call_unary_sfpu_operation_quasar<"
-            f"{op}, {en_32bit_dest}, {self.iterations}"
+            f"{op}, {en_32bit_dest}"
             f">({self.dest_idx}, {sfpu_format});\n"
         )
 
