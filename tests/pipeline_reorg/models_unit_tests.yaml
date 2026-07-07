@@ -170,9 +170,9 @@
 - name: Qwen3.6 unit tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_attention_tp.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
+    pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
   model: qwen3.6-27b
   skus:
@@ -507,8 +507,12 @@
     bh_quietbox_2:
       # 10 min was too tight: the suite runs to ~12 min and got wall-clock
       # killed mid-"Full MLP Pipeline" on the prefill_4096 test_decoder while
-      # all components were still passing (PCC 0.96-0.99). Bump to 15.
-      timeout: 15
+      # all components were still passing (PCC 0.96-0.99). 15 also proved too
+      # tight on slower hosts (07-06: killed at the 15-min limit having done 52
+      # of ~64 tests on p03t05, vs 11.4 min for the full 64 on p02t07 — host
+      # variance, not a hang; firmware pre-compiled, all sub-tests pass). Bump to
+      # 22; suite is long (test_rope seq sweep to 131k) and may want sharding.
+      timeout: 22
       tier: 1
     bh_galaxy:
       timeout: 10

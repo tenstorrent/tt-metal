@@ -14,6 +14,88 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 
+def score_activation(logits: torch.Tensor, score_func: str) -> torch.Tensor:
+    """Router affinity activation matching the moe_grouped_topk ``score_func`` option.
+
+    "sigmoid" for DeepSeek-V3 / Kimi, "sqrtsoftplus" (== sqrt(softplus(x)), beta=1, threshold=20)
+    for DeepSeek-V4.
+    """
+    if score_func == "sigmoid":
+        return torch.sigmoid(logits)
+    if score_func == "sqrtsoftplus":
+        return torch.sqrt(torch.nn.functional.softplus(logits))
+    raise ValueError(f"Unsupported score_func '{score_func}'")
+
+
+def grouped_gate_golden_act(
+    logits,
+    bias,
+    route_scale,
+    epsilon,
+    n_groups,
+    summed_experts_per_group,
+    topk_groups,
+    n_activated_experts,
+    score_func="sigmoid",
+):
+    """Activation-parametrized port of MoEGate.grouped_gate_golden.
+
+    Identical to the DeepSeek-V3 reference grouped gate (same top-k ordering convention as the
+    moe_grouped_topk device op) except the router affinity activation is selectable. With
+    ``n_groups == 1`` it collapses to a plain top-k, matching the single-group device path used by
+    Kimi and DeepSeek-V4. Returns ``(top_k_indices, scaled_weights)``.
+    """
+    scores = score_activation(logits, score_func)
+    biased_scores = scores + bias
+
+    grouped_scores = biased_scores.reshape(scores.shape[:-1] + (n_groups, scores.shape[-1] // n_groups))
+    top_p_experts_scores, _ = torch.topk(grouped_scores, summed_experts_per_group, dim=-1, sorted=True)
+    summed_scores = top_p_experts_scores.sum(dim=-1, keepdim=False)
+
+    _, top_k_groups_indices = torch.topk(summed_scores, topk_groups, dim=-1, sorted=True)
+    group_mask = torch.ones(grouped_scores.shape[:-1], dtype=torch.bool, device=scores.device)
+    group_mask.scatter_(-1, top_k_groups_indices, False)
+    masked_grouped_scores = grouped_scores.masked_fill(group_mask.unsqueeze(-1), float("-inf"))
+    masked_scores = masked_grouped_scores.reshape(scores.shape)
+
+    _, top_k_experts_indices = torch.topk(masked_scores, n_activated_experts, dim=-1, sorted=True)
+    chosen_scores = torch.gather(scores, dim=-1, index=top_k_experts_indices)
+    normalized_scores = chosen_scores / (chosen_scores.sum(dim=-1, keepdim=True) + epsilon)
+    scaled_scores = normalized_scores * route_scale
+    return top_k_experts_indices, scaled_scores
+
+
+def hash_gate_golden_act(
+    logits,
+    input_ids,
+    tid2eid,
+    route_scale,
+    epsilon,
+    n_activated_experts,
+    score_func="sqrtsoftplus",
+):
+    """PyTorch golden for the DeepSeek-V4 hash gate (matches ttnn ... moe_hash_gate).
+
+    Expert selection is the static ``tid2eid[input_ids]`` lookup (not top-k); weights are the
+    ``score_func`` activation of the logits gathered at those indices, normalized across the selected
+    experts and scaled. Returns ``(indices, scaled_weights)`` shaped ``[*leading, n_activated_experts]``.
+    """
+    experts = logits.shape[-1]
+    leading = logits.shape[:-1]
+    flat_logits = logits.reshape(-1, experts)
+    flat_ids = input_ids.reshape(-1).long()
+
+    indices = tid2eid[flat_ids][:, :n_activated_experts].long()  # [tokens, n_activated]
+    scores = score_activation(flat_logits, score_func)
+    chosen = torch.gather(scores, dim=-1, index=indices)
+    normalized = chosen / (chosen.sum(dim=-1, keepdim=True) + epsilon)
+    scaled = normalized * route_scale
+    return (
+        indices.reshape(*leading, n_activated_experts),
+        scaled.reshape(*leading, n_activated_experts),
+    )
+
+
 def calculate_average_recall(predicted_experts: torch.Tensor, reference_experts: torch.Tensor) -> float:
     """Calculate average recall of predicted expert selections vs reference."""
     recall = 0
@@ -22,6 +104,86 @@ def calculate_average_recall(predicted_experts: torch.Tensor, reference_experts:
         ref_set = set(e.item() for e in reference_experts[i])
         recall += len(pred_set & ref_set) / len(ref_set) if ref_set else 0
     return recall / predicted_experts.shape[0]
+
+
+def distinct_logits(shape, lo: float = -6.0, hi: float = 6.0, dtype=torch.float32) -> torch.Tensor:
+    """Gate logits whose per-row values are distinct (so the monotonic score_func activation, and
+    hence top-k / gather ordering, is unambiguous). Each row is a random subset of a shared set of
+    distinct candidates in ``[lo, hi]``. Shared by the moe_grouped_topk and moe_hash_gate tests.
+    """
+    row_size = shape[-1]
+    num_rows = int(torch.tensor(shape[:-1]).prod().item())
+    candidates = torch.linspace(lo, hi, row_size * 4, dtype=dtype).unique()
+    if candidates.numel() < row_size:
+        raise ValueError(f"Cannot generate {row_size} distinct logits in [{lo}, {hi}].")
+    rows = [candidates[torch.randperm(candidates.numel())[:row_size]] for _ in range(num_rows)]
+    return torch.stack(rows).to(dtype).reshape(shape)
+
+
+def build_padding_config(device, num_real: int):
+    """ROW_MAJOR uint32 ``[[num_real, 0]]`` right-padding config shared by the moe gate ops.
+
+    pad_side 0 == right padding: the leading ``num_real`` token rows are real, the rest are padding
+    (routed to the sentinel expert id == total_experts).
+    """
+    import ttnn
+
+    return ttnn.from_torch(
+        torch.tensor([[num_real, 0]], dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+
+def assert_gate_output(
+    tt_indices: torch.Tensor,
+    tt_weights: torch.Tensor,
+    ref_indices: torch.Tensor,
+    ref_weights: torch.Tensor,
+    n_activated_experts: int,
+    total_experts: int,
+    num_real: int,
+    apply_padding: bool,
+    *,
+    exact_recall: bool = False,
+    recall_threshold: float = 0.9,
+    pcc_threshold: float = 0.97,
+) -> Tuple[float, float]:
+    """Shared expert-selection (recall) + weight (PCC) check for the moe gate ops.
+
+    Flattens both sides to ``[tokens, n_activated_experts]``, verifies that any padded rows route to
+    the out-of-range sentinel expert (== ``total_experts``), then compares only the real rows.
+    ``exact_recall`` requires recall == 1.0 (deterministic hash routing); otherwise recall must be
+    >= ``recall_threshold``. Returns ``(recall, weights_pcc)``.
+    """
+    # Cast indices to long once so the uint16 device output can be compared without promotion errors.
+    tt_indices = tt_indices.reshape(-1, n_activated_experts).long()
+    ref_indices = ref_indices.reshape(-1, n_activated_experts).long()
+    tt_weights = tt_weights.reshape(-1, n_activated_experts)
+    ref_weights = ref_weights.reshape(-1, n_activated_experts)
+
+    if apply_padding:
+        pad_rows = tt_indices[num_real:]
+        assert torch.all(
+            pad_rows == total_experts
+        ), f"Padded rows not all sentinel ({total_experts}); got {torch.unique(pad_rows).tolist()}"
+        tt_indices, ref_indices = tt_indices[:num_real], ref_indices[:num_real]
+        tt_weights, ref_weights = tt_weights[:num_real], ref_weights[:num_real]
+
+    recall = calculate_average_recall(tt_indices, ref_indices)
+    if exact_recall:
+        assert recall == 1.0, f"Expected exact routing (recall 1.0), got {recall:.4f}"
+    else:
+        assert recall >= recall_threshold, f"Recall {recall:.4f} < {recall_threshold}"
+
+    weights_passed, weights_pcc = comp_pcc(tt_weights.float(), ref_weights.float(), pcc=pcc_threshold)
+    logger.info(
+        f"[{'PASS' if weights_passed else 'FAIL'}] recall={recall:.4f} weights_pcc={weights_pcc:.4f} "
+        f"(recall_thr={'1.0' if exact_recall else recall_threshold}, pcc_thr={pcc_threshold})"
+    )
+    assert weights_passed, f"Weights PCC {weights_pcc:.4f} < {pcc_threshold}"
+    return recall, weights_pcc
 
 
 def trace_token_source(

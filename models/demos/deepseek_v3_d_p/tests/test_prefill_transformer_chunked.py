@@ -35,6 +35,7 @@ from safetensors import safe_open
 import ttnn
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
@@ -748,6 +749,64 @@ def test_kimi_prefill_transformer_chunked_padded(
         weight_cache_path,
         num_layers,
         splits,
+        GateComputeMode.DEVICE_FP32,
+        num_links,
+        topology,
+        routing_use_l1_small_for_semaphores=True,
+    )
+
+
+# GLM-5.1 variants
+# ---------------------------------------------------------------------------
+# Same chunked-prefill validation as the DeepSeek/Kimi tests, with the glm_5_1 variant and the on-device
+# gate (GateComputeMode.DEVICE_FP32 — GLM's noaux_tc gate uses the grouped-topk fp32 device path) +
+# GLM51Config fabric payload. Golden = the vLLM GLM-5.1 55k structured trace (chunked_group_a_v1; set via
+# the variant's test_prefill_trace_default, override with PREFILL_TRACE_DIR).
+
+
+@pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
+@pytest.mark.parametrize("num_layers", [1, 10, 78], ids=["L1", "L10", "L78"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+                # Small L1_SMALL region for the MoE routing all-gather's global semaphores
+                # (use_l1_small_for_semaphores); see the Kimi chunked test for the rationale.
+                "l1_small_size": 512,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_1"], indirect=True, ids=["glm"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.1 requires Blackhole")
+@pytest.mark.timeout(0)
+def test_glm_prefill_transformer_chunked(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    num_layers,
+    n_chunks,
+    num_links,
+    topology,
+):
+    run_chunked_transformer(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        n_chunks,
         GateComputeMode.DEVICE_FP32,
         num_links,
         topology,

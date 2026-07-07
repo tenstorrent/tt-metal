@@ -72,8 +72,8 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
             while (res.logical_shape().rank() > input_rank) {
                 const auto shape = res.logical_shape();
                 const auto full_shape = res.padded_shape();
-                SmallVector<uint32_t> shape_vec{};
-                SmallVector<uint32_t> full_shape_vec{};
+                ttsl::SmallVector<uint32_t> shape_vec{};
+                ttsl::SmallVector<uint32_t> full_shape_vec{};
                 for (int i = 1; i < shape.rank(); i++) {
                     shape_vec.push_back(shape[i]);
                     full_shape_vec.push_back(full_shape[i]);
@@ -115,7 +115,7 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     TT_FATAL(
                         input_tensor.layout() == ttnn::TILE_LAYOUT,
                         "ttnn.concat: expected all input tensors to be in tile layout");
-                    ttnn::SmallVector<uint32_t> ends(
+                    ttsl::SmallVector<uint32_t> ends(
                         input_tensor.logical_shape().cbegin(), input_tensor.logical_shape().cend());
                     std::transform(ends.begin(), ends.end(), ends.begin(), [](const auto l) { return l - 1; });
                     return ttnn::untilize_with_unpadding(input_tensor, ttnn::Shape(ends), std::nullopt);
@@ -411,14 +411,14 @@ ttnn::Tensor concat(
                 std::vector<ttnn::Tensor> chunk_inputs;
                 chunk_inputs.reserve(input_tensors.size());
                 for (const auto& t : input_tensors) {
-                    ttnn::SmallVector<uint32_t> starts(rank, 0);
-                    ttnn::SmallVector<uint32_t> ends(rank);
+                    ttsl::SmallVector<uint32_t> starts(rank, 0);
+                    ttsl::SmallVector<uint32_t> ends(rank);
                     for (int i = 0; i < rank; i++) {
                         ends[i] = t.logical_shape()[i];
                     }
                     starts[rank - 2] = row_start;
                     ends[rank - 2] = row_end;
-                    ttnn::SmallVector<uint32_t> step(rank, 1);
+                    ttsl::SmallVector<uint32_t> step(rank, 1);
                     chunk_inputs.push_back(ttnn::slice(t, starts, ends, step, mem_config));
                 }
 

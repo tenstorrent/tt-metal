@@ -50,9 +50,9 @@ void bind_view(nb::module_& mod) {
     ttnn::bind_function<"view">(
         mod,
         doc,
-        // Bind first overload: view(Tensor, SmallVector<int32_t>)
+        // Bind first overload: view(Tensor, ttsl::SmallVector<int32_t>)
         ttnn::overload_t(&view_shape_vector_wrapper, nb::arg("input_tensor"), nb::arg("shape")),
-        // Bind second overload: view(Tensor, SmallVector<int32_t>)
+        // Bind second overload: view(Tensor, ttsl::SmallVector<int32_t>)
         ttnn::overload_t(
             nb::overload_cast<const ttnn::Tensor&, const ttnn::Shape&>(&ttnn::view),
             nb::arg("input_tensor"),

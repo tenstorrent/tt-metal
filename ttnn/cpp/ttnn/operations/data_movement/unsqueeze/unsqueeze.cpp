@@ -13,7 +13,7 @@ ttnn::Tensor unsqueeze(const ttnn::Tensor& input_tensor, const int dim) {
     const int32_t max_dim = (int)(rank);
     const int32_t min_dim = -(max_dim)-1;
 
-    SmallVector<uint32_t> output_shape_vector;
+    ttsl::SmallVector<uint32_t> output_shape_vector;
 
     int normal_dim;
     // Handle negative dimension by converting it to positive
