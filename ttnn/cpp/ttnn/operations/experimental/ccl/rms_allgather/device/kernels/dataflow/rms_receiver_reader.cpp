@@ -106,7 +106,7 @@ void kernel_main() {
         l1_read_addr_ex_par += all_to_all_tile_offset_bytes;
         // read data from other cores - second stage reduce
         uint32_t l1_read_addr_ex = 0;
-        uint32_t block_index_stride = 0;
+        [[maybe_unused]] uint32_t block_index_stride = 0;
         if constexpr (use_two_stage_reduce) {
             l1_read_addr_ex = get_read_ptr(cb_ex2);
             block_index_stride = num_x;

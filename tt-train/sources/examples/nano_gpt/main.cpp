@@ -7,6 +7,7 @@
 #include <csignal>
 #include <cstdint>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/memory_reporter.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -133,6 +134,13 @@ uint64_t get_number_of_parameters(Model &model, bool tp) {
     }
 
     return num_params;
+}
+
+uint64_t get_available_device_memory() {
+    auto *device = &ttml::autograd::ctx().get_device();
+    auto dram_view = tt::tt_metal::detail::GetMemoryView(device, ttnn::BufferType::DRAM);
+    uint64_t total_dram = dram_view.total_bytes_per_bank * dram_view.num_banks * tt::tt_metal::GetNumAvailableDevices();
+    return total_dram;
 }
 
 using ttml::autograd::TensorPtr;
@@ -665,6 +673,7 @@ int main(int argc, char **argv) {
         model_config.transformer_config);
 
     fmt::print("Model number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
+    fmt::print("Available Device Memory: {} MB\n", get_available_device_memory() / (1024 * 1024));
     if (track_memory) {
         ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
     }

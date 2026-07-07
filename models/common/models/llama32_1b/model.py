@@ -1056,7 +1056,17 @@ class EagerLlama32_1BExecutor:
     def prepare_decode_inputs_device(self, tokens, current_pos, page_table):
         return self._engine.prepare_decode_inputs_device(tokens, current_pos, page_table)
 
-    def compile_prefill(self, *, tokens, page_table, kv_cache=None, prompt_lens=None, empty_slots=None, start_pos=None):
+    def compile_prefill(
+        self,
+        *,
+        tokens,
+        page_table,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        start_pos=None,
+        sampling_params=None,
+    ):
         return self._engine.compile_prefill(
             tokens=tokens,
             page_table=page_table,
@@ -1064,6 +1074,7 @@ class EagerLlama32_1BExecutor:
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             start_pos=start_pos,
+            sampling_params=sampling_params,
         )
 
     def compile_decode(self, *, tokens, start_pos, page_table, kv_cache=None, sampling_params=None):
@@ -1163,7 +1174,17 @@ class TracedLlama32_1BExecutor:
     def warmup_model_prefill(self, seq_lens, make_tokens, make_page_table):
         return self._engine.warmup_model_prefill(seq_lens, make_tokens, make_page_table)
 
-    def compile_prefill(self, *, tokens, page_table, kv_cache=None, prompt_lens=None, empty_slots=None, start_pos=None):
+    def compile_prefill(
+        self,
+        *,
+        tokens,
+        page_table,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        start_pos=None,
+        sampling_params=None,
+    ):
         return self._engine.compile_prefill(
             tokens=tokens,
             page_table=page_table,
@@ -1171,6 +1192,7 @@ class TracedLlama32_1BExecutor:
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             start_pos=start_pos,
+            sampling_params=sampling_params,
         )
 
     def compile_decode(self, *, tokens, start_pos, page_table, kv_cache=None, sampling_params=None):

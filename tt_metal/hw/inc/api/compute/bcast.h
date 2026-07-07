@@ -129,9 +129,9 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
 #endif
 }
 
+#ifndef ARCH_QUASAR
 template <BroadcastType old_bcast_type, BroadcastType new_bcast_type>
 void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, uint32_t new_ocb) {
-#ifndef ARCH_QUASAR
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     // Pass through uses A2D and potentially direct unpack to dest.
     constexpr DataCopyType data_copy_type =
@@ -163,8 +163,8 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
 #endif
 
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_ocb, new_ocb)));
-#endif
 }
+#endif
 
 /**
  * Shorthand template instantiation of sub_tiles_bcast.

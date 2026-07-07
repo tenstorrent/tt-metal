@@ -25,7 +25,6 @@ sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor,
     sfpi::vFloat in = sfpi::dst_reg[dst_idx * dst_tile_size_sfpi];
     sfpi::vFloat x  = setexp(in, 127); // set exp to exp bias (put in range of 1-2)
 
-    // XXXXXX ask Namal? if we can derive the coefficients below to higher precision
     ////////////////////////////
     // Calculate Cheby Approximation using Horner Form Multiplication: 3rd Order
     // x* ( x* (A*x + B) + C) + D
@@ -38,9 +37,8 @@ sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor,
     // D' = -A + B - C + D
     // A':0.1058, B':-0.7116, C':2.0871, D':-1.4753
     ////////////////////////////
-    sfpi::vFloat a = sfpi::vConstFloatPrgm1;
-    sfpi::vFloat b = sfpi::vConstFloatPrgm2;
-    // XXXXX try variants of the below: B'=.7122, C'=2.0869
+    sfpi::vFloat a             = sfpi::vConstFloatPrgm1;
+    sfpi::vFloat b             = sfpi::vConstFloatPrgm2;
     sfpi::vFloat series_result = x * (x * (x * a + b) + 2.0871) + -1.4753f;
 
     ////////////////////////////
@@ -111,7 +109,6 @@ inline void _init_log_()
 {
     sfpi::vConstFloatPrgm0 = 0.692871f; // ln2
 
-    // XXXXX could do these to higher precision
     sfpi::vConstFloatPrgm1 = 0.1058f;
     sfpi::vConstFloatPrgm2 = -0.7166f;
 }

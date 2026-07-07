@@ -5,6 +5,8 @@
 #include "untilize_with_unpadding_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include <algorithm>
+
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -232,7 +234,26 @@ TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             const auto tile = input_tensor_a.tensor_spec().tile();
             uint32_t tile_height = tile.get_height();
-            uint32_t shard_idx0 = tt::round_up(tt::div_up(fused_height, num_cores), tile_height);
+            // Number of whole padded [H_padded, W] matrices packed into a single core's shard. This
+            // must match the sharded writer's `batch` (see the multi-core sharded program factory).
+            uint32_t batch = std::max(
+                1u,
+                (shard_spec.shape[0] * shard_spec.shape[1]) /
+                    (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]));
+            uint32_t shard_idx0;
+            if (batch > 1) {
+                // Each core holds `batch` full matrices and untilize strips the interior pad rows of
+                // every one of them. The writer derives its per-matrix unpadded row count as
+                // (output shard height / batch), so the output shard height must be exactly
+                // batch * logical_H. Rounding up to a tile multiple here would make that division
+                // yield the wrong per-matrix row count and corrupt every matrix past the first.
+                shard_idx0 = batch * output_shape[-2];
+            } else {
+                // A single matrix split across cores: no interior padding, untilize copies each
+                // core's shard 1:1, so the output shard height must equal the (tile-aligned) input
+                // shard height. See issue #16620.
+                shard_idx0 = tt::round_up(tt::div_up(fused_height, num_cores), tile_height);
+            }
             shard_shape = {shard_idx0, output_shape[-1]};
         } else {
             shard_shape = {fused_height, shard_spec.shape[1]};
