@@ -278,6 +278,12 @@ def run_combine(
         tt_expert_region_offsets,
     )
 
+    # [debug] Drain the combine flow-control traces ([rxlog]/[txlog]) that the fabric routers flushed to DRAM
+    # during the combine window into per-(device, eth core) files, sitting alongside the DPRINT output. Sync
+    # first so every router's DRAM write (including the STOP-marker tail flush) has landed before we read back.
+    ttnn.synchronize_device(mesh_device)
+    ttnn.dump_combine_flow_logs(mesh_device, "generated/dprint/combine-dump/")
+
     if not run_pcc_check:
         ttnn.synchronize_device(mesh_device)
         logger.debug("Skipping PCC validation (run_pcc_check=False)")
