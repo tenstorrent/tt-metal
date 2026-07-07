@@ -3920,6 +3920,16 @@ void kernel_main() {
         }
     }
 
+    ///////////////////////////////////////////////
+    // [debug] DRAM log-buffer base addresses
+    // Packed at the very end of the runtime args by FabricEriscDatamoverBuilder::get_runtime_args:
+    // receiver-log DRAM base address, then sender-log DRAM base address. Sizes come from the
+    // receiver_log_dram_buffer_size / sender_log_dram_buffer_size compile-time args. Parsed but NOT yet
+    // consumed.
+    ///////////////////////////////////////////////
+    [[maybe_unused]] const auto receiver_log_dram_addr = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const auto sender_log_dram_addr = get_arg_val<uint32_t>(arg_idx++);
+
     //  initialize the statically allocated "semaphores"
     [&]<size_t... Is>(std::index_sequence<Is...>) {
         (([&]<size_t I>() {

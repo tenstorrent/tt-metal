@@ -48,6 +48,23 @@ class Program;
 
 namespace tt::tt_fabric {
 
+// [debug] DRAM log-buffer geometry for combine flow-control tracing. Each used eth router is given a
+// receiver-log and a sender-log DRAM buffer of COMBINE_LOG_DRAM_BUFFER_SIZE bytes. The buffers are packed
+// contiguously, per used eth core, as [eth0_rec][eth0_snd][eth1_rec][eth1_snd]... starting at
+// combine_log_dram_region_base (stride = 2 * COMBINE_LOG_DRAM_BUFFER_SIZE per core). The per-core slot
+// index is the eth channel's ordinal among the device's *active* fabric eth channels (dense packing, so
+// ~6 used cores * 8 MB stays within ~50 MB), not the raw channel number.
+//
+// The region base is placed in a known-free high area of DRAM: Blackhole DRAM views are 0xFF000000
+// (~4080 MiB); the interleaved buffer allocator grows up from the (small) unreserved base and trace
+// buffers grow down from the top of the view, so a 3 GiB base with a <=112 MB extent (14 channels * 8 MB)
+// sits in free space with ~880 MB of headroom below any trace region. Deciphered from the DRAM usage of
+// models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py (BH ring-8 2link), whose
+// interleaved footprint is a tiny fraction of one 4 GB bank. Addresses stay < 4 GiB so they fit in the
+// uint32_t runtime-arg slots. Passed to the kernel but NOT yet consumed.
+static constexpr uint64_t COMBINE_LOG_DRAM_BUFFER_SIZE = 4ull << 20;     // 4 MiB per buffer (receiver, sender)
+static constexpr uint64_t combine_log_dram_region_base = 0xC0000000ull;  // 3 GiB
+
 size_t FabricEriscDatamoverBuilder::get_max_packet_payload_size_for_arch(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: return max_packet_payload_size_bytes_wormhole;
@@ -885,6 +902,11 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     named_args["RECEIVER_LOG_BUFFER_ADDR"] = static_cast<uint32_t>(config.receiver_log_buffer_address);
     named_args["SENDER_LOG_BUFFER_ADDR"] = static_cast<uint32_t>(config.sender_log_buffer_address);
 
+    // [debug] Per-router DRAM log-buffer sizes (bytes). The matching DRAM base addresses are passed as
+    // runtime args (see get_runtime_args). Parsed by the kernel but NOT yet consumed.
+    named_args["RECEIVER_LOG_DRAM_BUFFER_SIZE"] = static_cast<uint32_t>(COMBINE_LOG_DRAM_BUFFER_SIZE);
+    named_args["SENDER_LOG_DRAM_BUFFER_SIZE"] = static_cast<uint32_t>(COMBINE_LOG_DRAM_BUFFER_SIZE);
+
     // Add code profiling arguments (conditionally enabled)
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
         // Enable RECEIVER_CHANNEL_FORWARD timer (bit 0)
@@ -1529,6 +1551,26 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 
     // Pack relay connection args at the end (UDM mode only)
     receiver_channel_to_downstream_adapter->pack_adaptor_to_relay_rt_args(rt_args);
+
+    // [debug] Append this router's receiver- and sender-log DRAM base addresses (see the
+    // COMBINE_LOG_DRAM_BUFFER_SIZE / combine_log_dram_region_base comment near the top of this file for the
+    // layout). The slot index is this eth channel's ordinal among the device's active fabric eth channels,
+    // which packs the used cores densely. Parsed by the kernel but NOT yet consumed.
+    {
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto active_channels = control_plane.get_active_fabric_eth_channels(this->local_fabric_node_id);
+        uint32_t slot_index = 0;
+        for (const auto& [chan, _direction] : active_channels) {
+            if (chan == this->my_eth_channel) {
+                break;
+            }
+            ++slot_index;
+        }
+        const uint64_t slot_base =
+            combine_log_dram_region_base + static_cast<uint64_t>(slot_index) * (2ull * COMBINE_LOG_DRAM_BUFFER_SIZE);
+        rt_args.push_back(static_cast<uint32_t>(slot_base));                                 // receiver log DRAM addr
+        rt_args.push_back(static_cast<uint32_t>(slot_base + COMBINE_LOG_DRAM_BUFFER_SIZE));  // sender log DRAM addr
+    }
 
     return rt_args;
 }

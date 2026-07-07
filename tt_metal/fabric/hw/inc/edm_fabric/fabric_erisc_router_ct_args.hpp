@@ -485,6 +485,12 @@ constexpr size_t receiver_log_buffer_addr = NAMED_CT_ARG("RECEIVER_LOG_BUFFER_AD
 // receiver region so the sender and receiver traces never alias, even if one eRisc services both roles.
 constexpr size_t sender_log_buffer_addr = NAMED_CT_ARG("SENDER_LOG_BUFFER_ADDR");
 
+// [debug] Per-router DRAM log-buffer sizes (bytes). The matching DRAM base addresses arrive as runtime
+// args (receiver_log_dram_addr / sender_log_dram_addr, packed at the end of the runtime args by the
+// builder). Parsed but NOT yet consumed.
+constexpr size_t receiver_log_dram_buffer_size = NAMED_CT_ARG("RECEIVER_LOG_DRAM_BUFFER_SIZE");
+constexpr size_t sender_log_dram_buffer_size = NAMED_CT_ARG("SENDER_LOG_DRAM_BUFFER_SIZE");
+
 // ============================================================================
 // Code Profiling
 // ============================================================================
