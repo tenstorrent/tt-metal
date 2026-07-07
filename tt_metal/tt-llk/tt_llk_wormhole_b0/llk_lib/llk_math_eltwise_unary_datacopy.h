@@ -112,7 +112,10 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 48);
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST, tile_base + 56);
 
-            TTI_CLEARDVALID(0b10, 0);
+            // no-switch (reset bit1): SrcB here is math-thread scratch (MOVD2B-fed, not an unpacker fill),
+            // so releasing its dvalid must not flip the bank. The opening SETDVALID does not flip either, so
+            // this keeps the pair net-zero and avoids a tile-count-parity SrcB bank leak. tt-llk#1662
+            TTI_CLEARDVALID(0b10, 0b10);
         }
         else if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
         {
@@ -143,7 +146,10 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 48);
             TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movb2d::MOV_8_ROW_BRCST_D0_BRCST, tile_base + 56);
 
-            TTI_CLEARDVALID(0b10, 0);
+            // no-switch (reset bit1): SrcB here is math-thread scratch (MOVD2B-fed, not an unpacker fill),
+            // so releasing its dvalid must not flip the bank. The opening SETDVALID does not flip either, so
+            // this keeps the pair net-zero and avoids a tile-count-parity SrcB bank leak. tt-llk#1662
+            TTI_CLEARDVALID(0b10, 0b10);
         }
         else if constexpr (src_b_bcast_type == BroadcastType::COL)
         {
@@ -187,7 +193,10 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
                 TT_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ZERO_OFFSET + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, face_base + 28);
             }
 
-            TTI_CLEARDVALID(0b10, 0);
+            // no-switch (reset bit1): SrcB here is math-thread scratch (MOVD2B-fed, not an unpacker fill),
+            // so releasing its dvalid must not flip the bank. The opening SETDVALID does not flip either, so
+            // this keeps the pair net-zero and avoids a tile-count-parity SrcB bank leak. tt-llk#1662
+            TTI_CLEARDVALID(0b10, 0b10);
         }
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
 

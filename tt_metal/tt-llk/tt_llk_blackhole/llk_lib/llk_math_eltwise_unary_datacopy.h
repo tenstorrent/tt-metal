@@ -156,7 +156,10 @@ inline void _llk_math_eltwise_unary_datacopy_(
 
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
 
-            TTI_CLEARDVALID(0b10, 0);
+            // no-switch (reset bit1): SrcB here is math-thread scratch (MOVD2B-fed, not an unpacker fill),
+            // so releasing its dvalid must not flip the bank. The opening SETDVALID does not flip either, so
+            // this keeps the pair net-zero and avoids a tile-count-parity SrcB bank leak. tt-llk#1662
+            TTI_CLEARDVALID(0b10, 0b10);
         }
         else if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
         {
@@ -199,7 +202,10 @@ inline void _llk_math_eltwise_unary_datacopy_(
 
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
 
-            TTI_CLEARDVALID(0b10, 0);
+            // no-switch (reset bit1): SrcB here is math-thread scratch (MOVD2B-fed, not an unpacker fill),
+            // so releasing its dvalid must not flip the bank. The opening SETDVALID does not flip either, so
+            // this keeps the pair net-zero and avoids a tile-count-parity SrcB bank leak. tt-llk#1662
+            TTI_CLEARDVALID(0b10, 0b10);
         }
         else if constexpr (src_b_bcast_type == BroadcastType::COL)
         {
@@ -260,7 +266,10 @@ inline void _llk_math_eltwise_unary_datacopy_(
                 cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
             }
 
-            TTI_CLEARDVALID(0b10, 0);
+            // no-switch (reset bit1): SrcB here is math-thread scratch (MOVD2B-fed, not an unpacker fill),
+            // so releasing its dvalid must not flip the bank. The opening SETDVALID does not flip either, so
+            // this keeps the pair net-zero and avoids a tile-count-parity SrcB bank leak. tt-llk#1662
+            TTI_CLEARDVALID(0b10, 0b10);
         }
 
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
