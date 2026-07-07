@@ -1508,7 +1508,8 @@ def run_ring_joint_sdpa_sharded_prompt(
         # sp_factor=4: MeshShape(4,1), ring on axis 0 → 256 prompt tokens, 64/device
         ((4, 8), 2, 0, 1, 24, 64, 256, 64, 64, 64),
         # sp_factor=8: MeshShape(1,8), ring on axis 1 → 512 prompt tokens, 64/device
-        ((4, 8), 2, 1, 1, 24, 64, 512, 64, 64, 64),
+        # ((4, 8), 2, 1, 1, 24, 64, 512, 64, 64, 64),
+        ((4, 8), 2, 1, 1, 24, 4096, 512, 128, 256, 512),
     ],
     ids=["wh_sp2", "bh_sp4", "bh_sp8"],
     indirect=["mesh_device"],

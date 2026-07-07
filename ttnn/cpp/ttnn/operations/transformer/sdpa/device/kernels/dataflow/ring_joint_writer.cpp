@@ -430,6 +430,9 @@ void kernel_main() {
     constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(31);
     constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(32);
     constexpr uint32_t single_valid_kv_chunk_mask_compile [[maybe_unused]] = get_compile_time_arg_val(33);
+    // Slot 34: sharded-joint flag. When true, one L/P shard arrives per ring iteration and
+    // do_joint_kv fires on every iteration rather than only the last active iteration.
+    constexpr bool joint_is_sharded = get_compile_time_arg_val(34) == 1;
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. The program factory masks kernel_is_causal off when chunked is on, so only one of
     // the two paths drives the stamp per program — but they share the CB slot layout.
@@ -439,8 +442,12 @@ void kernel_main() {
     // and dropped by the compiler, eliminating runtime ternaries and the joint_out_generator.
     constexpr bool has_joint_q = num_joint_q_chunks > 0;
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
+    // Sharded joint: num_joint_k_chunks is per-shard count; process on every ring iteration.
+    constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
+    // Effective joint length for masking: per-shard (L_local = L/ring_size) for sharded, full L for replicated.
+    constexpr uint32_t L_effective = has_gathered_joint_k ? L / ring_size : L;
 
-    constexpr auto out_args = TensorAccessorArgs<34>();
+    constexpr auto out_args = TensorAccessorArgs<35>();  // shifted by 1 for joint_is_sharded at slot 34
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -507,7 +514,8 @@ void kernel_main() {
     // Needed when any K/joint dimension has padding, or when causal/chunked masking is active.
     constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
     constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-    constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    // Joint padding is per-shard: use L_effective, not the full L.
+    constexpr bool joint_has_padding = L > 0 && L_effective % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask =
         (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
     if constexpr (needs_lightweight_mask) {
@@ -536,10 +544,10 @@ void kernel_main() {
         if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
-        // Joint K/V is gathered over the FULL ring; consume it on the LAST ACTIVE ring iteration,
-        // not when ring_id == ring_size-1. Kept consistent with the reader and compute kernels
-        // (keying off ring_size-1 deadlocked the device that owns that shard). See ring_joint_reader.cpp.
-        const bool do_joint_kv = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+        // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
+        // Replicated joint: full gather only complete at last active iteration — consume there.
+        const bool do_joint_kv =
+            has_gathered_joint_k ? true : is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
         uint32_t num_kv_chunks = num_local_k_chunks;
         if constexpr (has_joint_k) {
             if (do_joint_kv) {
@@ -589,8 +597,8 @@ void kernel_main() {
         // If global N is in the ring iter, it supersedes the local N mask.
         const bool ring_iter_needs_local_n_mask = local_n_needs_masking && !global_n_is_within_ring_iter;
 
-        // JOINT L MASK
-        const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+        // JOINT L MASK — uses L_effective (per-shard for sharded, full L for replicated).
+        constexpr bool joint_n_needs_masking = L_effective % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
 
         // Deferred normalization is always paired with streaming compute.

@@ -75,6 +75,9 @@ void kernel_main() {
     constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(46);
     constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(47);
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(48) == 1;
+    // Slot 49: sharded-joint flag. When true, one L/P shard arrives per ring iteration and
+    // do_joint_kv fires on every iteration rather than only the last active iteration.
+    constexpr bool joint_is_sharded = get_compile_time_arg_val(49) == 1;
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
@@ -83,12 +86,20 @@ void kernel_main() {
     // path. kernel_is_causal is masked off by the program factory when chunked is on, so only
     // one of the two paths drives the stamp per program — but they share the CB slot layout.
     constexpr bool diag_tile_enabled = is_causal || chunked_enabled;
+    // Sharded joint: num_joint_k_chunks is the per-shard count (L_local / k_chunk). Replicated: full L.
+    constexpr bool has_joint_k = num_joint_k_chunks > 0;
+    constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
+
+    // Sharded joint: masking uses per-device shard length (L / ring_size). Replicated: full L.
+    // Must be defined here — used in joint_has_padding and joint_n_padded_tiles below.
+    constexpr uint32_t L_effective = has_gathered_joint_k ? L / ring_size : L;
+    constexpr uint32_t Lt_effective = (L_effective + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
 
     // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
     constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
     constexpr bool global_n_has_padding = logical_n_compile % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-    constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool joint_has_padding = L > 0 && L_effective % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask =
         (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
 
@@ -129,7 +140,7 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 49;
+    constexpr uint32_t cb_arg_offset = 50;  // shifted by 1 for joint_is_sharded at slot 49
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -172,10 +183,11 @@ void kernel_main() {
         cb_mask_in_obj.wait_front(total_mask_tiles);
     }
 
-    // Precompute padded tile counts that are constant across ring iterations
+    // Precompute padded tile counts that are constant across ring iterations.
     constexpr uint32_t local_n_padded_tiles =
         (kv_local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (kv_local_padded_Nt % Sk_chunk_t)) : 0;
-    constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
+    constexpr uint32_t joint_n_padded_tiles =
+        (Lt_effective % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt_effective % Sk_chunk_t)) : 0;
 
     using Straddle = KCausalStraddleInfo<kv_local_padded_Nt, Sk_chunk_t>;
     constexpr bool has_straddle = Straddle::has_straddle;
@@ -206,11 +218,10 @@ void kernel_main() {
         if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
-        // Joint K/V is gathered over the FULL ring; consume it on the LAST ACTIVE ring iteration
-        // (when the sequencer's sync has waited for all transfers), not when ring_id == ring_size-1.
-        // The device that owns shard ring_size-1 processes that shard on its local iter 0, before the
-        // joint gather completes — the old condition deadlocked the ring. See ring_joint_reader.cpp.
-        const bool do_joint_kv = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+        // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
+        // Replicated joint: full gather only complete at last active iteration — consume there.
+        const bool do_joint_kv =
+            has_gathered_joint_k ? true : is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
@@ -231,10 +242,10 @@ void kernel_main() {
         const bool local_n_needs_masking = kv_local_padded_Nt % Sk_chunk_t != 0;
         const uint32_t local_n_mask_chunk_id = kv_local_padded_Nt / Sk_chunk_t;
 
-        // JOINT L MASK
-        const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+        // JOINT L MASK — uses L_effective (per-shard for sharded, full L for replicated).
+        constexpr bool joint_n_needs_masking = L_effective % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
-        const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+        constexpr uint32_t joint_n_mask_chunk_id = L_effective / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
         // is_causal: diagonal only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
         // The 9 compile-time-constant mask fields are template params (static constexpr, no stack

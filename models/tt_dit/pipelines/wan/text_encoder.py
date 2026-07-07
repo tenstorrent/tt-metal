@@ -162,7 +162,7 @@ class TextEncoder:
         mesh_mapper = ttnn.ShardTensor2dMesh(self._device, mesh_shape=tuple(self._device.shape), dims=dims)
         tt_prompt = ttnn.from_torch(
             text_input_ids,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self._device,
             mesh_mapper=mesh_mapper,
         )

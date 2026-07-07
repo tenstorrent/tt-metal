@@ -84,8 +84,10 @@ struct RingJointRuntimeDerivation {
     uint32_t q_chunk_group_tile_count = 0;
     uint32_t num_local_k_chunks = 0;
     uint32_t k_chunk_tile_count = 0;
+    // For sharded joint: per-iteration count (L_local / k_chunk_size). For replicated: full L count.
     uint32_t num_joint_k_chunks = 0;
     uint32_t joint_seq_len = 0;
+    bool joint_is_sharded = false;
     bool kernel_chunked = false;
     bool kv_pad_rotation_enabled = false;
     bool kernel_is_causal = false;
@@ -203,11 +205,13 @@ RingWorkPlan build_ring_work_plan_impl(
 
     for (uint32_t ring_iter = 0; ring_iter < derivation.ring_size; ++ring_iter) {
         const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
-        // Gathered joint K/V is only complete at the final ring transfer, so consume it on the last
-        // ring iter (not the iter carrying ring_id == ring_size-1, which can land early when spatial
-        // doesn't span every iter). Safe: this op is always non-causal, so the final iter is never skipped.
+        // Sharded joint: each ring iteration delivers one L/P shard immediately, so process
+        // joint K/V on every ring iteration (no need to wait for the full gather to complete).
+        // Replicated joint: gathered joint K/V is only complete at the final ring transfer,
+        // so consume it only on the last ring iter.
+        const bool has_joint_work = derivation.num_joint_k_chunks > 0 && derivation.joint_seq_len != 0;
         const bool joint_contributes =
-            ring_iter == derivation.ring_size - 1 && derivation.num_joint_k_chunks > 0 && derivation.joint_seq_len != 0;
+            has_joint_work && (derivation.joint_is_sharded || ring_iter == derivation.ring_size - 1);
         uint32_t valid_spatial_kv_chunks = 0;
         for (uint32_t k_chunk = 0; k_chunk < derivation.num_local_k_chunks; ++k_chunk) {
             const uint32_t local_tile_start = k_chunk * derivation.k_chunk_tile_count;
@@ -359,7 +363,11 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.q_chunk_group_tile_count = derivation.q_local_padded_Nt * derivation.ring_size;
     derivation.num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
     derivation.k_chunk_tile_count = k_chunk_size / tt::constants::TILE_HEIGHT;
-    derivation.num_joint_k_chunks = tt::div_up(L, k_chunk_size);
+    // Sharded joint: each ring iteration delivers one L/P shard, so num_joint_k_chunks counts
+    // chunks within a single shard (ceil(L/P / k_chunk_size)). Replicated: full L.
+    derivation.joint_is_sharded = tensor_args.joint_is_sharded();
+    const uint32_t L_for_k_chunks = derivation.joint_is_sharded ? L / derivation.ring_size : L;
+    derivation.num_joint_k_chunks = tt::div_up(L_for_k_chunks, k_chunk_size);
     derivation.joint_seq_len = L;
     // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
     // non-chunked path.
@@ -857,12 +865,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t compile_time_global_n_partial_col = kv_pad_rotation_enabled ? 0 : global_n_partial_col;
 
     const bool global_n_has_padding = (compile_time_logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
-    const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
+    // Sharded joint: each per-device shard is L_local tokens; masking uses the per-shard length.
+    // Replicated joint: masking uses the full L length (L_local == L on replicated path).
+    const bool joint_has_padding = L > 0 && (L_local % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool needs_lightweight_mask =
         (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
 
     // Partial tile support when padding boundary falls inside a tile.
-    const uint32_t joint_l_partial_col = L % tt::constants::TILE_HEIGHT;
+    // Sharded: last tile of the per-device shard (L_local % TILE_HEIGHT). Replicated: full L.
+    const uint32_t joint_l_partial_col = L_local % tt::constants::TILE_HEIGHT;
     const uint32_t partial_mask_tiles =
         (compile_time_global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
     const uint32_t causal_diag_tiles = diag_tile_enabled ? 1 : 0;
@@ -871,11 +882,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
     // Q chunking uses L_local (per-device shard on sharded path, full L on replicated).
-    // K chunking always uses full L because gathered joint K/V spans the entire L.
     const uint32_t num_joint_q_chunks = tt::div_up(L_local, q_chunk_size);
     const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
     const uint32_t num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
-    const uint32_t num_joint_k_chunks = tt::div_up(L, k_chunk_size);
+    // Sharded joint: per-iteration K chunk count for one shard (L_local). Replicated: full L.
+    // Kernels process this many joint K chunks on every ring iteration (sharded) or just the last (replicated).
+    const uint32_t num_joint_k_chunks = tt::div_up(L_local, k_chunk_size);
 
     log_debug(tt::LogOp, "B: {}", B);
     log_debug(tt::LogOp, "NH: {}", NH);
@@ -1326,6 +1338,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compile_time_active_ring_iter_mask,
         compile_time_last_active_ring_iter,
         compile_time_single_valid_kv_chunk_mask,
+        // Slot 34: sharded-joint flag. When true, one shard per ring iteration; do_joint_kv fires every iter.
+        static_cast<uint32_t>(joint_is_sharded),
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -1381,7 +1395,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compile_time_kv_pad_q_mapping.q_valid_tile_count,
         compile_time_active_ring_iter_mask,
         compile_time_last_active_ring_iter,
-        static_cast<uint32_t>(v_shares_k_buffer)};
+        static_cast<uint32_t>(v_shares_k_buffer),
+        // Slot 49: sharded-joint flag. When true, one shard per ring iteration; do_joint_kv fires every iter.
+        static_cast<uint32_t>(joint_is_sharded)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
