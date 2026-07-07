@@ -83,10 +83,13 @@ ALWI void matmul_block_math_dynamic_throttle(
  * Matmul maps in0 -> SrcB and in1 -> SrcA (the reverse of other ops), which is why
  * compute_kernel_hw_startup must use SrcOrder::Reverse.
  *
- * NOTE (known gap, #46769): if a preceding op left SrcA/SrcB with asymmetric tile sizes (i.e. different
- * data formats per source) and the following matmul uses the same formats, matmul_init cannot fix the
- * per-source tile sizes on its own. It does not re-program the tile descriptor, and a reconfig_data_format
- * is inappropriate when the data formats did not change. No current kernel hits this; tracked in #46769.
+ * NOTE: if a preceding op left SrcA/SrcB with asymmetric tile sizes (i.e. different data formats per
+ * source) and the following matmul reuses those same formats, matmul_init cannot fix the per-source tile
+ * sizes on its own: it only builds the MOP and does not re-program the tile descriptor, and a
+ * reconfig_data_format is inappropriate when the data formats did not change. Call
+ * reconfig_matmul_tile_dims(in0_cb_id, in1_cb_id) (from reconfig_data_format.h) immediately before
+ * matmul_init to re-assert the per-source tile descriptors in matmul's reversed operand order. No current
+ * kernel needs this (all matmul operands are symmetric 32x32 4-face tiles).
  *
  * Return value: None
  *
@@ -149,11 +152,13 @@ ALWI void matmul_tiles(
  * Matmul maps in0 -> SrcB and in1 -> SrcA (the reverse of other ops), which is why
  * compute_kernel_hw_startup must use SrcOrder::Reverse.
  *
- * NOTE (known gap, #46769): if a preceding op left SrcA/SrcB with asymmetric tile sizes (i.e. different
- * data formats per source) and the following matmul uses the same formats, matmul_block_init cannot fix
- * the per-source tile sizes on its own. It does not re-program the tile descriptor, and a
- * reconfig_data_format is inappropriate when the data formats did not change. No current kernel hits this;
- * tracked in #46769.
+ * NOTE: if a preceding op left SrcA/SrcB with asymmetric tile sizes (i.e. different data formats per
+ * source) and the following matmul reuses those same formats, matmul_block_init cannot fix the per-source
+ * tile sizes on its own: it only builds the MOP and does not re-program the tile descriptor, and a
+ * reconfig_data_format is inappropriate when the data formats did not change. Call
+ * reconfig_matmul_tile_dims(in0_cb_id, in1_cb_id) (from reconfig_data_format.h) immediately before
+ * matmul_block_init to re-assert the per-source tile descriptors in matmul's reversed operand order. No
+ * current kernel needs this (all matmul operands are symmetric 32x32 4-face tiles).
  *
  * Return value: None
  *

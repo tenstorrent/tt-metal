@@ -112,6 +112,46 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
 
 // clang-format off
 /**
+ * Re-programs the per-source unpacker tile descriptor and TILE_SIZE_A/TILE_SIZE_B GPRs from the given
+ * input CBs in matmul's reversed operand order (in0 -> SrcB, in1 -> SrcA), WITHOUT changing data formats.
+ * Call it immediately before matmul_init / matmul_block_init when a preceding op left SrcA/SrcB with
+ * asymmetric per-source tile sizes (e.g. a binary op whose two operands had different data formats) but
+ * the following matmul reuses those same formats: matmul_init only builds the MOP and does not re-program
+ * the tile descriptor, and reconfig_data_format is semantically wrong here because the data formats did
+ * not change. Callers pass the operands in natural order (in0_cb_id, in1_cb_id); the reversed SrcA/SrcB
+ * assignment is handled inside this helper (SrcA tile size <- in1, SrcB tile size <- in0), matching the
+ * GPR-fed base-address auto-increment the matmul MOP performs (TILE_SIZE_A drives the SrcA stream,
+ * TILE_SIZE_B drives the SrcB stream). It re-asserts only tile-dimension state, never data formats.
+ *
+ * NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed into the unpack MOP at op init, so this
+ * helper is a no-op; re-call matmul_init(in0_cb_id, in1_cb_id) for the new operand pair instead.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name      | Description                                   | Type     | Valid Range | Required |
+ * |------------|-----------|-----------------------------------------------|----------|-------------|----------|
+ * | Function   | in0_cb_id | First matmul input CB (maps to SrcB)          | uint32_t | 0 to 31     | True     |
+ * | Function   | in1_cb_id | Second matmul input CB (maps to SrcA)         | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+ALWI void reconfig_matmul_tile_dims(const uint32_t in0_cb_id, const uint32_t in1_cb_id) {
+    LLK_SAN_FUNCTION();
+#ifndef ARCH_QUASAR
+    // Matmul reverses the operand -> source mapping (in0 -> SrcB, in1 -> SrcA), so the SrcA tile
+    // descriptor / TILE_SIZE_A must come from in1 and the SrcB tile descriptor / TILE_SIZE_B from in0.
+    // FACE_ROW_MAJOR selects the tile-dim reconfig path (re-asserts TILE_SIZE + Z-stride / x_end);
+    // to_from_int8 is false because the data formats are unchanged.
+    UNPACK(
+        (llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::FACE_ROW_MAJOR, false>(in1_cb_id)));
+    UNPACK(
+        (llk_unpack_reconfig_data_format_srcb<DST_ACCUM_MODE, p_dim_stride_target::FACE_ROW_MAJOR, false>(in0_cb_id)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE, false>(in1_cb_id)));
+    MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, false>(in0_cb_id)));
+#endif
+}
+
+// clang-format off
+/**
  * Reconfigures the packer output data format by specifying the CB ID of the new operand. This function
  * call will always perform the reconfiguration, regardless of the data format of the old operand.
  * If the new CB ID is the same as the current one, reconfiguration will still occur.
