@@ -229,7 +229,9 @@ from loguru import logger  # noqa: E402
 import ttnn  # noqa: E402
 from models.common.utility_functions import comp_allclose, comp_pcc  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.attention import (  # noqa: E402
-    _LayerKVCache,
+    build_static_layer_cache,
+    host_decode_mask,
+    int32_pos_tensor,
     make_rope_table,
 )
 from models.experimental.deepseek_v4_flash.tt.decoder_layer import DeepSeekV4DecoderLayer  # noqa: E402
@@ -429,16 +431,19 @@ def test_decoder_layer_decode_pcc(device, reset_seeds, tmp_path, layer_idx: int,
     assert split % 32 == 0 and split + _DECODE_STEPS <= seq_len
     cr = cfg.compress_rates[layer_type] if is_compressor else None
 
-    kv_cache = _LayerKVCache(cfg.sliding_window, is_compressor)
+    kv_cache = build_static_layer_cache(
+        device, cfg.sliding_window, layer_type, cfg.head_dim, seq_len, cfg.compress_rates
+    )
     for pos in range(split + _DECODE_STEPS):
         cos_d, sin_d, neg_sin_d = _rope_rows(bundle["cos_q"][pos : pos + 1], bundle["sin_q"][pos : pos + 1], device)
         cos_win_d = sin_win_d = None
-        if is_compressor and (pos + 1) // cr > 0:
-            n_win = (pos + 1) // cr
-            cw, sw = make_rope_table(bundle["cos_win"][:n_win], bundle["sin_win"][:n_win])
+        if is_compressor:
+            n_win_cap = seq_len // cr
+            cw, sw = make_rope_table(bundle["cos_win"][:n_win_cap], bundle["sin_win"][:n_win_cap])
             cos_win_d = _to_tt(cw, device)
             sin_win_d = _to_tt(sw, device)
 
+        mask = host_decode_mask(cfg.sliding_window, layer_type, cr, pos, seq_len, device)
         out_tt = layer.decode(
             _to_tt(streams[:, pos : pos + 1], device),
             cos_d,
@@ -446,7 +451,10 @@ def test_decoder_layer_decode_pcc(device, reset_seeds, tmp_path, layer_idx: int,
             neg_sin_d,
             cos_win_d,
             sin_win_d,
+            mask,
             kv_cache,
+            int32_pos_tensor(pos % cfg.sliding_window, device),
+            int32_pos_tensor(pos, device),
         )
         if pos < split:
             continue  # seeding the cache; no reference row to compare yet
