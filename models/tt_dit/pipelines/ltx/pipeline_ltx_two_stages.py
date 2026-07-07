@@ -32,7 +32,6 @@ class LTXTwoStagesPipeline(LTXPipeline):
     distilled-LoRA s2 refine (variant 1 = LoRA-fused base)."""
 
     HAS_UPSAMPLER = True
-    SUPPORTS_IMAGE_CONDITIONING = True
 
     def __init__(
         self,

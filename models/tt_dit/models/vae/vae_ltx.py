@@ -6,25 +6,30 @@
 
 from __future__ import annotations
 
+import json
 import math
+import os
 from typing import TYPE_CHECKING, Sequence
 
 import torch
 from einops import rearrange
 from loguru import logger
 from safetensors import safe_open
+from safetensors.torch import load_file
 
 import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
-from ...parallel.config import VaeHWParallelConfig
+from ...parallel.config import DiTParallelConfig, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
+from ...utils import cache as cache_module
 from ...utils.conv3d import (
     ConvDims,
     _ntuple,
     aligned_channels,
+    conv3d_blocking_hash,
     conv_pad_height,
     conv_pad_in_channels,
     conv_pad_width,
@@ -1346,6 +1351,159 @@ def read_vae_per_channel_stats(checkpoint_path: str) -> tuple[torch.Tensor, torc
         mean = f.get_tensor("vae.per_channel_statistics.mean-of-means").float()
         std = f.get_tensor("vae.per_channel_statistics.std-of-means").float()
     return mean.view(1, -1, 1, 1, 1), std.view(1, -1, 1, 1, 1)
+
+
+class LTXVideoVAEAdapter:
+    """Owns the LTX video VAE lifecycle: parses the checkpoint's VAE config, builds the
+    decoder + encoder, loads/reloads their weights, and holds the shared per-channel stats.
+
+    Decoder and encoder share ``vae.per_channel_statistics.*`` and the VAE H/W parallel config,
+    so a single adapter owns both (mirrors ``WanVAEDecoderAdapter``, which owns just the decoder).
+    Either submodule may be ``None`` when the checkpoint lacks the corresponding blocks (or when the
+    encoder has no concrete H/W). ``reload_decoder`` / ``reload_encoder`` are idempotent and driven
+    by the pipeline; ``decoder`` / ``encoder`` expose the underlying ``Module`` for coresident
+    exclusion registration.
+    """
+
+    def __init__(
+        self,
+        checkpoint_path: str,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        vae_parallel_config: VaeHWParallelConfig,
+        vae_ccl_manager: CCLManager,
+        dit_parallel_config: DiTParallelConfig,
+        num_frames: int,
+        height: int,
+        width: int,
+    ) -> None:
+        self._checkpoint_path = checkpoint_path
+        self._mesh_device = mesh_device
+        self._vae_parallel_config = vae_parallel_config
+        self._vae_ccl_manager = vae_ccl_manager
+        self._dit_parallel_config = dit_parallel_config
+        self._pcs_cache: tuple[torch.Tensor, torch.Tensor] | None = None
+
+        # VAE config from JSON metadata header (no tensor loads).
+        with open(checkpoint_path, "rb") as f:
+            header_size = int.from_bytes(f.read(8), "little")
+            header = json.loads(f.read(header_size))
+        vae_cfg = json.loads(header.get("__metadata__", {}).get("config", "{}")).get("vae", {})
+        self.decoder_blocks = vae_cfg.get("decoder_blocks", [])
+        self.encoder_blocks = vae_cfg.get("encoder_blocks", [])
+        self._causal = vae_cfg.get("causal_decoder", False)
+        self._base_channels = vae_cfg.get("decoder_base_channels", 128)
+        self._patch_size = vae_cfg.get("patch_size", 4)
+        if self.decoder_blocks:
+            logger.info(f"VAE config: {len(self.decoder_blocks)} blocks, causal={self._causal}")
+        if self.encoder_blocks:
+            logger.info(f"VAE encoder config: {len(self.encoder_blocks)} blocks")
+
+        self._decoder: LTXVideoDecoder | None = None
+        if self.decoder_blocks:
+            self._decoder = LTXVideoDecoder(
+                decoder_blocks=self.decoder_blocks,
+                causal=self._causal,
+                base_channels=self._base_channels,
+                mesh_device=mesh_device,
+                parallel_config=vae_parallel_config,
+                ccl_manager=vae_ccl_manager,
+                num_frames=num_frames or None,
+                height=height or None,
+                width=width or None,
+            )
+
+        # Image-conditioning VAE encoder (I2V): pixels -> latent. Single-frame at construction.
+        self._encoder: LTXVideoEncoder | None = None
+        if self.encoder_blocks and height > 0 and width > 0:
+            self._encoder = LTXVideoEncoder(
+                encoder_blocks=self.encoder_blocks,
+                patch_size=self._patch_size,
+                mesh_device=mesh_device,
+                parallel_config=vae_parallel_config,
+                ccl_manager=vae_ccl_manager,
+                num_frames=1,
+                height=height or None,
+                width=width or None,
+            )
+
+    @property
+    def decoder(self) -> "LTXVideoDecoder | None":
+        return self._decoder
+
+    @property
+    def encoder(self) -> "LTXVideoEncoder | None":
+        return self._encoder
+
+    def per_channel_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Cached ``(mean-of-means, std-of-means)`` reshaped for ``(B, C, F, H, W)`` broadcast —
+        the un_normalize/normalize bookends matching ``ltx_core.upsample_video``."""
+        if self._pcs_cache is None:
+            self._pcs_cache = read_vae_per_channel_stats(self._checkpoint_path)
+        return self._pcs_cache
+
+    def reload_decoder(self) -> None:
+        """Push VAE decoder weights onto the mesh via the disk cache. Blocking-hash subfolder
+        forces re-load when conv3d ``C_in_block`` changes (mirrors Wan). A static load keeps the
+        VAE resident across the audio decode — skip the per-request reload once loaded."""
+        if self._decoder is None or self._decoder.is_loaded():
+            return
+
+        def _state_provider() -> dict[str, torch.Tensor]:
+            logger.info(f"VAE cache miss — loading safetensors: {self._checkpoint_path}")
+            raw = load_file(self._checkpoint_path)
+            vae_state = {}
+            for k, v in raw.items():
+                if k.startswith("vae.decoder."):
+                    vae_state[k.removeprefix("vae.decoder.")] = v
+                elif k.startswith("vae.per_channel_statistics."):
+                    short_key = k.removeprefix("vae.")
+                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
+                        vae_state[short_key] = v
+            return vae_state
+
+        blocking_key = conv3d_blocking_hash(self._decoder)
+        subfolder = f"vae_{blocking_key}" if blocking_key else "vae"
+        cache_module.load_model(
+            self._decoder,
+            model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
+            subfolder=subfolder,
+            parallel_config=self._dit_parallel_config,
+            mesh_shape=tuple(self._mesh_device.shape),
+            get_torch_state_dict=_state_provider,
+        )
+        logger.info(f"Loaded TTNN VAE decoder ({len(self.decoder_blocks)} blocks)")
+
+    def reload_encoder(self) -> None:
+        """Push VAE encoder weights onto the mesh (I2V image conditioning). Mirrors
+        ``reload_decoder``; shares the decoder's ``vae.per_channel_statistics.*``."""
+        if self._encoder is None or self._encoder.is_loaded():
+            return
+
+        def _state_provider() -> dict[str, torch.Tensor]:
+            logger.info(f"VAE encoder cache miss — loading safetensors: {self._checkpoint_path}")
+            raw = load_file(self._checkpoint_path)
+            enc_state = {}
+            for k, v in raw.items():
+                if k.startswith("vae.encoder."):
+                    enc_state[k.removeprefix("vae.encoder.")] = v
+                elif k.startswith("vae.per_channel_statistics."):
+                    short_key = k.removeprefix("vae.")
+                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
+                        enc_state[short_key] = v
+            return enc_state
+
+        blocking_key = conv3d_blocking_hash(self._encoder)
+        subfolder = f"vae_enc_{blocking_key}" if blocking_key else "vae_enc"
+        cache_module.load_model(
+            self._encoder,
+            model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
+            subfolder=subfolder,
+            parallel_config=self._dit_parallel_config,
+            mesh_shape=tuple(self._mesh_device.shape),
+            get_torch_state_dict=_state_provider,
+        )
+        logger.info(f"Loaded TTNN VAE encoder ({len(self.encoder_blocks)} blocks)")
 
 
 def upsample_latent(

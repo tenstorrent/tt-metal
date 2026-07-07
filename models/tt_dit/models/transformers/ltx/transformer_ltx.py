@@ -4,7 +4,12 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
+from loguru import logger
+from safetensors import safe_open
+from safetensors.torch import load_file
 
 import ttnn
 
@@ -15,6 +20,8 @@ from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils import cache as cache_module
+from ....utils.fuse_loras import LoraSpec, fuse_loras_into
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from ....utils.tracing import traced_function
@@ -1052,3 +1059,103 @@ class LTXTransformerModel(Module):
                 mesh_dims[parallel_config.sequence_parallel.mesh_axis] = 2
             return ccl_manager.device_to_host(tt_tensor, mesh_dims).float().clone()
         return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0]).float()
+
+
+class LTXTransformerCheckpoint:
+    """An LTX transformer checkpoint: parses variant config, builds transformers, and loads weights.
+
+    Mirrors ``WanCheckpoint`` but for the single-file LTX safetensors layout. The pipeline-level
+    flags that vary per instance (``has_audio`` / ``image_conditioning``) are passed into ``build``
+    explicitly — the checkpoint never reads pipeline state. LoRA specs vary per variant, so they
+    are threaded through ``state_dict`` / ``cache_name`` / ``load`` rather than stored.
+    """
+
+    def __init__(self, checkpoint_path: str, *, inner_dim: int) -> None:
+        self._checkpoint_path = checkpoint_path
+        # Transformer + connector detection (key scan + one tensor-shape read). No tensor loads.
+        with safe_open(checkpoint_path, framework="pt") as f:
+            keys = list(f.keys())
+            adaln_key = "model.diffusion_model.adaln_single.linear.weight"
+            if adaln_key in keys:
+                self.cross_attention_adaln = f.get_tensor(adaln_key).shape[0] > 6 * inner_dim
+            else:
+                self.cross_attention_adaln = True
+            self.has_gate = any("to_gate_logits" in k for k in keys)
+        logger.info(f"Detected: has_gate={self.has_gate}, cross_attention_adaln={self.cross_attention_adaln}")
+
+    def state_dict(self, lora_specs: list[LoraSpec]) -> dict[str, torch.Tensor]:
+        """Load + LoRA-fuse the transformer state dict from safetensors. Only
+        invoked on cache miss by ``cache_module.load_model``."""
+        logger.info(f"Transformer cache miss — loading safetensors: {self._checkpoint_path}")
+        raw = load_file(self._checkpoint_path)
+        prefix = "model.diffusion_model."
+        sd = {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
+        if lora_specs:
+            sd = fuse_loras_into(sd, lora_specs)
+        return sd
+
+    def cache_name(self, lora_specs: list[LoraSpec]) -> str:
+        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and
+        base weights don't alias in ``TT_DIT_CACHE_DIR``."""
+        base = os.path.basename(self._checkpoint_path).removesuffix(".safetensors")
+        if not lora_specs:
+            return base
+        tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
+        return f"{base}.lora-{tag}"
+
+    def build(
+        self,
+        *,
+        num_attention_heads: int,
+        attention_head_dim: int,
+        in_channels: int,
+        out_channels: int,
+        num_layers: int,
+        cross_attention_dim: int,
+        mesh_device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+        has_audio: bool,
+        image_conditioning: bool,
+    ) -> LTXTransformerModel:
+        """Construct an ``LTXTransformerModel`` for this checkpoint (weights NOT loaded).
+
+        Loading is deferred so the caller can manage the lifecycle (deallocate / reload).
+        """
+        return LTXTransformerModel(
+            num_attention_heads=num_attention_heads,
+            attention_head_dim=attention_head_dim,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            num_layers=num_layers,
+            cross_attention_dim=cross_attention_dim,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            has_audio=has_audio,
+            apply_gated_attention=self.has_gate,
+            cross_attention_adaln=self.cross_attention_adaln,
+            image_conditioning=image_conditioning,
+        )
+
+    def load(
+        self,
+        model: LTXTransformerModel,
+        *,
+        parallel_config: DiTParallelConfig,
+        mesh_shape: tuple[int, ...],
+        is_fsdp: bool,
+        lora_specs: list[LoraSpec],
+    ) -> None:
+        """Load (or reload) weights for a previously-built transformer."""
+        cache_module.load_model(
+            model,
+            model_name=self.cache_name(lora_specs),
+            subfolder="transformer",
+            parallel_config=parallel_config,
+            mesh_shape=mesh_shape,
+            is_fsdp=is_fsdp,
+            get_torch_state_dict=lambda: self.state_dict(lora_specs),
+        )

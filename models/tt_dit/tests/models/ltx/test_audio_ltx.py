@@ -30,8 +30,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.audio_vae.audio_decoder_ltx import AudioDecoder
+from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from models.tt_dit.models.audio_vae.bwe_ltx import MelSTFT, VocoderWithBWE
+from models.tt_dit.models.audio_vae.mel_decoder_ltx import MelDecoder
 from models.tt_dit.models.audio_vae.vocoder_ltx import Vocoder
 from models.tt_dit.parallel.config import AudioTCParallelConfig, DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
@@ -132,7 +133,13 @@ def _build_pipeline(
         checkpoint_name=None,
     )
     pipeline.checkpoint_name = checkpoint
-    pipeline._new_audio_decoder()
+    pipeline._audio_adapter = LTXAudioDecoderAdapter(
+        pipeline.checkpoint_name,
+        mesh_device=pipeline.mesh_device,
+        vae_ccl_manager=pipeline.vae_ccl_manager,
+        dit_parallel_config=pipeline.parallel_config,
+        traced=pipeline._traced,
+    )
     return pipeline, parallel_config
 
 
@@ -146,12 +153,6 @@ def _psnr(ref: torch.Tensor, test: torch.Tensor) -> float:
     if peak == 0.0:
         return float("inf")
     return 20.0 * math.log10(peak) - 10.0 * math.log10(mse)
-
-
-def _decode_audio_device_compat(pipeline: LTXPipeline, audio_latent: torch.Tensor, num_frames: int, fps: float):
-    if hasattr(pipeline, "decode_audio_device"):
-        return pipeline.decode_audio_device(audio_latent, num_frames, fps=fps, fallback=False)
-    return pipeline.decode_audio(audio_latent, num_frames, fps=fps)
 
 
 # ---------------------------------------------------------------------------
@@ -208,14 +209,14 @@ def test_audio_decode_perf(
     num_frames, fps = 145, 24.0
 
     t0 = time.time()
-    dev_audio = _decode_audio_device_compat(pipeline, audio_latent, num_frames, fps=fps)
+    dev_audio = pipeline.decode_audio(audio_latent, num_frames, fps=fps)
     t_cold = time.time() - t0
     assert dev_audio is not None
 
     warm_times = []
     for _ in range(_WARM_ITERS):
         t0 = time.time()
-        out = _decode_audio_device_compat(pipeline, audio_latent, num_frames, fps=fps)
+        out = pipeline.decode_audio(audio_latent, num_frames, fps=fps)
         warm_times.append(time.time() - t0)
         assert out is not None
 
@@ -279,7 +280,7 @@ def test_audio_decode_e2e_psnr(
     ref_audio = _decode_audio_reference(ckpt, audio_latent, num_frames, fps=fps)
     assert ref_audio is not None, "host reference audio decode returned None"
 
-    dev_audio = _decode_audio_device_compat(pipeline, audio_latent, num_frames, fps=fps)
+    dev_audio = pipeline.decode_audio(audio_latent, num_frames, fps=fps)
     assert dev_audio is not None, "on-device audio decode returned None"
     assert dev_audio.sampling_rate == ref_audio.sampling_rate
 
@@ -436,7 +437,7 @@ def _decode_latent_ref(
     stats_std: torch.Tensor,
     stats_mean: torch.Tensor,
 ) -> torch.Tensor:
-    """Match ltx_core AudioDecoder / TT denormalize + decoder forward."""
+    """Match ltx_core MelDecoder / TT denormalize + decoder forward."""
     b, channels, _t, mel_bins = latent.shape
     patched = einops.rearrange(latent, "b c t f -> b t (c f)")
     std = stats_std.to(dtype=patched.dtype, device=patched.device)
@@ -598,7 +599,7 @@ def _build_torch_stage_c_real(checkpoint_name: str):
 def _build_torch_audio_decoder_real(checkpoint_name: str):
     """diffusers ``AutoencoderKLLTX2Audio`` (mel-VAE decoder) with the *real* checkpoint weights —
     the host oracle for the mel-VAE stage. Architecture dims are read from the checkpoint's
-    embedded config, the same source ``LTXPipeline._new_audio_decoder`` uses, so this tracks the
+    embedded config, the same source ``LTXAudioDecoderAdapter`` uses, so this tracks the
     real audio VAE rather than the toy component-test config.
 
     Returns ``(vae, stats_std, stats_mean, z_channels)`` ready for ``_decode_latent_ref``.
@@ -699,7 +700,7 @@ def _build_tt_stage_c(
         ccl_manager=ccl_manager,
         **_tt_vocoder_cfg(_MAIN_VOCODER_CFG),
     )
-    # Mirror the pipeline (pipeline_ltx._new_audio_decoder): channel-TP the BWE generator only
+    # Mirror the pipeline (LTXAudioDecoderAdapter): channel-TP the BWE generator only
     # where the channel axis pays for the gather (factor > 2); single-axis on 2x4 (factor 2).
     if isinstance(parallel_config, AudioTCParallelConfig):
         bwe_pc = parallel_config if parallel_config.channel_parallel.factor > 2 else parallel_config.time_parallel
@@ -783,7 +784,7 @@ def test_stage_a_audio_decoder(
     stats_std = torch.ones(z_times_f)
     stats_mean = torch.zeros(z_times_f)
 
-    tt_decoder = AudioDecoder(mesh_device=mesh_device, **_AUDIO_DECODER_CFG)
+    tt_decoder = MelDecoder(mesh_device=mesh_device, **_AUDIO_DECODER_CFG)
     tt_decoder.load_torch_state_dict(
         _audio_decoder_state_from_diffusers(ref_vae, stats_std=stats_std, stats_mean=stats_mean)
     )
@@ -997,3 +998,219 @@ def test_stage_c_audio_decode(mesh_device, device_params):
     # loose with random weights and is checked per-component in test_stage_c_vocoder_with_bwe.
     assert worst_su_max < 5e-3, f"audio window shard-vs-un max|Δ| {worst_su_max:.3e} — divergence"
     assert worst_su_rmse < 1e-2, f"audio window shard-vs-un rmse/σ {worst_su_rmse:.3e} — divergence"
+
+
+# ===========================================================================
+# Tracy per-op device-time profile of the on-device audio decode chain.
+#
+# Goal: emit every op in the audio decode (mel-VAE -> vocoder -> BWE) with its
+# device duration, and have the summed device time land on the ~0.49s traced
+# steady-state audio decode (within a small delta).
+#
+# Why eager (traced=False): each op dispatches as its own program, so (a) the
+# on-device profiler can be flushed per-block to stay under the 125-scope/core
+# buffer, and (b) every op gets a named DEVICE FW / KERNEL DURATION. The device
+# kernel durations are identical to the traced replay — trace only removes host
+# dispatch — so the summed device time reproduces the traced ~0.49s while the
+# host wall-clock (printed) is far larger; that gap is pure host dispatch.
+#
+# Two entry points:
+#   * test_audio_decode_profile     — the workload (run under `python -m tracy`)
+#   * test_audio_decode_perf_table  — driver that runs the profiler on the above
+#                                     and prints the per-op table + device total
+#
+# Manual one-liner (equivalent to the driver):
+#   LTX_AUDIO_PROF=1 \
+#   LTX_CHECKPOINT=~/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safetensors \
+#   python -m tracy -p -r -v -o generated/profiler/ltx_audio_decode -m \
+#     pytest 'models/tt_dit/tests/models/ltx/test_audio_ltx.py::test_audio_decode_profile' -s
+# then sum "DEVICE FW DURATION [ns]" from
+#   generated/profiler/ltx_audio_decode/reports/<date>/ops_perf_results_<date>.csv
+# ===========================================================================
+
+# The ~0.49s traced steady-state audio decode (4x8 ring, distilled, 145f@24fps),
+# expressed in ms; the summed device time should land within _PROF_TOL_MS of it.
+_PROF_TARGET_MS = 490.0
+_PROF_TOL_MS = 150.0
+
+# Compute-heavy leaf blocks; a ReadDeviceProfiler flush after each keeps every
+# Tracy zone window well under the per-core 125-scope device buffer.
+_PROF_FLUSH_TYPES = (ResnetBlock, AudioUpsample, AMPBlock1, MelSTFT)
+
+
+def _walk_tt(module):
+    """Depth-first walk over a tt_dit Module tree (root included)."""
+    yield module
+    for _, child in module.named_children():
+        yield from _walk_tt(child)
+
+
+def _flush_forward_after(module, mesh_device):
+    """Wrap ``module.forward`` so the on-device profiler is drained after every call,
+    keeping each Tracy zone window under the per-core scope buffer (see gemma harness)."""
+    orig = module.forward
+
+    def timed(*a, _orig=orig, **k):
+        r = _orig(*a, **k)
+        ttnn.ReadDeviceProfiler(mesh_device)
+        return r
+
+    module.forward = timed
+
+
+@pytest.mark.skipif(
+    os.environ.get("LTX_AUDIO_PROF") != "1",
+    reason="Tracy profiling workload — run via test_audio_decode_perf_table, or manually with "
+    "LTX_AUDIO_PROF=1 python -m tracy -p -r -o <out> -m pytest '<file>::test_audio_decode_profile' -s",
+)
+# Profiler-instrumented kernels compile fresh on the first profiling run and the eager decode
+# runs op-by-op, so this comfortably exceeds the default 300s per-test cap.
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 300_000_000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_audio_decode_profile(mesh_device, device_params):
+    """Eager on-device audio decode wrapped in Tracy signposts, one profiled iteration.
+
+    Mirrors the 4x8 ring distilled pipeline's audio-decode config (T-shard=8, replicated
+    channel; the pipeline default with LTX_AUDIO_CHANNEL_TP off). Emits ``signpost("start")``
+    / ``signpost("stop")`` around a single decode so ``post_process_ops_log(has_signposts=True)``
+    slices out warmup/compile; per-block ReadDeviceProfiler flushes keep the device buffer live.
+    Pure timing — no PCC (correctness is covered by the sibling e2e/component tests)."""
+    ckpt = _resolve_checkpoint(
+        [f"{_LOCAL_CHECKPOINT_DIR}/{_DISTILLED_CHECKPOINT}"],
+        (_DISTILLED_CHECKPOINT,),
+    )
+    if ckpt is None:
+        pytest.skip("distilled checkpoint not found (set LTX_CHECKPOINT)")
+
+    from tracy import signpost
+
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(4, 8))
+
+    torch.manual_seed(0)
+    # traced=False (LTXPipeline default): decode_audio runs eager, one program per op.
+    pipeline, _ = _build_pipeline(
+        mesh_device,
+        sp_axis=1,
+        tp_axis=0,
+        checkpoint=ckpt,
+        num_links=2,
+        topology=ttnn.Topology.Ring,
+    )
+    assert not pipeline._traced, "profile expects the eager decode path (per-op programs)"
+
+    audio_latent = torch.randn(1, 256, 128, dtype=torch.float32)
+    num_frames, fps = 145, 24.0
+
+    # Warmup: compile kernels + one-time device weight prep, unprofiled. Two iters so the
+    # program cache and any lazy device state are fully warm before the measured pass.
+    for _ in range(2):
+        assert pipeline.decode_audio(audio_latent, num_frames, fps=fps) is not None
+    ttnn.synchronize_device(mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)  # drain warmup zones (they precede the "start" marker)
+
+    # Install per-block flushes only for the measured pass.
+    for root in (pipeline.tt_mel_decoder, pipeline.tt_vocoder_with_bwe):
+        for mod in _walk_tt(root):
+            if isinstance(mod, _PROF_FLUSH_TYPES):
+                _flush_forward_after(mod, mesh_device)
+
+    # Capture the device-op-id range around the single forward. GLOBAL CALL COUNT in the C++
+    # device digest (cpp_device_perf_report.csv) == this counter, so [op0, op1) slices the digest
+    # to exactly this forward — no dependence on the fragile Tracy -r ops report or signpost rows.
+    from ttnn import _ttnn
+
+    op0 = _ttnn.get_device_operation_id()
+    signpost("start")
+    t0 = time.perf_counter()
+    out = pipeline.decode_audio(audio_latent, num_frames, fps=fps)
+    ttnn.synchronize_device(mesh_device)
+    host_wall_ms = (time.perf_counter() - t0) * 1000.0
+    ttnn.ReadDeviceProfiler(mesh_device)  # flush the tail ops while still inside the region
+    signpost("stop")
+    op1 = _ttnn.get_device_operation_id()
+
+    assert out is not None
+    logger.info(f"Audio decode profiled: host_wall={host_wall_ms:.1f}ms wave={tuple(out.waveform.shape)}")
+    print(f"\nAUDIO_DECODE_HOST_WALL_MS={host_wall_ms:.2f}", flush=True)
+    print(f"AUDIO_DECODE_OPID_RANGE={op0},{op1}", flush=True)
+
+
+@pytest.mark.skipif(
+    os.environ.get("LTX_AUDIO_PROF") != "1",
+    reason="Tracy driver — run: LTX_AUDIO_PROF=1 LTX_CHECKPOINT=<distilled> pytest "
+    "'<file>::test_audio_decode_perf_table' -s",
+)
+@pytest.mark.timeout(3600)
+def test_audio_decode_perf_table():
+    """Profile ``test_audio_decode_profile`` and print the per-op device-time table.
+
+    Spawns ``python -m tracy`` on the workload (opening the device itself; this driver does not
+    take the mesh_device fixture, matching test_ring_joint_sdpa_perf_table), then reads the
+    signpost-sliced ops log. Prints one row per op (device FW/kernel duration) plus the summed
+    device time, and asserts the total lands within ``_PROF_TOL_MS`` of the ~0.49s traced target.
+    """
+    import pandas as pd
+    from tracy.process_model_log import post_process_ops_log, run_device_profiler
+
+    subdir = "ltx_audio_decode"
+    test_id = "models/tt_dit/tests/models/ltx/test_audio_ltx.py::test_audio_decode_profile"
+    run_device_profiler(
+        f"-m 'pytest {test_id} -s'",
+        subdir,
+        check_test_return_code=True,
+        is_command_binary_exe=True,
+    )
+
+    df = post_process_ops_log(subdir, has_signposts=True)  # DataFrame sliced between start/stop
+    fw_col, k_col = "DEVICE FW DURATION [ns]", "DEVICE KERNEL DURATION [ns]"
+
+    def _num(series):
+        return pd.to_numeric(series[series != "-"], errors="coerce").fillna(0.0)
+
+    fw_ns = _num(df[fw_col])
+    k_ns = _num(df[k_col])
+    total_fw_ms = fw_ns.sum() / 1e6
+    total_k_ms = k_ns.sum() / 1e6
+
+    # Per-op table, ops in dispatch order.
+    print("\n" + "=" * 78, flush=True)
+    print(f"{'#':>3}  {'OP CODE':<34}{'FW [µs]':>12}{'KERNEL [µs]':>14}", flush=True)
+    print("-" * 78, flush=True)
+    codes = df["OP CODE"].tolist()
+    fw_list = _num(df[fw_col]).tolist()
+    k_list = _num(df[k_col]).tolist()
+    for i, (code, fw, kd) in enumerate(zip(codes, fw_list, k_list)):
+        print(f"{i:>3}  {str(code):<34}{fw / 1e3:>12.2f}{kd / 1e3:>14.2f}", flush=True)
+    print("-" * 78, flush=True)
+
+    # Per-op-code aggregate (sorted by total FW time).
+    agg = (
+        pd.DataFrame({"code": codes, "fw_ns": fw_list, "k_ns": k_list})
+        .groupby("code")
+        .agg(count=("fw_ns", "size"), fw_us=("fw_ns", lambda s: s.sum() / 1e3), k_us=("k_ns", lambda s: s.sum() / 1e3))
+        .sort_values("fw_us", ascending=False)
+    )
+    print("\nBy op code (FW-descending):", flush=True)
+    print(f"{'OP CODE':<34}{'count':>7}{'FW [µs]':>12}{'KERNEL [µs]':>14}", flush=True)
+    for code, row in agg.iterrows():
+        print(f"{str(code):<34}{int(row['count']):>7}{row['fw_us']:>12.1f}{row['k_us']:>14.1f}", flush=True)
+    print("=" * 78, flush=True)
+
+    print(
+        f"\nAUDIO_DECODE_DEVICE_FW_MS={total_fw_ms:.2f} "
+        f"AUDIO_DECODE_DEVICE_KERNEL_MS={total_k_ms:.2f} "
+        f"(target ~{_PROF_TARGET_MS:.0f}ms, tol ±{_PROF_TOL_MS:.0f}ms, n_ops={len(df)})",
+        flush=True,
+    )
+    logger.info(f"Audio decode device time: FW={total_fw_ms:.1f}ms kernel={total_k_ms:.1f}ms over {len(df)} ops")
+    assert len(df) > 0, "no ops captured between signposts — check flushing / signpost naming"
+    assert abs(total_fw_ms - _PROF_TARGET_MS) <= _PROF_TOL_MS, (
+        f"summed device FW {total_fw_ms:.1f}ms is >{_PROF_TOL_MS:.0f}ms from the ~{_PROF_TARGET_MS:.0f}ms "
+        f"traced target — device-bound audio-decode time drifted"
+    )
