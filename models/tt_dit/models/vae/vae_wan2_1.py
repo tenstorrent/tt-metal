@@ -971,12 +971,14 @@ class WanResample(Module):
     ) -> tuple[ttnn.Tensor, int, int]:
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanResample expects ROW_MAJOR input, got {x_BTHWC.layout}"
         B, T, H, W, C = x_BTHWC.shape
+        # logger.info(f"WanResample.forward: mode={self.mode}, input T={T}, shape={x_BTHWC.shape}, cached={feat_cache is not None}")
         if self.is_3d and self.is_upsample:  # upsample3d
             if feat_cache is not None:
                 idx = feat_idx[0]
                 if feat_cache[idx] is None:
+                    # logger.info(f"WanResample upsample3d: first chunk (cache empty), T={T}, will output T={1 + 2*(T-1) if T > 1 else 1}")
                     feat_idx[0] += 1
-                    if T > 1:
+                    if T > 2:
                         # Frame 0 passes through; frames 1+ get time_conv + temporal doubling
                         x_first = x_BTHWC[:, :1, :, :, :]
                         x_rest = x_BTHWC[:, 1:, :, :, :]
@@ -1028,13 +1030,14 @@ class WanResample(Module):
                     x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
                     x_BTHWC = ttnn.reshape(x_BT2HWC, (B, T1 * 2, H, W, C))
             else:
+                # logger.info(f"WanResample upsample3d: full-T mode (no cache), T={T}, will output T={1 + 2*(T-1) if T > 1 else 1}")
                 # Replicate cached path's "Rep" boundary behavior:
                 # - Frame 0: output directly (no time_conv), like when feat_cache is None → "Rep"
                 # - Frames 1..T-1: time_conv with zero-padded boundary
                 # This gives contexts: frame 1 = [0,0,x_1], frame 2 = [0,x_1,x_2], frame t≥3 = [x_{t-2},x_{t-1},x_t]
                 # which matches the cached path exactly.
                 x_first = x_BTHWC[:, :1, :, :, :]  # frame 0: identity (T=1)
-                if T > 1:
+                if T > 2:
                     x_rest = x_BTHWC[:, 1:, :, :, :]  # frames 1..T-1
                     x_time_rest = self.time_conv(
                         x_rest, logical_h, logical_w=logical_w
