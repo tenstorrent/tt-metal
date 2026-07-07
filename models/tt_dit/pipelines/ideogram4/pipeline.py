@@ -242,7 +242,7 @@ class Ideogram4Pipeline:
         weights_dir: str,
         qwen_repo: str = "Qwen/Qwen3-VL-8B-Instruct",
         tp_axis: int = 1,
-        num_links: int = 1,
+        num_links: int = 2,
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = weights_dir

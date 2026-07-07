@@ -48,7 +48,7 @@ TIMED_ITERS = 10
         pytest.param((2, 4), (2, 1), 0, 1, 1, id="sp2"),
         pytest.param((2, 4), (2, 2), 0, 1, 1, id="sp2tp2"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, id="sp2tp4"),
-        pytest.param((4, 2), (4, 2), 0, 1, 1, id="sp4tp2"),  # SP=4, TP=2 (full mesh, 4x2 arrangement)
+        pytest.param((4, 2), (4, 2), 0, 1, 2, id="sp4tp2"),  # SP=4, TP=2 (full mesh, 4x2 arrangement); num_links=2
     ],
     indirect=["mesh_device"],
 )
