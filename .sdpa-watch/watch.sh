@@ -112,6 +112,15 @@ $ctx"
   fi
   set -e
 
+  # opus-4.8 sometimes emits reasoning prose before the block despite the
+  # prompt's "one block and nothing else" rule. Keep only from the "▸ *"
+  # header line onward so neither the digest nor the success-line collapse
+  # ever ingests preamble. If no header line exists the result is empty and
+  # the fallback below fires (malformed output treated as an agent failure).
+  if [[ $rc -eq 0 && -n "$summary" ]]; then
+    summary=$(printf '%s\n' "$summary" | sed -n '/^▸/,$p')
+  fi
+
   # Agent failure: 🟡 block (not ⚠️ — that triggers the walk-back) plus
   # the last cached summary so the digest still shows real test state.
   # 🟡 first line tells the caller to skip persisting, so next tick retries.
@@ -130,16 +139,87 @@ $ctx"
   printf '%s' "$summary"
 }
 
+# MODE B auth: refresh the interactive OAuth credential ourselves if it is at
+# or near expiry. Headless `claude -p` reads $CLAUDE_CREDS_FILE but never
+# refreshes it, so without this an unattended cron dies once the ~8h access
+# token lapses. We POST the rotating refresh token to the OAuth endpoint and
+# write the new access/refresh/expiry back atomically. Returns 0 if the
+# credential is usable afterwards (fresh already, or refreshed), 1 otherwise.
+refresh_oauth_credential() {
+  local creds="$CLAUDE_CREDS_FILE"
+  if [[ ! -f "$creds" ]]; then
+    log "  no OAuth credential at $creds — log into 'claude' once to seed it, or drop a setup-token in $OAUTH_TOKEN_FILE"
+    return 1
+  fi
+  local exp now rt resp code body at nrt ein exp_ms
+  exp=$(jq -r '.claudeAiOauth.expiresAt // 0' "$creds" 2>/dev/null || echo 0)
+  now=$(( $(date -u +%s) * 1000 ))
+  if (( exp > now + OAUTH_REFRESH_MARGIN_SEC * 1000 )); then
+    return 0   # still comfortably valid — nothing to do
+  fi
+  rt=$(jq -r '.claudeAiOauth.refreshToken // empty' "$creds" 2>/dev/null)
+  if [[ -z "$rt" ]]; then
+    log "  credential has no refresh token — cannot auto-refresh"
+    return 1
+  fi
+  log "  OAuth access token at/near expiry — refreshing via $OAUTH_TOKEN_ENDPOINT"
+  resp=$(curl -sS -w '\n__HTTP__%{http_code}' -X POST "$OAUTH_TOKEN_ENDPOINT" \
+         -H 'Content-Type: application/json' \
+         -d "{\"grant_type\":\"refresh_token\",\"refresh_token\":\"$rt\",\"client_id\":\"$OAUTH_CLIENT_ID\"}" \
+         2>>"$AGENT_ERR")
+  code=$(printf '%s' "$resp" | sed -n 's/.*__HTTP__//p')
+  body=$(printf '%s' "$resp" | sed 's/__HTTP__[0-9]*$//')
+  if [[ "$code" != "200" ]]; then
+    log "  refresh failed (HTTP ${code:-?}) — keeping existing token; preflight will decide"
+    return 1
+  fi
+  at=$(printf '%s' "$body" | jq -r '.access_token // empty')
+  nrt=$(printf '%s' "$body" | jq -r '.refresh_token // empty')
+  ein=$(printf '%s' "$body" | jq -r '.expires_in // 28800')
+  if [[ -z "$at" ]]; then
+    log "  refresh response missing access_token — keeping existing token"
+    return 1
+  fi
+  exp_ms=$(( now + ein * 1000 ))
+  # Merge into the credential, preserving all other fields; rotate the refresh
+  # token if the server returned a new one. Atomic write + 600 perms.
+  if jq --arg at "$at" --arg rt "${nrt:-$rt}" --argjson exp "$exp_ms" \
+        '.claudeAiOauth.accessToken=$at | .claudeAiOauth.refreshToken=$rt | .claudeAiOauth.expiresAt=$exp' \
+        "$creds" > "$creds.tmp" 2>>"$AGENT_ERR"; then
+    mv "$creds.tmp" "$creds" && chmod 600 "$creds"
+    log "  OAuth token refreshed (valid ~$(( ein / 3600 ))h)"
+    return 0
+  fi
+  rm -f "$creds.tmp"
+  log "  failed to write refreshed credential"
+  return 1
+}
+
 # ---------- prerequisites ----------
-# Auth via Claude Enterprise (subscription OAuth), NOT a console API key —
-# the org retired console API keys (2026-07). `claude -p` picks up the OAuth
-# credentials in ~/.claude/.credentials.json, which are auto-refreshed on
-# every invocation, so an hourly cron tick keeps the token alive on its own.
-# A stale ANTHROPIC_API_KEY in the environment would OVERRIDE OAuth and 401,
-# so unset it defensively before every run.
-unset ANTHROPIC_API_KEY
-CREDS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
-[[ -f "$CREDS_FILE" ]] || { log "FATAL: no Claude OAuth credentials at $CREDS_FILE — run 'claude' once interactively to log in via Enterprise"; exit 1; }
+# Auth (see config.sh "Auth" for the full rationale). Two modes, MODE A first:
+#   A) a long-lived $OAUTH_TOKEN_FILE (from `claude setup-token`) → exported as
+#      CLAUDE_CODE_OAUTH_TOKEN; no refresh needed.
+#   B) otherwise the interactive $CLAUDE_CREDS_FILE, which we auto-refresh here
+#      because headless `claude -p` won't. Zero-manual once a /login seeds it.
+# A stale ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN would override either, so
+# unset both defensively before every run.
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+OAUTH_TOKEN_FILE="${OAUTH_TOKEN_FILE:-$HOME/.sdpa-watch/oauth_token}"
+if [[ -s "$OAUTH_TOKEN_FILE" ]]; then
+  log "auth: MODE A (long-lived setup-token)"
+  CLAUDE_CODE_OAUTH_TOKEN="$(tr -d '[:space:]' < "$OAUTH_TOKEN_FILE")"
+  export CLAUDE_CODE_OAUTH_TOKEN
+else
+  log "auth: MODE B (auto-refreshed interactive credential)"
+  refresh_oauth_credential || true   # non-fatal; preflight is the gate
+fi
+# Preflight so an expired/revoked/un-refreshable token fails loudly HERE (once,
+# in the log) instead of silently degrading every pipeline to a 🟡 block.
+if ! printf 'reply with the single word OK' \
+     | claude --model "$MODEL" -p >/dev/null 2>>"$AGENT_ERR"; then
+  log "FATAL: auth preflight failed — token expired/revoked and could not refresh. Re-seed via 'claude' /login (MODE B) or 'claude setup-token' → $OAUTH_TOKEN_FILE (MODE A). See $AGENT_ERR"
+  exit 1
+fi
 
 SLACK_URL=""
 if [[ -f "$SLACK_WEBHOOK_FILE" ]]; then
