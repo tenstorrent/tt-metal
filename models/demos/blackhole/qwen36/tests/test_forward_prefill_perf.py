@@ -74,6 +74,12 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     tp_composer,
 )
 
+# Default to single-device (P150) when MESH_DEVICE is unset: this harness targets single-card
+# profiling (incl. GDN_PERF_SIM_TP for per-card TP shapes), and on a multi-card box an unset
+# MESH_DEVICE would otherwise resolve to real TP and try to init FABRIC_1D. Set MESH_DEVICE=P150x4
+# explicitly for the real 4-card TP path. Must run before _resolve_mesh_shape() below.
+os.environ.setdefault("MESH_DEVICE", "P150")
+
 # Single device (1x1) needs NO fabric — tt_all_reduce short-circuits at mesh_shape==[1,1],
 # and initializing FABRIC_1D on a multi-card box times out on ethernet-router sync. Use the
 # fabric-less parametrization for 1x1, the fabric one for real TP. Resolved from MESH_DEVICE.
