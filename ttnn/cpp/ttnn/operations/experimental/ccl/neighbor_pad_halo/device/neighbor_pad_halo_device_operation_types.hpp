@@ -42,6 +42,13 @@ struct NpHaloParams {
     uint32_t input_pad_h = 0;
     uint32_t input_pad_w = 0;
 
+    // Padded-output (fused) mode (opt-in, default false): additionally scatter the exchanged compact halo
+    // + interior (from input) into a padded [.., H+2pH, W+2pW, C] output (tensor_args.padded_output),
+    // folding halo_scatter into this op. Interior copy overlaps the fabric exchange; border waits on an
+    // exchange-done sem. border_only: interior already present in padded_output, only the border is written.
+    bool output_padded = false;
+    bool border_only = false;
+
     // GlobalSemaphore is not default constructible, so an explicit constructor is required.
     NpHaloParams(
         uint32_t np_padding_h_,
@@ -90,7 +97,9 @@ struct NpHaloParams {
         "np_pad2_num_links",
         "padding_mode",
         "input_pad_h",
-        "input_pad_w");
+        "input_pad_w",
+        "output_padded",
+        "border_only");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -105,13 +114,18 @@ struct NpHaloParams {
             np_pad2_num_links,
             padding_mode,
             input_pad_h,
-            input_pad_w);
+            input_pad_w,
+            output_padded,
+            border_only);
     }
 };
 
 struct NpHaloInputs {
     Tensor input_tensor;
-    Tensor halo_buffer;  // compact halo buffer in DRAM (pre-allocated); also the op's output
+    Tensor halo_buffer;  // compact halo buffer in DRAM (pre-allocated); the op's output in compact mode
+    // Padded-output (fused) mode: the padded buffer the fused scatter writes and the op returns. In this
+    // mode halo_buffer is an internal compact staging buffer. std::nullopt in compact mode.
+    std::optional<Tensor> padded_output;
 };
 
 }  // namespace ttnn::experimental::prim

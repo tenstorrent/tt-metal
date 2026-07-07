@@ -58,6 +58,8 @@ ttnn::Tensor neighbor_pad_halo(
     const std::string& padding_mode = "zeros",
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     uint32_t input_pad_h = 0,
-    uint32_t input_pad_w = 0);
+    uint32_t input_pad_w = 0,
+    const std::optional<ttnn::Tensor>& padded_output = std::nullopt,
+    bool border_only = false);
 
 }  // namespace ttnn::experimental

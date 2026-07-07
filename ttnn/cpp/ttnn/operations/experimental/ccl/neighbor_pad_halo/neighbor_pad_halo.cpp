@@ -31,7 +31,9 @@ ttnn::Tensor neighbor_pad_halo(
     const std::string& padding_mode,
     const std::optional<MemoryConfig>& memory_config,
     uint32_t input_pad_h,
-    uint32_t input_pad_w) {
+    uint32_t input_pad_w,
+    const std::optional<ttnn::Tensor>& padded_output,
+    bool border_only) {
     TT_FATAL(np_padding_h > 0, "neighbor_pad_halo: np_padding_h must be > 0");
     TT_FATAL(np_pad_dim2 > 0, "neighbor_pad_halo: 2D padding required (np_pad_dim2 must be > 0)");
 
@@ -69,8 +71,10 @@ ttnn::Tensor neighbor_pad_halo(
         padding_mode);
     params.input_pad_h = input_pad_h;
     params.input_pad_w = input_pad_w;
+    params.output_padded = padded_output.has_value();
+    params.border_only = border_only;
 
-    return ttnn::prim::neighbor_pad_halo(input, halo_buffer, params);
+    return ttnn::prim::neighbor_pad_halo(input, halo_buffer, params, padded_output);
 }
 
 }  // namespace ttnn::experimental

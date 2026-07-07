@@ -35,6 +35,9 @@ namespace ttnn::prim {
 // halo_buffer must be a pre-allocated compact DRAM buffer sized for
 //   [H-top | H-bot | W-left | W-right] sticks; it is written in place and returned as the output.
 Tensor neighbor_pad_halo(
-    const Tensor& input, const Tensor& halo_buffer, const ttnn::experimental::prim::NpHaloParams& params);
+    const Tensor& input,
+    const Tensor& halo_buffer,
+    const ttnn::experimental::prim::NpHaloParams& params,
+    const std::optional<Tensor>& padded_output = std::nullopt);
 
 }  // namespace ttnn::prim

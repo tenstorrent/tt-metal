@@ -55,13 +55,19 @@ void NpHaloDeviceOperation::validate_on_program_cache_miss(
 }
 
 TensorSpec NpHaloDeviceOperation::compute_output_specs(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    // The op writes into the pre-allocated compact halo buffer and returns it.
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Fused padded-output mode returns the padded buffer; compact mode returns the compact halo buffer.
+    if (args.output_padded) {
+        return tensor_args.padded_output.value().tensor_spec();
+    }
     return tensor_args.halo_buffer.tensor_spec();
 }
 
 Tensor NpHaloDeviceOperation::create_output_tensors(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (args.output_padded) {
+        return tensor_args.padded_output.value();
+    }
     return tensor_args.halo_buffer;
 }
 
@@ -78,10 +84,14 @@ ttsl::hash::hash_t NpHaloDeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 
 Tensor neighbor_pad_halo(
-    const Tensor& input, const Tensor& halo_buffer, const ttnn::experimental::prim::NpHaloParams& params) {
+    const Tensor& input,
+    const Tensor& halo_buffer,
+    const ttnn::experimental::prim::NpHaloParams& params,
+    const std::optional<Tensor>& padded_output) {
     using OperationType = ttnn::experimental::prim::NpHaloDeviceOperation;
 
-    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input, .halo_buffer = halo_buffer};
+    auto tensor_args =
+        OperationType::tensor_args_t{.input_tensor = input, .halo_buffer = halo_buffer, .padded_output = padded_output};
 
     return ttnn::device_operation::launch<OperationType>(params, tensor_args);
 }
