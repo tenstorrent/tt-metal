@@ -10,6 +10,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <fstream>
 #include <memory>
@@ -37,6 +39,7 @@
 #include <tt_metal.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <umd/device/warm_reset.hpp>
 
 #include <common/TracySystem.hpp>
 #include <common/TracyTTDeviceData.hpp>
@@ -774,18 +777,93 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                         std::this_thread::sleep_for(std::chrono::microseconds(100));
                     }
                 }
+                // --- Option A: auto-recover an unprimed X280 (ON by default) -------------------------
+                // The usual reason for a dead X280 on a fresh/cold-booted board is that its L3 LIM ECC was
+                // never primed, so the drainer FW's stores fault. By default (opt out with
+                // TT_METAL_X280_NO_AUTOPRIME) we prime the ECC via the L3 cache controller and warm-reset
+                // the chip to activate it (WayEnable is increase-only, so ONLY an ASIC/warm reset clears it
+                // — an L2CPU-local reset does not). The warm reset re-enumerates the PCIe device, so metal
+                // cannot continue in-process; we prime, reset, and EXIT with an actionable message — the
+                // NEXT run boots cleanly with no tt-smi / tt-run / manual prime step. This fires only when
+                // X280 kernel-zone profiling was requested AND the drainer didn't start. A /tmp marker
+                // guards against a reset loop if priming doesn't fix the board. TT_METAL_X280_FORCE_PRIME
+                // forces the path once even on a healthy board, to exercise the prime+reset mechanics.
+                {
+                    auto truthy = [](const char* s) {
+                        return s && (s[0] == '1' || s[0] == 't' || s[0] == 'T' || s[0] == 'y' || s[0] == 'Y');
+                    };
+                    const bool force = truthy(std::getenv("TT_METAL_X280_FORCE_PRIME"));
+                    const bool autoprime = !truthy(std::getenv("TT_METAL_X280_NO_AUTOPRIME")) || force;
+                    const std::string marker = "/tmp/tt_x280_autoprime_dev" + std::to_string(device_id);
+                    const bool already_tried = std::ifstream(marker).good();
+                    if ((hb != kX280HbMainMagic || force) && autoprime && !already_tried) {
+                        log_warning(
+                            tt::LogMetal,
+                            "[Real-time profiler] Device {}: X280 unprimed (heartbeat=0x{:x}){}; auto-priming L3 "
+                            "LIM ECC and warm-resetting the chip. This run will EXIT — rerun afterwards.",
+                            device_id,
+                            hb,
+                            force ? " [forced]" : "");
+                        bool primed_ok = false;
+                        std::string fail_reason;
+                        try {
+                            {
+                                std::ofstream(marker).put('1');
+                            }  // loop guard: record that we tried this cycle
+                            zx.assert_reset();
+                            zx.prime_lim_ecc();
+                            primed_ok = tt::umd::WarmReset::warm_reset_chip_id({static_cast<int>(device_id)});
+                            if (!primed_ok) {
+                                fail_reason = "warm_reset returned false";
+                            }
+                        } catch (const std::exception& e) {
+                            fail_reason = e.what();
+                        }
+                        // The warm reset re-enumerates the chip out from under metal, so we hard-exit here —
+                        // which skips buffered-log flushing. Print the outcome DIRECTLY to stderr so the
+                        // RERUN instruction is guaranteed visible regardless of the logger's buffering.
+                        std::fflush(stdout);
+                        if (primed_ok) {
+                            std::fprintf(
+                                stderr,
+                                "\n"
+                                "================================================================================\n"
+                                "  X280 (device %d): L3 LIM ECC was unprimed -> auto-primed + chip warm-reset.\n"
+                                "  This is a one-time-per-cold-power-cycle step. The chip has been reset, so\n"
+                                "  this run is stopping now.  >>> RERUN your program <<<  and the X280\n"
+                                "  kernel-zone profiler will start normally.\n"
+                                "================================================================================\n\n",
+                                static_cast<int>(device_id));
+                        } else {
+                            std::fprintf(
+                                stderr,
+                                "\n"
+                                "================================================================================\n"
+                                "  X280 (device %d): auto-prime/warm-reset FAILED (%s).\n"
+                                "  The chip may be in an undefined state -- run `tt-smi -r %d` manually, then\n"
+                                "  rerun. (Set TT_METAL_X280_NO_AUTOPRIME=1 to disable this auto-recovery.)\n"
+                                "================================================================================\n\n",
+                                static_cast<int>(device_id),
+                                fail_reason.c_str(),
+                                static_cast<int>(device_id));
+                        }
+                        std::fflush(stderr);
+                        std::_Exit(primed_ok ? 75 : 1);  // 75=EX_TEMPFAIL: "transient, rerun"; 1=hard failure
+                    }
+                }
+                // --------------------------------------------------------------------------------------
                 if (hb != kX280HbMainMagic) {
                     log_warning(
                         tt::LogMetal,
                         "[Real-time profiler] Device {}: X280 drainer FW did not start (l2cpu {}, "
-                        "heartbeat=0x{:x}). The L2CPU's L3 LIM ECC is likely not primed on this board — "
-                        "run `tt x280-prime {}` once after each cold power cycle, then rerun. Continuing "
-                        "without X280 kernel-zone capture (the DRAM-based device profiler covers kernel "
-                        "zones as a fallback while TT_METAL_DEVICE_PROFILER is set).",
+                        "heartbeat=0x{:x}). The L2CPU's L3 LIM ECC is likely not primed — but auto-prime was "
+                        "either disabled (TT_METAL_X280_NO_AUTOPRIME) or already attempted this power cycle "
+                        "without success (the X280 may be faulty; a manual `tt-smi -r` is advised). Continuing "
+                        "without X280 kernel-zone capture (the DRAM-based device profiler covers kernel zones "
+                        "as a fallback while TT_METAL_DEVICE_PROFILER is set).",
                         device_id,
                         kL2CpuIndex,
-                        hb,
-                        device_id);
+                        hb);
                     zx.assert_reset();
                     dev_state.x280_socket.reset();
                     dev_state.x280_driver.reset();
@@ -804,6 +882,8 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                     }
                 } else {
                     dev_state.x280_active = true;
+                    // Clear the auto-prime loop guard: a clean boot means the prime (if any) took.
+                    std::remove(("/tmp/tt_x280_autoprime_dev" + std::to_string(device_id)).c_str());
                     log_info(
                         tt::LogMetal,
                         "[Real-time profiler] Device {}: booted X280 kernel-zone drainer (l2cpu {}, "

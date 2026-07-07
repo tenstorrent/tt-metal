@@ -151,6 +151,26 @@ public:
         }
     }
 
+    // One-time-per-cold-power-cycle L3 LIM ECC prime. Routes LIM's SRAM through the L3 cache controller
+    // (WayEnable=0xF, every master pinned to Way 15) and touches each 64 B line of the read-as-zero L3
+    // Zero Device, so the controller writes valid data+ECC into the physical SRAM backing LIM. WayEnable
+    // is increase-only, so LIM is a cache (unusable) until the caller warm-resets the chip AFTER this —
+    // the ECC then persists across that reset and LIM_BASE becomes valid SRAM. Mirrors
+    // test_x280_profcons --primeecc. `prime_bytes` must cover the firmware + mailboxes + stacks.
+    void prime_lim_ecc(uint64_t prime_bytes = 0x60000) const {
+        constexpr uint64_t kL3WayEnable = 0x02010008ULL;
+        constexpr uint64_t kL3WayMaskBase = 0x02010800ULL;
+        constexpr uint32_t kL3NumMasters = 38;
+        constexpr uint64_t kZeroDeviceBase = 0x0A000000ULL;
+        reg_wr(l2_, kL3WayEnable, 0xF);
+        for (uint32_t m = 0; m < kL3NumMasters; m++) {
+            reg_wr(l2_, kL3WayMaskBase + static_cast<uint64_t>(m) * 8, 0x8000);  // force alloc into Way 15
+        }
+        for (uint64_t off = 0; off < prime_bytes; off += 64) {
+            reg_wr(l2_, kZeroDeviceBase + off, 0);  // touch each line -> fetch+merge+writeback valid ECC
+        }
+    }
+
     tt_cxy_pair l2() const { return l2_; }
     tt_cxy_pair arc() const { return arc_; }
 

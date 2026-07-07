@@ -228,6 +228,19 @@ int main(int argc, char** argv) {
     int realzones = 0;                       // --realzones: real workload -> profzone pairs -> socket -> Tracy
     int primeecc = 0;                        // --primeecc: one-time fresh-board L3 LIM ECC prime (then tt-smi -r)
     int wayprobe = 0;  // --wayprobe: does the L2CPU reset clear L3 WayEnable? (metal-only prime feasibility)
+    int eccprobe = 0;  // --eccprobe: read-only dump of L3 Cache Controller ECC state (detector, no injection)
+    int eccinject = 0;      // --eccinject: STEP 2 safe single-bit (correctable) ECC inject; proves induce->detect
+    uint32_t inj_bit = 0;   // --injbit: which data bit index to toggle for --eccinject (default 0)
+    int inj_double = 0;     // --injdouble: attempt a persistent UNCORRECTABLE (2-bit) error at --injaddr
+    uint64_t inj_addr = 0;  // --injaddr: target LIM line for the inject (default LIM_BASE+0x40000)
+    int eccread = 0;        // --eccread: read --injaddr N times, report L3 fix/fail counter deltas (persistence/scan)
+    int eccpoke = 0;        // --eccpoke: boot a probe FW that reads --injaddr; does the hart HALT (uncorrectable)?
+    int eccscrub = 0;       // --eccscrub: probe FW — does the X280 have Zicboz cbo.zero (no-read line-zero)?
+    int dmaprime = 0;       // --dmaprime: bring complex up w/ harts parked so the DMAC is accessible (unlock)
+    int dmascrub = 0;       // --dmascrub: host-program the L2CPU PDMA to zero-fill LIM (no WayEnable/reset)
+    uint64_t dma_src = 0x0A000000ULL;  // --dmasrc: PDMA source (zero device); default the safe-zero region
+    uint64_t dma_dst = 0x08050000ULL;  // --dmadst: PDMA dest in LIM; default a scratch word inside the primed region
+    uint64_t dma_bytes = 64ULL;        // --dmabytes: bytes to copy (default 1 line; must be x32; <=131040 single-block)
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -276,6 +289,32 @@ int main(int argc, char** argv) {
             primeecc = 1;
         } else if (a == "--wayprobe") {
             wayprobe = 1;
+        } else if (a == "--eccprobe") {
+            eccprobe = 1;
+        } else if (a == "--eccinject") {
+            eccinject = 1;
+        } else if (a == "--injbit") {
+            inj_bit = static_cast<uint32_t>(std::stoul(next()));
+        } else if (a == "--eccread") {
+            eccread = 1;
+        } else if (a == "--eccpoke") {
+            eccpoke = 1;
+        } else if (a == "--injdouble") {
+            inj_double = 1;
+        } else if (a == "--injaddr") {
+            inj_addr = std::stoull(next(), nullptr, 0);
+        } else if (a == "--eccscrub") {
+            eccscrub = 1;
+        } else if (a == "--dmaprime") {
+            dmaprime = 1;
+        } else if (a == "--dmascrub") {
+            dmascrub = 1;
+        } else if (a == "--dmasrc") {
+            dma_src = std::stoull(next(), nullptr, 0);
+        } else if (a == "--dmadst") {
+            dma_dst = std::stoull(next(), nullptr, 0);
+        } else if (a == "--dmabytes") {
+            dma_bytes = std::stoull(next(), nullptr, 0);
         } else {
             fprintf(stderr, "unknown arg: %s\n", a.c_str());
             return 2;
@@ -286,7 +325,8 @@ int main(int argc, char** argv) {
     }
 
     std::vector<uint8_t> bin;
-    if (!primeecc && !wayprobe) {  // --primeecc/--wayprobe only touch L3 cache regs; no firmware needed
+    if (!primeecc && !wayprobe && !eccprobe && !eccinject && !dmascrub && !dmaprime && !eccscrub && !eccread &&
+        !eccpoke) {  // reg/DMA modes read their own or no fw
         bin = read_file(bin_path);
         printf("[fw] %s (%zu bytes)\n", bin_path.c_str(), bin.size());
     }
@@ -327,6 +367,473 @@ int main(int argc, char** argv) {
             after_l2cpu_reset,
             (after_l2cpu_reset != after_set) ? "CLEARS/CHANGES" : "does NOT clear",
             (after_l2cpu_reset != after_set) ? "PLAUSIBLE" : "NOT viable via L2CPU reset");
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
+
+    if (eccprobe) {
+        // Read-only dump of the L3 Cache Controller ECC state (base 0x02010000, from the SiFive X280
+        // MC manual §14.3/§14.4). Two purposes: (1) validate our NoC register path — L3 Config MUST
+        // read 0x06091004 (Banks=4, Ways=16, lgSets=9, lgBlockBytes=6); (2) report the data-array ECC
+        // counters, our non-intrusive detector for LIM (L3 data SRAM) ECC health. Reads only — no
+        // injection, no writes. NOTE: run with --no-reset to leave the current X280 state undisturbed.
+        // Reading a *Count register clears its ECC interrupt (manual §14.4.4/5) but not device memory.
+        X280 x(cluster, device_id, l2cpu);
+        tt_cxy_pair l2 = x.l2();
+        constexpr uint64_t L3_BASE = 0x02010000ULL;
+        auto rd = [&](uint64_t off) { return x.reg_rd(l2, L3_BASE + off); };
+        uint32_t cfg = rd(0x000);       // Config
+        uint32_t wayen = rd(0x008);     // WayEnable (0 => LIM mode; >0 => that many ways are cache)
+        uint32_t dir_fix = rd(0x108);   // DirECCFixCount  (correctable metadata)
+        uint32_t dir_fail = rd(0x128);  // DirECCFailCount (uncorrectable metadata)
+        uint32_t dat_fix = rd(0x148);   // DatECCFixCount  (correctable data)
+        uint32_t dat_fail_lo = rd(0x160), dat_fail_hi = rd(0x164);
+        uint32_t dat_fail = rd(0x168);  // DatECCFailCount (UNCORRECTABLE data == the fresh-board fault)
+        const bool base_ok = (cfg == 0x06091004u);
+        printf(
+            "[eccprobe] L3 Config = 0x%08x  Banks=%u Ways=%u lgSets=%u lgBlockBytes=%u  %s\n",
+            cfg,
+            cfg & 0xff,
+            (cfg >> 8) & 0xff,
+            (cfg >> 16) & 0xff,
+            (cfg >> 24) & 0xff,
+            base_ok ? "[OK: NoC reg path + L3 base 0x02010000 confirmed]"
+                    : "[!! expected 0x06091004 -- base/NoC path wrong, ignore counters below]");
+        printf("[eccprobe] WayEnable = 0x%x  (%s)\n", wayen, wayen == 0 ? "LIM mode" : "some ways enabled as cache");
+        printf(
+            "[eccprobe] L3 DATA array: DatECCFixCount(corr)=%u  DatECCFailCount(UNCORR)=%u  lastFailAddr=0x%08x%08x\n",
+            dat_fix,
+            dat_fail,
+            dat_fail_hi,
+            dat_fail_lo);
+        printf("[eccprobe] L3 METADATA:   DirECCFixCount=%u  DirECCFailCount=%u\n", dir_fix, dir_fail);
+        printf(
+            "[eccprobe] => %s\n",
+            (dat_fail == 0 && dir_fail == 0) ? "no uncorrectable ECC errors observed (LIM ECC healthy)"
+                                             : "UNCORRECTABLE ECC errors present!");
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
+
+    if (eccpoke) {
+        // Boot a probe FW from the primed low LIM, then have the hart read --injaddr. If that line is
+        // uncorrectable (unprimed/defective), the read faults and the hart halts: STATUS stays BOOTED and
+        // never reaches SURVIVED. This is the deterministic "no heartbeat" bad state we can then heal.
+        X280 x(cluster, device_id, l2cpu);
+        uint64_t target = inj_addr ? inj_addr : (LIM_BASE + 0x100000ULL);
+        auto bin = read_file("tools/x280_bm/build/eccpoke.bin");
+        constexpr uint64_t A_STATUS = 0x08010000ULL, A_RESULT = 0x08010010ULL, A_PARAM = 0x08010020ULL,
+                           A_MCAUSE = 0x0800FFE0ULL;
+        printf(
+            "[eccpoke] probe FW %zu bytes; boot LIM 0x%llx, hart reads target=0x%llx\n",
+            bin.size(),
+            (unsigned long long)LIM_BASE,
+            (unsigned long long)target);
+        x.assert_reset();
+        x.load_lim(bin);
+        x.lim_wr_u64(A_PARAM, target);  // param AFTER load so the FW image doesn't clobber it
+        x.set_reset_vectors(LIM_BASE);
+        x.release_reset();
+        uint64_t status = 0;
+        for (int i = 0; i < 200; i++) {
+            status = x.lim_rd_u64(A_STATUS);
+            if (status == 0xEC00000002ULL) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        uint64_t result = x.lim_rd_u64(A_RESULT), mcause = x.lim_rd_u64(A_MCAUSE);
+        printf(
+            "[eccpoke] status=0x%llx result=0x%llx trap_mcause=0x%llx\n",
+            (unsigned long long)status,
+            (unsigned long long)result,
+            (unsigned long long)mcause);
+        printf(
+            "[eccpoke] => %s\n",
+            (status == 0xEC00000002ULL)
+                ? "SURVIVED -- the read did not fault (target line is not uncorrectable)"
+                : "HALTED at the read -- uncorrectable ECC fault reproduced (this is the bad state)");
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
+
+    if (eccread) {
+        // Read a target LIM line N times and report L3 fix/fail counter deltas. Two uses: (1) after a warm
+        // reset, does a previously-injected defect still tick counters (did it SURVIVE the reset)? (2) scan
+        // high LIM addresses to find genuinely-unprimed regions (uncorrectable on first read).
+        X280 x(cluster, device_id, l2cpu);
+        tt_cxy_pair l2 = x.l2();
+        constexpr uint64_t L3_BASE = 0x02010000ULL;
+        auto rd = [&](uint64_t off) { return x.reg_rd(l2, L3_BASE + off); };
+        uint64_t target = inj_addr ? inj_addr : LIM_BASE;
+        uint32_t fix0 = rd(0x148), fail0 = rd(0x168);
+        volatile uint64_t sink = 0;
+        uint64_t first = x.lim_rd_u64(target);
+        for (int i = 0; i < 16; i++) {
+            sink += x.lim_rd_u64(target);
+        }
+        (void)sink;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        uint32_t fix1 = rd(0x148), fail1 = rd(0x168);
+        printf(
+            "[eccread] target=0x%llx readback=0x%llx  DatECCFixCount %u->%u (+%u)  DatECCFailCount %u->%u (+%u)\n",
+            (unsigned long long)target,
+            (unsigned long long)first,
+            fix0,
+            fix1,
+            fix1 - fix0,
+            fail0,
+            fail1,
+            fail1 - fail0);
+        printf(
+            "[eccread] => %s\n",
+            (fail1 > fail0) ? "UNCORRECTABLE on read (unprimed or 2-bit defect present)"
+            : (fix1 > fix0) ? "CORRECTABLE ticks (a 1-bit defect is present at this line)"
+                            : "clean (no ECC events -- line is primed and error-free)");
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
+
+    if (eccinject && inj_double) {
+        // STEP 3 (induce the "unprimed-like" bad state): try to plant a PERSISTENT UNCORRECTABLE (2-bit)
+        // ECC error at a chosen LIM line, and measure whether it (a) registers as uncorrectable
+        // (DatECCFailCount++) and (b) survives — i.e. whether the injector can stand in for genuinely
+        // unprimed LIM in an end-to-end Option-A test. Strategy: arm a bit + write the line (store a 1-bit
+        // error), then arm a second bit + write again, then read it back several times.
+        X280 x(cluster, device_id, l2cpu);
+        tt_cxy_pair l2 = x.l2();
+        constexpr uint64_t L3_BASE = 0x02010000ULL;
+        auto rd = [&](uint64_t off) { return x.reg_rd(l2, L3_BASE + off); };
+        uint64_t target = inj_addr ? inj_addr : (LIM_BASE + 0x40000ULL);
+        uint32_t fix0 = rd(0x148), fail0 = rd(0x168);
+        // Two store-time toggles on the same line, different bits, to try to accumulate 2 bits in SRAM.
+        x.reg_wr(l2, L3_BASE + 0x040, (inj_bit & 0xffu));  // arm bit A (data)
+        x.lim_wr_u64(target, 0xA5A5A5A5A5A5A5A5ULL);
+        x.reg_wr(l2, L3_BASE + 0x040, ((inj_bit + 1) & 0xffu));  // arm bit B (data)
+        x.lim_wr_u64(target, 0xA5A5A5A5A5A5A5A5ULL);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // Read it back a few times (each read is ECC-checked).
+        volatile uint64_t sink = 0;
+        for (int i = 0; i < 8; i++) {
+            sink += x.lim_rd_u64(target);
+        }
+        (void)sink;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        uint32_t fix1 = rd(0x148), fail1 = rd(0x168);
+        uint32_t faillo = rd(0x160), failhi = rd(0x164);
+        uint64_t readback = x.lim_rd_u64(target);
+        printf(
+            "[injdouble] target=0x%llx  DatECCFixCount %u->%u  DatECCFailCount %u->%u  failAddr=0x%x%08x  "
+            "readback=0x%llx\n",
+            (unsigned long long)target,
+            fix0,
+            fix1,
+            fail0,
+            fail1,
+            failhi,
+            faillo,
+            (unsigned long long)readback);
+        printf(
+            "[injdouble] => %s\n",
+            (fail1 > fail0) ? "UNCORRECTABLE induced (DatECCFailCount ticked) -- viable bad state; next: check it "
+                              "survives a warm reset"
+            : (fix1 > fix0) ? "only CORRECTABLE (fix ticked, fail did not) -- injector can't make a persistent 2-bit "
+                              "line; need unprimed-region induction"
+                            : "no counter change -- toggle did not land on these host accesses");
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
+
+    if (eccinject) {
+        // STEP 2 (SAFE): inject a SINGLE-bit ECC error into the L3 data array and confirm it registers
+        // as a *correctable* event (DatECCFixCount ticks up) with NO halt and NO reset. This proves the
+        // induce->detect loop end-to-end before we go double-bit (step 3, which halts the tile).
+        //
+        // ECCInjectError @ 0x02010040: [7:0]=ECCToggleBit, bit16=ECCToggleType (0=data, 1=directory).
+        // The toggle fires on the "next cache operation" — so we leave the X280 running (mesh init booted
+        // the RT drainer, whose harts continuously touch LIM) to generate one, and also issue a few host
+        // reads of LIM as a backup. A single flipped bit is always correctable, so the drainer keeps
+        // running and no data is lost.
+        X280 x(cluster, device_id, l2cpu);
+        tt_cxy_pair l2 = x.l2();
+        constexpr uint64_t L3_BASE = 0x02010000ULL;
+        auto rd = [&](uint64_t off) { return x.reg_rd(l2, L3_BASE + off); };
+        uint32_t fix_before = rd(0x148);
+        uint32_t fail_before = rd(0x168);
+        // Program the injector: toggle one data bit on the next cache operation.
+        const uint32_t inj = (inj_bit & 0xffu) | (0u << 16);  // ECCToggleType=0 => data array
+        x.reg_wr(l2, L3_BASE + 0x040, inj);
+        // Generate cache operations to trigger the toggle (host reads + let the running drainer tick).
+        volatile uint64_t sink = 0;
+        for (int i = 0; i < 16; i++) {
+            sink += x.lim_rd_u64(LIM_BASE + (uint64_t)(i * 64));
+        }
+        (void)sink;
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        uint32_t fix_after = rd(0x148);
+        uint32_t fail_after = rd(0x168);
+        printf(
+            "[eccinject] single-bit (bit %u, data): DatECCFixCount %u -> %u   DatECCFailCount %u -> %u\n",
+            inj_bit,
+            fix_before,
+            fix_after,
+            fail_before,
+            fail_after);
+        printf(
+            "[eccinject] => %s\n",
+            (fix_after > fix_before)
+                ? "CORRECTABLE error induced + detected -- induce/detect loop PROVEN (no halt, no reset)"
+                : "no counter change: the toggle did not fire on a host access -- 'next cache op' likely "
+                  "needs a hart-side access (retry with the drainer definitely running / target a hart-touched line)");
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
+
+    if (eccscrub) {
+        // PROBE: does the X280 implement a no-read line-zero (Zicboz `cbo.zero`)? That is the clean
+        // primitive for a hart to stamp ECC into UNPRIMED LIM without a read-modify-write fault. Boots
+        // the probe FW from PRIMED LIM (safe), runs cbo.zero on a separate primed line, reports outcome.
+        X280 x(cluster, device_id, l2cpu);
+        auto bin = read_file("tools/x280_bm/build/eccscrub.bin");
+        printf("[eccscrub] probe FW %zu bytes; booting from LIM 0x%llx\n", bin.size(), (unsigned long long)LIM_BASE);
+        x.assert_reset();
+        x.load_lim(bin);
+        x.set_reset_vectors(LIM_BASE);
+        x.release_reset();
+        constexpr uint64_t A_STATUS = 0x08010000ULL, A_READBACK = 0x08010008ULL, A_DONE = 0x08010010ULL,
+                           A_EFFECT = 0x08010018ULL, A_MCAUSE = 0x0800FFE0ULL;
+        uint64_t done = 0, status = 0;
+        for (int i = 0; i < 300; i++) {
+            done = x.lim_rd_u64(A_DONE);
+            status = x.lim_rd_u64(A_STATUS);
+            if (done == 0xEC000000FFULL) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        uint64_t rb = x.lim_rd_u64(A_READBACK), eff = x.lim_rd_u64(A_EFFECT);
+        uint64_t mcause = x.lim_rd_u64(A_MCAUSE), mepc = x.lim_rd_u64(A_MCAUSE + 8),
+                 mtval = x.lim_rd_u64(A_MCAUSE + 16);
+        printf(
+            "[eccscrub] status=0x%llx done=0x%llx readback=0x%llx effect=%llu\n",
+            (unsigned long long)status,
+            (unsigned long long)done,
+            (unsigned long long)rb,
+            (unsigned long long)eff);
+        printf(
+            "[eccscrub] trap-diag: mcause=0x%llx mepc=0x%llx mtval=0x%llx\n",
+            (unsigned long long)mcause,
+            (unsigned long long)mepc,
+            (unsigned long long)mtval);
+        const char* verdict;
+        if (done == 0xEC000000FFULL) {
+            verdict = eff == 1 ? "cbo.zero WORKS (line zeroed, no trap) -> clean hart-scrub primitive available"
+                               : "cbo.zero decoded as NO-OP (survived, line unchanged) -> not usable as-is";
+        } else if (status == 0xEC00000002ULL) {
+            verdict =
+                "TRAPPED at cbo.zero (mcause=2 => illegal) -> X280 has NO Zicboz; hart-scrub needs uncached-store path";
+        } else {
+            verdict = "inconclusive -- FW did not reach DONE (LIM boot failed or hung before the probe)";
+        }
+        printf("[eccscrub] => %s\n", verdict);
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
+
+    if (dmaprime) {
+        // UNLOCK STEP: bring the L2CPU complex OUT of reset (so the DMAC becomes accessible) WITHOUT any
+        // hart fetching uninitialized LIM. The DMAC reads all-ones while the complex is in reset (proven
+        // earlier), so an ECC scrub is impossible until the complex is up. Two independent guards keep the
+        // harts from executing garbage on a fresh board:
+        //   (1) reset-PC -> a `j .` spin in the general-purpose scratch (x280-phys 0x20010100, non-ECC,
+        //       executable per the ISA doc's RNMI-handler note), so even an un-suppressed hart just spins.
+        //   (2) suppress-instruction-fetch flags (tt-isa-documentation BlackholeA0/L2CPUTile/MemoryMap.md:
+        //       32-bit word at NoC 0xFFFFF7FEFFF10400, per-hart suppress in bits [19:16], "only applicable
+        //       when coming out of reset" -> set BEFORE release).
+        // Mirrors Umair's x280_boot.cpp release sequence (PLL-low -> release ARC bit l2cpu+4). No DMA writes
+        // here -- this only proves the unlock; the scrub is --dmascrub once the DMAC reads sane.
+        X280 x(cluster, device_id, l2cpu);
+        tt_cxy_pair l2 = x.l2();
+        constexpr uint64_t kScratch = 0xFFFFF7FEFFF10100ULL;      // L2CPU_REG_BASE + 0x100 (NoC view of 0x20010100)
+        constexpr uint64_t kSuppressReg = 0xFFFFF7FEFFF10400ULL;  // L2CPU_REG_BASE + 0x400
+        constexpr uint64_t kScratchPhys = 0x20010100ULL;          // x280-physical pc for the reset vector
+        constexpr uint64_t CH0 = 0xFFFFF7FEFFF80000ULL, CTL0 = 0x18;
+        x.set_pll(200);                       // README: release at LOW speed
+        x.assert_reset();                     // ensure harts in reset before arming
+        x.reg_wr(l2, kScratch, 0x0000006fu);  // `j .` (jal x0, 0) -> infinite self-loop
+        x.set_reset_vectors(kScratchPhys);    // all 4 harts boot to the scratch spin
+        uint32_t sup_before = x.reg_rd(l2, kSuppressReg);
+        x.reg_wr(l2, kSuppressReg, (sup_before & 0xFFFFu) | (0xFu << 16));  // suppress fetch, all 4 harts
+        uint32_t sup_after = x.reg_rd(l2, kSuppressReg);
+        x.release_reset();  // complex up; harts parked (spin + suppressed)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        uint32_t ctl_lo0 = x.reg_rd(l2, CH0 + CTL0), ctl_hi0 = x.reg_rd(l2, CH0 + CTL0 + 4);
+        // DECISIVE TEST: is the DMAC clock-gated? Umair's boot notes 0x02010008=0xf "ungates the L2CPU
+        // cache-controller clock domain" -- but that's the WayEnable=cache-mode write, irreversible until
+        // tt-smi -r. If the DMAC only reads sane AFTER this, then the DMA scrub can't avoid the reset either.
+        uint32_t wayen_before = x.reg_rd(l2, 0x02010008ULL);
+        x.reg_wr(l2, 0x02010008ULL, 0xF);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        uint32_t ctl_lo = x.reg_rd(l2, CH0 + CTL0), ctl_hi = x.reg_rd(l2, CH0 + CTL0 + 4);
+        printf(
+            "[dmaprime] DMAC CTL0 pre-ungate = 0x%08x%08x ; WayEnable(0x02010008) was 0x%x\n",
+            ctl_hi0,
+            ctl_lo0,
+            wayen_before);
+        bool dmac_up = !(ctl_lo == 0xffffffffu && ctl_hi == 0xffffffffu);
+        printf(
+            "[dmaprime] suppress 0x%llx: 0x%08x -> 0x%08x (bits19:16=per-hart suppress)\n",
+            (unsigned long long)kSuppressReg,
+            sup_before,
+            sup_after);
+        printf(
+            "[dmaprime] after PLL-low + reset-vec->scratch-spin + suppress + release: DMAC CTL0=0x%08x%08x\n",
+            ctl_hi,
+            ctl_lo);
+        printf(
+            "[dmaprime] => %s\n",
+            dmac_up ? "DMAC ACCESSIBLE -- complex is up with harts parked. UNLOCK ACHIEVED (scrub is now possible)."
+                    : "DMAC still all-ones -- complex did not come up as expected; inspect before scrubbing.");
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
+
+    if (dmascrub) {
+        // STEP 3 (corrected): host-drive the L2CPU **Synopsys DesignWare DMAC** (NOT a SiFive PDMA --
+        // my earlier attempt used the wrong register model and faulted the device) to copy zeros from
+        // the L3 Zero Device (0x0A000000, "always returns zero on reads") into LIM (0x08000000). The
+        // DMAC's write is an internal-master access, so it lays down valid data+ECC (manual §18.1.1's
+        // recommended ECC init) without touching WayEnable -> no `tt-smi -r`.
+        //
+        // Register model + sequence ported from our own working tools/x280_bm/dma_engine.h / dma_probe.c
+        // (which already do NoC<->LIM), with two changes for a fully on-tile copy:
+        //   - transfer type MEM->MEM (tt_fc=0): DMAC is the flow controller and moves the whole block
+        //     autonomously -- NO software handshake (no REQSRC/REQDST). That's what makes it safe to
+        //     drive host-side over NoC (no per-burst timing).
+        //   - both masters = L2 (on-tile L2 cache port): zero device and LIM are both on-tile, so no
+        //     DMA_TLB / NoC-window setup at all.
+        // The DMAC is at 0xFFFFF7FEFFF80000 in the NoC/host register view (== 0x2FF80000 hart view);
+        // channel-0 offsets (SAR/DAR/LLP/CTL/CFG, INT +0x2C0, MISC +0x398) match dma_engine.h.
+        if (dma_bytes % 32 != 0 || dma_bytes == 0 || dma_bytes > 4095ull * 32) {
+            fprintf(
+                stderr,
+                "[dmascrub] --dmabytes must be a nonzero multiple of 32 and <= %u (single block)\n",
+                4095u * 32u);
+            return 2;
+        }
+        X280 x(cluster, device_id, l2cpu);
+        tt_cxy_pair l2 = x.l2();
+        // NOTE: do NOT assert_reset here -- the L2CPU reset gates the whole complex including the DMAC,
+        // which makes its registers read back all-ones (inaccessible). The DMAC must stay clocked.
+        x.set_pll(1000);  // ensure the L2CPU complex is clocked (ARC-side PLL program; does not reset the complex)
+        constexpr uint64_t L3_BASE = 0x02010000ULL;
+        constexpr uint64_t CH0 = 0xFFFFF7FEFFF80000ULL;  // Synopsys DW DMAC channel-0 block (host/NoC view)
+        constexpr uint64_t SAR0 = 0x00, DAR0 = 0x08, LLP0 = 0x10, CTL0 = 0x18, CFG0 = 0x40;
+        constexpr uint64_t INT = 0x2C0, MISC = 0x398;
+        constexpr uint64_t RAWTFR = 0x00, RAWERR = 0x20, MASKTFR = 0x50, CLEARTFR = 0x78, CLEARBLK = 0x80,
+                           CLEARSRCT = 0x88, CLEARDSTT = 0x90, CLEARERR = 0x98;
+        constexpr uint64_t DMACFG = 0x00, CHEN = 0x08;
+        auto wr64 = [&](uint64_t off, uint64_t v) {
+            x.reg_wr(l2, CH0 + off, (uint32_t)(v & 0xffffffffu));
+            x.reg_wr(l2, CH0 + off + 4, (uint32_t)(v >> 32));
+        };
+        auto rd32 = [&](uint64_t off) { return x.reg_rd(l2, CH0 + off); };
+
+        // Accessibility guard: if the DMAC block reads all-ones it's not reachable/clocked -- bail out
+        // BEFORE programming it blindly (which is how we faulted the device earlier).
+        uint32_t probe_ctl_lo = rd32(CTL0), probe_ctl_hi = rd32(CTL0 + 4);
+        uint32_t probe_cfg_lo = rd32(CFG0);
+        printf("[dmascrub] DMAC probe: CTL0=0x%08x%08x CFG0lo=0x%08x\n", probe_ctl_hi, probe_ctl_lo, probe_cfg_lo);
+        if (probe_ctl_lo == 0xffffffffu && probe_ctl_hi == 0xffffffffu) {
+            printf(
+                "[dmascrub] => DMAC reads all-ones (inaccessible). Aborting before programming. "
+                "Complex may need to be clocked/out-of-reset first.\n");
+            std::fflush(stdout);
+            std::_Exit(0);
+        }
+
+        const uint64_t block_ts = dma_bytes / 32;  // 32-byte (WORD_32) words
+        uint32_t fail_before = x.reg_rd(l2, L3_BASE + 0x168);
+        printf(
+            "[dmascrub] Synopsys DMAC MEM->MEM: %llu B (block_ts=%llu x32B)  src=0x%llx (zero dev) -> dst=0x%llx "
+            "(LIM)\n",
+            (unsigned long long)dma_bytes,
+            (unsigned long long)block_ts,
+            (unsigned long long)dma_src,
+            (unsigned long long)dma_dst);
+
+        // --- reset channel: disable+enable DMAC, clear + unmask interrupts ---
+        wr64(MISC + DMACFG, 0);
+        wr64(MISC + DMACFG, 1);
+        for (uint64_t o : {CLEARTFR, CLEARBLK, CLEARSRCT, CLEARDSTT, CLEARERR}) {
+            wr64(INT + o, 1);
+        }
+        for (uint64_t o : {MASKTFR, (uint64_t)0x58, (uint64_t)0x60, (uint64_t)0x68, (uint64_t)0x70}) {
+            wr64(INT + o, 0x0101);  // unmask (bit0=mask, bit8=we)
+        }
+
+        // --- CTL0: int_en=1, done=1, 32B words, INCR/INCR, msize=BURST_8, tt_fc=0 (MEM->MEM),
+        //     sms=dms=L2(1), block_ts ---
+        uint64_t ctl = 0;
+        ctl |= 1ull << 0;         // int_en
+        ctl |= (uint64_t)5 << 1;  // dst_tr_width = WORD_32
+        ctl |= (uint64_t)5 << 4;  // src_tr_width = WORD_32
+        // dinc (7-8)=INCR=0, sinc (9-10)=INCR=0
+        ctl |= (uint64_t)2 << 11;  // dest_msize = BURST_8
+        ctl |= (uint64_t)2 << 14;  // src_msize  = BURST_8
+        // tt_fc (20-22) = 0  => MEM->MEM, DMAC flow controller
+        ctl |= 1ull << 23;      // dms = L2
+        ctl |= 1ull << 25;      // sms = L2
+        ctl |= block_ts << 32;  // block_ts (bits 32-43)
+        ctl |= 1ull << 44;      // done (pre-arm, per init_ctl)
+        wr64(CTL0, ctl);
+
+        // --- CFG0: ch_prior=1 (bits 5-7); hs_sel_* left 0 (unused in MEM->MEM) ---
+        wr64(CFG0, 1ull << 5);
+
+        wr64(SAR0, dma_src);
+        wr64(DAR0, dma_dst);
+        wr64(LLP0, 0);
+        for (uint64_t o : {CLEARTFR, CLEARBLK, CLEARSRCT, CLEARDSTT, CLEARERR}) {
+            wr64(INT + o, 1);
+        }
+
+        // --- enable channel 0 (CHEN bit0=ch_en, bit8=we) and poll RAWTFR/RAWERR (no start_burst) ---
+        wr64(MISC + CHEN, 0x0101);
+        bool done = false, err = false;
+        for (int i = 0; i < 20000; i++) {
+            if (rd32(INT + RAWERR) & 1) {
+                err = true;
+                break;
+            }
+            if (rd32(INT + RAWTFR) & 1) {
+                done = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+        uint32_t ctl_lo = rd32(CTL0), ctl_hi = rd32(CTL0 + 4);
+        uint64_t w0 = x.lim_rd_u64(dma_dst);
+        uint64_t w1 = x.lim_rd_u64(dma_dst + 8);
+        uint32_t fail_after = x.reg_rd(l2, L3_BASE + 0x168);
+        printf(
+            "[dmascrub] done=%d err=%d  CTL0=0x%08x%08x (done bit44=%d)  readback dst[0]=0x%016llx dst[1]=0x%016llx  "
+            "DatECCFailCount %u -> %u\n",
+            done,
+            err,
+            ctl_hi,
+            ctl_lo,
+            (ctl_hi >> 12) & 1,
+            (unsigned long long)w0,
+            (unsigned long long)w1,
+            fail_before,
+            fail_after);
+        printf(
+            "[dmascrub] => %s\n",
+            (done && !err && w0 == 0 && w1 == 0 && fail_after == fail_before)
+                ? "MEM->MEM DMA landed, dst zeroed, no uncorrectable ECC -- host-driven DMA scrub WORKS (no WayEnable, "
+                  "no tt-smi -r)"
+                : "did not fully verify -- inspect done/err/CTL/readback above");
         std::fflush(stdout);
         std::_Exit(0);
     }

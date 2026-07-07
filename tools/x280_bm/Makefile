@@ -27,7 +27,27 @@ BUILD := build
 LD_SCRIPT := ld/x280-lim.ld
 
 .PHONY: all clean disasm symbols toolchain
-all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin $(BUILD)/pollmp.bin $(BUILD)/gridilp.bin $(BUILD)/d2hbw.bin $(BUILD)/profrelay.bin $(BUILD)/profcons.bin $(BUILD)/profcons_split.bin
+all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin $(BUILD)/pollmp.bin $(BUILD)/gridilp.bin $(BUILD)/d2hbw.bin $(BUILD)/profrelay.bin $(BUILD)/profcons.bin $(BUILD)/profcons_split.bin $(BUILD)/eccscrub.bin
+
+$(BUILD)/eccscrub.o: src/eccscrub.c | $(BUILD) toolchain
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/eccscrub.elf: $(BUILD)/entry.o $(BUILD)/eccscrub.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/eccscrub.o
+
+$(BUILD)/eccscrub.bin: $(BUILD)/eccscrub.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "eccscrub.bin: $$(wc -c < $@) bytes"
+
+$(BUILD)/eccpoke.o: src/eccpoke.c | $(BUILD) toolchain
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/eccpoke.elf: $(BUILD)/entry.o $(BUILD)/eccpoke.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/eccpoke.o
+
+$(BUILD)/eccpoke.bin: $(BUILD)/eccpoke.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "eccpoke.bin: $$(wc -c < $@) bytes"
 
 $(BUILD)/entry.o: boot/entry.S | $(BUILD) toolchain
 	$(CC) $(ARCH_FLAGS) -nostdlib -c -o $@ $<
