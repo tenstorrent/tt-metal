@@ -89,16 +89,23 @@ per-query-frame K-range** — a banded K-skip, which the ring SDPA kernel can ex
 causal_k_limit skipping). Effort: a temporal-banded K-skip ring SDPA kernel, ~days of C++ (NOT the
 existing `windowed_scaled_dot_product_attention`, which is dense+mask = zero speedup).
 
-**CRITICAL: the window is depth-dependent, not universal.** Block-4 (early) spot-check FAILS the
-temporal window — T=±2f gives PCC_avg 0.83 but **min 0.23** (some queries attend globally). Early
-blocks set global structure (need dense attention); mid/late blocks refine detail (temporally
-local — block 24 holds at 0.96). So L4 must be **depth-adaptive**: dense attention for early blocks,
-temporal-windowed for the rest. That lowers the win (fewer sparsifiable blocks — est **~0.35–0.5s
-off → ~6.0–6.15s**) and requires a **per-block mask-search** (sweep all 48 blocks × a few steps to
-map which blocks tolerate which ±k window). Cheap to do, essential before the kernel.
+**CRITICAL: viability is per-block and non-monotonic — not a clean depth threshold.** I mapped 9
+blocks (single Stage-2 step); min-PCC ≥0.85 at a ±3-frame window (2.7×):
 
-**Confidence:** two samples. Block 24 (mid) holds at PCC 0.96/±2f; block 4 (early) fails (min 0.23).
-The depth split is real; the transition depth is unmapped — that's step 1 below.
+| block | 4 | 8 | 12 | 16 | 20 | 24 | 32 | 40 | 47 |
+|---|---|---|---|---|---|---|---|---|---|
+| ±3f min-PCC | 0.28 | 0.74 | **0.92** | 0.56 | 0.81 | **0.93** | **0.94** | **0.90** | **0.98** |
+
+Late blocks (32/40/47) hold robustly and get *more* local toward the output (b47 min 0.98); early
+blocks are mixed — **b12 (early) holds but b16/b20 (mid) fail**, so it's not "dense first N, windowed
+rest." A **per-block mask-search** is required. Notes: avg-PCC ≥0.85 for every block except b4 (the
+min failures are localized query regions), and block-level PCC is a *conservative screen* — errors
+across 48 blocks + VAE may not compound, so the real gate is an e2e decoded-video run with the
+kernel. Realistic win: ~half the blocks windowable → est **~0.3–0.5s off → ~6.0–6.2s**. Full map +
+per-block ±2f/±3f/±4f data: `opt/l4/depth_map.txt`.
+
+**Confidence:** 9-block depth map (single step). The temporal-locality signal is strong and
+trends with depth; per-block calibration + across-step confirmation is the mask-search (step 1).
 
 ## 5. What's delivered / committed
 

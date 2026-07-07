@@ -1,0 +1,36 @@
+L4 temporal-window depth map — Stage-2 attn1, block-level output PCC (windowed vs dense)
+Single Stage-2 denoise step, seed 10, middle Q-shard [14592:19456]. Gate = PCC >= 0.85.
+min-PCC is the worst-query metric (strict); avg-PCC is the mean over the shard.
+NOTE: block-level PCC is a CONSERVATIVE SCREEN, not the final gate — errors across 48
+blocks + VAE may not compound; the real test is an e2e decoded-video run with the kernel.
+
+block | T=+-2f (26% kept, 3.8x)  | T=+-3f (37% kept, 2.7x)  | verdict @ +-3f min>=0.85
+      |   avg / min              |   avg / min              |
+------+--------------------------+--------------------------+------------------------
+  4   |  0.827 / 0.230           |  0.840 / 0.279           |  FAIL (needs dense)
+  8   |  0.880 / 0.723           |  0.889 / 0.741           |  FAIL (marginal)
+ 12   |  0.956 / 0.903           |  0.959 / 0.917           |  PASS
+ 16   |  0.879 / 0.540           |  0.884 / 0.557           |  FAIL (needs dense)
+ 20   |  0.906 / 0.792           |  0.922 / 0.810           |  FAIL (marginal)
+ 24   |  0.964 / 0.912           |  0.973 / 0.929           |  PASS
+ 32   |  0.945 / 0.912           |  0.962 / 0.941           |  PASS
+ 40   |  0.946 / 0.861           |  0.963 / 0.903           |  PASS
+ 47   |  0.991 / 0.975           |  0.994 / 0.977           |  PASS (near-local)
+
+Spatial windows fail everywhere (min-PCC 0.06-0.64) — locality is TEMPORAL only.
+
+Read:
+- Non-monotonic / block-specific: b12 (early) holds, b16/b20 (mid) fail on min. NOT a
+  clean "dense first N, windowed rest" split — a per-block mask-search is required.
+- Trend: late blocks (32/40/47) hold robustly and get more local toward the output
+  (b47 is nearly fully local, min 0.98). Early blocks are mixed/failing.
+- avg-PCC >= 0.85 for every block except b4 — the min failures are localized query
+  regions (some tokens attend globally). So a per-block window OR a slightly wider
+  window for the failing blocks OR accepting them if e2e quality holds.
+- +-3f (2.7x) is materially safer than +-2f (3.8x); +-4f recovers more (b40: min
+  0.86->0.94). Speed/quality trade is per-block.
+
+Realistic win: ~half the blocks windowable at ~2.7x -> ~0.3-0.5s off DiT -> ~6.0-6.2s
+e2e. The strongly-local late blocks could go tighter. 3s needs this stacked with more.
+
+Reproduce: capture tmp/run_capture_multi.sh (CAP_BLOCKS=...), probe tmp/probe_real_qkv.py.
