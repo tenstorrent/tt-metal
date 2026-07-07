@@ -293,11 +293,11 @@ jobs:
         id: filter
         run: |
           matrix='${{ steps.build-matrix.outputs.matrix }}'
-          categories='${{ inputs.sweep-name == "ALL SWEEPS"* && "ALL" || inputs.sweep-name }}'
+          categories='${{ startsWith(inputs.sweep-name, 'ALL SWEEPS') && 'ALL' || inputs.sweep-name }}'
           if [[ "$categories" == "ALL" ]]; then
             filtered="$matrix"
           else
-            filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains("\,($c)"))]')
+            filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c)"))]')
           fi
           {
             echo "matrix<<EOF"
