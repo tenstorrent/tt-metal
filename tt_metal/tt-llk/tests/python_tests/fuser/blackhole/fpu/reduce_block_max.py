@@ -30,7 +30,8 @@ class ReduceBlockMaxFpu(Fpu):
     ) -> str:
         ct_dim = block.block_tiles_x
         dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_reduce_block_max_row_init_<{ct_dim}, {dest_acc}>();\n"
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        return f"_llk_math_reduce_block_max_row_init_<{ct_dim}, {dest_acc}, {num_faces}>();\n"
 
     def calculate(
         self,
@@ -41,12 +42,13 @@ class ReduceBlockMaxFpu(Fpu):
     ) -> str:
         ct_dim = block.block_tiles_x
         dest_acc = config.dest_acc.cpp_enum_value
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
         tile_x_in_block = f"(({block.tile_id_block}) % {block.block_tiles_x})"
         tile_y_in_block = f"(({block.tile_id_block}) / {block.block_tiles_x})"
         dest_expr = f"(({tile_y_in_block}) * {block.block_tiles_x})"
         return (
             f"if (({tile_x_in_block}) % {ct_dim} == 0 ) {{\n"
-            f"    _llk_math_reduce_block_max_row_<{ct_dim}, {dest_acc}>({dest_expr});\n"
+            f"    _llk_math_reduce_block_max_row_<{ct_dim}, {dest_acc}, {num_faces}>({dest_expr});\n"
             f"}}\n"
         )
 
@@ -93,9 +95,11 @@ class ReduceBlockMaxFpu(Fpu):
 
         generate_golden = get_golden_generator(ReduceBlockMaxRowGolden)
 
+        # Rows/cols per tile: 32x32 tiles use 32, 16x32 tiny tiles use 16 rows (one face-row).
+        tile_r = operation.tile_shape.total_row_dim()
+        tile_c = operation.tile_shape.total_col_dim()
+
         def process_block(block_x, block_y, block_tiles_x_eff, block_tiles_y_eff):
-            tile_r = operation.tile_shape.total_row_dim()
-            tile_c = operation.tile_shape.total_col_dim()
             src_start_row = block_y * tile_r
             src_end_row = (block_y + block_tiles_y_eff) * tile_r
             start_col = block_x * tile_c

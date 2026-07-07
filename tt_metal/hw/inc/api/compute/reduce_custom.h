@@ -31,7 +31,7 @@ namespace ckernel {
  * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
- * - Operand tile size is 32x32
+ * - Operand tile size is 32x32 (num_faces=4) or 16x32 (num_faces=2, a single face-row)
  * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE
  * - Does only MAX pool on ROW dimension
  *
@@ -53,13 +53,14 @@ namespace ckernel {
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
  * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
+ * | Template   | num_faces                 | Number of faces in the operand tile (4 for 32x32, 2 for a 16x32 tiny tile)              | uint32_t  | {2, 4}                                         | False    |
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
-template <uint32_t block_ct_dim, bool respect_trigger = false>
+template <uint32_t block_ct_dim, bool respect_trigger = false, uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_init(uint32_t ocb) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
-    MATH((llk_math_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger, num_faces>()));
+    MATH((llk_math_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, num_faces>()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
@@ -73,7 +74,7 @@ ALWI void reduce_block_max_row_init(uint32_t ocb) {
  * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
- * - Operand tile size is 32x32
+ * - Operand tile size is 32x32 (num_faces=4) or 16x32 (num_faces=2, a single face-row)
  * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE
  * - Does only MAX pool on ROW dimension
  *
@@ -95,16 +96,17 @@ ALWI void reduce_block_max_row_init(uint32_t ocb) {
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
  * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
+ * | Template   | num_faces                 | Number of faces in the operand tile (4 for 32x32, 2 for a 16x32 tiny tile)              | uint32_t  | {2, 4}                                         | False    |
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
  * | Function   | icb_scaler                | CB holding scaling factors                                                              | uint32_t  | 0 to 31                                        | True     |
  * | Function   | row_start_index           | The starting tile index for the row being processed                                     | uint32_t  | Must be less than the size of the CB           | True     |
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <uint32_t block_ct_dim, bool respect_trigger = false>
+template <uint32_t block_ct_dim, bool respect_trigger = false, uint32_t num_faces = 4>
 ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_start_index, uint32_t idst) {
     UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim, respect_trigger>(icb, icb_scaler, row_start_index)));
-    MATH((llk_math_reduce_block_max_row<block_ct_dim, DST_ACCUM_MODE>(idst)));
+    MATH((llk_math_reduce_block_max_row<block_ct_dim, DST_ACCUM_MODE, num_faces>(idst)));
 }
 
 #ifdef ARCH_BLACKHOLE
@@ -130,10 +132,10 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
-template <uint32_t block_ct_dim, bool respect_trigger = false>
+template <uint32_t block_ct_dim, bool respect_trigger = false, uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_reinit_short(uint32_t ocb) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
-    MATH((llk_math_reduce_block_max_row_reinit_with_mop<block_ct_dim>()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger, num_faces>()));
+    MATH((llk_math_reduce_block_max_row_reinit_with_mop<block_ct_dim, num_faces>()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 #endif
@@ -143,9 +145,9 @@ ALWI void reduce_block_max_row_reinit_short(uint32_t ocb) {
  * Minimal reinit: only ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6. Requires copy_tile_custom
  * (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved from the previous reduce.
  */
-template <uint32_t block_ct_dim, bool respect_trigger = false>
+template <uint32_t block_ct_dim, bool respect_trigger = false, uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_reinit_minimal(uint32_t ocb) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger, num_faces>()));
     MATH((llk_math_reduce_block_max_row_reinit_minimal()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
@@ -156,8 +158,8 @@ ALWI void reduce_block_max_row_reinit_minimal(uint32_t ocb) {
  * from the previous reduce.
  */
 ALWI void reduce_block_max_row_reinit_minimal_runtime(
-    uint32_t ocb, uint32_t block_ct_dim, bool respect_trigger = false) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
+    uint32_t ocb, uint32_t block_ct_dim, bool respect_trigger = false, uint32_t num_faces = 4) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, num_faces)));
     MATH((llk_math_reduce_block_max_row_reinit_minimal_runtime()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
@@ -166,9 +168,10 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(
  * Short reinit (runtime variant): Reprograms reduce MOP and restores addrmods.
  * Used when reduce follows custom SDPA sub path with runtime block_ct_dim.
  */
-ALWI void reduce_block_max_row_reinit_short_runtime(uint32_t ocb, uint32_t block_ct_dim, bool respect_trigger = false) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
-    MATH((llk_math_reduce_block_max_row_reinit_short_runtime<DST_ACCUM_MODE>(block_ct_dim)));
+ALWI void reduce_block_max_row_reinit_short_runtime(
+    uint32_t ocb, uint32_t block_ct_dim, bool respect_trigger = false, uint32_t num_faces = 4) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, num_faces)));
+    MATH((llk_math_reduce_block_max_row_reinit_short_runtime<DST_ACCUM_MODE>(block_ct_dim, num_faces)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 #endif
@@ -220,9 +223,10 @@ ALWI void reduce_block_max_row_uninit(uint32_t icb) {
 }
 
 // Runtime variants - block_ct_dim and respect_trigger are runtime parameters.
-ALWI void reduce_block_max_row_init_runtime(uint32_t ocb, uint32_t block_ct_dim, bool respect_trigger = false) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
-    MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim)));
+ALWI void reduce_block_max_row_init_runtime(
+    uint32_t ocb, uint32_t block_ct_dim, bool respect_trigger = false, uint32_t num_faces = 4) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, num_faces)));
+    MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, num_faces)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
@@ -232,10 +236,11 @@ ALWI void reduce_block_max_row_runtime(
     uint32_t row_start_index,
     uint32_t idst,
     bool respect_trigger = false,
-    bool overlap_first_half = false) {
+    bool overlap_first_half = false,
+    uint32_t num_faces = 4) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(
         icb, icb_scaler, row_start_index, respect_trigger, overlap_first_half)));
-    MATH((llk_math_reduce_block_max_row_runtime<DST_ACCUM_MODE>(idst)));
+    MATH((llk_math_reduce_block_max_row_runtime<DST_ACCUM_MODE>(idst, num_faces)));
 }
 
 ALWI void reduce_block_max_row_uninit_runtime(

@@ -26,14 +26,14 @@
  * Use the standard llk_math_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with multiple
  * llk_math_reduce() calls in a loop for general-purpose block reduction.
  */
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, uint32_t num_faces = 4>
 inline void llk_math_reduce_block_max_row_init() {
-    _llk_math_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en>();
+    _llk_math_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en, num_faces>();
 }
 
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, uint32_t num_faces = 4>
 inline void llk_math_reduce_block_max_row_mop_config() {
-    _llk_math_reduce_block_max_row_mop_config_<block_ct_dim, is_fp32_dest_acc_en>();
+    _llk_math_reduce_block_max_row_mop_config_<block_ct_dim, is_fp32_dest_acc_en, num_faces>();
 }
 
 /**
@@ -51,11 +51,11 @@ inline void llk_math_reduce_block_max_row_mop_config() {
  * Use the standard llk_math_reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>() in a loop
  * for general-purpose block reduction across multiple tiles.
  */
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, uint32_t num_faces = 4>
 inline void llk_math_reduce_block_max_row(const uint dst_index) {
     LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
 
-    _llk_math_reduce_block_max_row_<block_ct_dim, is_fp32_dest_acc_en>(dst_index);
+    _llk_math_reduce_block_max_row_<block_ct_dim, is_fp32_dest_acc_en, num_faces>(dst_index);
 }
 
 /**
@@ -68,8 +68,8 @@ inline void llk_math_reduce_block_max_row(const uint dst_index) {
  */
 inline void llk_math_reduce_block_max_row_reinit_minimal() { reduce_max_row_configure_addrmod_reinit_minimal(); }
 
-template <uint32_t block_ct_dim>
+template <uint32_t block_ct_dim, uint32_t num_faces = 4>
 inline void llk_math_reduce_block_max_row_reinit_with_mop() {
     reduce_max_row_configure_addrmod();
-    _llk_math_reduce_block_max_row_mop_reprogram_only_<block_ct_dim>();
+    _llk_math_reduce_block_max_row_mop_reprogram_only_<block_ct_dim, num_faces>();
 }

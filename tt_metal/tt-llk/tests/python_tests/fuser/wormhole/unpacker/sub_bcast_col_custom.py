@@ -112,7 +112,8 @@ class SubBcastColCustomUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        return "_llk_unpack_AB_sub_bcast_col_init_custom_();\n"
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        return f"_llk_unpack_AB_sub_bcast_col_init_custom_({num_faces});\n"
 
     def unpack(
         self,
