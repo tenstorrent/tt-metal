@@ -12,7 +12,13 @@ scheduler/scheduler_config.json, model_index.json).
 
 from __future__ import annotations
 
-HF_REPO = "nvidia/Cosmos3-Super-Image2Video"
+import os
+
+# COSMOS3_HF_REPO selects a different checkpoint of the same Cosmos3OmniTransformer
+# family (e.g. nvidia/Cosmos3-Nano, 16B) without a separate config module — the
+# trunk reads its dims from the checkpoint's hf_config at build time, not from the
+# dicts below.
+HF_REPO = os.environ.get("COSMOS3_HF_REPO", "nvidia/Cosmos3-Super-Image2Video")
 HF_REVISION = "8ec97da4ec5afc56754b1ff67de96fbbb87c76f5"
 
 
