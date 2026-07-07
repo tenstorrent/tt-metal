@@ -11,7 +11,7 @@ This document covers the Tenstorrent tt_dit implementation of Bria's **FIBO** te
 |---|---|---|---|
 | **1** | **SmolLM3 text encoder** | **Done** | New `encoders/smollm3/`; decoder layer from Qwen25VL, all-hidden-states shell from Gemma |
 | **2** | **BriaFibo transformer** | **Done** | New `transformer_bria_fibo.py` from Flux1 + per-layer "concat-halves" text injection |
-| 3 | Wan VAE + solver wiring | TODO | Reuse `vae_wan2_1.py` (T=1 decode) + `EulerSolver` + dynamic-shift scheduler |
+| **3** | **Wan VAE + solver wiring** | **Done** | Reuse `vae_wan2_1.py` (T=1 decode) + `EulerSolver` + dynamic-shift scheduler |
 | 4 | Pipeline + Blackhole bringup | TODO | New `pipelines/bria_fibo/`; CFG batched=2; 2×2 mesh (`cfg=(1,0) sp=(2,0) tp=(2,1)`) |
 
 ---
@@ -192,3 +192,74 @@ HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
 | Full transformer, reduced (2+2) | 2×2 mesh (sp=2, tp=2) | 99.94% |
 
 All tests pass PCC ≥ 0.99. The full-depth tp=1 and reduced-depth 2×2 iterations both validate HF-exact behavior. The full-depth 2×2 result (99.53%) reflects accumulated bf16 quantization across the longer block chain with spatial sharding; reduced iterations show bf16 accumulation is stable below that depth.
+
+---
+
+## Sub-project 3: Wan VAE + Solver Wiring
+
+### Architecture
+
+FIBO's VAE is `AutoencoderKLWan` configured as the Wan 2.2 high-compression ("TI2V") variant, distinct from the Wan 2.1 `z_dim=16` VAE already supported by tt_dit:
+
+| Parameter | Value |
+|---|---|
+| `is_residual` | `True` (Wan 2.2 residual decoder) |
+| `z_dim` | 48 |
+| `base_dim` | 160 |
+| `decoder_base_dim` | 256 |
+| `dim_mult` | `[1, 2, 4, 4]` |
+| `out_channels` | 12 |
+| `scale_factor_spatial` | 16 |
+
+`z_dim=48` is also the BriaFibo transformer's `in_channels`/`out_channels` (sub-project 2), so the diffusion latent feeds the transformer directly with no 2×2 packing step (unlike Flux's VAE/transformer channel relationship).
+
+`tt_dit`'s existing `vae_wan2_1.py` previously hard-blocked this configuration (`assert not is_residual` in `WanEncoder3D`, encode-side only — encode remains out of scope for FIBO, which only needs decode). This sub-project adds the residual **decoder** path:
+
+- **`WanDupUp3D`**: a parameter-free residual-shortcut upsampler, a BTHWC port of diffusers' `DupUp3D`. Repeats/duplicates the input along the upsample factor and optionally drops the leading `factor_t - 1` frames when `first_chunk=True`.
+- **`WanResidualUpBlock`**: the Wan 2.2 up-block. Wraps the existing resnet-block path and adds the `avg_shortcut` (a `WanDupUp3D`) applied to the block's input and summed into its output: `x = x + avg_shortcut(x_copy, first_chunk=first_chunk)`.
+- **`WanDecoder3d`**'s up-block construction loop now branches on `is_residual`, building `WanResidualUpBlock`s instead of the standard `WanUpBlock`/`WanResample` path when set. `first_chunk` (true only for the first temporal chunk, matching the reference `_decode`) is threaded from `WanDecoder.forward` through the up-block loop into `WanResidualUpBlock`/`WanDupUp3D`.
+- The Wan 2.1 (`is_residual=False`) decode path — `WanUpBlock`, `WanResample`, `WanDecoder3d`, `WanDecoder` — is unchanged; `test_wan_decoder` (Wan 2.1) continues to pass at the same PCC as before this change.
+
+### Flow-Match Solver + Dynamic Shift
+
+No new solver code was needed — FIBO reuses the existing tt_dit `solvers/euler.py` (`EulerSolver`) unchanged. FIBO's `FlowMatchEulerDiscreteScheduler` config (`use_dynamic_shifting=True`, `base_shift=0.5`, `max_shift=1.15`, `base_image_seq_len=256`, `max_image_seq_len=4096`, exponential shifting) matches the shift math tt_dit already implements (`_calculate_shift`). The diffusers host scheduler computes `mu` and the per-step sigma schedule (via `sigmas`/`mu` passed to `set_timesteps`); the device-side `EulerSolver.step` consumes that schedule directly. This was validated by reproducing the diffusers scheduler's sigma schedule against `EulerSolver`'s internal schedule (see Measured PCCs / results below) — no transformer or VAE weights are needed for this check, only the scheduler config.
+
+### Files
+
+```
+models/tt_dit/
+  models/vae/
+    vae_wan2_1.py                   # modified: WanResidualUpBlock, WanDupUp3D, is_residual branch in WanDecoder3d
+  tests/models/bria_fibo/
+    test_vae.py                     # FIBO VAE config check + reduced/production decode PCC vs HF reference
+    test_solver.py                  # EulerSolver schedule vs diffusers FlowMatchEulerDiscreteScheduler
+```
+
+### Running the Tests
+
+```bash
+HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+  python_env/bin/python -m pytest models/tt_dit/tests/models/bria_fibo/test_vae.py models/tt_dit/tests/models/bria_fibo/test_solver.py -v
+```
+
+**Prerequisites:**
+
+- **Weights**: `briaai/FIBO` is a gated HuggingFace repo. Accept the license on the HF model page, authenticate (`huggingface-cli login`), then pre-download the `vae/*` files (and `scheduler/*` for the solver test), e.g. `huggingface-cli download briaai/FIBO --include "vae/*" "scheduler/*"`. Tests run fully offline (`HF_HUB_OFFLINE=1`) against the local snapshot cache and `pytest.skip` with a clear message if weights are unavailable.
+- **`FIBO_PATH`** (optional): Override the HF model path, e.g. `FIBO_PATH=/data/models/FIBO pytest ...`. Defaults to `briaai/FIBO`.
+- **Devices**: All sub-project 3 tests run single-device (`mesh_device=(1,1)`); no multi-chip mesh required.
+
+### Measured PCCs (real `briaai/FIBO` VAE weights, bf16 tt vs f32 HF reference, Blackhole)
+
+| Test | Configuration | PCC |
+|---|---|---|
+| VAE decode, reduced | T=1, 16×16 latent | 99.97% |
+| VAE decode, production | T=1, 64×64 latent → 1024×1024 image, single chip | 99.96% |
+| Solver schedule vs diffusers | dynamic shift, 30 steps, seq_len=4096 | sigma schedule matches exactly (< 1e-6) |
+| Wan 2.1 `test_wan_decoder` (regression) | unchanged (`is_residual=False`) | 99.998% |
+
+All tests pass PCC ≥ 0.99. The production-resolution decode (64×64 latent, matching FIBO's default 1024×1024 output image via `scale_factor_spatial=16` × unpatchify) runs unconditionally on a single Blackhole chip — no OOM-fallback/retry loop is needed at this resolution.
+
+### Out of Scope / Deferred
+
+- **VAE encode** for `is_residual=True` remains blocked (`assert not is_residual` in `WanEncoder3D`) — FIBO's pipeline only needs decode.
+- **Pipeline wiring and end-to-end Blackhole bringup** (denoise loop calling the transformer + `EulerSolver`, then this VAE decoder) is sub-project 4, still TODO. Until that lands, the host (`torch`/diffusers) `AutoencoderKLWan` decode is an available stopgap for end-to-end testing.
