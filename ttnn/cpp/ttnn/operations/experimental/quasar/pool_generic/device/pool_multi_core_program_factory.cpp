@@ -548,6 +548,20 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         in_w,
         output_layout);
 
+    // QSR: the reduce-col strided tilize consumes a full 32x32 (num_faces=4) SrcA tile (see the
+    // num_faces_in_input_tile_for_cb=4 override below; the LLK asserts total_row_dim()==total_col_dim()==32).
+    // The shared WH/BH small-window optimization (pool_utils.cpp) sizes num_tilized_rows to only
+    // kernel_size_hw (e.g. 9 for a 3x3 window) so the in_cb page holds < 32 rows. On Quasar the reduce
+    // then reads the unwritten tail rows [window_size, 32), which hold STALE L1 (leftover halo output),
+    // inflating a MAX to the global input max. This is invisible to a constant-per-channel input probe
+    // (every stick equal per channel, so stale == correct) but corrupts real/per-stick data. Size the
+    // in_cb to a full TILE_HEIGHT so the tail rows exist in-page and the reader fills them with the pool
+    // identity (-inf max / 0 avg via the tail-fill + clear_value_cb); reducing them is then a no-op.
+    // (MPWI/return_indices uses a different in_cb geometry -- left unchanged.)
+    if (!return_indices) {
+        params.num_tilized_rows = tt::constants::TILE_HEIGHT;
+    }
+
     const uint32_t eff_kernel_h = ((kernel_h - 1) * dilation_h) + 1;
     const uint32_t eff_kernel_w = ((kernel_w - 1) * dilation_w) + 1;
     const uint32_t in_h_padded = in_h + pad_h + setup.ceil_pad_h;
@@ -663,10 +677,16 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         raw_face_r_pow2 <<= 1;
     }
     const uint32_t raw_face_r = raw_face_r_pow2;
-    const uint32_t num_faces_in_input_tile_for_cb =
-        (params.max_rows_for_reduction < tt::constants::TILE_HEIGHT || window_size_hw <= tt::constants::FACE_HEIGHT)
-            ? 2u
-            : 4u;
+    // QSR: the reduce-col strided tilize (_llk_unpack_reduce_col_tilizeA_strided_) only supports a full
+    // 32x32 (4-face) SrcA tile (LLK_ASSERT total_row_dim()==32 && total_col_dim()==32 at
+    // llk_unpack_reduce_col_tilizeA_strided.h). The WH/BH 2-face small-window optimization feeds it a
+    // 16x32 (num_faces=2) tile, which (a) violates that requirement -> wrong tilized data, and (b) makes
+    // the always-4-face strided unpack over-produce SrcA vs the 2-GMPOOL reduce -> SrcA double-buffer
+    // overflow -> deadlock (unpacker spins UPTW, math stalls on SrcB). Always describe the (already
+    // full-tile-padded, round_up(in_cb_sz, TILE_HW)) in_cb page as 4 faces; the padding rows
+    // [window_size, 32) hold the pool identity (-inf max / 0 avg via force_max_clear + clear_value_cb,
+    // AVG scalar = 1/true_window), so reducing the extra rows is a no-op.
+    const uint32_t num_faces_in_input_tile_for_cb = 4u;
     const std::optional<FaceGeometry> input_face_geometry =
         return_indices
             ? std::nullopt

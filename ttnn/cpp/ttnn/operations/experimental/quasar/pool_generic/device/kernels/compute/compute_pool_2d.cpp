@@ -71,8 +71,11 @@ void kernel_main() {
     constexpr bool use_split_reader = split_reader;
 
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
-    constexpr uint32_t num_faces_in_input_tile =
-        (max_sticks_for_reduction < TILE_HEIGHT || window_size_hw <= FACE_HEIGHT) ? 2 : 4;
+    // QSR: match num_faces_in_input_tile_for_cb in the pool factory. The reduce-col strided tilize
+    // requires a full 32x32 (4-face) SrcA tile, so always reduce 4 faces; padding rows [window,32) hold
+    // the pool identity so the extra reduced rows are a no-op. (On Quasar reduce_tile_math ignores this
+    // num_faces arg and uses the CB face-geometry metadata, but keep it coherent.)
+    constexpr uint32_t num_faces_in_input_tile = 4;
     // "Single partial tile per core that fits in one face": when there is only one output tile
     // per core (in_c < TILE_WIDTH) and it fits in a single face (in_c <= FACE_WIDTH), pack just
     // one face for that tile. The host correspondingly aligns output_shard_width to FACE_WIDTH,

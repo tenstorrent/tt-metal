@@ -30,13 +30,21 @@ void kernel_main() {
     compute_kernel_lib::untilize_init<tiles_per_row, src_cb_id, out_cb_id0>();
 
     for (uint32_t block_idx = 0; block_idx < total_blocks; block_idx++) {
-        // Use unified untilize with Neither mode since we handle init/uninit outside the loop
+        // QSR: the two blocks alternate output CBs (even->out0, odd->out1) so the split readers each
+        // consume their own untilize_out. On Quasar the pack writes via a buffer descriptor bound at
+        // pack_untilize_init time (the MOP bakes in the output CB's buf_desc_id / L1 base); it is NOT
+        // re-resolved per pack_untilize_block from the runtime `ocb` the way WH/BH dynamic pack addressing
+        // is. With a single up-front init (for out0) + InitUninitMode::Neither, every block therefore packs
+        // to out0's descriptor -> block 1 overwrites block 0 at out0 and out1 is never written (out0 ends up
+        // holding block 1's data, out1 all zeros -> the pool input is scrambled by +one tile-row). Re-init
+        // (InitOnly) per block so the pack rebinds to the correct out_cb_idN. (Unpack/math re-init for the
+        // same src_cb_id is idempotent; the trailing untilize_uninit still runs once after the loop.)
         if (block_idx % 2 == 0) {
             compute_kernel_lib::untilize<
                 tiles_per_row,
                 src_cb_id,
                 out_cb_id0,
-                compute_kernel_lib::untilize_config::InitUninitMode::Neither,
+                compute_kernel_lib::untilize_config::InitUninitMode::InitOnly,
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_size);
         } else {
@@ -44,7 +52,7 @@ void kernel_main() {
                 tiles_per_row,
                 src_cb_id,
                 out_cb_id1,
-                compute_kernel_lib::untilize_config::InitUninitMode::Neither,
+                compute_kernel_lib::untilize_config::InitUninitMode::InitOnly,
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_size);
         }

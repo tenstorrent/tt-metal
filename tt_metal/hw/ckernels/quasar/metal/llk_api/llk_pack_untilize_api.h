@@ -70,8 +70,19 @@ inline void llk_pack_untilize(
 
     const std::uint32_t y_stride = full_ct_dim * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
-    const std::uint32_t base_l1 = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx *
-                                  tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
+    const std::uint32_t wr_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx;
+    // The DST tile-face-row counter (l1_tile_idx) is scaled by dst_z_stride (= num_faces_c_dim) inside the
+    // pack (TT_SET_DST_TILE_FACE_ROW_IDX -> dst_row_base = counter * dst_z_stride). For a single-row-face
+    // narrow output (e.g. a column-reduce/pool stick: {num_faces_r_dim=1, num_faces_c_dim=2}), the CB write
+    // pointer wr_entry_idx counts COL-FACES pushed (num_faces_c_dim per output tile via out_cb.push_back),
+    // so multiplying it by num_faces_r_dim*face_r_dim (=1) and then again by dst_z_stride double-counts and
+    // lands each stick 2x too far apart (odd sticks left empty). Convert wr_entry_idx from col-faces to
+    // TILES (divide by num_faces_c_dim) so base_l1 * dst_z_stride reproduces the true per-stick row offset.
+    // Full/2-row-face tiles (halo untilize, num_faces_r_dim==2) keep the original formula.
+    const std::uint32_t base_l1 =
+        (tensor_shape.num_faces_r_dim == 1)
+            ? (wr_entry_idx * tensor_shape.face_r_dim / tensor_shape.num_faces_c_dim)
+            : (wr_entry_idx * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim);
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         const std::uint32_t dest_idx = block_rt * block_ct_dim + tile_dst_rt_offset;
