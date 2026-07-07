@@ -71,8 +71,7 @@ inline void set_dest_fmt(std::uint32_t fmt, int t)
     {
         set_dest_fmt<2>(fmt);
     }
-
-    tensix_sync();
+    // No tensix_sync() here: the templated set_dest_fmt<t> above already ends with one.
 }
 
 template <int t, bool is_signed>

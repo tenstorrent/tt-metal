@@ -28,7 +28,8 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
 
     // 1. Create a CB
     uint32_t cb_id = 0;
-    CircularBufferConfig cb_config = CircularBufferConfig(2048, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
+    CircularBufferConfig cb_config =
+        CircularBufferConfig(2048, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
     CreateCircularBuffer(program, logical_core, cb_config);
 
     // Allocate a real L1 buffer as the noc_async_read destination so the
@@ -50,7 +51,10 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
         }
     )";
 
-    auto kernel = CreateKernelFromString(program, kernel_src, logical_core,
+    auto kernel = CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     SetRuntimeArgs(program, kernel, logical_core, {dst_buf->address()});
 

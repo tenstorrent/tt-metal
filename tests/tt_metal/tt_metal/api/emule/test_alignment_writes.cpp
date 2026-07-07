@@ -49,7 +49,9 @@ TEST_F(MeshDeviceFixture, NocRead_L1_Misaligned_SanityCheck) {
     )";
 
     CreateKernelFromString(
-        program, kernel_src, logical_core,
+        program,
+        kernel_src,
+        logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
@@ -80,7 +82,9 @@ TEST_F(MeshDeviceFixture, NocWrite_L1_Misaligned_SanityCheck) {
     )";
 
     CreateKernelFromString(
-        program, kernel_src, logical_core,
+        program,
+        kernel_src,
+        logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
@@ -106,8 +110,7 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
     // (16-byte aligned, NOT 32-byte aligned).
     // NOC encoding: (y << 6) | x, shifted by 36 for the local-address field.
     auto dram_noc_coord = mesh->virtual_core_from_logical_core({0, 0}, CoreType::DRAM);
-    uint32_t noc_xy = (static_cast<uint32_t>(dram_noc_coord.y) << 6) |
-                       static_cast<uint32_t>(dram_noc_coord.x);
+    uint32_t noc_xy = (static_cast<uint32_t>(dram_noc_coord.y) << 6) | static_cast<uint32_t>(dram_noc_coord.x);
     uint64_t dram_src = (static_cast<uint64_t>(noc_xy) << 36) | 0x0010ULL;
     uint32_t dram_lo = static_cast<uint32_t>(dram_src & 0xFFFFFFFFU);
     uint32_t dram_hi = static_cast<uint32_t>(dram_src >> 32);
@@ -128,7 +131,9 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
     )";
 
     auto kernel = CreateKernelFromString(
-        program, kernel_src, logical_core,
+        program,
+        kernel_src,
+        logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     SetRuntimeArgs(program, kernel, logical_core, {dram_lo, dram_hi, l1_dst});
 
@@ -151,8 +156,7 @@ TEST_F(MeshDeviceFixture, NocWrite_DRAM_Misaligned_SanityCheck) {
 
     // Build DRAM NOC address with offset 0x01 so lower 4 bits = 1.
     auto dram_noc_coord = mesh->virtual_core_from_logical_core({0, 0}, CoreType::DRAM);
-    uint32_t noc_xy = (static_cast<uint32_t>(dram_noc_coord.y) << 6) |
-                       static_cast<uint32_t>(dram_noc_coord.x);
+    uint32_t noc_xy = (static_cast<uint32_t>(dram_noc_coord.y) << 6) | static_cast<uint32_t>(dram_noc_coord.x);
     uint64_t dram_dst = (static_cast<uint64_t>(noc_xy) << 36) | 0x0001ULL;
     uint32_t dram_lo = static_cast<uint32_t>(dram_dst & 0xFFFFFFFFU);
     uint32_t dram_hi = static_cast<uint32_t>(dram_dst >> 32);
@@ -172,7 +176,9 @@ TEST_F(MeshDeviceFixture, NocWrite_DRAM_Misaligned_SanityCheck) {
     )";
 
     auto kernel = CreateKernelFromString(
-        program, kernel_src, logical_core,
+        program,
+        kernel_src,
+        logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     SetRuntimeArgs(program, kernel, logical_core, {dram_lo, dram_hi, l1_src});
 

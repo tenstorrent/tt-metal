@@ -63,8 +63,7 @@ TEST_F(MeshDeviceFixture, Tensor_Padding_Violation_SanityCheck) {
         program,
         kernel_src,
         logical_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Pass the base address and the logical data cutoff boundary to the kernel
     SetRuntimeArgs(program, kernel, logical_core, {buffer->address(), logical_size});
@@ -72,8 +71,7 @@ TEST_F(MeshDeviceFixture, Tensor_Padding_Violation_SanityCheck) {
     // 3. The emulator should intercept the illegal write inside l1_ptr
     EXPECT_DEATH(
         detail::LaunchProgram(device, program),
-        ".*Tensor Padding Violation: Attempted to write to a padded memory region at address 0x.*"
-    );
+        ".*Tensor Padding Violation: Attempted to write to a padded memory region at address 0x.*");
 }
 
 }  // namespace tt::tt_metal
