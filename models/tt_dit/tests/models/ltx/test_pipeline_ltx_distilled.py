@@ -17,7 +17,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline, pixel_to_latent_frame
+from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import (
+    TEMPORAL_COMPRESSION,
+    LTXDistilledPipeline,
+    pixel_to_latent_frame,
+)
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_PROMPT,
     default_ltx_checkpoint,
@@ -965,3 +969,133 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     )
     assert torch.isfinite(wav).all(), "decoded waveform has non-finite samples"
     assert abs(dur - num_frames / 24.0) < 0.2, f"duration {dur:.2f}s != ~{num_frames/24.0:.2f}s"
+
+
+@pytest.mark.skipif(
+    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+    ],
+    ids=["bh_2x4sp1tp0"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_pipeline_distilled_i2v_middle_keyframe(
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+):
+    """MIDDLE-KEYFRAME I2V render check. The arbitrary-frame test only pins the first/last EDGES; a
+    mid-sequence pin is the two-sided case that the few-step fast/medium schedules can't resolve —
+    they pin the frame but leave its neighbors chromatically scrambled (device-verified: only the
+    8-step schedule is clean; the server routes non-frame-0 keyframes to the high tier for this
+    reason). Pin one image at a middle latent frame and check the pinned frame reproduces its image
+    (PCC); neighbor-roughness is logged as a diagnostic (a localized chromatic scramble is hard to
+    threshold from luma alone, so the durable regression gate is the server routing, not this metric)."""
+    import glob
+    import subprocess
+
+    from PIL import Image
+
+    cond = os.environ.get("LTX_I2V_COND_IMAGE_A", "/home/smarton/tt-metal/tmp/ltx-rt-opt/frames/f_001.png")
+    if not os.path.exists(cond):
+        pytest.skip(f"conditioning image not found: {cond}")
+
+    ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    num_frames = int(os.environ.get("NUM_FRAMES", "145"))
+    height = int(os.environ.get("HEIGHT", "1088"))
+    width = int(os.environ.get("WIDTH", "1920"))
+    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+    seed = int(os.environ.get("SEED", "11"))
+    prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+
+    latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
+    mid_lat = int(os.environ.get("MID_LATENT", str(latent_frames // 2)))
+    pin_pixel = mid_lat * TEMPORAL_COMPRESSION  # inverse of pixel_to_latent_frame: pins the middle latent
+    print(
+        f"\nI2V_MID config: {num_frames}f {height}x{width} latent_frames={latent_frames} "
+        f"mid_lat={mid_lat} pin_pixel={pin_pixel} seed={seed}",
+        flush=True,
+    )
+
+    pipeline = LTXDistilledPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=ckpt,
+        gemma_path=default_ltx_gemma(),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        run_warmup=traced,
+        traced=traced,
+        num_frames=num_frames,
+        height=height,
+        width=width,
+    )
+
+    if int(ttnn.distributed_context_get_rank()) != 0:
+        return
+
+    out = tmp_path / "mid.mp4"
+    pipeline.generate(
+        prompt,
+        output_path=str(out),
+        images=[(cond, pin_pixel, 1.0)],
+        num_frames=num_frames,
+        height=height,
+        width=width,
+        seed=seed,
+    )
+    if traced:
+        pipeline.release_traces()
+
+    keep = os.environ.get("OUTPUT_PATH")  # copy the clip out for eyeballing the A/B
+    if keep:
+        subprocess.run([_ffmpeg(), "-v", "error", "-i", str(out), "-y", keep], check=True)
+
+    # Frame-accurate decode so the pinned index and its neighbors line up with pixel frames.
+    fdir = tmp_path / "frames"
+    fdir.mkdir()
+    subprocess.run([_ffmpeg(), "-v", "error", "-i", str(out), "-vsync", "0", str(fdir / "f_%04d.png")], check=True)
+    paths = sorted(glob.glob(str(fdir / "f_*.png")))
+    assert paths, "no frames decoded"
+
+    def _luma(p):
+        return np.asarray(Image.open(p).convert("L")).astype("float32")
+
+    def _rough(f):
+        # mean |discrete Laplacian| over the interior: high-frequency energy. A scrambled frame is
+        # noisy/blocky and spikes here versus a coherent one.
+        lap = 4.0 * f[1:-1, 1:-1] - f[:-2, 1:-1] - f[2:, 1:-1] - f[1:-1, :-2] - f[1:-1, 2:]
+        return float(np.abs(lap).mean())
+
+    rough = np.array([_rough(_luma(p)) for p in paths])
+    nfr = len(rough)
+    med = float(np.median(rough))
+    lo = max(0, pin_pixel - 14)
+    hi = min(nfr, pin_pixel + 15)
+    win_max = float(rough[lo:hi].max())
+    ratio = win_max / med if med > 0 else float("inf")
+
+    pin_idx = min(pin_pixel, nfr - 1)
+    cl = torch.from_numpy(_luma(cond)).flatten()
+    pf = torch.from_numpy(_luma(paths[pin_idx])).flatten()
+    n = min(cl.numel(), pf.numel())
+    pcc = torch.corrcoef(torch.stack([cl[:n], pf[:n]]))[0, 1].item()
+
+    print(
+        f"I2V_MID pinned-vs-cond PCC={pcc:.4f} | neighbor roughness "
+        f"win_max/med={ratio:.2f} (med={med:.2f} win_max={win_max:.2f}) frames={nfr}",
+        flush=True,
+    )
+    print("I2V_MID rough[pin±14]=" + ",".join(f"{r:.1f}" for r in rough[lo:hi]), flush=True)
+
+    assert pcc > 0.5, f"middle keyframe does not track its image (PCC={pcc:.4f}) — conditioning broken"
+    thr = float(os.environ.get("MID_ROUGH_RATIO_MAX", "999"))
+    assert ratio < thr, f"middle-keyframe neighbor scramble: roughness ratio {ratio:.2f} >= {thr}"
