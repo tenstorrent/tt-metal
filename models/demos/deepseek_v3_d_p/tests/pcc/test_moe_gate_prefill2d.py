@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import Deep
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_fabric_router_config,
     create_gate_weights,
@@ -45,6 +46,7 @@ GATE_MODELS = {
     "deepseek_v3": DeepSeekV3Config,
     "kimi": KimiK26Config,
     "glm_5_1": GLM51Config,
+    "minimax_m2_7": MiniMaxM27Config,
     "dsv4_pro": DeepSeekV4ProConfig,
     "dsv4_flash": DeepSeekV4FlashConfig,
 }
@@ -183,6 +185,8 @@ REGULAR_GATE_CASES = [
     pytest.param("kimi", GateComputeMode.DEVICE_FP32, id="kimi-device_fp32"),
     pytest.param("glm_5_1", GateComputeMode.HOST_ALL, id="glm_5_1-host_all"),
     pytest.param("glm_5_1", GateComputeMode.DEVICE_FP32, id="glm_5_1-device_fp32"),
+    pytest.param("minimax_m2_7", GateComputeMode.HOST_ALL, id="minimax_m2_7-host_all"),
+    pytest.param("minimax_m2_7", GateComputeMode.DEVICE_FP32, id="minimax_m2_7-device_fp32"),
     pytest.param("dsv4_pro", GateComputeMode.DEVICE_FP32, id="dsv4_pro-device_fp32"),
     pytest.param("dsv4_flash", GateComputeMode.DEVICE_FP32, id="dsv4_flash-device_fp32"),
 ]
