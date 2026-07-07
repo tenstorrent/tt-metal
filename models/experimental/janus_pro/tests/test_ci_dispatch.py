@@ -35,6 +35,7 @@ def test_ci_dispatch(hf_model_name, is_ci_env, model_location_generator):
         "models/experimental/janus_pro/tests/test_vision_transformer_block.py",
         "models/experimental/janus_pro/tests/test_vision_transformer.py",
         "models/experimental/janus_pro/tests/test_vision_pipeline.py",
+        "models/experimental/janus_pro/tests/test_vision_model.py",
         "models/experimental/janus_pro/tests/test_lang_decoder_rope.py",
         "models/experimental/janus_pro/tests/test_lang_decoder_rms.py",
         "models/experimental/janus_pro/tests/test_lang_decoder_block.py",
