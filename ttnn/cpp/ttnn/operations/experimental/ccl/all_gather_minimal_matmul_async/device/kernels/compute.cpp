@@ -15,6 +15,8 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+
 void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb.get_cb_id());
     reconfig_data_format_srca(in_cb.get_cb_id());

@@ -136,6 +136,7 @@ void kernel_main() {
     Semaphore<> in0_valid_sem(in0_valid_semaphore_id);
     uint32_t in0_valid_semaphore_addr = get_semaphore(in0_valid_semaphore_id);
     uint32_t in0_receiver_semaphore_addr = get_semaphore(in0_receiver_semaphore_id);
+    uint32_t in0_sender_semaphore_addr = get_semaphore(in0_sender_semaphore_id);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -180,9 +181,6 @@ void kernel_main() {
 
 #if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
-    uint32_t backward_in0_core_order_index = in0_core_order_size - 2;
-    uint32_t forward_in0_core_order_index = in0_core_order_size - 1;
-
     // Each fabric-sender core only parses + connects the SINGLE direction it actually uses.
     // The program factory pushes RT args for exactly one direction per core, so argidx alignment
     // stays correct. The unused-direction mux/handle is default-initialized (connection_valid=false)
@@ -525,8 +523,8 @@ void kernel_main() {
 
                         noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                     }
-#endif
-                }  // end of IN0-SNF-CHAIN
+#endif  // end of IN0-SNF-CHAIN
+
 #if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
@@ -649,7 +647,8 @@ void kernel_main() {
                 }
 #endif  // USE_MUX
 #endif  // MATMUL_ISOLATION_MODE == 0
-            }
+            }  // end of k-loop
+
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
                 cb_in2.reserve_back(N_block_tiles);

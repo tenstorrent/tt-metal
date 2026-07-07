@@ -605,18 +605,6 @@ all_gather_minimal_matmul_async_factory_helper(
         return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
     };
 
-    // Map a scalar mux index to its logical core, accounting for core-grid orientation:
-    //   transpose=true  -> mux cores on the BOTTOM ROW   (index on x, wrap on full_grid_size.x)
-    //   transpose=false -> mux cores on the RIGHT COLUMN (index on y, wrap on full_grid_size.y)
-    const auto make_mux_logical_core = [transpose_core_grid, full_grid_size](uint32_t mux_index) -> CoreCoord {
-        const uint32_t wrap = transpose_core_grid ? full_grid_size.x : full_grid_size.y;
-        if (mux_index >= wrap) {
-            mux_index -= wrap;
-        }
-        return transpose_core_grid ? CoreCoord(mux_index, full_grid_size.y - 1)
-                                   : CoreCoord(full_grid_size.x - 1, mux_index);
-    };
-
     std::vector<CoreRange> mux_core_ranges;
     for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
         uint32_t dir = mux_id % 2;  // 2 being the number of directions
@@ -983,15 +971,17 @@ all_gather_minimal_matmul_async_factory_helper(
             fused_ternary_input_b,
             true);
 
-    auto in0_receiver_fabric_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp",
-        in0_receiver_cores_fabric,
-        tt::tt_metal::DataMovementConfig{
-            .processor = in0_risc,
-            .noc = in0_noc,
-            .compile_args = in0_receiver_fabric_compile_time_args,
-            .defines = in0_fabric_defines});
+        in0_receiver_fabric_kernels_id = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/"
+            "dm_in0_sender.cpp",
+            in0_receiver_cores_fabric,
+            tt::tt_metal::DataMovementConfig{
+                .processor = in0_risc,
+                .noc = in0_noc,
+                .compile_args = in0_receiver_fabric_compile_time_args,
+                .defines = in0_fabric_defines});
+    }
 
     // For in1's primary accessor: when fsdp_fused, the kernel reads from PWB (gathered weight),
     // so the main accessor describes the PWB. When not fsdp_fused, it describes the weight tensor
