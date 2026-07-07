@@ -12,14 +12,14 @@ tt::tt_metal::experimental::DataMovementHardwareConfig create_reader_datamovemen
     if (arch == tt::ARCH::QUASAR) {
         return tt::tt_metal::experimental::DataMovementGen2Config{};
     }
-    return tt::tt_metal::experimental::create_reader_gen1_datamovement_config();
+    return tt::tt_metal::experimental::CreateReaderGen1DataMovementConfig();
 }
 
 tt::tt_metal::experimental::DataMovementHardwareConfig create_writer_datamovement_config(tt::ARCH arch) {
     if (arch == tt::ARCH::QUASAR) {
         return tt::tt_metal::experimental::DataMovementGen2Config{};
     }
-    return tt::tt_metal::experimental::create_writer_gen1_datamovement_config();
+    return tt::tt_metal::experimental::CreateWriterGen1DataMovementConfig();
 }
 
 }  // namespace ttnn

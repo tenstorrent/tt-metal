@@ -26,7 +26,7 @@ namespace tt::tt_metal::experimental {
 //
 // Gen1 DM config (i.e., which RISC and NOC a kernel uses) is performance-critical,
 // but the common case is handled for you: build the DataMovementGen1Config with
-// create_reader_gen1_datamovement_config() / create_writer_gen1_datamovement_config(),
+// CreateReaderGen1DataMovementConfig() / CreateWriterGen1DataMovementConfig(),
 // which fill in the conventional processor/NOC/NOC-mode. Power users who want to override
 // that convention construct a DataMovementGen1Config directly.
 //
@@ -50,14 +50,14 @@ struct DataMovementGen1Config {
 //   reader -> NCRISC (RISCV_1) on NOC_0;  writer -> BRISC (RISCV_0) on NOC_1
 // NOC mode is always DM_DEDICATED_NOC; DM_DYNAMIC_NOC is a power-user knob reached only by
 // constructing a DataMovementGen1Config directly.
-inline DataMovementGen1Config create_reader_gen1_datamovement_config() noexcept {
+inline DataMovementGen1Config CreateReaderGen1DataMovementConfig() noexcept {
     return DataMovementGen1Config{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = tt::tt_metal::NOC::NOC_0,
         .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC};
 }
 
-inline DataMovementGen1Config create_writer_gen1_datamovement_config() noexcept {
+inline DataMovementGen1Config CreateWriterGen1DataMovementConfig() noexcept {
     return DataMovementGen1Config{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = tt::tt_metal::NOC::NOC_1,
