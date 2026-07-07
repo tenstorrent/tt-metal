@@ -156,7 +156,7 @@ jobs:
             ./.github/sku_config.yaml
 
   prepare-sweep-vectors:
-    name: Prepare sweep vectors
+    name: ${{ matrix.test-group.name }}
     needs: [generate-master-json-from-db, load-prepare-vectors-budget]
     if: >-
       always() &&
@@ -291,26 +291,17 @@ jobs:
             ./.github/sku_config.yaml
       - name: Select single-sweep hot path
         id: filter
-        env:
-          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
-          SWEEP: ${{ inputs.sweep-name }}
         run: |
-          # ALL SWEEPS runs keep the full matrix (passed through verbatim). A
-          # single-module sweep-name keeps only the one category batch whose
-          # op-category prefix-matches it (on a dot boundary), so a single sweep
-          # spins up 1 job, not all ~30.
-          if [[ "$SWEEP" == "ALL SWEEPS"* ]]; then
-            FILTERED="$MATRIX"
+          matrix='${{ steps.build-matrix.outputs.matrix }}'
+          categories='${{ inputs.sweep-name == "ALL SWEEPS"* && "ALL" || inputs.sweep-name }}'
+          if [[ "$categories" == "ALL" ]]; then
+            filtered="$matrix"
           else
-            FILTERED=$(jq -c --arg s "$SWEEP" \
-              '[.[] | (.category // "") as $c | select($c == $s or ($s | startswith($c + ".")))]' \
-              <<< "$MATRIX")
+            filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains("\,($c)"))]')
           fi
-          # Emit via the heredoc form (same as prepare_test_matrix.py) so a large
-          # matrix value is written intact.
           {
             echo "matrix<<EOF"
-            echo "$FILTERED"
+            echo "$filtered"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
