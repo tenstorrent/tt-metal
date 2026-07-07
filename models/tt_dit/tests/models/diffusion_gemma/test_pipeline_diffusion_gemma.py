@@ -43,7 +43,7 @@ MODEL_ID = os.environ.get("DIFFUSIONGEMMA_MODEL_ID", "google/diffusiongemma-26B-
 # match if HF's argmax token is anywhere in TT's top-``TOP_K_MATCH`` predictions. Assertion
 # requires at least ``MIN_MATCH_RATIO`` of the N positions to pass this test.
 #
-# Why not exact match? At bfp4/bfp8 expert precision the model output text is close but not
+# Why not exact match? At bfp8 expert precision the model output text is close but not
 # identical to HF ("Tokyo." vs "**Tokyo**.") — some positions have their top-1/top-2 winner
 # flipped by rounding, without breaking the overall answer. Top-K containment is robust to
 # this precision noise, while still failing if the model is qualitatively wrong.
@@ -69,30 +69,26 @@ MAX_NEW_TOKENS = 32
 SEED = 0
 
 # Permissive per-mesh-shape × per-expert-dtype latency thresholds (seconds). Expert dtype
-# strongly affects DRAM traffic through the MoE: bfp4 is ~8x smaller than bf16, bfp8 ~4x.
+# strongly affects DRAM traffic through the MoE: bfp8 is ~4x smaller than bf16.
 # Tighten after first hardware run.
 # Key format: (rows, cols, topology, expert_dtype_key) where
-#   expert_dtype_key ∈ {"bfp4", "bfp8", "bf16"}.
+#   expert_dtype_key ∈ {"bfp8", "bf16"}.
 _DEFAULT_METRICS = {"encoder": 20.0, "denoising": 120.0, "total": 150.0}
 EXPECTED_METRICS = {
     # BH QB2 (2x4 linear)
-    (2, 4, "linear", "bfp4"): {"encoder": 15.0, "denoising": 90.0, "total": 110.0},
     (2, 4, "linear", "bfp8"): _DEFAULT_METRICS,
     (2, 4, "linear", "bf16"): {"encoder": 30.0, "denoising": 180.0, "total": 220.0},
     # BH galaxy (4x8 linear)
-    (4, 8, "linear", "bfp4"): {"encoder": 6.0, "denoising": 45.0, "total": 60.0},
     (4, 8, "linear", "bfp8"): {"encoder": 8.0, "denoising": 60.0, "total": 80.0},
     (4, 8, "linear", "bf16"): {"encoder": 12.0, "denoising": 90.0, "total": 120.0},
     # WH T3K (2x4 ring) — bf16 doesn't fit in DRAM, skipped in-test.
-    (2, 4, "ring", "bfp4"): {"encoder": 20.0, "denoising": 120.0, "total": 150.0},
     (2, 4, "ring", "bfp8"): {"encoder": 30.0, "denoising": 180.0, "total": 220.0},
     # WH T3K (1x8 ring) — tp=8 splits MoE intermediate 8-way, so per-device DRAM is 4x
     # smaller than (2,4). bf16 fits here. Numbers below are calibrated from a measured
     # bfp8 run at ~39s total (with the M=256 canvas MoE fast path), with ~15% slack for
     # warm-cache/thermal variability. Total includes stopping-criteria-driven early
-    # termination. bfp4 and bf16 numbers extrapolated from the bfp8 baseline (bfp4 ≲ bfp8
-    # since MoE DRAM traffic is smaller; bf16 > bfp8).
-    (1, 8, "ring", "bfp4"): {"encoder": 5.0, "denoising": 35.0, "total": 40.0},
+    # termination. bf16 numbers extrapolated from the bfp8 baseline (bf16 > bfp8 since MoE
+    # DRAM traffic is larger).
     (1, 8, "ring", "bfp8"): {"encoder": 5.0, "denoising": 35.0, "total": 32.0},
     (1, 8, "ring", "bf16"): {"encoder": 8.0, "denoising": 55.0, "total": 40.0},
 }
@@ -100,7 +96,7 @@ EXPECTED_METRICS = {
 
 def _expert_dtype_key(dtype: ttnn.DataType) -> str:
     """Short stable string for keying ``EXPECTED_METRICS``."""
-    return {ttnn.bfloat4_b: "bfp4", ttnn.bfloat8_b: "bfp8", ttnn.bfloat16: "bf16"}[dtype]
+    return {ttnn.bfloat8_b: "bfp8", ttnn.bfloat16: "bf16"}[dtype]
 
 
 # ----- Test ------------------------------------------------------------------------------
@@ -109,7 +105,6 @@ def _expert_dtype_key(dtype: ttnn.DataType) -> str:
 @pytest.mark.parametrize(
     "expert_dtype",
     [
-        pytest.param(ttnn.bfloat4_b, id="expert_bfp4"),
         pytest.param(ttnn.bfloat8_b, id="expert_bfp8"),
         pytest.param(ttnn.bfloat16, id="expert_bf16"),
     ],
@@ -306,7 +301,7 @@ def test_pipeline_diffusion_gemma(
     # 4b. Approximate token match on the section-2 logits — the functional correctness bar.
     # We compare TT's *top-K* predictions to HF's argmax at each of the first N positions.
     # A position is a "match" when HF's argmax token is anywhere in TT's top-K set. This is
-    # tolerant of bfp4/bfp8 precision flips (which can swap a token with a near-tie synonym)
+    # tolerant of bfp8 precision flips (which can swap a token with a near-tie synonym)
     # while still failing if TT lands far outside HF's plausible set. Both are deterministic
     # for the same seeded canvas.
     hf_argmax = hf_logits.argmax(dim=-1)[0, :N_TOKEN_MATCH].tolist()

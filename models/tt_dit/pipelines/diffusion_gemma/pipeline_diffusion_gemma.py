@@ -131,7 +131,7 @@ class DiffusionGemmaPipeline:
         # bfp8 and bf16 without a stale-cache collision.
         cache_base = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
         model_key = str(hf_model.config._name_or_path).rstrip("/").split("/")[-1] or "diffusion_gemma"
-        _dtype_to_key = {ttnn.bfloat4_b: "bfp4", ttnn.bfloat8_b: "bfp8", ttnn.bfloat16: "bf16"}
+        _dtype_to_key = {ttnn.bfloat8_b: "bfp8", ttnn.bfloat16: "bf16"}
         dtype_key = _dtype_to_key.get(config.expert_dtype, "unknown")
         moe_cache_root = os.path.join(cache_base, model_key, f"experts_{dtype_key}")
 
@@ -230,7 +230,7 @@ class DiffusionGemmaPipeline:
         # Build decoder sharing encoder's layers/norm/embed_tokens on device. Matches HF's
         # ``DiffusionGemmaModel._tied_weights_keys`` (encoder.layers ↔ decoder.layers, .norm ↔
         # .norm, .embed_tokens ↔ .embed_tokens). Prevents double-construction of ~5.7 GB of
-        # MoE weights per device (which OOMs on WH T3K even at bfp4 experts).
+        # MoE weights per device (which OOMs on WH T3K even at bfp8 experts).
         decoder = DiffusionGemmaDecoderModel(
             **decoder_text_kwargs,
             shared_layers=encoder.language_model.layers,

@@ -39,7 +39,7 @@ class DiffusionGemmaDecoderModel(Module):
     provided, this decoder reuses those Python objects instead of constructing new ones
     — the way HF's ``DiffusionGemmaModel._tied_weights_keys`` intends. Without sharing
     the decoder would double-allocate every layer weight, which OOMs the full 30-layer
-    model on WH T3K DRAM (even at bfp4 experts). Standalone tests skip these kwargs and
+    model on WH T3K DRAM (even at bfp8 experts). Standalone tests skip these kwargs and
     still work — they just pay the extra allocation.
     """
 
