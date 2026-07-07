@@ -1,0 +1,126 @@
+# THROWAWAY diagnostic workflow — safe to delete after the investigation closes.
+# Reproduces the "IndexError: unordered_map::at" seen in Galaxy DeepSeek Prefill
+# CI failures (see run 28753760978). Does not touch the production test matrix
+# or its Slack alerting, and only runs on workflow_dispatch.
+name: "[investigation] Repro cluster-teardown IndexError"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact:
+    needs: check-harbor
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: Release
+      build-wheel: true
+      platform: "Ubuntu 22.04"
+
+  repro:
+    needs: [check-harbor, build-artifact]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sku: bh_galaxy
+            runs_on: [arch-blackhole, pipeline-functional, topology-6u, in-service]
+          - sku: wh_galaxy
+            runs_on: [arch-wormhole_b0, pipeline-functional, topology-6u, in-service]
+    name: "repro (${{ matrix.sku }})"
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 25
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ github.ref }}
+          submodules: recursive
+          path: docker-job
+      - name: Mark repository as safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+      - name: Setup job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: Run control + trigger arms, 5x each, and evaluate
+        id: repro
+        run: |
+          set -uo pipefail
+          TESTS_DIR="models/demos/deepseek_v3_d_p/tests"
+          CONTROL="$TESTS_DIR/test_repro_cluster_teardown_control.py"
+          TRIGGER="$TESTS_DIR/test_repro_cluster_teardown_trigger.py"
+          RUNS=5
+          mkdir -p /tmp/repro_logs
+
+          control_pass=0
+          for i in $(seq 1 $RUNS); do
+            echo "::group::control run $i/$RUNS"
+            if pytest "$CONTROL" -q --tb=short > "/tmp/repro_logs/control_$i.log" 2>&1; then
+              control_pass=$((control_pass+1))
+            fi
+            cat "/tmp/repro_logs/control_$i.log"
+            echo "::endgroup::"
+          done
+
+          trigger_repro=0
+          trigger_pass=0
+          trigger_other_fail=0
+          for i in $(seq 1 $RUNS); do
+            echo "::group::trigger run $i/$RUNS"
+            if pytest "$TRIGGER" -q --tb=short > "/tmp/repro_logs/trigger_$i.log" 2>&1; then
+              trigger_pass=$((trigger_pass+1))
+            elif grep -q "IndexError: unordered_map::at" "/tmp/repro_logs/trigger_$i.log"; then
+              trigger_repro=$((trigger_repro+1))
+            else
+              trigger_other_fail=$((trigger_other_fail+1))
+            fi
+            cat "/tmp/repro_logs/trigger_$i.log"
+            echo "::endgroup::"
+          done
+
+          {
+            echo "## Cluster-teardown IndexError repro — ${{ matrix.sku }}"
+            echo ""
+            echo "| Arm | Result |"
+            echo "|---|---|"
+            echo "| control (0 collection-time probes) | $control_pass/$RUNS passed |"
+            echo "| trigger (3 collection-time probes) | $trigger_repro/$RUNS reproduced the IndexError, $trigger_pass/$RUNS unexpectedly passed, $trigger_other_fail/$RUNS failed a different way |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          if [ "$control_pass" -eq "$RUNS" ] && [ "$trigger_repro" -eq "$RUNS" ]; then
+            echo "RESULT: HYPOTHESIS CONFIRMED on ${{ matrix.sku }} — deterministic ${RUNS}/${RUNS} both arms."
+            exit 0
+          else
+            echo "RESULT: HYPOTHESIS NOT CONFIRMED on ${{ matrix.sku }} — see counts above."
+            exit 1
+          fi
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
