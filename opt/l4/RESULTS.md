@@ -107,6 +107,30 @@ per-block ±2f/±3f/±4f data: `opt/l4/depth_map.txt`.
 **Confidence:** 9-block depth map (single step). The temporal-locality signal is strong and
 trends with depth; per-block calibration + across-step confirmation is the mask-search (step 1).
 
+## 4b. Audio: a stale-fork regression — the biggest FREE win (−0.42s)
+
+Measured the standalone girl-clip audio decode (`test_audio_decode_girl`, galaxy 4×8, traced, warm):
+
+| | this branch (deffb9) | ltx-perf tip |
+|---|---|---|
+| **Audio decode (warm, galaxy 4×8)** | **0.92s** (vocoder+BWE 795ms) | **0.5s** |
+
+ltx-perf tip's own committed perf table (`models/tt_dit/models/LTX2.md`, refreshed Jul 1) reports
+0.5s on galaxy 4×8; my measured 0.92s on the same mesh/checkpoint/content is a **~0.42s regression**.
+**Root cause: this branch (`deffb9`, ~Jun) is a stale fork that predates ltx-perf's audio-decode
+refactor** (940 commits diverged; Jun 30–Jul 6: `d976d711a16` slim decode, `9dd7c436fc4` on-device
+weight formatting, `ec0c2496463` conv1d reshard+untilize fold, plus vocoder/bwe/decode_audio
+rewrites = −772 lines in `pipeline_ltx.py`). It is NOT one missing commit — it's an entire divergent
+(older) audio subsystem.
+
+**Fix = rebase, not re-optimize.** Do NOT hand-optimize vocoder+BWE on the stale fork (that
+duplicates shipped ltx-perf work). Rebase the fast-mode/quant/sigma/L4 work onto ltx-perf tip → the
+audio drops to 0.5s for free (**e2e fast baseline 6.52s → ~6.1s**), and you inherit the current VAE
++ pipeline too. This is the single biggest available win — larger than any config lever and larger
+than L4's estimate — and it stacks with L4. Caveat: the rebase is 940 commits and will have
+conflicts (the fast-mode video features — LTX_FAST bundle, quant_config, sigma overrides — are not
+on ltx-perf); budget it as a real integration, and re-baseline all numbers on the new base.
+
 ## 5. What's delivered / committed
 
 - Prewarm cherry-pick built & validated (`386ee5b0e2f`).
@@ -115,13 +139,57 @@ trends with depth; per-block calibration + across-step confirmation is the mask-
 - L4 investigation tooling: capture hook + real-activation probe (the decisive experiment).
 - Lever 2a consistency cleanup (audio tile-preserving chunk).
 
-## 6. Recommended next steps (in order)
+## 6. Recommended next steps — ranked path toward 3s
 
-1. **Per-block mask-search** — sweep all 48 blocks × a few steps with the capture+probe tooling to
-   map the dense→windowable transition depth and the tolerable ±k per block. (block 24 holds, block
-   4 fails; the boundary is unmapped.) Cheap, and it's the prerequisite for the kernel.
-2. **Build the depth-adaptive temporal-banded K-skip ring SDPA kernel** (dense early blocks, ±2–3
-   frame window later). The real path to a faster DiT and toward 3s. ~days.
-3. Marginal: test **Lever 5** (SDPA-input bf8) for the last ~1–3% on the comms side (gated).
-4. 3s at the full 6s/145f/1080p deliverable will likely need L4 **stacked** with a frame-count or
-   further step-schedule decision — flag as a product call, since 145f = the 6.04s clip.
+Synthesized from external literature (adversarially-verified deep research) + internal TT knowledge
+(Glean). **Honest headline: ~3s for the exact 6s/1080p/145f deliverable is NOT reachable by
+training-free levers alone** — the verified literature puts the training-free ceiling at ~1.5–2×
+off 6.5s (→ ~3.5–4.5s), short of the ~2.2× needed. Reaching ~3s requires a **retrained ≤4-step
+CFG-free LTX** on top of the kernel work, OR a frame-count/resolution product decision. Context: the
+official roadmap target was **6.0s and it was hit** (Townhall 06-17); 3s is ~2× beyond roadmap.
+
+### Tier A — free/cheap, do first (quality-safe)
+1. **Rebase onto ltx-perf tip** (see §4b). Audio 0.92→0.5s = **−0.42s → ~6.1s**, free, inherits
+   current VAE/pipeline. Biggest single win. 940-commit rebase w/ conflicts — real integration.
+2. **Per-block × per-step mask-search** for L4 — sweep all 48 blocks × the denoise steps with the
+   `opt/l4/` capture+probe tooling to map which blocks tolerate which ±k temporal window (the 9-block
+   map shows it's block-specific and non-monotonic). Cheap; prerequisite for the kernel.
+
+### Tier B — kernel work (~days each), training-free, STACKS
+3. **L4 depth-adaptive temporal sparse attention.** DON'T build from scratch — **reuse the internal
+   MiniMax-M3 Sparse Attention (MSA) machinery** in tt-blaze/tt-metal, already on the *same Galaxy
+   SP8×TP4 mesh*: `indexer_score_msa` (merged, tt-metal PR #48205), `FlashGQASparseDecode` (tt-blaze
+   PR #1788, attends only to selected 128-token blocks), `MiniMaxM3IndexerSelect` (block-select).
+   Re-targets: decode-time→prefill, GQA→MHA, content-index→(static temporal window OR indexer).
+   Owners skrsticTT / nmaurice / handrews; loop in Colman Glagovich (TT FlashAttention owner, >70%
+   BH math-util FA). Realized ~1.3–1.7× on attention (lit + our probe) → **~−0.3–0.5s → ~5.7s**.
+4. **VAE decoder acceleration.** Video VAE is 1.1s and NOT trace-replayed today. Flash-VAED-style
+   decoders report ~6× on the *exact* LTX VAE in the literature (bounded e2e since DiT dominates) →
+   **~−0.4–0.6s → ~5.2s**. Kevin is already profiling the VAE (`prof_vae_ltx.py`, `LTX_USE_FUSED`).
+
+### Tier C — the decisive lever for 3s, but needs model training
+5. **Few-step CFG-free distilled LTX (8→4 steps, or fewer).** For a *communication-bound* DiT this
+   is the #1 lever: each removed denoise step removes a full round of AllGather/ReduceScatter. NOT
+   training-free — needs offline distillation (Phased DMD arxiv 2510.27684 hits a 4-step floor on
+   14–28B video DiTs; Wan2.2-Lightning ships 4-step + CFG-free at ~20× fwd-pass reduction). 4 steps
+   is the safe quality floor; 3-step aspirational. **LTX checkpoints are hot-swappable** (Sulphur
+   weight-swap; AnimateDiff-Lightning 4-step precedent internally), so a distilled checkpoint drops
+   in. Path: (a) request/wait for a Lightricks few-step LTX-2.3, or (b) an internal distill run.
+   8→4 steps ≈ −40–45% DiT ≈ **−1.5–1.7s**. This is what closes the gap to ~3s.
+
+### Dead ends — do NOT pursue (evidence)
+- **Feature caching** (TeaCache/PAB/FBCache/∆-DiT/toca): dead at ≤8 steps on distilled models — two
+  independent 2026 primary sources (Chorus, DisCa) agree caching & distillation exploit the *same*
+  inter-step redundancy; also matches the internal `LTX_PERF_PLAN.md` finding.
+- **CFG removal**: already off — the distilled pipeline is `_denoise_no_guidance` (verified). Spent.
+- **"Batched denoising"** (the roadmap's named next lever): a **throughput/cost** optimization
+  (larger batch → larger CCL messages → better mesh utilization), NOT single-clip latency — a
+  single clip's steps are sequential. Won't help the 3s number; helps $/video at serving scale.
+- **Config knobs** (num_links, topology, reshards, SDPA-LoFi, SDPA-bf8): the HW/comms wall (§2/§3).
+
+### Honest 3s verdict
+Tier A+B (all quality-safe, ~weeks of kernel work) → **~5.0–5.3s**. Reaching **~3s requires Tier C**
+(the 4-step distilled model — the decisive lever), OR a product decision: 145f→~73f *is* a 3s clip
+but a different deliverable; 121f (FastVideo's) → ~5.3s. Sparse-attention CUDA kernels and all
+published FPS numbers are NVIDIA-specific — only the *algorithms* port to Blackhole; budget kernel
+implementation as new BH work.
