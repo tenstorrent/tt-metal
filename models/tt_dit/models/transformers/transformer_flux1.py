@@ -428,7 +428,7 @@ class Flux1Transformer(Module):
 class Flux1Checkpoint:
     """A Flux.1 checkpoint: fetches weights and builds loaded transformers."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, lora_path: str | None = None, lora_scale: float = 1.0) -> None:
         self._name = name
         torch_transformer = FluxTransformer2DModel.from_pretrained(
             name,
@@ -436,6 +436,18 @@ class Flux1Checkpoint:
             torch_dtype=torch.bfloat16,
         )
         torch_transformer.eval()
+        # Optional LoRA: fuse a FLUX.1 LoRA adapter into the transformer weights on
+        # host before extracting the state_dict, so the fused weights are what gets
+        # loaded onto device. No runtime LoRA path is needed on-device. FLUX.1-dev
+        # LoRAs target the same layers Kontext shares, so they generally apply.
+        if lora_path:
+            import loguru
+
+            loguru.logger.info(f"fusing LoRA adapter {lora_path!r} (scale={lora_scale})...")
+            torch_transformer.load_lora_adapter(lora_path)
+            torch_transformer.fuse_lora(lora_scale=lora_scale)
+            torch_transformer.unload_lora()  # drop adapter modules; keep fused weights
+            torch_transformer.eval()
         self._config = torch_transformer.config
         self._state_dict = torch_transformer.state_dict()
 
