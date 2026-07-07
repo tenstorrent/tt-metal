@@ -78,6 +78,16 @@ glue that will not generalize. Reimplement the *math* on simple `ttnn.bfloat16` 
 / `ttnn.DRAM_MEMORY_CONFIG` defaults (the functional-decoder correctness-first convention), so the
 layer accepts an arbitrary `seq_len`.
 
+**Preserve the emitted workload batch size.** The emit is generated for a specific batch (read it
+from `model_pt.BATCH_SIZE`, e.g. **32** for Llama-3.1-8B). That batch is part of the workload the
+downstream stages (optimize, full-model, release) are expected to serve, so **do not silently
+retarget to batch-1**. Batch is a runtime/workload dimension, *not* static layout glue — keep it. The
+thing you drop is the seq=16 *layout* specialization (shard specs, program configs, per-core grids),
+not the batch. Parameterize the layer by `batch` (defaulting to the emitted `BATCH_SIZE`) and by
+`seq_len`, so it accepts arbitrary values of both. If you have a documented reason to also support
+batch-1 (single-user latency), add it as an *additional* supported value — do not make it the sole
+target and do not lose the emitted batch.
+
 ### Per-layer semantics (extracted from `Qwen3DecoderLayer` / `Qwen3Attention` / `Qwen3MLP`)
 
 Decoder block (`Qwen3DecoderLayer.forward(hidden_states, residual, cos, sin)`):
@@ -98,6 +108,8 @@ Attention (`Qwen3Attention.forward`), GQA with per-head QK-norm and RoPE:
 - One **fused QKV** matmul → output width 6144, sliced in **`[V, Q, K]`** order:
   `V = [:, 0:1024]`, `Q = [:, 1024:5120]` (4096 wide), `K = [:, 5120:6144]`.
   (The fused weight is built by consteval as `concat([V^T, Q^T, K^T], dim=1)`.)
+- In the reshapes below the leading `1` is the **batch axis**; carry the emitted `batch`
+  (e.g. `[batch, seq, 8, 128]`), do not hard-code it to 1.
 - `V`: reshape `[1, seq, 8, 128]` → permute `[0,2,1,3]` → `[1, 8, seq, 128]`. No norm, no RoPE.
 - `K`: reshape `[1, seq, 8, 128]` → `rms_norm(eps=1e-6, weight=k_norm_weight)` over head_dim →
   permute `[0,2,1,3]` → `rotary_embedding(cos, sin)`.
@@ -111,7 +123,8 @@ Attention (`Qwen3Attention.forward`), GQA with per-head QK-norm and RoPE:
 
 Shapes/config (Qwen3-4B; confirm from `AutoConfig`): hidden 2560, 36 layers, 32 Q heads, 8 KV heads
 (GQA), head_dim 128, intermediate ≈ 9728, RMSNorm eps 1e-6, `rope_theta` per config,
-`max_position_embeddings` = 40960, vocab 151936.
+`max_position_embeddings` = 40960, vocab 151936. **Batch** comes from the emit
+(`model_pt.BATCH_SIZE`), not from config — read and preserve it.
 
 MLP (`Qwen3MLP.forward`) — SwiGLU: `down_proj( silu(gate_proj(x)) * up_proj(x) )`.
 
@@ -142,14 +155,16 @@ correctness), and RoPE-table / mask construction. Keep the runtime `prefill_forw
 
 1. Load `AutoConfig` for `HF_MODEL`; confirm the shapes/config above from the real config, not memory.
 2. Read `FORGE_DIR/model/graph_0/model_ttnn.py` + `consteval.py` + `params.py` to lock the exact math
-   (eps, slice order `[V,Q,K]`, per-head QK-norm, RoPE, SDPA scale, o_proj transpose, SwiGLU).
+   (eps, slice order `[V,Q,K]`, per-head QK-norm, RoPE, SDPA scale, o_proj transpose, SwiGLU) **and
+   the emitted batch** (`model_pt.BATCH_SIZE`).
 3. Write `FunctionalDecoder` for a single decoder layer on a 1x1 mesh, bf16 / TILE / DRAM defaults,
-   parameterized by `seq_len`. `from_state_dict(state_dict, *, hf_config, layer_idx, mesh_device)`
+   parameterized by `seq_len` **and `batch` (default = emitted `BATCH_SIZE`)**.
+   `from_state_dict(state_dict, *, hf_config, layer_idx, mesh_device, batch=<emitted>)`
    builds all ttnn weights + RoPE tables + mask; `prefill_forward(hidden_states, *, position_cos,
-   position_sin, ...)` runs the block and returns the layer output `[1, batch, seq, hidden]` (match
-   the example autoports' prefill shape convention; document whatever you pick).
+   position_sin, ...)` runs the block and returns the layer output `[1, batch, seq, hidden]` at the
+   **emitted batch** (match the example autoports' prefill shape convention; document whatever you pick).
 4. Build an HF single-layer reference (`Qwen3DecoderLayer` from `transformers`, or slice layer
-   `layer_idx` out of the full model) and compare prefill PCC.
+   `layer_idx` out of the full model) **at the same batch** and compare prefill PCC.
 5. `decode_forward` raises `NotImplementedError("decode path pending emitted-decode forge version")`.
 
 ## Evidence To Leave (done criteria — "works for now" bar)
@@ -158,13 +173,13 @@ Done means all of these are true and recorded:
 
 - `tt/functional_decoder.py` with `FunctionalDecoder(LightweightModule)`, `from_state_dict`,
   `prefill_forward`, and a documented `decode_forward` stub. `forward(mode=...)` dispatcher optional.
-- `tests/test_functional_decoder.py`: at least one **real-weight** single-layer prefill test that
-  passes **PCC ≥ 0.99** vs the HF reference layer (the emit itself captures ~0.977 full-model bf16, so
-  a single bf16 layer should comfortably clear 0.99; aim for ≥ 0.995 if achievable). Include a
-  synthetic-weight prefill test at real shapes, and a couple of non-trivial `seq_len` values (a small
-  smoke length and one larger length). A `decode_forward` test may `pytest.xfail`/`skip` with the
-  pending-decode reason. Include a static runtime-fallback audit (grep the runtime method source for
-  `torch`/`from_torch`/`to_torch`).
+- `tests/test_functional_decoder.py`: at least one **real-weight** single-layer prefill test **at the
+  emitted batch** that passes **PCC ≥ 0.99** vs the HF reference layer (the emit itself captures ~0.977
+  full-model bf16, so a single bf16 layer should comfortably clear 0.99; aim for ≥ 0.995 if
+  achievable). Include a synthetic-weight prefill test at real shapes, and a couple of non-trivial
+  `seq_len` values (a small smoke length and one larger length), all at the emitted batch. A
+  `decode_forward` test may `pytest.xfail`/`skip` with the pending-decode reason. Include a static
+  runtime-fallback audit (grep the runtime method source for `torch`/`from_torch`/`to_torch`).
 - `doc/context_contract.json`: records `hf_advertised_context` (= HF `max_position_embeddings`) and
   `current_supported_context` (the largest prefill seq you validated). Because this is a
   forge-seeded prefill-only starting point, `current_supported_context` will be below advertised;
@@ -198,4 +213,5 @@ If a quick warmed-prefill timing is easy, include it; otherwise record it as not
 - Prefer explicit model contracts over permissive fallback logic.
 - Do not silently infer or patch invalid config values; fail directly.
 - Keep the seq=16-specific forge layout glue out of the generalized implementation.
+- **Preserve the emitted workload batch** (`model_pt.BATCH_SIZE`); drop layout glue, not batch.
 - Be honest in the docs and contract about what is and isn't supported this pass.
