@@ -56,14 +56,19 @@ void kernel_main() {
 
     cb_wait_front(cb_eps, 1);
 
+    // combine_welford_partials takes CircularBuffer& (stateless wrappers over the CB id);
+    // the raw uint32_t ids above are still used for the eltwise_chain template args and cb_* calls.
+    CircularBuffer cb_stats_cb(cb_stats);
+    CircularBuffer cb_stats_reduced_cb(cb_stats_reduced);
+
     for (uint32_t tile_row = 0; tile_row < num_tile_rows; tile_row++) {
         // Calculate global tile row and batch index
         uint32_t global_tile_row = tile_row_start + tile_row;
         uint32_t batch_idx = global_tile_row / Ht;
         // Combine per-device stats into mean/variance
         norm::kernel_util::compute::combine_welford_partials(
-            cb_stats,
-            cb_stats_reduced,
+            cb_stats_cb,
+            cb_stats_reduced_cb,
             num_devices,
             [W](uint32_t) { return (static_cast<float>(W)); },
             norm::kernel_util::compute::RSqrtPolicy{false, 0});
