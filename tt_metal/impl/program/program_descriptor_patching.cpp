@@ -58,6 +58,16 @@ ResolvedBindings resolve_bindings(
     //
     // tensor_buffers is ordered inputs-first; the first num_input_buffers entries are inputs.
     {
+        // Buffers in the output/workload region. An input-region entry that also appears here is the
+        // op's own output carried inside tensor_args (e.g. an in-place op's optional output_tensor
+        // aliasing an input) — a same-buffer-by-construction alias, NOT the ambiguous matmul(X, X)
+        // case — so it must not bail. (#48928: binary_ng in-place residual add.)
+        std::unordered_set<Buffer*> output_region;
+        for (size_t i = num_input_buffers; i < tensor_buffers.size(); ++i) {
+            if (tensor_buffers[i]) {
+                output_region.insert(tensor_buffers[i]);
+            }
+        }
         std::unordered_set<Buffer*> input_buffers;   // buffers seen in the input region
         std::unordered_set<Buffer*> output_buffers;  // buffers seen in the output/workload region
         for (size_t i = 0; i < tensor_buffers.size(); ++i) {
@@ -68,6 +78,11 @@ ResolvedBindings resolve_bindings(
             const bool is_input = i < num_input_buffers;
             // An output/workload buffer that aliases an input is the safe in-place case — skip it.
             if (!is_input && input_buffers.contains(buf)) {
+                continue;
+            }
+            // An input-region entry that is also an output buffer is the op's output (an in-place
+            // alias, e.g. output_tensor carried in tensor_args), not a distinct second input — safe.
+            if (is_input && output_region.contains(buf)) {
                 continue;
             }
             // Otherwise a repeat is ambiguous (matmul(X, X), or a repeated output) — bail to slow path.
