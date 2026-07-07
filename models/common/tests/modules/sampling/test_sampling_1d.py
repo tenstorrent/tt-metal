@@ -1682,7 +1682,7 @@ def test_topk_allgather_trace_ab(ttnn_mesh_device, gather_op, vocab_size):
     per_device_vocab = vocab_size // num_devices
     B = 32
     K = 32
-    NUM_REPLAYS = 10
+    NUM_REPLAYS = 200
 
     torch.manual_seed(42)
     logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
@@ -1844,7 +1844,7 @@ def test_candidate_gather_semaphore_clobber(ttnn_mesh_device, gather_op, num_bg,
     cluster_shape = tuple(mesh_device.shape)
     num_devices = max(cluster_shape)
     per_device_vocab = vocab_size // num_devices
-    B, K, NUM_REPLAYS = 32, 32, 10
+    B, K, NUM_REPLAYS = 32, 32, 200
     cluster_axis = None if 1 in cluster_shape else 0
 
     torch.manual_seed(42)
@@ -1992,7 +1992,7 @@ def test_ttsampling_forward_trace_ab(ttnn_mesh_device, gather_op, logit_profile)
 
     mesh_device = ttnn_mesh_device
     cluster_shape = tuple(mesh_device.shape)
-    B, NUM_REPLAYS = 32, 10
+    B, NUM_REPLAYS = 32, 200
 
     model_args = ModelArgs(mesh_device, max_batch_size=B, max_seq_len=128, dummy_weights=True)
     # Force the heavy top-k/top-p path (not force-argmax) so _perform_all_gather is exercised.
