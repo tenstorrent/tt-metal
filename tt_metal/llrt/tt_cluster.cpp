@@ -43,6 +43,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <umd/device/utils/mmio_timeout_config.hpp>
 #include <unistd.h>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
@@ -345,6 +346,18 @@ void Cluster::initialize_device_drivers() {
                 this->noc_mapping_enabled_ = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
             }
         }
+    }
+
+    // UMD's per-op MMIO timeout guard defaults to a 10 ms budget, which is too tight for IOMMU-enabled
+    // systems: on those boxes a single non-posted PCIe read (e.g. the dispatch-progress read in
+    // get_cq_dispatch_progress) can legitimately stall on the order of ~200 ms and trip the guard. Honor an
+    // explicit TT_METAL_MMIO_OP_TIMEOUT_MS override if provided (0 disables the guard); otherwise raise the
+    // budget only when an IOMMU is present, leaving the UMD default in place on non-IOMMU systems.
+    if (const auto override_ms = this->rtoptions_.get_mmio_op_timeout_ms()) {
+        tt::umd::MmioTimeoutConfig::set_op_timeout(std::chrono::milliseconds(*override_ms));
+    } else if (this->iommu_enabled_) {
+        constexpr auto iommu_mmio_op_timeout = std::chrono::milliseconds(1000);
+        tt::umd::MmioTimeoutConfig::set_op_timeout(iommu_mmio_op_timeout);
     }
 }
 

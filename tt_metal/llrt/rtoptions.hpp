@@ -358,6 +358,11 @@ class RunTimeOptions {
     // If not set, fabric code will use its own default
     std::optional<uint32_t> fabric_router_sync_timeout_ms = std::nullopt;
 
+    // Per-op MMIO (TLB-mapped) device transfer timeout, in milliseconds, forwarded to UMD's MmioTimeoutConfig.
+    // 0 disables the per-op MMIO timeout. If not set, the UMD default is used except on IOMMU-enabled systems
+    // where Cluster applies a larger budget at init.
+    std::optional<uint32_t> mmio_op_timeout_ms = std::nullopt;
+
     // User override for fabric kernel compiler optimization level
     // If not set, automatic selection is used (O3 when VC1 inactive, Os when VC1 active)
     std::optional<tt_metal::KernelBuildOptLevel> fabric_kernel_opt_level = std::nullopt;
@@ -845,6 +850,8 @@ public:
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
+
+    std::optional<uint32_t> get_mmio_op_timeout_ms() const { return mmio_op_timeout_ms; }
 
     std::optional<tt_metal::KernelBuildOptLevel> get_fabric_kernel_opt_level() const { return fabric_kernel_opt_level; }
     void set_fabric_kernel_opt_level(std::optional<tt_metal::KernelBuildOptLevel> opt_level) {

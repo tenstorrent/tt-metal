@@ -139,6 +139,7 @@ enum class EnvVarID {
     TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
+    TT_METAL_MMIO_OP_TIMEOUT_MS,                   // Per-op MMIO (TLB-mapped) transfer timeout in milliseconds
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
     TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
@@ -1532,6 +1533,26 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 TT_THROW("Invalid TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS: {}", value);
             } catch (const std::out_of_range&) {
                 TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS value out of range: {}", value);
+            }
+            break;
+
+        // TT_METAL_MMIO_OP_TIMEOUT_MS
+        // Per-op budget (milliseconds) for a single host-side MMIO (TLB-mapped) device transfer, forwarded to
+        // UMD's MmioTimeoutConfig. A value of 0 disables the per-op MMIO timeout. When unset, tt-metal leaves
+        // the UMD default in place except on IOMMU-enabled systems, where a larger budget is applied at cluster
+        // init (see Cluster::initialize_device_drivers).
+        // Usage: export TT_METAL_MMIO_OP_TIMEOUT_MS=1000
+        case EnvVarID::TT_METAL_MMIO_OP_TIMEOUT_MS:
+            try {
+                int parsed_value = std::stoi(value);
+                if (parsed_value < 0) {
+                    TT_THROW("TT_METAL_MMIO_OP_TIMEOUT_MS must be non-negative: {}", value);
+                }
+                this->mmio_op_timeout_ms = static_cast<uint32_t>(parsed_value);
+            } catch (const std::invalid_argument& ia) {
+                TT_THROW("Invalid TT_METAL_MMIO_OP_TIMEOUT_MS: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_MMIO_OP_TIMEOUT_MS value out of range: {}", value);
             }
             break;
 
