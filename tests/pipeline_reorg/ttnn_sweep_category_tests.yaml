@@ -28,423 +28,424 @@
   team: ttnn
   category: eltwise.unary
 
-- name: ttnn sweeps eltwise.unary_backward
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary_backward --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 130
-    wh_n300_civ2:
-      timeout: 130
-    bh_p150b_civ2:
-      timeout: 130
-    bh_p100:
-      timeout: 130
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: eltwise.unary_backward
-
-- name: ttnn sweeps eltwise.binary
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.binary --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 110
-    wh_n300_civ2:
-      timeout: 110
-    bh_p150b_civ2:
-      timeout: 110
-    bh_p100:
-      timeout: 110
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: eltwise.binary
-
-- name: ttnn sweeps eltwise.binary_backward
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.binary_backward --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 30
-    wh_n300_civ2:
-      timeout: 30
-    bh_p150b_civ2:
-      timeout: 30
-    bh_p100:
-      timeout: 30
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: eltwise.binary_backward
-
-- name: ttnn sweeps eltwise.composite
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.composite --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 25
-    wh_n300_civ2:
-      timeout: 25
-    bh_p150b_civ2:
-      timeout: 25
-    bh_p100:
-      timeout: 25
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: eltwise.composite
-
-- name: ttnn sweeps eltwise.unary_complex
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary_complex --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 18
-    wh_n300_civ2:
-      timeout: 18
-    bh_p150b_civ2:
-      timeout: 18
-    bh_p100:
-      timeout: 18
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: eltwise.unary_complex
-
-- name: ttnn sweeps eltwise.ternary
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.ternary --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 14
-    wh_n300_civ2:
-      timeout: 14
-    bh_p150b_civ2:
-      timeout: 14
-    bh_p100:
-      timeout: 14
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: eltwise.ternary
-
-- name: ttnn sweeps eltwise.binary_complex
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.binary_complex --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 8
-    wh_n300_civ2:
-      timeout: 8
-    bh_p150b_civ2:
-      timeout: 8
-    bh_p100:
-      timeout: 8
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: eltwise.binary_complex
-
-- name: ttnn sweeps eltwise.ternary_backward
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.ternary_backward --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: eltwise.ternary_backward
-
-# --- other single-card categories ---
-- name: ttnn sweeps data_movement
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name data_movement --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 55
-    wh_n300_civ2:
-      timeout: 55
-    bh_p150b_civ2:
-      timeout: 55
-    bh_p100:
-      timeout: 55
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: data_movement
-
-- name: ttnn sweeps reduction
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name reduction --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 30
-    wh_n300_civ2:
-      timeout: 30
-    bh_p150b_civ2:
-      timeout: 30
-    bh_p100:
-      timeout: 30
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: reduction
-
-- name: ttnn sweeps matmul
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name matmul --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 27
-    wh_n300_civ2:
-      timeout: 27
-    bh_p150b_civ2:
-      timeout: 27
-    bh_p100:
-      timeout: 27
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: matmul
-
-- name: ttnn sweeps transformer
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name transformer --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 10
-    wh_n300_civ2:
-      timeout: 10
-    bh_p150b_civ2:
-      timeout: 10
-    bh_p100:
-      timeout: 10
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: transformer
-
-- name: ttnn sweeps pool2d
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name pool2d --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 10
-    wh_n300_civ2:
-      timeout: 10
-    bh_p150b_civ2:
-      timeout: 10
-    bh_p100:
-      timeout: 10
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: pool2d
-
-- name: ttnn sweeps normalization
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name normalization --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 10
-    wh_n300_civ2:
-      timeout: 10
-    bh_p150b_civ2:
-      timeout: 10
-    bh_p100:
-      timeout: 10
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: normalization
-
-- name: ttnn sweeps creation
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name creation --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: creation
-
-- name: ttnn sweeps losses
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name losses --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: losses
-
-- name: ttnn sweeps fused
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name fused --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: fused
-
-- name: ttnn sweeps conv2d
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name conv2d --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: conv2d
-
-- name: ttnn sweeps composite
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name composite --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: composite
-
-- name: ttnn sweeps embedding
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name embedding --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: embedding
-
-- name: ttnn sweeps embedding_bw
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name embedding_bw --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: embedding_bw
-
-- name: ttnn sweeps conv_transpose2d
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name conv_transpose2d --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: conv_transpose2d
-
-# --- flat top-level sweep modules (no subdir) ---
-- name: ttnn sweeps add
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name add --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: add
-
-- name: ttnn sweeps tilize
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name tilize --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: tilize
-
-- name: ttnn sweeps tilize_with_val_padding
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name tilize_with_val_padding --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: tilize_with_val_padding
-
-- name: ttnn sweeps untilize
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name untilize --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: untilize
-
-- name: ttnn sweeps untilize_with_unpadding
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name untilize_with_unpadding --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-    bh_p100:
-      timeout: 5
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: untilize_with_unpadding
-
-# --- ccl (multi-device) ---
-- name: ttnn sweeps ccl
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name ccl --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name generality_suite_fabric_1d'
-  skus:
-    wh_galaxy:
-      timeout: 90
-    wh_llmbox:
-      timeout: 90
-    bh_loudbox:
-      timeout: 90
-  owner_id: U08T3JQEB36 # Steven Lee
-  team: ttnn
-  category: ccl
+# - name: ttnn sweeps eltwise.unary_backward
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary_backward --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 130
+#     wh_n300_civ2:
+#       timeout: 130
+#     bh_p150b_civ2:
+#       timeout: 130
+#     bh_p100:
+#       timeout: 130
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: eltwise.unary_backward
+# 
+# - name: ttnn sweeps eltwise.binary
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.binary --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 110
+#     wh_n300_civ2:
+#       timeout: 110
+#     bh_p150b_civ2:
+#       timeout: 110
+#     bh_p100:
+#       timeout: 110
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: eltwise.binary
+# 
+# - name: ttnn sweeps eltwise.binary_backward
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.binary_backward --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 30
+#     wh_n300_civ2:
+#       timeout: 30
+#     bh_p150b_civ2:
+#       timeout: 30
+#     bh_p100:
+#       timeout: 30
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: eltwise.binary_backward
+# 
+# - name: ttnn sweeps eltwise.composite
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.composite --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 25
+#     wh_n300_civ2:
+#       timeout: 25
+#     bh_p150b_civ2:
+#       timeout: 25
+#     bh_p100:
+#       timeout: 25
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: eltwise.composite
+# 
+# - name: ttnn sweeps eltwise.unary_complex
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary_complex --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 18
+#     wh_n300_civ2:
+#       timeout: 18
+#     bh_p150b_civ2:
+#       timeout: 18
+#     bh_p100:
+#       timeout: 18
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: eltwise.unary_complex
+# 
+# - name: ttnn sweeps eltwise.ternary
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.ternary --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 14
+#     wh_n300_civ2:
+#       timeout: 14
+#     bh_p150b_civ2:
+#       timeout: 14
+#     bh_p100:
+#       timeout: 14
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: eltwise.ternary
+# 
+# - name: ttnn sweeps eltwise.binary_complex
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.binary_complex --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 8
+#     wh_n300_civ2:
+#       timeout: 8
+#     bh_p150b_civ2:
+#       timeout: 8
+#     bh_p100:
+#       timeout: 8
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: eltwise.binary_complex
+# 
+# - name: ttnn sweeps eltwise.ternary_backward
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.ternary_backward --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: eltwise.ternary_backward
+# 
+# # --- other single-card categories ---
+# - name: ttnn sweeps data_movement
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name data_movement --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 55
+#     wh_n300_civ2:
+#       timeout: 55
+#     bh_p150b_civ2:
+#       timeout: 55
+#     bh_p100:
+#       timeout: 55
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: data_movement
+# 
+# - name: ttnn sweeps reduction
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name reduction --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 30
+#     wh_n300_civ2:
+#       timeout: 30
+#     bh_p150b_civ2:
+#       timeout: 30
+#     bh_p100:
+#       timeout: 30
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: reduction
+# 
+# - name: ttnn sweeps matmul
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name matmul --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 27
+#     wh_n300_civ2:
+#       timeout: 27
+#     bh_p150b_civ2:
+#       timeout: 27
+#     bh_p100:
+#       timeout: 27
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: matmul
+# 
+# - name: ttnn sweeps transformer
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name transformer --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 10
+#     wh_n300_civ2:
+#       timeout: 10
+#     bh_p150b_civ2:
+#       timeout: 10
+#     bh_p100:
+#       timeout: 10
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: transformer
+# 
+# - name: ttnn sweeps pool2d
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name pool2d --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 10
+#     wh_n300_civ2:
+#       timeout: 10
+#     bh_p150b_civ2:
+#       timeout: 10
+#     bh_p100:
+#       timeout: 10
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: pool2d
+# 
+# - name: ttnn sweeps normalization
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name normalization --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 10
+#     wh_n300_civ2:
+#       timeout: 10
+#     bh_p150b_civ2:
+#       timeout: 10
+#     bh_p100:
+#       timeout: 10
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: normalization
+# 
+# - name: ttnn sweeps creation
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name creation --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: creation
+# 
+# - name: ttnn sweeps losses
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name losses --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: losses
+# 
+# - name: ttnn sweeps fused
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name fused --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: fused
+# 
+# - name: ttnn sweeps conv2d
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name conv2d --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: conv2d
+# 
+# - name: ttnn sweeps composite
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name composite --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: composite
+# 
+# - name: ttnn sweeps embedding
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name embedding --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: embedding
+# 
+# - name: ttnn sweeps embedding_bw
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name embedding_bw --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: embedding_bw
+# 
+# - name: ttnn sweeps conv_transpose2d
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name conv_transpose2d --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: conv_transpose2d
+# 
+# # --- flat top-level sweep modules (no subdir) ---
+# - name: ttnn sweeps add
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name add --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: add
+# 
+# - name: ttnn sweeps tilize
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name tilize --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: tilize
+# 
+# - name: ttnn sweeps tilize_with_val_padding
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name tilize_with_val_padding --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: tilize_with_val_padding
+# 
+# - name: ttnn sweeps untilize
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name untilize --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: untilize
+# 
+# - name: ttnn sweeps untilize_with_unpadding
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name untilize_with_unpadding --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   skus:
+#     wh_n150_civ2:
+#       timeout: 5
+#     wh_n300_civ2:
+#       timeout: 5
+#     bh_p150b_civ2:
+#       timeout: 5
+#     bh_p100:
+#       timeout: 5
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: untilize_with_unpadding
+# 
+# # --- ccl (multi-device) ---
+# - name: ttnn sweeps ccl
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name ccl --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name generality_suite_fabric_1d'
+#   skus:
+#     wh_galaxy:
+#       timeout: 90
+#     wh_llmbox:
+#       timeout: 90
+#     bh_loudbox:
+#       timeout: 90
+#   owner_id: U08T3JQEB36 # Steven Lee
+#   team: ttnn
+#   category: ccl
+# 

@@ -260,7 +260,7 @@ jobs:
     if: ${{ always() && needs.prepare-sweep-vectors.result == 'success' }}
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.filter.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_sweep_${{ needs.prepare-sweep-vectors.outputs.split }}_tests.yaml
     steps:
