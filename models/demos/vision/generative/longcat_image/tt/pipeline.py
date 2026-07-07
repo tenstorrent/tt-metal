@@ -260,6 +260,22 @@ class LongCatImagePipelineTT:
         stub.wdtype = BF16
         self.invoked.add("long_cat_image_transformer2_d_model")
         try:
+            # PERF: for text-to-image, capture the FULL per-step DiT compute (both CFG
+            # forwards + the guidance combine) as ONE trace and execute_trace per step —
+            # removing the eager per-op host dispatch. Both forwards live inside the traced
+            # fn so no post-capture tensor is clobbered by a later execute_trace. Only the
+            # scheduler's new latents is allocated eagerly, and the Tracer copies it into
+            # the captured input buffer before the next execute. Falls back to eager on the
+            # image-edit path (img_lat) or any trace error.
+            if image_latents_packed is None:
+                try:
+                    return self._tt_denoise_traced(
+                        stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
+                        txt_ids, img_ids, timesteps, sigmas, guidance_scale,
+                        enable_cfg_renorm, cfg_renorm_min, do_cfg,
+                    )
+                except Exception as _te:
+                    print(f"[denoise] traced path failed ({type(_te).__name__}: {str(_te)[:200]}); using eager", flush=True)
             latents = ttnn.from_torch(
                 latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=self.device, memory_config=DRAM
             )
@@ -320,6 +336,72 @@ class LongCatImagePipelineTT:
         finally:
             _free_stub(stub)
         return latent_out
+
+    def _tt_denoise_traced(
+        self, stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
+        txt_ids, img_ids, timesteps, sigmas, guidance_scale, enable_cfg_renorm, cfg_renorm_min, do_cfg,
+    ):
+        """Traced text-to-image denoise loop. Captures the WHOLE per-step DiT compute (both
+        CFG forwards + guidance combine + cfg_renorm) as ONE trace via the tt_dit Tracer, then
+        execute_trace per step. The Tracer refreshes the captured input buffers (latents, temb)
+        from the args each call (enc_pos/enc_neg are fixed -> same object -> copy skipped). The
+        FlowMatch Euler step stays eager fp32 (trajectory-stable, matches the eager path); its
+        output latents is consumed by the next call's input-refresh before that call's
+        execute_trace, so it is never clobbered."""
+        from models.tt_dit.utils.tracing import Tracer
+
+        cos, sin = stub._rope_tables(txt_ids, img_ids)  # fixed positions
+        enc_pos = stub._linear(stub._to_ttnn(prompt_embeds_pos), stub.tf.context_embedder)  # fixed
+        enc_neg = (
+            stub._linear(stub._to_ttnn(prompt_embeds_neg), stub.tf.context_embedder) if do_cfg else None
+        )
+        latents = ttnn.from_torch(
+            latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=self.device, memory_config=DRAM
+        )
+        gs = float(guidance_scale)
+
+        def _dit(lat, temb, enc):  # one DiT forward, mirrors denoise_trace_step
+            hid = stub._linear(lat, stub.tf.x_embedder)
+            for blk in stub.tf.transformer_blocks:
+                enc, hid = stub._double_block(blk, hid, enc, temb, cos, sin)
+            for blk in stub.tf.single_transformer_blocks:
+                enc, hid = stub._single_block(blk, hid, enc, temb, cos, sin)
+            scale, shift = stub._ada_mod_cont(temb, stub.tf.norm_out.linear)
+            out = ttnn.add(ttnn.mul(stub._layernorm(hid), ttnn.add(scale, 1.0)), shift)
+            return stub._linear(out, stub.tf.proj_out)
+
+        # The FlowMatch Euler step runs INSIDE the trace and the traced fn returns the NEW
+        # latents. dt varies per step, so it is a (refreshable) tensor input. The output feeds
+        # back as the next call's latents input — the Tracer copies it into the captured input
+        # buffer before the next execute_trace, so nothing clobberable is read eagerly.
+        def _step_cfg(lat, temb, dt_t, enc_p, enc_n):  # BOTH forwards + guidance + Euler, all traced
+            nt = ttnn.typecast(_dit(lat, temb, enc_p), F32)
+            nu = ttnn.typecast(_dit(lat, temb, enc_n), F32)
+            noise = ttnn.add(nu, ttnn.mul(ttnn.sub(nt, nu), gs))
+            if enable_cfg_renorm:
+                cn = self._l2_norm_lastdim(nt)
+                nn_ = self._l2_norm_lastdim(noise)
+                sc = ttnn.clamp(ttnn.mul(cn, ttnn.reciprocal(ttnn.add(nn_, 1e-8))), cfg_renorm_min, 1.0)
+                noise = ttnn.mul(noise, sc)
+            return ttnn.add(lat, ttnn.mul(noise, dt_t))
+
+        def _step_nocfg(lat, temb, dt_t, enc_p):
+            noise = ttnn.typecast(_dit(lat, temb, enc_p), F32)
+            return ttnn.add(lat, ttnn.mul(noise, dt_t))
+
+        tracer = Tracer(_step_cfg if do_cfg else _step_nocfg, device=self.device)
+        for i, t in enumerate(timesteps):
+            ts = torch.tensor([float(t) / 1000.0], dtype=torch.float32)
+            temb = stub._time_embed(ts * 1000.0)
+            dt = float(sigmas[i + 1]) - float(sigmas[i])
+            dt_t = ttnn.from_torch(
+                torch.full((1, 1, 1), dt, dtype=torch.float32),
+                dtype=F32, layout=TILE, device=self.device, memory_config=DRAM,
+            )
+            latents = (
+                tracer(latents, temb, dt_t, enc_pos, enc_neg) if do_cfg else tracer(latents, temb, dt_t, enc_pos)
+            )
+        return _to_torch(latents, self.device)
 
     # ── stage 3: VAE decode (autoencoder_k_l stub) ───────────────────────────
     def _tt_vae_decode(self, latents_nchw):
