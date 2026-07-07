@@ -138,7 +138,9 @@ ops-perf CSV. If they disagree, trust the raw log and investigate.
   (≈20 marker rows/core) already carry per-core durations. Only reach for a temporary
   `DeviceZoneScopedN` marker if you need the *discrete count of work-units per core* (a
   separate, harder signal — mind the ~250-marker/core/launch budget and isolate it on its own
-  compile-time gate).
+  compile-time gate). If you do add such a temporary marker, revert it via the shared
+  snapshot-then-restore procedure in [`../shared/revert-temp-edits.md`](../shared/revert-temp-edits.md)
+  — never `git checkout` a file that may hold the user's uncommitted work.
 - **cycles → ns** via `CHIP_FREQ[MHz]` from the raw header (`ns = cycles / (MHz/1000)`).
 - **per-core duration** = max over that core's RISC `*-KERNEL` zones (the core's wall-busy
   span). BRISC=writer, NCRISC=reader, TRISC_0/1/2=compute.

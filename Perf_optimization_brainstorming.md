@@ -1031,6 +1031,55 @@ command). Follow the `core-occupancy` skill as the structural template.
 contrast against a config where forwarding is off (or the generated SDPA, which has none) to
 show redundancy ≈ num-sharers — the concrete multicast delta.
 
+### Checkpoint — signal #3 built & validated (`dram-bytes-per-tile` skill)
+
+Built and validated, but the measurement path changed materially from the seed's plan — the
+Tracy NoC-trace approach the seed assumed does **not** work for this signal:
+
+- **Metric (per input arg):** `reads_per_output_byte(role) = dram_read_bytes/output_bytes`
+  (impact) **and** `read_redundancy(role) = dram_read_bytes/unique_input_bytes` (detector; ≈1
+  ideal, >1 = re-read). Report a per-role table — the aggregate hides which tensor is redundant.
+- **Load-bearing discovery — the Tracy NoC-event trace is unreliable for DRAM-read accounting.**
+  The device profiler is *drop-don't-stall by design* (stalling would perturb the timing it
+  measures) and additionally **refuses to flush while a linked multicast is in flight**
+  (`quick_push` bails on `NOC_CMD_VC_LINKED`, issue #22578). The heaviest-reading cores
+  (forwarding *injectors*) are exactly the ones whose K/V reads get silently dropped — captured
+  DRAM reads came out ~⅓ of reality even at tiny scale, and **no runtime knob fixes it**
+  (`PROGRAM_SUPPORT_COUNT`, mid-run dump, profiler-sync all had zero effect). So `--collect-noc-traces`
+  + tt-npe (or raw-JSON parsing) systematically undercounts the very signal we want.
+- **tt-npe status:** it *consumes* the same lossy trace (profiler mode re-simulates the captured
+  events — it cannot recover dropped ones), so it inherits the undercount. Its real value is
+  congestion / `dram_bw_util` / per-controller / link-util, and *synthetic* mode. It also didn't
+  run on this box until patched: `Unknown device model: P150_X4` → fixed by mapping `P150_X4` to
+  the single-chip Blackhole model (committed on tt-npe branch `dnijemcevic/p150_x4-device-model`,
+  local clone at `/localdev/dnijemcevic/tt-npe`).
+- **The method that works (what the skill teaches): temporary in-kernel per-role DRAM-byte
+  counters + `DPRINT`, run with the profiler OFF.** A single counter emitted once per core is
+  immune to the ring/flush/linked-mcast drop. Count only DRAM-sourced reads (exclude
+  forwarded/received L1 data and padding); instrument at the op's *own* reader call sites, not
+  shared dataflow headers; capture all worker cores and sum. Reader = NCRISC (`DPRINT_RISCVS=NC`).
+- **Revert discipline isolated to a shared reference** — `.claude/skills/shared/revert-temp-edits.md`
+  (snapshot-then-restore into the scratchpad, manifest journal, hash-checked, **never**
+  `git checkout` — the file may hold the user's uncommitted work). `core-occupancy` now references
+  it too (for its optional temp `DeviceZoneScopedN` marker).
+- **Validated end-to-end** by fresh agents oriented *only* by the skill (twice, both exact), on the
+  SDPA WAN cell `wan2_2_1xGLX_analog-k512-q288-bf16` (b1·nh10·s9472·d128, 11×10 grid):
+
+  | role | dram_read_bytes | reads/output | redundancy | forwarding OFF (redundancy) |
+  |------|-----------------|--------------|------------|------------------------------|
+  | Q | 24.25 MB | 1.00 | **1.00** | 1.00 |
+  | K | 72.7 MB | 3.00 | **3.00** | **33.0** |
+  | V | 72.7 MB | 3.00 | **3.00** | **33.0** |
+
+  The multicast (11 cores/head, 1 injector) gives an **11× reduction** in K/V DRAM reads
+  (33→3 = cores-per-head); the residual **3×** is the injector re-reading its head's K/V once per
+  q_chunk it owns (no caching across q_chunks) — a concrete second lever. Forwarding-off was
+  proven by a temporary program-factory toggle (`needs_rebuild`), also reverted.
+
+Skill: `dram-bytes-per-tile` (SKILL.md) — op-agnostic; agent supplies one run-once command,
+finds the reader read-sites itself. Committed on `dnijemcevic/perf_signals`. Remaining starter
+signal (per-CB stall) still to build.
+
 ## Near-Term Implementation Sketch
 
 We now have two validated pairs (SDPA, rms_norm) and the tooling tiers. Next steps:
