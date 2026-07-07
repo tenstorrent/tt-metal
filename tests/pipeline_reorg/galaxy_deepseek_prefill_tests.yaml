@@ -158,8 +158,8 @@
   cmd: |
     export MESH_DEVICE=TG
     export DS_SPARSE_FABRIC=line
-    export GLM51_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.1
-    export TT_GLM51_PREFILL_TTNN_CACHE=/mnt/MLPerf/deepseek-prefill-cache/GLM-5_1-Cache
+    export GLM51_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.1-FP8
+    export TT_GLM51_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/zai-org/GLM-5.1-FP8-Cache
     export GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache
     # Fused GLM decoder block (sparse-SDPA MLA + norm/residual + dense/MoE FFN, layers 0 and 3) vs the
     # composed CPU reference (reference.glm_5_1). Real weights via the prebuilt ttnn cache when present
