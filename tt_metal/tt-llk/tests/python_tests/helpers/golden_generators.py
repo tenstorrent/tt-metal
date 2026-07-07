@@ -2165,7 +2165,6 @@ class UnarySFPUGolden:
             MathOperation.Tanh: self._tanh,
             MathOperation.Fill: self._fill,
             MathOperation.Elu: self._elu,
-            MathOperation.Erfinv: self._erfinv,
             MathOperation.Exp: self._exp,
             MathOperation.Exp2: self._exp2,
             MathOperation.Hardsigmoid: self._hardsigmoid,
@@ -2430,9 +2429,6 @@ class UnarySFPUGolden:
 
     def _sqrt(self, x):
         return self._torch_unary(x, torch.sqrt)
-
-    def _erfinv(self, x):
-        return self._torch_unary(x, torch.erfinv)
 
     def _tanh(self, x):
         return math.tanh(x)

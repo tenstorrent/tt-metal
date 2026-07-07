@@ -78,7 +78,6 @@ class MathOperation(Enum):
     Celu = OpSpec("celu", MathOpType.SFPU_UNARY)
     Cos = OpSpec("cosine", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
-    Erfinv = OpSpec("erfinv", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
     Fill = OpSpec("fill", MathOpType.SFPU_UNARY)

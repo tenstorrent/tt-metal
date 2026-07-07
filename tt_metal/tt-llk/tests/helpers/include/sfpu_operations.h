@@ -357,10 +357,6 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(cosine_init<APPROX_MODE>);
     }
-    else if constexpr (OPERATION == SfpuType::erfinv)
-    {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(erfinv_init<APPROX_MODE>);
-    }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(exp2_init<APPROX_MODE, is_fp32_dest_acc_en>);
@@ -525,12 +521,6 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             dst_index,
             vector_mode,
             0x3f800000u /* alpha = 1.0f */);
-    }
-    else if constexpr (OPERATION == SfpuType::erfinv)
-    {
-        // calculate_erfinv fixes its own 8-row inner loop (one face); the params
-        // wrapper drives the 4 faces. No ITERATIONS/dest-acc template args.
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfinv, (APPROX_MODE), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
