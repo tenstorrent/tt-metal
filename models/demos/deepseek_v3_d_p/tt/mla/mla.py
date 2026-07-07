@@ -1414,9 +1414,15 @@ class ttMLA:
         cache_batch_idx (no host slot-slice). The unwritten suffix is never addressed since indices
         stay < populated."""
         cache_i = ttnn.to_memory_config(kvpe_cache, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
+        # A ROW_MAJOR input forces all_gather_async into the composite lowering (all_broadcast + concat,
+        # composite_common.cpp:294-296), ~2x slower than a native tiled AllGather. Round-trip through TILE so
+        # the SP gather takes the native path, then back to ROW_MAJOR for sparse_sdpa. The logical block-cyclic
+        # row order is preserved (tilize / AG-on-dim2 / untilize are all order-preserving). ~-10.7ms on long.
+        cache_i = ttnn.to_layout(cache_i, ttnn.TILE_LAYOUT)
         full = self._all_gather(
             cache_i, dim=2, cluster_axis=self.sp_axis
         )  # → [B,1,seq_len_cache,576] repl, block-cyclic
+        full = ttnn.to_layout(full, ttnn.ROW_MAJOR_LAYOUT)
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
         return full
