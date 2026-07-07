@@ -91,6 +91,7 @@ void kernel_main() {
     CircularBuffer cb_eps_obj(cb_eps);
     CircularBuffer cb_scaler_obj(cb_scaler);
     CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_in_rm_obj(cb_in_rm);
     CircularBuffer cb_inb_obj(cb_inb);
     CircularBuffer cb_out_obj(cb_out);
     CircularBuffer cb_gamma_obj(cb_gamma);
@@ -147,7 +148,7 @@ void kernel_main() {
         const bool last_tile_is_partial = W % tile_width > 0;
         for (auto block : generic::blocks(Wt, block_size)) {
 #ifdef TILIZE_IN
-            tilize_row_major_block(cb_in_rm, cb_in, block_size, block);
+            tilize_row_major_block(cb_in_rm_obj, cb_in_obj, block_size, block);
 #ifdef RMSNORM
             binary_op_init_common(cb_in, cb_scaler, cb_xmm2);
 #else
@@ -269,7 +270,7 @@ void kernel_main() {
         for (auto block : generic::blocks(Wt, block_size)) {
 #ifdef TILIZE_IN
             // Reader supplies this second pass of data after the variance data.
-            tilize_row_major_block(cb_in_rm, cb_in, block_size, block);
+            tilize_row_major_block(cb_in_rm_obj, cb_in_obj, block_size, block);
 
 #ifdef RMSNORM
             binary_op_init_common(cb_in, cb_scaler, cb_xmm2);
@@ -417,7 +418,8 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
             constexpr auto cb_out_rm = get_named_compile_time_arg_val("cb_out_rm");
-            untilize_row_major_block<decltype(block), block_size>(cb_out, cb_out_rm, block);
+            CircularBuffer cb_out_rm_obj(cb_out_rm);
+            untilize_row_major_block<decltype(block), block_size>(cb_out_obj, cb_out_rm_obj, block);
 #endif
         }  // block loop
         // End of

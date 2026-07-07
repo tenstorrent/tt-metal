@@ -136,7 +136,8 @@ void kernel_main() {
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
-        tilize_all_blocks_to_cb<block_size>(cb_in_rm, cb_in, Wt);
+        CircularBuffer cb_in_rm_obj(cb_in_rm);
+        tilize_all_blocks_to_cb<block_size>(cb_in_rm_obj, cb_in_obj, Wt);
         // Re-init binary ops after tilize hardware reconfiguration.
 #ifdef FUSE_PRE_ADD
         binary_op_init_common(cb_in, cb_inb, cb_x);
@@ -412,7 +413,8 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
         constexpr auto cb_out_rm = get_named_compile_time_arg_val("cb_out_rm");
-        untilize_all_blocks_from_cb<block_size>(cb_out, cb_out_rm, Wt);
+        CircularBuffer cb_out_rm_obj(cb_out_rm);
+        untilize_all_blocks_from_cb<block_size>(cb_out_obj, cb_out_rm_obj, Wt);
 #endif
     }  // NCHt loop
     // The reduce scaler is generated once by the reader and reused (waited inside row_wise_mean)
