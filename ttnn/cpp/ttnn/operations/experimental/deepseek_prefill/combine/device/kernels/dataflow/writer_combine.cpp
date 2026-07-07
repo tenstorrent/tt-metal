@@ -190,17 +190,35 @@ void kernel_main() {
     }
 
     // Bidirectional multicast handshake (hs_ = handshake): each device increments the init/exit
-    // semaphore on every other combine-axis device exactly once. Per-slot hop range is chosen by THIS
-    // device's position (hs_axis_pos) along the combine axis: the forward slot covers the (len-1-pos)
-    // devices ahead, the backward slot the pos devices behind — together exactly combine_devices-1
-    // peers. The neighbor's position only selects which slot (forward vs backward), not the range.
-    // (FABRIC_2D combine is always a Linear axis here; no FABRIC_2D ring config exists.)
+    // semaphore on every other combine-axis device exactly once. The forward slot (+axis: SOUTH for
+    // COLS / EAST for ROWS) covers `hs_pos_range` devices, the backward slot the other `hs_neg_range`;
+    // together exactly combine_devices-1 peers.
+    //
+    // LINEAR axis: forward covers the (len-1-pos) devices ahead, backward the pos devices behind, and a
+    // connection is forward iff the neighbor's axis position is larger.
+    // RING/TORUS axis: the wrap closes the loop, so the linear split is wrong — the wrap neighbor sits at
+    // the far axis position and would be misclassified as forward, doubling one side and never covering
+    // the other (init_sem never reaches combine_devices-1 -> hang). Instead split the ring into two
+    // disjoint arcs that tile all len-1 peers exactly once regardless of pos: forward covers len/2
+    // devices, backward covers the rest. Classify a connection forward iff its eth direction (tag) is the
+    // +axis direction, not by neighbor position.
     constexpr bool hs_is_cols = (axis == ReplicateGroup::COLS);
     constexpr uint32_t hs_axis_pos =
         hs_is_cols ? (linearized_mesh_coord / mesh_cols) : (linearized_mesh_coord % mesh_cols);
     constexpr uint32_t hs_axis_len = hs_is_cols ? mesh_rows : mesh_cols;
-    constexpr uint32_t hs_pos_range = (hs_axis_len - 1) - hs_axis_pos;  // devices ahead on the axis
-    constexpr uint32_t hs_neg_range = hs_axis_pos;                      // devices behind on the axis
+    constexpr bool hs_is_ring = has_wrap_around<topology>();
+    // Per-direction arc sizes; forward (pos) + backward (neg) = hs_axis_len - 1 in both branches.
+    //   ring:   forward = len/2, backward = the remaining peers — two disjoint arcs that tile every
+    //           peer exactly once, parity-agnostic (NOT "devices ahead/behind", which is linear-only).
+    //   linear: forward = len-1-pos devices ahead, backward = pos devices behind.
+    constexpr uint32_t hs_pos_range = hs_is_ring ? (hs_axis_len / 2) : ((hs_axis_len - 1) - hs_axis_pos);
+    constexpr uint32_t hs_neg_range = hs_is_ring ? ((hs_axis_len - 1) - (hs_axis_len / 2)) : hs_axis_pos;
+    // +axis eth direction that marks a connection "forward" on a ring (a wrap neighbor's axis position
+    // is on the wrong side, so position can't classify it): SOUTH = increasing row index (dim 0,
+    // mesh_rows); EAST = increasing col index (dim 1, mesh_cols) — per the BH galaxy mesh wiring.
+    constexpr uint8_t hs_fwd_tag =
+        hs_is_cols ? static_cast<uint8_t>(eth_chan_directions::SOUTH) : static_cast<uint8_t>(eth_chan_directions::EAST);
+    constexpr uint8_t HS_START_SKIP_SELF = 1;  // start_distance: deliver from the first hop, skipping self
 
     uint8_t hs_starts[tt::tt_fabric::RoutingPlaneConnectionManager::MaxConnections];
     uint8_t hs_ranges[tt::tt_fabric::RoutingPlaneConnectionManager::MaxConnections];
@@ -219,9 +237,13 @@ void kernel_main() {
             }
         }
         ASSERT(nbr_found);  // a connection neighbor missing from dest_chip_ids => mis-sized/garbled rt args
-        const uint32_t nbr_axis_pos = hs_is_cols ? (nbr_lin / mesh_cols) : (nbr_lin % mesh_cols);
-        const bool is_forward = (nbr_axis_pos > hs_axis_pos);
-        hs_starts[i] = 1;  // start_distance=1: skip the issuing device, deliver from its first hop onward
+        // nbr_axis_pos (and the reverse-map above) feed only the linear classifier; unused on a ring.
+        [[maybe_unused]] const uint32_t nbr_axis_pos = hs_is_cols ? (nbr_lin / mesh_cols) : (nbr_lin % mesh_cols);
+        // Ring: classify by the connection's eth direction (the wrap neighbor's axis position is on the
+        // wrong side). Linear: classify by neighbor axis position.
+        const bool is_forward =
+            hs_is_ring ? (fabric_connections.get(i).tag == hs_fwd_tag) : (nbr_axis_pos > hs_axis_pos);
+        hs_starts[i] = HS_START_SKIP_SELF;
         hs_ranges[i] = is_forward ? static_cast<uint8_t>(hs_pos_range) : static_cast<uint8_t>(hs_neg_range);
     }
 

@@ -11,6 +11,7 @@ Automatically downloads weights from HuggingFace if not available locally.
 import json
 import os
 import shutil
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -75,6 +76,43 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-mesh-8x4",
     ),
+    # FABRIC_2D_TORUS_Y: single-galaxy 8x4 with the SP axis (mesh dim 0, 8-long) closed into a
+    # ring; the TP axis (dim 1, 4-wide) stays a line. Per-axis topology (SP, TP) = (Ring, Linear):
+    # Ring drives the SP-axis MoE dispatch/combine, Linear the TP-axis collectives (RMS-norm, MLA,
+    # shared-expert, gate). A scalar Ring here would deadlock the TP-axis all-gathers on a column
+    # wrap link that has no physical fabric edge. 2-link mirrors the fabric2d-mesh-8x4 sibling.
+    pytest.param(
+        (8, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2,
+        (ttnn.Topology.Ring, ttnn.Topology.Linear),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        # Id omits `fabric2d-`/`mesh-` so it stays out of the count-guarded `-k "8x4 and fabric2d"`
+        # (EXPECT_NUM_TESTS=1) CI selectors that target the fabric2d-mesh siblings; select via `-k torus-y`.
+        id="torus-y-8x4",
+    ),
+    # FABRIC_2D_TORUS_Y on a 4x4 sub-torus (16 of the galaxy's 32 chips). Same [RING, LINE]
+    # shape as the 8x4 torus but with a Ring-4 on the SP axis (dim 0). Requires carving the
+    # sub-torus at runtime via TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH pointing at
+    # models/demos/deepseek_v3_d_p/experimental_descriptors/single_bh_galaxy_subtorus_y4_graph_descriptor.textproto
+    # (channels count: 2 -> 2 links).
+    # Per-axis topology (SP, TP) = (Ring, Linear), as for the 8x4 torus.
+    pytest.param(
+        (4, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2,
+        (ttnn.Topology.Ring, ttnn.Topology.Linear),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-y-4x4",
+    ),
 ]
 
 
@@ -95,9 +133,60 @@ def pytest_collection_modifyitems(config, items):
     Hardware constraints:
     - Blackhole: Only supports 4-device configs (linear-4, ring-4)
     - Wormhole: Ring topology only works with 8 devices (ring-8)
+
+    Galaxy ring/subtorus guard (CI): ring and torus fabrics need physical wrap cabling. On a
+    GALAXY board that wrap is subtorus wiring that CI galaxy runners do not have — the native
+    galaxy mesh is 32x4 across 4 hosts, so an 8-ring or 4-ring on a single galaxy is a sub-torus
+    (and the 4-ring exists ONLY on a subtorus-wired galaxy, not on a LoudBox). Opening such a
+    fabric on a CI galaxy just hangs. So on CI + galaxy we skip EVERY torus
+    (FABRIC_2D_TORUS_{X,Y,XY}) and FABRIC_1D_RING config. LoudBox is untouched: its ring is
+    native there, and galaxy-only torus configs can't be collected on it anyway (device count).
+    None of this fires off CI, so a subtorus-wired host (CI unset) still runs everything.
     """
+    on_ci = os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ
+    ring_or_torus_fabrics = {
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        ttnn.FabricConfig.FABRIC_1D_RING,
+    }
+
+    def _is_ring_or_torus(item):
+        params = getattr(getattr(item, "callspec", None), "params", {})
+        dp = params.get("device_params")
+        return isinstance(dp, dict) and dp.get("fabric_config") in ring_or_torus_fabrics
+
+    # Only skip ring/torus on a galaxy; LoudBox rings are native. Galaxy detection via
+    # get_cluster_type() OPENS the chip cluster as a side effect, so only call it when this session
+    # actually collects a ring/torus config to decide on. Otherwise a device-free session — notably the
+    # tracy-based perf tests, which spawn a child pytest — would open the device here in the PARENT and
+    # hold CHIP_IN_USE, deadlocking the child (get_num_devices() below is likewise gated by a marker).
+    # On detection failure default to skipping (a missed skip on a galaxy hangs, worse than over-skip on LB).
+    skip_rings = False
+    if on_ci and any(_is_ring_or_torus(item) for item in items):
+        try:
+            skip_rings = ttnn.cluster.get_cluster_type() in (
+                ttnn.cluster.ClusterType.GALAXY,
+                ttnn.cluster.ClusterType.TG,
+                ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+            )
+        except Exception:
+            skip_rings = True
 
     for item in items:
+        # Galaxy ring/subtorus guard — runs before the marker check so it catches configs whether or
+        # not they carry a requires_mesh_topology mark.
+        if skip_rings:
+            if _is_ring_or_torus(item):
+                item.add_marker(
+                    pytest.mark.skip(
+                        reason="ring/subtorus config on a CI galaxy runner: an 8-/4-ring on one galaxy "
+                        "needs subtorus wrap cabling that CI galaxies lack -> would hang. Runs only on a "
+                        "subtorus-wired galaxy (CI unset), or — for a native ring — a LoudBox."
+                    )
+                )
+                continue
+
         marker = item.get_closest_marker("requires_mesh_topology")
         if not marker:
             continue
@@ -194,17 +283,33 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             ignore_patterns=["*.safetensors"],  # Don't download weight files
         )
 
+        # Variants that load config/tokenizer without trust_remote_code (e.g. DeepSeek-V3, stock fast
+        # tokenizer) can use the HF snapshot dir directly — no flat copy needed. Skipping it also avoids
+        # writing into a possibly read-only HF cache mount.
+        if not variant.needs_flat_config_dir:
+            logger.success(f"✓ Config files downloaded to: {model_dir}")
+            return Path(model_dir)
+
         # The HF cache stores files as symlinks into blobs/ (content-hash names). With
         # trust_remote_code=True, transformers resolves the remote module to its blob realpath
         # and then looks for its relative-import siblings (e.g. tool_declaration_ts.py) by name in
         # that same dir, which fails in blobs/. Copy into a flat dir of real files so relative
-        # imports resolve by name.
+        # imports resolve by name. The dir name is made dot-free (trust_remote_code can't import a
+        # dynamic module whose dir contains '.'). Weight shards are excluded so we never materialize
+        # the hundreds of GB the snapshot may hold from a prior weight download, and the flat dir lives
+        # in a writable temp location so a read-only HF cache mount doesn't break the copy.
         flat_dir = (
-            cache_dir
-            / "flat_config"
+            Path(tempfile.gettempdir())
+            / "ttnn_flat_config"
             / variant.hf_repo_id.replace("/", "__").replace(".", "_").replace("-", "_").replace("_", "-")
         )
-        shutil.copytree(model_dir, flat_dir, symlinks=False, dirs_exist_ok=True)
+        shutil.copytree(
+            model_dir,
+            flat_dir,
+            symlinks=False,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("*.safetensors"),
+        )
 
         logger.success(f"✓ Config files downloaded to: {model_dir} (flattened to: {flat_dir})")
         return flat_dir
@@ -328,6 +433,29 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
         raise
 
 
+def _resolve_hf_snapshot_dir(path: Path) -> Path:
+    """If `path` is an HF hub-cache repo root (``models--org--name/`` with a ``snapshots/`` subdir),
+    return the active snapshot dir (the ``refs/main`` commit, else the newest snapshot that has the
+    safetensors index) so callers see the real config.json + shards. Otherwise return `path` as-is.
+
+    Lets ``*_HF_MODEL`` point at either the hub root (``.../hub/models--zai-org--GLM-5.1``) or a plain
+    checkout dir. The hash snapshot dir also sidesteps the trust_remote_code dot-in-path import issue.
+    """
+    if (path / "model.safetensors.index.json").exists():
+        return path
+    snaps = path / "snapshots"
+    if snaps.is_dir():
+        ref = path / "refs" / "main"
+        if ref.is_file():
+            cand = snaps / ref.read_text().strip()
+            if (cand / "model.safetensors.index.json").exists():
+                return cand
+        cands = [d for d in snaps.iterdir() if d.is_dir() and (d / "model.safetensors.index.json").exists()]
+        if cands:
+            return max(cands, key=lambda d: d.stat().st_mtime)
+    return path
+
+
 def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: int = 6) -> Path:
     """
     Get model path, downloading from HuggingFace if necessary.
@@ -346,6 +474,9 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
     if env_path:
         model_path = Path(env_path)
         if model_path.exists():
+            # Accept an HF hub-cache root (e.g. /mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.1)
+            # by descending into its current snapshot, where config.json + the safetensors index live.
+            model_path = _resolve_hf_snapshot_dir(model_path)
             index_file = model_path / "model.safetensors.index.json"
             if index_file.exists():
                 logger.info(f"Using existing model from {variant.env_var}: {model_path}")
@@ -477,6 +608,9 @@ def _resolve_state_dict(model_path_str: str):
 @lru_cache(maxsize=None)
 def _resolve_tokenizer(variant_name: str, padding_side: str):
     v = TEST_VARIANTS[variant_name]
+    # Only variants that ship custom tokenizer code (e.g. Kimi) need trust_remote_code; DeepSeek-V3
+    # uses a stock fast tokenizer and turns it off to avoid the flat-config custom-import path.
+    trust_remote_code = v.tokenizer_trust_remote_code
     candidates = [
         os.getenv(v.env_var),
         str(v.default_local_path) if v.default_local_path is not None else None,
@@ -488,7 +622,7 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
         p = Path(candidate)
         if p.exists() and any(p.glob("tokenizer*")):
             logger.info(f"Loading tokenizer from: {p}")
-            tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=True)
+            tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=trust_remote_code)
             tok.padding_side = padding_side
             return tok
 
@@ -496,7 +630,7 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
     config_path = download_model_config_only(v, cache_dir)
     logger.info(f"Loading tokenizer from downloaded config: {config_path}")
-    tok = AutoTokenizer.from_pretrained(str(config_path), use_fast=True, trust_remote_code=True)
+    tok = AutoTokenizer.from_pretrained(str(config_path), use_fast=True, trust_remote_code=trust_remote_code)
     tok.padding_side = padding_side
     return tok
 

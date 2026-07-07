@@ -211,6 +211,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/quasar/to_device/to_device_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/moe_hash_gate/moe_hash_gate_nanobind.cpp
     cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.cpp
     cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.cpp
     cpp/ttnn/operations/experimental/paged_cache/paged_cache_nanobind.cpp

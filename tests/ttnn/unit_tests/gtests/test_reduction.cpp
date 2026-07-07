@@ -104,7 +104,7 @@ TEST_P(SumTensorBothDimsFixture, SumTensorCorrectly) {
     auto& device = *device_;
     std::array<uint32_t, 2> dimensions = {param.h, param.w};
     ttnn::Shape shape(dimensions);
-    SmallVector<int> dim = {0, 1};
+    ttsl::SmallVector<int> dim = {0, 1};
 
     {
         const auto input_tensor = ttnn::ones(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
@@ -254,7 +254,7 @@ class MinMaxTensorBothDimsFixture : public TTNNFixtureWithSuiteDevice<MinMaxTens
 TEST_P(MinMaxTensorBothDimsFixture, MinMaxTensorCorrectly) {
     auto param = GetParam();
     auto& device = *device_;
-    SmallVector<int> dim = {-2, -1};
+    ttsl::SmallVector<int> dim = {-2, -1};
     {
         const ttnn::Shape tensor_shape{1, 1, param.h, param.w};
         const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};

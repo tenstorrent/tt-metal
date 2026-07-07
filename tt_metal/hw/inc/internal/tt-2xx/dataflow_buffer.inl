@@ -25,6 +25,8 @@ inline uint32_t DataflowBuffer::get_entry_size() const { return local_dfb_interf
 
 inline uint32_t DataflowBuffer::get_stride_size() const { return local_dfb_interface_.stride_size; }
 
+inline uint32_t DataflowBuffer::get_total_num_entries() const { return local_dfb_interface_.num_entries; }
+
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
     WAYPOINT("RBW");
     dfb::PackedTileCounter packed_tc =
