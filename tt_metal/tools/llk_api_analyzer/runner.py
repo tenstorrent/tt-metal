@@ -55,20 +55,26 @@ class ModelRunner:
         model run live.
         """
         cache_dir, is_temporary = self._prepare_cache_dir()
-        env = self._build_environment(cache_dir)
 
-        print(f"[llk-analyzer] running model with TT_METAL_CACHE={cache_dir}", file=sys.stderr)
-        if self._enable_debug_info:
-            print("[llk-analyzer] TT_METAL_RISCV_DEBUG_INFO=1 (DWARF debug info enabled)", file=sys.stderr)
-        print(f"[llk-analyzer] command: {command}", file=sys.stderr)
+        try:
+            env = self._build_environment(cache_dir)
 
-        completed = subprocess.run(
-            command,
-            shell=isinstance(command, str),
-            env=env,
-            cwd=str(self._working_directory) if self._working_directory else None,
-            check=False,
-        )
+            print(f"[llk-analyzer] running model with TT_METAL_CACHE={cache_dir}", file=sys.stderr)
+            if self._enable_debug_info:
+                print("[llk-analyzer] TT_METAL_RISCV_DEBUG_INFO=1 (DWARF debug info enabled)", file=sys.stderr)
+            print(f"[llk-analyzer] command: {command}", file=sys.stderr)
+
+            completed = subprocess.run(
+                command,
+                shell=isinstance(command, str),
+                env=env,
+                cwd=str(self._working_directory) if self._working_directory else None,
+                check=False,
+            )
+        except BaseException:  # noqa: BLE001 - includes KeyboardInterrupt; re-raised below
+            if is_temporary:
+                shutil.rmtree(cache_dir, ignore_errors=True)
+            raise
 
         if completed.returncode != 0:
             print(

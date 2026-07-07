@@ -83,6 +83,28 @@ class EnumTable:
         return resolved
 
 
+def collect_enum_value_names(dwarf: DWARFInfo, type_name: str) -> dict[int, str]:
+    """Collect ``{value: enumerator_name}`` for a named enum across all CUs.
+
+    Used to decode integer codes (e.g. ``tt::DataFormat`` / tensix ``DataFormat``)
+    directly from the ELF's own debug info instead of a hand-maintained table, so
+    the mapping stays correct per architecture. First definition wins per value.
+    """
+    result: dict[int, str] = {}
+    for cu in dwarf.iter_CUs():
+        for die in cu.iter_DIEs():
+            if die.tag != "DW_TAG_enumeration_type" or attr_str(die, "DW_AT_name") != type_name:
+                continue
+            for child in die.iter_children():
+                if child.tag != "DW_TAG_enumerator":
+                    continue
+                const = child.attributes.get("DW_AT_const_value")
+                name = attr_str(child, "DW_AT_name")
+                if const is not None and isinstance(const.value, int) and name is not None:
+                    result.setdefault(const.value, name)
+    return result
+
+
 def resolve_name(die: DIE, _depth: int = 0) -> str | None:
     """Return a DIE's name, following ``abstract_origin``/``specification``.
 

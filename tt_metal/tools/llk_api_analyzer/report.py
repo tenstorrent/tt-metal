@@ -211,11 +211,23 @@ def render_csv(analysis: RunAnalysis) -> str:
     return buffer.getvalue().rstrip("\n")
 
 
-# Runtime-arg names that carry an input circular-buffer index (all contain
-# "operand", e.g. operand, operandA, unpA_operand, srca_new_operand) and the
-# exact names that carry an output circular-buffer index. "output_tile_index"
-# is deliberately excluded from the latter (it is a tile offset, not a CB).
-_OUTPUT_CB_ARGS = frozenset({"output", "pack_output", "out_cb", "ocb"})
+# Runtime-arg names that carry an input circular-buffer index all contain
+# "operand" (e.g. operand, operandA, unpA_operand, srca_new_operand).
+#
+# Output-CB argument names are matched by substring so the reconfig variants are
+# caught alongside the plain names: "output" covers output / pack_output /
+# new_output / old_output (e.g. llk_pack_reconfig_data_format), and "ocb" covers
+# ocb / new_ocb / old_ocb. A few exact names (out_cb) carry an output CB index
+# but match no substring. Names containing "tile" (e.g. output_tile_index) are
+# tile offsets, not CBs, and are excluded.
+_OUTPUT_CB_ARG_SUBSTRINGS = ("output", "ocb")
+_OUTPUT_CB_ARGS = frozenset({"out_cb"})
+
+
+def _is_output_cb_arg(name: str) -> bool:
+    if "tile" in name:
+        return False
+    return name in _OUTPUT_CB_ARGS or any(sub in name for sub in _OUTPUT_CB_ARG_SUBSTRINGS)
 
 
 def _cb_format_map(desc: KernelDescriptors | None) -> dict[int, str]:
@@ -246,7 +258,7 @@ def _classify_cbs_for_call(call: ApiCall) -> tuple[set[int], set[int]]:
             continue
         if "operand" in arg.name:
             inputs.update(arg.static_values)
-        elif arg.name in _OUTPUT_CB_ARGS:
+        elif _is_output_cb_arg(arg.name):
             outputs.update(arg.static_values)
     return inputs, outputs
 

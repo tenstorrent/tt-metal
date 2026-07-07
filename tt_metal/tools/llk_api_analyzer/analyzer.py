@@ -25,6 +25,7 @@ from elftools.elf.elffile import ELFFile
 
 from .descriptors import parse_descriptors
 from .discovery import KernelArtifacts, discover_compute_kernels
+from .dwarf_helpers import collect_enum_value_names
 from .extractor import ExtractorConfig, LlkApiExtractor
 from .model import ApiCall, ComputeThread, KernelAnalysis, RunAnalysis
 
@@ -47,23 +48,29 @@ class LlkAnalyzer:
         """Analyze a single compute kernel (all available TRISC threads)."""
         result = KernelAnalysis(name=artifacts.name, path=str(artifacts.directory))
 
-        if artifacts.descriptors_header is not None:
-            try:
-                result.descriptors = parse_descriptors(artifacts.descriptors_header)
-            except Exception as exc:  # noqa: BLE001 - keep going, just record it
-                result.errors.append(f"descriptor parse failed: {exc}")
-
+        # The tensix ``DataFormat`` enum recovered from the ELF's own DWARF; used
+        # to decode the descriptor CB format codes (arch-correct, self-updating).
+        format_names: dict[int, str] = {}
         for trisc_id, elf_path in sorted(artifacts.trisc_elfs.items()):
             thread = ComputeThread.from_trisc(trisc_id)
             try:
-                result.api_calls.extend(self._analyze_elf(elf_path, thread))
+                calls, elf_formats = self._analyze_elf(elf_path, thread)
+                result.api_calls.extend(calls)
                 result.threads_analyzed.append(thread)
+                if not format_names:
+                    format_names = elf_formats
             except Exception as exc:  # noqa: BLE001 - one bad ELF must not abort the run
                 result.errors.append(f"{thread.value} ({elf_path.name}): {exc}")
 
+        if artifacts.descriptors_header is not None:
+            try:
+                result.descriptors = parse_descriptors(artifacts.descriptors_header, format_names)
+            except Exception as exc:  # noqa: BLE001 - keep going, just record it
+                result.errors.append(f"descriptor parse failed: {exc}")
+
         return result
 
-    def _analyze_elf(self, elf_path: Path, thread: ComputeThread) -> list[ApiCall]:
+    def _analyze_elf(self, elf_path: Path, thread: ComputeThread) -> tuple[list[ApiCall], dict[int, str]]:
         with open(elf_path, "rb") as handle:
             elffile = ELFFile(handle)
             if not elffile.has_dwarf_info():
@@ -71,4 +78,6 @@ class LlkAnalyzer:
             # relocate_dwarf_sections=False: skip the (unsupported) RISC-V debug
             # relocations; see the module docstring for why this is correct.
             dwarf = elffile.get_dwarf_info(relocate_dwarf_sections=False)
-            return LlkApiExtractor(dwarf, thread, self._extractor_config).extract()
+            calls = LlkApiExtractor(dwarf, thread, self._extractor_config).extract()
+            format_names = collect_enum_value_names(dwarf, "DataFormat")
+            return calls, format_names

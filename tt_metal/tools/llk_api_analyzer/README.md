@@ -187,7 +187,6 @@ ModelRunner.cleanup(result)
 | `dwarf_helpers.py` | Generic DIE helpers: names, enum tables, types, source paths. |
 | `extractor.py` | Walk the inlined-subroutine tree → `ApiCall` records. |
 | `descriptors.py` | Parse `chlkc_descriptors.h` (formats, tile sizes, sync, accum). |
-| `data_formats.py` | `tt::DataFormat` code → name table. |
 | `discovery.py` | Find compute-kernel ELF triples under a run directory. |
 | `runner.py` | Run a model command with an isolated, debug-info-enabled cache. |
 | `analyzer.py` | Orchestrate discovery + extraction → `RunAnalysis`. |

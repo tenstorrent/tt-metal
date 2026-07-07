@@ -69,8 +69,14 @@ class ConstantArgEvaluator:
 
     def __init__(self, dwarf):
         self._expr_parser = DWARFExprParser(dwarf.structs)
-        loclists = dwarf.location_lists()
-        self._loc_parser = LocationParser(loclists) if loclists is not None else None
+        # Build the location parser unconditionally. Inline exprloc constants
+        # (``DW_OP_constu N; DW_OP_stack_value``) — this tool's primary target —
+        # parse without any loclist section, so we must not gate on
+        # ``location_lists()`` being present (it is ``None`` when the ELF has no
+        # ``.debug_loc`` / ``.debug_loclists``). ``LocationParser`` only touches
+        # the loclists for loclist-pointer attributes, which cannot occur when
+        # there is no such section.
+        self._loc_parser = LocationParser(dwarf.location_lists())
         # DWARF stack values are of the "generic type": an integral type the
         # size of a target address, with two's-complement wraparound. All
         # folded results are reduced modulo ``2**bits``.
@@ -96,7 +102,7 @@ class ConstantArgEvaluator:
             return (const.value,)
 
         location_attr = param_die.attributes.get("DW_AT_location")
-        if location_attr is None or self._loc_parser is None:
+        if location_attr is None:
             return None
 
         try:

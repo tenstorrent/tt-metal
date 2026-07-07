@@ -20,7 +20,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .data_formats import UNUSED_FORMAT_CODE, data_format_name
+# Code marking an unconfigured / unused circular-buffer slot (tensix ``Invalid``).
+UNUSED_FORMAT_CODE = 255
 
 _ARRAY_RE = re.compile(
     r"constexpr\s+(?:unsigned\s+char|uint8_t|uint16_t|uint32_t|int)\s+" r"(\w+)\s*\[\d+\]\s*=\s*\{([^}]*)\}",
@@ -71,8 +72,14 @@ def _parse_int_array(text: str) -> list[int]:
     return [int(tok) for tok in text.replace("\n", "").split(",") if tok.strip()]
 
 
-def parse_descriptors(path: str | Path) -> KernelDescriptors:
-    """Parse a ``chlkc_descriptors.h`` file into a :class:`KernelDescriptors`."""
+def parse_descriptors(path: str | Path, format_names: dict[int, str] | None = None) -> KernelDescriptors:
+    """Parse a ``chlkc_descriptors.h`` file into a :class:`KernelDescriptors`.
+
+    ``format_names`` maps a data-format code to its name, taken from the ELF's
+    own tensix ``DataFormat`` enum, so the codes decode correctly per
+    architecture. Codes not present in that enum are reported as
+    ``Unknown(<code>)``.
+    """
     source = Path(path).read_text()
     arrays = {name: _parse_int_array(body) for name, body in _ARRAY_RE.findall(source)}
 
@@ -93,14 +100,38 @@ def parse_descriptors(path: str | Path) -> KernelDescriptors:
         code = int(fidelity_match.group(1))
         descriptors.math_fidelity = _MATH_FIDELITY_NAMES.get(code, f"Fidelity({code})")
 
-    descriptors.unpack_inputs = _collect_cbs(arrays, "unpack")
-    descriptors.pack_outputs = _collect_cbs(arrays, "pack")
+    # Both circular-buffer directions must use the L1 (memory) format, not the
+    # in-register format. Per genfiles.cpp, ``unpack_src_format`` is the input
+    # CB's L1 format and ``pack_dst_format`` is the output CB's L1 format
+    # ("pack dst == L1"). ``pack_src_format`` is the packer's DST-register read
+    # format instead, which diverges from L1 under fp32_dest_acc_en (and for
+    # Fp8/MX formats), so it must not be used for the output CB format.
+    descriptors.unpack_inputs = _collect_cbs(arrays, "unpack", "unpack_src_format", format_names)
+    descriptors.pack_outputs = _collect_cbs(arrays, "pack", "pack_dst_format", format_names)
     return descriptors
 
 
-def _collect_cbs(arrays: dict[str, list[int]], prefix: str) -> list[CircularBufferConfig]:
-    """Build CB configs for every slot whose format is not the 'unused' sentinel."""
-    formats = arrays.get(f"{prefix}_src_format")
+def _format_name(code: int, format_names: dict[int, str] | None) -> str:
+    """Resolve a data-format code via the ELF's tensix ``DataFormat`` enum."""
+    if format_names and code in format_names:
+        return format_names[code]
+    return f"Unknown({code})"
+
+
+def _collect_cbs(
+    arrays: dict[str, list[int]],
+    prefix: str,
+    format_array: str,
+    format_names: dict[int, str] | None = None,
+) -> list[CircularBufferConfig]:
+    """Build CB configs for every slot whose format is not the 'unused' sentinel.
+
+    ``format_array`` is the L1 data-format array to read (``unpack_src_format``
+    for inputs, ``pack_dst_format`` for outputs); tile-geometry arrays are keyed
+    by ``prefix`` (``unpack``/``pack``). ``format_names`` (from the ELF's tensix
+    ``DataFormat`` enum) is preferred for decoding format codes.
+    """
+    formats = arrays.get(format_array)
     if not formats:
         return []
     tile_sizes = arrays.get(f"{prefix}_tile_size", [])
@@ -115,7 +146,7 @@ def _collect_cbs(arrays: dict[str, list[int]], prefix: str) -> list[CircularBuff
         result.append(
             CircularBufferConfig(
                 index=index,
-                data_format=data_format_name(code),
+                data_format=_format_name(code, format_names),
                 tile_size_bytes=tile_sizes[index] if index < len(tile_sizes) else None,
                 tile_r_dim=tile_r[index] if index < len(tile_r) else None,
                 tile_c_dim=tile_c[index] if index < len(tile_c) else None,
