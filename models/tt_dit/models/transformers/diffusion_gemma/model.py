@@ -96,11 +96,9 @@ class DiffusionGemmaForBlockDiffusion(Module):
         self.final_logit_softcapping = final_logit_softcapping
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
-        # lm_head: hidden_size → vocab_size. TP-shard on the vocab axis when a parallel_config
-        # is provided (vocab 262144 × hidden 2816 at bf16 is ~1.4 GB per device replicated —
-        # halved with TP=2, quartered with TP=4). Halving alone is what makes the full-config
-        # model fit on WH T3K DRAM alongside the layer stack. Falls back to a plain replicated
-        # Linear when no parallel_config is passed (existing standalone tests).
+        # TP-shard lm_head on the vocab axis when possible (vocab 262144 × hidden 2816 ≈ 1.4 GB
+        # replicated; TP-sharding is required to fit on WH T3K). Plain Linear fallback for
+        # standalone tests without a parallel_config.
         if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
             self.lm_head = ColParallelLinear(
                 text_hidden_size,
@@ -116,36 +114,10 @@ class DiffusionGemmaForBlockDiffusion(Module):
             self._lm_head_tp = False
 
     def _prepare_torch_state(self, state) -> None:
-        """HF ties ``lm_head.weight`` to ``model.decoder.embed_tokens.weight``. If the loaded
-        state-dict already populates both keys (untied) we leave them; if only one is present
-        we duplicate it under the other name so the loader finds both."""
+        # HF ties lm_head.weight to model.decoder.embed_tokens.weight; if only one is present,
+        # duplicate it under the other name so the loader finds both.
         if "lm_head.weight" not in state and "model.decoder.embed_tokens.weight" in state:
             state["lm_head.weight"] = state["model.decoder.embed_tokens.weight"]
-
-    def tie_shared_embeddings(self) -> None:
-        """Alias ``encoder.embed_tokens.weight`` to ``decoder.embed_tokens.weight`` on device.
-
-        HF ties ``encoder.embed ↔ decoder.embed ↔ lm_head`` via ``tie_word_embeddings=True``.
-        In our TT model each is a separate ``Parameter`` with its own device allocation, so
-        we pay 3x the vocab-embedding storage (~1.4 GB each at bf16 for vocab=262144,
-        hidden=2816). This method aliases encoder → decoder to save one copy (~1.4 GB per
-        device). ``lm_head.weight`` stores its data transposed (Linear semantics: [in, out])
-        while embedding tables are [vocab, hidden], so lm_head can't be trivially aliased —
-        it stays separate.
-
-        Call after ``load_state_dict`` so both parameters have their loaded (independent)
-        tensors first; we deallocate encoder's copy and re-point it at the decoder's.
-        """
-        encoder_embed = self.model.encoder.language_model.embed_tokens
-        decoder_embed = self.model.decoder.embed_tokens
-
-        # Free the encoder's independent allocation before aliasing.
-        if encoder_embed.weight._data is not None:
-            ttnn.deallocate(encoder_embed.weight._data)
-        encoder_embed.weight._data = decoder_embed.weight._data
-
-        # embed_scale is a scalar buffer (value = sqrt(hidden_size)) — safe to leave as two
-        # separate tiny [1, 1] tensors; not worth the aliasing complexity.
 
     def forward(
         self,
@@ -204,18 +176,13 @@ class DiffusionGemmaForBlockDiffusion(Module):
         return self._apply_lm_head(decoder_h)
 
     def _apply_lm_head(self, decoder_h: "ttnn.Tensor") -> "ttnn.Tensor":
-        """Project decoder hidden states to vocab logits and apply tanh softcap on-device."""
+        """Project decoder hidden states to vocab logits + tanh softcap."""
         logits = self.lm_head(decoder_h)
         ttnn.deallocate(decoder_h)
-        # When lm_head is ColParallelLinear, its output is TP-fractured on the vocab axis
-        # ([1, B, S, vocab/tp]). Gather it back so downstream (host-side sampler) sees the
-        # full vocab. When lm_head is plain Linear, this is a no-op.
+        # ColParallelLinear output is vocab-fractured; gather so the host sampler sees full vocab.
+        # use_persistent_buffer=False avoids ping-pong collisions with the layer stack's gathers
+        # between denoising steps.
         if getattr(self, "_lm_head_tp", False) and self.parallel_config.tensor_parallel.factor > 1:
-            # ``use_persistent_buffer=False`` because the layer stack's all_gathers use the
-            # same input shape and share the ping-pong cache — leaving that state around
-            # manifests as "Input Tensor is not allocated" on the *next* denoising step's
-            # first all_gather. lm_head runs once per denoising step so the fresh allocation
-            # cost is negligible (same fix pattern as ``self_conditioning``'s all_gather).
             logits = self.ccl_manager.all_gather(
                 logits,
                 dim=3,

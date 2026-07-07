@@ -147,19 +147,15 @@ class DiffusionGemmaLayer(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Strip the router/experts subtree (handled at __init__ time) and reshape layer_scalar."""
-        # The DiffusionGemmaMoE wrapper consumes its weights at construction time, so the
-        # standard tt_dit load path must not try to descend into it.
+        # DiffusionGemmaMoE consumes its weights at construction; drop MoE-related state keys
+        # here so the standard loader doesn't descend into them.
         if "experts_and_router" in state and isinstance(state["experts_and_router"], dict):
             state.pop("experts_and_router", None)
-        # HF state_dict uses flat keys; tt_dit Module loader iterates named_children.
-        # When this layer is loaded via `load_state_dict(hf_layer.state_dict())`, the
-        # router.* and experts.* keys are present at the top level — drop them since
-        # the MoE wrapper already owns those weights.
         for key in list(state.keys()):
             if key.startswith("router.") or key.startswith("experts."):
                 state.pop(key, None)
 
-        # HF `layer_scalar` is a buffer of shape (1,); we need [1, 1] for ttnn.
+        # HF layer_scalar is shape (1,); ttnn wants [1, 1].
         if "layer_scalar" in state and state["layer_scalar"].ndim == 1:
             state["layer_scalar"] = state["layer_scalar"].reshape(1, 1)
 
@@ -171,22 +167,10 @@ class DiffusionGemmaLayer(Module):
         attention_mask: ttnn.Tensor | None = None,
         encoder_kv: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """One layer forward.
-
-        Args:
-            hidden_states: replicated [B, S, hidden_size]
-            cos, sin:      [B, 1, S, head_dim/2] (this layer's RoPE flavor)
-            attention_mask: optional bf16 additive mask
-            encoder_kv:    for decoder mode — (K_enc_layer, V_enc_layer) shape
-                            [B, num_local_kv_heads, src_seq, head_dim]
-
-        Returns:
-            (hidden_states, k_local, v_local): output activations, plus the K/V
-            this layer produced (used by the encoder model to build the KV cache
-            that the decoder consumes later).
-        """
+        """One layer forward. Returns (hidden, k_local, v_local); K/V are captured for the
+        encoder cache the decoder will consume."""
         cc = self.compute_config
-        # --- Self-attention block (input norm → attn → post-attn norm → residual add). ---
+        # Self-attention block.
         residual = hidden_states
         h = self.input_layernorm(hidden_states, compute_kernel_config=cc)
         attn_out, k_local, v_local = self.self_attn(h, cos, sin, attention_mask=attention_mask, encoder_kv=encoder_kv)
@@ -195,28 +179,24 @@ class DiffusionGemmaLayer(Module):
         hidden_states = ttnn.add(residual, attn_out)
         ttnn.deallocate(attn_out)
 
-        # --- Feed-forward block (dense MLP + MoE in parallel, summed). ---
+        # Feed-forward block: dense MLP + MoE in parallel, summed.
         residual = hidden_states
 
-        # Dense MLP path.
         h_dense = self.pre_feedforward_layernorm(hidden_states, compute_kernel_config=cc)
         h_dense = self.mlp(h_dense)
-        # GatedMLP emits TP-fractured hidden (RowParallel's reduce_scatter). Gather back
-        # to replicated before the norm + combine + residual, which all expect the full
-        # hidden dim.
+        # Gather GatedMLP's TP-fractured output back to replicated.
         if self.parallel_config.tensor_parallel.factor > 1:
             h_dense = self.ccl_manager.all_gather_persistent_buffer(
                 h_dense, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
         h_dense = self.post_feedforward_layernorm_1(h_dense, compute_kernel_config=cc)
 
-        # MoE path — router gets RAW residual; experts get pre_feedforward_layernorm_2'd input.
+        # Router sees raw residual; experts see pre_feedforward_layernorm_2(residual).
         expert_input = self.pre_feedforward_layernorm_2(residual, compute_kernel_config=cc)
         h_moe = self.experts_and_router(router_input=residual, expert_input=expert_input)
         ttnn.deallocate(expert_input)
         h_moe = self.post_feedforward_layernorm_2(h_moe, compute_kernel_config=cc)
 
-        # Combine and normalize.
         combined = ttnn.add(h_dense, h_moe)
         ttnn.deallocate(h_dense)
         ttnn.deallocate(h_moe)
@@ -224,7 +204,5 @@ class DiffusionGemmaLayer(Module):
         hidden_states = ttnn.add(residual, combined)
         ttnn.deallocate(combined)
 
-        # Per-layer scalar multiplier.
         hidden_states = ttnn.multiply(hidden_states, self.layer_scalar.data)
-
         return hidden_states, k_local, v_local

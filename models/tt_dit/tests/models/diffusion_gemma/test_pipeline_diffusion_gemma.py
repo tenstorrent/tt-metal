@@ -1,23 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end + perf test for the DiffusionGemma pipeline.
+"""End-to-end + perf test for the DiffusionGemma pipeline vs HF.
 
-Per-canvas correctness:
-  * Hidden-state PCC after one decoder forward vs HF.
-  * Token-ID match on the first ``N_TOKEN_MATCH`` tokens generated under a
-    deterministic seed.
+Correctness: PCC on a single seeded-canvas decoder forward + top-K token match.
+Perf: end-to-end diffusion-loop wall time asserted against per-mesh thresholds.
 
-Perf:
-  * BenchmarkProfiler instruments encoder / decoder-loop / total wall time.
-  * Asserts each component is below a permissive per-mesh threshold (start
-    permissive, tighten after first hardware run).
-
-Requires the released checkpoint (``google/diffusiongemma-26B-A4B-it``, 51 GB).
-The test will skip on configurations whose total device memory is too tight to
-hold the model + activations.
-
-    pytest models/tt_dit/tests/models/diffusion_gemma/test_pipeline_diffusion_gemma.py -s
+Requires the 51 GB google/diffusiongemma-26B-A4B-it checkpoint.
 """
 
 from __future__ import annotations
@@ -38,64 +27,36 @@ from ....utils.test import line_params, ring_params
 # ----- Configuration ---------------------------------------------------------------------
 
 MODEL_ID = os.environ.get("DIFFUSIONGEMMA_MODEL_ID", "google/diffusiongemma-26B-A4B-it")
-# First-N tokens should approximately match HF at the same seeded canvas. We use a
-# "top-K containment" check: at each of the first ``N_TOKEN_MATCH`` positions, count it as a
-# match if HF's argmax token is anywhere in TT's top-``TOP_K_MATCH`` predictions. Assertion
-# requires at least ``MIN_MATCH_RATIO`` of the N positions to pass this test.
-#
-# Why not exact match? At bfp8 expert precision the model output text is close but not
-# identical to HF ("Tokyo." vs "**Tokyo**.") — some positions have their top-1/top-2 winner
-# flipped by rounding, without breaking the overall answer. Top-K containment is robust to
-# this precision noise, while still failing if the model is qualitatively wrong.
+# Top-K containment check: HF's argmax token must be in TT's top-K at each of the first
+# N positions; require MIN_MATCH_RATIO of positions to pass. Tolerates bfp8 argmax flips
+# on near-tie tokens ("Tokyo." vs "**Tokyo**.") while still catching qualitative drift.
 N_TOKEN_MATCH = 16
 TOP_K_MATCH = 3
 MIN_MATCH_RATIO = 1.0
-# End-to-end pipeline runs the tanh-softcapped logits through a sampler; the softcap compresses
-# most drift into the ~[-30, 30] band. First-N token-ID match under a seeded categorical sampler
-# is the primary correctness signal. Logit-space PCC is a smoke test at a *loose* threshold —
-# chained-bf16 drift across 30 layers + tanh saturation + 262144-way vocab projection sits at
-# ~88% naturally even when the argmax path (and hence generated text) matches HF exactly.
-#
-# TODO(sosborne): the current 30-layer chained hidden-state drift includes an outsized
-# ~-32pp PCC drop at layer 29 (last ``full_attention`` layer) that the final RMSNorm partially
-# rescues. Every 6th layer (5, 11, 17, 23, 29) is ``full_attention`` and the per-layer PCC
-# regression grows with depth. Working hypothesis: bf16 accumulation drift compounding in the
-# num_kv_heads=2/kv_replication=4 attention (head_dim=512, larger matmuls than sliding).
-# Tightening the PCC threshold requires either (a) higher-fidelity SDPA on full_attention or
-# (b) fp32 accumulation on the attention output path. Not blocking correct-output-generation.
+# Loose PCC bar: chained bf16 over 30 layers + tanh softcap + 262144-vocab projection lands
+# around 0.88 even when argmax is correct. TODO: full_attention layers (5, 11, 17, 23, 29)
+# introduce most of the depth-wise drift; tightening requires higher-fidelity SDPA there.
 PCC_THRESHOLD = 0.80
 PROMPT = "Briefly: what is the capital of Japan?"
 MAX_NEW_TOKENS = 32
 SEED = 0
 
-# Permissive per-mesh-shape × per-expert-dtype latency thresholds (seconds). Expert dtype
-# strongly affects DRAM traffic through the MoE: bfp8 is ~4x smaller than bf16.
-# Tighten after first hardware run.
-# Key format: (rows, cols, topology, expert_dtype_key) where
-#   expert_dtype_key ∈ {"bfp8", "bf16"}.
+# Per-mesh × expert-dtype total-latency thresholds (seconds). Only ``total`` is asserted;
+# ``encoder``/``denoising`` are informational. (1, 8, "ring", "bfp8") is calibrated from
+# hardware; others are estimates.
 _DEFAULT_METRICS = {"encoder": 20.0, "denoising": 120.0, "total": 150.0}
 EXPECTED_METRICS = {
-    # BH QB2 (2x4 linear)
     (2, 4, "linear", "bfp8"): _DEFAULT_METRICS,
     (2, 4, "linear", "bf16"): {"encoder": 30.0, "denoising": 180.0, "total": 220.0},
-    # BH galaxy (4x8 linear)
     (4, 8, "linear", "bfp8"): {"encoder": 8.0, "denoising": 60.0, "total": 80.0},
     (4, 8, "linear", "bf16"): {"encoder": 12.0, "denoising": 90.0, "total": 120.0},
-    # WH T3K (2x4 ring) — bf16 doesn't fit in DRAM, skipped in-test.
     (2, 4, "ring", "bfp8"): {"encoder": 30.0, "denoising": 180.0, "total": 220.0},
-    # WH T3K (1x8 ring) — tp=8 splits MoE intermediate 8-way, so per-device DRAM is 4x
-    # smaller than (2,4). bf16 fits here. Numbers below are calibrated from a measured
-    # bfp8 run at ~39s total (with the M=256 canvas MoE fast path), with ~15% slack for
-    # warm-cache/thermal variability. Total includes stopping-criteria-driven early
-    # termination. bf16 numbers extrapolated from the bfp8 baseline (bf16 > bfp8 since MoE
-    # DRAM traffic is larger).
     (1, 8, "ring", "bfp8"): {"encoder": 5.0, "denoising": 35.0, "total": 32.0},
     (1, 8, "ring", "bf16"): {"encoder": 8.0, "denoising": 55.0, "total": 40.0},
 }
 
 
 def _expert_dtype_key(dtype: ttnn.DataType) -> str:
-    """Short stable string for keying ``EXPECTED_METRICS``."""
     return {ttnn.bfloat8_b: "bfp8", ttnn.bfloat16: "bf16"}[dtype]
 
 
@@ -115,10 +76,8 @@ def _expert_dtype_key(dtype: ttnn.DataType) -> str:
         pytest.param((2, 4), 0, 1, line_params, ttnn.Topology.Linear, id="bh_qb2"),
         pytest.param((4, 8), 0, 2, line_params, ttnn.Topology.Linear, id="bh_galaxy"),
         pytest.param((2, 4), 0, 1, ring_params, ttnn.Topology.Ring, id="wh_t3k"),
-        # WH T3K flat 1x8 with tp=8. Splits the MoE intermediate dim 8-way, giving ~4x less
-        # per-device DRAM than the 2x4 layout — makes bfp8/bf16 experts fit where 2x4 OOMs.
-        # tp_axis=1 since axis 0 is size 1. Attention KV heads with num_global_kv_heads=2 will
-        # be replicated 4x per device (Gemma4Attention handles this via `_kv_replication`).
+        # WH T3K flat 1x8, tp=8: splits MoE intermediate 8-way; ~4x less per-device DRAM
+        # than 2x4 → bf16 fits here. Attention with num_global_kv_heads=2 uses kv_replication=4.
         pytest.param((1, 8), 1, 1, ring_params, ttnn.Topology.Ring, id="wh_t3k_1x8"),
     ],
     indirect=["mesh_device", "device_params"],
@@ -138,29 +97,16 @@ def test_pipeline_diffusion_gemma(
 
     mesh_shape = tuple(mesh_device.shape)
 
-    # DRAM ceiling on 2x4 meshes: bf16 expert weights are ~91 GB for MoE alone → doesn't fit
-    # on WH T3K (8x12 GB = 96 GB) or Blackhole 2x4. bfp8 experts (~23 GB for MoE) fit
-    # comfortably on both. The 4x8 Blackhole galaxy has 4x the DRAM banks and fits both dtypes.
-    # Escape hatch: DIFFUSIONGEMMA_FORCE_BF16=1 if you've validated the DRAM math on a
-    # specific config (e.g. reduced num_hidden_layers).
+    # bf16 experts (~91 GB MoE alone) don't fit on 2x4 meshes; skip unless force-enabled.
     if expert_dtype == ttnn.bfloat16 and mesh_shape == (2, 4):
         if os.environ.get("DIFFUSIONGEMMA_FORCE_BF16", "0") != "1":
-            pytest.skip(
-                f"bf16 expert weights don't fit in DRAM on mesh_shape={mesh_shape}. "
-                "Use expert_dtype=ttnn.bfloat8_b, run on 4x8 mesh, or set DIFFUSIONGEMMA_FORCE_BF16=1."
-            )
+            pytest.skip(f"bf16 experts OOM on {mesh_shape}; use bfp8 or DIFFUSIONGEMMA_FORCE_BF16=1")
 
     torch.manual_seed(SEED)
     benchmark_profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
 
-    # ------------------------------------------------------------------
     # 1. Build TT pipeline + HF reference model.
-    # ------------------------------------------------------------------
-    # ``expert_dtype`` is parametrized so we can validate both the DRAM-efficient bfp8 path
-    # (default; fits comfortably on all supported meshes) and the higher-precision bf16 path
-    # (may OOM on tighter mesh shapes — the ``bf16`` variants are expected to skip when the
-    # DRAM budget is exceeded rather than fail the test suite).
     config = DiffusionGemmaPipelineConfig(
         mesh_device=mesh_device,
         tp_axis=tp_axis,
@@ -175,9 +121,7 @@ def test_pipeline_diffusion_gemma(
     hf_model = HFForBlockDiffusion.from_pretrained(MODEL_ID, dtype=torch.float32).eval()
     benchmark_profiler.end("setup")
 
-    # ------------------------------------------------------------------
     # 2. Correctness: one decoder forward at a seeded canvas vs HF.
-    # ------------------------------------------------------------------
     messages = [{"role": "user", "content": [{"type": "text", "text": PROMPT}]}]
     proc_inputs = hf_processor.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=True, return_dict=True, return_tensors="pt"
@@ -205,12 +149,7 @@ def test_pipeline_diffusion_gemma(
 
     logger.info(f"hf_logits {hf_logits.shape}, tt_logits {tt_logits.shape}")
 
-    # ------------------------------------------------------------------
-    # 3. Full diffusion loop with per-step decoded text.
-    # ------------------------------------------------------------------
-    # Runs the same diffusion loop that ``pipeline.generate()`` runs, but prints the decoded
-    # argmax canvas after every step. Useful for spotting convergence problems and for the
-    # visualize_diffusion.py video tool that parses this log format.
+    # 3. Full diffusion loop with per-step decoded text (also consumed by visualize_diffusion.py).
     from transformers.models.diffusion_gemma.generation_diffusion_gemma import (
         EntropyBoundSampler,
         EntropyBoundSamplerConfig,
@@ -239,22 +178,14 @@ def test_pipeline_diffusion_gemma(
     self_cond_logits: torch.Tensor | None = None
     argmax_canvas = current_canvas.clone()
 
-    # ---- Warmup ----------------------------------------------------------------
-    # Force JIT / kernel-cache compilation of both decoder code paths before the timed
-    # loop. Section 2 already ran ``_run_encoder`` and one ``_run_decoder`` with
-    # ``self_cond_logits=None`` (the first-step path), so we only need one additional
-    # decoder call with a non-None ``self_cond_logits`` to warm the self-conditioning
-    # code path used by every subsequent step. The warmup output is discarded.
-    logger.info(
-        "[3] Warmup: 1 encoder + 1 decoder(self_cond=None) via section 2, " "+ 1 decoder(self_cond=logits) below."
-    )
+    # Warmup the self_cond decoder code path (section 2 already warmed encoder + self_cond=None).
     _ = pipeline._run_decoder(
         current_canvas,
         encoder_kv,
         decoder_position_ids,
         tt_enc_masks,
         encoder_seq_len=input_ids.shape[1],
-        self_cond_logits=tt_logits,  # section-2 logits used as a stand-in prior.
+        self_cond_logits=tt_logits,
     )
 
     logger.info(f"[3] Diffusion loop ({pipeline.config.max_denoising_steps} steps max)")
@@ -289,44 +220,28 @@ def test_pipeline_diffusion_gemma(
     final_text = hf_processor.batch_decode(argmax_canvas, skip_special_tokens=False)[0]
     logger.info(f"[3] Final TT decoded canvas: {final_text!r}")
 
-    # ------------------------------------------------------------------
     # 4. Correctness assertions.
-    # ------------------------------------------------------------------
-    # 4a. Loose PCC smoke test on the section-2 seed-canvas logits. See ``PCC_THRESHOLD``'s
-    # comment for why 0.80 is the current bar (chained bf16 across 30 layers + tanh saturation
-    # + 262144-way vocab projection lands at ~0.88 in practice even when argmax is correct).
+    # 4a. Loose PCC smoke test on the section-2 seed-canvas logits.
     logger.info(f"[4a] Loose PCC smoke test (threshold={PCC_THRESHOLD:.2f})")
     assert_quality(hf_logits, tt_logits, pcc=PCC_THRESHOLD)
 
-    # 4b. Approximate token match on the section-2 logits — the functional correctness bar.
-    # We compare TT's *top-K* predictions to HF's argmax at each of the first N positions.
-    # A position is a "match" when HF's argmax token is anywhere in TT's top-K set. This is
-    # tolerant of bfp8 precision flips (which can swap a token with a near-tie synonym)
-    # while still failing if TT lands far outside HF's plausible set. Both are deterministic
-    # for the same seeded canvas.
+    # 4b. Top-K token containment: HF argmax must appear in TT's top-K at each of the first
+    # N positions; require MIN_MATCH_RATIO of positions to pass. Tolerates bfp8 near-tie flips.
     hf_argmax = hf_logits.argmax(dim=-1)[0, :N_TOKEN_MATCH].tolist()
     tt_topk = torch.topk(tt_logits[0, :N_TOKEN_MATCH], k=TOP_K_MATCH, dim=-1).indices.tolist()
-    tt_argmax = [row[0] for row in tt_topk]  # top-1 for the log, purely informational
-    matches = [hf_tok in top_row for hf_tok, top_row in zip(hf_argmax, tt_topk)]
-    match_count = sum(matches)
-    logger.info(f"[4b] HF argmax[:{N_TOKEN_MATCH}]:            {hf_argmax}")
-    logger.info(f"[4b] TT top-{TOP_K_MATCH}[:{N_TOKEN_MATCH}]:  {tt_topk}")
-    logger.info(
-        f"[4b] Per-position hits (HF ∈ TT.top-{TOP_K_MATCH}): {matches} "
-        f"→ {match_count}/{N_TOKEN_MATCH} ({match_count / N_TOKEN_MATCH:.0%})"
-    )
-    required_matches = max(1, int(N_TOKEN_MATCH * MIN_MATCH_RATIO + 0.5))
-    assert match_count >= required_matches, (
-        f"Token overlap too low: {match_count}/{N_TOKEN_MATCH} positions had HF's argmax "
-        f"within TT's top-{TOP_K_MATCH}; required at least {required_matches} "
-        f"({MIN_MATCH_RATIO:.0%}).\n"
-        f"  TT top-1: {tt_argmax} -> {hf_processor.batch_decode(torch.tensor([tt_argmax]))[0]!r}\n"
-        f"  HF top-1: {hf_argmax} -> {hf_processor.batch_decode(torch.tensor([hf_argmax]))[0]!r}"
+    tt_argmax = [row[0] for row in tt_topk]
+    match_count = sum(hf_tok in top_row for hf_tok, top_row in zip(hf_argmax, tt_topk))
+    logger.info(f"[4b] HF argmax: {hf_argmax}")
+    logger.info(f"[4b] TT top-{TOP_K_MATCH}: {tt_topk}")
+    logger.info(f"[4b] {match_count}/{N_TOKEN_MATCH} positions had HF's argmax in TT's top-{TOP_K_MATCH}")
+    required = max(1, int(N_TOKEN_MATCH * MIN_MATCH_RATIO + 0.5))
+    assert match_count >= required, (
+        f"Only {match_count}/{N_TOKEN_MATCH} positions match (required {required}).\n"
+        f"  TT top-1: {hf_processor.batch_decode(torch.tensor([tt_argmax]))[0]!r}\n"
+        f"  HF top-1: {hf_processor.batch_decode(torch.tensor([hf_argmax]))[0]!r}"
     )
 
-    # ------------------------------------------------------------------
-    # 5. Perf: assert per-component thresholds.
-    # ------------------------------------------------------------------
+    # 5. Perf: assert e2e diffusion loop time.
     topology_key = "ring" if topology == ttnn.Topology.Ring else "linear"
     metrics_key = (*mesh_shape, topology_key, _expert_dtype_key(expert_dtype))
     expected = EXPECTED_METRICS.get(metrics_key, _DEFAULT_METRICS)

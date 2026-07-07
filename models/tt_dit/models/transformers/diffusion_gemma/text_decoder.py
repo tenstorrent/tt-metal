@@ -32,15 +32,12 @@ from .self_conditioning import DiffusionGemmaSelfConditioning
 
 
 class DiffusionGemmaDecoderModel(Module):
-    """Embed → self_conditioning → 30 layers (with encoder cache cross-attn) → final norm.
+    """Embed → self_conditioning → N layers (cross-attn to encoder cache) → final norm.
 
-    Optionally accepts pre-constructed ``shared_layers`` / ``shared_norm`` /
-    ``shared_embed_tokens`` from a companion ``DiffusionGemmaEncoderTextModel``. When
-    provided, this decoder reuses those Python objects instead of constructing new ones
-    — the way HF's ``DiffusionGemmaModel._tied_weights_keys`` intends. Without sharing
-    the decoder would double-allocate every layer weight, which OOMs the full 30-layer
-    model on WH T3K DRAM (even at bfp8 experts). Standalone tests skip these kwargs and
-    still work — they just pay the extra allocation.
+    ``shared_layers`` / ``shared_norm`` / ``shared_embed_tokens`` alias the encoder's
+    same-named modules (HF ties them via ``_tied_weights_keys``). Sharing is required to
+    fit the full 30-layer model on WH T3K DRAM. Standalone tests can pass ``None`` and
+    pay the extra allocation.
     """
 
     def __init__(
@@ -79,22 +76,6 @@ class DiffusionGemmaDecoderModel(Module):
         shared_norm: "RMSNorm | None" = None,
         shared_embed_tokens: "DiffusionGemmaScaledWordEmbedding | None" = None,
     ) -> None:
-        """
-        HF ties every layer weight between encoder and decoder (see
-        ``DiffusionGemmaModel._tied_weights_keys``) — attention Q/K/V/O, MoE router+experts,
-        MLP, layer norms, layer_scalar. Also ties encoder.norm ↔ decoder.norm and
-        encoder.embed_tokens ↔ decoder.embed_tokens.
-
-        To honor those ties on device (crucial to avoid 2× DRAM for the full 30-layer
-        model on WH T3K), the pipeline builds the encoder first and passes its
-        ``language_model.layers``, ``.norm``, and ``.embed_tokens`` here as
-        ``shared_layers`` / ``shared_norm`` / ``shared_embed_tokens``. When provided,
-        this decoder aliases them (same Python object → same underlying ttnn tensors)
-        instead of constructing new instances that would double-allocate the weights.
-
-        Standalone tests (that don't share) pass ``None`` for these and get an
-        independent copy — the pre-sharing behavior.
-        """
         super().__init__()
         self.hidden_size = hidden_size
         self.num_hidden_layers = num_hidden_layers

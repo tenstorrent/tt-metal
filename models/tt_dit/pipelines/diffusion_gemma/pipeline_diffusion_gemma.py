@@ -3,20 +3,12 @@
 
 """End-to-end DiffusionGemma pipeline.
 
-Mirrors the autoregressive-over-canvases + diffusion-within-canvas loop from
-``transformers.models.diffusion_gemma.generation_diffusion_gemma.DiffusionGemmaGenerationMixin.generate``,
-but routes the encoder + decoder forwards through our TT model. The sampler /
-logits processor / stopping criteria classes are imported directly from HF so we
-don't duplicate the (pure-torch, host-side) math.
+Mirrors HF's ``DiffusionGemmaGenerationMixin.generate`` (canvas outer loop + diffusion
+inner loop), routing encoder/decoder forwards through the TT model. Imports HF's
+sampler / logits processor / stopping criteria directly.
 
-Scope notes:
-  * Single batch (``batch_size == 1``) — the simpler inference case. Multi-batch
-    requires per-row finished tracking which is straightforward to add but not
-    needed for the first parity pass.
-  * Per-canvas the encoder re-encodes the full prefix (no incremental cache
-    extension between canvases). This is suboptimal for throughput but
-    semantically equivalent and avoids the cache-rolling complexity. Optimization
-    follow-up: extend the KV cache rather than recomputing it.
+Scope: batch_size==1; encoder re-encodes the full prefix per canvas (no incremental
+cache extension yet).
 """
 
 from __future__ import annotations
@@ -42,30 +34,18 @@ class DiffusionGemmaPipeline:
 
     @dataclasses.dataclass
     class Config:
-        """Pipeline configuration.
-
-        Kept as a nested class so callers get one entry point:
-        ``DiffusionGemmaPipeline.Config(...)`` alongside
-        ``DiffusionGemmaPipeline.from_pretrained(...)``.
-        """
-
         mesh_device: ttnn.MeshDevice
         tp_axis: int = 0
         num_links: int = 1
         topology: ttnn.Topology = ttnn.Topology.Linear
-        # Sampler tuning. Defaults match HF generation_config.json defaults.
+        # Sampler / stopping-criteria hyperparameters (HF generation_config.json defaults).
         max_denoising_steps: int = 48
         entropy_bound: float = 0.1
         temperature_start: float = 0.8
         temperature_end: float = 0.4
-        # StableAndConfidentStoppingCriteria hyperparameters (HF defaults).
         stability_threshold: int = 2
         confidence_threshold: float = 0.9
-        # Expert weights are the dominant DRAM consumer at real config (30 layers × 128 experts
-        # × per-expert projection weights). bfp8 fits comfortably where bf16 OOMs, and
-        # demos/gemma4's own MoEBlock default is bfp8 — so precision at the router path is not
-        # further degraded by this choice. Router weights stay at bf16 since the router logic is
-        # more precision-sensitive and its state is small enough to fit at bf16.
+        # bfp8 experts fit on WH T3K; bf16 doesn't. Router stays bf16 (small + precision-sensitive).
         expert_dtype: ttnn.DataType = ttnn.bfloat8_b
         router_dtype: ttnn.DataType = ttnn.bfloat16
 
@@ -95,12 +75,8 @@ class DiffusionGemmaPipeline:
         config: "DiffusionGemmaPipeline.Config",
         torch_dtype: torch.dtype = torch.bfloat16,
     ) -> "DiffusionGemmaPipeline":
-        """Build the pipeline from an HF checkpoint.
-
-        The HF model is kept in memory for: (a) the multi-modal preprocessor +
-        generation_config, (b) the text encoder's vision tower's std_bias/scale
-        buffers when needed. The model weights are also used to populate our
-        TT model via ``load_state_dict``.
+        """Build the pipeline from an HF checkpoint. Keeps HF model in memory for the
+        processor + generation_config + vision-tower buffers.
         """
         from transformers import AutoProcessor
         from transformers.models.diffusion_gemma.modeling_diffusion_gemma import (
@@ -116,19 +92,14 @@ class DiffusionGemmaPipeline:
 
     @staticmethod
     def _build_tt_model_from_hf(hf_model, config: "DiffusionGemmaPipeline.Config") -> DiffusionGemmaForBlockDiffusion:
-        """Construct our TT model with hyperparameters from the HF config and load weights."""
+        """Construct the TT model from HF config; load weights from HF state_dict."""
         import os
 
         hf_cfg = hf_model.config
         text_cfg = hf_cfg.text_config
         vision_cfg = hf_cfg.vision_config
 
-        # Disk cache path for demos/gemma4's MoE weight loader. Without this, every expert
-        # weight (~24 MB × 128 experts × 30 layers ≈ 92 GB at bf16, ~23 GB at bfp8) is
-        # re-uploaded host→device on every construction, which can take many minutes.
-        # ``TT_DIT_CACHE_DIR`` follows the convention used by other tt_dit pipelines
-        # (mochi, ltx, qwenimage). The path is keyed by expert dtype so we can flip between
-        # bfp8 and bf16 without a stale-cache collision.
+        # Disk cache for demos/gemma4 MoE weights (keyed by expert dtype to avoid stale cache).
         cache_base = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
         model_key = str(hf_model.config._name_or_path).rstrip("/").split("/")[-1] or "diffusion_gemma"
         _dtype_to_key = {ttnn.bfloat8_b: "bfp8", ttnn.bfloat16: "bf16"}
@@ -227,10 +198,8 @@ class DiffusionGemmaPipeline:
             pad_token_id=text_cfg.pad_token_id,
             mesh_device=mesh_device,
         )
-        # Build decoder sharing encoder's layers/norm/embed_tokens on device. Matches HF's
-        # ``DiffusionGemmaModel._tied_weights_keys`` (encoder.layers ↔ decoder.layers, .norm ↔
-        # .norm, .embed_tokens ↔ .embed_tokens). Prevents double-construction of ~5.7 GB of
-        # MoE weights per device (which OOMs on WH T3K even at bfp8 experts).
+        # Share encoder's layers/norm/embed_tokens (HF ties them via _tied_weights_keys).
+        # Prevents double-allocation of the ~5.7 GB MoE weight stack per device.
         decoder = DiffusionGemmaDecoderModel(
             **decoder_text_kwargs,
             shared_layers=encoder.language_model.layers,
@@ -248,11 +217,8 @@ class DiffusionGemmaPipeline:
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
-        # ``lm_head`` is HF-tied to ``model.decoder.embed_tokens.weight`` and HF may not emit
-        # both keys separately (state_dict de-dupes tied groups). Our ``DiffusionGemmaForBlockDiffusion.
-        # _prepare_torch_state`` normally synthesizes ``lm_head.weight`` from the decoder embed
-        # key, but we're about to strip that. Synthesize now from whichever tied source is
-        # present so lm_head still gets loaded.
+        # lm_head is tied to decoder.embed_tokens in HF; synthesize it from the tied source
+        # before we strip decoder-prefixed keys (or the loader will find nothing for lm_head).
         if "lm_head.weight" not in hf_state:
             for src in (
                 "model.decoder.embed_tokens.weight",
@@ -262,17 +228,13 @@ class DiffusionGemmaPipeline:
                     hf_state["lm_head.weight"] = hf_state[src]
                     break
 
-        # Strip the decoder-prefixed layer/norm/embed keys from the state dict — the decoder's
-        # shared submodules will be loaded via the encoder prefix, and re-loading via the
-        # decoder prefix would try to re-allocate the same tensors.
+        # Strip decoder-prefixed shared-submodule keys — those weights are loaded via the
+        # encoder prefix (they alias the same on-device tensors). Non-strict load lets the
+        # decoder-side missing keys pass.
         _shared_prefixes = ("model.decoder.layers.", "model.decoder.norm.", "model.decoder.embed_tokens.")
         for k in list(hf_state.keys()):
             if k.startswith(_shared_prefixes):
                 del hf_state[k]
-        # Use non-strict load: the decoder-side submodules are shared with the encoder, so
-        # the loader will visit them a second time via the decoder prefix and find no state
-        # keys (we just stripped them). Those are "missing" from the decoder's perspective
-        # but already loaded via encoder. strict=False lets that pass without error.
         tt_for_diffusion.load_torch_state_dict(hf_state, strict=False)
         return tt_for_diffusion
 
@@ -290,8 +252,7 @@ class DiffusionGemmaPipeline:
     ) -> dict[str, Any]:
         """Generate text from a prompt (optionally with images).
 
-        Returns a dict with ``sequences`` (LongTensor [B, total_len]),
-        ``generated_text`` (decoded string), and ``num_canvases``.
+        Returns dict with ``sequences``, ``generated_text``, ``num_canvases``.
         """
         from transformers.models.diffusion_gemma.generation_diffusion_gemma import (
             EntropyBoundSampler,
@@ -303,7 +264,6 @@ class DiffusionGemmaPipeline:
         torch.manual_seed(seed)
         device = torch.device("cpu")
 
-        # 1. Tokenize + image-process.
         messages = self._build_chat_messages(text_prompt, images)
         proc_inputs = self.hf_processor.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True, return_dict=True, return_tensors="pt"
@@ -314,13 +274,11 @@ class DiffusionGemmaPipeline:
 
         text_cfg = self.hf_model.config.text_config
         canvas_length = self.hf_model.config.canvas_length
-        vocab_size = text_cfg.vocab_size
 
-        # 2. Sampler / processor / stopping setup (HF classes, host-side).
         sampler = EntropyBoundSampler(
             EntropyBoundSamplerConfig(entropy_bound=self.config.entropy_bound),
             canvas_length=canvas_length,
-            vocab_size=vocab_size,
+            vocab_size=text_cfg.vocab_size,
             max_denoising_steps=self.config.max_denoising_steps,
         )
         logits_processor = LinearTemperatureScheduleLogitsProcessor(
@@ -333,19 +291,15 @@ class DiffusionGemmaPipeline:
             confidence_threshold=self.config.confidence_threshold,
         )
 
-        # 3. Outer (canvas) loop.
         cur_input_ids = input_ids
         max_canvases = max(1, (max_new_tokens + canvas_length - 1) // canvas_length)
         for canvas_idx in range(max_canvases):
-            # 3a. Encode the prompt + previously generated canvases. Build masks via HF mask utilities.
-            encoder_kv, encoder_attention_masks, encoder_position_ids = self._run_encoder(
+            encoder_kv, encoder_attention_masks, _enc_pos = self._run_encoder(
                 cur_input_ids, pixel_values, pixel_position_ids
             )
 
-            # 3b. Inner (diffusion) loop on the new canvas.
             current_canvas = sampler.initialize_canvas(batch_size=cur_input_ids.shape[0], device=device)
             self_cond_logits: torch.Tensor | None = None
-            finished_denoising = torch.zeros(cur_input_ids.shape[0], dtype=torch.bool, device=device)
             decoder_position_ids = torch.arange(
                 cur_input_ids.shape[1], cur_input_ids.shape[1] + canvas_length, dtype=torch.long
             ).unsqueeze(0)
@@ -362,13 +316,10 @@ class DiffusionGemmaPipeline:
                 )
                 argmax_canvas = logits.argmax(dim=-1)
                 processed_logits = logits_processor(current_canvas, logits, cur_step=step)
-                # Sample (categorical) for the denoiser canvas.
                 probs = torch.softmax(processed_logits.float(), dim=-1)
                 denoiser_canvas = torch.distributions.Categorical(probs=probs).sample()
-                # Accept and renoise per the sampler.
                 accepted = sampler.accept_canvas(current_canvas, denoiser_canvas, processed_logits, step)
                 current_canvas = sampler.renoise_canvas(accepted, step)
-                # Adaptive stopping.
                 finished_denoising = stopping(argmax_canvas, processed_logits)
                 self_cond_logits = processed_logits
                 if torch.all(finished_denoising):
@@ -416,7 +367,7 @@ class DiffusionGemmaPipeline:
         seq_len = input_ids.shape[1]
         position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
 
-        # Build per-layer-type masks via HF's mask utilities (no hand-coded mask math).
+        # Build per-layer-type masks via HF's mask utilities.
         with torch.no_grad():
             inputs_embeds_for_mask = self.hf_model.model.encoder.language_model.embed_tokens(input_ids)
         mask_kwargs = {
@@ -431,9 +382,7 @@ class DiffusionGemmaPipeline:
             "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
         }
 
-        # HF's create_causal_mask returns a BOOLEAN mask under the SDPA path
-        # (True=attend, False=masked). ttnn SDPA expects an ADDITIVE mask
-        # (0.0=attend, -inf=masked). Convert before upload.
+        # HF returns bool masks under SDPA; ttnn SDPA wants additive (0/-inf).
         def _to_additive(m: torch.Tensor) -> torch.Tensor:
             if m.dtype == torch.bool:
                 m = torch.where(m, torch.tensor(0.0), torch.tensor(float("-inf")))
@@ -453,14 +402,12 @@ class DiffusionGemmaPipeline:
         tt_pixels = None
         padding_positions = None
         if pixel_values is not None:
-            # Pixel preprocessing: HF expects raw [0, 1] pixels but our patch embedder
-            # expects pre-scaled (2*p - 1) input. Apply on host.
+            # HF gives raw [0,1] pixels; our patch embedder wants (2*p - 1).
             scaled_px = 2.0 * (pixel_values.float() - 0.5)
             tt_pixels = bf16_tensor(scaled_px.unsqueeze(0), device=mesh_device)
             if pixel_position_ids is not None:
                 padding_positions = (pixel_position_ids == -1).all(dim=-1)
 
-        # Run our TT encoder.
         _hidden, per_layer_kv = self.tt_model.model.encoder(
             tt_input_ids,
             position_ids,
@@ -486,25 +433,17 @@ class DiffusionGemmaPipeline:
         text_cfg = self.hf_model.config.text_config
         canvas_length = canvas_ids.shape[1]
 
-        # Decoder mask: bidirectional across [encoder cache | canvas]. Additive zeros.
-        decoder_mask_dict = {
-            "full_attention": torch.zeros(
-                canvas_ids.shape[0], 1, canvas_length, encoder_seq_len + canvas_length, dtype=torch.bfloat16
-            ),
-            "sliding_attention": torch.zeros(
-                canvas_ids.shape[0], 1, canvas_length, encoder_seq_len + canvas_length, dtype=torch.bfloat16
-            ),
-        }
+        # Bidirectional decoder mask across [encoder cache | canvas] (additive zeros).
+        mask_shape = (canvas_ids.shape[0], 1, canvas_length, encoder_seq_len + canvas_length)
+        zero_mask = torch.zeros(*mask_shape, dtype=torch.bfloat16)
         tt_decoder_masks = {
-            lt: ttnn.from_torch(m, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-            for lt, m in decoder_mask_dict.items()
+            lt: ttnn.from_torch(zero_mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            for lt in ("full_attention", "sliding_attention")
         }
 
         tt_canvas = ttnn.from_torch(canvas_ids, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        # Self-conditioning signal: prior step's logits → soft embeddings. The decoder
-        # module accepts ``self_conditioning_signal`` (already projected to hidden). We
-        # compute the soft embedding here.
+        # Self-cond: prior step's logits → soft embeddings (host-side, then upload).
         tt_self_cond_signal = None
         if self_cond_logits is not None:
             soft_probs = self_cond_logits.softmax(dim=-1, dtype=torch.float32).to(torch.bfloat16)
@@ -512,7 +451,6 @@ class DiffusionGemmaPipeline:
             soft_emb = (soft_probs @ embed_w).to(torch.bfloat16) * (text_cfg.hidden_size**0.5)
             tt_self_cond_signal = bf16_tensor(soft_emb.unsqueeze(0), device=mesh_device)
 
-        # Single clean decoder step: decoder + lm_head + softcap on-device.
         out = self.tt_model.decoder_step(
             tt_canvas,
             decoder_position_ids,
@@ -520,12 +458,8 @@ class DiffusionGemmaPipeline:
             decoder_attention_masks=tt_decoder_masks,
             self_conditioning_signal=tt_self_cond_signal,
         )
-        # Bring to host as fp32 for the sampler math. local_device_to_torch returns the
-        # single-device replica with its on-device shape preserved — typically [B, canvas, vocab].
-        # The HF sampler expects exactly that shape; do NOT squeeze (otherwise we lose the
-        # batch dim and Categorical treats `canvas` as batch).
+        # Bring to host as fp32 for the sampler. Preserve [B, canvas, vocab] shape.
         out_host = local_device_to_torch(out).to(torch.float32)
-        # Defensive: handle the edge case where the upload added a leading mesh dim.
         if out_host.ndim == 4 and out_host.shape[0] == 1:
             out_host = out_host.squeeze(0)
         return out_host
