@@ -66,7 +66,6 @@ class CT_DIM(TemplateParameter):
     broadcast_type=[BroadcastType.Column],
     input_dimensions_A=[[32, w] for w in range(32, 257, 32)],
     input_dimensions_B=[[32, 32]],
-    ct_dim=lambda input_dimensions_A: [input_dimensions_A[1] // 32],
 )
 def test_eltwise_bcast_col_custom(
     cpp_source,
@@ -77,7 +76,6 @@ def test_eltwise_bcast_col_custom(
     broadcast_type,
     input_dimensions_A,
     input_dimensions_B,
-    ct_dim,
 ):
     if math_op != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")

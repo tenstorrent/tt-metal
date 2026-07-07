@@ -76,6 +76,7 @@ def _is_block_float(fmt: DataFormat) -> bool:
 
 @pytest.mark.perf
 @parametrize(
+    cpp_source=["sources/eltwise_unary_typecast_perf.cpp"],
     combo_idx=list(range(len(_TYPECAST_PERF_CASES))),
     formats=lambda combo_idx: [
         InputOutputFormat(
@@ -96,6 +97,7 @@ def _is_block_float(fmt: DataFormat) -> bool:
 )
 def test_perf_eltwise_unary_typecast(
     perf_report,
+    cpp_source,
     combo_idx,
     formats,
     dest_acc,
@@ -110,6 +112,7 @@ def test_perf_eltwise_unary_typecast(
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
+    assert tile_count_A == (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
 
     # Unpack straight into Dest when the input is 32-bit: the unpacker has no
     # SrcA/SrcB path for Int32/UInt32/Float32, so cunpack_common asserts
@@ -120,7 +123,7 @@ def test_perf_eltwise_unary_typecast(
     unpack_to_dest = input_format.is_32_bit()
 
     configuration = PerfConfig(
-        "sources/eltwise_unary_typecast_perf.cpp",
+        cpp_source,
         formats,
         run_types=[
             PerfRunType.L1_TO_L1,

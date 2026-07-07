@@ -27,6 +27,7 @@ from helpers.test_variant_parameters import (
 
 @pytest.mark.perf
 @parametrize(
+    cpp_source=["sources/eltwise_binary_fpu_perf.cpp"],
     formats=input_output_formats(
         [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
     ),
@@ -35,7 +36,6 @@ from helpers.test_variant_parameters import (
     transpose_srca=[Transpose.No],
     input_dimensions=[[512, 32]],
     tile_dimensions=[[32, 32]],
-    tile_count=16,
     math_fidelity=lambda formats, math_op: get_valid_math_fidelities(
         formats, math_op, PERF_RUN=True
     ),
@@ -43,30 +43,24 @@ from helpers.test_variant_parameters import (
 )
 def test_perf_eltwise_binary(
     perf_report,
+    cpp_source,
     formats,
     math_op,
     broadcast_type,
     transpose_srca,
     input_dimensions,
     tile_dimensions,
-    tile_count,
     math_fidelity,
     dest_acc,
 ):
     if math_op != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
-    if transpose_srca != Transpose.No:
-        pytest.skip("SrcA transpose is not supported by eltwise_binary_fpu_perf.cpp")
-
     tile_rows, tile_cols = tile_dimensions
-    derived_tile_count = (input_dimensions[0] // tile_rows) * (
-        input_dimensions[1] // tile_cols
-    )
-    assert derived_tile_count == tile_count
+    tile_count = (input_dimensions[0] // tile_rows) * (input_dimensions[1] // tile_cols)
 
     configuration = PerfConfig(
-        "sources/eltwise_binary_fpu_perf.cpp",
+        cpp_source,
         formats,
         run_types=[
             PerfRunType.L1_TO_L1,

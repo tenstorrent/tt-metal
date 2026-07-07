@@ -72,7 +72,7 @@ def test_perf_fast_tilize(
     dimensions,
 ):
     tile_count = dimensions[0] * dimensions[1]
-    pixel_dimensions = (dimensions[0] * 32, dimensions[1] * 32)
+    input_dimensions = (dimensions[0] * 32, dimensions[1] * 32)
 
     configuration = PerfConfig(
         "sources/fast_tilize_test.cpp",
@@ -80,7 +80,7 @@ def test_perf_fast_tilize(
         run_types=[PerfRunType.L1_TO_L1],
         templates=[],
         runtimes=[
-            generate_input_dim(pixel_dimensions, pixel_dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),
             LOOP_FACTOR(1024),
             NUM_FACES(4),
