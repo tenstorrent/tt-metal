@@ -881,7 +881,7 @@ ALWI void max_reduce_with_indices_init() {
  *
  * Only 32x32 tile dimensions are supported
  *  - This kernel is optimized for 32x32 tile dimensions and uses VectorMode::RC_custom for customized reduction
- *  - Column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is supported for SUM and MAX only.
+ *  - Column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is supported for SUM, MAX and MIN only.
  *  - REDUCE_COL operates on a single tile only (ct_dim = 1, rt_dim = 1).
  *  - REDUCE_ROW supports multiple tiles: ct_dim and rt_dim specify the tile block dimensions to reduce over.
  *
@@ -899,9 +899,10 @@ template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDi
 ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL ||
-            (reduce_dim == ReduceDim::REDUCE_ROW && (pool_type == PoolType::SUM || pool_type == PoolType::MAX)),
+            (reduce_dim == ReduceDim::REDUCE_ROW &&
+             (pool_type == PoolType::SUM || pool_type == PoolType::MAX || pool_type == PoolType::MIN)),
         "Only column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is only "
-        "supported for SUM and MAX");
+        "supported for SUM, MAX and MIN");
     static_assert(
         format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 ||
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,

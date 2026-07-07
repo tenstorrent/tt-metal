@@ -108,29 +108,6 @@ def _int32_input_with_injected_value(input_shape, base_low, base_high, injected_
 )
 def test_int32_reduce_with_extreme_value_in_input(device, input_shape, dim, injected_value, op, base_range):
     base_low, base_high = base_range
-    _INT32_MIN = torch.iinfo(torch.int32).min
-    _INT32_MAX = torch.iinfo(torch.int32).max
-
-    # A: MIN negates input before max-finding; -INT32_MIN overflows back to INT32_MIN, losing the extreme value
-    is_min_int32_edge = op == "min" and injected_value == _INT32_MIN
-
-    # B: INT32_MIN (0x80000000) is compared as 0 via INT32_2S_COMP; 0 beats all negatives so MAX returns wrong value
-    is_max_int32_min_edge = (
-        op == "max"
-        and injected_value == _INT32_MIN
-        and (base_high < 0 or (base_low < 0 and dim == -2 and input_shape[-2] % 32 != 0))
-    )
-
-    # C: row reduce uses sign-magnitude mode; SFPSWAP picks larger magnitude, inverting negative ordering
-    is_row_reduce_sign_magnitude_issue = (
-        dim == -1
-        and injected_value == _INT32_MAX
-        and ((op == "max" and base_high < 0) or (op == "min" and base_low > 0))
-    )
-
-    if is_min_int32_edge or is_max_int32_min_edge or is_row_reduce_sign_magnitude_issue:
-        pytest.xfail("Int32 SFPU reduce(min/max) returns wrong result with INT32_MIN/MAX in input (issue #44750).")
-
     torch_input = _int32_input_with_injected_value(input_shape, base_low, base_high, injected_value)
 
     torch_op = torch.amax if op == "max" else torch.amin
