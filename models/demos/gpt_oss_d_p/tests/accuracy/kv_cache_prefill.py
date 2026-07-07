@@ -129,6 +129,11 @@ def main():
         default=PCC_THRESHOLD,
         help=f"minimum PCC for a layer to pass (default: {PCC_THRESHOLD})",
     )
+    ap.add_argument(
+        "--verbose-rows",
+        action="store_true",
+        help="for SP>1 meshes, also print per-SP-row K/V PCC to isolate which rows diverge",
+    )
     args = ap.parse_args()
 
     if args.prompt_file is not None:
@@ -322,6 +327,18 @@ def main():
             results_table.append((i, pcc_k, pcc_v, passed))
             status = "PASS" if passed else "FAIL"
             print(f"[kv_cache] layer {i:3d}: K PCC={pcc_k:.4f}  V PCC={pcc_v:.4f}  {status}", flush=True)
+
+            if args.verbose_rows and sp > 1:
+                for row in range(sp):
+                    rs = row * isl_per_row
+                    re = min((row + 1) * isl_per_row, real_len)
+                    row_pcc_k = _pcc(tt_k[:, rs:re, :], oracle_k[:, rs:re, :])
+                    row_pcc_v = _pcc(tt_v[:, rs:re, :], oracle_v[:, rs:re, :])
+                    print(
+                        f"[kv_cache]          row {row} (pos {rs:5d}-{re-1:5d}): "
+                        f"K={row_pcc_k:.4f}  V={row_pcc_v:.4f}",
+                        flush=True,
+                    )
 
             if i >= max_layer_idx:
                 hidden_states.deallocate(True)
