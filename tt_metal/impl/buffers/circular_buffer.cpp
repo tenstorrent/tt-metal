@@ -116,9 +116,6 @@ uint32_t CircularBufferImpl::page_size(uint32_t buffer_index) const {
             buffer_index);
     }
     uint32_t page_size = this->config_.page_sizes().at(buffer_index).value();
-    if (this->size() % page_size != 0) {
-        TT_THROW("Total circular buffer size {} B must be divisible by page size {} B", this->size(), page_size);
-    }
     return page_size;
 }
 

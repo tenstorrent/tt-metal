@@ -82,7 +82,10 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
     if (remote_unit_size_padded != unit_size || local_unit_size_padded != unit_size) {
         unaligned = true;
     }
-    const uint32_t total_size = local_units_per_shard * unit_size;
+    // The local sharded buffer stores each row (page) at its L1-aligned stride, so the CB
+    // that views it must span the padded shard size. When aligned, local_unit_size_padded ==
+    // unit_size, so this matches the packed size and leaves the aligned path unchanged.
+    const uint32_t total_size = local_units_per_shard * local_unit_size_padded;
     const std::string kernel_name =
         local_is_output
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
@@ -160,7 +163,10 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
             if (local_units_to_transfer != 0) {
                 uint32_t num_transfers = 0;
                 kernel_args[1] = local_start_offset;
-                local_start_offset += local_units_to_transfer * unit_size;
+                // Advance by the padded (L1-aligned) stride so the second split kernel writes
+                // to the correct row offset in the local buffer. Aligned path is unchanged
+                // because local_unit_size_padded == unit_size there.
+                local_start_offset += local_units_to_transfer * local_unit_size_padded;
                 while (local_units_to_transfer > 0) {
                     if (remote_core_units_rem == 0) {
                         remote_core_idx++;

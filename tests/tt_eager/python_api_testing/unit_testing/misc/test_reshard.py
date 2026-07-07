@@ -717,27 +717,20 @@ def test_reshard_aligned_channels_height_sharded(device, channels, tt_dtype):
     assert passing, output
 
 
-@pytest.mark.xfail(
-    raises=RuntimeError,
-    strict=True,
-    reason="Unaligned row-major HEIGHT_SHARDED reshard is unsupported: the shard row "
-    "(channels * elem_size) is not 16-byte L1-aligned, so reshard's validate rejects it. "
-    "The op's unaligned same-width path is incomplete (silently corrupts data / asserts). "
-    "Remove this xfail once unaligned support lands. "
-    "See https://github.com/tenstorrent/tt-metal/issues/29514",
-)
 @pytest.mark.parametrize("channels", [1, 2, 3, 4, 5, 6, 7])
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
 def test_reshard_unaligned_channels_height_sharded(device, channels, tt_dtype):
     """
-    Row-major HEIGHT_SHARDED reshard requires an L1-aligned shard page size: the shard
-    row (shard_width * elem_size) must be a multiple of the 16-byte L1 alignment.
+    Row-major HEIGHT_SHARDED reshard with an unaligned shard page size: the shard row
+    (shard_width * elem_size) is NOT a multiple of the 16-byte L1 alignment -- 1..7
+    channels in bf16 give 2..14-byte rows.
 
-    Channel counts whose row is not 16-byte aligned -- 1..7 channels in bf16 give
-    2..14-byte rows -- are currently unsupported: reshard's validate rejects them (rather
-    than silently returning corrupt data from the incomplete unaligned path). Marked xfail
-    until unaligned support is implemented. Aligned widths (multiples of 8 channels in
-    bf16, e.g. 8/16) are supported; see test_reshard_aligned_channels_height_sharded.
+    The height->height same-width path handles this via a scratch buffer: it reads the
+    remote rows at their aligned page stride into scratch, then re-strides each row into
+    the output shard at its aligned page stride (local_unit_size_padded), preserving the
+    per-row padding that to_torch expects. Aligned widths (multiples of 8 channels in bf16,
+    e.g. 8/16) take the contiguous fast path; see
+    test_reshard_aligned_channels_height_sharded.
     """
     grid_size = device.compute_with_storage_grid_size()
     if grid_size.x < 3:
