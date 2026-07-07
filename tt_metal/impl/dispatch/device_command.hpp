@@ -125,6 +125,8 @@ public:
 
     void add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask);
 
+    void add_dispatch_rt_profiler_flush(uint32_t wait_count, uint32_t wait_stream);
+
     template <bool inline_data = false>
     void add_dispatch_write_paged(
         bool flush_prefetch,
@@ -157,12 +159,12 @@ public:
     void add_dispatch_set_num_worker_sems(uint32_t num_worker_sems, DispatcherSelect dispatcher_type);
 
     void add_dispatch_set_sub_device_worker_counts(
-        tt::stl::Span<const uint32_t> workers_per_sub_device, DispatcherSelect dispatcher_type);
+        ttsl::Span<const uint32_t> workers_per_sub_device, DispatcherSelect dispatcher_type);
 
     void add_dispatch_set_go_signal_noc_data(
         const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type);
 
-    void add_dispatch_set_write_offsets(tt::stl::Span<const uint32_t> write_offsets);
+    void add_dispatch_set_write_offsets(ttsl::Span<const uint32_t> write_offsets);
 
     void add_dispatch_terminate(DispatcherSelect dispatcher_type = DispatcherSelect::DISPATCH_MASTER);
 
@@ -222,7 +224,7 @@ public:
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
-        const std::vector<tt::stl::Span<const uint8_t>>& data_collection,
+        const std::vector<ttsl::Span<const uint8_t>>& data_collection,
         std::vector<uint8_t*>*
             data_collection_buffer_ptr,  // optional. Stores the location each data segment was written to
         uint32_t offset_idx = 0,
@@ -243,7 +245,7 @@ public:
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeUnicastSubCmd>& sub_cmds,
-        const std::vector<tt::stl::Span<const uint8_t>>& data_collection,
+        const std::vector<ttsl::Span<const uint8_t>>& data_collection,
         std::vector<uint8_t*>*
             data_collection_buffer_ptr,  // optional. Stores the location each data segment was written to
         uint32_t offset_idx = 0,

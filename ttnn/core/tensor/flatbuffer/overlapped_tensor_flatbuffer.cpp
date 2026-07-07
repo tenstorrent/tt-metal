@@ -49,7 +49,7 @@ flatbuffers::Offset<flatbuffer::OverlappedTensors> overlapped_tensors_to_flatbuf
 
 std::vector<tt::tt_metal::OverlappedTensorView> overlapped_tensors_from_flatbuffer(
     const flatbuffer::OverlappedTensors* fb,
-    tt::stl::Span<std::byte> tensor_data,
+    ttsl::Span<std::byte> tensor_data,
     const tt::tt_metal::MemoryPin& memory_pin) {
     TT_FATAL(fb != nullptr, "OverlappedTensors flatbuffer pointer must not be null");
     TT_FATAL(fb->fused_tensor() != nullptr, "fused_tensor is required");

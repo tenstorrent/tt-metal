@@ -143,7 +143,7 @@ PerTokenCastBackDeviceOperation::tensor_return_value_t PerTokenCastBackDeviceOpe
     return create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input_e4m3.device());
 }
 
-tt::stl::hash::hash_t PerTokenCastBackDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t PerTokenCastBackDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto tile_shape = tensor_args.input_e4m3.tensor_spec().tile().get_tile_shape();
     const auto face_shape = tensor_args.input_e4m3.tensor_spec().tile().get_face_shape();

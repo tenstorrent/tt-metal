@@ -124,7 +124,7 @@ ttnn::Tensor tilize_with_val_padding(
 
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<uint32_t>& output_padded_shape,
+    const ttsl::SmallVector<uint32_t>& output_padded_shape,
     const tt::tt_metal::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,

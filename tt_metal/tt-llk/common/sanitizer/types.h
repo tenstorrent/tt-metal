@@ -351,7 +351,7 @@ enum class Operation : std::uint32_t
     // PACK EXU (TRISC2)
 
     // sstanisic todo: contract cannot be enforced if Pack has an uninit, without killing performance
-    Pack         = OperationUtil::make(OperationUtil::ExecutionUnit::PACK, OperationUtil::NativeThread::TRISC2, OperationUtil::ExpectUninit::Yes, 1),
+    Pack         = OperationUtil::make(OperationUtil::ExecutionUnit::PACK, OperationUtil::NativeThread::TRISC2, OperationUtil::ExpectUninit::No, 1),
     PackUntilize = OperationUtil::make(OperationUtil::ExecutionUnit::PACK, OperationUtil::NativeThread::TRISC2, OperationUtil::ExpectUninit::Yes, 2),
 };
 
