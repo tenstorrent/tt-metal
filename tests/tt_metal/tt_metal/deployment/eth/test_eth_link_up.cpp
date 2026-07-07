@@ -9,6 +9,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
+#include <unordered_set>
+
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
@@ -85,8 +87,22 @@ TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetLinkUp) {
 
     SignalGuard g(SIGINT, handle_sigint);
 
+    const auto& cluster = MetalContext::instance().get_cluster();
+
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
+
+        // Active eth cores whose link stays *within* the opened cluster. This is
+        // derived from get_ethernet_connections(), so cores whose link leaves the
+        // cluster to a remote MMIO device (another host / an unopened chip) are
+        // excluded. Calling get_connected_ethernet_core() on such a core TT_FATALs
+        // ("connects to a remote mmio device", tt_cluster.cpp), even though the link
+        // is up, so those cores must be skipped rather than tested.
+        std::unordered_set<CoreCoord> intra_cluster_cores;
+        for (const auto& [peer_chip, cores] : cluster.get_ethernet_cores_grouped_by_connected_chips(sender_device->id())) {
+            intra_cluster_cores.insert(cores.begin(), cores.end());
+        }
+
         for (const auto& receiver_mesh_device : devices_) {
             auto* const receiver_device = receiver_mesh_device->get_devices()[0];
 
@@ -97,6 +113,10 @@ TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetLinkUp) {
                 receiver_device->id());
 
             for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
+                if (!intra_cluster_cores.contains(sender_core)) {
+                    continue;
+                }
+
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
 
                 if (receiver_device->id() != device_id) {
