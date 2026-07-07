@@ -464,6 +464,56 @@ static uint64_t fnv1a_hash(const std::string& s) {
     return hasher.digest();
 }
 
+// Hash a file's contents to a hex string ("missing" if unreadable). Used to
+// content-address FILE_PATH kernels: a source edit changes the hash (and thus the
+// cache key), so we no longer rely on file mtime — which a fresh git checkout
+// resets, defeating a restored/persistent cache.
+static std::string hash_file_contents(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return "missing";
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+    char hex[FNV_HEX_BUF_SIZE];
+    std::snprintf(hex, sizeof(hex), "%016lx", fnv1a_hash(ss.str()));
+    return hex;
+}
+
+// Fingerprint of the emule surface baked into every kernel .so: a hash of the
+// jit_hw header tree plus the compiler identity. Folded into every cache key so a
+// cached .so is reused only when the emule headers and compiler are unchanged —
+// which is what makes the disk cache safe to persist across CI runs (a PR that
+// changes emule yields a fresh fingerprint → correct cold recompile). Only headers
+// compiled INTO the .so are hashed; emule runtime behaviour in libtt_metal.so is
+// resolved at dlopen, so a cached .so picks it up fresh and needs no fingerprint.
+// Computed once per process (the headers are fixed for the process's lifetime).
+static const std::string& emule_build_fingerprint() {
+    static const std::string fp = [] {
+        std::vector<std::filesystem::path> files;
+        std::error_code ec;
+        for (std::filesystem::recursive_directory_iterator it(TT_EMULE_JIT_INCLUDE_DIR, ec), end;
+             !ec && it != end;
+             it.increment(ec)) {
+            if (it->is_regular_file(ec)) {
+                files.push_back(it->path());
+            }
+        }
+        std::sort(files.begin(), files.end());  // stable order → deterministic hash
+        std::string acc;
+        for (const auto& f : files) {
+            acc += hash_file_contents(f.string());
+        }
+        char hex[FNV_HEX_BUF_SIZE];
+        std::snprintf(hex, sizeof(hex), "%016lx", fnv1a_hash(acc));
+        std::stringstream fp_ss;
+        fp_ss << "emule=" << hex << ":cxx=" << TT_EMULE_CXX_COMPILER << ":std=" << TT_EMULE_CXX_STANDARD;
+        log_debug(tt::LogMetal, "emule JIT cache fingerprint: {}", fp_ss.str());
+        return fp_ss.str();
+    }();
+    return fp;
+}
+
 static std::string get_jit_cache_dir() {
     if (const char* dir = std::getenv("TT_EMULE_JIT_CACHE_DIR")) {
         return dir;
@@ -495,9 +545,11 @@ static std::function<void()> dlopen_cached_so(const std::string& so_path) {
     return [fn, shared_handle]() { fn(); };
 }
 
-// Check disk cache for a compiled .so matching cache_key.
-// Returns a callable if cache hit (and source mtime is not newer), else nullptr.
-static std::function<void()> disk_cache_lookup(const std::string& cache_key, const std::string& src_path) {
+// Check disk cache for a compiled .so matching cache_key. The key is fully
+// content-addressed (kernel source content + emule fingerprint + compiler +
+// compile args/defines), so a matching .so is always valid — no mtime check is
+// needed, which is what makes the cache safe to persist across fresh checkouts.
+static std::function<void()> disk_cache_lookup(const std::string& cache_key) {
     std::string cache_dir = get_jit_cache_dir();
     char hex[FNV_HEX_BUF_SIZE];
     std::snprintf(hex, sizeof(hex), "%016lx", fnv1a_hash(cache_key));
@@ -505,16 +557,6 @@ static std::function<void()> disk_cache_lookup(const std::string& cache_key, con
 
     if (!std::filesystem::exists(so_path)) {
         return nullptr;
-    }
-
-    // Invalidate if kernel source file is newer than cached .so
-    // (skip for inline sources — their content is hashed into the cache key)
-    if (!src_path.empty() && std::filesystem::exists(src_path)) {
-        auto so_mtime = std::filesystem::last_write_time(so_path);
-        auto src_mtime = std::filesystem::last_write_time(src_path);
-        if (src_mtime > so_mtime) {
-            return nullptr;
-        }
     }
 
     auto fn = dlopen_cached_so(so_path);
@@ -1473,7 +1515,9 @@ static void collect_kernels(
             auto compute_cache_key = [&](const std::map<std::string, std::string>& defs) -> std::string {
                 std::string key;
                 if (ksrc.source_type_ == KernelSource::FILE_PATH) {
-                    key = src_path;
+                    // Content-address the source (not the path) so an edit invalidates
+                    // the cache without relying on mtime.
+                    key = "file:" + hash_file_contents(src_path);
                 } else {
                     char hex[FNV_HEX_BUF_SIZE];
                     std::snprintf(hex, sizeof(hex), "%016lx", fnv1a_hash(ksrc.source_));
@@ -1492,6 +1536,9 @@ static void collect_kernels(
                     key += ":" + k + "=" + v;
                 }
                 key += metal2_key_suffix;
+                // Fold in the emule-headers + compiler fingerprint so a cached .so is
+                // reused only when the emule surface it was compiled against matches.
+                key += ":" + emule_build_fingerprint();
                 return key;
             };
 
@@ -1504,8 +1551,7 @@ static void collect_kernels(
                 } else if (
                     resolved_fns.find(key) == resolved_fns.end() &&
                     deferred_compiles.find(key) == deferred_compiles.end()) {
-                    std::string mtime_path = (ksrc.source_type_ == KernelSource::FILE_PATH) ? src_path : "";
-                    auto disk_fn = disk_cache_lookup(key, mtime_path);
+                    auto disk_fn = disk_cache_lookup(key);
                     if (disk_fn) {
                         resolved_fns[key] = disk_fn;
                         g_jit_cache[key] = disk_fn;
