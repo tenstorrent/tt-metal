@@ -6,7 +6,7 @@
 Launched under tt-run with world_size == 2 (see ``runner.sh``), 4 chips per rank
 (8 total -- the ``configurations/local8`` topology).
 
-* **Rank 0 (TTML)** opens a ``[1, 4]`` DDP mesh from ``grpo_boolq_llama_4dev_ddp.yaml``,
+* **Rank 0 (TTML)** opens a ``[1, 4]`` DDP mesh from ``grpo_boolq_llama_1b_ddp_4dev.yaml``,
   loads the instruct ``LlamaCompositeKV``, and pushes its weights through a
   :class:`MPIRolloutClient` backed by a :class:`HostWeightBridge` sender.
 * **Rank 1 (TTT)** opens a ``[1, 4]`` parent mesh, splits it into four ``[1, 1]``
@@ -57,7 +57,7 @@ MAX_NEW_TOKENS = 64
 VERIFY_NEW_TOKENS = 16
 TEMPERATURE = 0.0
 
-TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_4dev_ddp.yaml"
+TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp_4dev.yaml"
 TTT_PARENT_MESH_SHAPE = (1, 4)
 NUM_SUBMESHES = 4
 

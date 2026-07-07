@@ -128,12 +128,12 @@ MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 # hangs in the cross-rank handshake/transport on this host.
 _TOPOLOGIES = {
     "2x2": {
-        "ttml_device_config_rel": "tt-train/configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_4.yaml",
+        "ttml_device_config_rel": "tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp_2dev.yaml",
         "ttt_parent_mesh_shape": (1, 2),
         "num_submeshes": 2,
     },
     "4x4": {
-        "ttml_device_config_rel": "tt-train/configs/training_configs/grpo_boolq_llama_4dev_ddp.yaml",
+        "ttml_device_config_rel": "tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp_4dev.yaml",
         "ttt_parent_mesh_shape": (1, 4),
         "num_submeshes": 4,
     },
