@@ -118,15 +118,15 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
 // clang-format off
 /**
  * Copies a block of `ntiles` consecutive tiles from the specified input CB into consecutive DST
- * register slots. This is the uniform block entry point for the copy/datacopy op group: its body is
- * a simple loop over `copy_tile`, so it inherits `copy_tile`'s semantics (unpack into SRC, move into
- * DST) and requires the same initialization (`copy_tile_init` / `copy_tile_to_dst_init_short`) to have
- * been called first. The DST register buffer must be in acquired state via *acquire_dst* call, and
- * `cb_wait_front(n)` must have made at least `start_in_tile_index + ntiles` tiles available in the
- * input CB. This call is blocking and is only available on the compute engine.
+ * register slots. This is the uniform block entry point for the copy/datacopy op group. It uses the
+ * block unpack/datacopy llk paths and requires the same initialization as `copy_tile`
+ * (`copy_tile_init` / `copy_tile_to_dst_init_short`). The DST register buffer must be in acquired
+ * state via *acquire_dst* call, and `cb_wait_front(n)` must have made at least
+ * `start_in_tile_index + ntiles` tiles available in the input CB. This call is blocking and is only
+ * available on the compute engine.
  *
- * NOTE: The loop implementation is transitional. The blocking will be pushed down into llk-lib
- * (MOPs / REPLAY buffers) by tt-metal#47485 without changing this signature.
+ * NOTE: The blocking will be pushed further down into llk-lib (MOPs / REPLAY buffers) by
+ * tt-metal#47485 without changing this signature.
  *
  * Return value: None
  *
@@ -139,18 +139,20 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
  * */
 // clang-format on
 ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
-    for (uint32_t i = 0; i < ntiles; ++i) {
-        copy_tile(in_cb_id, start_in_tile_index + i, start_dst_tile_index + i);
-    }
+#ifndef ARCH_QUASAR
+    LLK_SAN_FUNCTION();
+#endif
+    UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+        in_cb_id, start_in_tile_index, ntiles)));
+    MATH((llk_math_eltwise_unary_datacopy_block<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+        start_dst_tile_index, ntiles, in_cb_id)));
 }
 
 // clang-format off
 /**
- * Copies a block of `ntiles` consecutive tiles from the specified input CB into consecutive DST
- * register slots, using the block unpack/datacopy llk paths intended for reloading matmul partial
- * results back into DST. Functionally equivalent to `copy_block`, but retained as a distinct entry
- * point for the matmul-partials use case. The DST register buffer must be in acquired state via
- * *acquire_dst* call and requires the same initialization as `copy_tile`.
+ * @deprecated Use `copy_block()`, which is functionally equivalent (same block unpack/datacopy paths).
+ * This forwarding shim is retained only for backwards compatibility and will be removed after
+ * August 15th, 2026 (see .github/deprecations.json).
  *
  * Return value: None
  *
@@ -162,15 +164,10 @@ ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t s
  * | ntiles               | The number of consecutive tiles to copy                    | uint32_t  | start_dst_tile_index + ntiles <= DST register size  | True     |
  * */
 // clang-format on
-ALWI void copy_block_matmul_partials(
+[[deprecated("Use copy_block(); copy_block_matmul_partials will be removed after August 15th, 2026.")]] ALWI void
+copy_block_matmul_partials(
     uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
-#ifndef ARCH_QUASAR
-    LLK_SAN_FUNCTION();
-#endif
-    UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        in_cb_id, start_in_tile_index, ntiles)));
-    MATH((llk_math_eltwise_unary_datacopy_block<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
-        start_dst_tile_index, ntiles, in_cb_id)));
+    copy_block(in_cb_id, start_in_tile_index, start_dst_tile_index, ntiles);
 }
 
 }  // namespace ckernel

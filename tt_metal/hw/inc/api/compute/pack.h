@@ -138,7 +138,7 @@ ALWI void pack_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
 // clang-format off
 /**
  * @deprecated Renamed to `pack_block()`. This forwarding shim is retained only for backwards
- * compatibility and will be removed after the deprecation grace period (see .github/deprecations.json).
+ * compatibility and will be removed after August 15th, 2026 (see .github/deprecations.json).
  *
  * Return value: None
  *
@@ -149,8 +149,8 @@ ALWI void pack_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
  * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
  */
 // clang-format on
-[[deprecated("Renamed to pack_block().")]] ALWI void pack_tile_block(
-    uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
+[[deprecated("Renamed to pack_block(); pack_tile_block will be removed after August 15th, 2026.")]] ALWI void
+pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
     pack_block(ifrom_dst, icb, ntiles);
 }
 
