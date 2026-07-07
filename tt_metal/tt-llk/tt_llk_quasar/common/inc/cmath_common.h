@@ -178,8 +178,6 @@ inline void _set_tile_shape_idx_gpr_(const std::uint32_t num_rows_per_tile)
         (num_rows_per_tile == 64)
             ? 6
             : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
-    // TODO: Determine if SETGPR followed by an MMIO read is safe to do, if so update
-    // the next line from an MMIO write to a SETGPR
     ckernel::regfile[p_gpr_math::TEMP0] = tile_shape_idx;
 }
 
