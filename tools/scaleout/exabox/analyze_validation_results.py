@@ -65,6 +65,7 @@ EXIT_CODE_WORKLOAD_TIMEOUT = 9
 EXIT_CODE_ARC_TIMEOUT = 10
 EXIT_CODE_AICLK_TIMEOUT = 11
 EXIT_CODE_NETWORK_ERROR = 12
+EXIT_CODE_MISSING_DEVICES = 13
 EXIT_CODE_INCONCLUSIVE = 50
 EXIT_CODE_INPUT_ERROR = 66
 
@@ -123,6 +124,12 @@ CATEGORIES = {
         r"Permission denied \(publickey\)|ssh.*Connection refused|ssh.*Connection timed out",
         "YELLOW",
         "SSH error",
+    ),
+    # Hardware device errors
+    "missing_devices": (
+        r"Read 0xffffffff over PCIe|PcieHangError|ArcStartupError",
+        "RED",
+        "Device init error",
     ),
     # Configuration errors (FSD/MGD) - treated as connections mismatch
     "fsd_error": (r"Hostname not found in FSD", "RED", "FSD configuration error"),
@@ -622,6 +629,7 @@ def print_summary(analyses: list[LogAnalysis], metrics: dict, show_files: bool =
         "unhealthy",
         "failed_retrain",
         "extra_connections",
+        "missing_devices",
         "workload_timeout",
         "dram_failure",
         "arc_timeout",
@@ -860,6 +868,17 @@ def _recommend_failed_retrain(cats: dict, total: int, analyses: list[LogAnalysis
     return [" ".join(msg_parts)]
 
 
+@register_recommendation("missing_devices")
+def _recommend_missing_devices(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
+    if not cats.get("missing_devices"):
+        return []
+    count = cats["missing_devices"]
+    return [
+        f"- {Colors.RED}Device init error:{Colors.NC} Board failed to initialize in {count} occurrence(s) "
+        f"(PCIe hang or ARC startup failure). If problem persists after resetting the board / power cycling machine, escalate to Syseng."
+    ]
+
+
 @register_recommendation("extra_connections")
 def _recommend_extra_connections(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
     if not cats.get("extra_connections"):
@@ -964,6 +983,7 @@ def print_recommendations(analyses: list[LogAnalysis]) -> None:
     category_order = [
         "failed_retrain",
         "extra_connections",
+        "missing_devices",
         "workload_timeout",
         "dram_failure",
         "arc_timeout",
@@ -1039,6 +1059,8 @@ def print_timeline(analyses: list[LogAnalysis]) -> None:
             icons.append(("G", Colors.RED))
         elif "failed_retrain" in a.categories:
             icons.append(("○", Colors.BLUE))
+        elif "missing_devices" in a.categories:
+            icons.append(("P", Colors.RED))
         elif "extra_connections" in a.categories:
             icons.append(("+", Colors.YELLOW))
         elif "inconclusive" in a.categories:
@@ -1066,6 +1088,7 @@ def print_timeline(analyses: list[LogAnalysis]) -> None:
         f"{Colors.YELLOW}S{Colors.NC}=ssh "
         f"{Colors.RED}F{Colors.NC}=fsd "
         f"{Colors.RED}G{Colors.NC}=mgd "
+        f"{Colors.RED}P{Colors.NC}=pcie "
         f"{Colors.CYAN}?{Colors.NC}=inconclusive "
         f"{Colors.YELLOW}~{Colors.NC}=other\n"
     )
@@ -1490,6 +1513,16 @@ def count_validation_issues(analyses: list[LogAnalysis]) -> dict[str, dict]:
             "exit_code": EXIT_CODE_AICLK_TIMEOUT,
             "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} AICLK TIMEOUT detected in {aiclk_timeout_count}/{total} runs.",
             "priority": 8,
+        }
+
+    # Count device init errors (PCIe hang or ARC startup failure)
+    missing_devices_count = len([a for a in analyses if "missing_devices" in a.categories])
+    if missing_devices_count > 0:
+        issue_counts["missing_devices"] = {
+            "count": missing_devices_count,
+            "exit_code": EXIT_CODE_MISSING_DEVICES,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} DEVICE INIT ERROR (PCIe hang or ARC startup failure) detected in {missing_devices_count}/{total} runs.",
+            "priority": 2,
         }
 
     # Count network errors (combined MPI and SSH)
