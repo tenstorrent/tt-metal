@@ -252,7 +252,12 @@ class LongCatImagePipelineTT:
         # compound), so the fast on-device gate uses a small step count. (limb
         # 16-bit matmuls are available via stub.limb=True but give ~no gain here —
         # the error is trajectory divergence, not per-matmul precision.)
-        stub.wdtype = F32
+        # PERF: run the DiT denoiser in bf16, not fp32. The e2e error is dominated by
+        # iterative-diffusion trajectory divergence, not per-matmul precision (see below),
+        # so bf16 barely moves PCC (0.9947 -> 0.9922, gate 0.95) while cutting the
+        # per-denoise-step device latency 125.1 -> 73.1 ms (1.71x). The denoiser runs
+        # num_inference_steps times per image, so this is the dominant full-model speedup.
+        stub.wdtype = BF16
         self.invoked.add("long_cat_image_transformer2_d_model")
         try:
             latents = ttnn.from_torch(
