@@ -140,29 +140,45 @@ def main():
             for i in range(num_capture):
                 hooks.append(model.model.layers[i].register_forward_hook(make_hook(i)))
 
-        # Hook F.scaled_dot_product_attention to capture post-RoPE K and V.
+        # Hook scaled_dot_product_attention to capture post-RoPE K and V.
         # past_key_values stores pre-RoPE keys in many modern HF models; SDPA inputs
         # are post-RoPE and match what TT writes into fill_cache.
+        #
+        # trust_remote_code models import sdpa into their own module namespace at
+        # load time, so patching torch.nn.functional.F alone is insufficient — we
+        # also patch it in the attention module's namespace directly.
+        import sys
+
         import torch.nn.functional as F
 
         kv_captures: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
-        original_sdpa = F.scaled_dot_product_attention
         sdpa_call_idx = [0]
+        original_F_sdpa = F.scaled_dot_product_attention
 
-        def _capturing_sdpa(q, k, v, *args, **kwargs):
+        attn_cls = type(model.model.layers[0].self_attn)
+        attn_mod = sys.modules.get(attn_cls.__module__)
+        original_mod_sdpa = getattr(attn_mod, "scaled_dot_product_attention", None) if attn_mod else None
+
+        save_kv = args.save_kv  # avoid late-binding in closure
+
+        def _capturing_sdpa(q, k, v, *a, **kw):
             idx = sdpa_call_idx[0]
             sdpa_call_idx[0] += 1
-            if args.save_kv and idx < num_capture:
+            if save_kv and idx < num_capture:
                 # k shape: [batch, num_kv_heads, seq_len, head_dim]
                 kv_captures[idx] = (k[0].detach().float(), v[0].detach().float())
-            return original_sdpa(q, k, v, *args, **kwargs)
+            return original_F_sdpa(q, k, v, *a, **kw)
 
         F.scaled_dot_product_attention = _capturing_sdpa
+        if attn_mod is not None and original_mod_sdpa is not None:
+            attn_mod.scaled_dot_product_attention = _capturing_sdpa
         try:
             with torch.no_grad():
                 out = model(input_ids=input_ids, use_cache=True)
         finally:
-            F.scaled_dot_product_attention = original_sdpa
+            F.scaled_dot_product_attention = original_F_sdpa
+            if attn_mod is not None and original_mod_sdpa is not None:
+                attn_mod.scaled_dot_product_attention = original_mod_sdpa
 
         for h in hooks:
             h.remove()
