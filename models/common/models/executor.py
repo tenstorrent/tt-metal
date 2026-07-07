@@ -19,9 +19,11 @@ Design principle: Thick engine, thin model executor.
 from __future__ import annotations
 
 import contextlib
+import json
 import time
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 from loguru import logger
@@ -72,6 +74,150 @@ def make_contiguous_page_table(
         start_block = user_id * num_blocks_per_user
         page_table[user_id] = torch.arange(start_block, start_block + num_blocks_per_user, dtype=torch.int32)
     return page_table
+
+
+# =============================================================================
+# Batched prefill (partial B=8) — predicate + slot packing + per-bucket grouping
+# =============================================================================
+# TTTv2 normally prefills 32 users in a sequential per-user loop (32 forward passes). When a group of
+# users shares the same padded prefill length and has no prefix cache, those passes can be fused into
+# batched passes over a folded [1, 1, padded_batch*S, dim] tensor — a single-pass-per-group device
+# workload that utilises the core grid far better than the 32 small S=128 passes. This closes the
+# batch-32 TTFT gap vs TTTv1. Predicate ported from TTTv1 generator.py use_batched_prefill (L631-691),
+# capped at `max_prefill_batch_size` (default 8) for partial batching — most of the win, far less DRAM
+# risk than full B=32.
+#
+# Composition with the Phase-1 per-bucket TTFT fix: the Phase-1 fix restored per-bucket prefill (each
+# user prefills at its OWN get_padded_prefill_len bucket, with a SHARED persistent cos/sin so ≥2
+# bucket traces coexist correctly). Batched prefill therefore fires PER UNIFORM-LENGTH BUCKET GROUP —
+# _group_slots_by_prefill_bucket splits empty_slots by bucket, and the predicate is applied per group.
+# A mixed batch {128,1024} thus batches the 128-bucket users together and the 1024-bucket users
+# together (≥2 coexisting BATCHED traces), rather than declining the whole batch. The batched trace
+# body sources cos/sin from the SAME shared persistent tensor (never a fresh per-capture slice) so the
+# mixed-bucket aliasing the Phase-1 fix cured cannot return under batching.
+
+# Mirror of TTTv1 generator.py constants.
+SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
+MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
+
+
+def select_batched_prefill_padded_batch(model_args, batch_size, prefill_seq_lens, num_cached_per_user):
+    """Return the per-group batch size for batched prefill, or ``None`` to use the sequential loop.
+
+    Conditions (TTTv1 parity, design §4):
+      - ``batch_size > 1`` and ``model_args`` present,
+      - per-model opt-in (``supports_batched_prefill``) and not disabled (``disable_batched_prefill``),
+      - all users share one padded prefill length (uniform ``prefill_seq_lens``),
+      - no prefix caching (all ``num_cached_per_user == 0``; the batched path feeds full tokens),
+      - ``data_parallel == 1``,
+      - ``seq <= max_prefill_chunk_size`` (chunked prompts stay sequential — batching buys no
+        single-pass win and re-introduces the DRAM pressure chunking relieves, tt-metal #45234),
+      - ``padded_batch * seq < MAX_BATCHED_PREFILL_SEQ_LEN`` (DRAM / all-gather guard).
+
+    ``padded_batch`` is the smallest supported batch size >= ``min(batch_size, max_prefill_batch_size)``;
+    32 users with the default cap of 8 therefore run as 4 batched passes of 8. This predicate is applied
+    per uniform-length bucket group (see _group_slots_by_prefill_bucket), not to the whole batch.
+    """
+    if model_args is None or batch_size <= 1:
+        return None
+    # Opt-in: only models whose prefill_forward threads `batch_size` (and that set this flag) may use
+    # the batched path. Unmodified models fall through to the sequential loop — never crash.
+    if not getattr(model_args, "supports_batched_prefill", False):
+        return None
+    if getattr(model_args, "disable_batched_prefill", False):
+        return None
+    if len(set(prefill_seq_lens)) != 1:
+        return None
+    if any(n != 0 for n in num_cached_per_user):
+        return None
+    if getattr(model_args, "data_parallel", 1) != 1:
+        return None
+    seq = int(prefill_seq_lens[0])
+    max_chunk = getattr(model_args, "max_prefill_chunk_size", seq)
+    if max_chunk is not None and seq > max_chunk:
+        return None
+    cap = getattr(model_args, "max_prefill_batch_size", 8) or 8
+    group = min(batch_size, cap)
+    padded_batch = next((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= group), group)
+    if padded_batch > batch_size:
+        padded_batch = batch_size
+    if padded_batch <= 1:
+        return None
+    if padded_batch * seq >= MAX_BATCHED_PREFILL_SEQ_LEN:
+        return None
+    return padded_batch
+
+
+def _group_slots_by_prefill_bucket(empty_slots, prompt_lens, num_cached_per_user):
+    """Group ``empty_slots`` (positions in the batch) by their padded prefill bucket.
+
+    Returns an ordered dict ``{prefill_seq_len: [positions]}`` where each position ``i`` indexes
+    ``empty_slots``/``prompt_lens``/``num_cached_per_user`` (NOT the physical slot). Positions whose
+    ``prompt_lens[i] - num_cached_per_user[i] <= 0`` (nothing to prefill) are dropped — the caller
+    handles those in the sequential skip path. Buckets are returned in first-seen order so the
+    dispatch is deterministic across repeats (matches the sequential loop's slot order).
+    """
+    groups: dict[int, list[int]] = {}
+    for i in range(len(empty_slots)):
+        new_tokens = int(prompt_lens[i]) - num_cached_per_user[i]
+        if new_tokens <= 0:
+            continue
+        bucket = get_padded_prefill_len(new_tokens)
+        groups.setdefault(bucket, []).append(i)
+    return groups
+
+
+def _plan_batched_prefill(model_args, empty_slots, prompt_lens, num_cached_per_user):
+    """Decide which positions batch (per bucket) and which stay sequential.
+
+    Returns ``(batched_groups, sequential_positions)`` where:
+      - ``batched_groups`` is a list of ``(prefill_seq_len, padded_batch, positions)`` — one entry per
+        uniform-length bucket group that satisfies the predicate; ``positions`` index ``empty_slots``.
+      - ``sequential_positions`` is the set of positions NOT covered by any batched group (buckets that
+        declined batching, e.g. a lone user or a bucket the predicate rejected).
+
+    When ``batched_groups`` is empty every position is sequential and the caller's original per-user
+    loop runs unchanged — the ``DISABLE_BATCHED_PREFILL`` / non-opted-in / batch<=1 path is therefore
+    byte-identical to the pre-feature code.
+    """
+    groups = _group_slots_by_prefill_bucket(empty_slots, prompt_lens, num_cached_per_user)
+    batched_groups = []
+    sequential_positions: set[int] = set()
+    for bucket, positions in groups.items():
+        group_seq_lens = [bucket] * len(positions)
+        group_cached = [num_cached_per_user[i] for i in positions]
+        padded_batch = select_batched_prefill_padded_batch(model_args, len(positions), group_seq_lens, group_cached)
+        if padded_batch is not None:
+            batched_groups.append((bucket, padded_batch, positions))
+        else:
+            sequential_positions.update(positions)
+    return batched_groups, sequential_positions
+
+
+def _build_batched_prefill_group(
+    tokens, prompt_lens, page_table, empty_slots, positions, padded_batch, prefill_seq_len, block_size
+):
+    """Pack one group of users into folded batched-prefill inputs.
+
+    ``positions`` are indices into ``empty_slots`` for the (up to ``padded_batch``) real users in this
+    group. Returns ``(folded_tokens [1, padded_batch*prefill_seq_len], group_page_table [padded_batch,
+    num_blocks], group_idxs, last_token_idxs)``. ``group_idxs`` are the positions in ``empty_slots`` of
+    the real users (used to index ``tokens``/``prompt_lens``/the output); the page table is built with
+    one LOCAL row per real user (row i = that user's physical blocks), so the attention KV-fill loop and
+    the captured trace use local batch_idx 0..padded_batch-1 — identical across every group, which lets
+    a single trace replay for all groups.
+    """
+    num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+    folded = torch.zeros(1, padded_batch * prefill_seq_len, dtype=tokens.dtype)
+    group_pt = torch.zeros(padded_batch, num_blocks, dtype=torch.int32)
+    group_idxs = list(positions[:padded_batch])
+    last_token_idxs = []
+    for local_i, idx in enumerate(group_idxs):
+        sl = int(prompt_lens[idx])
+        folded[0, local_i * prefill_seq_len : local_i * prefill_seq_len + sl] = tokens[idx, :sl]
+        group_pt[local_i] = page_table[idx, :num_blocks]
+        last_token_idxs.append(sl - 1)
+    return folded, group_pt, group_idxs, last_token_idxs
 
 
 def _build_decode_topk_param_tensors(mesh_device, sampling_params, batch_size, allow_force_argmax=True):
@@ -673,7 +819,31 @@ class EagerLLMExecutor:
 
         prefill_results = []
 
+        # Batched prefill fast path: fuse equal-length users into batched passes, PER uniform-length
+        # bucket group (see _plan_batched_prefill / select_batched_prefill_padded_batch). Positions the
+        # plan leaves sequential (or all positions when batching is off / declined) fall through to the
+        # per-user loop below, which is byte-identical to the pre-feature path.
+        num_cached_per_user = [int(start_pos[i]) if start_pos is not None else 0 for i in range(len(empty_slots))]
+        batched_groups, sequential_positions = _plan_batched_prefill(
+            self.model_args, empty_slots, prompt_lens, num_cached_per_user
+        )
+        seq_filter = None
+        if batched_groups:
+            seq_filter = sequential_positions
+            for prefill_seq_len_g, padded_batch_g, positions_g in batched_groups:
+                logger.info(
+                    f"Batched prefill: {len(positions_g)} users in groups of {padded_batch_g} "
+                    f"(seq={prefill_seq_len_g})"
+                )
+                prefill_results.extend(
+                    self._prefill_forward_batched_group(
+                        tokens, page_table, prompt_lens, empty_slots, positions_g, padded_batch_g, prefill_seq_len_g
+                    )
+                )
+
         for idx, user_id in enumerate(empty_slots):
+            if seq_filter is not None and idx not in seq_filter:
+                continue  # handled by the batched path above
             seq_len = int(prompt_lens[idx])
             num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
             new_tokens = seq_len - num_cached_tokens
@@ -805,6 +975,153 @@ class EagerLLMExecutor:
                 page_table=page_table_tt,
                 get_last_token=get_last_token,
             )
+
+    # =========================================================================
+    # Batched Prefill (partial B=padded_batch)
+    # =========================================================================
+
+    def _prepare_batched_prefill_device_inputs(self, folded_tokens, group_page_table, prefill_seq_len):
+        """Prepare device inputs for one batched-prefill group (eager / trace-warmup compile).
+
+        Returns ``(tokens_embd, cos, sin, page_table_tt)``:
+          - ``folded_tokens`` [1, padded_batch*S] is embedded to a folded [1, 1, padded_batch*S, dim],
+          - ``cos``/``sin`` are the per-user rope slices for positions 0..S-1 (all users start at 0,
+            so the same slices broadcast over the batch axis inside attention),
+          - ``group_page_table`` [padded_batch, num_blocks] maps each local row to its physical blocks.
+
+        This eager path is used for direct eager execution and for the traced JIT warmup; the persistent
+        TRACE inputs come from ``TracedLLMExecutor._prepare_batched_prefill_trace_inputs_host`` which
+        instead sources cos/sin from the shared persistent tensor.
+        """
+        tokens_reshaped = folded_tokens.reshape(1, 1, 1, -1)
+        tokens_tt = ttnn.from_torch(
+            tokens_reshaped,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        tokens_embd = self.model.embed_prefill(tokens_tt)
+
+        rope = self.model.rope_setup
+        rope.load_device_weights()
+        cos_slice = rope.cos_matrix[:, :, 0:prefill_seq_len, :]
+        sin_slice = rope.sin_matrix[:, :, 0:prefill_seq_len, :]
+
+        page_table_tt = ttnn.from_torch(
+            group_page_table,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        return tokens_embd, cos_slice, sin_slice, page_table_tt
+
+    def _extract_batched_prefill_logits(self, hidden, padded_batch, prefill_seq_len, group_idxs, last_token_idxs):
+        """Extract each user's last-token logits from a folded batched-prefill hidden state.
+
+        ``hidden`` is the folded [1, 1, padded_batch*S, dim]. Two paths (gated by model_args
+        ``batched_prefill_batched_extract``, default True):
+
+        * **batched** (default): gather every user's last-token hidden row into one [1,1,32,dim]
+          tensor and run norm + lm_head ONCE for the whole group (TTTv1
+          ``extract_last_tokens_batched_prefill`` + ``_apply_norm_and_lm_head``). At padded_batch=32 this
+          is a single lm_head over 32 rows == TTTv1's layout; the per-slot path instead runs 32 lm_heads
+          (each wasting 31 padding rows of the tile) — the residual TTTv2→TTTv1 TTFT gap. Per-row math is
+          identical (RMSNorm is per-row, lm_head rows are independent), so logits match the per-slot path.
+        * **per-slot** (fallback): one ``post_process_prefill_output`` (norm+lm_head) per user — bit-
+          identical to the sequential path, but 32× the lm_head work.
+
+        Returns a list of per-user result dicts.
+        """
+        batched_extract = getattr(self.model_args, "batched_prefill_batched_extract", True)
+        if batched_extract:
+            return self._extract_batched_prefill_logits_gathered(
+                hidden, padded_batch, prefill_seq_len, group_idxs, last_token_idxs
+            )
+
+        dim = hidden.shape[-1]
+        hidden = ttnn.reshape(hidden, [padded_batch, 1, prefill_seq_len, dim])
+        results = []
+        for local_i, idx in enumerate(group_idxs):
+            slot_hidden = hidden[local_i : local_i + 1, :, :, :]
+            logits = self.model.post_process_prefill_output(slot_hidden, last_token_idxs[local_i])
+            logits = ttnn.untilize(logits, use_multicore=True)
+            results.append(
+                {"idx": idx, "last_token_idx": last_token_idxs[local_i], "logits": logits.cpu(blocking=False)}
+            )
+        return results
+
+    def _extract_batched_prefill_logits_gathered(
+        self, hidden, padded_batch, prefill_seq_len, group_idxs, last_token_idxs
+    ):
+        """Batched last-token extraction: one norm + lm_head over all users in the group.
+
+        Gathers each user's last-token hidden row (folded layout: user ``i`` occupies rows
+        ``[i*S : i*S+S]``) into a single [1,1,32,dim] tensor — column-sharded across the mesh the same
+        way the prefill residual is (dim=-1), so the model's distributed norm all-gathers correctly —
+        then runs ``post_process_prefill_output`` once (slice [0:32] is a no-op on the 32-row tile).
+        Mirrors TTTv1 ``extract_last_tokens_batched_prefill`` (host gather + ShardTensorToMesh). This is
+        a pure host gather + re-upload (deterministic; source branch measured pcc 1.0 vs sequential).
+        """
+        # hidden: folded [1, 1, padded_batch*prefill_seq_len, dim_per_device]. Read per-device shards
+        # and concat along the (sharded) hidden dim to reconstruct full dim on host.
+        ttnn.synchronize_device(self.mesh_device)
+        shards = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(hidden)]
+        host_full = torch.cat(shards, dim=-1) if len(shards) > 1 else shards[0]  # [1,1,B*S,full_dim]
+        full_dim = host_full.shape[-1]
+        host_full = host_full.reshape(padded_batch, prefill_seq_len, full_dim)
+
+        # Pack last-token rows into a tile-height (32) block; row local_i = user group_idxs[local_i].
+        TILE = 32
+        combined = torch.zeros(1, 1, TILE, full_dim, dtype=host_full.dtype)
+        for local_i, _ in enumerate(group_idxs):
+            combined[0, 0, local_i, :] = host_full[local_i, last_token_idxs[local_i], :]
+
+        gathered = ttnn.from_torch(
+            combined,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+        )
+        # last_token_idx = TILE-1 → post_process slices [0:TILE] (whole tile) then runs norm+lm_head once.
+        logits = self.model.post_process_prefill_output(gathered, TILE - 1)
+        logits = ttnn.untilize(logits, use_multicore=True)
+        logits_host = logits.cpu(blocking=False)
+        # Each user's logits sit at row local_i of the shared [.,.,32,vocab] output.
+        return [
+            {"idx": idx, "last_token_idx": local_i, "logits": logits_host} for local_i, idx in enumerate(group_idxs)
+        ]
+
+    def _prefill_forward_batched_group(
+        self, tokens, page_table, prompt_lens, empty_slots, positions, padded_batch, prefill_seq_len
+    ):
+        """Eager batched prefill for ONE uniform-length bucket group: process ``positions`` (indices
+        into ``empty_slots``) in sub-groups of ``padded_batch``, one forward per sub-group, then extract
+        each user's last-token logits. Returns a list of per-user result dicts."""
+        block_size = get_block_size(self._kv_cache) if self._kv_cache is not None else 32
+        prefill_results = []
+        for g0 in range(0, len(positions), padded_batch):
+            sub_positions = positions[g0 : g0 + padded_batch]
+            folded, group_pt, group_idxs, last_token_idxs = _build_batched_prefill_group(
+                tokens, prompt_lens, page_table, empty_slots, sub_positions, padded_batch, prefill_seq_len, block_size
+            )
+            tokens_embd, cos, sin, pt_tt = self._prepare_batched_prefill_device_inputs(
+                folded, group_pt, prefill_seq_len
+            )
+            hidden = self.model.prefill_forward(
+                tokens_embd,
+                [cos, sin],
+                user_id=list(range(len(group_idxs))),
+                page_table=pt_tt,
+                get_last_token=-1,
+                batch_size=padded_batch,
+            )
+            prefill_results.extend(
+                self._extract_batched_prefill_logits(hidden, padded_batch, prefill_seq_len, group_idxs, last_token_idxs)
+            )
+        return prefill_results
 
     # =========================================================================
     # Decode Forward
@@ -964,6 +1281,22 @@ class TracedLLMExecutor:
         self.trace_inputs_prefill: dict[int, tuple | None] = defaultdict(lambda: None)
         self.trace_output_prefill: dict[int, ttnn.Tensor | None] = defaultdict(lambda: None)
 
+        # Batched prefill traces: keyed by (prefill_seq_len, padded_batch). One trace serves every
+        # group of `padded_batch` users at that bucket — the captured KV-fill batch_idx values are
+        # LOCAL (0..pb-1), identical across groups; only the tokens + page table differ and are copied
+        # in on replay. Multiple (bucket, pb) traces coexist (mixed-length eval-32 -> {128,1024}); like
+        # the single-user traces they share ONE persistent cos/sin (see _shared_prefill_cos_sin) so no
+        # fresh per-capture cos/sin buffer lands in a coexisting trace's live range.
+        self.trace_id_prefill_batched: dict[tuple, int | None] = defaultdict(lambda: None)
+        self.trace_inputs_prefill_batched: dict[tuple, tuple | None] = defaultdict(lambda: None)
+        self.trace_output_prefill_batched: dict[tuple, ttnn.Tensor | None] = defaultdict(lambda: None)
+
+        # Shared, persistent full-range prefill cos/sin trace inputs (keyed by max_seq_len).
+        # Materialised ONCE and reused by every per-bucket prefill trace so that no fresh per-capture
+        # cos/sin slice buffer can land inside another coexisting bucket's live residual/activation
+        # buffer and corrupt it (the ci-eval-32 mixed-bucket bug). See _shared_prefill_cos_sin.
+        self._prefill_cos_sin_shared: dict[int, tuple] = {}
+
         # Decode traces: keyed by sampling_on_device (bool)
         self.trace_ids_decode: dict[bool, int | None] = defaultdict(lambda: None)
         self.trace_inputs_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
@@ -1084,14 +1417,25 @@ class TracedLLMExecutor:
         pad_len = max(0, required_end - mat_len)
         max_seq_len = self.model_args.max_seq_len if self.model_args else mat_len
 
-        cos_slice = rope.cos_matrix[:, :, 0:max_seq_len, :]
-        sin_slice = rope.sin_matrix[:, :, 0:max_seq_len, :]
-
         if pad_len > 0:
+            # Prefix-caching / out-of-range path: per-call padded slice (rare; not the batched-prefill
+            # trace path). Kept as a fresh tensor since the shape is call-specific.
+            cos_slice = rope.cos_matrix[:, :, 0:max_seq_len, :]
+            sin_slice = rope.sin_matrix[:, :, 0:max_seq_len, :]
             padding = [(0, 0)] * 4
             padding[2] = (0, pad_len)
             cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
             sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
+        else:
+            # Standard batched-prefill trace path: the cos/sin slice is the CONSTANT [0:max_seq_len]
+            # range for EVERY bucket (same shape, same content, read-only, and never re-copied on
+            # replay). Materialise it ONCE and share the SAME persistent device tensor across all
+            # per-bucket prefill traces. This removes the fresh per-capture cos/sin buffer that
+            # otherwise gets bottom-up-allocated into another coexisting bucket's live residual buffer
+            # and corrupts it (device-verified: mixed-bucket ci-eval-32 corruption tracked exactly this
+            # overlap). Mirrors TTTv1, which feeds prefill rot_mats from the persistent cos/sin matrix
+            # rather than re-materialising a slice per bucket.
+            cos_slice, sin_slice = self._shared_prefill_cos_sin(rope, max_seq_len)
 
         tt_page_table = ttnn.from_torch(
             page_table,
@@ -1112,6 +1456,25 @@ class TracedLLMExecutor:
             )
 
         return tokens_tt, cos_slice, sin_slice, tt_page_table, tt_chunk_page_table
+
+    def _shared_prefill_cos_sin(self, rope, max_seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Return the persistent, shared full-range ``[0:max_seq_len]`` prefill cos/sin tensors.
+
+        Materialised once per ``max_seq_len`` and reused by every per-bucket prefill trace. The
+        slice is content- and shape-identical for every bucket (the executor always slices the
+        constant ``[0:max_seq_len]`` range, independent of the padded bucket length), cos/sin are
+        read-only inside the trace body (``rotary_embedding_llama`` takes them by const ref), and
+        they are never re-copied on replay. Sharing one device buffer therefore changes nothing
+        functionally while eliminating the fresh per-capture slice buffer that could be allocated
+        into another coexisting bucket trace's live residual buffer and corrupt it.
+        """
+        cached = self._prefill_cos_sin_shared.get(max_seq_len)
+        if cached is not None:
+            return cached
+        cos_slice = rope.cos_matrix[:, :, 0:max_seq_len, :]
+        sin_slice = rope.sin_matrix[:, :, 0:max_seq_len, :]
+        self._prefill_cos_sin_shared[max_seq_len] = (cos_slice, sin_slice)
+        return cos_slice, sin_slice
 
     # =========================================================================
     # Compile (delegates to eager, captures output specs)
@@ -1280,7 +1643,37 @@ class TracedLLMExecutor:
 
         prefill_results = []
 
+        # Batched prefill fast path (traced): fuse equal-length users into batched passes, PER uniform-
+        # length bucket group (see _plan_batched_prefill). Positions the plan leaves sequential (or all
+        # positions when batching is off / declined) fall through to the per-user loop below.
+        #
+        # Per-user (sequential) prefill: each user is traced at its OWN get_padded_prefill_len bucket
+        # (TTTv1-parity per-bucket TTFT). Multiple bucket traces (e.g. {128, 1024}) — single-user AND
+        # batched — coexist correctly because every prefill trace's cos/sin input is the SAME shared
+        # persistent tensor (_shared_prefill_cos_sin), never a fresh per-capture slice (a fresh slice
+        # would be bottom-up-allocated into another coexisting trace's live residual buffer and corrupt
+        # it — the ci-eval-32 mixed-bucket bug). No single-bucket collapse is needed.
+        num_cached_per_user = [int(start_pos[i]) if start_pos is not None else 0 for i in range(len(empty_slots))]
+        batched_groups, sequential_positions = _plan_batched_prefill(
+            self.model_args, empty_slots, prompt_lens, num_cached_per_user
+        )
+        seq_filter = None
+        if batched_groups:
+            seq_filter = sequential_positions
+            for prefill_seq_len_g, padded_batch_g, positions_g in batched_groups:
+                logger.info(
+                    f"Batched prefill (traced): {len(positions_g)} users in groups of {padded_batch_g} "
+                    f"(seq={prefill_seq_len_g})"
+                )
+                prefill_results.extend(
+                    self._prefill_forward_batched_group_traced(
+                        tokens, page_table, prompt_lens, empty_slots, positions_g, padded_batch_g, prefill_seq_len_g
+                    )
+                )
+
         for idx, user_id in enumerate(empty_slots):
+            if seq_filter is not None and idx not in seq_filter:
+                continue  # handled by the batched path above
             seq_len = int(prompt_lens[idx])
             # todo)) prefix caching could be refactored into composable feature? --> shouldn't vLLM handle this not use? --> this could be a composable feature!
             num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
@@ -1414,7 +1807,16 @@ class TracedLLMExecutor:
             page_table=page_table,
             last_token_idx=last_token_idx,
         )
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        device_inputs = list(copy_host_to_device(host_inputs, mesh_device=self.mesh_device))
+        # host_inputs[1],[2] are already the SHARED persistent cos/sin device tensors (from
+        # _shared_prefill_cos_sin). copy_host_to_device is a no-op for already-on-device tensors, but
+        # pin the shared object identity explicitly so every bucket's captured trace inputs reference
+        # the SAME cos/sin buffer (never a fresh per-capture copy) — this is what prevents a second
+        # bucket's cos/sin from being allocated into another bucket trace's live residual and
+        # corrupting it. cos/sin are read-only in the trace and not re-copied on replay.
+        device_inputs[1] = host_inputs[1]
+        device_inputs[2] = host_inputs[2]
+        device_inputs = tuple(device_inputs)
 
         with suspend_module_input_validation():
             trace_warmup_output = self._run_prefill_trace_body(device_inputs, user_id)
@@ -1436,6 +1838,162 @@ class TracedLLMExecutor:
 
         logger.info(f"Captured prefill trace for seq_len={prefill_seq_len}")
         return logits
+
+    # =========================================================================
+    # Batched Prefill (traced, partial B=padded_batch)
+    # =========================================================================
+
+    def _prepare_batched_prefill_trace_inputs_host(self, folded_tokens, group_page_table):
+        """Host-side inputs for a batched-prefill trace.
+
+        Tokens and page table are host tensors (copied in per group on replay); cos/sin are the SHARED
+        persistent full-range ``[0:max_seq_len]`` rope tensors (``_shared_prefill_cos_sin``), the SAME
+        object every single-user AND batched trace uses. The rotary op accepts cos whose seq dim is
+        longer than q's and broadcasts cos's batch dim (==1) over the unfolded [B,nh,S,hd] q
+        (device-verified: rotary_embedding_llama prefill validate has no seq-dim check and requires
+        cos.shape[0]==1). Reusing one buffer means NO fresh per-capture cos/sin slice can be
+        bottom-up-allocated into a coexisting trace's live range — the Phase-1 mixed-bucket fix holds
+        under batching. cos/sin are read-only in the trace body and never re-copied on replay.
+        """
+        tokens_reshaped = folded_tokens.reshape(1, 1, 1, -1)
+        tokens_tt = ttnn.from_torch(
+            tokens_reshaped,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        rope = self.model.rope_setup
+        rope.load_device_weights()
+        max_seq_len = self.model_args.max_seq_len if self.model_args else rope.cos_matrix.shape[2]
+        cos_slice, sin_slice = self._shared_prefill_cos_sin(rope, max_seq_len)
+        page_table_tt = ttnn.from_torch(
+            group_page_table,
+            device=None,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        return tokens_tt, cos_slice, sin_slice, page_table_tt
+
+    def _run_batched_prefill_trace_body(self, device_inputs, padded_batch, num_real):
+        tokens_embd = self.model.embed_prefill(device_inputs[0])
+        rot_mats = [device_inputs[1], device_inputs[2]]
+        tt_page_table = device_inputs[3]
+        return self.model.prefill_forward(
+            tokens_embd,
+            rot_mats,
+            user_id=list(range(num_real)),
+            page_table=tt_page_table,
+            get_last_token=-1,
+            batch_size=padded_batch,
+        )
+
+    def _easy_trace_batched_prefill(self, folded, group_pt, padded_batch, prefill_seq_len, num_real):
+        """Lazy capture/replay of the batched-prefill trace keyed by (prefill_seq_len, padded_batch)."""
+        key = (prefill_seq_len, padded_batch)
+        if self.trace_id_prefill_batched[key] is None:
+            return self._capture_and_run_batched_prefill_trace(
+                folded, group_pt, padded_batch, prefill_seq_len, num_real
+            )
+
+        host_inputs = self._prepare_batched_prefill_trace_inputs_host(folded, group_pt)
+        trace_inputs = self.trace_inputs_prefill_batched[key]
+        # Only tokens (idx 0) and page table (idx 3) vary per group; cos/sin (idx 1,2) are the shared
+        # persistent tensors, baked at capture and never re-copied.
+        copy_host_to_device(
+            host_tensors=(host_inputs[0], host_inputs[3]),
+            device_tensors=(trace_inputs[0], trace_inputs[3]),
+        )
+        ttnn.execute_trace(self.mesh_device, self.trace_id_prefill_batched[key], cq_id=0, blocking=False)
+        return self.trace_output_prefill_batched[key]
+
+    def _capture_and_run_batched_prefill_trace(self, folded, group_pt, padded_batch, prefill_seq_len, num_real):
+        """Compile + capture a batched-prefill trace for (prefill_seq_len, padded_batch)."""
+        key = (prefill_seq_len, padded_batch)
+        # Eager warmup (JIT-compile the batched ops outside trace capture). Throwaway cos/sin here.
+        tokens_embd, cos, sin, pt_tt = self._eager._prepare_batched_prefill_device_inputs(
+            folded, group_pt, prefill_seq_len
+        )
+        with suspend_module_input_validation():
+            self.model.prefill_forward(
+                tokens_embd,
+                [cos, sin],
+                user_id=list(range(num_real)),
+                page_table=pt_tt,
+                get_last_token=-1,
+                batch_size=padded_batch,
+            )
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"Compiled batched prefill for seq_len={prefill_seq_len}, padded_batch={padded_batch}")
+
+        host_inputs = self._prepare_batched_prefill_trace_inputs_host(folded, group_pt)
+        device_inputs = list(copy_host_to_device(host_inputs, mesh_device=self.mesh_device))
+        # host_inputs[1],[2] are the SHARED persistent cos/sin device tensors (from _shared_prefill_cos_sin);
+        # copy_host_to_device is a no-op for already-on-device tensors, but pin the shared object identity
+        # so every batched trace references the SAME cos/sin buffer (never a fresh per-capture copy). This
+        # is what keeps the Phase-1 mixed-bucket aliasing fix intact across coexisting batched traces.
+        device_inputs[1] = host_inputs[1]
+        device_inputs[2] = host_inputs[2]
+        device_inputs = tuple(device_inputs)
+
+        with suspend_module_input_validation():
+            trace_warmup_output = self._run_batched_prefill_trace_body(device_inputs, padded_batch, num_real)
+        ttnn.synchronize_device(self.mesh_device)
+        cleanup_ttnn_value(trace_warmup_output)
+        ttnn.synchronize_device(self.mesh_device)
+
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        with suspend_module_input_validation():
+            hidden = self._run_batched_prefill_trace_body(device_inputs, padded_batch, num_real)
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+
+        self.trace_id_prefill_batched[key] = trace_id
+        self.trace_inputs_prefill_batched[key] = device_inputs
+        self.trace_output_prefill_batched[key] = hidden
+
+        logger.info(f"Captured batched prefill trace for seq_len={prefill_seq_len}, padded_batch={padded_batch}")
+        return hidden
+
+    def _prefill_forward_batched_group_traced(
+        self, tokens, page_table, prompt_lens, empty_slots, positions, padded_batch, prefill_seq_len
+    ):
+        """Traced batched prefill for ONE uniform-length bucket group: one batched (traced when
+        allowed) pass per sub-group of padded_batch users, then last-token extraction. Only full
+        sub-groups are traced; a partial trailing sub-group runs eager (it would bake a different
+        KV-fill loop length into the trace). Returns a list of per-user result dicts."""
+        block_size = get_block_size(self._kv_cache) if self._kv_cache is not None else 32
+        can_trace = bool(self.model_args and self.model_args.can_enable_trace(prefill_seq_len, 0))
+        prefill_results = []
+
+        for g0 in range(0, len(positions), padded_batch):
+            sub_positions = positions[g0 : g0 + padded_batch]
+            folded, group_pt, group_idxs, last_token_idxs = _build_batched_prefill_group(
+                tokens, prompt_lens, page_table, empty_slots, sub_positions, padded_batch, prefill_seq_len, block_size
+            )
+            if can_trace and len(group_idxs) == padded_batch:
+                hidden = self._easy_trace_batched_prefill(
+                    folded, group_pt, padded_batch, prefill_seq_len, num_real=len(group_idxs)
+                )
+            else:
+                tokens_embd, cos, sin, pt_tt = self._eager._prepare_batched_prefill_device_inputs(
+                    folded, group_pt, prefill_seq_len
+                )
+                hidden = self.model.prefill_forward(
+                    tokens_embd,
+                    [cos, sin],
+                    user_id=list(range(len(group_idxs))),
+                    page_table=pt_tt,
+                    get_last_token=-1,
+                    batch_size=padded_batch,
+                )
+            prefill_results.extend(
+                self._eager._extract_batched_prefill_logits(
+                    hidden, padded_batch, prefill_seq_len, group_idxs, last_token_idxs
+                )
+            )
+        return prefill_results
 
     # =========================================================================
     # Decode (traced)
@@ -1682,14 +2240,42 @@ class TracedLLMExecutor:
         if self._cleaned_up:
             return
 
+        # Shared prefill cos/sin tensors are referenced by EVERY per-bucket trace-input tuple
+        # (indices 1,2). Deallocate them exactly once below (not per trace) to avoid a double-free.
+        shared_cos_sin_ids = {
+            id(t) for pair in self._prefill_cos_sin_shared.values() for t in pair if isinstance(t, ttnn.Tensor)
+        }
         for key, trace_id in list(self.trace_id_prefill.items()):
             if trace_id is not None:
                 ttnn.release_trace(self.mesh_device, trace_id)
-            cleanup_ttnn_value(self.trace_inputs_prefill[key])
+            inputs = self.trace_inputs_prefill[key]
+            if inputs is not None:
+                for t in inputs:
+                    if isinstance(t, ttnn.Tensor) and id(t) in shared_cos_sin_ids:
+                        continue  # shared cos/sin: freed once, after this loop
+                    cleanup_ttnn_value(t)
             cleanup_ttnn_value(self.trace_output_prefill[key])
             self.trace_id_prefill[key] = None
             self.trace_inputs_prefill[key] = None
             self.trace_output_prefill[key] = None
+        # Batched prefill traces: same shared-cos/sin id-skip (indices 1,2 are the shared tensors).
+        for key, trace_id in list(self.trace_id_prefill_batched.items()):
+            if trace_id is not None:
+                ttnn.release_trace(self.mesh_device, trace_id)
+            inputs = self.trace_inputs_prefill_batched[key]
+            if inputs is not None:
+                for t in inputs:
+                    if isinstance(t, ttnn.Tensor) and id(t) in shared_cos_sin_ids:
+                        continue  # shared cos/sin: freed once, below
+                    cleanup_ttnn_value(t)
+            cleanup_ttnn_value(self.trace_output_prefill_batched[key])
+            self.trace_id_prefill_batched[key] = None
+            self.trace_inputs_prefill_batched[key] = None
+            self.trace_output_prefill_batched[key] = None
+        # Free the shared cos/sin once.
+        for pair in self._prefill_cos_sin_shared.values():
+            cleanup_ttnn_value(pair)
+        self._prefill_cos_sin_shared.clear()
         for key, trace_id in list(self.trace_ids_decode.items()):
             if trace_id is not None:
                 ttnn.release_trace(self.mesh_device, trace_id)
@@ -2125,6 +2711,199 @@ def run_perf_benchmark(
         num_decode_tokens=num_decode_tokens,
         generated_token_ids=generated_token_ids,
     )
+
+
+# =============================================================================
+# ci-eval-32: 32-user cross-batch determinism (self-consistency) helpers
+# =============================================================================
+#
+# TTTv2 equivalent of the TTTv1 ``ci-eval-32`` case: run the batch-32 prefill+decode
+# loop ``repeat_batches`` times, rotating the prompt->slot assignment by one each
+# repeat, and assert that undoing the rotation lines up per-user outputs. There is no
+# external golden — the target is the model's own output under prompt rotation.
+#
+# These helpers operate on the per-user token-id streams already returned by
+# ``run_perf_benchmark`` (``PerfBenchmarkResult.generated_token_ids``) — no new device
+# plumbing. Comparing token-id lists (not decoded text) is stricter than TTTv1's
+# decoded-string compare and avoids tokenizer-decode ambiguity.
+#
+# Prompt parity with TTTv1: the demos feed ``eval_repeat_prompts_batch32.json`` — the same
+# numeric sequence-continuation prompts TTTv1's ci-eval-32 case uses (simple_text_demo.py).
+# Caveat: the self-consistency assert requires bit-exact reproduction of a prompt's greedy
+# output across batch slots. Degenerate repetitive output (e.g. a small model looping on one
+# token) sits on argmax near-ties whose resolution shifts with batch position (batched-matmul
+# / all-gather FP non-associativity), so it is NOT slot-invariant and will fail the assert. On
+# TTTv2-1B these prompts degenerate and the case fails — a real gap to close (compare against
+# TTTv1's own ci-eval-32 on the same model to confirm whether TTTv1 stays coherent here).
+
+
+def load_eval_repeat_prompts_batch32() -> list[str]:
+    """The 32 numeric sequence-continuation prompts TTTv1's ci-eval-32 uses (parity)."""
+    path = Path("models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch32.json")
+    with open(path) as f:
+        data = json.load(f)
+    return [entry["prompt"] for entry in data]
+
+
+def rotate_prompts(all_prompts: list[str], repeat: int) -> list[str]:
+    """Rotate the prompt->slot assignment by ``repeat``: slot j holds prompt (j+repeat)%N."""
+    n = len(all_prompts)
+    return [all_prompts[(j + repeat) % n] for j in range(n)]
+
+
+def truncate_at_stop(ids: list[int], stop_ids: set[int]) -> list[int]:
+    """Prefix of ``ids`` up to (excluding) the first id in ``stop_ids``."""
+    out: list[int] = []
+    for t in ids:
+        if t in stop_ids:
+            break
+        out.append(t)
+    return out
+
+
+def hf_stop_ids(tokenizer, hf_model_id: str | None = None) -> set[int]:
+    """Best-effort stop-token id set for an HF ``AutoTokenizer``.
+
+    Raw HF tokenizers have no ``.stop_tokens`` (that only exists on the TTTv1 wrapped
+    tokenizer). Build the set from ``eos_token_id`` (int|list|None), and — when an
+    ``hf_model_id`` is supplied — also fold in the model's ``generation_config`` eos ids,
+    since chat models (e.g. Llama-3 Instruct) often carry extra eot ids there rather than
+    on ``eos_token_id``. Missing/empty -> empty set (truncation simply runs full length).
+    """
+    stop: set[int] = set()
+
+    def _add(value) -> None:
+        if value is None:
+            return
+        if isinstance(value, bool):  # guard: bool is an int subclass
+            return
+        if isinstance(value, int):
+            stop.add(int(value))
+        elif isinstance(value, (list, tuple, set)):
+            for e in value:
+                _add(e)
+
+    _add(getattr(tokenizer, "eos_token_id", None))
+    # tt_transformers ModelArgs.tokenizer augments the HF tokenizer with ``stop_tokens``
+    # (eos + any extra eot ids); raw HF AutoTokenizers don't have it (getattr -> None).
+    _add(getattr(tokenizer, "stop_tokens", None))
+    if hf_model_id is not None:
+        try:
+            from transformers import GenerationConfig
+
+            gen_cfg = GenerationConfig.from_pretrained(hf_model_id)
+            _add(getattr(gen_cfg, "eos_token_id", None))
+        except Exception as e:  # generation_config absent / unreadable — eos_token_id is enough
+            logger.debug(f"ci-eval-32: could not read generation_config eos ids for {hf_model_id}: {e}")
+    return stop
+
+
+def assert_cross_batch_consistency(per_repeat_outputs: list[list[list[int]]]) -> None:
+    """Assert prompt-position invariance across repeats.
+
+    ``per_repeat_outputs[b][u]`` = truncated token-id list for slot ``u`` of repeat ``b``.
+    With slot j of repeat b holding prompt (j+b)%N (see ``rotate_prompts``), the same prompt
+    sits at slot (offset+1)%N of repeat b and slot offset of repeat b+1 — so those two
+    outputs must be identical if no per-user state leaks.
+    """
+    num_batches = len(per_repeat_outputs)
+    assert num_batches >= 2, "cross-batch consistency needs >=2 repeats"
+    n = len(per_repeat_outputs[0])
+    failed, total = 0, 0
+    first_failure = None
+    for b in range(num_batches - 1):
+        cur, nxt = per_repeat_outputs[b], per_repeat_outputs[b + 1]
+        for offset in range(n):
+            total += 1
+            if cur[(offset + 1) % n] != nxt[offset]:
+                failed += 1
+                if first_failure is None:
+                    first_failure = (b, offset)
+    assert failed == 0, (
+        f"ci-eval-32: {failed}/{total} cross-batch consistency checks failed "
+        f"(first at repeat {first_failure[0]}->{first_failure[0] + 1}, offset {first_failure[1]})"
+    )
+
+
+def run_eval_repeat_batch32(
+    *,
+    make_executor,
+    allocate_kv_cache,
+    page_table: torch.Tensor,
+    prompts: list[str],
+    tokenizer,
+    tokenize_fn,
+    num_decode_tokens: int,
+    max_batch_size: int,
+    sampling_params=None,
+    repeat_batches: int = 3,
+    hf_model_id: str | None = None,
+) -> None:
+    """Drive the ci-eval-32 determinism case, building a fresh traced executor per repeat.
+
+    Each repeat builds its own traced executor (``make_executor()``) and its own zeroed KV
+    cache (``allocate_kv_cache(executor)``), so the rotated batches are fully independent —
+    no shared device or host state can leak across repeats. The executor is cleaned up after
+    each repeat. (The model is bit-deterministic across repeats either way; fresh-per-repeat
+    is simply the cleanest independence guarantee for a determinism test, and the trace
+    recapture cost is negligible at batch-32.)
+
+    Args:
+        make_executor: Zero-arg callable returning a fresh traced executor
+            (``run_perf_benchmark`` requires traced). Called once per repeat.
+        allocate_kv_cache: Callable(executor) -> fresh zeroed kv_cache bound on that executor.
+        page_table: Fixed contiguous page table (shared across repeats).
+        prompts: The N (=max_batch_size) prompts to rotate (TTTv1 ci-eval-32 numeric prompts;
+            see the module note above re: degenerate-output sensitivity on small models).
+        tokenizer: HF tokenizer (for stop / special ids).
+        tokenize_fn: Callable(list[str]) -> (tokens, prompt_lens).
+        num_decode_tokens: Decode steps per repeat.
+        max_batch_size: Padded batch (== len(prompts) for this fixed-32 case).
+        sampling_params: None -> host argmax (deterministic, mesh-agnostic default).
+        repeat_batches: Number of rotated repeats (TTTv1 uses 3).
+        hf_model_id: Optional, to enrich stop ids from generation_config.
+    """
+    assert (
+        len(prompts) == max_batch_size
+    ), f"ci-eval-32 expects len(prompts)==max_batch_size; got {len(prompts)} vs {max_batch_size}"
+    stop_ids = hf_stop_ids(tokenizer, hf_model_id)
+    special_ids = set(getattr(tokenizer, "all_special_ids", []) or [])
+    # Garbage guard targets only special tokens that are NOT recognized stops: a legitimate
+    # stop is removed by truncation, so anything special left in the body is degenerate output.
+    garbage_ids = special_ids - stop_ids
+    logger.info(
+        f"ci-eval-32: repeat_batches={repeat_batches}, N={len(prompts)}, "
+        f"stop_ids={sorted(stop_ids)}, |special_ids|={len(special_ids)}, sampling_params={sampling_params}"
+    )
+
+    per_repeat: list[list[list[int]]] = []
+    for i in range(repeat_batches):
+        traced_executor = make_executor()
+        try:
+            kv_cache = allocate_kv_cache(traced_executor)
+            rotated = rotate_prompts(prompts, i)
+            tokens, prompt_lens = tokenize_fn(rotated)
+            result = run_perf_benchmark(
+                traced_executor,
+                tokens=tokens,
+                kv_cache=kv_cache,
+                page_table=page_table,
+                num_decode_tokens=num_decode_tokens,
+                max_batch_size=max_batch_size,
+                prompt_lens=prompt_lens,
+                sampling_params=sampling_params,
+            )
+        finally:
+            traced_executor.cleanup()
+        truncated = [truncate_at_stop(ids, stop_ids) for ids in result.generated_token_ids]
+        for u, ids in enumerate(truncated):
+            bad = set(ids) & garbage_ids
+            assert not bad, f"ci-eval-32: user {u} produced special token(s) {sorted(bad)} mid-stream"
+        per_repeat.append(truncated)
+        logger.info(f"ci-eval-32 repeat {i}: truncated lengths = {[len(t) for t in truncated]}")
+
+    assert_cross_batch_consistency(per_repeat)
+    logger.info(f"ci-eval-32: all {(repeat_batches - 1) * len(prompts)} cross-batch consistency checks passed")
 
 
 # =============================================================================
