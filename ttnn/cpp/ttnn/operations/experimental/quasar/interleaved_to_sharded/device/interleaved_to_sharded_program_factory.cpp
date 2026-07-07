@@ -29,7 +29,11 @@ namespace {
 // (Pattern: Unity-build hygiene for anonymous-namespace symbols).
 const DFBSpecName I2S_INPUT_DFB{"i2s_input"};
 const DFBSpecName I2S_OUTPUT_DFB{"i2s_output"};
-const DFBSpecName I2S_SCRATCH_DFB{"i2s_scratch"};
+// SCRATCH is modeled as a private node-local L1 scratchpad (not a DFB): the stick-layout reader is
+// the sole user (it both fills it via src->scratch and drains it via a local scratch->dest copy).
+// A self-looped DFB (same DM kernel bound PRODUCER+CONSUMER) is rejected on Gen2/Quasar by the
+// program_spec validator; a scratchpad has no producer/consumer edge, so it validates everywhere.
+const ScratchpadSpecName I2S_SCRATCH_PAD{"i2s_scratch"};
 
 const TensorParamName I2S_INPUT{"i2s_input"};
 const TensorParamName I2S_OUTPUT{"i2s_output"};
@@ -180,13 +184,14 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         });
     }
 
-    // SCRATCH DFB: only on the stick-layout reader path, used as a TRID staging buffer.
+    // SCRATCH scratchpad: only on the stick-layout reader path, used as a TRID staging buffer.
+    // Reserved as raw node-local L1 sized for `num_trids` staging slots. Modeled as a scratchpad
+    // (not a DFB) because the reader is its only user (no downstream consumer), which would otherwise
+    // make it an unsupported DM producer+consumer self-loop DFB on Gen2/Quasar.
     if (!is_tile && use_scratch) {
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = I2S_SCRATCH_DFB,
-            .entry_size = scratch_cb_page_size,
-            .num_entries = num_trids,
-            .data_format_metadata = input_cb_data_format,
+        spec.scratchpads.push_back(ScratchpadSpec{
+            .unique_id = I2S_SCRATCH_PAD,
+            .size_per_node = scratch_cb_page_size * num_trids,
         });
     }
 
@@ -221,14 +226,15 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/dataflow/"
             "reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp";
         reader.compile_time_args = {{"num_trids", num_trids}};
-        // SCRATCH is a self-loop on the reader (produces and consumes its own staging buffer).
-        reader.dfb_bindings = {
-            ProducerOf(reader_out_dfb, "in0"),
-            DFBBinding{
-                .dfb_spec_name = I2S_SCRATCH_DFB, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER},
-            DFBBinding{
-                .dfb_spec_name = I2S_SCRATCH_DFB, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
-        };
+        reader.dfb_bindings = {ProducerOf(reader_out_dfb, "in0")};
+        // SCRATCH staging buffer: bound as a private scratchpad (raw node-local L1), not a DFB. The
+        // reader both fills it and drains it itself, so a DFB would be a producer+consumer self-loop
+        // on this DM kernel — unsupported on Gen2/Quasar. Only present on the stick-layout path
+        // (this branch), guarded by the same `use_scratch` condition that declares the ScratchpadSpec.
+        if (use_scratch) {
+            reader.scratchpad_bindings = {
+                ScratchpadBinding{.scratchpad_spec_name = I2S_SCRATCH_PAD, .accessor_name = "pad"}};
+        }
         reader.runtime_arg_schema = {
             .runtime_arg_names = {
                 "block_height",
