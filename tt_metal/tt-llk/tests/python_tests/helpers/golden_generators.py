@@ -1779,9 +1779,7 @@ class TypecastGolden:
         output_format: DataFormat,
         input_dimensions: list[int] = [32, 32],
     ):
-        operand = quantize_input_to_unpack_format(
-            operand, input_format, all_mx_formats=True
-        )
+        operand = quantize_input_to_unpack_format(operand, input_format)
         if not isinstance(operand, torch.Tensor):
             operand = torch.tensor(operand)
 
