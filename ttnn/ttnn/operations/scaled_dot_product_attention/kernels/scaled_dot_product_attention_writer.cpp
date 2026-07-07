@@ -13,10 +13,11 @@
 //   [5..] Output TensorAccessorArgs
 //
 // RT arg layout:
-//   [0] output_addr
-//   [1] b_idx  — batch index for this core
-//   [2] h_idx  — head index for this core
-//   [3] start_tile_id — first tile id for this (b,h) pair
+//   [0] num_work_units — number of (B,H) pairs this core processes
+//   [1] output_addr
+//   [2] start_tile_id_0 — first tile id for work unit 0
+//   [3] start_tile_id_1 — first tile id for work unit 1 (if present)
+//   ...
 
 #include "api/dataflow/dataflow_api.h"
 
@@ -29,30 +30,35 @@ void kernel_main() {
 
     constexpr auto out_args = TensorAccessorArgs<5>();
 
-    const uint32_t out_addr = get_arg_val<uint32_t>(0);
-    // b_idx and h_idx are not needed since start_tile_id is precomputed
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(3);
+    // RT args: [num_work_units, output_addr, start_tile_id_0, ...]
+    const uint32_t num_work_units = get_arg_val<uint32_t>(0);
+    const uint32_t out_addr = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t cb_output = 16;
 
     const uint32_t tile_bytes = get_tile_size(cb_output);
     const auto out_accessor = TensorAccessor(out_args, out_addr, tile_bytes);
 
-    uint32_t tile_offset = start_tile_id;
+    uint32_t rt_arg_idx = 2;  // start_tile_ids start at RT arg index 2
+    for (uint32_t wu = 0; wu < num_work_units; wu++) {
+        const uint32_t start_tile_id = get_arg_val<uint32_t>(rt_arg_idx++);
 
-    for (uint32_t qb = 0; qb < num_q_blocks; qb++) {
-        // Each Q block produces B_q × D_t tiles
-        for (uint32_t sq = 0; sq < B_q; sq++) {
-            if (qb * B_q + sq >= S_q_t) {
-                break;
-            }
-            for (uint32_t d = 0; d < D_t; d++) {
-                cb_wait_front(cb_output, 1);
-                uint32_t l1_read_addr = get_read_ptr(cb_output);
-                noc_async_write_tile(tile_offset, out_accessor, l1_read_addr);
-                noc_async_write_barrier();
-                cb_pop_front(cb_output, 1);
-                tile_offset++;
+        uint32_t tile_offset = start_tile_id;
+
+        for (uint32_t qb = 0; qb < num_q_blocks; qb++) {
+            // Each Q block produces B_q × D_t tiles
+            for (uint32_t sq = 0; sq < B_q; sq++) {
+                if (qb * B_q + sq >= S_q_t) {
+                    break;
+                }
+                for (uint32_t d = 0; d < D_t; d++) {
+                    cb_wait_front(cb_output, 1);
+                    uint32_t l1_read_addr = get_read_ptr(cb_output);
+                    noc_async_write_tile(tile_offset, out_accessor, l1_read_addr);
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_output, 1);
+                    tile_offset++;
+                }
             }
         }
     }

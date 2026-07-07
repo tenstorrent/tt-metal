@@ -97,28 +97,39 @@ def create_program_descriptor(
     actual_B_kv = min(B_kv, S_kv_t)
 
     # ========== 2. CORE GRID AND WORK DISTRIBUTION ==========
-    num_work_units = B * H  # one (B,H) pair per core
-    max_core = ttnn.CoreCoord(7, 7)
+    num_work_units = B * H  # one (B,H) pair per work unit
+    # Use 8×7 grid (56 worker cores). The 8th row (y=7) contains dispatch
+    # cores that cannot host user kernels.
+    max_core = ttnn.CoreCoord(7, 6)
     all_cores_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), max_core)])
 
     (_, core_grid, core_group_1, core_group_2, units_per_core_g1, units_per_core_g2) = ttnn.split_work_to_cores(
         all_cores_crs, num_work_units, row_wise=True
     )
 
-    # Helper to iterate all active cores in order
-    def iter_cores():
-        """Yield (x, y, work_unit_idx) for each core in the work split."""
-        idx = 0
-        for cr in core_group_1.ranges():
-            for x in range(cr.start.x, cr.end.x + 1):
-                for y in range(cr.start.y, cr.end.y + 1):
-                    yield x, y, idx
-                    idx += 1
-        for cr in core_group_2.ranges():
-            for x in range(cr.start.x, cr.end.x + 1):
-                for y in range(cr.start.y, cr.end.y + 1):
-                    yield x, y, idx
-                    idx += 1
+    # Build per-core work unit lists. When num_work_units > num_cores, some
+    # cores get multiple (B,H) pairs — the kernel loops over them.
+    # core_to_work_units: { (x,y) : [(b_idx, h_idx, start_tile_id), ...] }
+    core_to_work_units = {}
+    work_idx = 0
+    for cr in core_group_1.ranges():
+        for x in range(cr.start.x, cr.end.x + 1):
+            for y in range(cr.start.y, cr.end.y + 1):
+                for _ in range(units_per_core_g1):
+                    b_idx = work_idx // H
+                    h_idx = work_idx % H
+                    start_tile_id = b_idx * H * S_q_t * D_t + h_idx * S_q_t * D_t
+                    core_to_work_units.setdefault((x, y), []).append((b_idx, h_idx, start_tile_id))
+                    work_idx += 1
+    for cr in core_group_2.ranges():
+        for x in range(cr.start.x, cr.end.x + 1):
+            for y in range(cr.start.y, cr.end.y + 1):
+                for _ in range(units_per_core_g2):
+                    b_idx = work_idx // H
+                    h_idx = work_idx % H
+                    start_tile_id = b_idx * H * S_q_t * D_t + h_idx * S_q_t * D_t
+                    core_to_work_units.setdefault((x, y), []).append((b_idx, h_idx, start_tile_id))
+                    work_idx += 1
 
     # ========== 3. CIRCULAR BUFFER DESCRIPTORS ==========
     # CB indices
@@ -229,18 +240,21 @@ def create_program_descriptor(
     else:
         reader_ct_args.extend(ttnn.TensorAccessorArgs().get_compile_time_args())
 
+    # Reader RT args: flatten all work units for each core into a single list.
+    # Format per core: [num_work_units, addr_q, addr_k, addr_v, addr_mask,
+    #                   b0, h0, b1, h1, ...]
     reader_rt_args = ttnn.RuntimeArgs()
-    for x, y, bh in iter_cores():
-        b_idx = bh // H
-        h_idx = bh % H
-        reader_rt_args[x][y] = [
+    for (x, y), work_units in core_to_work_units.items():
+        rt = [
+            len(work_units),
             query.buffer_address(),
             key.buffer_address(),
             value.buffer_address(),
             attn_mask.buffer_address() if has_mask else 0,
-            b_idx,
-            h_idx,
         ]
+        for b_idx, h_idx, _ in work_units:
+            rt.extend([b_idx, h_idx])
+        reader_rt_args[x][y] = rt
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_reader.cpp"),
@@ -260,19 +274,14 @@ def create_program_descriptor(
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
+    # Writer RT args: flatten all work units for each core.
+    # Format per core: [num_work_units, output_addr, start_tile_0, start_tile_1, ...]
     writer_rt_args = ttnn.RuntimeArgs()
-    for x, y, bh in iter_cores():
-        b_idx = bh // H
-        h_idx = bh % H
-        # Output tile layout: (B, H, S_q_t, D_t)
-        # start_tile_id = b_idx * H * S_q_t * D_t + h_idx * S_q_t * D_t
-        start_tile_id = b_idx * H * S_q_t * D_t + h_idx * S_q_t * D_t
-        writer_rt_args[x][y] = [
-            output_tensor.buffer_address(),
-            b_idx,
-            h_idx,
-            start_tile_id,
-        ]
+    for (x, y), work_units in core_to_work_units.items():
+        rt = [len(work_units), output_tensor.buffer_address()]
+        for _, _, start_tile_id in work_units:
+            rt.append(start_tile_id)
+        writer_rt_args[x][y] = rt
 
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_writer.cpp"),
@@ -298,8 +307,8 @@ def create_program_descriptor(
     ]
 
     compute_rt_args = ttnn.RuntimeArgs()
-    for x, y, _ in iter_cores():
-        compute_rt_args[x][y] = []
+    for (x, y), work_units in core_to_work_units.items():
+        compute_rt_args[x][y] = [len(work_units)]
 
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),
