@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Extract the Qwen3-ASR text decoder into a vanilla Qwen3ForCausalLM checkpoint
 (so tt_transformers can load it like any Qwen3 model), and dump decoder-stage
 golden for the Phase-3/4 PCC tests.

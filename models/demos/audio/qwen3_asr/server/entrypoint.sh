@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Dedicated Qwen3-ASR API server entrypoint: container boots straight into the
 # OpenAI-compatible /v1/audio/transcriptions server on a Tenstorrent P150.
 set -e

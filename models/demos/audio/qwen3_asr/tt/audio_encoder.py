@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """ttnn implementation of the Qwen3-ASR AuT audio encoder (Blackhole / P150a).
 
 Structure mirrors `reference/audio_encoder_ref.py` (validated PCC=1.0 vs golden):

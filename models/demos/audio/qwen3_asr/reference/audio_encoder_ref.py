@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Self-contained functional reference for the Qwen3-ASR AuT audio encoder.
 
 Mirrors `Qwen3ASRAudioEncoder.forward` exactly, but as plain functional torch

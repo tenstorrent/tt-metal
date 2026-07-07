@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Dedicated Qwen3-ASR API server image (Tenstorrent P150 / Blackhole).
 # Boots straight into the OpenAI /v1/audio/transcriptions server.
 # tt-metal (TT_METAL_HOME) + model weights mount at runtime as volumes

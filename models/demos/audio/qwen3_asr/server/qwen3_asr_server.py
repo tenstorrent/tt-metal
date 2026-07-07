@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """OpenAI-compatible ASR server for TT Qwen3-ASR-1.7B (same /v1/audio/transcriptions
 contract as the tt-media-server whisper endpoint, so the qwen3-asr-eval pipeline can
 target it transparently via --asr-api).

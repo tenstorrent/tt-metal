@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Host-side preprocessing for the raw-wav, language-auto TT demo (run in eval venv).
 
 For each clip: build the Qwen3-ASR prompt with NO forced language (auto-detect), run
