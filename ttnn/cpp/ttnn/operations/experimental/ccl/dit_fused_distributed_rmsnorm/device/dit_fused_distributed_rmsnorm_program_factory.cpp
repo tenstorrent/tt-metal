@@ -396,8 +396,11 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         has_weight && !per_token_weight && batch > 1 && affine_tile_rows(*weight) == batch;
     const bool per_batch_bias = has_bias && !per_token_bias && batch > 1 && affine_tile_rows(*bias) == batch;
     // Broadcast reader read count: 1 row for true-broadcast, `batch` rows for per-batch adaLN.
-    const uint32_t weight_bcast_tiles = per_batch_weight ? batch * num_tile_cols : num_tile_cols;
-    const uint32_t bias_bcast_tiles = per_batch_bias ? batch * num_tile_cols : num_tile_cols;
+    // Broadcast bulk-read count is one row (num_tile_cols): only TRUE broadcast [1,1,H] uses the
+    // one-shot resident read. per-batch adaLN now streams its per-row batch slice (like per-token),
+    // so it does NOT bulk-read all batches here.
+    const uint32_t weight_bcast_tiles = num_tile_cols;
+    const uint32_t bias_bcast_tiles = num_tile_cols;
     const bool fuse_rope = trans_mat.has_value() && rope_cos.has_value() && rope_sin.has_value();
 
     // Per-head RoPE: cos/sin shape[1] == num_heads_per_device gives each head
@@ -644,18 +647,10 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     }
     // welford_zero_cb is resident for LN regardless of layout; reserve it from the cap too.
     l1_cap_bytes -= welford_zero_bytes;
-    // Resident weight/bias CB tile counts — MUST match the create_cb sizing below:
-    // per-token holds chunk_size_rows rows, per-batch holds all `batch` rows, broadcast holds 1.
-    const uint32_t weight_cb_tiles_est =
-        has_weight ? (per_token_weight ? chunk_size_rows * num_tile_cols
-                      : per_batch_weight ? batch * num_tile_cols
-                                         : num_tile_cols)
-                   : 0u;
-    const uint32_t bias_cb_tiles_est =
-        has_bias ? (per_token_bias ? chunk_size_rows * num_tile_cols
-                    : per_batch_bias ? batch * num_tile_cols
-                                     : num_tile_cols)
-                 : 0u;
+    // weight/bias CB tile counts — MUST match the create_cb sizing below. All modes hold ONE
+    // row (num_tile_cols): broadcast resident, per-token / per-batch streamed per row.
+    const uint32_t weight_cb_tiles_est = has_weight ? num_tile_cols : 0u;
+    const uint32_t bias_cb_tiles_est = has_bias ? num_tile_cols : 0u;
     const bool overflows_resident_post = decide_block_major_post(
         num_tile_cols,
         block_size,
@@ -873,19 +868,16 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // CB tile size, the compute reconfigs the FPU operand format, so no kernel change needed.
     // (weight_format / bias_format / weight_tile_sz / bias_tile_sz computed earlier, by the
     // L1-decision block, so the resident estimates see the true fp32 sizes.)
-    // Per-batch adaLN keeps ALL batches' broadcast rows resident (batch * num_tile_cols),
-    // so compute can index by wbatch * num_tile_cols without a per-row re-push.
-    const uint32_t weight_cb_tiles =
-        has_weight ? (per_token_weight ? chunk_size_rows * num_tile_cols
-                      : per_batch_weight ? batch * num_tile_cols
-                                         : num_tile_cols)
-                   : 1;
+    // weight_cb / bias_cb hold ONE row's worth (num_tile_cols) for every mode:
+    //  - broadcast [1,1,H]: the single row, resident (never popped).
+    //  - per-token [.,N,H]: this row's slice, re-pushed + popped per row.
+    //  - per-batch [batch,1,H] adaLN: this row's batch slice (face-row broadcast), re-pushed +
+    //    popped per row (streamed, not all-batches-resident) — so a wide per-batch shard fits L1
+    //    at TP=1 (the full unsharded width) instead of holding batch*num_tile_cols tiles.
+    // chunk_size_rows==1, so per-token's chunk_size_rows*num_tile_cols is also just num_tile_cols.
+    const uint32_t weight_cb_tiles = has_weight ? num_tile_cols : 1;
     create_cb(weight_cb_id, program, worker_core_set, weight_tile_sz, weight_cb_tiles, weight_format);
-    const uint32_t bias_cb_tiles =
-        has_bias ? (per_token_bias ? chunk_size_rows * num_tile_cols
-                    : per_batch_bias ? batch * num_tile_cols
-                                     : num_tile_cols)
-                 : 1;
+    const uint32_t bias_cb_tiles = has_bias ? num_tile_cols : 1;
     create_cb(bias_cb_id, program, worker_core_set, bias_tile_sz, bias_cb_tiles, bias_format);
     // Recip LUT CB: one contiguous page of reduce_width fp32 (== recip_lut_bytes). A 4 B
     // stub when unused (the reader/compute gate on use_recip and never touch it).
@@ -1061,13 +1053,19 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // reads the CB as the Welford reciprocal_lut. recip accessor is appended last.
         static_cast<uint32_t>(use_recip_lut),
         recip_lut_cb_id,
-        // CT 19/20: broadcast affine read counts. num_tile_cols for true-broadcast [1,1,H];
-        // batch*num_tile_cols for per-batch adaLN [batch,1,H] (all batches read once, resident).
+        // CT 19/20: broadcast affine read counts (always num_tile_cols: only TRUE broadcast
+        // [1,1,H] uses the one-shot resident read).
         weight_bcast_tiles,
         bias_bcast_tiles,
         // CT 21: per-batch RoPE stride (tiles). 0 -> broadcast cos/sin across the input batch
         // (reader reindexes by within-batch seq row); >0 -> each batch offsets by this many tiles.
         rope_batch_stride_tiles,
+        // CT 22/23/24: per-batch adaLN weight/bias ([batch,1,H]) — streamed per row (face-row
+        // broadcast read at wbatch*num_tile_cols, wbatch = tile_row / rows_per_batch_tiles),
+        // consumed + popped per row like per-token. rows_per_batch_tiles = num_tile_rows / batch.
+        static_cast<uint32_t>(per_batch_weight),
+        static_cast<uint32_t>(per_batch_bias),
+        rows_per_batch_tiles,
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
@@ -1285,9 +1283,11 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(use_recip_lut),
         // CT 40: zeroed welford-state CB (LayerNorm warm-row accumulator reset).
         welford_zero_cb_id,
-        // CT 41/42/43: per-batch adaLN. per_batch_weight/bias select the resident-offset path
-        // (mul_bcast_rows at wbatch*num_tile_cols, wbatch = (tile_row_start + row) /
-        // rows_per_batch_tiles); rows_per_batch_tiles is the per-batch tile-row span.
+        // CT 41/42/43: per-batch adaLN. per_batch_weight/bias tell the compute to consume + POP
+        // weight_cb/bias_cb per row (the reader streams each row's batch slice, face-row broadcast)
+        // using mul_bcast_rows — same per-row consumption as per-token, broadcast op.
+        // rows_per_batch_tiles is unused by compute now (the reader owns batch indexing); kept for
+        // arg stability.
         static_cast<uint32_t>(per_batch_weight),
         static_cast<uint32_t>(per_batch_bias),
         rows_per_batch_tiles,

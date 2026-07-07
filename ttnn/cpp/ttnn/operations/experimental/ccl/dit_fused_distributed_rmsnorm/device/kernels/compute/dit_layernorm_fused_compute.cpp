@@ -160,13 +160,9 @@ void kernel_main() {
     cb_wait_front(welford_zero_cb, 2);  // resident for the whole kernel (never popped)
 
     for (uint32_t row = 0; row < num_tile_rows; row++) {
-        // Per-batch adaLN tile offsets: weight/bias for this row's batch live at
-        // wbatch * num_tile_cols in the resident weight_cb / bias_cb. For a true-broadcast or
-        // no-affine weight per_batch_* is 0 -> offset 0 (front of the CB, unchanged behavior).
-        const uint32_t wbatch = (per_batch_weight != 0) ? ((tile_row_start + row) / rows_per_batch_tiles) : 0u;
-        const uint32_t bbatch = (per_batch_bias != 0) ? ((tile_row_start + row) / rows_per_batch_tiles) : 0u;
-        const uint32_t w_off = wbatch * num_tile_cols;
-        const uint32_t b_off = bbatch * num_tile_cols;
+        // Per-batch adaLN (per_batch_weight/bias): the reader streams THIS row's batch slice to
+        // the front of weight_cb / bias_cb (face-row broadcast), so the compute consumes at col
+        // and pops per row — identical to per-token, using mul_bcast_rows. No batch offset here.
 
         // Resident layout: whole row stays in L1 (Welford PRE + POST re-read).
         // Streaming layout (wide shards): each pass waits/pops per block instead.
@@ -413,7 +409,7 @@ void kernel_main() {
 
                 // * weight
                 if constexpr (has_weight != 0) {
-                    cb_wait_front(weight_cb, w_off + col_tile + block_size);
+                    cb_wait_front(weight_cb, col_tile + block_size);
                     cb_wait_front(norm_result_cb, block_size);
                     reconfig_data_format(norm_result_cb, weight_cb);
                     pack_reconfig_data_format(weight_result_cb);
@@ -426,9 +422,9 @@ void kernel_main() {
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size; i++) {
                         if constexpr (per_token_weight != 0) {
-                            mul_tiles(norm_result_cb, weight_cb, i, w_off + col_tile + i, i);
+                            mul_tiles(norm_result_cb, weight_cb, i, col_tile + i, i);
                         } else {
-                            mul_tiles_bcast_rows(norm_result_cb, weight_cb, i, w_off + col_tile + i, i);
+                            mul_tiles_bcast_rows(norm_result_cb, weight_cb, i, col_tile + i, i);
                         }
                     }
                     tile_regs_commit();
@@ -443,7 +439,7 @@ void kernel_main() {
 
                 // + bias
                 if constexpr (has_bias != 0) {
-                    cb_wait_front(bias_cb, b_off + col_tile + block_size);
+                    cb_wait_front(bias_cb, col_tile + block_size);
                     cb_wait_front(weight_result_cb, block_size);
                     reconfig_data_format(weight_result_cb, bias_cb);
                     pack_reconfig_data_format(output_cb);
@@ -456,9 +452,9 @@ void kernel_main() {
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size; i++) {
                         if constexpr (per_token_bias != 0) {
-                            add_tiles(weight_result_cb, bias_cb, i, b_off + col_tile + i, i);
+                            add_tiles(weight_result_cb, bias_cb, i, col_tile + i, i);
                         } else {
-                            add_tiles_bcast_rows(weight_result_cb, bias_cb, i, b_off + col_tile + i, i);
+                            add_tiles_bcast_rows(weight_result_cb, bias_cb, i, col_tile + i, i);
                         }
                     }
                     tile_regs_commit();
@@ -471,13 +467,14 @@ void kernel_main() {
                     cb_push_back(output_cb, block_size);
                 }
             }
-            // Per-token weight/bias: the reader pushes row r's slice; pop it so row r+1's slice
-            // is at the front next iteration (block-major runs only for divisible num_tile_cols,
-            // so the whole row's num_tile_cols was consumed above). Resident/per-batch: no pop.
-            if constexpr (per_token_weight != 0) {
+            // Per-row affine (per-token OR per-batch adaLN): the reader pushes row r's slice; pop
+            // it so row r+1's slice is at the front next iteration (block-major runs only for
+            // divisible num_tile_cols, so the whole row's num_tile_cols was consumed above).
+            // Broadcast weight/bias stays resident (never popped).
+            if constexpr (per_token_weight != 0 || per_batch_weight != 0) {
                 cb_pop_front(weight_cb, num_tile_cols);
             }
-            if constexpr (per_token_bias != 0) {
+            if constexpr (per_token_bias != 0 || per_batch_bias != 0) {
                 cb_pop_front(bias_cb, num_tile_cols);
             }
         } else {
@@ -548,14 +545,14 @@ void kernel_main() {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
                     // whole-row weight: cumulative wait; per-batch offsets into this batch's
                     // resident num_tile_cols slice (w_off==0 for broadcast/per-token).
-                    cb_wait_front(weight_cb, w_off + col + n);
+                    cb_wait_front(weight_cb, col + n);
                     cb_wait_front(norm_result_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < n; i++) {
                         if constexpr (per_token_weight != 0) {
-                            mul_tiles(norm_result_cb, weight_cb, i, w_off + col + i, i);
+                            mul_tiles(norm_result_cb, weight_cb, i, col + i, i);
                         } else {
-                            mul_tiles_bcast_rows(norm_result_cb, weight_cb, i, w_off + col + i, i);
+                            mul_tiles_bcast_rows(norm_result_cb, weight_cb, i, col + i, i);
                         }
                     }
                     tile_regs_commit();
@@ -568,10 +565,10 @@ void kernel_main() {
                     tile_regs_release();
                     cb_push_back(weight_result_cb, block_size);
                 }
-                // Per-token weight is pushed fresh per row by the reader (row r's slice at the
-                // front); pop this row's num_tile_cols so row r+1's slice is at the front next
-                // iteration. Broadcast / per-batch weight stays resident (never popped).
-                if constexpr (per_token_weight != 0) {
+                // Per-row affine (per-token OR per-batch adaLN): weight is pushed fresh per row by
+                // the reader (row r's slice at the front); pop this row's num_tile_cols so row
+                // r+1's slice is at the front next iteration. Broadcast weight stays resident.
+                if constexpr (per_token_weight != 0 || per_batch_weight != 0) {
                     cb_pop_front(weight_cb, num_tile_cols);
                 }
             }
@@ -588,14 +585,14 @@ void kernel_main() {
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
                     // whole-row bias: cumulative wait; per-batch offsets into this batch's slice.
-                    cb_wait_front(bias_cb, b_off + col + n);
+                    cb_wait_front(bias_cb, col + n);
                     cb_wait_front(weight_result_cb, block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < n; i++) {
                         if constexpr (per_token_bias != 0) {
-                            add_tiles(weight_result_cb, bias_cb, i, b_off + col + i, i);
+                            add_tiles(weight_result_cb, bias_cb, i, col + i, i);
                         } else {
-                            add_tiles_bcast_rows(weight_result_cb, bias_cb, i, b_off + col + i, i);
+                            add_tiles_bcast_rows(weight_result_cb, bias_cb, i, col + i, i);
                         }
                     }
                     tile_regs_commit();
@@ -608,8 +605,8 @@ void kernel_main() {
                     tile_regs_release();
                     cb_push_back(output_cb, block_size);
                 }
-                // Per-token bias: pop this row's slice (see the weight pop above).
-                if constexpr (per_token_bias != 0) {
+                // Per-row affine bias (per-token OR per-batch adaLN): pop this row's slice.
+                if constexpr (per_token_bias != 0 || per_batch_bias != 0) {
                     cb_pop_front(bias_cb, num_tile_cols);
                 }
             }

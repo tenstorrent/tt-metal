@@ -74,11 +74,8 @@ void kernel_main() {
     // last TensorAccessorArgs; recip DRAM addr is reader RT arg 7.
     constexpr uint32_t use_recip_lut = get_compile_time_arg_val(17);
     constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(18);
-    // Broadcast affine read counts (CT 19/20): num_tile_cols for a true-broadcast [1,1,H]
-    // weight/bias; batch*num_tile_cols for per-batch adaLN [batch,1,H], where all batches'
-    // broadcast rows are read once and kept resident (compute offsets by wbatch*num_tile_cols).
-    // The per-batch weight/bias is still face-row sparse (one real row per batch), so the same
-    // face-row read applies; only the loop bound (and thus the resident tile count) grows.
+    // Broadcast affine read count (CT 19/20): num_tile_cols — only TRUE broadcast [1,1,H]
+    // weight/bias uses the one-shot resident face-row read. per-batch adaLN streams per row.
     constexpr uint32_t weight_bcast_tiles = get_compile_time_arg_val(19);
     constexpr uint32_t bias_bcast_tiles = get_compile_time_arg_val(20);
     // Batched RoPE (CT 21): per-batch stride into cos/sin, in tiles (== one batch's whole cos/sin
@@ -87,9 +84,15 @@ void kernel_main() {
     // (global_row / rope_seqlen_tiles) * rope_batch_stride_tiles; at batch=1 both terms collapse
     // to the original single-batch indexing.
     constexpr uint32_t rope_batch_stride_tiles = get_compile_time_arg_val(21);
+    // Per-batch adaLN weight/bias (CT 22/23/24): [batch,1,H] — broadcast over seq but distinct per
+    // batch. Streamed like per-token (per-row push + compute pops per row), but the read is the
+    // face-row broadcast read at wbatch*num_tile_cols, wbatch = tile_row / rows_per_batch_tiles.
+    constexpr uint32_t per_batch_weight = get_compile_time_arg_val(22);
+    constexpr uint32_t per_batch_bias = get_compile_time_arg_val(23);
+    constexpr uint32_t rows_per_batch_tiles = get_compile_time_arg_val(24);
     // The WRITER always populates the reduce_scalar_* / epsilon / trans_mat CBs,
     // so the reader's first NoC op is the input read (starts streaming ASAP).
-    constexpr auto input_args = TensorAccessorArgs<22>();
+    constexpr auto input_args = TensorAccessorArgs<25>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
@@ -240,6 +243,48 @@ void kernel_main() {
             }
         }
 
+        // Per-batch adaLN weight / bias: this row's batch slice, pushed per row (compute pops per
+        // row, mul_bcast_rows). Broadcast over seq -> face-row read (one real row per batch), at
+        // wbatch*num_tile_cols where wbatch = tile_row / rows_per_batch_tiles. Streamed (not
+        // all-batches-resident), so weight_cb stays 1 row and a wide per-batch shard fits L1.
+        if constexpr (per_batch_weight != 0) {
+            const uint32_t w_base =
+                ((rows_per_batch_tiles != 0) ? (tile_row / rows_per_batch_tiles) : 0u) * num_tile_cols;
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t tiles_in_block =
+                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                cb_reserve_back(weight_cb, tiles_in_block);
+                uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    uint64_t weight_noc_addr = get_noc_addr(w_base + col_tile + i, weight_accessor);
+                    noc_async_read(weight_noc_addr, weight_wr_ptr, weight_face_row_bytes);
+                    noc_async_read(
+                        weight_noc_addr + weight_face_bytes, weight_wr_ptr + weight_face_bytes, weight_face_row_bytes);
+                    weight_wr_ptr += weight_tile_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(weight_cb, tiles_in_block);
+            }
+        }
+        if constexpr (per_batch_bias != 0) {
+            const uint32_t b_base =
+                ((rows_per_batch_tiles != 0) ? (tile_row / rows_per_batch_tiles) : 0u) * num_tile_cols;
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t tiles_in_block =
+                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                cb_reserve_back(bias_cb, tiles_in_block);
+                uint32_t bias_wr_ptr = get_write_ptr(bias_cb);
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    uint64_t bias_noc_addr = get_noc_addr(b_base + col_tile + i, bias_accessor);
+                    noc_async_read(bias_noc_addr, bias_wr_ptr, bias_face_row_bytes);
+                    noc_async_read(bias_noc_addr + bias_face_bytes, bias_wr_ptr + bias_face_bytes, bias_face_row_bytes);
+                    bias_wr_ptr += bias_tile_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(bias_cb, tiles_in_block);
+            }
+        }
+
         // Broadcast weight + bias: after chunk 0's rows are pushed (or at
         // end-of-worker if the worker has fewer rows than chunk_size_rows),
         // issue the reads once for the whole worker. Latency hides behind
@@ -248,7 +293,7 @@ void kernel_main() {
         const bool first_chunk_done = (rows_pushed >= chunk_size_rows);
         const bool last_row = (tile_row + 1 == tile_row_end);
         const bool should_issue_side_inputs = first_chunk_done || last_row;
-        if constexpr (per_token_weight == 0) {
+        if constexpr (per_token_weight == 0 && per_batch_weight == 0) {
             if (!weight_pushed && should_issue_side_inputs) {
                 for (uint32_t col_tile = 0; col_tile < weight_bcast_tiles; col_tile += block_size) {
                     const uint32_t tiles_in_block =
@@ -270,7 +315,7 @@ void kernel_main() {
                 weight_pushed = true;
             }
         }
-        if constexpr (per_token_bias == 0) {
+        if constexpr (per_token_bias == 0 && per_batch_bias == 0) {
             if (!bias_pushed && should_issue_side_inputs) {
                 for (uint32_t col_tile = 0; col_tile < bias_bcast_tiles; col_tile += block_size) {
                     const uint32_t tiles_in_block =
