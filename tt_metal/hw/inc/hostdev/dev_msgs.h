@@ -382,6 +382,7 @@ enum class CoreMagicNumber : uint32_t {
     ACTIVE_ETH = 0xc63050d1,
     IDLE_ETH = 0x837b6cae,
     DRAM = 0x4d92f8e1,
+    DISPATCH = 0x4021fa16,
 };
 struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_base;
