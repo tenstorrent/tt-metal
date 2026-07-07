@@ -492,7 +492,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
             experimental::ComputeHardwareConfig{
                 experimental::ComputeGen2Config{
                     .math_fidelity = MathFidelity::HiFi4,
-                    .fp32_dest_acc_en = true,
+                    .accumulator_width = experimental::AccumulatorWidth::Wide,
                     .unpack_to_dest_mode =
                         {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
                          {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
@@ -833,7 +833,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
             experimental::ComputeHardwareConfig{
                 experimental::ComputeGen2Config{
                     .math_fidelity = MathFidelity::HiFi4,
-                    .fp32_dest_acc_en = true,
+                    .accumulator_width = experimental::AccumulatorWidth::Wide,
                     .unpack_to_dest_mode =
                         {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
                          {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},

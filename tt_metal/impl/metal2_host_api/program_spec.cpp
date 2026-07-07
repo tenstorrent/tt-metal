@@ -915,8 +915,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         const auto& unpack_to_dest_mode =
             std::visit([](const auto& config) { return config.unpack_to_dest_mode; }, compute_config);
 
-        const bool fp32_dest_acc_en =
-            std::visit([](const auto& config) { return config.fp32_dest_acc_en; }, compute_config);
+        const bool fp32_dest_acc_en = std::visit(
+            [](const auto& config) { return config.accumulator_width == AccumulatorWidth::Wide; }, compute_config);
 
         // Index the kernel's DFB bindings: which DFBs it binds.
         std::unordered_set<DFBSpecName> bound_dfbs;
@@ -2586,8 +2586,8 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
 
     return ComputeConfig{
         .math_fidelity = gen1.math_fidelity,
-        .fp32_dest_acc_en = gen1.fp32_dest_acc_en,
-        .dst_full_sync_en = gen1.dst_full_sync_en,
+        .fp32_dest_acc_en = gen1.accumulator_width == AccumulatorWidth::Wide,
+        .dst_full_sync_en = gen1.accumulator_buffering == AccumulatorBuffering::MaxCapacity,
         .unpack_to_dest_mode = unpack_modes,
         .bfp8_pack_precise = gen1.bfp8_pack_precise,
         .math_approx_mode = gen1.math_approx_mode,
@@ -2636,8 +2636,8 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
         .math_fidelity = gen2.math_fidelity,
-        .fp32_dest_acc_en = gen2.fp32_dest_acc_en,
-        .dst_full_sync_en = gen2.dst_full_sync_en,
+        .fp32_dest_acc_en = gen2.accumulator_width == AccumulatorWidth::Wide,
+        .dst_full_sync_en = gen2.accumulator_buffering == AccumulatorBuffering::MaxCapacity,
         .unpack_to_dest_mode = unpack_modes,
         .math_approx_mode = gen2.math_approx_mode,
         .enable_2x_src_format = gen2.enable_2x_src_format,
