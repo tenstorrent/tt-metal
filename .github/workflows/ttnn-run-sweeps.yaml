@@ -739,13 +739,14 @@ jobs:
           echo "measure-e2e-perf=$MEASURE_E2E_PERF" >> $GITHUB_OUTPUT
           echo "measure-memory=$MEASURE_MEMORY" >> $GITHUB_OUTPUT
           echo "arch=${{ github.event.inputs.arch || 'wormhole_b0' }}" >> $GITHUB_OUTPUT
+          echo "runner-label=${{ github.event.inputs['runner-label'] || 'N150' }}" >> $GITHUB_OUTPUT
 
           # A single-module sweep loads only its target SKU (the runner-label, which
           # is now a SKU name); ALL SWEEPS runs enable every SKU in the matrix yaml.
           if [[ "$SWEEP_NAME" == "ALL SWEEPS"* ]]; then
             ENABLED_SKUS="ALL_SKUS_IN_TESTS"
           else
-            case "$RUNNER_LABEL" in
+            case "${{ github.event.inputs['runner-label'] || 'N150' }}" in
               N150)
                 ENABLED_SKUS="wh_n150_civ2"
                 ;;

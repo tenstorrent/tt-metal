@@ -114,12 +114,58 @@ jobs:
           path: model_tracer/traced_operations/ttnn_operations_master.json
           retention-days: 1
 
+  # Prepare-sweep-vectors is a fixed per-run hardware load shared by every sweep
+  # batch, so it is budgeted on its own (workflow key: sweep_prepare) rather than
+  # folded into the per-batch sweep budget. This job loads that budget, enforces
+  # it, and hands the resolved timeout to prepare-sweep-vectors below.
+  load-prepare-vectors-budget:
+    name: Load prepare-sweep-vectors budget
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_sweep_prepare_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify prepare-sweep-vectors timeout against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            sweep_prepare
+      - name: Build prepare-sweep-vectors matrix
+        id: build-matrix
+        run: |
+          # prepare-sweep-vectors is a single fixed hardware load, not fanned out
+          # by the sweep's target SKUs, so resolve every SKU declared in the prepare
+          # yaml (currently just wh_n150_civ2) rather than filtering by enabled-skus.
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "ALL_SKUS_IN_TESTS" \
+            ./.github/sku_config.yaml
+
   prepare-sweep-vectors:
     name: Prepare sweep vectors
-    needs: [generate-master-json-from-db]
+    needs: [generate-master-json-from-db, load-prepare-vectors-budget]
     if: >-
       always() &&
+      needs.load-prepare-vectors-budget.result == 'success' &&
       (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-prepare-vectors-budget.outputs.matrix) }}
     outputs:
       split: ${{ steps.decide-split.outputs.split }}
     container:
@@ -140,8 +186,8 @@ jobs:
       run:
         shell: bash
         working-directory: /work
-    timeout-minutes: 30
-    runs-on: tt-ubuntu-2204-N150-viommu-stable
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -187,21 +233,21 @@ jobs:
           inputs.sweep-name != 'ALL SWEEPS (Model Traced)' &&
           inputs.sweep-name != 'ALL SWEEPS (Lead Models)'
         run: |
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ inputs.sweep-name }} --group-by ${{ inputs.group-by }} --tag ci-main
+          ${{ matrix.test-group.cmd }} --module-name ${{ inputs.sweep-name }} --group-by ${{ inputs.group-by }} --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps - model traced)
         if: inputs.sweep-name == 'ALL SWEEPS (Model Traced)'
         run: |
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced all --suite-name model_traced --group-by ${{ inputs.group-by }} --tag ci-main
+          ${{ matrix.test-group.cmd }} --model-traced all --suite-name model_traced --group-by ${{ inputs.group-by }} --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps - lead models)
         if: inputs.sweep-name == 'ALL SWEEPS (Lead Models)'
         run: |
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --suite-name model_traced --group-by ${{ inputs.group-by }} --tag ci-main
+          ${{ matrix.test-group.cmd }} --model-traced lead --suite-name model_traced --group-by ${{ inputs.group-by }} --tag ci-main
       - name: Run ttnn sweeps generation (nightly/comprehensive)
         if: >-
           inputs.sweep-name == 'ALL SWEEPS (Nightly)' ||
           inputs.sweep-name == 'ALL SWEEPS (Comprehensive)'
         run: |
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --group-by ${{ inputs.group-by }} --tag ci-main
+          ${{ matrix.test-group.cmd }} --group-by ${{ inputs.group-by }} --tag ci-main
       - name: Upload sweep vectors
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -249,19 +295,24 @@ jobs:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
           SWEEP: ${{ inputs.sweep-name }}
         run: |
-          # ALL SWEEPS runs keep the full matrix. A single-module sweep-name keeps
-          # only the one category batch whose op-category prefix-matches it (on a
-          # dot boundary), so a single sweep spins up 1 job, not all ~30.
-          python3 -c '
-          import json, os
-          m = json.loads(os.environ["MATRIX"])
-          s = os.environ["SWEEP"]
-          out = m if s.startswith("ALL SWEEPS") else [
-              e for e in m
-              if s == e.get("category", "") or s.startswith(e.get("category", "") + ".")
-          ]
-          print("matrix=" + json.dumps(out))
-          ' >> "$GITHUB_OUTPUT"
+          # ALL SWEEPS runs keep the full matrix (passed through verbatim). A
+          # single-module sweep-name keeps only the one category batch whose
+          # op-category prefix-matches it (on a dot boundary), so a single sweep
+          # spins up 1 job, not all ~30.
+          if [[ "$SWEEP" == "ALL SWEEPS"* ]]; then
+            FILTERED="$MATRIX"
+          else
+            FILTERED=$(jq -c --arg s "$SWEEP" \
+              '[.[] | (.category // "") as $c | select($c == $s or ($s | startswith($c + ".")))]' \
+              <<< "$MATRIX")
+          fi
+          # Emit via the heredoc form (same as prepare_test_matrix.py) so a large
+          # matrix value is written intact.
+          {
+            echo "matrix<<EOF"
+            echo "$FILTERED"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
   ttnn-run-sweeps:
     needs: [prepare-sweep-vectors, load-test-matrix]
@@ -289,8 +340,8 @@ jobs:
         # test group's capability filter in vector_source; an op-category (e.g.
         # 'matmul', 'eltwise.unary') is just batch identity and sets no group.
         # lead-models lanes additionally flip run-type detection.
-        TEST_GROUP_NAME: ${{ (endsWith(matrix.test-group.category, '-sweeps') || startsWith(matrix.test-group.category, 'lead-models')) && matrix.test-group.category || '' }}
-        LEAD_MODELS_RUN: ${{ startsWith(matrix.test-group.category, 'lead-models') && '1' || '0' }}
+        TEST_GROUP_NAME: ${{ (endsWith(matrix.test-group.category || '', '-sweeps') || startsWith(matrix.test-group.category || '', 'lead-models')) && (matrix.test-group.category || '') || '' }}
+        LEAD_MODELS_RUN: ${{ startsWith(matrix.test-group.category || '', 'lead-models') && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G

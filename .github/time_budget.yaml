@@ -125,8 +125,7 @@ ttnn:
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
   # Sweep budgets: per-SKU caps for the ttnn-run-sweeps and sweep-validation
-  # workflows. Budget planning uses a 30-min figure per job (the verify step
-  # passes --timeout-minutes 30); actual job timeout is 60 min.
+  # workflows.
   sweep:
     wh_n150_civ2: 847
     wh_n300_civ2: 847
@@ -140,6 +139,11 @@ ttnn:
     wh_n300_civ2: 120
     bh_p150b_civ2: 120
     wh_galaxy: 120
+  # Prepare-vectors budget: the prepare-sweep-vectors job generates sweep vectors
+  # on hardware once per run, and every sweep batch depends on its artifact. This
+  # fixed per-run load is tracked separately from the per-batch sweep budget.
+  sweep_prepare:
+    wh_n150_civ2: 30
 
 train:
   merge_gate:
