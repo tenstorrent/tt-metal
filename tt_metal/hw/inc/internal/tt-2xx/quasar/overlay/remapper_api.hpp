@@ -53,7 +53,7 @@ private:
     tClientL_Config_Reg_u clientL_configs[REMAP_NUM_PAIRS]{};
     uint32_t current_pair_idx;
     // Highest pair index programmed to HW since last reset (0 if none yet)
-    // Updated by note_pair_configured()
+    // Updated by note_pair_configured() or set_pair_high_watermark()
     uint32_t pair_high_watermark_ = 0;
 
 public:
@@ -107,6 +107,16 @@ public:
         if (pair_idx > pair_high_watermark_) {
             pair_high_watermark_ = pair_idx;
         }
+    }
+
+    /**
+     * @brief Set the configured-pair high watermark after a bulk remapper init loop.
+     *
+     * @param pair_idx Largest pair index programmed (0-63); teardown clears [0, pair_idx].
+     */
+    void set_pair_high_watermark(uint32_t pair_idx) {
+        ASSERT(pair_idx < REMAP_NUM_PAIRS);
+        pair_high_watermark_ = pair_idx;
     }
 
     /**

@@ -493,6 +493,7 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
     uint32_t first_pair_clientL_hw = 0;
     uint32_t last_pair_hw = 0;
     bool first_slot_written = false;
+    uint32_t max_pair_idx = 0;
 
     for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
         const uint32_t t_pass_start = rdcycle();
@@ -539,8 +540,9 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
             pass_pairs_reg += pair_reg_hw;
             last_pair_hw = pair_reg_hw;
             pairs_slots_written++;
-            // enable_remapper = true;
-            g_remapper_configurator.note_pair_configured(pair_idx);
+            if (pair_idx > max_pair_idx) {
+                max_pair_idx = pair_idx;
+            }
         }
 
         dm1_blob_ptr += entry_bytes;
@@ -557,6 +559,10 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
     //     end_remapper_config_time = rdcycle();
     //     enable_remapper_hw = end_remapper_config_time - t_before_enable;
     // }
+
+    if (pairs_slots_written > 0u) {
+        g_remapper_configurator.set_pair_high_watermark(max_pair_idx);
+    }
 
     WAYPOINT("RSD");
     const uint32_t end_time = rdcycle();
