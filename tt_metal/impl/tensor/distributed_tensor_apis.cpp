@@ -36,14 +36,14 @@ MeshTensor mesh_tensor_from_buffer_with_topology(
 
 MeshTensor allocate_mesh_tensor_on_device_with_topology(
     distributed::MeshDevice& mesh_device, TensorSpec spec, TensorTopology topology) {
-    // Catch-all guard: FP8_E4M3 is only supported on Blackhole. Op-level validators may also
+    // Catch-all guard: FP8_E4M3 is only supported on Blackhole and Quasar. Op-level validators may also
     // check this, but we enforce it here at the device-binding boundary so any path that
     // produces an FP8 tensor on unsupported hardware fails loudly rather than silently
     // generating programs that misbehave later.
     if (spec.data_type() == DataType::FP8_E4M3) {
         TT_FATAL(
-            mesh_device.arch() == tt::ARCH::BLACKHOLE,
-            "FP8_E4M3 is only supported on Blackhole hardware (got arch {})",
+            mesh_device.arch() == tt::ARCH::BLACKHOLE || mesh_device.arch() == tt::ARCH::QUASAR,
+            "FP8_E4M3 is only supported on Blackhole/Quasar hardware (got arch {})",
             mesh_device.arch());
     }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
