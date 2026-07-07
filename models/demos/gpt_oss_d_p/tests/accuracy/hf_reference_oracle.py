@@ -154,16 +154,24 @@ def main():
         layer0_attn_input: list[torch.Tensor] = []
         if args.check_kv_rope:
 
-            def _capture_l0_attn_input(module, args, kwargs=None):
+            def _capture_l0_attn_input(module, args, kwargs):
+                print(f"[pre-hook] args count: {len(args)}")
+                for i, a in enumerate(args):
+                    desc = f"shape={a.shape}, dtype={a.dtype}" if isinstance(a, torch.Tensor) else repr(a)
+                    print(f"[pre-hook] args[{i}]: {desc}")
+                print(f"[pre-hook] kwargs keys: {list(kwargs.keys())}")
+                for k, v in kwargs.items():
+                    desc = f"shape={v.shape}, dtype={v.dtype}" if isinstance(v, torch.Tensor) else repr(v)
+                    print(f"[pre-hook] kwargs[{k!r}]: {desc}")
                 if args:
                     hs = args[0]
                 else:
-                    hs = (kwargs or {}).get("hidden_states")
+                    hs = kwargs.get("hidden_states")
                 if hs is None:
                     raise RuntimeError("Could not capture hidden_states from self_attn pre-hook")
                 layer0_attn_input.append(hs.detach().float())
 
-            _h0 = model.model.layers[0].self_attn.register_forward_pre_hook(_capture_l0_attn_input)
+            _h0 = model.model.layers[0].self_attn.register_forward_pre_hook(_capture_l0_attn_input, with_kwargs=True)
 
         with torch.no_grad():
             out = model(input_ids=input_ids, use_cache=True)
