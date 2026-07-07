@@ -137,6 +137,7 @@ class GLM52Adapter(SparseMLAPrefillAdapter):
     ttnn_cache_env = "TT_GLM52_PREFILL_TTNN_CACHE"
     ref_cache_env = "TT_GLM52_PREFILL_HOST_REF_CACHE"
     prefill_trace_layout = "chunked_group_a_v1"
+    test_prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_52_55k_vllm"
 
     @property
     def config_builder(self) -> Callable:

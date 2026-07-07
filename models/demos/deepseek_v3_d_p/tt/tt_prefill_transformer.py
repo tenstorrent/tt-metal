@@ -390,8 +390,6 @@ class TtPrefillTransformer(LightweightModule):
             else:
                 h, _ = ret
             signpost(f"forward_layer_{i}_end")
-        if reuse and indexer_indices is not None:
-            ttnn.deallocate(indexer_indices)
             if self.kv_only_last_layer and i == len(self.layers) - 1:
                 # Last layer was kv-only — KV cache filled, migration callback
                 # fired, no hidden state flowing forward. Skip norm + lm_head +
@@ -402,6 +400,9 @@ class TtPrefillTransformer(LightweightModule):
                 intermediates[f"layer_{i}"] = self._to_host(h)
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
+        # GLM-5.2 reuse: free the last full layer's held top-k indices after the final layer.
+        if reuse and indexer_indices is not None:
+            ttnn.deallocate(indexer_indices)
 
         # Non-last pipeline ranks stop here: the layer slice's output activation is
         # handed to the next rank, which continues from this hidden state. The norm /
