@@ -55,6 +55,8 @@ inline uint64_t debug_normalize_l1_addr(uint64_t addr) {
     }
     return addr;
 }
+#else
+inline uint64_t debug_normalize_l1_addr(uint64_t addr) { return addr; }
 #endif
 
 // Helper function to get the core type from noc coords.
@@ -182,9 +184,7 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write)
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     addr = debug_normalize_l1_addr(addr);
-#endif
     if (addr < MEM_L1_BASE) {
         return DebugSanitizeNocAddrUnderflow;
     }
@@ -278,9 +278,7 @@ inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) 
 // BRISC/NCRISC where cb_addr_shift == 0 (addresses are in bytes).
 // Relies on unused CBs having fifo_size == 0 (cleared at kernel startup).
 inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     l1_addr = static_cast<uint32_t>(debug_normalize_l1_addr(l1_addr));
-#endif
     for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         LocalCBInterface& cb = get_local_cb_interface(i);
         if (cb.fifo_size == 0) {
@@ -631,9 +629,7 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
 #else
     constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE;
 #endif
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     addr = debug_normalize_l1_addr(addr);
-#endif
     if (addr + len <= addr || addr + len > l1_overflow_addr) {
         debug_sanitize_post_addr_and_hang(
             0,  // unused (not a noc transaction)
