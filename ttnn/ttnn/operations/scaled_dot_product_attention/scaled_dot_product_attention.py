@@ -86,7 +86,7 @@ SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
-    "mask_mode": ["none", "custom"],
+    "mask_mode": ["none", "custom", "causal"],
     "scale_mode": ["auto", "explicit"],
     "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha", "gqa", "mqa"],
@@ -103,6 +103,10 @@ SUPPORTED = {
 
 EXCLUSIONS: list[dict] = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    # Causal masking requires S_q == S_kv (decoder self-attention only).
+    # A rectangular S_q × S_kv upper-triangular mask is mathematically
+    # well-defined but corresponds to no real workload.
+    {"mask_mode": "causal", "attention_kind": "cross"},
 ]
 
 
@@ -286,6 +290,7 @@ def scaled_dot_product_attention(
         value,
         output_tensor,
         attn_mask=attn_mask,
+        is_causal=is_causal,
         scale=scale,
         compute_kernel_config=compute_kernel_config,
     )

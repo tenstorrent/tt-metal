@@ -30,6 +30,7 @@ def create_program_descriptor(
     output_tensor: ttnn.Tensor,
     *,
     attn_mask: ttnn.Tensor | None = None,
+    is_causal: bool = False,
     scale: float = 1.0,
     compute_kernel_config: ttnn.ComputeConfigDescriptor | None = None,
 ) -> ttnn.ProgramDescriptor:
@@ -41,6 +42,7 @@ def create_program_descriptor(
         value: (B, H, S_kv, D) bf16 TILE
         output_tensor: pre-allocated (B, H, S_q, D) bf16 TILE
         attn_mask: optional (B, 1, S_q, S_kv) or (B, H, S_q, S_kv) bf16 TILE
+        is_causal: if True, generate causal mask on-device
         scale: scale factor for QK^T
         compute_kernel_config: compute kernel precision config
     """
@@ -81,6 +83,7 @@ def create_program_descriptor(
     intermediate_tile_size = ttnn.tile_size(intermediate_format)
 
     has_mask = attn_mask is not None
+    is_causal_mask = is_causal  # causal mask is generated on-device, no caller tensor
     # Mask shape: (B, H_m, S_q, S_kv) where H_m is 1 or H
     if has_mask:
         mask_H = int(attn_mask.shape[1])
@@ -153,7 +156,9 @@ def create_program_descriptor(
     q_pages = 2 * (actual_B_q * D_t)
     k_pages = 2 * (actual_B_kv * D_t)
     v_pages = 2 * (actual_B_kv * D_t)
-    mask_pages = 2 * (actual_B_q * actual_B_kv) if has_mask else 1
+    # Mask CB: for custom mask, reader streams from DRAM (double-buffered).
+    # For causal mask, reader generates 1 tile per diagonal KV block (B_q*B_kv=1).
+    mask_pages = 2 * (actual_B_q * actual_B_kv) if (has_mask or is_causal_mask) else 1
     scale_pages = 1
     output_pages = 2 * (actual_B_q * D_t)
     # cb_scores holds QK^T scores (B_q×B_kv tiles, Phase 1) — used for scale,
@@ -199,7 +204,13 @@ def create_program_descriptor(
     cbs.append(make_cb(cb_q_id, q_pages, dtype, tile_size))
     cbs.append(make_cb(cb_k_id, k_pages, dtype, tile_size))
     cbs.append(make_cb(cb_v_id, v_pages, dtype, tile_size))
-    cbs.append(make_cb(cb_attn_mask_id, mask_pages, dtype, tile_size))
+    # Causal mask CB uses intermediate format (generated on-device in the reader
+    # kernel via direct L1 writes). For custom mask, it follows the input dtype
+    # (streamed from DRAM). Using intermediate format for causal ensures the
+    # mask values (-1e38f) match the score accumulation precision.
+    mask_cb_format = intermediate_format if is_causal_mask else dtype
+    mask_cb_tile_size = ttnn.tile_size(mask_cb_format)
+    cbs.append(make_cb(cb_attn_mask_id, mask_pages, mask_cb_format, mask_cb_tile_size))
     cbs.append(make_cb(cb_scale_id, scale_pages, dtype, tile_size))
     cbs.append(make_cb(cb_output_id, output_pages, dtype, tile_size))
     # Intermediate accumulator CBs use Float32 when fp32_dest_acc_en=True
@@ -231,6 +242,7 @@ def create_program_descriptor(
         1 if has_mask else 0,
         1 if mask_per_head else 0,
         H_kv,  # [11] K/V num heads (GQA/MQA broadcasting)
+        1 if is_causal_mask else 0,  # [12] is_causal
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
@@ -304,6 +316,7 @@ def create_program_descriptor(
         num_kv_blocks,
         1 if has_mask else 0,
         scale_bits,
+        1 if is_causal_mask else 0,  # [9] is_causal
     ]
 
     compute_rt_args = ttnn.RuntimeArgs()
