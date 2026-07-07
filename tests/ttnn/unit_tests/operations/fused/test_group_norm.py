@@ -1523,12 +1523,6 @@ def test_group_norm_optional_weight_bias(
     )
 
 
-# ---------------------------------------------------------------------------------------------
-# Welford GroupNorm FP32 sharded path. FP32 input + FP32/bf16 gamma/beta, TILE and
-# ROW_MAJOR output, with bf16 input as control. FP32 is welford-gated (legacy truncates to TF32 on
-# SrcA and is validation-rejected) and requires fp32_dest_acc_en=True. Shapes cover height-sharded
-# (grid_y == 1) and block-sharded (grid_y > 1) layouts.
-# ---------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_SHARDED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
@@ -1607,14 +1601,6 @@ def test_group_norm_sharded_welford_all_config(
     )
 
 
-# ---------------------------------------------------------------------------------------------
-# Legacy (non-welford) GroupNorm FP32 sharded path. FP32 input + FP32/bf16 gamma/beta, with bf16
-# input as control. Legacy fp32 mirrors LayerNorm's legacy fp32: it requires fp32_dest_acc_en=True
-# (fp32 DEST accumulation + fp32 intermediate storage), and is validation-gated to sharded inputs
-# (interleaved legacy fp32 is not yet supported). Precision is fp32-quality on normal inputs but
-# TF32-limited on biased inputs (the FPU reads x via SrcA at TF32) -- so this test uses unbiased
-# (offset 0) data, matching the LayerNorm legacy fp32 contract.
-# ---------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_SHARDED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
@@ -1692,11 +1678,6 @@ def test_group_norm_sharded_legacy_all_config(device, in_dtype, gb_dtype, N, C, 
     )
 
 
-# Legacy (non-welford) FP32 GroupNorm on DRAM-interleaved input. Interleaved analog of
-# test_group_norm_sharded_legacy_all_config (same dtypes, gamma+beta applied), just DRAM
-# interleaved instead of sharded. Requires fp32_dest_acc_en=True; unbiased data (FPU reads x via
-# SrcA at TF32). Shapes are (N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x) to exercise the
-# mcast/no_mcast factory split, num_out_blocks slicing, single-core, and sub-tile group widths.
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_INTERLEAVED_SHAPES)
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])

@@ -328,19 +328,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
     uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
     // Scalar CBs (scaler c_2, scaler-c c_4, eps c_3, ones c_26) are always bf16: their values are
-    // written as bf16 bit patterns (generate_reduce_scaler / generate_bcast_col_scalar /
-    // generate_tile_with_packed_bfloat16_values). On the legacy fp32 path cb_data_format is Float32,
-    // so binding these CBs to cb_data_format would make the kernel read a bf16 bit pattern as fp32 ->
-    // garbage scaler/ones -> wrong mean/variance scale. Pin them to bf16 (precision is irrelevant for
-    // these constants). bf16/welford paths are unaffected (cb_data_format is already bf16 there).
-    const tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t eps_single_tile_size = tt::tile_size(scalar_cb_data_format);
+    // written as bf16 bit patterns, so binding them to cb_data_format (Float32 on the legacy fp32
+    // path) would reinterpret the bits as fp32 -> garbage. Precision is irrelevant for these constants.
+    const tt::DataFormat eps_cb_data_format = tt::DataFormat::Float16_b;
+    uint32_t eps_single_tile_size = tt::tile_size(eps_cb_data_format);
     uint32_t scalar_single_tile_size = eps_single_tile_size;
-    // in2 (c_2): a bf16 reduce scaler on the legacy path, but the welford kernel repurposes c_2 as
-    // cb_xmm — an (x-mean)/scale intermediate that must follow cb_data_format (fp32 when stats are
-    // fp32), and needs 3 tile slots. Sizing/formatting it bf16 on the fp32 welford path would make
-    // the kernel write fp32 into a bf16 CB -> garbage.
-    const tt::DataFormat in2_cb_data_format = use_welford ? cb_data_format : scalar_cb_data_format;
+    // c_2 is a bf16 reduce scaler on the legacy path, but the welford kernel repurposes it as cb_xmm
+    // (an fp32 intermediate following cb_data_format, needing 3 tile slots).
+    const tt::DataFormat in2_cb_data_format = use_welford ? cb_data_format : eps_cb_data_format;
     const uint32_t in2_single_tile_size = use_welford ? single_tile_size : scalar_single_tile_size;
     uint32_t in2_CB_size = in2_single_tile_size * (use_welford ? 3 : 1);
     // in3 - eps.
@@ -967,7 +962,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(in3_cb_index),
-            .data_format = scalar_cb_data_format,
+            .data_format = eps_cb_data_format,
             .page_size = eps_single_tile_size,
         }}},
     });
@@ -979,7 +974,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(in4_cb_index),
-                .data_format = scalar_cb_data_format,
+                .data_format = eps_cb_data_format,
                 .page_size = scalar_single_tile_size,
             }}},
         });
@@ -1130,7 +1125,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_ones_index),
-            .data_format = scalar_cb_data_format,
+            .data_format = eps_cb_data_format,
             .page_size = scalar_single_tile_size,
         }}},
     });

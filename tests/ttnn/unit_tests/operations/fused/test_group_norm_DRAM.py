@@ -525,13 +525,6 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     )
 
 
-# ---------------------------------------------------------------------------------------------
-# Welford GroupNorm FP32 (issue #44650), interleaved/DRAM path (mcast/no_mcast factory). FP32 input
-# + FP32/bf16 gamma/beta, TILE output, bf16 input as control. FP32 is welford-gated and requires
-# fp32_dest_acc_en=True. (Interleaved ROW_MAJOR output is unsupported for any dtype, not covered.)
-# Shapes are (N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x) to exercise the mcast/no_mcast
-# factory split, num_out_blocks slicing, single-core, and sub-tile group widths under FP32.
-# ---------------------------------------------------------------------------------------------
 GN_INTERLEAVED_SHAPES = [
     (1, 320, 32, 32, 16, 1, 1, 8),  # base config (original single-shape test)
     (1, 480, 1, 64, 8, 1, 1, 1),  # single core, last group ends less than max tile span
