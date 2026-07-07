@@ -150,16 +150,6 @@ inline void _set_dst_write_addr_(const std::uint32_t tile_index)
     ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
 }
 
-inline void _set_dst_write_addr_by_rows_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_index)
-{
-    const std::uint32_t tile_shape_idx =
-        (num_rows_per_tile == 64)
-            ? 6
-            : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
-    const std::uint32_t dst_index = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
-    ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
-}
-
 /**
  * @brief Computes the tile-shape index (a log2-style shift exponent derived from
  *        the number of rows per tile) and stores it in GPR TEMP0 for later reuse
@@ -195,7 +185,7 @@ inline void _set_tile_shape_idx_gpr_(const std::uint32_t num_rows_per_tile)
  *        16-bit dest reg data format -> tile_index = 0 - 7
  *        32-bit dest reg data format -> tile_index = 0 - 3
  */
-inline void _set_dst_write_addr_by_rows_gpr_(const std::uint32_t tile_index)
+inline void _set_dst_write_addr_by_rows_(const std::uint32_t tile_index)
 {
     const std::uint32_t tile_shape_idx = ckernel::regfile[p_gpr_math::TEMP0];
     const std::uint32_t dst_index      = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
