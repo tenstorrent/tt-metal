@@ -55,6 +55,38 @@ _GN_MODE = os.environ.get("HY_GN_MODE", "dist").lower()
 _GN_STATS = os.environ.get("HY_GN_STATS", "split").lower()
 
 
+def _spatial_sum(x: ttnn.Tensor, *, ncores: int = 110) -> ttnn.Tensor:
+    """Sum over dim2 of a [1, D, n, C] TILE tensor -> [1, D, 1, C].
+
+    A plain ``ttnn.sum(x, dim=2)`` parallelizes only over the D*ceil(C/32) output
+    tiles, so a large-``n`` reduce with a small D*C (e.g. the C=128 full-spatial
+    GroupNorm stat, 4 output tiles) pins to ~4 cores that each stream the whole
+    ``n`` from DRAM — the dominant VAE-decode device cost. Split ``n`` into K
+    chunks so the heavy reduce emits D*K*ceil(C/32) output tiles (spread across
+    many cores), then fold the K partials with a second tiny reduce.
+
+    K is the largest divisor of n/32 with D*K*ceil(C/32) <= ncores, so the split
+    is a tile-aligned (free) reshape and the heavy reduce fits in one core wave;
+    K==1 falls back to the plain single reduce (small tensors, C already wide)."""
+    _, D, n, C = x.shape
+    ct = max(1, (C + 31) // 32)
+    target_k = max(1, ncores // (D * ct))
+    K = 1
+    if n % 32 == 0 and target_k > 1:
+        m = n // 32  # tile-rows available to split
+        for k in range(1, min(target_k, m) + 1):
+            if m % k == 0:
+                K = k
+    if K <= 1:
+        return ttnn.sum(x, dim=2, keepdim=True)
+    xr = ttnn.reshape(x, [1, D * K, n // K, C])
+    partial = ttnn.sum(xr, dim=2, keepdim=True)  # [1, D*K, 1, C], many output tiles
+    partial = ttnn.reshape(partial, [1, D, K, C])
+    out = ttnn.sum(partial, dim=2, keepdim=True)  # [1, D, 1, C], tiny fold
+    ttnn.deallocate(partial)
+    return out
+
+
 def _all_reduce_sum(ccl, t: ttnn.Tensor, *, mesh_axis: int) -> ttnn.Tensor:
     """Sum a small per-group stat tensor (or several stacked on dim1) across one mesh
     axis. all_gather concatenates each shard's value on dim0, then reduce — equal shard
@@ -105,14 +137,14 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
     if _GN_STATS == "concat":
         x_xsq = ttnn.concat([x, xsq], dim=1)  # [1,2,n_local,C]
         ttnn.deallocate(xsq)
-        csum_both = ttnn.sum(x_xsq, dim=2, keepdim=True)  # [1,2,1,C]
+        csum_both = _spatial_sum(x_xsq)  # [1,2,1,C]
         ttnn.deallocate(x_xsq)
         csum = ttnn.slice(csum_both, [0, 0, 0, 0], [1, 1, 1, C])
         csumsq = ttnn.slice(csum_both, [0, 1, 0, 0], [1, 2, 1, C])
         ttnn.deallocate(csum_both)
     else:
-        csum = ttnn.sum(x, dim=2, keepdim=True)  # [1,1,1,C]
-        csumsq = ttnn.sum(xsq, dim=2, keepdim=True)  # [1,1,1,C]
+        csum = _spatial_sum(x)  # [1,1,1,C]
+        csumsq = _spatial_sum(xsq)  # [1,1,1,C]
         ttnn.deallocate(xsq)
 
     def _group_reduce(csum_1c):  # [1,1,1,C] -> per-group [1,1,G,1]
