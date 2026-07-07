@@ -11,7 +11,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "api/debug/dprint.h"
-#include "tools/profiler/kernel_profiler.hpp"
 
 #define ENABLE_DISPATCH_DEBUG 0
 
@@ -59,19 +58,9 @@ void kernel_main() {
         }
 
         for (uint32_t block = 0; block < num_blocks; block++) {
-<<<<<<< Updated upstream
             cb_in.wait_front(block_ct_dim);
             pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in_id, 1, cb_untilize_id, block);
             cb_in.pop_front(block_ct_dim);
-=======
-            cb_wait_front(cb_in_id, block_ct_dim);
-            {
-                DeviceZoneScopedN("untilize_dispatch");
-                pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in_id, 1, cb_untilize_id, block);
-            }
-
-            cb_pop_front(cb_in_id, block_ct_dim);
->>>>>>> Stashed changes
         }
 
         cb_untilize.push_back(read_batch_size);
