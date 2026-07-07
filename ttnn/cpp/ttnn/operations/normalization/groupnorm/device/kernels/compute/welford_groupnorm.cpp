@@ -385,7 +385,8 @@ void kernel_main() {
         cb_ex_global.wait_front(2 * num_groups);
         cb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
-        // fp32: reset SrcA to cb_ex_global (bf16 var) else the fp32-configured SrcA misreads it; no-op for bf16.
+        // fp32: cb_ex_global is fp32 (var), cb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
+        // Reset both srcs so they match the operands read below. no-op for bf16.
         add_tiles_init(cb_ex_global_id, cb_eps_id);
         reconfig_data_format_srca(cb_ex_global_id);
         reconfig_data_format_srcb(cb_eps_id);
@@ -446,8 +447,9 @@ void kernel_main() {
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
-                        // fp32: reset SrcA to cb_in0 and SrcB to cb_ex_global (unconditional 1-arg; a 2-arg reset off
-                        // the bf16 stats would no-op) so fp32 input and bf16 mean aren't misread.
+                        // fp32: SrcA needs cb_in0 (fp32 input), SrcB needs cb_ex_global (fp32 mean); the prior group's
+                        // mul_tiles(cb_xmm) left SrcA on cb_xmm. Use the unconditional 1-arg form: the old 2-arg
+                        // srcb(cb_eps -> cb_ex_global) never reset SrcA at all. no-op for bf16.
                         sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
                         reconfig_data_format_srca(cb_in0_id);
                         reconfig_data_format_srcb(cb_ex_global_id);
@@ -479,7 +481,8 @@ void kernel_main() {
                         // // c. a * b
                         cb_xmm.wait_front(2);
                         mul_tiles_init(cb_xmm_id, cb_xmm_id);
-                        // fp32 mask: reset SrcA to bf16 cb_xmm else the fp32-mask-configured SrcA misreads it.
+                        // fp32: reset SrcA to cb_xmm (fp32); step b above left SrcA on the bf16 input mask. no-op for
+                        // bf16.
                         reconfig_data_format_srca(cb_xmm_id);
                         reconfig_data_format_srcb(cb_ex2pe_id, cb_xmm_id);
                         tile_regs_acquire();
@@ -558,7 +561,8 @@ void kernel_main() {
                     }
 
                     if constexpr (do_gamma) {
-                        // fp32 mask: reset SrcA to bf16 cb_x else the fp32-configured SrcA misreads it.
+                        // fp32: reset SrcA to cb_x (fp32); the prior mask/accumulate step left SrcA on a bf16 format.
+                        // no-op for bf16.
                         reconfig_data_format_srca(cb_x_id);
                         reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
                         mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
@@ -576,7 +580,7 @@ void kernel_main() {
                     }
 
                     if constexpr (do_beta) {
-                        // fp32 mask: reset SrcA to bf16 cb_x, same as the gamma step above.
+                        // fp32: reset SrcA to cb_x (fp32), same as the gamma step above.
                         reconfig_data_format_srca(cb_x_id);
                         reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
                         add_bcast_rows_init_short(cb_x_id, cb_beta_id);
