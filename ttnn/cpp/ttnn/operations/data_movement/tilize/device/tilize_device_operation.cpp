@@ -27,6 +27,11 @@ bool can_use_sharded_optimized_factories(
         return false;
     }
 
+    // Reader kernel aliases sharded input buffer for CB
+    if (input_tensor.memory_config().buffer_type() == BufferType::DRAM) {
+        return false;
+    }
+
     auto memory_layout = input_tensor.memory_config().memory_layout();
     if (memory_layout != TensorMemoryLayout::HEIGHT_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
         memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
