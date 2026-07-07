@@ -25,15 +25,20 @@ to the other every step.
 
   rank 0 (TTML)                    rank 1 (TTT)
   ───────────────                   ──────────────
-  ttml.Llama policy                 4x tt-transformers Transformer
-  GRPOTrainer + optimizer           4x TttGenerationWorker
-  mesh: [1, 4] (DDP)                mesh: [1, 4] -> 4x [1, 1] submesh
+  ttml.Llama policy                 Nx tt-transformers Transformer
+  GRPOTrainer + optimizer           Nx TttGenerationWorker
+  mesh: [1, N] (DDP)                mesh: [1, N] -> Nx [1, 1] submesh
        │                                ▲
        │  MPIRolloutClient    OP_GENERATE / OP_TRANSFER / OP_SHUTDOWN
        └──────────────► MPI ───────────► MPIRolloutServer
        │                                │
        └────── WeightBridge socket ─────┘    (replicated weights every step)
 ```
+
+`N` is the per-rank mesh width, selected by `runner.sh --topology`:
+`2` for `2x2` (the default, `configurations/local4`, 4 chips total) or
+`4` for `4x4` (`configurations/local8`, 8 chips total). See
+[How to run](#how-to-run).
 
 `GRPOTrainer` is unaware of the rank split. It calls
 `completer.generate(...)`; `LlamaGRPOCompleter` hides the cross-rank
@@ -224,18 +229,32 @@ else:
 ## How to run
 
 ```bash
+# Default 2->2 split (4 chips: one N300 board per rank).
 HF_TOKEN=hf_... ./runner.sh
+
+# Explicit topology selection.
+HF_TOKEN=hf_... ./runner.sh --topology 2x2   # same as default
+HF_TOKEN=hf_... ./runner.sh --topology 4x4   # 8 chips, two boards per rank
 ```
 
 `runner.sh` invokes `tt-run` with `world_size == 2` and dispatches the
-two ranks into `boolq_training_example.py`. Mesh / DDP configuration
-for the TTML rank is read from
-[`grpo_boolq_llama_4dev_ddp.yaml`](../../../../configs/training_configs/grpo_boolq_llama_4dev_ddp.yaml)
-(`mesh_shape: [1, 4]`, `enable_ddp: true`). The TTT rank opens a
-`[1, 4]` parent mesh and splits it into four `[1, 1]` submeshes (one
-`TttGenerationWorker` each), hardcoded in the entrypoint. The default
-`configurations/local8` bindings pin rank 0 to boards `0,1` and rank 1
-to boards `2,3` — 8 chips total (a T3000-class host).
+two ranks into `boolq_training_example.py`. `--topology` picks the split
+width and exports `GRPO_BOOLQ_TOPOLOGY` (forwarded to both ranks via
+`mpirun -x`) so the entrypoint opens the matching meshes:
+
+| `--topology` | Bindings | TTML mesh (YAML) | TTT parent → submeshes | Chips |
+|--------------|----------|------------------|------------------------|-------|
+| `2x2` (default) | `configurations/local4` | `[1, 2]` DDP ([`grpo_boolq_llama_2dev_ddp_gas_4.yaml`](../../../../configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_4.yaml)) | `[1, 2]` → 2× `[1, 1]` | 4 |
+| `4x4` | `configurations/local8` | `[1, 4]` DDP ([`grpo_boolq_llama_4dev_ddp.yaml`](../../../../configs/training_configs/grpo_boolq_llama_4dev_ddp.yaml)) | `[1, 4]` → 4× `[1, 1]` | 8 |
+
+`local4` pins rank 0 to board `0` and rank 1 to board `1`; `local8`
+pins rank 0 to boards `0,1` and rank 1 to boards `2,3` (a T3000-class
+host). Override the bindings/hostfile for other machines with
+`--rank-bindings` / `--hostfile`.
+
+> **Known issue:** `--topology 4x4` currently hangs somewhere in the
+> cross-rank handshake/transport. Use the default `2x2` split until that
+> is resolved.
 
 ### Outputs
 

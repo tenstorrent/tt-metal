@@ -10,15 +10,19 @@ Launched under ``tt-run`` with world_size == 2 (see :file:`runner.sh`).
 Topology
 ========
 
-* Rank 0 (TTML) opens the full ``[1, 4]`` DDP mesh declared by
-  ``configurations/local8/mgd.textproto`` (two N300 boards, four chips).
-  It owns the policy ttml ``Llama`` model and drives training via
-  :class:`ttml.trainers.GRPOTrainer`.
-* Rank 1 (TTT) opens a ``[1, 4]`` parent mesh (its own two boards) and
-  splits it into four ``[1, 1]`` submeshes, one
+The split width is chosen by the ``GRPO_BOOLQ_TOPOLOGY`` env var (set by
+``runner.sh --topology``): ``2x2`` (default) or ``4x4``. Below, ``N`` is 2
+or 4 accordingly.
+
+* Rank 0 (TTML) opens the full ``[1, N]`` DDP mesh declared by the
+  matching ``configurations/<dir>/mgd.textproto`` (``local4`` for 2x2,
+  ``local8`` for 4x4). It owns the policy ttml ``Llama`` model and drives
+  training via :class:`ttml.trainers.GRPOTrainer`.
+* Rank 1 (TTT) opens a ``[1, N]`` parent mesh (its own boards) and splits
+  it into ``N`` ``[1, 1]`` submeshes, one
   :class:`utils.ttt_generation_worker.TttGenerationWorker` per submesh.
-  The weight bridge replicates each freshly-synced policy onto all four
-  submeshes; generate RPCs are served by submesh 0. Mirrors the 4->4
+  The weight bridge replicates each freshly-synced policy onto all
+  submeshes; generate RPCs are served by submesh 0. Mirrors the
   topology in ``tests/weight_transfer/test_weight_transfer.py``.
 
 The :class:`utils.mpi_rollout.MPIRolloutClient` constructor on
@@ -49,15 +53,15 @@ Lifecycle (TTML rank)
 Lifecycle (TTT rank)
 ====================
 
-1. Initialise ttnn distributed context, open a ``[1, 4]`` parent mesh
-   and split it into four ``[1, 1]`` submeshes.
+1. Initialise ttnn distributed context, open a ``[1, N]`` parent mesh
+   and split it into ``N`` ``[1, 1]`` submeshes.
 2. Resolve stop / pad token IDs by briefly loading the HF tokenizer
    for ``MODEL_ID`` (see
    :func:`utils.llama_ttt_presets.llama_stop_and_pad`). The tokenizer
    is dropped immediately; the worker never holds one.
 3. Build one :class:`TttGenerationWorker` per submesh --
    ``dummy_weights=True`` plus ``disable_disk_cache=True`` so boot is
-   fast and the asymmetric ``[1, 4] -> [1, 1]`` mesh handshake does not
+   fast and the asymmetric ``[1, N] -> [1, 1]`` mesh handshake does not
    trip the disk-cache collective.
 4. Build :class:`MPIRolloutServer`: ``generate`` is served by submesh
    0's worker, and each transferred weight dict is applied to its own
@@ -111,9 +115,41 @@ ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 from utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
-TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_4dev_ddp.yaml"
-TTT_PARENT_MESH_SHAPE = (1, 4)
-NUM_SUBMESHES = 4
+
+# Topology selection. runner.sh exports GRPO_BOOLQ_TOPOLOGY (2x2 or 4x4) and
+# pins the matching configurations/<dir> bindings; both ranks read the same
+# value here so the ttml DDP mesh width, the ttt parent mesh, and the submesh
+# count stay consistent:
+#   * 2x2 -> ttml [1, 2] DDP mesh, ttt [1, 2] parent split into two [1, 1]
+#            submeshes (4 chips total, configurations/local4).
+#   * 4x4 -> ttml [1, 4] DDP mesh, ttt [1, 4] parent split into four [1, 1]
+#            submeshes (8 chips total, configurations/local8).
+# Defaults to 2x2 (the smaller, known-good split) when unset -- 4x4 currently
+# hangs in the cross-rank handshake/transport on this host.
+_TOPOLOGIES = {
+    "2x2": {
+        "ttml_device_config_rel": "tt-train/configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_4.yaml",
+        "ttt_parent_mesh_shape": (1, 2),
+        "num_submeshes": 2,
+    },
+    "4x4": {
+        "ttml_device_config_rel": "tt-train/configs/training_configs/grpo_boolq_llama_4dev_ddp.yaml",
+        "ttt_parent_mesh_shape": (1, 4),
+        "num_submeshes": 4,
+    },
+}
+
+TOPOLOGY = os.environ.get("GRPO_BOOLQ_TOPOLOGY", "2x2")
+if TOPOLOGY not in _TOPOLOGIES:
+    raise RuntimeError(
+        f"Unknown GRPO_BOOLQ_TOPOLOGY={TOPOLOGY!r}; expected one of {sorted(_TOPOLOGIES)}. "
+        "Select it via boolq/runner.sh --topology."
+    )
+_TOPO = _TOPOLOGIES[TOPOLOGY]
+
+TTML_DEVICE_CONFIG_REL = _TOPO["ttml_device_config_rel"]
+TTT_PARENT_MESH_SHAPE = _TOPO["ttt_parent_mesh_shape"]
+NUM_SUBMESHES = _TOPO["num_submeshes"]
 
 TTT_MAX_BATCH_SIZE = 32
 TTT_MAX_SEQ_LEN = 2048
