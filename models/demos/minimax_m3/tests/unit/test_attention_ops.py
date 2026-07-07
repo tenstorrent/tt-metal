@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tier-1 focused unit tests for the MiniMax-M2 attention deltas added in Step 2.
+Tier-1 focused unit tests for the MiniMax-M3 attention ops (QK-norm + partial RoPE).
 
 These compare our TTNN ops against hand-written torch references and depend ONLY
 on torch (no HuggingFace / AutoConfig), so they run on a single Wormhole/Blackhole
-card without transformers>=4.57 or a downloaded checkpoint.
+card without a downloaded checkpoint.
 
 Coverage:
   * distributed_rms_norm / QK-norm math (full-width RMSNorm). At TP=1 this exercises
