@@ -171,10 +171,11 @@ class AceStepDiTLayer(LightweightModule):
 
         # 1. Self-attention with AdaLN: n = norm(x)*scale+shift (scale row is pre-incremented by 1.0
         # at construction, so this is the reference's norm*(1+scale)+shift). x = x + attn(n)*gate.
+        # ttnn.mac(a,b,c)=a*b+c fuses each mul+add into one op (PCC 1.0, ~1.02x DiT forward).
         n = self.self_attn_norm.forward(hidden_states, mode="prefill")
-        n = ttnn.add(ttnn.mul(n, scale_msa), shift_msa)
+        n = ttnn.mac(n, scale_msa, shift_msa)
         attn = self.self_attn.forward(n, cos=cos, sin=sin, attn_mask=attn_mask)
-        hidden_states = ttnn.add(hidden_states, ttnn.mul(attn, gate_msa))
+        hidden_states = ttnn.mac(attn, gate_msa, hidden_states)
 
         # 2. Cross-attention (standard residual, no modulation). cross_kv, when provided, is this
         # layer's precomputed (denoise-invariant) K/V so only Q is projected per step.
@@ -185,9 +186,9 @@ class AceStepDiTLayer(LightweightModule):
             )
             hidden_states = ttnn.add(hidden_states, cattn)
 
-        # 3. MLP with AdaLN (c_scale row pre-incremented by 1.0 at construction).
+        # 3. MLP with AdaLN (c_scale row pre-incremented by 1.0 at construction). mac fuses mul+add.
         n = self.mlp_norm.forward(hidden_states, mode="prefill")
-        n = ttnn.add(ttnn.mul(n, c_scale), c_shift)
+        n = ttnn.mac(n, c_scale, c_shift)
         ff = self.mlp.forward(n, mode="prefill")
-        hidden_states = ttnn.add(hidden_states, ttnn.mul(ff, c_gate))
+        hidden_states = ttnn.mac(ff, c_gate, hidden_states)
         return hidden_states

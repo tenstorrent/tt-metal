@@ -81,7 +81,7 @@ class DiTOutput(LightweightModule):
         scale = mod[:, 1:2, :, :]
 
         x = self.norm_out.forward(x, mode="prefill")
-        x = ttnn.add(ttnn.mul(x, ttnn.add(scale, 1.0)), shift)  # [1,1,T',dim]
+        x = ttnn.mac(x, ttnn.add(scale, 1.0), shift)  # norm*(1+scale)+shift, fused mul+add
 
         # De-patchify: Linear(dim -> out*p) then reshape [1,1,T',out*p] -> [1,1,T'*p, out].
         # ConvTranspose1d bias is per-output-channel (out), applied AFTER un-patchify (each of
