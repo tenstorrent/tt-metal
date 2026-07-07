@@ -589,12 +589,12 @@ def test_outer_integer_dtypes(a_shape, b_shape, dtype, low, high, device):
     [ttnn.bfloat4_b, ttnn.uint16, ttnn.uint8],
     ids=["bfloat4_b", "uint16", "uint8"],
 )
-def test_outer_unsupported_dtype_rejected(device, dtype):
+def test_outer_unsupported_dtype_rejected(device, dtype, expect_error):
     a_pt = torch.rand([32], dtype=torch.bfloat16)
     b_pt = torch.rand([32], dtype=torch.bfloat16)
     a_tt = ttnn.from_torch(a_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
     b_tt = ttnn.from_torch(b_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
-    with pytest.raises(RuntimeError, match="ttnn.outer: unsupported dtype"):
+    with expect_error(RuntimeError, "ttnn.outer: unsupported dtype"):
         ttnn.outer(a_tt, b_tt)
 
 
@@ -613,7 +613,7 @@ def test_outer_unsupported_dtype_rejected(device, dtype):
     ],
     ids=["bf16_fp32", "fp32_bf16", "bf16_bf8b", "i32_u32"],
 )
-def test_outer_dtype_mismatch_rejected(device, dtype_a, dtype_b):
+def test_outer_dtype_mismatch_rejected(device, dtype_a, dtype_b, expect_error):
     """ttnn.outer requires both inputs to have the same dtype. Pin the explicit
     check so mismatched-dtype inputs raise a clearly attributable ttnn.outer
     error rather than bubbling up a generic multiply dtype-mismatch."""
@@ -621,7 +621,7 @@ def test_outer_dtype_mismatch_rejected(device, dtype_a, dtype_b):
     b_pt = torch.rand([32], dtype=torch.bfloat16)
     a_tt = ttnn.from_torch(a_pt, dtype=dtype_a, device=device, layout=ttnn.TILE_LAYOUT)
     b_tt = ttnn.from_torch(b_pt, dtype=dtype_b, device=device, layout=ttnn.TILE_LAYOUT)
-    with pytest.raises(RuntimeError, match="ttnn.outer: inputs must have the same dtype"):
+    with expect_error(RuntimeError, "ttnn.outer: inputs must have the same dtype"):
         ttnn.outer(a_tt, b_tt)
 
 
@@ -639,12 +639,12 @@ def test_outer_dtype_mismatch_rejected(device, dtype_a, dtype_b):
     ],
     ids=["scalar_a", "scalar_b", "scalar_both"],
 )
-def test_outer_rank0_rejected(device, shape_a, shape_b):
+def test_outer_rank0_rejected(device, shape_a, shape_b, expect_error):
     """ttnn.outer requires both inputs to be at least 1D. Pin the explicit
     rank check so a scalar input raises a clearly attributable ttnn.outer
     error rather than bubbling up an opaque 'Dimension out of range' from
     ttnn.unsqueeze."""
     a_tt = ttnn.from_torch(torch.rand(shape_a, dtype=torch.bfloat16), dtype=ttnn.bfloat16, device=device)
     b_tt = ttnn.from_torch(torch.rand(shape_b, dtype=torch.bfloat16), dtype=ttnn.bfloat16, device=device)
-    with pytest.raises(RuntimeError, match="ttnn.outer: inputs must be at least 1D"):
+    with expect_error(RuntimeError, "ttnn.outer: inputs must be at least 1D"):
         ttnn.outer(a_tt, b_tt)
