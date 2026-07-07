@@ -122,6 +122,12 @@ def _get_out_subblock_w(per_core_n, out_subblock_h):
     return 1
 
 
+def _full_grid_crs(grid):
+    """Full-grid allowed_worker_cores for CCL-fused matmuls, which bypass ttnn::prim::matmul()'s normalize_program_config()."""
+    gx, gy = grid
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
+
+
 def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
@@ -228,6 +234,7 @@ def build_mmrs_decode_state(mesh_device, M, K_local, N, nd, dtype=ttnn.bfloat16)
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=False,
+        allowed_worker_cores=_full_grid_crs(cg),
     )
     mk = lambda w: ttnn.from_torch(
         torch.zeros(1, 1, M, w),
@@ -319,6 +326,7 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=False,
+        allowed_worker_cores=_full_grid_crs(grid),
     )
     _, rs = ttnn.experimental.matmul_reduce_scatter_async(
         x4,
