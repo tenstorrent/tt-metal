@@ -137,6 +137,25 @@ def _supports_matrix_auto_config(lhs_shape: tuple[int, ...], rhs_shape: tuple[in
     return len(lhs_shape) >= 2 and len(rhs_shape) >= 2
 
 
+def _matmul_dims_compatible(
+    lhs_shape: tuple[int, ...],
+    rhs_shape: tuple[int, ...],
+    transpose_a: bool,
+    transpose_b: bool,
+) -> bool:
+    """Return True only if the contraction (K) dimensions line up.
+
+    Auto-config cannot build a program config for a matmul the base op would
+    reject.  When the shapes are incompatible we defer to the base op so it can
+    raise its own native error, preserving matmul's error contract.
+    """
+    if not _supports_matrix_auto_config(lhs_shape, rhs_shape):
+        return False
+    lhs_inner = lhs_shape[-2] if transpose_a else lhs_shape[-1]
+    rhs_inner = rhs_shape[-1] if transpose_b else rhs_shape[-2]
+    return lhs_inner == rhs_inner
+
+
 def _extract_mkn(
     lhs_shape: tuple[int, ...],
     rhs_shape: tuple[int, ...],
@@ -1892,6 +1911,24 @@ def dispatch_matmul(
         )
 
     if _has_explicit_override(kwargs):
+        return _run_base_operation(
+            base_operation=base_operation,
+            input_tensor_a=prepared.input_tensor_a,
+            input_tensor_b=prepared.input_tensor_b,
+            bias=prepared.bias,
+            is_linear=is_linear,
+            kwargs=kwargs,
+        )
+
+    # Incompatible contraction dims: auto-config cannot build a config the base
+    # op would accept.  Defer so the base op raises its own native error rather
+    # than auto-config surfacing a different exception type/message.
+    if not _matmul_dims_compatible(
+        _shape_to_tuple(getattr(prepared.input_tensor_a, "shape", ())),
+        _shape_to_tuple(getattr(prepared.input_tensor_b, "shape", ())),
+        kwargs.get("transpose_a", False),
+        kwargs.get("transpose_b", False),
+    ):
         return _run_base_operation(
             base_operation=base_operation,
             input_tensor_a=prepared.input_tensor_a,
