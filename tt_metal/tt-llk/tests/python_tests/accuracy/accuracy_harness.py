@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import shutil
+from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 
@@ -24,21 +25,36 @@ from helpers.llk_params import (
     DestAccumulation,
     FastMode,
     MathOperation,
+    PerfRunType,
+    StableSort,
+    Transpose,
     format_dict,
 )
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
+from helpers.perf import PerfConfig
 from helpers.sfpu_domains import for_op
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import (
+    DistributionKind,
+    StimuliSpec,
+    calculate_tile_and_face_counts,
+    generate_stimuli,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
     FAST_MODE,
+    ITERATIONS,
+    LOOP_FACTOR,
     MATH_OP,
     NUM_BLOCKS,
+    NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    STABLE_SORT,
     TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
     DestSync,
     generate_input_dim,
 )
@@ -314,28 +330,78 @@ def clear_shards() -> None:
     SHARD_DIR.mkdir(parents=True, exist_ok=True)
 
 
+class RunMode(Enum):
+    """Which pipeline a single run_case variant exercises.
+
+    ACCURACY  — functional kernel (eltwise_unary_sfpu_test.cpp); writes the
+                accuracy CSV shard. This is the original, unchanged behavior.
+    PERF      — perf kernel (eltwise_unary_sfpu_perf.cpp) across every perf
+                scenario; captures timings into perf_report only (no CSV).
+    BOTH      — perf kernel restricted to L1_TO_L1; captures timings AND reads
+                the L1 result back to write the accuracy CSV, so the perf
+                kernel's output is checked against the golden in one run.
+    """
+
+    ACCURACY = "accuracy"
+    PERF = "perf"
+    BOTH = "both"
+
+
+# PERF profiles every scenario (matches the standalone perf sweep). BOTH is
+# restricted to L1_TO_L1 — the only run type whose L1 output can be read back
+# and compared to the golden.
+_PERF_ONLY_RUN_TYPES = [
+    PerfRunType.L1_TO_L1,
+    PerfRunType.UNPACK_ISOLATE,
+    PerfRunType.MATH_ISOLATE,
+    PerfRunType.PACK_ISOLATE,
+    PerfRunType.L1_CONGESTION,
+]
+_ACCURACY_CAPABLE_RUN_TYPES = [PerfRunType.L1_TO_L1]
+
+
 def run_case(
     op: MathOperation,
     formats: InputOutputFormat,
     approx_mode: ApproximationMode,
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
+    perf_report=None,
     *,
+    run_mode: RunMode = RunMode.ACCURACY,
+    loop_factor: int = 16,
+    iterations: int = 32,
     points: int = DEFAULT_SWEEP_POINTS,
     distribution: DistributionKind = DistributionKind.RAMP,
     seed: Optional[int] = None,
-) -> Path:
-    """Measure one (op, format, config) on hardware and write its shard CSV.
+) -> Optional[Path]:
+    """Run one (op, format, config) variant in the requested *run_mode*.
 
-    The full pipeline for one variant:
+    RunMode.ACCURACY (default) reproduces the original accuracy sweep exactly:
+    the functional kernel runs, the result is compared to the torch golden, and
+    a shard CSV is written. RunMode.PERF runs the perf kernel for timings only
+    (into *perf_report*, no CSV). RunMode.BOTH runs the perf kernel once in
+    L1_TO_L1 and captures both the timings and the accuracy shard, so the perf
+    kernel's numeric output can be diffed against the accuracy-only run.
+
+    The pipeline for the accuracy-producing modes (ACCURACY, BOTH):
       1. build the input sweep for this op (deterministic RAMP by default;
          pass *distribution* for another, and *seed* for reproducible random ones),
       2. compute the torch "golden" output,
       3. compile + run the op on the device to get the "hw" output,
       4. compute per-element errors and write a shard via rows_dataframe/write_shard.
 
-    Returns the shard path.
+    *perf_report* (the pytest fixture) is required for PERF and BOTH; ACCURACY
+    ignores it. *loop_factor*/*iterations* apply only to the perf kernel.
+
+    Returns the shard path for ACCURACY/BOTH, or None for PERF (timings only).
     """
+    if run_mode in (RunMode.PERF, RunMode.BOTH) and perf_report is None:
+        raise ValueError(
+            f"run_mode={run_mode.value} needs the pytest perf_report fixture; "
+            "only RunMode.ACCURACY may omit it"
+        )
+
     # Seed the global RNG too (not just spec.seed) so it's consistent with the
     # param: 0 when unseeded (reproducible baseline), else the requested seed.
     torch.manual_seed(0 if seed is None else seed)
@@ -351,6 +417,105 @@ def run_case(
         input_dimensions_B=input_dimensions,
     )
 
+    variant_stimuli = StimuliConfig(
+        src_A,
+        formats.input_format,
+        src_B,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+    )
+
+    # A 32-bit input unpacks straight to dest when dest_acc is ON (matches the
+    # functional kernel); shared by both the functional and perf kernel paths.
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
+
+    if run_mode == RunMode.ACCURACY:
+        # ── Functional-kernel path (unchanged legacy behavior) ──────────────
+        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+            DestSync.Half,
+            dest_acc,
+            formats,
+            input_dimensions,
+            TILE_DIMENSIONS,
+            BlocksCalculationAlgorithm.Standard,
+        )
+        configuration = TestConfig(
+            "sources/eltwise_unary_sfpu_test.cpp",
+            formats,
+            templates=[
+                generate_input_dim(input_dimensions, input_dimensions),
+                APPROX_MODE(approx_mode),
+                FAST_MODE(fast_mode),
+                CLAMP_NEGATIVE(True),
+                MATH_OP(mathop=op),
+            ],
+            runtimes=[
+                TILE_COUNT(tile_cnt_A),
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            ],
+            variant_stimuli=variant_stimuli,
+            dest_acc=dest_acc,
+            unpack_to_dest=unpack_to_dest,
+        )
+        res_from_L1 = configuration.run().result
+    else:
+        # ── Perf-kernel path (PERF: timings only; BOTH: timings + readback) ──
+        _, _, faces_to_generate = calculate_tile_and_face_counts(
+            input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+        )
+        run_types = (
+            _ACCURACY_CAPABLE_RUN_TYPES
+            if run_mode == RunMode.BOTH
+            else _PERF_ONLY_RUN_TYPES
+        )
+        configuration = PerfConfig(
+            "sources/eltwise_unary_sfpu_perf.cpp",
+            formats,
+            run_types=run_types,
+            templates=[
+                MATH_OP(mathop=op),
+                APPROX_MODE(approx_mode),
+                ITERATIONS(iterations),
+                FAST_MODE(fast_mode),
+                STABLE_SORT(StableSort.No),
+                # CLAMP_NEGATIVE must match the functional kernel: for approx exp
+                # it selects the clamped branch in sfpu_operations (omitting it
+                # defaults to false -> a different path -> mismatch).
+                CLAMP_NEGATIVE(True),
+            ],
+            runtimes=[
+                TILE_COUNT(tile_cnt_A),
+                LOOP_FACTOR(loop_factor),
+                NUM_FACES(num_faces=faces_to_generate),
+                UNPACK_TRANS_FACES(Transpose.No),
+                UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            ],
+            variant_stimuli=variant_stimuli,
+            unpack_to_dest=unpack_to_dest,
+            dest_acc=dest_acc,
+        )
+
+        if run_mode == RunMode.PERF:
+            # Timings only — PerfConfig.run() writes runtime params and collects
+            # timings; it needs no real stimuli written and no result read back.
+            configuration.run(perf_report)
+            return None
+
+        # BOTH: PerfConfig.run() does not write stimuli or read the result, so
+        # bracket it — write the real input to L1 first, read it back after.
+        configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+        configuration.run(perf_report)
+        res_from_L1 = configuration.variant_stimuli.collect_results(
+            TestConfig.TENSIX_LOCATION
+        )
+
+    # ── Golden + accuracy CSV (ACCURACY and BOTH) ───────────────────────────
     generate_golden = get_golden_generator(UnarySFPUGolden)
     golden_tensor = generate_golden(
         op,
@@ -361,47 +526,6 @@ def run_case(
         input_dimensions,
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(approx_mode),
-            FAST_MODE(fast_mode),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=op),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
-    )
-
-    res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor), (
         f"{op.name}: result length {len(res_from_L1)} != golden "
         f"{len(golden_tensor)}"

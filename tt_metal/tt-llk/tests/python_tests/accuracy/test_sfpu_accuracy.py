@@ -78,18 +78,13 @@ ACCURACY_PARAMS = list(
 )
 
 
-@skip_for_coverage
-@pytest.mark.accuracy
-@pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc", ACCURACY_PARAMS
-)
-def test_sfpu_accuracy_sweep(
-    formats: InputOutputFormat,
-    approx_mode: ApproximationMode,
+def _skip_if_unsupported(
     mathop: MathOperation,
-    fast_mode: FastMode,
+    approx_mode: ApproximationMode,
     dest_acc: DestAccumulation,
-):
+    formats: InputOutputFormat,
+) -> None:
+    """Skip variants the hardware / metal stack does not support."""
     if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
         pytest.skip(reason="Metal tanh does not support approximation mode")
 
@@ -103,6 +98,97 @@ def test_sfpu_accuracy_sweep(
     ):
         pytest.skip(reason="This combination is not supported on BH architecture")
 
+
+# Three ways to run the same op/format/config matrix (RunMode selects which):
+#   -m accuracy          -> functional kernel, accuracy CSV only (unchanged)
+#   -k sfpu_perf_sweep   -> perf kernel, timings only
+#   -k accuracy_and_perf -> perf kernel, timings + accuracy CSV in one L1_TO_L1 run
+# Both perf tests carry @pytest.mark.perf; narrow with -k to pick just one.
+@skip_for_coverage
+@pytest.mark.accuracy
+@pytest.mark.parametrize(
+    "formats,approx_mode,mathop,fast_mode,dest_acc", ACCURACY_PARAMS
+)
+def test_sfpu_accuracy_sweep(
+    formats: InputOutputFormat,
+    approx_mode: ApproximationMode,
+    mathop: MathOperation,
+    fast_mode: FastMode,
+    dest_acc: DestAccumulation,
+):
+    _skip_if_unsupported(mathop, approx_mode, dest_acc, formats)
+
     from accuracy.accuracy_harness import run_case
 
     run_case(mathop, formats, approx_mode, fast_mode, dest_acc)
+
+
+@skip_for_coverage
+@pytest.mark.perf
+@pytest.mark.parametrize(
+    "formats,approx_mode,mathop,fast_mode,dest_acc", ACCURACY_PARAMS
+)
+def test_sfpu_perf_sweep(
+    perf_report,
+    formats: InputOutputFormat,
+    approx_mode: ApproximationMode,
+    mathop: MathOperation,
+    fast_mode: FastMode,
+    dest_acc: DestAccumulation,
+):
+    """Perf-only sweep: run the perf kernel across every scenario for timings."""
+    _skip_if_unsupported(mathop, approx_mode, dest_acc, formats)
+
+    # Lazy import so collecting under a `not perf` marker filter doesn't pull the
+    # harness's heavy deps (pandas/torch) into every pytest-xdist worker.
+    from accuracy.accuracy_harness import RunMode, run_case
+
+    run_case(
+        mathop,
+        formats,
+        approx_mode,
+        fast_mode,
+        dest_acc,
+        perf_report,
+        run_mode=RunMode.PERF,
+        loop_factor=16,
+    )
+
+
+@skip_for_coverage
+@pytest.mark.perf
+@pytest.mark.parametrize(
+    "formats,approx_mode,mathop,fast_mode,dest_acc", ACCURACY_PARAMS
+)
+def test_sfpu_accuracy_and_perf_sweep(
+    perf_report,
+    formats: InputOutputFormat,
+    approx_mode: ApproximationMode,
+    mathop: MathOperation,
+    fast_mode: FastMode,
+    dest_acc: DestAccumulation,
+):
+    """Merged sweep: one L1_TO_L1 perf run that captures timings AND writes the
+    accuracy shard, so the perf kernel's output is checked against the golden.
+
+    loop_factor=16: realistic perf setting (amortizes profiler overhead). Safe
+    for accuracy because each loop iteration re-copies the input (datacopy
+    srcA->dest) and unpack re-reads buffer_A from L1, so every iteration
+    recomputes op(input) from scratch — the final L1 result is one clean
+    application regardless of loop_factor.
+    """
+    _skip_if_unsupported(mathop, approx_mode, dest_acc, formats)
+
+    from accuracy.accuracy_harness import RunMode, run_case
+
+    run_case(
+        mathop,
+        formats,
+        approx_mode,
+        fast_mode,
+        dest_acc,
+        perf_report,
+        run_mode=RunMode.BOTH,
+        loop_factor=16,
+        points=8192,
+    )
