@@ -154,7 +154,7 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
         {
             replay_buf_len++;
         }
-        replay_buf_len += NUM_FIDELITY_PHASES + 1;
+        replay_buf_len += NUM_FIDELITY_PHASES + 1U;
     }
 
     if (tensor_shape.face_r_dim > ELTWISE_MATH_ROWS)
@@ -221,15 +221,15 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
             // Need to increment by 32 where all faces are considered a HW tile.
             if (tensor_shape.total_num_faces() == NUM_FACES)
             {
-                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 32, p_setrwc::SET_D);
+                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, MAX_TILE_R_DIM, p_setrwc::SET_D);
             }
             TTI_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_D, 0, p_setrwc::SET_B);
         });
 
     const std::uint32_t replay           = TT_OP_REPLAY(0, main_len, 0, 0, 0, 0);
-    const std::uint32_t skip_32_inc_dest = TT_OP_REPLAY(main_len, tail_len, 0, 0, 0, 0);
+    const std::uint32_t dest_inc_32      = TT_OP_REPLAY(main_len, tail_len, 0, 0, 0, 0);
 
-    ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, replay, skip_32_inc_dest);
+    ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, replay, dest_inc_32);
     temp.set_last_inner_loop_instr(TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_BD));
     temp.program_bank0_sw_cntl(instrn_buffer);
 }
@@ -406,6 +406,10 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
         _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
     }
 
+    // For face_r_dim >= 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
+    // If num_rows_per_tile is less than that of face_r_dim = 8, replace it to ensure face_r_dim = 8 sparse layout.
+    _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));
+
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -413,16 +417,13 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
 /**
  * @brief Perform a reduce operation.
  *
- * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @param tile_idx: Tile index into the destination register. If dest reg in 16-bit mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
  * full mode. If dest reg in 32-bit mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
  * @note Call @ref _llk_math_reduce_init_ with matching template args before this function.
  */
-inline void _llk_math_reduce_(const TensorShape& tensor_shape, const std::uint32_t tile_idx)
+inline void _llk_math_reduce_(const std::uint32_t tile_idx)
 {
-    // For face_r_dim >= 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
-    // If num_rows_per_tile is less than that of face_r_dim = 8, replace it to ensure face_r_dim = 8 sparse layout.
-    _set_dst_write_addr_by_rows_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()), tile_idx);
+    _set_dst_write_addr_by_rows_gpr_(tile_idx);
 
     // Run MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
