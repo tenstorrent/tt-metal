@@ -29,7 +29,11 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
-from models.experimental.seamless_m4t_v2_large.tests.pcc.test_seamless_m4t_v2_model import _make_tt_model
+from models.experimental.seamless_m4t_v2_large.tests.pcc.test_seamless_m4t_v2_model import (
+    _make_tt_model,
+    _torch_feats_to_ttnn,
+    _torch_ids_to_ttnn,
+)
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import (
     TextDecoderPccInputs,
     align_case_for_tt_prefill,
@@ -54,6 +58,7 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     from_torch_uint32_rm,
     get_tp,
     mesh_default_device,
+    mesh_num_devices,
 )
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import (
     create_speech_encoder_parameters,
@@ -63,8 +68,6 @@ from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import (
 from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
     _read_int_row,
     _subsampled_lens_dev,
-    _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX,
-    _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN,
     _tt_speech_enc_attn,
     _ttnn_ids_from_list,
 )
@@ -300,6 +303,33 @@ def tt_encode_text(
     return enc_out, enc_mask_2d_tt
 
 
+def tt_encode_speech_via_model(
+    mesh_device: ttnn.Device,
+    tt_model,
+    input_features: torch.Tensor,
+    mel_attention_mask: torch.Tensor,
+) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Production speech encoder path: ``prewarm_speech_encoder`` + ``_encode_speech``.
+
+    Reuses the model's persistent encoder (``matmul_token_rows=64``). The standalone
+    ``tt_encode_speech`` rebuilds a fresh encoder per call with ``matmul_token_rows=batch*mel``
+    and corrupts cross-attention context at long mel (1024/2048/4096), especially on 1×1.
+    """
+    mel_frames = int(mel_attention_mask.sum().item())
+    tt_model.prewarm_speech_encoder([mel_frames])
+    feats_tt = _torch_feats_to_ttnn(mesh_device, input_features)
+    mask_tt = _torch_ids_to_ttnn(mesh_device, mel_attention_mask)
+    enc_tt, enc_mask_tt, attn_owned = tt_model._encode_speech(feats_tt, mask_tt)
+    ttnn.deallocate(feats_tt)
+    if attn_owned and enc_mask_tt is not mask_tt:
+        ttnn.deallocate(mask_tt)
+    # On 1×1, long-mel speech encode caches large L1 attention masks that clash with text-decoder
+    # matmul CBs unless evicted (``generate()`` calls ``_clear_decode_and_t2u_programs`` for this).
+    if mesh_num_devices(mesh_device) == 1:
+        tt_model._clear_decode_and_t2u_programs(preserve_vocoder=True)
+    return enc_tt, enc_mask_tt
+
+
 def tt_encode_speech(
     mesh_device: ttnn.Device,
     speech_encoder_module,
@@ -307,7 +337,7 @@ def tt_encode_speech(
     input_features: torch.Tensor,
     attention_mask: torch.Tensor,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Live TT speech encoder + adaptor trim (production-shaped), returns ``(hidden, enc_attn_2d)``."""
+    """Standalone speech encoder (legacy). Prefer ``tt_encode_speech_via_model`` for E2E sweeps."""
     batch = int(input_features.shape[0])
     seq_in = int(input_features.shape[1])
     bucketed = ((seq_in + _SPEECH_ENC_SEQ_BUCKET - 1) // _SPEECH_ENC_SEQ_BUCKET) * _SPEECH_ENC_SEQ_BUCKET
@@ -654,33 +684,31 @@ def run_speech_e2e_logit_pcc(
         enc_seq_len=MAX_ENC_SEQ,
         wav_path=wav_path,
     )
-    enc_tt, enc_mask_tt = tt_encode_speech(
-        mesh_device,
-        hf_model.speech_encoder,
-        hf_model.config,
-        speech.input_features,
-        speech.mel_attention_mask,
-    )
-    enc_tt, enc_mask_tt = _align_tt_encoder_to_case(
-        mesh_device,
-        enc_tt,
-        enc_mask_tt,
-        speech.case,
-        pad_id=int(hf_model.config.pad_token_id),
-        hidden_size=int(hf_model.config.hidden_size),
-    )
-    run_e2e_logit_pcc(
-        mesh_device,
-        hf_model,
-        speech.case,
-        enc_tt,
-        enc_mask_tt,
-        log_label=log_label,
-        decode_steps=decode_steps,
-        pcc_decode=pcc_decode,
-        pcc_encoder=PCC_ENCODER_SPEECH,
-        pcc_prefill=pcc_prefill,
-    )
+    cfg = hf_model.config
+    t2u_cfg = hf_model.t2u_model.config
+    with mesh_default_device(mesh_device):
+        tt_model = _make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
+        try:
+            enc_tt, enc_mask_tt = tt_encode_speech_via_model(
+                mesh_device,
+                tt_model,
+                speech.input_features,
+                speech.mel_attention_mask,
+            )
+            run_e2e_logit_pcc(
+                mesh_device,
+                hf_model,
+                speech.case,
+                enc_tt,
+                enc_mask_tt,
+                log_label=log_label,
+                decode_steps=decode_steps,
+                pcc_decode=pcc_decode,
+                pcc_encoder=PCC_ENCODER_SPEECH,
+                pcc_prefill=pcc_prefill,
+            )
+        finally:
+            tt_model.release_generation_runtime()
 
 
 # ---------------------------------------------------------------------------
@@ -937,28 +965,6 @@ def run_e2e_logits_pcc_loop(
     ttnn.synchronize_device(mesh_device)
 
 
-def _maybe_warmup_speech_encoder_for_logits_sweep(
-    mesh_device: ttnn.Device,
-    hf_model,
-    ref: SpeechTokenAccuracyReference,
-) -> None:
-    """Mirror token-matching sweep: warm speech encoder except mel buckets 1920–2560."""
-    cfg = hf_model.config
-    mel_seq = int(ref.input_features.shape[1])
-    bucket = ((mel_seq + _SPEECH_ENC_SEQ_BUCKET - 1) // _SPEECH_ENC_SEQ_BUCKET) * _SPEECH_ENC_SEQ_BUCKET
-    if _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN <= bucket <= _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX:
-        return
-    warm_enc, warm_mask = tt_encode_speech(
-        mesh_device,
-        hf_model.speech_encoder,
-        cfg,
-        ref.input_features,
-        ref.mel_attention_mask,
-    )
-    ttnn.deallocate(warm_enc)
-    ttnn.deallocate(warm_mask)
-
-
 def effective_logit_pcc_decode_steps(ref_teacher_steps: int, *, task: str, seq_len: int) -> int:
     """Cap decode steps at HF greedy length (EOS); skip only when ref has zero steps."""
     if ref_teacher_steps <= 0:
@@ -1043,37 +1049,30 @@ def run_speech_e2e_logits_pcc_from_ref(
 
     with mesh_default_device(mesh_device):
         tt_model = _make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
-        _maybe_warmup_speech_encoder_for_logits_sweep(mesh_device, hf_model, ref)
-        enc_tt, enc_mask_tt = tt_encode_speech(
-            mesh_device,
-            hf_model.speech_encoder,
-            cfg,
-            ref.input_features,
-            ref.mel_attention_mask,
-        )
-        enc_tt, enc_mask_tt = _align_tt_encoder_to_case(
-            mesh_device,
-            enc_tt,
-            enc_mask_tt,
-            ref.decoder_case,
-            pad_id=int(cfg.pad_token_id),
-            hidden_size=int(cfg.hidden_size),
-        )
+        try:
+            enc_tt, enc_mask_tt = tt_encode_speech_via_model(
+                mesh_device,
+                tt_model,
+                ref.input_features,
+                ref.mel_attention_mask,
+            )
 
-        logger.info(
-            f"SeamlessM4Tv2 E2E logits PCC ({log_label}): decode_steps={decode_steps}, "
-            f"pcc>={pcc_required}, teacher=HF_greedy"
-        )
-        run_e2e_logits_pcc_loop(
-            tt_model,
-            mesh_device,
-            hf_model,
-            encoder_hidden=encoder_hidden,
-            enc_mask=enc_mask,
-            seed_ids=ref.seed_ids,
-            enc_tt=enc_tt,
-            enc_mask_tt=enc_mask_tt,
-            decode_steps=decode_steps,
-            log_label=log_label,
-            pcc_required=pcc_required,
-        )
+            logger.info(
+                f"SeamlessM4Tv2 E2E logits PCC ({log_label}): decode_steps={decode_steps}, "
+                f"pcc>={pcc_required}, teacher=HF_greedy"
+            )
+            run_e2e_logits_pcc_loop(
+                tt_model,
+                mesh_device,
+                hf_model,
+                encoder_hidden=encoder_hidden,
+                enc_mask=enc_mask,
+                seed_ids=ref.seed_ids,
+                enc_tt=enc_tt,
+                enc_mask_tt=enc_mask_tt,
+                decode_steps=decode_steps,
+                log_label=log_label,
+                pcc_required=pcc_required,
+            )
+        finally:
+            tt_model.release_generation_runtime()

@@ -49,6 +49,8 @@ _LONG_SEQ_LINEAR_DRAM_ROWS = 256
 # Keep conformer residuals in DRAM above this frame count (L1 CB pressure on long audio).
 # 512 subsampled frames (≈4096 mel): sharded LN persistent L1 clashes with decode-trace + T2U/vocoder.
 _LONG_AUDIO_RES_DRAM_THRESHOLD = 512
+# On 1×1, conformer activations at S≥256 (≈2048 mel) diverge in L1 vs DRAM/TP paths.
+_SINGLE_DEVICE_DRAM_ACT_THRESHOLD = 256
 # Query-block relative attention above this seq (avoids O(S²) L1 use).
 # Must stay <= 1024: the full [B,H,S,S] path loses bf16 precision as S grows — at S=2048 the
 # conformer speech-encoder output diverges from HF (PCC ~0.94 vs ~0.999 at 512/1024), which the
@@ -187,7 +189,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         """Activation buffer type: DRAM on TP>1 so fused-op static CBs do not clash with persistent L1."""
         if self._tp > 1:
             return ttnn.DRAM_MEMORY_CONFIG
-        if seq_len is not None and seq_len >= _LONG_AUDIO_RES_DRAM_THRESHOLD:
+        if seq_len is not None and seq_len >= _SINGLE_DEVICE_DRAM_ACT_THRESHOLD:
             return ttnn.DRAM_MEMORY_CONFIG
         return ttnn.L1_MEMORY_CONFIG
 
@@ -1414,7 +1416,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
             k_transposed=use_relative,
             accept_sharded_input=accept_sharded_input,
         )
-        if self._tp > 1:
+        use_chunked_rel = use_relative and seq_len > _ATTN_QUERY_CHUNK_THRESHOLD
+        if self._tp > 1 or use_chunked_rel:
             q = self._to_act_mc(q, seq_len=seq_len)
             k = self._to_act_mc(k, seq_len=seq_len)
             v = self._to_act_mc(v, seq_len=seq_len)
@@ -1422,7 +1425,11 @@ class TTSeamlessM4Tv2SpeechEncoder:
         if not use_relative:
             # Adapter self-attn has no relative positions — use fused SDPA.
             # K is in [B, H, S, D] form (k_transposed=False) as SDPA requires.
-            compact_sdpa = seq_len >= _ADAPTER_FUSED_SDPA_COMPACT_THRESHOLD
+            # Compact SDPA avoids L1 CB clash on TP>1 and at very long seq (≈4096 mel). On 1×1 at
+            # S∈[256,512) (≈2048 mel) the compact kernels diverge from HF; full SDPA is still safe.
+            compact_sdpa = seq_len >= _ADAPTER_FUSED_SDPA_COMPACT_THRESHOLD and (
+                self._tp > 1 or seq_len >= _LONG_AUDIO_RES_DRAM_THRESHOLD
+            )
             attn_out = ttnn.transformer.scaled_dot_product_attention(
                 q,
                 k,
@@ -1437,7 +1444,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             ttnn.deallocate(q)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
-        elif seq_len > _ATTN_QUERY_CHUNK_THRESHOLD:
+        elif use_chunked_rel:
             # Long mel seq: query-block attention (peak O(Qc·S), lifts the full-path L1/OOM ceiling).
             # Gated above the validated full-attention range so seq ≤ threshold is bit-identical.
             attn_out = self._chunked_relative_attention(
@@ -1452,8 +1459,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             )
         else:
             # scores [B, H, S, S] — L1 fits for short seq on single device.
-            # TP at S>=128 and long audio use DRAM (L1 scores diverge on 1×4 at S=256).
-            scores_mc = self._mc_act(seq_len=seq_len if seq_len > 256 else 128)
+            scores_mc = self._mc_act(seq_len=seq_len)
 
             # k is already [B, H, D, S] — no permute needed.
             # Q weights are pre-scaled by 1/√head_dim during preprocessing so
@@ -1724,15 +1730,20 @@ class TTSeamlessM4Tv2SpeechEncoder:
         # Each entry is ``(tensor, owned)`` — ``chunk_bad`` is borrowed from
         # ``_chunk_attn_mask_cache`` and must NOT be deallocated by the merge loop,
         # otherwise the next call with a different ``conv_mask_1d`` hits a freed tensor.
+        mask_mc = (
+            ttnn.DRAM_MEMORY_CONFIG
+            if self._tp == 1 and seq_len >= _SINGLE_DEVICE_DRAM_ACT_THRESHOLD
+            else ttnn.L1_MEMORY_CONFIG
+        )
         bad_parts: list[tuple[ttnn.Tensor, bool]] = []
         if conv_mask_1d is not None:
             m = ttnn.reshape(conv_mask_1d, (batch, 1, 1, seq_len))
             one = ttnn.ones(m.shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
-            inv = ttnn.subtract(one, m, memory_config=ttnn.L1_MEMORY_CONFIG)
+            inv = ttnn.subtract(one, m, memory_config=mask_mc)
             ttnn.deallocate(one)
             # Use a single ttnn.repeat instead of an S-way concat — avoids allocating S
             # individual row tensors and the O(S²) intermediate concat output separately.
-            pad_bad = ttnn.repeat(inv, [1, 1, seq_len, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+            pad_bad = ttnn.repeat(inv, [1, 1, seq_len, 1], memory_config=mask_mc)
             ttnn.deallocate(inv)
             bad_parts.append((pad_bad, True))
 
@@ -1746,18 +1757,18 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
         bad, bad_owned = bad_parts[0]
         for extra, extra_owned in bad_parts[1:]:
-            s = ttnn.add(bad, extra, memory_config=ttnn.L1_MEMORY_CONFIG)
+            s = ttnn.add(bad, extra, memory_config=mask_mc)
             if bad_owned:
                 ttnn.deallocate(bad)
             if extra_owned:
                 ttnn.deallocate(extra)
             cap = ttnn.ones(s.shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
-            bad = ttnn.minimum(s, cap, memory_config=ttnn.L1_MEMORY_CONFIG)
+            bad = ttnn.minimum(s, cap, memory_config=mask_mc)
             ttnn.deallocate(s)
             ttnn.deallocate(cap)
             bad_owned = True
 
-        out = ttnn.multiply(bad, _BF16_ATTN_MASK_MIN, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.multiply(bad, _BF16_ATTN_MASK_MIN, memory_config=mask_mc)
         if bad_owned:
             ttnn.deallocate(bad)
         self._encoder_additive_mask_cache[cache_key] = out
@@ -1824,19 +1835,24 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self, conv_mask_1d: ttnn.Tensor, *, kernel: int, stride: int, pad: int
     ) -> ttnn.Tensor:
         """Per-batch subsampled lengths after strided conv (HF adapter)."""
-        s = ttnn.sum(conv_mask_1d, dim=1, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # float32 (not bf16): on-device ``ttnn.sum`` accumulates in the mask dtype; bf16's 8-bit
+        # mantissa cannot represent a sum of >256 ones exactly, so long mel (2048/4096) yields an
+        # off-by-one subsampled length and corrupts adapter self-attention masks on 1×1.
+        mask_f = ttnn.typecast(conv_mask_1d, ttnn.float32)
+        s = ttnn.sum(mask_f, dim=1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(mask_f)
         two_pad = float(2 * pad)
-        padded = ttnn.add(s, two_pad, memory_config=ttnn.L1_MEMORY_CONFIG)
+        padded = ttnn.add(s, two_pad, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(s)
-        num = ttnn.subtract(padded, float(kernel), memory_config=ttnn.L1_MEMORY_CONFIG)
+        num = ttnn.subtract(padded, float(kernel), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(padded)
-        scaled = ttnn.divide(num, float(stride), memory_config=ttnn.L1_MEMORY_CONFIG)
+        scaled = ttnn.divide(num, float(stride), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(num)
         one = ttnn.ones(scaled.shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        out = ttnn.add(scaled, one, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.add(scaled, one, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(scaled)
         ttnn.deallocate(one)
-        return ttnn.floor(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return ttnn.floor(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _adapter_new_attention_mask(self, seq_len_out: int, seq_lens: ttnn.Tensor, *, batch: int) -> ttnn.Tensor:
         """``[B, seq_len_out]`` with 1 for valid positions (approximate floor parity via BF16)."""

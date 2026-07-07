@@ -20,18 +20,10 @@ from loguru import logger
 
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import TextDecoderPccInputs
-from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_logit_pcc_helpers import (
-    _align_tt_encoder_to_case,
-    tt_encode_speech,
-)
+from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_logit_pcc_helpers import tt_encode_speech_via_model
 from models.experimental.seamless_m4t_v2_large.tests.pcc.test_seamless_m4t_v2_model import _make_tt_model
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import from_torch_uint32_rm, mesh_default_device
-from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
-    _ttnn_ids_from_list,
-    _SPEECH_ENC_SEQ_BUCKET,
-    _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN,
-    _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX,
-)
+from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import _ttnn_ids_from_list
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import init_text_decoder_kv_cache
 
 # Same long English source as ``test_seamless_m4t_v2_model.py`` (yields ~100+ Hindi decode steps).
@@ -372,54 +364,26 @@ def run_speech_e2e_token_accuracy(
 
     with mesh_default_device(mesh_device):
         tt_model = _make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
-        # Speech-encoder JIT/program-cache warmup. The FIRST cold dispatch at some mel buckets
-        # (notably the 1024 bucket) returns garbage — a device-level first-invocation hazard the
-        # demo/generate path avoids via ``prewarm_speech_encoder``. This test's ``tt_encode_speech``
-        # helper doesn't go through that path, so warm the same encoder once and discard, scoring the
-        # warmed encoder as production does. (Verified on BH 1×4: call #0 enc PCC ~0.0, call #1+ ~0.998.)
-        #
-        # BUT mirror ``prewarm_speech_encoder``'s guard: a dummy forward in the 1920–2560 mel bucket
-        # band POISONS persistent L1 and collapses the real encode (2048 mel). Those buckets don't
-        # need the warmup (they're correct cold), so skip the warmup forward there.
-        _mel_seq = int(ref.input_features.shape[1])
-        _bucket = ((_mel_seq + _SPEECH_ENC_SEQ_BUCKET - 1) // _SPEECH_ENC_SEQ_BUCKET) * _SPEECH_ENC_SEQ_BUCKET
-        if not (_SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN <= _bucket <= _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX):
-            _warm_enc, _warm_mask = tt_encode_speech(
+        try:
+            enc_tt, enc_mask_tt = tt_encode_speech_via_model(
                 mesh_device,
-                hf_model.speech_encoder,
-                cfg,
+                tt_model,
                 ref.input_features,
                 ref.mel_attention_mask,
             )
-            ttnn.deallocate(_warm_enc)
-            ttnn.deallocate(_warm_mask)
-        enc_tt, enc_mask_tt = tt_encode_speech(
-            mesh_device,
-            hf_model.speech_encoder,
-            cfg,
-            ref.input_features,
-            ref.mel_attention_mask,
-        )
-        enc_tt, enc_mask_tt = _align_tt_encoder_to_case(
-            mesh_device,
-            enc_tt,
-            enc_mask_tt,
-            ref.decoder_case,
-            pad_id=int(cfg.pad_token_id),
-            hidden_size=int(cfg.hidden_size),
-        )
-
-        _run_token_accuracy_loop(
-            tt_model,
-            mesh_device,
-            hf_model,
-            enc_tt=enc_tt,
-            enc_mask_tt=enc_mask_tt,
-            seed_ids=ref.seed_ids,
-            teacher_tokens=ref.teacher_tokens,
-            top5_tokens=ref.top5_tokens,
-            decode_steps=decode_steps,
-            top1_threshold=top1_threshold,
-            top5_threshold=top5_threshold,
-            log_label=log_label,
-        )
+            _run_token_accuracy_loop(
+                tt_model,
+                mesh_device,
+                hf_model,
+                enc_tt=enc_tt,
+                enc_mask_tt=enc_mask_tt,
+                seed_ids=ref.seed_ids,
+                teacher_tokens=ref.teacher_tokens,
+                top5_tokens=ref.top5_tokens,
+                decode_steps=decode_steps,
+                top1_threshold=top1_threshold,
+                top5_threshold=top5_threshold,
+                log_label=log_label,
+            )
+        finally:
+            tt_model.release_generation_runtime()
