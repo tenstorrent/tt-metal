@@ -260,7 +260,7 @@ void kernel_main() {
 #ifdef ENABLE_GLOBAL_CB
         uint32_t in1_cb_start_addr = 0;
         uint32_t in1_rd_ptr_start_addr = 0;
-        uint32_t curr_in1_block_index = 0;
+        [[maybe_unused]] uint32_t curr_in1_block_index = 0;
         bool in1_tensor_split = 0;
         uint32_t next_in1_block_index;
         uint32_t next_in1_rd_ptr_addr;

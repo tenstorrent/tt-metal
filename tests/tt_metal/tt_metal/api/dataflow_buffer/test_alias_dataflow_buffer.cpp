@@ -113,15 +113,11 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
     // DM kernel configs (Gen1 + Gen2 variants so the same spec runs everywhere).
     const DataMovementHardwareConfig producer_cfg{
         .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
-        .gen2_config =
-            DataMovementHardwareConfig::Gen2Config{
-                .disable_implicit_sync_for = {experimental::DFBSpecName{"dfb_a"}, experimental::DFBSpecName{"dfb_b"}}},
+        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
     const DataMovementHardwareConfig consumer_cfg{
         .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1},
-        .gen2_config =
-            DataMovementHardwareConfig::Gen2Config{
-                .disable_implicit_sync_for = {experimental::DFBSpecName{"dfb_a"}, experimental::DFBSpecName{"dfb_b"}}},
+        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 
     DataflowBufferSpec dfb_a{
@@ -327,17 +323,11 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
 
     const DataMovementHardwareConfig producer_cfg{
         .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
-        .gen2_config =
-            DataMovementHardwareConfig::Gen2Config{
-                .disable_implicit_sync_for =
-                    {experimental::DFBSpecName{"dfb_borrowed"}, experimental::DFBSpecName{"dfb_alias"}}},
+        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
     const DataMovementHardwareConfig consumer_cfg{
         .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1},
-        .gen2_config =
-            DataMovementHardwareConfig::Gen2Config{
-                .disable_implicit_sync_for =
-                    {experimental::DFBSpecName{"dfb_borrowed"}, experimental::DFBSpecName{"dfb_alias"}}},
+        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 
     // dfb_borrowed: backed by ring_tensor (L1)

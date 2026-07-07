@@ -61,7 +61,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     }
     // Create golden data using tt_eager APIs
     Tensor np_tensor = ttnn::full(input_shape, static_cast<float>(1), DataType::BFLOAT16, Layout::TILE, *device_);
-    ttnn::SmallVector<int64_t> reduce_dims = {3};
+    ttsl::SmallVector<int64_t> reduce_dims = {3};
     Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims, false, std::nullopt, std::nullopt, std::nullopt);
     Tensor np_out_host = np_out.cpu();
     const Tensor reference_tensor = ttnn::distributed::get_device_tensors(np_out_host).front();
@@ -133,6 +133,9 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             Tensor output_tensor;
             ttnn::with_command_queue_id(workload_dispatch_cq, [&]() { output_tensor = ttnn::sqrt(input_tensor); });
 
+            // #43725 diag: record sqrt's output buffer address before `neg` reassigns output_tensor.
+            const uint64_t dbg_S = static_cast<uint64_t>(output_tensor.buffer()->address());
+
             auto dummy_buffer_0 =
                 tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
 
@@ -145,10 +148,43 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             auto workload_event = ttnn::record_event(device_->mesh_command_queue(*workload_dispatch_cq));
             // Wait until cq 0 prog execution is done
             ttnn::wait_for_event(device_->mesh_command_queue(*io_cq), workload_event);
+
+            // #43725 diag: capture the buffer addresses in play right before the CQ1 readback. output_tensor
+            // now holds neg's output (N), which is also the buffer the read below sources from.
+            const uint64_t dbg_input = static_cast<uint64_t>(input_tensor.buffer()->address());
+            const uint64_t dbg_D0 = static_cast<uint64_t>(dummy_buffer_0->address());
+            const uint64_t dbg_N = static_cast<uint64_t>(output_tensor.buffer()->address());
+            const uint64_t dbg_D1 = static_cast<uint64_t>(dummy_buffer_1->address());
+
             // Read using cq 1
             ttnn::read_buffer(io_cq, output_tensor, {readback_data});
-            EXPECT_EQ(std::memcmp(readback_data.get(), expected_data.get(), buf_size_datums * datum_size_bytes), 0)
-                << "Data mismatch at loop " << loop << " input_val " << input_val;
+
+            // Failure-path diagnostics for the intermittent memcmp==-128 flake tracked in #43725. This repeats
+            // the comparison the EXPECT_EQ below already performs (host-side, on data already read back) and
+            // logs only on a mismatch, so passing runs do zero extra I/O and the timing window that produces
+            // the race is left undisturbed. On a caught failure N_eq_S discriminates the two leading theories:
+            // N_eq_S == 1 => neg's output buffer (N) aliased sqrt's still-live output (S), i.e. premature async
+            // buffer-address reuse; N_eq_S == 0 => the read observed a distinct buffer, pointing instead at a
+            // NOC/completion-ordering race.
+            const int dbg_cmp =
+                std::memcmp(readback_data.get(), expected_data.get(), buf_size_datums * datum_size_bytes);
+            if (dbg_cmp != 0) {
+                log_error(
+                    LogTest,
+                    "43725_DIAG loop={} input_val={} INPUT=0x{:x} S=0x{:x} D0=0x{:x} N=0x{:x} D1=0x{:x} "
+                    "N_eq_S={} memcmp={}",
+                    loop,
+                    input_val,
+                    dbg_input,
+                    dbg_S,
+                    dbg_D0,
+                    dbg_N,
+                    dbg_D1,
+                    (dbg_N == dbg_S) ? 1 : 0,
+                    dbg_cmp);
+            }
+
+            EXPECT_EQ(dbg_cmp, 0) << "Data mismatch at loop " << loop << " input_val " << input_val;
         }
     }
 }

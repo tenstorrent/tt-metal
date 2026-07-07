@@ -6,6 +6,8 @@
 
 #include <tt_stl/assert.hpp>
 #include "device.hpp"
+#include "mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "llrt/hal.hpp"
@@ -77,14 +79,12 @@ void load_host_dispatch_state(
 }
 
 void issue_trace_commands(
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     SystemMemoryManager& sysmem_manager,
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     CoreCoord dispatch_core) {
-    TT_FATAL(device->arch() != tt::ARCH::QUASAR, "Trace commands are currently not supported on Quasar");
-
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, dispatch_md.cmd_sequence_sizeB);
@@ -101,10 +101,10 @@ void issue_trace_commands(
 
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
         const auto& noc_data_start_idx =
-            device->noc_data_start_index(id, desc.num_traced_programs_needing_go_signal_unicast);
+            mesh_device->impl().noc_data_start_index(id, desc.num_traced_programs_needing_go_signal_unicast);
 
         const auto& num_noc_unicast_txns =
-            desc.num_traced_programs_needing_go_signal_unicast ? device->num_virtual_eth_cores(id) : 0;
+            desc.num_traced_programs_needing_go_signal_unicast ? mesh_device->impl().num_virtual_eth_cores(id) : 0;
         auto index = *id;
 
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
@@ -116,7 +116,7 @@ void issue_trace_commands(
                 dispatch_core.y,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index)),
             MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
-            desc.num_traced_programs_needing_go_signal_multicast && device->has_noc_mcast_txns(id)
+            desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             num_noc_unicast_txns,
@@ -131,10 +131,10 @@ void issue_trace_commands(
         auto index = *id;
         uint32_t expected_num_workers = expected_num_workers_completed[index];
         if (desc.num_traced_programs_needing_go_signal_multicast) {
-            expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
+            expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
         }
         if (desc.num_traced_programs_needing_go_signal_unicast) {
-            expected_num_workers += device->num_virtual_eth_cores(id);
+            expected_num_workers += mesh_device->impl().num_virtual_eth_cores(id);
         }
 
         if (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {

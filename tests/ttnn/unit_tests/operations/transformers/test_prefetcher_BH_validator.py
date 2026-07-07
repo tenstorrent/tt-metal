@@ -23,6 +23,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bytes_per_tile as _bytes_per_tile,
     ring_grid_cols as _ring_grid_cols,
     bank_receivers_strided as _bank_receivers_strided,
+    bank_receivers_contiguous as _bank_receivers_contiguous,
     make_recv_contig_weight as _make_recv_contig_weight,
     tensor_prefetcher_session,
 )
@@ -35,7 +36,9 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 def _require_tensor_prefetcher(device):
     """Skip unless programmable DRAM cores are available on this device."""
     if not ttnn.experimental.is_tensor_prefetcher_supported(device):
-        pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
+        pytest.skip(
+            "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
+        )
 
 
 _GCB_DEPTH_PAGES = 4  # small ring so the validator stresses reserve_back/wait_front handshakes
@@ -328,10 +331,25 @@ def test_validator_worker_sender(device, K, N, dtype, recv_per_bank, num_layers)
         device.remove_sub_device_manager(sub_device_manager)
 
 
-def _setup_weight_and_gcb_recv_contig(device, K, N, dtype, recv_per_bank, num_layers, dual_senders=False):
+def _setup_weight_and_gcb_recv_contig(
+    device,
+    K,
+    N,
+    dtype,
+    recv_per_bank,
+    num_layers,
+    dual_senders=False,
+    distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+):
     """Build a DRAM-sender GCB + NdShardSpec-allocated weight for the
     receiver-contiguous DRAM-core path. num_shards = ring_size > num_dram_banks
-    triggers the manager's recv-contig detection."""
+    triggers the manager's recv-contig detection.
+
+    The weight's shard distribution and the GCB sender->receiver pairing must
+    agree: round-robin shards pair with strided arcs, shard-contiguous (CONTIGUOUS_1D)
+    shards pair with contiguous arcs. Either pairing yields shard index == ring
+    position, so the validator's per-receiver column slice is unchanged."""
+    is_shard_contiguous = distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
     tile_bytes = _bytes_per_tile(dtype)
     num_dram_banks = device.dram_grid_size().x
     ring_size = num_dram_banks * recv_per_bank
@@ -347,12 +365,19 @@ def _setup_weight_and_gcb_recv_contig(device, K, N, dtype, recv_per_bank, num_la
     pt_weight = torch.zeros(1, 1, K_padded, N)
     pt_weight[:, :, :K, :] = torch.randn(1, 1, K, N)
 
-    tt_weight = _make_recv_contig_weight(device, pt_weight, num_dram_banks, ring_size, dtype)
+    tt_weight = _make_recv_contig_weight(
+        device, pt_weight, num_dram_banks, ring_size, dtype, distribution_strategy=distribution_strategy
+    )
 
-    bank_to_receivers = [
-        (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
-        for b in range(num_dram_banks)
-    ]
+    if is_shard_contiguous:
+        bank_to_receivers = [
+            (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
+        ]
+    else:
+        bank_to_receivers = [
+            (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
+            for b in range(num_dram_banks)
+        ]
     gcb_size = _GCB_DEPTH_PAGES * push_page_size
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
         device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
@@ -377,6 +402,43 @@ def _setup_weight_and_gcb_recv_contig(device, K, N, dtype, recv_per_bank, num_la
 def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, num_layers, dual_senders):
     tt_weight, gcb, num_iters_total, push_page_size, ring_size = _setup_weight_and_gcb_recv_contig(
         device, K, N, dtype, recv_per_bank, num_layers, dual_senders=dual_senders
+    )
+    with tensor_prefetcher_session(device, dual_senders_per_bank=dual_senders):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device,
+            tt_weight,
+            num_layers=num_layers,
+            print_stride=max(1, ring_size // 4),
+            global_cb=gcb,
+        )
+
+
+@pytest.mark.parametrize(
+    "K,N,dtype,recv_per_bank,num_layers,dual_senders",
+    [
+        (2048, 3584, ttnn.bfloat8_b, 2, 1, False),  # ring=16, contiguous arcs
+        (4096, 14336, ttnn.bfloat8_b, 8, 1, False),  # FF1 ring=64
+        (2048, 7168, ttnn.bfloat8_b, 4, 1, False),  # ring=32, single-sender nr=4
+        (4096, 14336, ttnn.bfloat8_b, 8, 1, True),  # FF1 ring=64, dual-sender split 4/4
+    ],
+    ids=["multi_ksub", "ff1", "single_r4", "ff1_dual"],
+)
+def test_validator_dram_sender_recv_contig_shard_contiguous(
+    device, K, N, dtype, recv_per_bank, num_layers, dual_senders
+):
+    """Shard-contiguous (CONTIGUOUS_1D) recv-contig: adjacent shards share a bank, so each bank
+    feeds a contiguous ring arc. Exercises the shard-contiguous shard->bank placement (host BDS)
+    and the distribution-aware TensorAccessor the validator reads the source through."""
+    tt_weight, gcb, num_iters_total, push_page_size, ring_size = _setup_weight_and_gcb_recv_contig(
+        device,
+        K,
+        N,
+        dtype,
+        recv_per_bank,
+        num_layers,
+        dual_senders=dual_senders,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
     )
     with tensor_prefetcher_session(device, dual_senders_per_bank=dual_senders):
         ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb)

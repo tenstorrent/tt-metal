@@ -128,9 +128,14 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Asinh: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # atanh: domain |x| < 1; stay away from ±1 to avoid ±inf
+    # atanh: domain |x| < 1. The log1p reformulation is stable across the whole
+    # interior including the small-x region (catastrophic cancellation in the old
+    # form) and close to ±1, so sweep nearer the boundary; stay just inside ±1 to
+    # avoid the exact ±inf endpoints (covered separately by special-case tests).
     MathOperation.Atanh: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.95, high=0.95)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-0.999, high=0.999
+        )
     ),
     # celu: exercises both the exponential branch (x < 0) and linear (x >= 0)
     MathOperation.Celu: OperandSpecs(
@@ -146,6 +151,14 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Elu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
+    # erfinv: domain |x| < 1; stay just inside ±1 to avoid the ±inf endpoints.
+    MathOperation.Erfinv: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=0.99)
+    ),
+    # heaviside: cover both the negative (->0) and positive (->1) branches.
+    MathOperation.Heaviside: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
     # exp: format-specific overflow threshold
     MathOperation.Exp: _exp_spec,
     # exp2: format-specific overflow threshold
@@ -154,9 +167,15 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Fill: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=1.0)
     ),
-    # gelu: Gaussian activation — gaussian distribution naturally exercises tails
+    # gelu: gaussian-sampled (mean=0, std=3) — most inputs near 0, but still some large ones.
     MathOperation.Gelu: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.GAUSSIAN, mean=0.0, std=3.0)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.GAUSSIAN,
+            mean=0.0,
+            std=3.0,
+            low=-5.0,
+            high=5.0,
+        )
     ),
     # gelu_tanh: tanh approximation of gelu — same Gaussian spread exercises both
     # tails (saturation) and values near 0 (the +-0 sign path).
@@ -195,6 +214,11 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.ReluMin: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
+    # lrelu: leaky ReLU with slope 0.1; span both signs so the negative
+    # (scaled) branch and the positive (pass-through) branch are exercised.
+    MathOperation.Lrelu: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
     MathOperation.Threshold: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
@@ -211,6 +235,56 @@ _OP_DOMAIN_REGISTRY: Dict[
     # silu: silu(x) = x * sigmoid(x); cover saturation + linear regions
     MathOperation.Silu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # softshrink: piecewise around ±lambda (0.5); span both shrink branches and the zero band
+    MathOperation.Softshrink: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # softsign: softsign(x) = x / (1 + |x|); defined for all reals
+    MathOperation.Softsign: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # mish: mish(x) = x * tanh(softplus(x)); defined for all reals, cover saturation
+    MathOperation.Mish: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # selu: piecewise at x==0; span both the linear (x>=0) and exp (x<0) branches
+    MathOperation.Selu: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # i0: modified Bessel I0; kernel poly approx is only valid on |x| <= 3.75
+    MathOperation.I0: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
+    ),
+    # comparison-to-zero: span both signs so the </<=/>/>= branches are exercised
+    MathOperation.EqualZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.NotEqualZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.LessThanZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.GreaterThanZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.LessThanEqualZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.GreaterThanEqualZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    # rdiv: value / x; keep x away from 0 to avoid the reciprocal blow-up
+    MathOperation.Rdiv: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=1.0, high=8.0)
+    ),
+    # clamp/hardtanh: bounds fixed to [-1, 1]; span past both bounds to exercise clamping
+    MathOperation.Clamp: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.Hardtanh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
     ),
     # sin: cover the full unit circle
     MathOperation.Sin: OperandSpecs(
@@ -443,6 +517,10 @@ _SFPU_UNDEFINED_RANGES: Dict[
     MathOperation.Log1p: {Operand.A: [(-float("inf"), -1.0 + 1e-6)]},
     MathOperation.Rsqrt: {Operand.A: [(-float("inf"), 1e-6)]},
     MathOperation.Acosh: {Operand.A: [(-float("inf"), 1.0)]},
+    # erfinv: defined only on the open interval (-1, 1)
+    MathOperation.Erfinv: {
+        Operand.A: [(-float("inf"), -1.0 + 1e-6), (1.0 - 1e-6, float("inf"))]
+    },
     # ── Binary: per-operand holes ────────────────────────────────────────────
     # div: divisor (srcB) must avoid 0
     MathOperation.SfpuElwdiv: {Operand.B: [(-1e-6, 1e-6)]},
