@@ -169,3 +169,28 @@
   - Reader kernel `fill_causal_mask_tile` template: needed to handle both FP32 and BF16 tile formats for the mask CB. Used `mask_tile_bytes >= 4 * 32 * 32` to detect FP32 format at runtime. The BF16 format uses packed uint16 values (2 per uint32 slot).
   - Mask CB format: originally used input dtype for mask CB. Changed to `intermediate_format` for causal mode so the -1e9 mask values match the score accumulation precision (Float32 when fp32_dest_acc_en=True, Float16_b when False).
 - **Tests added**: test_sdpa_refinement4_causal.py (36 tests covering causal self-attention across shape scaling, multi-head/multi-batch, explicit scale, GQA/MQA, cross-attention exclusion, is_causal+attn_mask mutual exclusion, causal vs custom mask equivalence, sequential state-leak regression, all-ones deterministic input, non-power-of-2 heads, long context)
+
+## Refinement 5 — Non-tile-aligned shapes
+- **Date**: 2026-07-07
+- **What was done**:
+  - Added `w_non_aligned` and `h_non_aligned` to `SUPPORTED["alignment"]`.
+  - Program descriptor: changed tile count computation from truncating `// 32` to ceildiv `(S + 31) // 32` for `S_q_t`, `S_kv_t`, and `D_t`. Non-aligned dimensions occupy a full tile in TILE_LAYOUT (zero-padded by `ttnn.from_torch`).
+  - Program descriptor: added `has_kv_padding` and `S_kv_padded` compile-time args to reader kernel (CT args [13] and [14]), and `has_kv_padding` to compute kernel (CT arg [10]).
+  - Program descriptor: force mask CB allocation when `needs_padding_mask` (non-aligned S_kv + no caller mask).
+  - Reader kernel: generate column-based padding mask for the last KV tile when `has_kv_padding` and `mask_mode=none`. The mask sets columns >= `S_kv_in_tile` to `-1e9` (masked out). Key insight: padded K positions are COLUMNS in the scores tile (Q @ K^T), not rows.
+  - Reader kernel: overlay padding mask on custom mask tiles (last KV tile) after reading from DRAM. For bfloat8_b input, the mask tensor is typecast to `intermediate_format` on the host side first — writing raw bits into a block-float tile is incorrect.
+  - Reader kernel: overlay padding mask on causal mask tiles (last KV tile). Padded K positions below the causal diagonal are still masked out (they're zero-padded, not real positions).
+  - Reader kernel: use mask CB's tile size for mask accessor (was using Q's tile size, which is wrong when mask is typecast to a different format).
+  - Compute kernel: apply mask when `has_kv_padding` (in addition to `has_mask` and `is_causal`). The `BinaryFpu<Add>` eltwise chain applies the padding mask the same way as custom/causal masks.
+  - Op file: use ceildiv in L1 budget pre-flight check.
+  - w_non_aligned (D not divisible by 32): no padding mask needed. Padded D columns are zeros in K/V, so Q·0=0 in the dot product doesn't corrupt softmax normalization (just reduces magnitude uniformly).
+- **Accuracy achieved**:
+  - bf16: PCC ≥ 0.9999 on all non-aligned shapes (self/cross, mask/causal/none, multi-head, multi-batch, GQA/MQA, explicit scale)
+  - fp32: PCC ≥ 0.999
+  - bf8b: PCC ≥ 0.99 (including custom mask + non-aligned via typecast)
+- **Golden test progress**: 1784 / 2269 passing (was 1494 / 2269 in prior phase). +290 new passing cells (non-aligned shapes across all dtype × mask × scale × kv_heads × fp32_dest_acc_en combinations). 16 failures (all pre-existing: 6 OOM float32+D=1024, 10 precision float32+S≥4096). 468 xfailed (causal+cross exclusion + fp32+False exclusion). Zero hangs. Full suite runs in ~170 seconds.
+- **Issues encountered**:
+  - Initial padding mask used row-based fill (incorrect — padded K positions are columns in scores tile, not rows). Fixed by switching to column-based fill.
+  - bfloat8_b + custom mask + non-aligned: writing raw BF16_NEG_INF_BITS into a bfloat8_b (block-float) tile produces garbage. Fixed by typecasting the mask tensor to `intermediate_format` on the host side before passing to the program descriptor, and forcing the mask CB to `intermediate_format` when `has_mask + has_kv_padding`.
+  - Mask accessor tile size mismatch: after typecasting mask to fp32, the mask accessor still used Q's bf8b tile size (1088 bytes) instead of the mask CB's fp32 tile size (4096 bytes). Fixed by using `get_tile_size(cb_attn_mask)` for the mask accessor.
+- **Tests added**: test_sdpa_refinement5_non_aligned.py (44 tests covering w_non_aligned, h_non_aligned, both non-aligned, all mask modes, all dtypes, multi-head/batch, GQA/MQA, cross-attention, deterministic all-ones, sequential state-leak regression, golden INPUTS non-aligned shapes)

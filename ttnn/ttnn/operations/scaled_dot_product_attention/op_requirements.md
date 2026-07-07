@@ -114,7 +114,7 @@ Bullet 2 FAIL: acceptance/refinement tests failing:
 
 **Verifier notes**: Per the design doc rules, `{"mask_mode": "causal", "attention_kind": "cross"}` should be declared as an EXCLUSION (causal requires S_q == S_kv). Also, `is_causal=True` combined with a non-None `attn_mask` should raise ValueError (already implemented in validate). Missing value: mask_mode={causal}.
 
-### [ ] Refinement 5 — Non-tile-aligned shapes
+### [x] Refinement 5 — Non-tile-aligned shapes
 
 **Goal**: add `w_non_aligned` and `h_non_aligned` to `SUPPORTED["alignment"]` by handling non-tile-aligned dimensions (D % 32 != 0 or S % 32 != 0) with zero-padding / masking in the reader kernel.
 
