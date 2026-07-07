@@ -234,7 +234,7 @@ ProgramArtifacts create_sharded_artifacts(
     if (a.device()->arch() == tt::ARCH::QUASAR) {
         reader_hw = m2::DataMovementGen2Config{};
     } else {
-        reader_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1};
+        reader_hw = m2::CreateReaderGen1DataMovementConfig();
     }
     m2::KernelSpec reader_spec{
         .unique_id = READER,
@@ -249,7 +249,7 @@ ProgramArtifacts create_sharded_artifacts(
     if (a.device()->arch() == tt::ARCH::QUASAR) {
         writer_hw = m2::DataMovementGen2Config{};
     } else {
-        writer_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+        writer_hw = m2::CreateWriterGen1DataMovementConfig();
     }
     m2::KernelSpec writer_spec{
         .unique_id = WRITER,

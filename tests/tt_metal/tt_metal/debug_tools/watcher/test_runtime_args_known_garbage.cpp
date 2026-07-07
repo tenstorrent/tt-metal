@@ -149,7 +149,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
             .source = rta_crta_kernel_path,
             .num_threads = 1,
             .compile_time_args = {{"l1_scratch_addr", l1_unreserved_base}},
-            .hw_config = experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0},
+            .hw_config = experimental::CreateWriterGen1DataMovementConfig(),
         };
         experimental::KernelSpec compute_spec{
             .unique_id = COMPUTE_KERNEL_NAME,
@@ -264,7 +264,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     if (is_quasar) {
         dm_cfg = experimental::DataMovementGen2Config{};
     } else {
-        dm_cfg = experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+        dm_cfg = experimental::CreateWriterGen1DataMovementConfig();
     }
 
     experimental::KernelSpec dm_spec{
@@ -410,7 +410,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
             kspec.hw_config = experimental::DataMovementGen2Config{};
         } else {
             kspec.num_threads = 1;
-            kspec.hw_config = experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+            kspec.hw_config = experimental::CreateWriterGen1DataMovementConfig();
         }
     } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
         kspec.num_threads = 1;  // On Quasar, only 1 NEO Cluster; gen1 has a single compute group.

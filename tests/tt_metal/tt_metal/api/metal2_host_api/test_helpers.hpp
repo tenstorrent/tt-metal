@@ -21,6 +21,8 @@
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "experimental/metal2_host_api/data_movement_hardware_config.hpp"
+#include "kernel_types.hpp"
 
 // This file contains shortcut helper functions to create minimal valid ProgramSpec
 // objects for unit tests. This cuts boilerplate in a unit testing context.
@@ -91,8 +93,15 @@ inline KernelSpec MakeMinimalGen2DMKernel(std::string name, uint32_t num_threads
 // pairing of an RISCV_0 kernel with an RISCV_1 kernel on the same node gets distinct NOCs. On Gen1,
 // two dedicated-NOC DM kernels sharing a NOC hang the device (validation rejects it), so a helper
 // that always defaulted to NOC_0 would produce a pair that fails validation.
-inline KernelSpec MakeMinimalGen1DMKernel(
-    std::string name, tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0) {
+inline KernelSpec MakeMinimalGen1DMKernel(std::string name) {
+    return KernelSpec{
+        .unique_id = KernelSpecName{std::move(name)},
+        .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
+        .num_threads = 1,
+        .hw_config = CreateReaderGen1DataMovementConfig()};
+}
+
+inline KernelSpec MakeMinimalGen1DMKernel(std::string name, tt::tt_metal::DataMovementProcessor processor) {
     const tt::tt_metal::NOC noc = (processor == tt::tt_metal::DataMovementProcessor::RISCV_0)
                                       ? tt::tt_metal::NOC::NOC_0
                                       : tt::tt_metal::NOC::NOC_1;
@@ -100,12 +109,7 @@ inline KernelSpec MakeMinimalGen1DMKernel(
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .hw_config =
-            DataMovementGen1Config{
-                .processor = processor,
-                .noc = noc,
-            },
-    };
+        .hw_config = DataMovementGen1Config{.processor = processor, .noc = noc}};
 }
 
 // Helper to create a minimal valid KernelSpec for data movement whose Gen1 config is built

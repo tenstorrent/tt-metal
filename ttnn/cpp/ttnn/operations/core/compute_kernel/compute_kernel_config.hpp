@@ -68,6 +68,10 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 // packer_l1_acc and throttle_level are op-side concerns, not translated.
 // The result's per-DFB unpack_to_dest_mode is left default for the program factory to set.
 // (As is bfp8_pack_precise, but that is rarely to never set non-default.)
+//
+// Please note that the following fields are not set from this helper:
+// enable_2x_src_format, unpack_to_dest_en, unpack_to_dest_mode
+// If specialization is desired, use site should update them instead.
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     tt::ARCH arch, const ComputeKernelConfig& config);
 

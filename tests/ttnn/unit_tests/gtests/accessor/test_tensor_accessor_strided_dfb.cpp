@@ -232,8 +232,8 @@ TEST_P(TensorAccessorStridedDFBTest, Gen1StridedPagesCopy) {
     const auto& params = GetParam();
 
     auto kernel_builder = [&](KernelSpec& reader, KernelSpec& writer) {
-        reader = MakeMinimalGen1DMKernel("reader", DataMovementProcessor::RISCV_0);
-        writer = MakeMinimalGen1DMKernel("writer", DataMovementProcessor::RISCV_1);
+        reader = MakeMinimalWriterDMKernel("reader");
+        writer = MakeMinimalReaderDMKernel("writer");
         // STRIDED with 1 thread: stride=1, each thread accesses all DFB entries
         reader.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
         writer.dfb_bindings.push_back(ConsumerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
