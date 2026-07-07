@@ -102,6 +102,22 @@ def _is_mesh_device(device):
     return hasattr(device, "get_device_ids") or hasattr(device, "get_devices")
 
 
+def _detect_num_cqs(device):
+    """Best-effort read of how many command queues the device was opened with; 1 if unknown.
+    (Mirrors perf_automation.trace_replay._num_command_queues — this ttnn build's device object
+    does not always expose the count, so the caller usually passes num_cqs explicitly.)"""
+    for attr in ("num_command_queues", "num_hw_cqs"):
+        fn = getattr(device, attr, None)
+        try:
+            if callable(fn):
+                return int(fn())
+            if isinstance(fn, int):
+                return int(fn)
+        except Exception:
+            pass
+    return 1
+
+
 def _to_torch(t, device=None):
     """Mesh-safe readback. Bare ttnn.to_torch can busy-loop on a MeshDevice
     (see the per-component harness), so synchronize first and, on a mesh, read
@@ -199,12 +215,17 @@ class LongCatImagePipelineTT:
 
     PIPELINE_STAGES = PIPELINE_STAGES
 
-    def __init__(self, device, pipe):
+    def __init__(self, device, pipe, num_cqs=None):
         self.device = device
         self.pipe = pipe
         self.vae_scale_factor = pipe.vae_scale_factor
         self.num_channels_latents = 16
         self.invoked = set()  # graduated stub modules actually built + called (Gate 2)
+        # How many command queues the device was opened with. The trace+2CQ denoise path
+        # (stage per-step inputs on CQ1 while CQ0 runs the trace) needs >=2. The device object
+        # does not reliably expose the count in this ttnn build, so callers that opened a 2-CQ
+        # device pass num_cqs=2 (the demo's `--cq 2`). Defaults to the single-CQ traced path.
+        self.num_cqs = int(num_cqs) if num_cqs is not None else _detect_num_cqs(device)
 
     # ── stage 1: text encode (qwen2_v_l_model stub) ──────────────────────────
     def _tt_text_encode(self, input_ids, attention_mask, prefix_len, suffix_len):
@@ -268,6 +289,17 @@ class LongCatImagePipelineTT:
             # the captured input buffer before the next execute. Falls back to eager on the
             # image-edit path (img_lat) or any trace error.
             if image_latents_packed is None:
+                # On a 2-CQ device, overlap per-step input staging (CQ1) with the traced
+                # compute (CQ0). Degrade to trace+1CQ, then eager, on any error.
+                if getattr(self, "num_cqs", 1) >= 2:
+                    try:
+                        return self._tt_denoise_traced_2cq(
+                            stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
+                            txt_ids, img_ids, timesteps, sigmas, guidance_scale,
+                            enable_cfg_renorm, cfg_renorm_min, do_cfg,
+                        )
+                    except Exception as _te:
+                        print(f"[denoise] traced+2cq path failed ({type(_te).__name__}: {str(_te)[:200]}); trying traced+1cq", flush=True)
                 try:
                     return self._tt_denoise_traced(
                         stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
@@ -402,6 +434,109 @@ class LongCatImagePipelineTT:
                 tracer(latents, temb, dt_t, enc_pos, enc_neg) if do_cfg else tracer(latents, temb, dt_t, enc_pos)
             )
         return _to_torch(latents, self.device)
+
+    def _tt_denoise_traced_2cq(
+        self, stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
+        txt_ids, img_ids, timesteps, sigmas, guidance_scale, enable_cfg_renorm, cfg_renorm_min, do_cfg,
+    ):
+        """Trace + TWO command queues. Captures the SAME whole per-step DiT compute as
+        _tt_denoise_traced (both CFG forwards + guidance + cfg_renorm + Euler) as ONE trace on
+        CQ0, then each step stages the next step's inputs on CQ1 while CQ0 runs the trace,
+        synchronized with events — the canonical trace+2CQ decode loop.
+
+        Because the trace program is identical to the 1CQ path and it is fed the same inputs,
+        the result is numerically identical; only the queue orchestration differs. HONEST NOTE:
+        for this workload the win over trace+1CQ is ~0. The only per-step inputs that can be
+        prefetched are the time embedding `temb` and the Euler `dt` — both tiny and known in
+        advance — and the sole cross-step dependency (the latents) is device-resident (fed back
+        from the trace output, so there is no host transfer to hide). This path exists for
+        completeness / parity with the 2CQ decode contract; requires num_command_queues>=2."""
+        from models.tt_dit.utils.tracing import Tracer
+
+        device = self.device
+        cos, sin = stub._rope_tables(txt_ids, img_ids)  # fixed positions
+        enc_pos = stub._linear(stub._to_ttnn(prompt_embeds_pos), stub.tf.context_embedder)  # fixed
+        enc_neg = (
+            stub._linear(stub._to_ttnn(prompt_embeds_neg), stub.tf.context_embedder) if do_cfg else None
+        )
+        gs = float(guidance_scale)
+
+        def _dit(lat, temb, enc):  # one DiT forward (identical to _tt_denoise_traced._dit)
+            hid = stub._linear(lat, stub.tf.x_embedder)
+            for blk in stub.tf.transformer_blocks:
+                enc, hid = stub._double_block(blk, hid, enc, temb, cos, sin)
+            for blk in stub.tf.single_transformer_blocks:
+                enc, hid = stub._single_block(blk, hid, enc, temb, cos, sin)
+            scale, shift = stub._ada_mod_cont(temb, stub.tf.norm_out.linear)
+            out = ttnn.add(ttnn.mul(stub._layernorm(hid), ttnn.add(scale, 1.0)), shift)
+            return stub._linear(out, stub.tf.proj_out)
+
+        def _step_cfg(lat, temb, dt_t, enc_p, enc_n):
+            nt = ttnn.typecast(_dit(lat, temb, enc_p), F32)
+            nu = ttnn.typecast(_dit(lat, temb, enc_n), F32)
+            noise = ttnn.add(nu, ttnn.mul(ttnn.sub(nt, nu), gs))
+            if enable_cfg_renorm:
+                cn = self._l2_norm_lastdim(nt)
+                nn_ = self._l2_norm_lastdim(noise)
+                sc = ttnn.clamp(ttnn.mul(cn, ttnn.reciprocal(ttnn.add(nn_, 1e-8))), cfg_renorm_min, 1.0)
+                noise = ttnn.mul(noise, sc)
+            return ttnn.add(lat, ttnn.mul(noise, dt_t))
+
+        def _step_nocfg(lat, temb, dt_t, enc_p):
+            noise = ttnn.typecast(_dit(lat, temb, enc_p), F32)
+            return ttnn.add(lat, ttnn.mul(noise, dt_t))
+
+        # CQ1 may only issue DMA (host<->device), never programs — tt-metal's sub-device program
+        # ownership belongs to the compute queue (CQ0). So temb/dt are staged as HOST-tensor DMAs
+        # on CQ1: precompute the whole schedule once (they are latents-independent + known ahead)
+        # into ttnn HOST tensors matching the captured buffers' dtype/layout, plus the CQ0-side
+        # device buffers that seed the trace's step-0 inputs.
+        temb_hosts, dt_hosts = [], []
+        temb_buf = dt_buf = None
+        for i, t in enumerate(timesteps):
+            ts = torch.tensor([float(t) / 1000.0], dtype=torch.float32)
+            temb_dev = stub._time_embed(ts * 1000.0)  # device-computed embedding
+            if i == 0:
+                temb_buf = ttnn.clone(temb_dev)  # captured temb input buffer (device)
+                t_dtype, t_layout = temb_dev.dtype, temb_dev.layout
+            temb_hosts.append(ttnn.from_torch(_to_torch(temb_dev, device), dtype=t_dtype, layout=t_layout))
+            dt = float(sigmas[i + 1]) - float(sigmas[i])
+            dt_torch = torch.full((1, 1, 1), dt, dtype=torch.float32)
+            dt_hosts.append(ttnn.from_torch(dt_torch, dtype=F32, layout=TILE))
+            if i == 0:
+                dt_buf = ttnn.from_torch(dt_torch, dtype=F32, layout=TILE, device=device, memory_config=DRAM)
+
+        latents_buf = ttnn.from_torch(
+            latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=device, memory_config=DRAM
+        )
+
+        tracer = Tracer(_step_cfg if do_cfg else _step_nocfg, device=device)
+        cap = (latents_buf, temb_buf, dt_buf, enc_pos, enc_neg) if do_cfg else (latents_buf, temb_buf, dt_buf, enc_pos)
+        # First call captures the trace on CQ0 and computes step 0.
+        out = tracer(*cap, tracer_cq_id=0, tracer_blocking_execution=False)
+        ttnn.synchronize_device(device)
+        inp = tracer.inputs  # captured input buffers (same objects as `cap`)
+
+        for i in range(1, len(timesteps)):
+            # Feed the previous step's output latents back into the latents input buffer. This is a
+            # device->device program, so it runs on CQ0 (which owns the sub-device), ordered after
+            # the trace that produced `out` and before the trace that will read `inp[0]`.
+            ttnn.copy(out, inp[0])
+            # Stage this step's temb + dt into the captured input buffers on CQ1 as pure DMA
+            # (host->device), overlapping the CQ0 latents copy above.
+            ttnn.copy_host_to_device_tensor(temb_hosts[i], inp[1], cq_id=1)
+            ttnn.copy_host_to_device_tensor(dt_hosts[i], inp[2], cq_id=1)
+            ev = ttnn.record_event(device, 1)  # CQ1 inputs staged
+            ttnn.wait_for_event(0, ev)  # CQ0 waits for the inputs before running the traced step
+            # Reuse the SAME buffers -> the Tracer sees matching buffer addresses and skips its own
+            # input copies, so execute_trace runs on CQ0 with no redundant per-op host dispatch.
+            step = (inp[0], inp[1], inp[2], inp[3], inp[4]) if do_cfg else (inp[0], inp[1], inp[2], inp[3])
+            out = tracer(*step, tracer_cq_id=0, tracer_blocking_execution=False)
+            op_ev = ttnn.record_event(device, 0)  # CQ0 finished reading the inputs
+            ttnn.wait_for_event(1, op_ev)  # CQ1 must not overwrite temb/dt until then (WAR guard)
+
+        ttnn.synchronize_device(device)
+        return _to_torch(out, device)
 
     # ── stage 3: VAE decode (autoencoder_k_l stub) ───────────────────────────
     def _tt_vae_decode(self, latents_nchw):
@@ -618,11 +753,23 @@ class LongCatImagePipelineTT:
         return (stub._linear(out, stub.tf.proj_out),)
 
     def denoise_write_inputs(self, latents_packed, timestep):
-        """Stage the next step's latents (per-step AR update) on CQ1; refresh temb."""
+        """Stage the next step's latents on CQ1 and refresh temb — the write half of the trace+2CQ
+        decode loop (measure_adapter overlaps this with the CQ0 trace, and auto-degrades to
+        single-CQ if the device was opened with one queue). The upload happens ONCE into a
+        spec-matched staging buffer; each step then does a device->device `copy(..., queue_id=1)`
+        into the trace's persistent latents input, which is a genuine CQ1 transfer (the torch ->
+        copy_host_to_device_tensor form is rejected by ttnn, so it always fell back before)."""
         c = self._trace_ctx
         stub = c["stub"]
         try:
-            ttnn.copy_host_to_device_tensor(latents_packed.to(torch.float32), c["latents"], cq_id=1)
+            host = c.get("_latents_host")
+            if host is None:
+                # a ttnn HOST tensor matching the persistent buffer's dtype/layout; CQ1 can only
+                # issue DMA (not programs), so the cq1 stage MUST be copy_host_to_device_tensor.
+                buf = c["latents"]
+                host = ttnn.from_torch(latents_packed.to(torch.float32), dtype=buf.dtype, layout=buf.layout)
+                c["_latents_host"] = host
+            ttnn.copy_host_to_device_tensor(host, c["latents"], cq_id=1)  # pure DMA on CQ1
         except Exception:
             c["latents"] = stub._to_ttnn(latents_packed)
         ts = torch.tensor([float(timestep)], dtype=torch.float32)

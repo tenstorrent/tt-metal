@@ -27,10 +27,15 @@ from models.experimental.perf_automation.agent.trace_replay import measure_adapt
 HF_MODEL_ID = "meituan-longcat/LongCat-Image"
 
 # Trace replay needs a trace region; l1_small matches the demo/e2e device open.
+# LONGCAT_PERF_CQ=2 opens a second command queue and drives the trace+2CQ replay (input staging
+# on CQ1 overlapping compute on CQ0). Default 1 = single-CQ trace replay.
+_PERF_CQ = int(os.environ.get("LONGCAT_PERF_CQ", "1"))
 _OPEN_KWARGS = {
     "l1_small_size": 24576,
     "trace_region_size": int(os.environ.get("TT_PERF_TRACE_REGION", "209715200")),  # 200 MB
 }
+if _PERF_CQ >= 2:
+    _OPEN_KWARGS["num_command_queues"] = 2
 
 
 def _build_for_perf(dev):
@@ -47,9 +52,10 @@ def test_text_to_image_perf():
     device = ttnn.open_device(device_id=0, **_OPEN_KWARGS)
     try:
         adapter = PipelineDecodeAdapter(_build_for_perf, prompt_ids=None, batch=1)
-        # single-CQ trace replay: the device is opened with one command queue here, so force 1cq
-        # (auto would attempt the 2CQ overlap path and hit a caught-but-noisy cq_id-1 fallback).
-        per_step_ms = measure_adapter(adapter, device, mode="1cq")  # prints TRACE_PER_TOKEN_MS=<ms>
+        # 1cq by default (single command queue); LONGCAT_PERF_CQ=2 opens a 2nd queue above and
+        # drives the trace+2CQ overlap path (measure_adapter degrades to 1cq if it errors).
+        mode = "2cq" if _PERF_CQ >= 2 else "1cq"
+        per_step_ms = measure_adapter(adapter, device, mode=mode)  # prints TRACE_PER_TOKEN_MS=<ms>
         print(f"[perf] denoise per-step device latency: {per_step_ms:.4f} ms", flush=True)
         assert per_step_ms > 0.0
     finally:
