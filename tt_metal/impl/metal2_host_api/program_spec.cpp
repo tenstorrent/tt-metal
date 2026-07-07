@@ -31,6 +31,7 @@
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <variant>
 
 namespace tt::tt_metal::experimental {
 
@@ -814,14 +815,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // Validate DM configs: the config's generation must match the target platform. There is no
-    // implicit cross-generation substitution — supplying the wrong alternative is a hard error, not
-    // silently defaulted. On Gen1 (WH/BH) the kernel must carry a DataMovementGen1Config declaring its
-    // RISC/NOC placement (op-specific; no safe reader-vs-writer default), built with
-    // CreateReaderGen1DataMovementConfig() / CreateWriterGen1DataMovementConfig() or
-    // constructed directly. On Gen2 (Quasar) the kernel must carry a
-    // DataMovementGen2Config (a default-constructed one is fine; core selection is automated and the
-    // config only carries DFB implicit-sync opt-outs).
+    // Validate hardware configs: a kernel's config generation must match the target platform. There
+    // is no implicit cross-generation substitution — supplying the wrong alternative results in direct error.
     for (const auto& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
             const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
@@ -829,15 +824,33 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (is_gen1_arch()) {
                 TT_FATAL(
                     std::holds_alternative<DataMovementGen1Config>(data_movement_config),
-                    "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig holds a "
-                    "DataMovementGen2Config. Supply a Gen1 config (e.g. "
+                    "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig does not hold a "
+                    "DataMovementGen1Config. Supply a Gen1 config (e.g. "
                     "CreateReaderGen1DataMovementConfig()/CreateWriterGen1DataMovementConfig()).",
                     kernel.unique_id);
             } else if (is_gen2_arch()) {
                 TT_FATAL(
                     std::holds_alternative<DataMovementGen2Config>(data_movement_config),
-                    "KernelSpec '{}' targets Gen2 (Quasar) but its DataMovementHardwareConfig holds a "
-                    "DataMovementGen1Config. Supply a Gen2 config (DataMovementGen2Config{{}}).",
+                    "KernelSpec '{}' targets Gen2 (Quasar) but its DataMovementHardwareConfig does not hold a "
+                    "DataMovementGen2Config. Supply a Gen2 config (DataMovementGen2Config{{}}).",
+                    kernel.unique_id);
+            }
+        }
+
+        if (kernel.is_compute_kernel()) {
+            const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
+
+            if (is_gen1_arch()) {
+                TT_FATAL(
+                    std::holds_alternative<ComputeGen1Config>(compute_config),
+                    "KernelSpec '{}' targets Gen1 (WH/BH) but its ComputeHardwareConfig does not hold a "
+                    "ComputeGen1Config. Supply a Gen1 config (ComputeGen1Config).",
+                    kernel.unique_id);
+            } else if (is_gen2_arch()) {
+                TT_FATAL(
+                    std::holds_alternative<ComputeGen2Config>(compute_config),
+                    "KernelSpec '{}' targets Gen2 (Quasar) but its ComputeHardwareConfig does not hold a "
+                    "ComputeGen2Config. Supply a Gen2 config (ComputeGen2Config).",
                     kernel.unique_id);
             }
         }
@@ -899,24 +912,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
         const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
 
-        // Read the shared fields from the sub-config matching the target architecture — the
-        // same sub-config the dispatcher (is_gen2_arch()) will hand to the resolver at runtime.
-        const auto unpack_to_dest_mode = is_gen2_arch() ? (std::holds_alternative<ComputeGen2Config>(compute_config)
-                                                               ? std::get<ComputeGen2Config>(compute_config)
-                                                               : ComputeGen2Config{})
-                                                              .unpack_to_dest_mode
-                                                        : (std::holds_alternative<ComputeGen1Config>(compute_config)
-                                                               ? std::get<ComputeGen1Config>(compute_config)
-                                                               : ComputeGen1Config{})
-                                                              .unpack_to_dest_mode;
-        const bool fp32_dest_acc_en = is_gen2_arch() ? (std::holds_alternative<ComputeGen2Config>(compute_config)
-                                                            ? std::get<ComputeGen2Config>(compute_config)
-                                                            : ComputeGen2Config{})
-                                                               .accumulator_width == AccumulatorWidth::Wide
-                                                     : (std::holds_alternative<ComputeGen1Config>(compute_config)
-                                                            ? std::get<ComputeGen1Config>(compute_config)
-                                                            : ComputeGen1Config{})
-                                                               .accumulator_width == AccumulatorWidth::Wide;
+        const auto& unpack_to_dest_mode =
+            std::visit([](const auto& config) { return config.unpack_to_dest_mode; }, compute_config);
+
+        const bool fp32_dest_acc_en = std::visit(
+            [](const auto& config) { return config.accumulator_width == AccumulatorWidth::Wide; }, compute_config);
 
         // Index the kernel's DFB bindings: which DFBs it binds.
         std::unordered_set<DFBSpecName> bound_dfbs;
@@ -2575,9 +2575,12 @@ std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
 ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
-    const auto gen1 =
-        (std::holds_alternative<ComputeGen1Config>(compute_config) ? std::get<ComputeGen1Config>(compute_config)
-                                                                   : ComputeGen1Config{});
+
+    TT_FATAL(
+        std::holds_alternative<ComputeGen1Config>(compute_config),
+        "Trying to construct a Gen1 compute config but the kernel's ComputeHardwareConfig does not hold a "
+        "ComputeGen1Config, generation mismatch, please provide the correctly typed hardware config.");
+    const auto& gen1 = std::get<ComputeGen1Config>(compute_config);
 
     std::vector<UnpackToDestMode> unpack_modes = BuildUnpackToDestModeVector(gen1.unpack_to_dest_mode, dfb_name_to_id);
 
@@ -2622,9 +2625,11 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
-    const auto gen2 =
-        (std::holds_alternative<ComputeGen2Config>(compute_config) ? std::get<ComputeGen2Config>(compute_config)
-                                                                   : ComputeGen2Config{});
+    TT_FATAL(
+        std::holds_alternative<ComputeGen2Config>(compute_config),
+        "Trying to construct a Quasar compute config but the kernel's ComputeHardwareConfig does not hold a "
+        "ComputeGen2Config, generation mismatch, please provide the correctly typed hardware config.");
+    const auto& gen2 = std::get<ComputeGen2Config>(compute_config);
 
     std::vector<UnpackToDestMode> unpack_modes = BuildUnpackToDestModeVector(gen2.unpack_to_dest_mode, dfb_name_to_id);
 
