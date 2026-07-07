@@ -19,6 +19,7 @@ Design principle: Thick engine, thin model executor.
 from __future__ import annotations
 
 import contextlib
+import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -952,6 +953,23 @@ class TracedLLMExecutor:
         self.trace_inputs_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
         self.trace_output_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
 
+        # On-device decode loop (opt-in, default OFF). When enabled, the captured decode trace
+        # advances position/rope on device (in-place ``ttnn.plus_one``) and feeds the sampled token
+        # back into the persistent token buffer (``ttnn.sampling(output_tensor=...)``), so steady-state
+        # steps replay with NO per-step host input staging. Mirrors TTTv1's on-device sampling trace
+        # (tt_transformers generator ``refresh_trace_inputs=False`` + model ``_increment_decode_positions_device``).
+        # Only valid for free-running greedy/top-k generation — NOT teacher forcing (which injects
+        # host tokens every step), so accuracy/teacher-forcing runs must leave this OFF.
+        self._ondevice_decode_loop = os.environ.get("TTT_ONDEVICE_DECODE_LOOP", "0") == "1"
+        # Diagnostic: read back device current_pos on the first few steps to prove plus_one persistence.
+        self._ondevice_decode_loop_debug = os.environ.get("TTT_ONDEVICE_DECODE_LOOP_DEBUG", "0") == "1"
+        # Per sampling-mode flag: the next decode step must re-seed the persistent buffers from host
+        # (correct first token + start position). Set after every prefill and at init; cleared once
+        # the device has been seeded, after which steady-state steps carry state on device.
+        self._decode_needs_reseed: dict[bool, bool] = defaultdict(lambda: True)
+        self._prev_decode_page_table: torch.Tensor | None = None
+        self._decode_dbg_count = 0
+
         self.mode = None
         self.already_warmed_up_prefill = False
 
@@ -1009,6 +1027,20 @@ class TracedLLMExecutor:
     def _get_decode_trace_key(self, sampling_params) -> bool:
         """Decode trace key = whether sampling is on device."""
         return sampling_params is not None
+
+    def _decode_loop_active(self, sampling_params) -> bool:
+        """Whether the on-device decode loop applies for this decode call.
+
+        Requires: the opt-in flag, on-device sampling, AND the top-k op path (``ttnn.sampling``),
+        whose output is uint32 ``[1,1,1,32]`` on Wormhole/Blackhole — an exact match for the
+        persistent token buffer, so it can be fed back in place via ``output_tensor=`` with no
+        realloc. The force-argmax path (``ttnn.argmax`` → uint32 ``[1,1,32]``, rank-3) does NOT
+        match the rank-4 token buffer, so the loop stays off there and falls back to host resupply.
+        """
+        if not self._ondevice_decode_loop or sampling_params is None or self.model.sampling is None:
+            return False
+        # kpt is None only for the force-argmax path; non-None => top-k op path.
+        return self._eager._get_decode_sampling_kpt(sampling_params) is not None
 
     def _prepare_prefill_trace_inputs_host(
         self, tokens, page_table, start_pos=0, chunk_page_table=None, last_token_idx=None
@@ -1221,6 +1253,10 @@ class TracedLLMExecutor:
 
         self.mode = Mode.PREFILL
         self._eager._assert_kv_cache_identity(kv_cache)
+        # A prefill breaks decode continuity: the next decode step must re-seed the persistent
+        # on-device buffers from host (correct first token + start position) before the device
+        # can carry state on its own. Mark all sampling modes stale.
+        self._decode_needs_reseed = defaultdict(lambda: True)
 
         batch_size, batch_seq_len = tokens.shape
         vocab_size = self.model.vocab_size
@@ -1450,11 +1486,27 @@ class TracedLLMExecutor:
         if not self.trace_ids_decode[sampling_on_device]:
             self._capture_decode_trace(tokens, start_pos, page_table, kv_cache, sampling_on_device, sampling_params)
 
-        host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
-        copy_host_to_device(
-            host_tensors=host_inputs,
-            device_tensors=self.trace_inputs_decode[sampling_on_device],
-        )
+        loop_active = self._decode_loop_active(sampling_params)
+        if loop_active and not self._decode_needs_reseed[sampling_on_device]:
+            # Steady-state on-device loop: the captured trace advanced current_pos/rot_mat_idxs
+            # (in-place plus_one) and wrote the sampled token back into the persistent token buffer
+            # on the previous replay, so tokens/positions need NO host staging. Refresh only the
+            # page table, and only when it actually changed (block boundaries crossed).
+            if self._prev_decode_page_table is None or not torch.equal(self._prev_decode_page_table, page_table):
+                host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
+                device_inputs = self.trace_inputs_decode[sampling_on_device]
+                ttnn.copy_host_to_device_tensor(host_inputs[3], device_inputs[3])  # page_table only
+                self._prev_decode_page_table = page_table.clone()
+        else:
+            # Reseed (first step after prefill, or loop disabled): full host refresh of all inputs.
+            host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
+            copy_host_to_device(
+                host_tensors=host_inputs,
+                device_tensors=self.trace_inputs_decode[sampling_on_device],
+            )
+            self._prev_decode_page_table = page_table.clone()
+            if loop_active:
+                self._decode_needs_reseed[sampling_on_device] = False
 
         ttnn.execute_trace(
             self.mesh_device,
@@ -1464,16 +1516,23 @@ class TracedLLMExecutor:
         )
         tt_output = self.trace_output_decode[sampling_on_device]
 
+        if loop_active and self._ondevice_decode_loop_debug and self._decode_dbg_count < 6:
+            # Prove plus_one persistence: read back the device position after this replay.
+            # Expect device current_pos to track host+1 (device already incremented for next step);
+            # if it stays pinned, plus_one is not persisting across replays.
+            self._decode_dbg_count += 1
+            dbg_pos = self.trace_inputs_decode[sampling_on_device][1]
+            pos_host = ttnn.to_torch(ttnn.get_device_tensors(dbg_pos)[0]).flatten()[:1].tolist()
+            logger.info(f"[ondevice-loop-debug] host start_pos[0]={int(start_pos[0])} device current_pos[0]={pos_host}")
+
         if read_from_device:
             if sampling_on_device:
                 tt_toks, tt_log_probs = tt_output
                 toks_host = tt_toks.cpu()
-                ttnn.synchronize_device(self.mesh_device)
                 return _process_output_decode_tokens(toks_host, B, cluster_shape), None
             else:
                 logits, _ = tt_output
                 logits_host = logits.cpu()
-                ttnn.synchronize_device(self.mesh_device)
                 return _process_output_decode(logits_host, B, vocab_size, num_devices, cluster_shape), None
 
         return tt_output
@@ -1516,6 +1575,10 @@ class TracedLLMExecutor:
         host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
 
+        # On-device decode loop: when active, the sampled token is fed back in place into the
+        # persistent token buffer (device_inputs[0]) and position/rope are advanced on device.
+        loop_active = self._decode_loop_active(sampling_params)
+
         # On-device sampling: materialise sampling buffers AND JIT-compile the sampling program
         # BEFORE trace capture. Both buffer materialisation (Sampling1D LazyBuffers + the
         # LogProbsCalculator's ttnn.as_tensor scratch) and a first-run program compile issue device
@@ -1535,10 +1598,26 @@ class TracedLLMExecutor:
                 wu_rot_mats = self.model.rope_setup.get_rot_mats(wu_rot_mat_idxs)
                 wu_embed = self.model.embed_decode(wu_tokens)
                 wu_logits = self.model.decode_forward(wu_embed, wu_current_pos, wu_rot_mats, page_table=wu_page_table)
-                wu_toks, _ = self._eager._sampling_decode_forward(wu_logits, sampling_params, tt_out_tok=None)
+                # Warm up with the SAME output_tensor the captured body uses, so the
+                # ttnn.sampling(output_tensor=...) program variant is compiled before capture
+                # (avoids a "compile during trace capture" fatal).
+                wu_feedback = wu_tokens if loop_active else None
+                wu_toks, _ = self._eager._sampling_decode_forward(wu_logits, sampling_params, tt_out_tok=wu_feedback)
             ttnn.synchronize_device(self.mesh_device)
-            cleanup_ttnn_value(wu_toks)
+            # Only free wu_toks if it is a fresh allocation; when loop_active it aliases the
+            # persistent token buffer (device_inputs[0]) and MUST NOT be deallocated.
+            if wu_feedback is None:
+                cleanup_ttnn_value(wu_toks)
             ttnn.synchronize_device(self.mesh_device)
+            if loop_active:
+                # Warm up BOTH ttnn.plus_one program variants (skip_negative_entries True/False are
+                # distinct compile-time programs) so they are in the program cache before capture —
+                # otherwise the in-trace plus_one triggers "Cannot load new binaries during trace
+                # capture". These increment wu_current_pos/wu_rot_mat_idxs once; harmless, since the
+                # first decode step re-seeds the persistent buffers from host.
+                ttnn.plus_one(wu_current_pos, skip_negative_entries=True)
+                ttnn.plus_one(wu_rot_mat_idxs)
+                ttnn.synchronize_device(self.mesh_device)
             logger.info("Compiled on-device sampling")
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
@@ -1556,15 +1635,27 @@ class TracedLLMExecutor:
             )
 
             if sampling_on_device and self.model.sampling is not None:
-                # NOTE: increment_positions (ttnn.plus_one) is intentionally NOT called inside the
-                # captured body. plus_one issues per-device host-assisted writes that are illegal
-                # during trace capture ("Writes are not supported during trace capture"), and it is
-                # redundant here: decode_forward re-supplies current_pos/rot_mat_idxs from the host
-                # via copy_host_to_device at the start of every step, so any in-trace increment is
-                # overwritten before the next replay. Host owns position bookkeeping.
-                # tt_out_tok=None: sampling allocates its own [1,1,32] argmax output captured in the
-                # trace (reusing the [1,1,1,32] input-token buffer is a shape mismatch -> realloc).
-                tt_toks, tt_log_probs = self._eager._sampling_decode_forward(logits, sampling_params, tt_out_tok=None)
+                if loop_active:
+                    # On-device loop: feed the sampled token back into the persistent token buffer
+                    # (device_inputs[0]) in place. On the top-k path ttnn.sampling emits uint32
+                    # [1,1,1,32] on Wormhole/Blackhole — an exact match for the token buffer, so
+                    # output_tensor= writes in place with no realloc (safe during capture). Then
+                    # advance position + rope index on device (in-place plus_one), so the NEXT
+                    # execute_trace sees the new token at the new position with zero host staging.
+                    # These writes are AFTER every read of the buffers in this body, so there is no
+                    # intra-trace hazard. plus_one is a pure device op (in-place, traceable); the
+                    # earlier "host-assisted writes illegal during capture" note was mistaken.
+                    tt_toks, tt_log_probs = self._eager._sampling_decode_forward(
+                        logits, sampling_params, tt_out_tok=tt_tokens
+                    )
+                    ttnn.plus_one(tt_current_pos, skip_negative_entries=True)
+                    ttnn.plus_one(tt_rot_mat_idxs)
+                else:
+                    # tt_out_tok=None: sampling allocates its own output; decode_forward re-supplies
+                    # current_pos/rot_mat_idxs from host every step, so no in-trace increment.
+                    tt_toks, tt_log_probs = self._eager._sampling_decode_forward(
+                        logits, sampling_params, tt_out_tok=None
+                    )
                 output = (tt_toks, tt_log_probs)
             else:
                 logits = self.model.gather_and_untilize_logits(logits)
@@ -1929,8 +2020,6 @@ def run_perf_benchmark(
             read_from_device=True,
             sampling_params=sampling_params,
         )
-        if hasattr(executor, "mesh_device"):
-            ttnn.synchronize_device(executor.mesh_device)
         elapsed = time.perf_counter() - t0
 
         if i == 0:
