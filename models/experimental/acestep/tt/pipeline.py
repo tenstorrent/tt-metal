@@ -194,13 +194,16 @@ class AceStepPipeline:
                 hidden_noise, context_latents, encoder_hidden_states, cos_tt, sin_tt, sliding, solver, t
             )
 
+        # Cross-attn K/V are denoise-invariant -> project once, reuse across steps (skip per-step
+        # condition_embedder + K/V projection). Math identical.
+        cross_kv = self.dit.compute_cross_kv(encoder_hidden_states)
         xt = hidden_noise
         for step_idx in range(infer_steps):
             t_curr = float(t[step_idx].item())
             t_prev = float(t[step_idx + 1].item())
             t_scalar = torch.tensor([t_curr], dtype=torch.float32)
             vt = self.dit.forward(
-                xt, context_latents, t_scalar, t_scalar, cos_tt, sin_tt, encoder_hidden_states, sliding_mask=sliding
+                xt, context_latents, t_scalar, t_scalar, cos_tt, sin_tt, None, sliding_mask=sliding, cross_kv=cross_kv
             )
             xt_new = solver.euler_step(xt, vt, t_curr - t_prev)
             if step_idx > 0:
@@ -357,8 +360,12 @@ class AceStepPipeline:
                 layout=ttnn.TILE_LAYOUT,
             )
 
-        def _dit_velocity(xt, ts, context, enc, cos, sin):
-            return self.dit.forward(xt, context, ts, ts, cos, sin, enc, sliding_mask=sliding)
+        # Cross-attn K/V are denoise-invariant -> precompute once outside the trace and pass as a
+        # trace CONSTANT (like context/rope). Each step projects only Q + skips condition_embedder.
+        cross_kv = self.dit.compute_cross_kv(encoder_hidden_states)
+
+        def _dit_velocity(xt, ts, cos, sin, ckv):
+            return self.dit.forward(xt, context_latents, ts, ts, cos, sin, None, sliding_mask=sliding, cross_kv=ckv)
 
         tracer = Tracer(_dit_velocity, device=self.mesh_device, prep_run=True, clone_prep_inputs=False)
 
@@ -370,10 +377,9 @@ class AceStepPipeline:
             vt = tracer(
                 xt=xt,
                 ts=_ts(t_curr),
-                context=context_latents if first else tracer.inputs["context"],
-                enc=encoder_hidden_states if first else tracer.inputs["enc"],
                 cos=cos_tt if first else tracer.inputs["cos"],
                 sin=sin_tt if first else tracer.inputs["sin"],
+                ckv=cross_kv if first else tracer.inputs["ckv"],
                 traced=True,
             )
             # Euler runs eager on the trace's velocity output; read xt back from the trace buffer
