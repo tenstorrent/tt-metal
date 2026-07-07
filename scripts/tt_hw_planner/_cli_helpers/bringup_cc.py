@@ -406,9 +406,7 @@ def run_bringup_cc(
         try:
             data = json.loads((Path(demo_dir) / "bringup_status.json").read_text())
             return {
-                str(c.get("name", "")).strip()
-                for c in (data.get("components") or [])
-                if str(c.get("name", "")).strip()
+                str(c.get("name", "")).strip() for c in (data.get("components") or []) if str(c.get("name", "")).strip()
             }
         except Exception:
             return set()
@@ -490,6 +488,7 @@ def run_bringup_cc(
         claude_bin=agent_bin,
         pre_round=_pre_round,
         on_round=_on_round,
+        on_heartbeat=_announce_graduations,
     )
     final = gate_fn()
     _announce_graduations(final)

@@ -193,6 +193,7 @@ def run_cc_loop(
     claude_bin: str = "claude",
     on_round: Callable[[int, dict], None] | None = None,
     pre_round: Callable[[int, dict], None] | None = None,
+    on_heartbeat: Callable[[dict], None] | None = None,
     agent_timeout_s: int | None = None,
     max_consecutive_timeouts: int = 2,
 ) -> dict:
@@ -271,6 +272,14 @@ def run_cc_loop(
                         hb[0] = now
                         sys.stdout.write(f"  · round {rnd} working… {int(now - _start)}s, {tc[0]} tool calls\n")
                         sys.stdout.flush()
+                        # Live graduation feed: same cadence as the heartbeat. Domain caller
+                        # inspects the gate state (cheap file read) and prints any new rows.
+                        # Wrapped so a caller-side raise can never wedge the pump thread.
+                        if on_heartbeat is not None:
+                            try:
+                                on_heartbeat(gate_fn())
+                            except Exception:
+                                pass
             except Exception:
                 pass
 
