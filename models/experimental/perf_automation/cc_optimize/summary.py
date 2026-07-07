@@ -47,6 +47,8 @@ def render_summary(
     perf_test: str = "",
     report_csv: str = "",
     residual: dict | None = None,
+    before_ms: float | None = None,
+    after_ms: float | None = None,
 ) -> str:
     """Return a markdown summary. Degrades gracefully when data is partial."""
     attempts = _read_json(kernel_log_path) or []
@@ -89,6 +91,14 @@ def render_summary(
         lines.append(f"baseline {baseline_ms:.2f} ms  ->  (no measured win recorded)")
     else:
         lines.append("baseline/final ms unavailable (no baseline profile found)")
+    if before_ms and after_ms:
+        _d = (before_ms - after_ms) / before_ms * 100.0 if before_ms else 0.0
+        lines.append(
+            f"trace+2CQ full-pipeline e2e:  before {before_ms:.2f} ms  ->  after {after_ms:.2f} ms"
+            f"   ({_d:+.1f}% {'faster' if _d >= 0 else 'SLOWER'})"
+        )
+    elif before_ms:
+        lines.append(f"trace+2CQ full-pipeline e2e:  before {before_ms:.2f} ms  ->  (after not measured)")
     lines.append("")
 
     if by_op:
@@ -161,7 +171,36 @@ def render_summary(
     # --- Reproduce these numbers (#6) ---
     lines.append("")
     lines.append("Reproduce:")
-    lines.append(f"  perf test:  python -m pytest {perf_test} -svv" if perf_test else "  perf test:  (node-id not provided)")
+    lines.append(
+        f"  trace+2CQ perf:  python -m pytest {perf_test} -svv" if perf_test else "  trace+2CQ perf:  (node-id not provided)"
+    )
+    # Derive the demo (real input/output) + full-model e2e PCC test from the perf-test path
+    # (perf tests live under models/demos/<model>/tests/...); best-effort, pointer only.
+    _demo_root = ""
+    if perf_test:
+        _pt = perf_test.split("::")[0]
+        _mi = _pt.find("/tests/")
+        if _mi > 0:
+            _demo_root = _pt[:_mi]
+    if _demo_root:
+        import os as _os
+
+        _demo_dir = _os.path.join(_demo_root, "demo")
+        _e2e_dir = _os.path.join(_demo_root, "tests", "e2e")
+        try:
+            _demos = sorted(f for f in _os.listdir(_demo_dir) if f.startswith("demo_") and f.endswith(".py"))
+        except Exception:
+            _demos = []
+        try:
+            _pccs = sorted(
+                f for f in _os.listdir(_e2e_dir) if f.startswith("test_") and f.endswith(".py") and "perf" not in f
+            )
+        except Exception:
+            _pccs = []
+        if _demos:
+            lines.append(f"  demo (real input→output):  python {_demo_dir}/{_demos[0]}")
+        if _pccs:
+            lines.append(f"  full-model e2e PCC:  python -m pytest {_e2e_dir}/{_pccs[0]} -svv")
     if report_csv:
         lines.append(f"  per-op device report (tt-metal format): {report_csv}")
 

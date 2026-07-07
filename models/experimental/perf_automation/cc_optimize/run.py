@@ -480,19 +480,43 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
     whole process group (claude + its mcp server + any hung profiler) and reset the device. Returns True
     if the round was killed as wedged, False if it exited on its own. The NEXT round re-spawns a fresh
     mcp server + runs on the reset mesh, so a stale cached-mesh handle can't persist across the wedge."""
-    proc = subprocess.Popen(cmd, cwd=str(repo_root), env=cc_env(repo_root, devices), start_new_session=True)
+    agent_log = str(kernel_log) + ".agent.log"
+    try:
+        _lf = open(agent_log, "a", buffering=1, errors="ignore")
+    except Exception:  # noqa: BLE001
+        _lf = subprocess.DEVNULL
+    # CLEAN screen: the agent's raw stream-json transcript goes to agent_log, not the terminal —
+    # the terminal shows only a periodic heartbeat. Full detail stays in the log file.
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(repo_root),
+        env=cc_env(repo_root, devices),
+        start_new_session=True,
+        stdout=_lf,
+        stderr=subprocess.STDOUT,
+    )
     last_tok = _progress_token(repo_root, kernel_log)
     last_change = time.monotonic()
-    while True:
+    _t0 = last_change
+    try:
+        while True:
+            try:
+                proc.wait(timeout=60)
+                return False
+            except subprocess.TimeoutExpired:
+                _now = time.monotonic()
+                print(f"  · optimizing… {int(_now - _t0)}s (agent transcript → {agent_log})", flush=True)
+                tok = _progress_token(repo_root, kernel_log)
+                if tok != last_tok:
+                    last_tok, last_change = tok, _now
+                elif _now - last_change > stall_sec:
+                    break
+    finally:
         try:
-            proc.wait(timeout=60)
-            return False
-        except subprocess.TimeoutExpired:
-            tok = _progress_token(repo_root, kernel_log)
-            if tok != last_tok:
-                last_tok, last_change = tok, time.monotonic()
-            elif time.monotonic() - last_change > stall_sec:
-                break
+            if _lf not in (None, subprocess.DEVNULL):
+                _lf.close()
+        except Exception:  # noqa: BLE001
+            pass
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except Exception:  # noqa: BLE001
@@ -520,7 +544,15 @@ def _baseline_ms() -> float | None:
 
 
 def _emit_summary(
-    repo_root: Path, kernel_log: str, model_name: str, task: str, metric: str, start_sha: str, perf_test: str = ""
+    repo_root: Path,
+    kernel_log: str,
+    model_name: str,
+    task: str,
+    metric: str,
+    start_sha: str,
+    perf_test: str = "",
+    before_ms=None,
+    after_ms=None,
 ) -> None:
     import importlib.util
 
@@ -559,6 +591,8 @@ def _emit_summary(
         perf_test=perf_test,
         report_csv=report_csv,
         residual=residual,
+        before_ms=before_ms,
+        after_ms=after_ms,
     )
     print("\n" + text + "\n")
     md = _latest_manifest(repo_root / PERF_DIR)
@@ -652,7 +686,17 @@ def optimize_pipeline(
     except Exception:  # noqa: BLE001
         _mf = {}
     _print_scorecard(devices, _mf, pipe, _cov_facts, before_ms, after_ms, model_name)
-    _emit_summary(repo_root, kernel_log, model_name, task, metric, start_sha, perf_test=(pipe or {}).get("perf_test", ""))
+    _emit_summary(
+        repo_root,
+        kernel_log,
+        model_name,
+        task,
+        metric,
+        start_sha,
+        perf_test=(pipe or {}).get("perf_test", ""),
+        before_ms=before_ms,
+        after_ms=after_ms,
+    )
     return {"task": task, "rounds": rounds, "can_stop": can_stop, "halted": halted}
 
 
