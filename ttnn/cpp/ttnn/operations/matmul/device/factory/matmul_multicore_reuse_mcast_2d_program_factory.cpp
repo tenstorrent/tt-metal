@@ -1104,7 +1104,13 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     if (in0_block_sharded) {
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        // Quasar requires the multicast rectangle to be specified from the min (top-left) corner,
+        // i.e. start <= end. WH/BH reverse the corners for a NOC_1 mcast (start > end) to walk the
+        // rectangle in the NOC's direction, but on Quasar that reversed rectangle is malformed and the
+        // mcast hangs waiting for acks (watcher + noc-sanitize flags this). Keep the computed min->max
+        // order on Quasar by skipping the NOC_1 reversal. (LLK guidance; verified by
+        // test_quasar_mcast2d_matmul_hang.)
+        if (in0_noc == tt::tt_metal::NOC::NOC_1 && device->arch() != tt::ARCH::QUASAR) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
     }
@@ -2541,7 +2547,13 @@ create_program_mcast_in0_in1(
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     if (in0_block_sharded) {
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+        // Quasar requires the multicast rectangle to be specified from the min (top-left) corner,
+        // i.e. start <= end. WH/BH reverse the corners for a NOC_1 mcast (start > end) to walk the
+        // rectangle in the NOC's direction, but on Quasar that reversed rectangle is malformed and the
+        // mcast hangs waiting for acks (watcher + noc-sanitize flags this). Keep the computed min->max
+        // order on Quasar by skipping the NOC_1 reversal. (LLK guidance; verified by
+        // test_quasar_mcast2d_matmul_hang.)
+        if (in0_noc == tt::tt_metal::NOC::NOC_1 && device->arch() != tt::ARCH::QUASAR) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
     }
