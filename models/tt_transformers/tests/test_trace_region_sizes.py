@@ -27,6 +27,50 @@ CI_PIPELINE_FILES = (
 )
 HF_MODEL_RE = re.compile(r"HF_MODEL=([^\s]+)")
 
+# Multi-trace models kept on fixed sizes until #48869 is fixed in runtime.
+BLOCKED_ON_48869_MODEL_KEYS = frozenset(
+    {
+        "llama3.1-8b",
+        "llama3.1-70b",
+        "llama3.3-70b",
+        "llama3.1-70b-legacy",
+        "llama3.2-1b",
+        "llama3.2-3b",
+        "llama3.2-90b-vision",
+        "llama3.2-11b-vision",
+        "qwen3-32b",
+        "qwen2.5-72b",
+        "qwen2.5-32b",
+        "qwen2.5-vl-7b",
+        "qwen2.5-vl-32b",
+        "qwen2.5-vl-72b",
+        "qwen2.5-7b",
+        "qwen2.5-coder-32b",
+        "qwq-32b",
+        "qwen3-vl",
+        "gpt-oss-20b",
+        "gpt-oss-120b",
+        "mistral-7b",
+        "phi-3-mini",
+        "mixtral-8x7b",
+        "mistral-small-3.1-24b",
+        "gemma-3-4b",
+        "gemma-3-27b-vision",
+        "gemma-4-e2b",
+        "gemma-4-e4b",
+        "gemma-4-12b",
+        "gemma-4-26b-a4b",
+        "gemma-4-31b",
+        "gemma-3-27b",
+        "deepseek-r1-distill-llama-70b",
+        "llama3.3-70b-galaxy",
+        "llama3.3-70b-galaxy-decode",
+        "llama3.3-70b-galaxy-qwen",
+        "qwen3-32b-galaxy",
+        "qwen3-32b-galaxy-decode",
+    }
+)
+
 
 def _iter_yaml_trace_region_entries():
     doc = load_trace_region_sizes()
@@ -81,10 +125,10 @@ def test_resolve_trace_region_size_matches_yaml(model_name, sku, expected_size):
 @pytest.mark.parametrize(
     "model_name,legacy_sku,expected_size",
     [
-        ("Llama-3.1-8B", "N150", TRACE_REGION_SIZE_DYNAMIC),
-        ("Llama-3.1-8B", "T3K", TRACE_REGION_SIZE_DYNAMIC),
-        ("Llama-3.3-70B", "P150x4", TRACE_REGION_SIZE_DYNAMIC),
-        ("meta-llama/Llama-3.1-8B-Instruct", "bh_quietbox_2", TRACE_REGION_SIZE_DYNAMIC),
+        ("Llama-3.1-8B", "N150", TRACE_REGION_SIZE_DYNAMIC),  # dynamic allocation, see #48636
+        ("Llama-3.1-8B", "T3K", 50000000),
+        ("Llama-3.3-70B", "P150x4", 96000000),
+        ("meta-llama/Llama-3.1-8B-Instruct", "bh_quietbox_2", 52000000),
         ("llama3.3-70b-galaxy", "TG", 216580672),
         ("qwen3-32b-galaxy-decode", "TG", 12726272),
     ],
@@ -140,13 +184,33 @@ def test_resolve_deepseek_v3_dynamic_allocation():
     assert resolve_trace_region_size("deepseek-v3", "wh_llmbox_perf") == TRACE_REGION_SIZE_DYNAMIC
 
 
+def test_resolve_informer_dynamic_allocation():
+    assert resolve_trace_region_size("informer", "wh_n150") == TRACE_REGION_SIZE_DYNAMIC
+
+
+def test_blocked_models_have_todo_comment_in_yaml():
+    """Blocked multi-trace models must document #48869 in the YAML source."""
+    raw = TRACE_REGION_SIZES_YAML_PATH.read_text(encoding="utf-8")
+    doc = yaml.safe_load(raw)
+    sizes = doc.get("sizes", {})
+    for model_key in sizes:
+        if model_key not in BLOCKED_ON_48869_MODEL_KEYS:
+            continue
+        # Find the model block header in raw YAML (comments precede the key line).
+        marker = f"  {model_key}:"
+        idx = raw.find(marker)
+        assert idx != -1, f"{model_key}: block not found in YAML"
+        preceding = raw[max(0, idx - 400) : idx]
+        assert "#48869" in preceding, f"{model_key}: missing TODO(#48869) comment before block"
+
+
 def test_resolve_qwen3_vl_32b_hf_model_alias():
     assert (
         resolve_trace_region_size_for_candidates(
             hf_model_name_candidates("Qwen/Qwen3-VL-32B-Instruct"),
             "wh_llmbox_perf",
         )
-        == TRACE_REGION_SIZE_DYNAMIC
+        == 28467200
     )
 
 
@@ -174,40 +238,40 @@ def test_ci_hf_model_jobs_resolve_trace_region_size(job_name, hf_model, sku):
 
 
 @pytest.mark.parametrize(
-    "model_path,sku",
+    "model_path,sku,expected_size",
     [
-        ("models/demos/gemma4/configs/gemma-4-E2B-it", "wh_n150"),
-        ("models/demos/gemma4/configs/gemma-4-E4B-it", "p300x2"),
-        ("models/demos/gemma4/configs/gemma-4-E4B-it", "bh_p150"),
-        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_llmbox_perf"),
-        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_n150"),
-        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "bh_p150"),
-        ("models/demos/gemma4/configs/gemma-4-31B-it", "p300x2"),
-        ("models/demos/gemma4/configs/gemma-4-31B-it", "wh_n150"),
-        ("models/demos/gemma4/configs/gemma-4-31B-it", "bh_p150"),
+        ("models/demos/gemma4/configs/gemma-4-E2B-it", "wh_n150", 30000000),
+        ("models/demos/gemma4/configs/gemma-4-E4B-it", "p300x2", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-E4B-it", "bh_p150", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_llmbox_perf", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_n150", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "bh_p150", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-31B-it", "p300x2", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-31B-it", "wh_n150", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-31B-it", "bh_p150", 70000000),
     ],
 )
-def test_resolve_gemma4_config_path_aliases_use_dynamic_allocation(model_path, sku):
-    assert resolve_trace_region_size(model_path, sku) == TRACE_REGION_SIZE_DYNAMIC
+def test_resolve_gemma4_config_path_aliases(model_path, sku, expected_size):
+    assert resolve_trace_region_size(model_path, sku) == expected_size
 
 
 @pytest.mark.parametrize(
-    "hub_path,sku",
+    "hub_path,sku,expected_size",
     [
         (
             "/mnt/MLPerf/huggingface/hub/models--google--gemma-3-27b-it/snapshots/005ad3404e59d6023443cb575daa05336842228a",
             "wh_llmbox_perf",
+            30000000,
         ),
         (
             "/mnt/MLPerf/huggingface/hub/models--google--gemma-3-4b-it/snapshots/093f9f388b31de276ce2de164bdc2081324b9767",
             "wh_n150",
+            30000000,
         ),
     ],
 )
-def test_resolve_trace_region_size_from_hf_hub_cache_path_uses_dynamic_allocation(hub_path, sku):
-    assert (
-        resolve_trace_region_size_for_candidates(hf_model_name_candidates(hub_path), sku) == TRACE_REGION_SIZE_DYNAMIC
-    )
+def test_resolve_trace_region_size_from_hf_hub_cache_path(hub_path, sku, expected_size):
+    assert resolve_trace_region_size_for_candidates(hf_model_name_candidates(hub_path), sku) == expected_size
 
 
 def _gpt_oss_trace_model_key_from_env() -> str:

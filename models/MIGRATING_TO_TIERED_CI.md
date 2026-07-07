@@ -547,8 +547,15 @@ Trace buffer sizes for **fixed-size exceptions** live in
 All other `(model, SKU)` pairs use **dynamic allocation** by default
 (`trace_region_size=0`): [`resolve_trace_region_size`](./demos/utils/trace_region_sizes.py)
 logs an info message and returns `TRACE_REGION_SIZE_DYNAMIC` when no YAML entry
-matches. Add an explicit entry only when dynamic allocation regresses for a
-specific model/SKU (see [`trace_region_size_migration.md`](./trace_region_size_migration.md), #47574).
+matches.
+
+**Partial migration (#47574, phase 1):** multi-trace LLM models (prefill + decode
+traces alive simultaneously) keep fixed sizes from `main` with `TODO(#48869)` in
+the YAML until the runtime validates high-water marks across all live traces
+([#48869](https://github.com/tenstorrent/tt-metal/issues/48869)). Add or keep
+an explicit entry when a model is blocked on #48869, regresses with dynamic
+allocation, or needs an infra exception (unet, galaxy). See
+[`trace_region_size_migration.md`](./trace_region_size_migration.md).
 
 - **Model keys** — same short kebab-case + `aliases` convention as `model_targets.yaml`.
 - **SKU keys** — canonical names (`wh_n150`, `wh_llmbox_perf`, `bh_p150`, …); legacy labels like `T3K` / `P150x4` / `wh_llmbox` / `bh_galaxy` resolve via `normalize_sku` in [`model_targets.py`](./demos/utils/model_targets.py).

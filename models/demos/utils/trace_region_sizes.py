@@ -9,7 +9,8 @@ This module is the single entry point for answering "how many bytes of
 this machine?". Fixed-size **exceptions** live in
 ``models/model_trace_region_sizes.yaml``, keyed by model and SKU (the
 cluster/board type, e.g. ``wh_n150``, ``wh_llmbox_perf``, ``bh_p150``).
-All other ``(model, SKU)`` pairs use dynamic allocation (``0``).
+Exceptions include multi-trace LLMs blocked on #48869 and infra keys
+(unet, galaxy). All other ``(model, SKU)`` pairs use dynamic allocation (``0``).
 
 Resolution:
     ``resolve_trace_region_size(model_name, sku)`` matches ``model_name``
