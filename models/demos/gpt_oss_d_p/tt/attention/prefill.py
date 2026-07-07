@@ -92,11 +92,13 @@ def prefill_forward(
     else:
         rope_mats_sliced = rope_mats
     tt_q_orig = tt_q
-    tt_k_orig = tt_k
+    # SANITY CHECK: keep pre-RoPE K alive so we can fill the cache with it
+    # and compare directly against HF past_key_values (which are also pre-RoPE).
+    # Revert to saving post-RoPE K once the comparison confirms QKV/fill correctness.
+    tt_k_pre_rope = tt_k
     tt_q = apply_rope(tt_q, rope_mats_sliced, transformation_mat, is_decode_mode=False)
-    tt_k = apply_rope(tt_k, rope_mats_sliced, transformation_mat, is_decode_mode=False)
+    tt_k = apply_rope(tt_k_pre_rope, rope_mats_sliced, transformation_mat, is_decode_mode=False)
     tt_q_orig.deallocate(True)
-    tt_k_orig.deallocate(True)
 
     # Fill KV cache. When kv_cache is None the SDPA below still operates on the
     # freshly-computed tt_k / tt_v directly, so activations are correct; only the
@@ -104,12 +106,15 @@ def prefill_forward(
     # avoid allocating cache for all 94 layers.
     if kv_cache is not None:
         k_cache, v_cache = kv_cache
-        tt_k_pre_cast = tt_k
+        # SANITY CHECK: fill with pre-RoPE K; post-RoPE tt_k is still used for SDPA below.
+        tt_k_for_fill = ttnn.typecast(tt_k_pre_rope, k_cache.dtype)
+        tt_k_pre_rope.deallocate(True)
         tt_v_pre_cast = tt_v
-        tt_k = ttnn.typecast(tt_k, k_cache.dtype)
         tt_v = ttnn.typecast(tt_v, v_cache.dtype)
-        tt_k_pre_cast.deallocate(True)
         tt_v_pre_cast.deallocate(True)
+        tt_k_post_rope = tt_k
+        tt_k = ttnn.typecast(tt_k, k_cache.dtype)
+        tt_k_post_rope.deallocate(True)
 
         if page_table is not None:
             block_size = k_cache.shape[2]
@@ -120,7 +125,7 @@ def prefill_forward(
                 # paged_fill_cache doesn't correctly handle positions beyond the original
                 # page_table's block count. Use per-user calls with batch_idx=0 instead.
                 for b in range(batch_size):
-                    k_b = tt_k[b : b + 1, :, :, :]
+                    k_b = tt_k_for_fill[b : b + 1, :, :, :]
                     v_b = tt_v[b : b + 1, :, :, :]
                     pt_b = page_table[b : b + 1, :]
                     k_b_fill = k_b[:, :, :page_len, :] if page_len < k_b.shape[2] else k_b
@@ -128,11 +133,11 @@ def prefill_forward(
                     ttnn.experimental.paged_fill_cache(k_cache, k_b_fill, pt_b, batch_idx=0)
                     ttnn.experimental.paged_fill_cache(v_cache, v_b_fill, pt_b, batch_idx=0)
             else:
-                tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
+                tt_k_sliced = tt_k_for_fill[:, :, :page_len, :] if page_len < tt_k_for_fill.shape[2] else tt_k_for_fill
                 tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
                 ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=user_id)
                 ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=user_id)
-                if page_len < tt_k.shape[2]:
+                if page_len < tt_k_for_fill.shape[2]:
                     tt_k_sliced.deallocate(True)
                 if page_len < tt_v.shape[2]:
                     tt_v_sliced.deallocate(True)
@@ -141,15 +146,20 @@ def prefill_forward(
             # Non-paged attention
             if batch_size > 1:
                 for b in range(batch_size):
-                    k_b = ttnn.slice(tt_k, (b, 0, 0, 0), (b + 1, tt_k.shape[1], tt_k.shape[2], tt_k.shape[3]))
+                    k_b = ttnn.slice(
+                        tt_k_for_fill,
+                        (b, 0, 0, 0),
+                        (b + 1, tt_k_for_fill.shape[1], tt_k_for_fill.shape[2], tt_k_for_fill.shape[3]),
+                    )
                     v_b = ttnn.slice(tt_v, (b, 0, 0, 0), (b + 1, tt_v.shape[1], tt_v.shape[2], tt_v.shape[3]))
                     ttnn.fill_cache(k_cache, k_b, batch_idx=b)
                     ttnn.fill_cache(v_cache, v_b, batch_idx=b)
                     k_b.deallocate(True)
                     v_b.deallocate(True)
             else:
-                ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
+                ttnn.fill_cache(k_cache, tt_k_for_fill, batch_idx=user_id)
                 ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
+        tt_k_for_fill.deallocate(True)
 
     # Scaled dot-product attention — three paths based on SP factor and sliding window
     sp_factor = mesh_config.prefill.sp

@@ -163,36 +163,18 @@ def main():
 
         kv_files: dict[str, dict[str, str]] = {}
         if args.save_kv and out.past_key_values is not None:
-            # past_key_values stores pre-RoPE K; apply RoPE here to match what TT
-            # writes into fill_cache (post-RoPE).  Use the model's own rotary_emb so
-            # frequencies / scaling are identical to the forward pass.
-            from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
-
-            position_ids = torch.arange(len(ids), dtype=torch.long).unsqueeze(0)
-            rope_emb = GptOssRotaryEmbedding(model.config)
-            dummy = torch.zeros(1, len(ids), model.config.hidden_size)
-            cos, sin = rope_emb(dummy, position_ids)
-            # cos/sin: [1, seq_len, head_dim//2] (HF unique-values format)
-            # Duplicate each value to get Meta-interleaved [1, 1, seq_len, head_dim]
-            cos = cos.unsqueeze(1).repeat_interleave(2, dim=-1).float()  # [1, 1, seq_len, head_dim]
-            sin = sin.unsqueeze(1).repeat_interleave(2, dim=-1).float()
-
-            def _rotate_half(x):
-                # Meta/Llama-style: swap and negate adjacent pairs
-                x1, x2 = x[..., ::2], x[..., 1::2]
-                return torch.stack((-x2, x1), dim=-1).flatten(-2)
-
+            # SANITY CHECK: save pre-RoPE K to match TT fill_cache (which also now saves
+            # pre-RoPE K).  Revert both sides once QKV/fill correctness is confirmed.
             for i, layer_kv in enumerate(out.past_key_values):
                 if i >= num_capture:
                     break
                 k, v = layer_kv[0], layer_kv[1]
                 # k: [batch, num_kv_heads, seq_len, head_dim] bfloat16, pre-RoPE
                 k_float = k[0].float()  # [num_kv_heads, seq_len, head_dim]
-                k_post_rope = k_float * cos[0] + _rotate_half(k_float) * sin[0]
                 v_float = v[0].float()  # V is not RoPE-rotated
                 k_fname = f"kv_k_{i}_{key}.npy"
                 v_fname = f"kv_v_{i}_{key}.npy"
-                np.save(outdir / k_fname, k_post_rope.numpy())
+                np.save(outdir / k_fname, k_float.numpy())
                 np.save(outdir / v_fname, v_float.numpy())
                 kv_files[str(i)] = {"k": k_fname, "v": v_fname}
             print(f"[oracle] saved {len(kv_files)} KV cache layer(s)", flush=True)
