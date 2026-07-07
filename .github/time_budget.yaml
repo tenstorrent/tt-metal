@@ -285,7 +285,7 @@ models:
     wh_llmbox: 198
     bh_p150b_civ2: 63
     bh_p300: 20
-    bh_loudbox: 162
+    bh_loudbox: 190
     bh_quietbox_2: 80
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
   # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
@@ -349,7 +349,7 @@ models:
     wh_llmbox_perf: 1290
     wh_galaxy: 345
     wh_galaxy_perf: 150
-    bh_galaxy: 410
+    bh_galaxy: 440
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
