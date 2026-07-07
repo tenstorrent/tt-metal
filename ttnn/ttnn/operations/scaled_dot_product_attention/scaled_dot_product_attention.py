@@ -89,7 +89,7 @@ SUPPORTED = {
     "mask_mode": ["none", "custom"],
     "scale_mode": ["auto", "explicit"],
     "attention_kind": ["self", "cross"],
-    "kv_heads_mode": ["mha"],
+    "kv_heads_mode": ["mha", "gqa", "mqa"],
     "fp32_dest_acc_en": [True, False],
 }
 

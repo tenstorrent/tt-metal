@@ -46,10 +46,11 @@ def create_program_descriptor(
     """
     # ========== 1. EXTRACT TENSOR METADATA ==========
     B = int(query.shape[0])
-    H = int(query.shape[1])
+    H = int(query.shape[1])  # H_q (Q num heads)
     S_q = int(query.shape[2])
     D = int(query.shape[3])
     S_kv = int(key.shape[2])
+    H_kv = int(key.shape[1])  # K/V num heads (GQA/MQA: H_kv <= H_q)
 
     S_q_t = S_q // 32  # tiles along S_q
     S_kv_t = S_kv // 32  # tiles along S_kv
@@ -208,7 +209,7 @@ def create_program_descriptor(
     # CT args: scalar params first, then TensorAccessorArgs for Q, K, V, mask
     reader_ct_args = [
         B,
-        H,
+        H,  # [1] H_q (Q num heads)
         S_q_t,
         S_kv_t,
         D_t,
@@ -218,6 +219,7 @@ def create_program_descriptor(
         actual_B_kv,
         1 if has_mask else 0,
         1 if mask_per_head else 0,
+        H_kv,  # [11] K/V num heads (GQA/MQA broadcasting)
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())

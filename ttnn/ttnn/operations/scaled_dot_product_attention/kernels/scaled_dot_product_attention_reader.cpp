@@ -3,6 +3,10 @@
 
 // Flash Attention — Reader Kernel (NCRISC)
 // Streams Q, K, V tile blocks (and optional attn_mask) from DRAM into L1 CBs.
+//
+// GQA/MQA support: K and V tensors have H_kv heads (H_kv <= H_q). Each Q head
+// h_q maps to K/V head h_kv = h_q * H_kv / H_q (matching repeat_interleave
+// broadcasting: each KV head is replicated H_q/H_kv times consecutively).
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -10,7 +14,7 @@
 void kernel_main() {
     // Scalar CT args
     const uint32_t B = get_compile_time_arg_val(0);
-    const uint32_t H = get_compile_time_arg_val(1);
+    const uint32_t H = get_compile_time_arg_val(1);  // H_q (Q num heads)
     const uint32_t S_q_t = get_compile_time_arg_val(2);
     const uint32_t S_kv_t = get_compile_time_arg_val(3);
     const uint32_t D_t = get_compile_time_arg_val(4);
@@ -20,9 +24,10 @@ void kernel_main() {
     constexpr uint32_t B_kv = get_compile_time_arg_val(8);
     const uint32_t has_mask = get_compile_time_arg_val(9);
     const uint32_t mask_per_head = get_compile_time_arg_val(10);
+    const uint32_t H_kv = get_compile_time_arg_val(11);  // K/V num heads (GQA/MQA)
 
-    // TensorAccessorArgs start at CT offset 11
-    constexpr auto q_args = TensorAccessorArgs<11>();
+    // TensorAccessorArgs start at CT offset 12
+    constexpr auto q_args = TensorAccessorArgs<12>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -50,8 +55,11 @@ void kernel_main() {
     const auto mask_accessor = TensorAccessor(mask_args, mask_addr, tile_bytes);
 
     // Tensor layout: (B, H, S_t, D_t) — tiles are laid out as B*H*S_t*D_t pages
+    // Q has H (=H_q) heads; K/V have H_kv heads. For GQA/MQA (H_kv < H_q),
+    // Q head h_idx maps to K/V head h_kv = h_idx * H_kv / H_q (repeat_interleave).
     const uint32_t q_tile_base = b_idx * H * S_q_t * D_t + h_idx * S_q_t * D_t;
-    const uint32_t kv_tile_base = b_idx * H * S_kv_t * D_t + h_idx * S_kv_t * D_t;
+    const uint32_t h_kv = (H_kv == H) ? h_idx : (h_idx * H_kv / H);
+    const uint32_t kv_tile_base = b_idx * H_kv * S_kv_t * D_t + h_kv * S_kv_t * D_t;
 
     uint32_t mask_tile_base = 0;
     if (has_mask) {
