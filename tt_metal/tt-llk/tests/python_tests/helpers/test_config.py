@@ -1288,7 +1288,9 @@ class TestConfig:
                     f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
                     f"-DLLK_TRISC_{trisc_define} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
-                    f"-x c++ - -lc -o {VARIANT_ELF_DIR / name}.elf"
+                    # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3) that
+                    # -nostdlib drops; only referenced helpers are linked, so it's a no-op otherwise.
+                    f"-x c++ - -lc -lgcc -o {VARIANT_ELF_DIR / name}.elf"
                 )
 
                 logger.trace(compile_command)

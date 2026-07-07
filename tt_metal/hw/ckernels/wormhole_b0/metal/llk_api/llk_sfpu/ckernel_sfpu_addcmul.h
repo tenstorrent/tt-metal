@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_defs.h"
 #include "sfpi.h"
 
@@ -11,11 +12,11 @@ namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_addcmul(
-    const uint dst_index_in0,  // input_a
-    const uint dst_index_in1,  // input_b
-    const uint dst_index_in2,  // input_c
-    const uint dst_index_out,  // output
-    const uint value) {        // scalar value to multiply with input_b
+    const std::uint32_t dst_index_in0,  // input_a
+    const std::uint32_t dst_index_in1,  // input_b
+    const std::uint32_t dst_index_in2,  // input_c
+    const std::uint32_t dst_index_out,  // output
+    const std::uint32_t value) {        // scalar value to multiply with input_b
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b || data_format == DataFormat::Bfp8_b,
         "Unsupported data format for calculate_addcmul(). Only Float32, Float16_b (BFloat16), and Bfp8_b (BFloat8B) "
@@ -24,7 +25,7 @@ inline void calculate_addcmul(
     constexpr InstrModLoadStore mod0 =
         (data_format == DataFormat::Float32) ? InstrModLoadStore::FP32 : InstrModLoadStore::DEFAULT;
     // size of each tile in Dest is 64 rows
-    constexpr uint dst_tile_size = 64;
+    constexpr std::uint32_t dst_tile_size = 64;
     // addcmul = input_a + ((value * input_b) * input_c)
     TT_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, value >> 16);
