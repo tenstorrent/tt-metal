@@ -370,6 +370,22 @@ class WeightBridge:
         # ``send_state``/``recv_state``.
         self._socket: Optional[ttnn.MeshSocket] = None
 
+        # Persistent receive-buffer cache (ttt side). ``recv_state`` allocates
+        # one replicated destination tensor per manifest entry. Re-allocating
+        # the full (~GB) state dict on every transfer is not free, and -- more
+        # importantly -- allocating it while a decode trace is resident on the
+        # receiver collides with the trace's reserved DRAM/worker-core/L1 and
+        # wedges the on-device CCL recv (the theta_0 update, before any decode
+        # trace exists, transfers fine; every post-rollout update hung).
+        # Allocating these buffers once (on the first transfer, before any
+        # decode trace is captured) and reusing them on every subsequent
+        # transfer keeps the device allocation map stable across updates, so no
+        # allocation ever races a live trace. Keyed by a manifest signature so
+        # a changed weight set (different keys/shapes/dtypes/layouts)
+        # transparently re-allocates.
+        self._recv_buffers: Optional[dict[str, "ttnn.Tensor"]] = None
+        self._recv_signature: Optional[tuple] = None
+
     # ------------------------------------------------------------------ #
     # Synchronisation primitives                                         #
     # ------------------------------------------------------------------ #
@@ -521,12 +537,28 @@ class WeightBridge:
     def recv_state(self) -> dict[str, "ttnn.Tensor"]:
         """Receive a full HF-keyed weight dict from the ttml rank.
 
-        Allocates one fresh template tensor per manifest entry on the
-        local mesh (replicated, matching ``(shape, dtype, layout)``)
-        then ``recv_async``s into it. Total device-memory footprint is
-        the entire model state simultaneously, until the caller passes
-        the dict to ``Transformer.update_weights`` and drops the
-        reference.
+        Uses one persistent replicated destination tensor per manifest
+        entry, allocated on the first transfer (matching each entry's
+        ``(shape, dtype, layout)``) and reused on every subsequent
+        transfer with the same manifest signature. ``recv_async``
+        overwrites the destination in place, so reuse is safe: the prior
+        contents have already been copied into the model by
+        ``Transformer.update_weights`` before the next transfer runs.
+
+        Reusing the buffers (rather than allocating a fresh full state
+        dict each time) keeps the receiver's device allocation map stable
+        across updates. That matters because allocating the buffers while
+        a decode trace is resident collides with the trace's reserved
+        DRAM/L1 and wedges the on-device CCL recv; allocating once,
+        before any decode trace is captured, sidesteps that entirely.
+
+        The returned dict aliases the persistent buffers -- the caller
+        may ``del`` its reference after applying the weights; the bridge
+        keeps the buffers alive for the next transfer. If the manifest
+        signature changes (different keys/shapes/dtypes/layouts) the
+        cache is transparently re-allocated. Total resident device-memory
+        footprint is the entire model state, held for the bridge's
+        lifetime.
         """
         if self.role != _ROLE_TTT:
             raise RuntimeError(f"WeightBridge.recv_state called with role={self.role!r}; expected {_ROLE_TTT!r}")
@@ -542,14 +574,30 @@ class WeightBridge:
         # ``sender_mesh_shape`` for forward compatibility / debugging
         # but the receiver does not need to consume it.
 
+        entries = manifest["entries"]
+        signature = tuple(
+            (e["key"], tuple(int(d) for d in e["shape"]), e["dtype"], e["layout"]) for e in entries
+        )
+        if self._recv_buffers is None or self._recv_signature != signature:
+            # First transfer, or the weight set changed shape. Allocate the
+            # persistent destination buffers now. On the first transfer this
+            # runs before any decode trace has been captured (warmup only
+            # captures prefill traces), so the allocation is collision-free;
+            # every later transfer reuses these buffers and allocates nothing.
+            self._recv_buffers = {
+                e["key"]: _alloc_replicated_template(
+                    shape=e["shape"],
+                    dtype=_dtype_from_name(e["dtype"]),
+                    layout=_layout_from_name(e["layout"]),
+                    device=self.device,
+                )
+                for e in entries
+            }
+            self._recv_signature = signature
+
         hf_dict: dict[str, ttnn.Tensor] = {}
-        for entry in manifest["entries"]:
-            template = _alloc_replicated_template(
-                shape=entry["shape"],
-                dtype=_dtype_from_name(entry["dtype"]),
-                layout=_layout_from_name(entry["layout"]),
-                device=self.device,
-            )
+        for entry in entries:
+            template = self._recv_buffers[entry["key"]]
             received = ttnn.experimental.recv_async(template, socket)
             # ``recv_async`` returns a list with the populated output tensor
             # (see ``ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_nanobind.cpp``).
@@ -557,6 +605,17 @@ class WeightBridge:
 
         ttnn.synchronize_device(self.device)
         return hf_dict
+
+    def release_recv_buffers(self) -> None:
+        """Drop the persistent receive-buffer cache (ttt side).
+
+        The next ``recv_state`` re-allocates from the manifest. Call this
+        only when the device is idle (no in-flight transfer) and, ideally,
+        before any decode trace is resident, so the subsequent
+        re-allocation does not race a live trace.
+        """
+        self._recv_buffers = None
+        self._recv_signature = None
 
     def barrier(self) -> None:
         """Post-transfer fence so the sender does not free source
