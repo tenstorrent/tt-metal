@@ -129,8 +129,14 @@ class GLM52Adapter(SparseMLAPrefillAdapter):
     mla_pcc_threshold = 0.995
     moe_pcc_threshold = 0.971
 
-    # supports_pretrained stays False until the real-weight path is wired (per-layer indexer weights:
-    # shared layers carry none). Bring-up (sparse-MLA + block) runs on random weights.
+    # Pretrained path: the cache build is per-layer indexer-aware (full layers cache MLA+indexer;
+    # shared layers cache MLA only — they own no indexer weights). No reference_model_cls (the HF
+    # glm_moe_dsa indexer is a numerical outlier vs the vLLM/device lineage), so PCC validation uses a
+    # vLLM trace, as GLM-5.1 does.
+    supports_pretrained = True
+    ttnn_cache_env = "TT_GLM52_PREFILL_TTNN_CACHE"
+    ref_cache_env = "TT_GLM52_PREFILL_HOST_REF_CACHE"
+    prefill_trace_layout = "chunked_group_a_v1"
 
     @property
     def config_builder(self) -> Callable:

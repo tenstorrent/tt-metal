@@ -12,7 +12,13 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import NullIndexer, ReuseIndexer, TtIndexer, resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
+    NullIndexer,
+    ReuseIndexer,
+    TtIndexer,
+    indexer_layer_is_reused,
+    resolve_has_indexer,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
@@ -226,8 +232,10 @@ class ttMLA:
         ttMLA._convert_and_cache_weights(
             state_dict, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path, device=None, kv_only=kv_only
         )
+        # GLM-5.2 shared layers are sparse but own no indexer weights (they reuse a prior full layer's
+        # top-k) -> build the MLA cache only, skip the indexer tensorbins.
         resolved_has_indexer = resolve_has_indexer(config, state_dict=state_dict, explicit=has_indexer)
-        if resolved_has_indexer:
+        if resolved_has_indexer and not indexer_layer_is_reused(config, layer_idx):
             if not TtIndexer.has_host_weights(state_dict):
                 raise ValueError(
                     f"Sparse MLA cache build for layer {layer_idx} resolved has_indexer=True but the "
@@ -415,14 +423,11 @@ class ttMLA:
             weight_cache_path=self.weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.mla",
         )
-        # GLM-5.2 indexer reuse: a "shared" layer (per config.indexer_types[layer_idx]) is sparse but owns
-        # no indexer weights — it reuses the most recent "full" layer's top-k indices, injected at
-        # forward. It binds a weight-less ReuseIndexer (never computes). Absent indexer_types
-        # (v3.1 / v3.2 / GLM-5.1) every layer is "full" -> current behavior, unchanged.
-        _indexer_types = getattr(config, "indexer_types", None)
-        self._indexer_reuse = (
-            bool(_indexer_types) and layer_idx < len(_indexer_types) and _indexer_types[layer_idx] == "shared"
-        )
+        # GLM-5.2 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
+        # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
+        # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2 / GLM-5.1) every layer is
+        # "full" -> current behavior, unchanged.
+        self._indexer_reuse = indexer_layer_is_reused(config, layer_idx)
         if self._has_indexer:
             # The indexer assumes natural-order SP sharding (contiguous per-chip query blocks: its
             # device RoPE and the indexer_score per-device causal offset both index positions as

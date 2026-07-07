@@ -180,6 +180,60 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
     "mesh_device, device_params",
     [
         pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+            },
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm_5_2"])
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm52_shared_layer_cache_skips_indexer(mesh_device, device_params, variant, config_only):
+    """GLM-5.2 shared layer owns no indexer weights: the cache build skips the indexer tensorbins (no
+    raise), completeness holds without them, and cache-only construction binds ReuseIndexer (sparse
+    attention with reused top-k) — not TtIndexer, not NullIndexer."""
+    config = config_only
+    config.max_seq_len = SEQ_LEN
+    shared_idx = next(i for i, t in enumerate(config.indexer_types) if t == "shared")
+    prefix = f"layer_{shared_idx}.mla"
+
+    # Shared-layer host weights: MLA present, indexer absent (as in the real checkpoint).
+    shared_weights = {k: v for k, v in random_mla_weights(config).items() if not k.startswith("indexer")}
+
+    # Build the cache: must NOT raise on the missing indexer, and must write the MLA tensorbins only.
+    init_checker(CACHE_DIR)
+    ttMLA.build_ttnn_cache(shared_weights, CACHE_DIR, mesh_device, config, shared_idx, SEQ_LEN, SP_AXIS, TP_AXIS)
+    init_checker(CACHE_DIR)
+    assert ttMLA.check_cache_complete(CACHE_DIR, prefix, has_indexer=False), "shared MLA cache should be complete"
+    assert not list(CACHE_DIR.glob(f"{prefix}.indexer_*.tensorbin")), "shared layer must not write indexer tensorbins"
+
+    # Cache-only construct at the shared layer: sparse attention, but a weight-less ReuseIndexer.
+    mla_c = ttMLA(
+        config,
+        {},
+        mesh_device,
+        layer_idx=shared_idx,
+        seq_len=SEQ_LEN,
+        sp_axis=SP_AXIS,
+        tp_axis=TP_AXIS,
+        weight_cache_path=CACHE_DIR,
+    )
+    assert mla_c._has_indexer and mla_c._indexer_reuse, f"{variant.name}: shared layer must be sparse + reuse"
+    assert type(mla_c._indexer).__name__ == "ReuseIndexer", "shared layer must bind ReuseIndexer"
+    logger.info(f"[{variant.name}] shared layer {shared_idx}: cache built without indexer, ReuseIndexer bound")
+    ttnn.synchronize_device(mesh_device)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
             (4, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
