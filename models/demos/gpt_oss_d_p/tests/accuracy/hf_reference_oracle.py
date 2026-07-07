@@ -153,7 +153,8 @@ def main():
         input_ids = torch.tensor(ids, dtype=torch.long).unsqueeze(0)
         last = len(ids) - 1
         key = hashlib.sha256(prompt.encode()).hexdigest()[:12]
-        print(f"[oracle] prompt={prompt!r} n_tokens={len(ids)} key={key} -> forward (slow) ...", flush=True)
+        prompt_preview = repr(prompt[:80] + "..." if len(prompt) > 80 else prompt)
+        print(f"[oracle] prompt={prompt_preview} n_tokens={len(ids)} key={key} -> forward (slow) ...", flush=True)
 
         layer_outputs: dict[int, np.ndarray] = {}
         hooks = []
