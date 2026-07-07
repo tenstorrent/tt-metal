@@ -54,6 +54,11 @@ void validate_dfb_tile_counters(
     const CoreCoord& logical_core,
     const experimental::dfb::DataflowBufferConfig& config,
     const DFBTileCounterExpectation& expectation) {
+    // risc_mask/groups are only populated by finalize_dataflow_buffer_configs(); these
+    // host-side config tests inspect that state without launching, so finalize here.
+    // Idempotent (finalize skips already-finalized DFBs) -> no-op for the MultiCore/Reentry
+    // tests that finalize explicitly.
+    program.impl().finalize_dataflow_buffer_configs();
     auto dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1) << "Expected exactly 1 DFB on core";
 
@@ -117,8 +122,17 @@ void validate_dfb_tile_counters(
         }
     }
 
-    // For ALL mode, validate remapper pair indices
-    if (config.cap == dfb::AccessPattern::ALL) {
+    // ALL mode engages the remapper ONLY when a Tensix endpoint is involved. Pure DM->DM ALL
+    // broadcasts via broadcast_tc, so remapper_pair_index / consumer_tcs are intentionally left
+    // at 0 (in dataflow_buffer.cpp they are populated only inside `if (use_remapper)`, and
+    // use_remapper == ALL && !dm_dm_all). Tensix RISCs occupy mask bits 0x0F00.
+    const bool dm_dm_all = config.cap == dfb::AccessPattern::ALL &&
+                           (config.producer_risc_mask & 0x0F00) == 0 &&
+                           (config.consumer_risc_mask & 0x0F00) == 0;
+    const bool uses_remapper = config.cap == dfb::AccessPattern::ALL && !dm_dm_all;
+
+    // For remapper-based ALL, validate remapper pair indices are unique per producer.
+    if (uses_remapper) {
         std::set<uint8_t> seen_remapper_indices;
         for (const auto& [risc_id, rc] : producer_configs) {
             uint8_t remapper_idx = rc->config.remapper_pair_index;
@@ -202,7 +216,7 @@ void validate_dfb_tile_counters(
             }
         }
 
-        if (config.cap == dfb::AccessPattern::ALL) {
+        if (uses_remapper) {
             uint32_t actual_consumer_tcs = producer_rc->config.consumer_tcs;
             ASSERT_EQ(actual_consumer_tcs, expected_consumer_tcs)
                 << "ALL: Producer " << (int)producer_risc_id << " consumer_tcs mismatch. "
@@ -214,6 +228,15 @@ void validate_dfb_tile_counters(
                 "ALL: Producer {} consumer_tcs validated: 0x{:x}",
                 producer_risc_id,
                 actual_consumer_tcs);
+        } else if (dm_dm_all) {
+            // DM->DM ALL broadcasts via broadcast_tc; the remapper-only fields must stay unset.
+            EXPECT_EQ(producer_rc->config.consumer_tcs, 0u)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id
+                << " must not populate consumer_tcs (broadcast_tc path, remapper unused)";
+            EXPECT_TRUE(producer_rc->config.broadcast_tc)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id << " must have broadcast_tc set";
+            EXPECT_EQ(producer_rc->config.remapper_pair_index, 0)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id << " must not allocate a remapper pair index";
         }
     }
 }
@@ -242,7 +265,7 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
         .expected_producer_tc_count = 1,  // 1 producer with 1 consumer -> 1 TC per producer
         .expected_consumer_tc_count = 1,  // 1 consumer with 1 producer -> 1 TC per consumer
         .producer_to_consumer_pairings = {
-            {0, {{0, 0, 0}}},  // Producer 0 TC[0] pairs with Consumer risc 0 TC[0]
+            {0, {{4, 0, 0}}},  // Producer 0 TC[0] pairs with Consumer risc 4 TC[0]  (consumer_risc_mask 0x10 -> risc 4; matches DMTensixTest1xDFB4Sx1SConfig)
         }};
 
     validate_dfb_tile_counters(program, logical_core, config, expectation);
@@ -505,7 +528,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_producer_tc_count = 4,  // ALL: producer broadcasts to num_consumers=4 TCs
         .expected_consumer_tc_count = 1,  // ALL: each consumer has num_producers TCs = 1
         .producer_to_consumer_pairings = {
             {0,
@@ -573,7 +596,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_producer_tc_count = 4,  // ALL: producer broadcasts to num_consumers=4 TCs
         .expected_consumer_tc_count = 4,  // ALL: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0,
@@ -630,7 +653,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_producer_tc_count = 2,  // ALL: producer broadcasts to num_consumers=2 TCs
         .expected_consumer_tc_count = 4,  // ALL: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0,
@@ -683,7 +706,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
 
     // consumer_risc_mask 0x3C = riscs 2,3,4,5
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_producer_tc_count = 4,  // ALL: producer broadcasts to num_consumers=4 TCs
         .expected_consumer_tc_count = 2,  // ALL: each consumer has num_producers TCs = 2
         .producer_to_consumer_pairings = {
             {0,
