@@ -231,7 +231,17 @@ def create_program_descriptor(
     # mask values (-1e38f) match the score accumulation precision.
     # Padding mask (non-aligned S_kv, no caller mask) also uses intermediate
     # format — it's generated on-device like causal.
-    mask_cb_format = intermediate_format if (is_causal_mask or needs_padding_mask) else dtype
+    # Custom mask + kv_padding: the reader overlays -1e9 into padded KV columns.
+    # This overlay writes raw bits (FP32_NEG_INF_BITS or BF16_NEG_INF_BITS), which
+    # is only correct for fp32/bf16 tiles — NOT for bfloat8_b (block-float layout).
+    # So when custom mask + kv_padding, force the mask CB to intermediate_format
+    # and typecast the mask tensor on the host side.
+    if is_causal_mask or needs_padding_mask:
+        mask_cb_format = intermediate_format
+    elif has_mask and has_kv_padding:
+        mask_cb_format = intermediate_format  # overlay needs non-block-float format
+    else:
+        mask_cb_format = dtype
     mask_cb_tile_size = ttnn.tile_size(mask_cb_format)
     cbs.append(make_cb(cb_attn_mask_id, mask_pages, mask_cb_format, mask_cb_tile_size))
     cbs.append(make_cb(cb_scale_id, scale_pages, dtype, tile_size))

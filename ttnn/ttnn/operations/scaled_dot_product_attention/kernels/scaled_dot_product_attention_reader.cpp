@@ -146,14 +146,17 @@ void kernel_main() {
     constexpr uint32_t cb_scaler = 31;
 
     const uint32_t tile_bytes = get_tile_size(cb_q);
+    // Mask CB may use a different format (intermediate_format) than the input
+    // dtype when padding overlay is needed. Use the mask CB's tile size for
+    // the mask accessor so DRAM reads match the CB format.
+    const uint32_t mask_tile_bytes = get_tile_size(cb_attn_mask);
 
     const auto q_accessor = TensorAccessor(q_args, q_addr, tile_bytes);
     const auto k_accessor = TensorAccessor(k_args, k_addr, tile_bytes);
     const auto v_accessor = TensorAccessor(v_args, v_addr, tile_bytes);
-    const auto mask_accessor = TensorAccessor(mask_args, mask_addr, tile_bytes);
+    const auto mask_accessor = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
 
     // Determine mask tile data format for causal mask generation
-    const uint32_t mask_tile_bytes = get_tile_size(cb_attn_mask);
     const bool mask_is_fp32 = (mask_tile_bytes >= 4 * TILE_DIM * TILE_DIM);
 
     // Loop over work units (multiple (B,H) pairs per core when B*H > num_cores)

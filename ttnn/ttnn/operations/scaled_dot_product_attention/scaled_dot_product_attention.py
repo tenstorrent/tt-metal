@@ -284,6 +284,17 @@ def scaled_dot_product_attention(
         output_memory_config,
     )
 
+    # When custom mask + non-aligned S_kv, the reader kernel overlays -1e9 into
+    # padded KV columns by writing raw bits. This only works for non-block-float
+    # formats (fp32, bf16). For bfloat8_b input, typecast the mask to the
+    # intermediate format so the overlay writes correct values.
+    S_kv = int(key.shape[2])
+    if attn_mask is not None and (S_kv % 32 != 0):
+        fp32_dest = getattr(compute_kernel_config, "fp32_dest_acc_en", True)
+        intermediate_dtype = ttnn.float32 if fp32_dest else ttnn.bfloat16
+        if attn_mask.dtype != intermediate_dtype:
+            attn_mask = ttnn.typecast(attn_mask, dtype=intermediate_dtype)
+
     program_descriptor = create_program_descriptor(
         query,
         key,
