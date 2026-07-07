@@ -307,9 +307,9 @@ TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
     std::mutex records_mu;
     std::vector<ProgramRealtimeRecord> records;
     ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecord& record) {
+        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecordBatch& batch) {
             std::lock_guard<std::mutex> lk(records_mu);
-            records.push_back(record);
+            records.insert(records.end(), batch.records.begin(), batch.records.end());
         });
 
     CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();

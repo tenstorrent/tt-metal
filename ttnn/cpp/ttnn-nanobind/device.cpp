@@ -178,7 +178,8 @@ void py_device_module_types(nb::module_& m_device) {
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                 return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
             },
-            "Kernel source paths associated with this runtime ID");
+            "Kernel source paths associated with this runtime ID. Resolve during the callback; invalid after device "
+            "or context teardown.");
 
     nb::class_<PythonProgramRealtimeRecordBatch>(
         m_device, "ProgramRealtimeRecordBatch", "Batch of real-time profiler records delivered to a callback.")
