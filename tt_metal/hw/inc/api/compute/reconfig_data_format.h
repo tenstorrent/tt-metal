@@ -25,6 +25,11 @@ namespace ckernel {
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
+#ifdef ARCH_QUASAR
+    // to_from_int8 is silently ignored on Quasar: the unpack LLK marks it [[maybe_unused]] and the
+    // math reconfig is a no-op.
+    static_assert(!to_from_int8, "non-default to_from_int8 not supported on Quasar");
+#endif
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format<
             DST_ACCUM_MODE,
@@ -45,6 +50,11 @@ ALWI void reconfig_data_format(
     const uint32_t srcb_old_operand,
     const uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
+#ifdef ARCH_QUASAR
+    // to_from_int8 is silently ignored on Quasar: the unpack LLK marks it [[maybe_unused]] and the
+    // math reconfig is a no-op.
+    static_assert(!to_from_int8, "non-default to_from_int8 not supported on Quasar");
+#endif
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format<
             DST_ACCUM_MODE,
@@ -60,6 +70,11 @@ ALWI void reconfig_data_format(
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
+#ifdef ARCH_QUASAR
+    // to_from_int8 is silently ignored on Quasar: the unpack LLK marks it [[maybe_unused]] and the
+    // math reconfig is a no-op.
+    static_assert(!to_from_int8, "non-default to_from_int8 not supported on Quasar");
+#endif
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srca<
             DST_ACCUM_MODE,
@@ -74,6 +89,11 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
     LLK_SAN_FUNCTION();
+#ifdef ARCH_QUASAR
+    // to_from_int8 is silently ignored on Quasar: the unpack LLK marks it [[maybe_unused]] and the
+    // math reconfig is a no-op.
+    static_assert(!to_from_int8, "non-default to_from_int8 not supported on Quasar");
+#endif
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srca<
             DST_ACCUM_MODE,
@@ -88,6 +108,11 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint3
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
+#ifdef ARCH_QUASAR
+    // to_from_int8 is silently ignored on Quasar: the unpack LLK marks it [[maybe_unused]] and the
+    // math reconfig is a no-op.
+    static_assert(!to_from_int8, "non-default to_from_int8 not supported on Quasar");
+#endif
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srcb<
             DST_ACCUM_MODE,
@@ -102,6 +127,11 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
     LLK_SAN_FUNCTION();
+#ifdef ARCH_QUASAR
+    // to_from_int8 is silently ignored on Quasar: the unpack LLK marks it [[maybe_unused]] and the
+    // math reconfig is a no-op.
+    static_assert(!to_from_int8, "non-default to_from_int8 not supported on Quasar");
+#endif
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srcb<
             DST_ACCUM_MODE,
