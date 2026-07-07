@@ -78,6 +78,10 @@ jobs:
   test-dispatch:
     needs: [check-harbor, build-artifact]
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5]
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     container:
       image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
@@ -135,16 +139,52 @@ jobs:
           uv pip install "$WHEEL_FILENAME"
         shell: bash
       - name: Run regression in loop
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARD_TOTAL: "5"
         run: |
           uv pip install pytest-repeat
           ${{ inputs.command }}
         shell: bash
-      - name: 📤 Upload perf results JSON
+      - name: 🏷️ Name shard result
+        if: always()
+        working-directory: /work
+        run: |
+          f=$(ls -1 eltwise_perf_results_*_final.json 2>/dev/null | head -1)
+          if [ -n "$f" ]; then mv "$f" "shard-${{ matrix.shard }}.json"; fi
+        shell: bash
+      - name: 📤 Upload shard result JSON
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: eltwise-perf-results
-          path: /work/eltwise_perf_results_*.json
+          name: eltwise-perf-results-shard-${{ matrix.shard }}
+          path: /work/shard-${{ matrix.shard }}.json
           if-no-files-found: error
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  combine-results:
+    needs: test-dispatch
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⬇️ Download all shard results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: eltwise-perf-results-shard-*
+          merge-multiple: true
+          path: shards
+      - name: 🧩 Merge shards into one JSON
+        run: |
+          set -euo pipefail
+          echo "Shard files downloaded:"; ls -la shards/
+          curl -fsSL https://raw.githubusercontent.com/Aswincloud/ttnn-performance-dashboard/main/perf_measurement_script.py -o driver.py
+          python3 driver.py --merge shards/shard-*.json
+          echo "Combined file:"; ls -1 eltwise_perf_results_*_final.json
+        shell: bash
+      - name: 📤 Upload combined perf results JSON
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: eltwise-perf-results
+          path: eltwise_perf_results_*_final.json
+          if-no-files-found: error
