@@ -125,6 +125,12 @@ def run_model(
     if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_6":
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
 
+    # host_gate_all is a local testing aid for sub-256-expert configs (e.g. the 4x4 sub-torus,
+    # where the device grouped-gate's hard 256-expert requirement forces the host gate). It is not CI
+    # coverage; the real device gate already covers the 256-expert meshes that run in CI.
+    if (is_ci_env or is_ci_v2_env) and gate_fallback_mode == GateComputeMode.HOST_ALL:
+        pytest.skip("host_gate_all is a local-only testing aid (sub-256-expert); not run in CI")
+
     # The 25k-ISL cases only fit L1 on the full 8x4 mesh. There sp_factor=8 keeps the per-chip
     # sequence at 3200 tokens, so the shared-expert down-projection matmul runs with per_core_M=2.
     # On the smaller 2x4 meshes the per-chip sequence is 12800 tokens, pushing per_core_M to 5 and
@@ -509,8 +515,11 @@ def run_model(
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
-    [("dense", None), ("moe", GateComputeMode.DEVICE)],
-    ids=["dense", "moe-gate_device"],
+    [("dense", None), ("moe", GateComputeMode.DEVICE), ("moe", GateComputeMode.HOST_ALL)],
+    # The host-gate id omits the `moe` token on purpose: CI selects the device gate via count-guarded
+    # `-k "... and moe and ..."` (EXPECT_NUM_TESTS=1), so a host id carrying `moe` would be collected too
+    # and break the count. It is a local sub-256-expert aid (CI-skipped by enum); select via `-k host_gate`.
+    ids=["dense", "moe-gate_device", "host_gate_all"],
 )
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
 @pytest.mark.parametrize(
@@ -569,6 +578,60 @@ def run_model(
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-mesh-8x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            1,
+            # Per-axis topology (SP-axis-0, TP-axis-1). FABRIC_2D_TORUS_Y wraps ONLY the SP axis
+            # into a ring → Ring for SP-axis MoE dispatch/combine; the 4-wide TP axis stays a line
+            # → Linear for TP-axis collectives (RMS-norm, MLA, shared-expert, gate). A scalar Ring
+            # here deadlocks the TP-axis all-gathers on a non-existent column wrap link.
+            (ttnn.Topology.Ring, ttnn.Topology.Linear),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            # Id omits the `fabric2d-`/`mesh-` tokens on purpose: CI runs the fabric2d-mesh siblings
+            # via count-guarded `-k "8x4 and fabric2d"` (EXPECT_NUM_TESTS=1) selectors, so a torus id
+            # carrying `fabric2d` would be collected too and break the count. Select it with `-k torus-y`.
+            id="torus-y-8x4",
+        ),
+        pytest.param(
+            (4, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2,
+            # 4x4 sub-torus: Ring-4 on the SP axis (dim 0), Linear on the 4-wide TP axis (dim 1).
+            # Run with TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_y4...
+            (ttnn.Topology.Ring, ttnn.Topology.Linear),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-y-4x4",
+        ),
+        pytest.param(
+            (4, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2,
+            # 4x4 full 2D sub-torus: Ring-4 on BOTH axes (dim 0 = SP/Y, dim 1 = TP/X). Both axes have
+            # a physical wrap, so TP-axis collectives (RMS-norm, MLA, shared-expert) can ring too.
+            # Run with TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_xy4...
+            (ttnn.Topology.Ring, ttnn.Topology.Ring),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
