@@ -12,7 +12,7 @@ void kernel_main() {
     DataflowBuffer dfb(dfb::out);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
-        DPRINT("producer tile id {}\n", tile_id);
+        // DPRINT("producer tile id {}\n", tile_id);
         dfb.reserve_back(1);
         dfb.push_back(1);
     }

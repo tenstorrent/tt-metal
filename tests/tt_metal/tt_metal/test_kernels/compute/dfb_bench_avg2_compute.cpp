@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Benchmark compute kernel for BenchmarkCaseFour (worst-case init benchmark).
+// Benchmark compute kernel for BenchmarkCaseThree (average-case-two init benchmark).
 //
 // Modeled on eltwise_copy_2_0.cpp (reader_datacopy_writer in test_direct.cpp):
 //   tile_regs_acquire/wait → wait_front → copy_tile → pop_front → commit/release
 //
-// Acts as ALL CONSUMER on three 4Sx4A DM→Tensix DFBs:
+// Acts as STRIDED CONSUMER on three 4Sx4S DM→Tensix DFBs:
 //   dfb::in0, dfb::in1, dfb::in2
 //
 // Drains the full 16-entry ring per DFB (num_entries=16, 4 Neos):
-//   16 tiles per Neo per DFB (4 ALL TCs × 4 entries each, remapper fan-out)
+//   4 tiles per Neo per DFB (1 strided TC each)
 //
 // finish() is called by the reader DM kernels (producer side).
 
@@ -23,9 +23,7 @@
 namespace {
 constexpr uint32_t kNumEntries = 16u;
 constexpr uint32_t kNumNeos = 4u;
-constexpr uint32_t kAllTcsPerNeo = 4u;
 constexpr uint32_t kTilesPerNeo = kNumEntries / kNumNeos;
-constexpr uint32_t kTilesPerNeoPerDfb = kTilesPerNeo * kAllTcsPerNeo;
 }  // namespace
 
 void kernel_main() {
@@ -34,7 +32,7 @@ void kernel_main() {
     DataflowBuffer in2(dfb::in2);
 
     unary_op_init_common(dfb::in0, dfb::in0);
-    for (uint32_t i = 0; i < kTilesPerNeoPerDfb; i++) {
+    for (uint32_t i = 0; i < kTilesPerNeo; i++) {
         tile_regs_acquire();
         tile_regs_wait();
 
@@ -47,7 +45,7 @@ void kernel_main() {
     }
 
     unary_op_init_common(dfb::in1, dfb::in1);
-    for (uint32_t i = 0; i < kTilesPerNeoPerDfb; i++) {
+    for (uint32_t i = 0; i < kTilesPerNeo; i++) {
         tile_regs_acquire();
         tile_regs_wait();
 
@@ -60,7 +58,7 @@ void kernel_main() {
     }
 
     unary_op_init_common(dfb::in2, dfb::in2);
-    for (uint32_t i = 0; i < kTilesPerNeoPerDfb; i++) {
+    for (uint32_t i = 0; i < kTilesPerNeo; i++) {
         tile_regs_acquire();
         tile_regs_wait();
 

@@ -4,39 +4,75 @@
 
 // Benchmark compute kernel for the average-case DFB ISR latency benchmark.
 //
+// Modeled on eltwise_copy_2_0.cpp (reader_datacopy_writer in test_direct.cpp):
+//   tile_regs_acquire/wait → wait_front → copy_tile → pop_front → commit/release
+//
 // Participates in three DFBs:
 //   dfb::ss_in   - DM→Tensix, 4Sx4S STRIDED consumer (paired with reader_dm ss_out)
 //   dfb::sa_in   - DM→Tensix, 4Sx4A ALL consumer     (paired with reader_dm sa_out)
 //   dfb::t6_out  - Tensix→DM, STRIDED producer        (paired with writer_dm t6_in)
 //
-// Threshold table (ss_in and sa_in, num_entries=16, num_producers=4):
-//   tiles_to_post = 2 per Neo per DFB after ISR fires
+// Drains the full 16-entry ring (num_entries=16, 4 Neos):
+//   ss_in:  4 tiles per Neo (1 strided TC)
+//   sa_in: 16 tiles per Neo (4 ALL TCs × 4 entries each)
+//   t6_out: 4 tiles per Neo (reserve/push, no upstream copy)
 //
-// Each Neo thread:
-//   - Waits until 1 credit is available on ss_in (ISR has fired), pops 2 to drain
-//   - Waits until 1 credit is available on sa_in (ISR has fired), pops 2 to drain
-//   - Pushes 1 credit to t6_out to signal the writer DM (explicit sync)
-//   - Calls finish() on all three DFBs
+// finish() is called by the reader (ss/sa producer) and writer (t6 consumer) kernels.
 
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/dataflow/dataflow_buffer.h"
+
+namespace {
+constexpr uint32_t kNumEntries = 16u;
+constexpr uint32_t kNumNeos = 4u;
+constexpr uint32_t kSaTcsPerNeo = 4u;
+constexpr uint32_t kTilesPerNeo = kNumEntries / kNumNeos;
+constexpr uint32_t kSaTilesPerNeo = kTilesPerNeo * kSaTcsPerNeo;
+constexpr uint32_t kT6TilesPerNeo = kTilesPerNeo;
+}  // namespace
 
 void kernel_main() {
     DataflowBuffer ss_in(dfb::ss_in);
     DataflowBuffer sa_in(dfb::sa_in);
     DataflowBuffer t6_out(dfb::t6_out);
 
-    // Wait for ISR to fire and post 2 credits; pop all 2 to unblock DM finish()
-    // ss_in.wait_front(1);
-    // ss_in.pop_front(1);
+    unary_op_init_common(dfb::ss_in, dfb::ss_in);
+    for (uint32_t i = 0; i < kTilesPerNeo; i++) {
+        tile_regs_acquire();
+        tile_regs_wait();
 
-    // sa_in.wait_front(1);
-    // sa_in.pop_front(1);
+        ss_in.wait_front(1);
+        copy_tile(dfb::ss_in, 0, 0);
+        ss_in.pop_front(1);
 
-    // // Push 1 credit to the writer DM via explicit sync
-    // t6_out.reserve_back(1);
-    // t6_out.push_back(1);
+        tile_regs_commit();
+        tile_regs_release();
+    }
 
-    // ss_in.finish();
-    // sa_in.finish();
-    // t6_out.finish();
+    unary_op_init_common(dfb::sa_in, dfb::sa_in);
+    for (uint32_t i = 0; i < kSaTilesPerNeo; i++) {
+        tile_regs_acquire();
+        tile_regs_wait();
+
+        sa_in.wait_front(1);
+        copy_tile(dfb::sa_in, 0, 0);
+        sa_in.pop_front(1);
+
+        tile_regs_commit();
+        tile_regs_release();
+    }
+
+    unary_op_init_common(dfb::t6_out, dfb::t6_out);
+    for (uint32_t i = 0; i < kT6TilesPerNeo; i++) {
+        tile_regs_acquire();
+        tile_regs_wait();
+
+        t6_out.reserve_back(1);
+        t6_out.push_back(1);
+
+        tile_regs_commit();
+        tile_regs_release();
+    }
 }

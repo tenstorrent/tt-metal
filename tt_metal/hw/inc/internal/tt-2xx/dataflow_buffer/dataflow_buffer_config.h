@@ -30,7 +30,9 @@ constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 6;
 // DM0 blob constants
 constexpr uint8_t MAX_DM0_REMAPPER_SLOTS = 8;  // max DM producer RISCs
 constexpr uint8_t MAX_CLIENT_RS          = 4;   // max consumers per remapper slot (4 Tensix or 4 DM clientR IDs)
-constexpr uint8_t MAX_TCS_PER_TXN        = 8;   // max producer TCs per txn entry (8 DM producers × 1 TC each)
+// Must match TxnDFBDescriptor::tile_counters[18] (32-byte ISR blob slot).
+// Worst consumer case: 4 ALL DMs × 4 producer TCs = 16; worst producer case: 8 DM producers × 1 TC.
+constexpr uint8_t MAX_TCS_PER_TXN        = 18;
 
 constexpr uint16_t TENSIX_RISC_OFFSET = 8; // First 8 represent DMs
 // Hartids 0-7 = DM0-7, 8-11 = Neo0-3 (TRISC init uses 8 + neo_id).
@@ -142,8 +144,8 @@ constexpr uint8_t DFB_HART_FLAG_TRISC_MASK   = 0x0Fu;  // bits 3:0 = tensix_tris
 // Total TC section = num_tcs*9B rounded up to 4B — identical to the original SoA byte count.
 // No __attribute__((packed)): both u32 fields are naturally 4B-aligned.
 struct dfb_blob_tc_pair_t {
-    uint32_t base_addr;  // raw bytes; device applies >> cb_addr_shift
-    uint32_t limit;      // raw bytes; device applies >> cb_addr_shift
+    uint32_t base_addr;  // TRISC: tile units (host >> cb_addr_shift); DM: raw byte addresses
+    uint32_t limit;      // TRISC: tile units (host >> cb_addr_shift); DM: raw byte addresses
 };
 static_assert(sizeof(dfb_blob_tc_pair_t) == 8, "dfb_blob_tc_pair_t must be 8B");
 
@@ -161,17 +163,58 @@ struct dfb_hart_init_entry_t {
     //   DM harts:    stride_size_precomp = entry_size_raw * stride_in_entries  (raw bytes)
     //   TRISC harts: stride_size_precomp = (entry_size_raw >> cb_addr_shift) * stride_in_entries  (tile units)
     uint32_t stride_size_precomp;
-    uint8_t  stride_size_tiles;              // = (uint8_t)stride_in_entries — stored for TRISC direct use
-    uint8_t  num_txn_ids;                    // DM only; 0 for TRISC
-    uint8_t  threshold;                      // DM only
-    uint8_t  num_entries_per_txn_id;         // DM only
-    uint8_t  num_entries_per_txn_id_per_tc;  // DM only
-    uint8_t  producer_signal_bit;            // index into this DFB's producer slot row (0-based); 0xFF if consumer
-    uint8_t  txn_ids[dfb::NUM_TXN_IDS];     // DM only; unused slots zero
-    uint8_t  remapper_pair_index;            // remapper pair for this producer; 0xFF if not remapped
+    uint8_t  stride_size_tiles;              // TRISC: stride in entries; DM: unused (see dm scalar pack below)
+    uint8_t  num_txn_ids;                    // TRISC layout byte 13; DM pack uses byte 21 (see below)
+    uint8_t  threshold;                      // TRISC layout; DM pack byte 18
+    uint8_t  num_entries_per_txn_id;         // TRISC layout; DM pack byte 19
+    uint8_t  num_entries_per_txn_id_per_tc;  // TRISC layout byte 16; DM pack byte 20
+    uint8_t  producer_signal_bit;            // TRISC layout byte 17; DM pack byte 13 (transport)
+    uint8_t  txn_ids[dfb::NUM_TXN_IDS];     // TRISC layout bytes 18-21; DM pack bytes 14-17
+    uint8_t  remapper_pair_index;            // TRISC layout byte 22; DM pack byte 23
     uint8_t  _pad;                           // pad header to 24B → 4B-aligned TC arrays follow
 } __attribute__((packed));
 static_assert(sizeof(dfb_hart_init_entry_t) == 24, "dfb_hart_init_entry_t must be 24B");
+
+// Opt 5 (DM only): bytes [12,24) of the init entry header mirror LocalDFBInterface bytes [8,20)
+// (num_tcs_to_rr through _tc_align_pad). Host writes this 12B span in DTCM order; device unpacks
+// w3–w5 in dfb_unpack_entry_header_dm and stores via dfb_write_dm_iface_scalars_from_hdr (Opt 4).
+// Byte 13 carries producer_signal_bit for init decode (device sets tc_idx=0 after scalar write).
+constexpr uint32_t DFB_INIT_ENTRY_DM_SCALAR_PACK_BYTE_OFF = 12u;
+constexpr uint32_t DFB_INIT_ENTRY_DM_SCALAR_PACK_BYTES = 12u;
+constexpr uint32_t DFB_INIT_ENTRY_DM_PRODUCER_SIGNAL_BYTE_OFF = 13u;
+
+inline void dfb_write_dm_scalar_pack_to_blob(
+    uint8_t* entry_bytes,
+    uint8_t num_tcs,
+    uint8_t producer_signal_bit,
+    const uint8_t txn_ids[dfb::NUM_TXN_IDS],
+    uint8_t threshold,
+    uint8_t num_entries_per_txn_id,
+    uint8_t num_entries_per_txn_id_per_tc,
+    uint8_t num_txn_ids,
+    uint8_t broadcast_tc,
+    uint8_t remapper_pair_index) {
+    uint8_t* const p = entry_bytes + DFB_INIT_ENTRY_DM_SCALAR_PACK_BYTE_OFF;
+    p[0] = num_tcs;
+    p[1] = producer_signal_bit;
+    p[2] = txn_ids[0];
+    p[3] = txn_ids[1];
+    p[4] = txn_ids[2];
+    p[5] = txn_ids[3];
+    p[6] = threshold;
+    p[7] = num_entries_per_txn_id;
+    p[8] = num_entries_per_txn_id_per_tc;
+    p[9] = num_txn_ids;
+    p[10] = broadcast_tc;
+    p[11] = remapper_pair_index;
+}
+
+inline uint8_t dfb_read_init_entry_producer_signal_bit(const uint8_t* entry_bytes, bool is_dm_hart) {
+    if (is_dm_hart) {
+        return entry_bytes[DFB_INIT_ENTRY_DM_PRODUCER_SIGNAL_BYTE_OFF];
+    }
+    return reinterpret_cast<const dfb_hart_init_entry_t*>(entry_bytes)->producer_signal_bit;
+}
 
 // Returns total serialized bytes for one dfb_hart_init_entry_t with num_tcs TC slots.
 // AoP tail: num_tcs pairs (8B each) + num_tcs ptc bytes, rounded up to 4B.
@@ -272,9 +315,10 @@ struct dfb_dm0_isr_blob_core_header_t {
 };
 
 // CMDBUF threshold for one txn id (role/path implied by producer/consumer masks in core_hdr).
+// 4B stride so the DM0 ISR blob + following hart blobs stay 4B-aligned (pool is indexed by txn_id).
 struct dfb_dm0_isr_txn_threshold_t {
     uint8_t threshold;
-    uint8_t _pad;
+    uint8_t _pad[3];
 };
 
 // 32-byte image matching TxnDFBDescriptor layout in dataflow_buffer_interface.h.
@@ -315,7 +359,7 @@ static_assert(sizeof(dfb_dm0_remapper_slot_t) == 12, "dfb_dm0_remapper_slot_t mu
 
 static_assert(sizeof(dfb_dm0_isr_blob_core_header_t) == 8, "dfb_dm0_isr_blob_core_header_t must be 8 bytes");
 static_assert(sizeof(dfb_dm0_txn_descriptor_image_t) == 32, "dfb_dm0_txn_descriptor_image_t must be 32 bytes");
-static_assert(sizeof(dfb_dm0_isr_txn_threshold_t) == 2, "dfb_dm0_isr_txn_threshold_t must be 2 bytes");
+static_assert(sizeof(dfb_dm0_isr_txn_threshold_t) == 4, "dfb_dm0_isr_txn_threshold_t must be 4 bytes");
 
 // Span covers txn ids 0 .. highest set bit in (producer_mask | consumer_mask).
 inline uint32_t dm0_isr_txn_slot_span(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
@@ -355,14 +399,14 @@ namespace dfb {
 //         Neo3 unpack, Neo3 pack
 //
 // Per-role metrics (A..J = METRIC_A..METRIC_J):
-//   DM0_ISR: A=pre_loop_sw B=subpassB_desc C=between_dfb_sw D=subpassB_l1_read
+//   DM0_ISR: A=pre_loop_sw B=subpassB_desc C=hw_reg_write_cycles D=subpassB_l1_read
 //            E=subpassB_rocc_issue F=first_ie_rmw G=second_ie_rmw H=isr_enable
-//            I=implicit_sync_stores J=subpassB_hw
+//            I=hw_reg_writes J=subpassB_hw
 //   DM1_RMP: A=blob_l1_read_sw B=blob_loop_ovhd C=pairs_reg_hw D=enable_remapper_hw
 //            E=first_pair_clientR_hw F=first_pair_clientL_hw G=last_pair_hw
-//            J=pairs_slots_written
-//   DM_LOCAL/TRISC: A=merged_sw B=remapper_spin C=tc_hw D=wait_all E=tc_reset_hw
-//                   F=tc_capacity_hw
+//            H=hw_reg_write_cycles I=hw_reg_writes J=pairs_slots_written
+//   DM_LOCAL/TRISC: A=merged_sw B=remapper_spin C=tc_hw D=hw_reg_writes E=tc_reset_hw
+//                   F=tc_capacity_hw G=pre_loop H=entry_hdr I=tc_slots J=sig_write
 // ---------------------------------------------------------------------------
 constexpr uint8_t DFB_INIT_TIMING_NUM_SLOTS = 16;
 constexpr uint8_t DFB_INIT_TIMING_WORDS_PER_SLOT = 16;

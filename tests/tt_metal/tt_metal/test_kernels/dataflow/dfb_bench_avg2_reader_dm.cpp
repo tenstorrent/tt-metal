@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Benchmark reader DM kernel for BenchmarkCaseFour (worst-case init benchmark).
+// Benchmark reader DM kernel for BenchmarkCaseThree (average-case-two init benchmark).
 //
-// Acts as STRIDED PRODUCER on three 4Sx4A DM→Tensix DFBs:
+// Acts as STRIDED PRODUCER on three 4Sx4S DM→Tensix DFBs:
 //   dfb::out0, dfb::out1, dfb::out2
 //
 // Drains the full 16-entry ring per DFB (num_entries=16, 4 strided producers):

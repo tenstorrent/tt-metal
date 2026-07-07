@@ -67,7 +67,8 @@ std::vector<uint8_t> serialize_dm0_isr_txn_hw_pool_for_core(
 
     std::vector<uint8_t> pool(hw_bytes, 0);
     auto write_threshold = [&](uint8_t txn_id, uint8_t threshold) {
-        dfb_dm0_isr_txn_threshold_t entry = {.threshold = threshold, ._pad = 0};
+        dfb_dm0_isr_txn_threshold_t entry = {};
+        entry.threshold = threshold;
         std::memcpy(
             pool.data() + static_cast<uint32_t>(txn_id) * sizeof(dfb_dm0_isr_txn_threshold_t),
             &entry,
@@ -576,6 +577,22 @@ size_t serialize_dfb_config_for_core(
             // Write fixed header.
             std::memcpy(out.data() + offset, &entry, sizeof(entry));
 
+            // DM harts: mirror bytes [12,24) in Opt-5 DTCM order so device-side tools and
+            // dfb_unpack_entry_header_dm stay consistent with on-disk layout.
+            if (h < ::dfb::TENSIX_RISC_OFFSET) {
+                dfb_write_dm_scalar_pack_to_blob(
+                    out.data() + offset,
+                    num_tcs,
+                    producer_signal_bit[di][h],
+                    entry.txn_ids,
+                    entry.threshold,
+                    entry.num_entries_per_txn_id,
+                    entry.num_entries_per_txn_id_per_tc,
+                    entry.num_txn_ids,
+                    static_cast<uint8_t>((flags & DFB_HART_FLAG_BROADCAST_TC) ? 1u : 0u),
+                    entry.remapper_pair_index);
+            }
+
             // Write AoP TC tail: dfb_blob_tc_pair_t[num_tcs] immediately after the 24B header,
             // followed by uint8_t packed_tile_counter[num_tcs] padded to 4B.
             // Each pair is {base_addr(4B), limit(4B)} = 8B; ptc bytes are packed contiguously.
@@ -585,8 +602,13 @@ size_t serialize_dfb_config_for_core(
             uint32_t tc_pairs_off = offset + static_cast<uint32_t>(sizeof(entry));
             for (uint8_t t = 0; t < num_tcs; t++) {
                 dfb_blob_tc_pair_t pair = {};
-                pair.base_addr = rc.config.base_addr[t];
-                pair.limit     = rc.config.limit[t];
+                if (h >= ::dfb::TENSIX_RISC_OFFSET) {
+                    pair.base_addr = rc.config.base_addr[t] >> kTRISCCbAddrShift;
+                    pair.limit     = rc.config.limit[t] >> kTRISCCbAddrShift;
+                } else {
+                    pair.base_addr = rc.config.base_addr[t];
+                    pair.limit     = rc.config.limit[t];
+                }
                 std::memcpy(out.data() + tc_pairs_off, &pair, sizeof(pair));
                 tc_pairs_off += static_cast<uint32_t>(sizeof(pair));
             }
@@ -713,6 +735,23 @@ void log_dfb_config_vec_dump(const CoreCoord& core, std::string_view label, std:
                 "    entry[{}] dfb_id={} num_tcs={} flags=0x{:02x} cap={} entry_size={} signal_bit={}",
                 e, entry->logical_dfb_id, entry->num_tcs, entry->flags,
                 entry->capacity, entry->entry_size, entry->producer_signal_bit);
+            const uint32_t tc_pairs_off =
+                cursor + static_cast<uint32_t>(sizeof(dfb_hart_init_entry_t));
+            for (uint8_t t = 0; t < entry->num_tcs; t++) {
+                if (tc_pairs_off + (t + 1u) * sizeof(dfb_blob_tc_pair_t) > config_bytes.size()) {
+                    break;
+                }
+                const auto* pair = reinterpret_cast<const dfb_blob_tc_pair_t*>(
+                    config_bytes.data() + tc_pairs_off + static_cast<uint32_t>(t) * sizeof(dfb_blob_tc_pair_t));
+                log_info(
+                    tt::LogMetal,
+                    "      tc[{}] base=0x{:08x} limit=0x{:08x} ring={} (hart>={} => tile units)",
+                    t,
+                    pair->base_addr,
+                    pair->limit,
+                    pair->limit - pair->base_addr,
+                    ::dfb::TENSIX_RISC_OFFSET);
+            }
             cursor += dfb_hart_init_entry_byte_size(entry->num_tcs);
         }
     }

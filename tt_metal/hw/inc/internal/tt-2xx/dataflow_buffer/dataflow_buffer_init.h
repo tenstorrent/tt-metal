@@ -68,7 +68,8 @@ struct dfb_init_entry_hdr_t {
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t producer_signal_bit;  // bit position in dfb_signal[dfb_id]; 0xFF if consumer
     uint8_t txn_ids[dfb::NUM_TXN_IDS];  // bytes 18–21 (DM only; 0 elsewhere)
-    uint8_t remapper_pair_index;  // byte 22; 0xFF if not remapped
+    uint8_t broadcast_tc;         // DM pack byte 22 → iface.broadcast_tc (DM unpack only)
+    uint8_t remapper_pair_index;  // byte 23 / DM pack byte 11 → iface._tc_align_pad on copy
 };
 
 // Fix A: read the entire 24B dfb_hart_init_entry_t (__attribute__((packed))) as 6 u32s.
@@ -84,7 +85,7 @@ struct dfb_init_entry_hdr_t {
 //   w4 [7:0]=num_entries_per_txn_id_per_tc  [15:8]=producer_signal_bit  [23:16]=txn_ids[0]  [31:24]=txn_ids[1]
 //   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index  [31:24]=_pad
 
-// Shared unpack helper: called with either a volatile uncached or a plain cached pointer.
+// Shared unpack helper: TRISC blob w3–w5 (legacy SoA byte layout).
 template <typename PtrT>
 FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5];
@@ -105,9 +106,56 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     h.txn_ids[1]                 = static_cast<uint8_t>(w4 >> 24);
     h.txn_ids[2]                 = static_cast<uint8_t>(w5);
     h.txn_ids[3]                 = static_cast<uint8_t>(w5 >> 8);
+    h.broadcast_tc               = 0;
     h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 16);
     return h;
 }
+
+// DM unpack: w3–w5 are the Opt-5 scalar pack (12B DTCM layout). See dfb_write_dm_scalar_pack_to_blob.
+template <typename PtrT>
+FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
+    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5];
+    dfb_init_entry_hdr_t h;
+    h.logical_dfb_id             = static_cast<uint8_t>(w0);
+    h.num_tcs                    = static_cast<uint8_t>(w0 >> 8);
+    h.flags                      = static_cast<uint8_t>(w0 >> 16);
+    h.capacity                   = static_cast<uint8_t>(w0 >> 24);
+    h.entry_size                 = w1;
+    h.stride_size_precomp        = w2;
+    h.stride_size_tiles          = 0;
+    h.producer_signal_bit        = static_cast<uint8_t>(w3 >> 8);
+    h.txn_ids[0]                 = static_cast<uint8_t>(w3 >> 16);
+    h.txn_ids[1]                 = static_cast<uint8_t>(w3 >> 24);
+    h.txn_ids[2]                 = static_cast<uint8_t>(w4);
+    h.txn_ids[3]                 = static_cast<uint8_t>(w4 >> 8);
+    h.threshold                  = static_cast<uint8_t>(w4 >> 16);
+    h.num_entries_per_txn_id     = static_cast<uint8_t>(w4 >> 24);
+    h.num_entries_per_txn_id_per_tc = static_cast<uint8_t>(w5);
+    h.num_txn_ids                = static_cast<uint8_t>(w5 >> 8);
+    h.broadcast_tc               = static_cast<uint8_t>(w5 >> 16);
+    h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 24);
+    return h;
+}
+
+#ifndef COMPILE_FOR_TRISC
+// Opt 4: write iface bytes [8,20) from unpacked eh — same 3×u32 layout as Opt 5 blob copy, no L1 reload.
+FORCE_INLINE void dfb_write_dm_iface_scalars_from_hdr(LocalDFBInterface& iface, const dfb_init_entry_hdr_t& eh) {
+    const uint32_t pack_w0 = static_cast<uint32_t>(eh.num_tcs) | (static_cast<uint32_t>(eh.txn_ids[0]) << 16) |
+                             (static_cast<uint32_t>(eh.txn_ids[1]) << 24);
+    const uint32_t pack_w1 = static_cast<uint32_t>(eh.txn_ids[2]) | (static_cast<uint32_t>(eh.txn_ids[3]) << 8) |
+                             (static_cast<uint32_t>(eh.threshold) << 16) |
+                             (static_cast<uint32_t>(eh.num_entries_per_txn_id) << 24);
+    const uint32_t pack_w2 = static_cast<uint32_t>(eh.num_entries_per_txn_id_per_tc) |
+                             (static_cast<uint32_t>(eh.num_txn_ids) << 8) |
+                             (static_cast<uint32_t>(eh.broadcast_tc) << 16) |
+                             (static_cast<uint32_t>(eh.remapper_pair_index) << 24);
+    uint32_t* const dm_scalar = reinterpret_cast<uint32_t*>(&iface.num_tcs_to_rr);
+    dm_scalar[0] = pack_w0;
+    dm_scalar[1] = pack_w1;
+    dm_scalar[2] = pack_w2;
+    iface.tc_idx = 0;
+}
+#endif
 
 // Uncached variant — used by TRISC (no private L2 cache).
 FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header(uintptr_t entry_addr) {
@@ -116,8 +164,9 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header(uintptr_t entry_add
 
 // Cached variant — used by DM after invalidate_l2_cache_range covers the blob.
 // Plain (non-volatile) pointer: no TL1 bypass; reads go through L1 D$ → L2 → TL1.
+// Bytes [12,24) are in Opt-5 DTCM order (host writes via dfb_write_dm_scalar_pack_to_blob).
 FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header_cached(uintptr_t entry_addr) {
-    return dfb_unpack_entry_header(reinterpret_cast<const uint32_t*>(entry_addr));
+    return dfb_unpack_entry_header_dm(reinterpret_cast<const uint32_t*>(entry_addr));
 }
 
 FORCE_INLINE volatile uint32_t* dfb_init_timing_slot_words(uint8_t slot) {
@@ -214,7 +263,9 @@ FORCE_INLINE void dfb_ensure_ready(uintptr_t config_cached, uint8_t dfb_id) {
             config_cached + sig_off + kExpectedBase + static_cast<uint32_t>(dfb_id) * sizeof(uint32_t)));
 
     const uint32_t expected = *exp_ptr;
-    if (expected == 0) { return; }
+    if (expected == 0) {
+        return;
+    }
 
 #ifndef COMPILE_FOR_TRISC
     const bool need_isr_gate =
@@ -244,22 +295,27 @@ FORCE_INLINE void dfb_ensure_ready(uintptr_t config_cached, uint8_t dfb_id) {
 }
 
 // Publish producer readiness: write byte 1 into this producer's unique slot in dfb_signal.
-// producer_signal_bit == 0xFF means "no slot" (non-primary producer) → no-op.
-// Each producer owns a distinct byte slot so no atomics are required. The write goes through
-// the uncached L1 alias so DM↔TRISC consumers observe it without cache management.
+// producer_signal_bit == 0xFF means consumer (no signal slot) → no-op.
+// dfb_signal_base must be the uncached alias of (config_base + dfb_signal_region_off),
+// hoisted once before the init loop so per-entry publish is index + store only.
 // A compiler barrier prevents the signal write from being hoisted before any preceding TC init.
 FORCE_INLINE void dfb_publish_producer_ready(
-    uintptr_t config_cached, uint32_t dfb_signal_region_off, uint8_t logical_dfb_id, uint8_t producer_signal_bit) {
+    volatile uint8_t* dfb_signal_base, uint8_t logical_dfb_id, uint8_t producer_signal_bit) {
     if (producer_signal_bit == 0xFFu) {
         return;
     }
-    volatile uint8_t* sig_slot = dfb_l1_uncached_byte_ptr(
-        config_cached + dfb_signal_region_off +
-        static_cast<uint32_t>(logical_dfb_id) * ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR +
-        static_cast<uint32_t>(producer_signal_bit));
+    constexpr uint32_t k_slot_stride = static_cast<uint32_t>(::dfb::MAX_NUM_TILE_COUNTERS_TO_RR);
     asm volatile("" ::: "memory");  // compiler barrier only; no hardware fence needed
-    *sig_slot = 1u;
+    dfb_signal_base[static_cast<uint32_t>(logical_dfb_id) * k_slot_stride +
+                    static_cast<uint32_t>(producer_signal_bit)] = 1u;
     WAYPOINT("PPR");
+}
+
+// Uncached-base + offset wrapper for one-off publishes outside the init loop.
+FORCE_INLINE void dfb_publish_producer_ready(
+    uintptr_t config_cached, uint32_t dfb_signal_region_off, uint8_t logical_dfb_id, uint8_t producer_signal_bit) {
+    dfb_publish_producer_ready(
+        dfb_l1_uncached_byte_ptr(config_cached + dfb_signal_region_off), logical_dfb_id, producer_signal_bit);
 }
 
 #ifndef COMPILE_FOR_TRISC
@@ -310,6 +366,8 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
 
     uint32_t total_l1_read = 0;
     uint32_t total_rocc_issue = 0;
+    uint32_t hw_reg_writes = 0;
+    uint32_t hw_reg_write_cycles = 0;
     const uint32_t t_before_cmdbuf = t_after_desc_copy;
 
     uint32_t pending = producer_txn_id_mask;
@@ -319,9 +377,13 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         const uint32_t threshold = txn_threshold_table[txn_id].threshold;
         const uint32_t t_after_l1 = rdcycle();
         total_l1_read += t_after_l1 - t_slot_start;
+        const uint32_t t_wr_start = rdcycle();
         CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, txn_id);
         asm volatile("nop");
+        DPRINT("ack txn id: {} threshold: {}\n", txn_id, threshold);
         SET_TILES_TO_PROCESS_THRES_TR_ACK(txn_id, threshold);
+        hw_reg_writes += 2u;
+        hw_reg_write_cycles += rdcycle() - t_wr_start;
         const uint32_t t_after_rocc = rdcycle();
         total_rocc_issue += t_after_rocc - t_after_l1;
         pending &= (pending - 1u);
@@ -334,9 +396,13 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         const uint32_t threshold = txn_threshold_table[txn_id].threshold;
         const uint32_t t_after_l1 = rdcycle();
         total_l1_read += t_after_l1 - t_slot_start;
+        const uint32_t t_wr_start = rdcycle();
         CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, txn_id);
         asm volatile("nop");
+        DPRINT("wr sent txn id: {} threshold: {}\n", txn_id, threshold);
         SET_TILES_TO_PROCESS_THRES_WR_SENT(txn_id, threshold);
+        hw_reg_writes += 2u;
+        hw_reg_write_cycles += rdcycle() - t_wr_start;
         const uint32_t t_after_rocc = rdcycle();
         total_rocc_issue += t_after_rocc - t_after_l1;
         pending &= (pending - 1u);
@@ -346,18 +412,28 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
     const uint32_t t_before_ie = rdcycle();
     uint64_t reg_val = CMDBUF_RD_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);
     reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(producer_txn_id_mask & 0xFFFFFFFFULL) << 32);
+    DPRINT("producer txn id mask: {}\n", producer_txn_id_mask);
     CMDBUF_WR_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);
     const uint32_t t_after_first_ie_rmw = rdcycle();
 
     reg_val = CMDBUF_RD_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);
     reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (consumer_txn_id_mask & 0xFFFFFFFFULL);
+    DPRINT("consumer txn id mask: {}\n", consumer_txn_id_mask);
     CMDBUF_WR_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);
     const uint32_t t_after_isr_ie_writes = rdcycle();
+    hw_reg_writes += 2u;
+    hw_reg_write_cycles += t_after_isr_ie_writes - t_before_ie;
 
     if ((producer_txn_id_mask | consumer_txn_id_mask) != 0) {
+        const uint32_t t_isr_start = rdcycle();
         enable_dfb_tile_isr();
+        hw_reg_writes += 2u;  // mie + mstatus CSR writes
+        hw_reg_write_cycles += rdcycle() - t_isr_start;
     } else {
+        const uint32_t t_isr_start = rdcycle();
         disable_dfb_tile_isr();
+        hw_reg_writes += 2u;
+        hw_reg_write_cycles += rdcycle() - t_isr_start;
     }
     const uint32_t end_isr_enable_time = rdcycle();
 
@@ -371,7 +447,6 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
 
     const uint32_t pre_loop_sw = t_before_desc_copy - start_time;
     const uint32_t subpassB_desc = t_after_desc_copy - t_before_desc_copy;
-    const uint32_t between_dfb_sw = 0;
     const uint32_t subpassB_hw = t_after_cmdbuf - t_before_cmdbuf;
     const uint32_t first_ie_rmw = t_after_first_ie_rmw - t_before_ie;
     const uint32_t second_ie_rmw = t_after_isr_ie_writes - t_after_first_ie_rmw;
@@ -384,7 +459,7 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         end_time - start_time,
         pre_loop_sw,
         subpassB_desc,
-        between_dfb_sw,
+        hw_reg_write_cycles,
         total_l1_read,
         total_rocc_issue,
         first_ie_rmw,
@@ -392,7 +467,7 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         end_time,
         second_ie_rmw,
         isr_enable,
-        0,
+        hw_reg_writes,
         subpassB_hw);
 }
 
@@ -405,7 +480,7 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
     const uint32_t dm1_remapper_blob_offset = ghdr->dm1_remapper_blob_offset;
     volatile tt_l1_ptr uint8_t* dm1_blob_ptr = config_base + dm1_remapper_blob_offset;
 
-    bool enable_remapper = false;
+    // bool enable_remapper = false;
     uint32_t end_remapper_config_time = 0;
 
     WAYPOINT("RS");
@@ -464,7 +539,7 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
             pass_pairs_reg += pair_reg_hw;
             last_pair_hw = pair_reg_hw;
             pairs_slots_written++;
-            enable_remapper = true;
+            // enable_remapper = true;
             g_remapper_configurator.note_pair_configured(pair_idx);
         }
 
@@ -475,7 +550,7 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
         blob_loop_ovhd += (t_pass_end - t_pass_start) - pass_l1_read - pass_pairs_reg;
     }
 
-    uint32_t enable_remapper_hw = 0;
+    // uint32_t enable_remapper_hw = 0;
     // if (enable_remapper) {
     //     const uint32_t t_before_enable = rdcycle();
     //     g_remapper_configurator.enable_remapper();
@@ -499,8 +574,8 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
         start_time,
         end_time,
         last_pair_hw,
-        0,
-        0,
+        pairs_reg_hw,                        // METRIC_H: hw_reg_write_cycles
+        pairs_slots_written * 2u,            // METRIC_I: hw_reg_writes (clientR + clientL per slot)
         pairs_slots_written);
 }
 
@@ -527,6 +602,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     const uint32_t participation_mask = dfb_read_participation_mask(config_cached, hart_u8);
     const uint32_t dfb_signal_region_off = *dfb_l1_uncached_u32_ptr(
         config_cached + offsetof(dfb_global_header_t, dfb_signal_region_off));
+    // Hoist uncached signal-region base; per-entry publish adds dfb_id×stride + signal_bit only.
+    volatile uint8_t* const dfb_signal_base =
+        dfb_l1_uncached_byte_ptr(config_cached + dfb_signal_region_off);
 
     // One load: this hart's blob offset from the header — no dependent table arithmetic.
     const volatile uint8_t* p = reinterpret_cast<const volatile uint8_t*>(
@@ -536,6 +614,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     uint32_t total_tc_hw = 0;
     uint32_t total_tc_reset_hw = 0;
     uint32_t total_tc_capacity_hw = 0;
+    uint32_t total_hw_reg_writes = 0;
     // Sub-breakdown metrics (g–j):
     //   g: pre-loop fixed overhead (3 uncached header reads before the loop)
     //   h: time in dfb_read_init_entry_header (6 u32 reads × N entries)
@@ -639,8 +718,10 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #endif
 
         // --- Common scalar fields ---
+#if defined(COMPILE_FOR_TRISC)
         iface.num_tcs_to_rr = num_tcs;
         iface.tc_idx = 0;
+#endif
 
         WAYPOINT("L2");
 
@@ -659,18 +740,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         iface.entry_size  = eh.entry_size >> cb_addr_shift;
         // Opt 2: stride_size_precomp already has entry_size_raw * stride_in_entries — no multiply.
         iface.stride_size = eh.stride_size_precomp;
-        iface.broadcast_tc  = (eh.flags & DFB_HART_FLAG_BROADCAST_TC) ? 1u : 0u;
-        iface.num_txn_ids               = eh.num_txn_ids;
-        iface.threshold                 = eh.threshold;
-        iface.num_entries_per_txn_id    = eh.num_entries_per_txn_id;
-        iface.num_entries_per_txn_id_per_tc = eh.num_entries_per_txn_id_per_tc;
-        // Fix B: unroll txn_ids copy to 4 unconditional sb stores (no variable-bound loop).
-        // Unused slots beyond num_txn_ids were zeroed at host serialization time and are
-        // never accessed at runtime, so writing all 4 is always safe and correct.
-        iface.txn_ids[0] = eh.txn_ids[0];
-        iface.txn_ids[1] = eh.txn_ids[1];
-        iface.txn_ids[2] = eh.txn_ids[2];
-        iface.txn_ids[3] = eh.txn_ids[3];
+        // Opt 4: 3×u32 DTCM stores from Opt-5 unpacked eh; no second L1 read of bytes 12–23.
+        dfb_write_dm_iface_scalars_from_hdr(iface, eh);
 #endif
 
         WAYPOINT("L3");
@@ -694,8 +765,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #endif
         const uint32_t t_slots_start = rdcycle();
         for (uint8_t t = 0; t < num_tcs; t++, pairs++) {
-            const uint32_t base      = pairs->base_addr >> cb_addr_shift;
-            const uint32_t limit     = pairs->limit     >> cb_addr_shift;
+            // Host pre-shifts TRISC TC addresses to tile units at serialization; DM blobs keep byte addresses.
+            const uint32_t base      = pairs->base_addr;
+            const uint32_t limit     = pairs->limit;
             const uint8_t  ptc       = static_cast<uint8_t>((t < 4u ? ptc_w0 : ptc_w1) >> ((t & 3u) * 8u));
             iface.tc_slots[t].packed_tile_counter = ptc;
 
@@ -748,23 +820,26 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 const uint32_t t_reset = rdcycle();
                 overlay::fast_llk_intf_reset(tensix_id, tc_id);
                 total_tc_reset_hw += rdcycle() - t_reset;
+                total_hw_reg_writes++;
                 const uint32_t t_cap = rdcycle();
                 overlay::fast_llk_intf_set_capacity(tensix_id, tc_id, eh.capacity);
                 total_tc_capacity_hw += rdcycle() - t_cap;
+                total_hw_reg_writes++;
 #elif defined(UCK_CHLKC_PACK)
                 const uint32_t t_reset = rdcycle();
                 ckernel::trisc::tile_counters[tc_id].f.reset = 1;
                 total_tc_reset_hw += rdcycle() - t_reset;
+                total_hw_reg_writes++;
                 const uint32_t t_cap = rdcycle();
                 ckernel::trisc::tile_counters[tc_id].f.buf_capacity = eh.capacity;
                 total_tc_capacity_hw += rdcycle() - t_cap;
+                total_hw_reg_writes++;
 #endif
             }
             total_tc_hw += rdcycle() - tc_hw_start;
 
             const uint32_t t_sig_start = rdcycle();
-            dfb_publish_producer_ready(
-                config_cached, dfb_signal_region_off, eh.logical_dfb_id, eh.producer_signal_bit);
+            dfb_publish_producer_ready(dfb_signal_base, eh.logical_dfb_id, eh.producer_signal_bit);
             total_sig_write += rdcycle() - t_sig_start;
         }
 #endif  // !COMPILE_FOR_TRISC || UCK_CHLKC_PACK
@@ -791,7 +866,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         t_after_merged_loop - start_time,   // METRIC_A: merged_sw (full loop wall time)
         total_remapper_spin,                 // METRIC_B: remapper_spin
         total_tc_hw,                         // METRIC_C: tc_hw
-        0,  // METRIC_D: producer-ready wait deferred to DataflowBuffer ctor (dfb_ensure_ready)
+        total_hw_reg_writes,                 // METRIC_D: hw_reg_writes (TC reset + capacity per producer TC)
         total_tc_reset_hw,                   // METRIC_E: tc_reset_hw
         total_tc_capacity_hw,                // METRIC_F: tc_capacity_hw
         start_time,
