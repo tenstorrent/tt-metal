@@ -71,6 +71,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     permute/device/permute_rm_program_factory.cpp
     permute/device/permute_tiled_program_factory.cpp
     permute/permute.cpp
+    pixel_unshuffle/device/pixel_unshuffle_device_op.cpp
+    pixel_unshuffle/device/pixel_unshuffle_program_factory.cpp
+    pixel_unshuffle/pixel_unshuffle.cpp
     repeat/device/repeat_program_factory_last_dim.cpp
     repeat/device/repeat_program_factory_higher_dim.cpp
     repeat/device/repeat_device_operation.cpp
@@ -237,6 +240,7 @@ set(TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS
     non_zero_indices/non_zero_indices_nanobind.cpp
     pad/pad_nanobind.cpp
     permute/permute_nanobind.cpp
+    pixel_unshuffle/pixel_unshuffle_nanobind.cpp
     repeat/repeat_nanobind.cpp
     repeat_interleave/repeat_interleave_nanobind.cpp
     reshape_view/reshape_nanobind.cpp
