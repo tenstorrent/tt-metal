@@ -183,6 +183,7 @@ inline void calculate_sine() {
         C0 = -0x1.5554a4p-3f;
     }
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
@@ -258,6 +259,7 @@ inline void calculate_cosine() {
     const float ROUNDING_BIAS = 12582912.0f;
     const float NEG_ROUNDING_BIAS = -12582912.0f;
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
