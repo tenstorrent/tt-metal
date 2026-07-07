@@ -12,7 +12,7 @@ namespace ttnn {
 
 // `implementation` selects the prim used for each repeated dim: "auto" (default) defers to
 // supported_by_codegen(); "native" / "codegen" force a side (forcing "codegen" on an ineligible
-// input TT_FATALs rather than silently falling back — see repeat/device/repeat_codegen_supported.hpp).
+// input TT_FATALs rather than silently falling back — see repeat/codegen/repeat_codegen_supported.hpp).
 ttnn::Tensor repeat(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<uint32_t>& repetition_vector,

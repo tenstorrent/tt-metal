@@ -5,8 +5,8 @@
 #pragma once
 
 #include "ttnn/operation.hpp"
-#include "ttnn/operations/data_movement/repeat/device/repeat_codegen_device_operation_types.hpp"
-#include "ttnn/operations/data_movement/repeat/device/repeat_codegen_program_factory.hpp"
+#include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_device_operation_types.hpp"
+#include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_program_factory.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::prim {

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/data_movement/repeat/device/repeat_codegen_program_factory.hpp"
+#include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_program_factory.hpp"
 
 #include <cstdint>
 
@@ -70,7 +70,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     // RuntimeTensorShape onto its single kernel.
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_codegen_reader.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/repeat_codegen_reader.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.named_compile_time_args = {{"seq_id", 1}, {"cb_id", cb_id}, {"batch", READ_BATCH}};
@@ -79,7 +79,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_codegen_writer.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/repeat_codegen_writer.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = {cb_id, page_size};
