@@ -12,6 +12,8 @@
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include "tilize_device_operation_types.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 
@@ -34,6 +36,13 @@ struct TilizeDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
+
+    // #48928: the sharded factory is pure CB-bound; opt into the descriptor fast-path on a cache hit.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
 
 ttnn::Tensor tilize(
