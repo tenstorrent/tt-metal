@@ -177,7 +177,7 @@ scaleout:
     cpu_medium_prio: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 180 # fabric CPU-only shards: unit/sp4-glx/subtorus ×15 + bh-slices ×25 + bh-pod-pipeline ×40 + bh-subtorus-sc20 ×40 + bh-blitz-decode ×30
+    cpu_medium: 200 # fabric CPU-only shards: unit/sp4-glx/subtorus ×15 + bh-slices ×25 + bh-pod-pipeline-{revAB,revC} ×30 + bh-subtorus-sc20 ×40 + bh-blitz-decode ×30
     wh_llmbox: 60
     wh_galaxy: 25
   stress:

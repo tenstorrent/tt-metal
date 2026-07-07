@@ -33,15 +33,26 @@
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song
 
-# Split out of bh-slices: bh-pod-pipeline is now resolvable after the SC36 subtorus rename and runs ~30
-# per-host-sliced pod combos across 4 single-pod mocks, which pushed the combined bh-slices shard past
-# even a 40-min cap on CI. Kept as its own shard.
-- id: fabric-cpu-bh-pod-pipeline
-  name: fabric cpu unit tests (bh-pod-pipeline)
-  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline
+# bh-pod-pipeline became runnable after the SC36 subtorus rename and runs 39 per-host-sliced pod combos
+# across 4 single-pod mocks (incl. slow 40-host llama pods), which exceeded a 40-min shard on CI. Split by
+# mock revision via --grep: revAB (21 combos: SC4 revAB subtorus/aisleD + SP3 16x8) and revC (18 combos:
+# SC4 revC subtorus aisleC/aisleD). The two greps partition the group exactly (21 + 18 = 39, disjoint).
+- id: fabric-cpu-bh-pod-pipeline-revab
+  name: fabric cpu unit tests (bh-pod-pipeline-revAB)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revAB
   skus:
     cpu_medium:
-      timeout: 40
+      timeout: 30
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
+- id: fabric-cpu-bh-pod-pipeline-revc
+  name: fabric cpu unit tests (bh-pod-pipeline-revC)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revC
+  skus:
+    cpu_medium:
+      timeout: 30
   team: scaleout
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song
