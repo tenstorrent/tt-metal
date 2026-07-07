@@ -519,6 +519,44 @@ inline void _gmg_copy_topk_run()
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + to_hi);
 }
 
+/**
+ * @brief Copy a stored top-8 run (bias + concat idx|score) between arbitrary DEST TILE bases, with
+ *        column-pair selection on both ends. Generalizes @ref _gmg_copy_topk_run (the from_base==to_base==0
+ *        case) by adding a per-end tile-granular base offset, so a run can be PARKED into an otherwise-unused
+ *        DEST tile and later RESTORED. This is the primitive the DEST-resident (no-L1) multi-block combine
+ *        needs: block0's run is parked 4 tiles up (scores'/idx'/bias' = tiles 4/5/6) while block1's pipeline
+ *        reruns in tiles 0-3, then restored to {4,6} for the final merge. SFPU (MATH).
+ *
+ * @tparam from_base: DEST tile-base (a multiple of dst_tile_offset=64) added to the source region offsets.
+ * @tparam from_lo/from_hi: source column pair within the source region.
+ * @tparam to_base: DEST tile-base added to the destination region offsets.
+ * @tparam to_lo/to_hi: destination column pair within the destination region.
+ * @note Reads bias(mode 0)/idx(LO16)/score(HI16) at {from_base+from_lo, from_base+from_hi} across the
+ *       scores/indices/bias regions and writes the same convention at {to_base+to_lo, to_base+to_hi}. Resets
+ *       the Dst RWC counter at entry (a preceding FPU MOP leaves it advanced). Clobbers LREG0/1/4/5. Uses only
+ *       SFPLOAD/SFPSTORE (no SFPTRANSP/SFPSWAP), so tile-granular bases (e.g. 256 = 4 tiles up) are safe — the
+ *       proven interm_offset=192 addressing shows plain addressed loads/stores reach beyond tile 0; the
+ *       "offset>=8 wraps" caveat is specific to the merge's transpose network, not to these loads/stores.
+ */
+template <std::uint32_t from_base, std::uint32_t from_lo, std::uint32_t from_hi, std::uint32_t to_base, std::uint32_t to_lo, std::uint32_t to_hi>
+inline void _gmg_copy_run_tiled()
+{
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + from_base + from_lo);
+    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + from_base + from_hi);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + from_base + from_lo);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + from_base + from_hi);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + from_base + from_lo);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + from_base + from_hi);
+    TTI_SFPNOP;
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + to_base + to_lo);
+    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + to_base + to_hi);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + to_base + to_lo);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + to_base + to_hi);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + to_base + to_lo);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + to_base + to_hi);
+}
+
 // Multi-block combine: place ONE field of a run from the intermediate region {src_lo,src_hi} into its home
 // region (scores/indices/bias) {dst_lo,dst_hi}. The field-tile was unpacked (copy_tile) into intermediate
 // from the L1 run stash; this SFPU copy is row-selective so it writes only {dst_lo,dst_hi}, leaving

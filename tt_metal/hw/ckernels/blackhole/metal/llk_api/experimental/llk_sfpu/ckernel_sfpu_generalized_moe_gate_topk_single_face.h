@@ -52,6 +52,19 @@ inline void generalized_moe_gate_copy_topk_run() {
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
+    uint32_t from_base,
+    uint32_t from_lo,
+    uint32_t from_hi,
+    uint32_t to_base,
+    uint32_t to_lo,
+    uint32_t to_hi>
+inline void generalized_moe_gate_copy_run_tiled() {
+    _gmg_copy_run_tiled<from_base, from_lo, from_hi, to_base, to_lo, to_hi>();
+}
+
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
     uint32_t field,
     uint32_t src_lo,
     uint32_t src_hi,

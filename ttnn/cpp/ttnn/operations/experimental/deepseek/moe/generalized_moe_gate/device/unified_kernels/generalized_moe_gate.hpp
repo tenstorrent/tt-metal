@@ -248,6 +248,79 @@ struct GeneralizedMoeGate {
                 output_indices_cb.push_back(1);
                 tile_regs_release();
             } else {
+#if GMG_DEST_RESIDENT
+                // ======= multi-block path — DEST-RESIDENT combine (experimental, no L1 stash) =======
+                // SEPARATE tile_regs_acquire per block (a SINGLE acquire for both poisons block1's pipeline ->
+                // all-0), replacing the L1 pack_untilize->tilize->transpose_wh round-trip with an in-DEST PARK.
+                // acquire1: block0 produce_run leaves its top-8 RUN at {0,2} (math layout, tiles 0-2); it is
+                // parked to the free SHADOW tiles 4/5/6 (kShadowBase=256, above interm=t3) via the SFPU
+                // tile-granular copy, then step2_only settles the math state. acquire2: block1 produce_run reruns
+                // in tiles 0-3 (shadow untouched); block0 is restored to {4,6} and merged/normalized as the
+                // single-256 finalize does.
+                // KEY: tile_regs_release() in full-sync issues ZEROACC CLR_ALL, which SETS the zero-flags on ALL
+                // 16 tiles (reads then return 0) but does NOT physically overwrite DEST RAM. So block0's parked
+                // run survives acquire1's release PHYSICALLY — only masked. generalized_moe_gate_unmask_shadow()
+                // clears the zero-flags on tiles 4-6 in acquire2, revealing it for the restore. (Without the
+                // un-mask the restore read all-zero -> block0 lost, block1 dominated the merge.) Per-block
+                // indices carry GLOBAL ids (block b = arange+b*256). run_*/cb_tilize CBs unused here. Enabled by
+                // GMG_DEST_RESIDENT (default 0 -> the proven L1 path below).
+                CircularBuffer bias_cb(CTArgs::bias_cb);
+                CircularBuffer input_cb(CTArgs::input_cb);
+                CircularBuffer output_cb(CTArgs::output_cb);
+                CircularBuffer output_indices_cb(CTArgs::output_indices_cb);
+                constexpr uint32_t kShadowBase = 4 * 64;  // shadow scores'/idx'/bias' = tiles 4/5/6 (above interm=t3)
+                // ---- acquire 1: block0 -> RUN {0,2} math -> park to shadow tiles 4/5/6 -> settle ----
+                bias_cb.wait_front(1);
+                input_cb.wait_front(1);
+                reconfig_data_format_srca(CTArgs::input_indices_cb);
+                copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
+                tile_regs_acquire();
+                copy_tile(CTArgs::input_indices_cb, 0, 1);  // block0 GLOBAL ids 0-255 -> idx region (DEST tile 1)
+                reconfig_data_format_srca(CTArgs::input_cb);
+                generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
+                generalized_moe_gate<CTArgs::enable_sigmoid, false, /*produce_run=*/true, 0, 2, 0>(
+                    CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);  // run @ {0,2} math
+                generalized_moe_gate_relocate_run_tiled<0, 0, 2, kShadowBase, 0, 2>();  // park {0,2}@t0-2 -> {0,2}@t4-6
+                // settle math state so acquire2's pipeline starts cleanly (transposes stale tiles 0-2, NOT the shadow)
+                generalized_moe_gate_step2_only<false>();
+                tile_regs_commit();
+                tile_regs_wait();  // release ZEROACC-masks all tiles, but block0's shadow RAM (tiles 4-6) survives
+                tile_regs_release();
+                input_cb.pop_front(1);
+                bias_cb.pop_front(1);
+                // ---- acquire 2: block1 -> RUN {0,2} math -> unmask+restore block0 -> {4,6} -> merge ----
+                bias_cb.wait_front(1);
+                input_cb.wait_front(1);
+                reconfig_data_format_srca(CTArgs::input_indices_cb);
+                copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
+                tile_regs_acquire();
+                copy_tile(CTArgs::input_indices_cb, 1, 1);  // block1 GLOBAL ids 256-511 -> idx region (DEST tile 1)
+                reconfig_data_format_srca(CTArgs::input_cb);
+                generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
+                generalized_moe_gate<CTArgs::enable_sigmoid, false, /*produce_run=*/true, 0, 2, 0>(
+                    CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);  // run @ {0,2} math
+                input_cb.pop_front(1);
+                bias_cb.pop_front(1);
+                // reveal block0's parked run: its physical DEST RAM (tiles 4-6) survived acquire1's release
+                // ZEROACC (which only SET the zero-flags); clear those flags, then restore it to {4,6}.
+                generalized_moe_gate_unmask_shadow<kShadowBase>();
+                generalized_moe_gate_relocate_run_tiled<kShadowBase, 0, 2, 0, 4, 6>();  // {0,2}@t4-6 -> {4,6}@t0-2
+                generalized_moe_gate_combine_init<false>();
+                UNPACK((llk_unpack_set_srcb_dummy_valid()));
+                generalized_moe_gate_combine_finalize<false, CTArgs::topk, CTArgs::output_softmax>(
+                    CTArgs::eps, CTArgs::scaling_factor);
+                tile_regs_commit();
+                output_cb.reserve_back(1);
+                output_indices_cb.reserve_back(1);
+                tile_regs_wait();
+                pack_reconfig_data_format(CTArgs::output_cb);
+                pack_tile(0, CTArgs::output_cb);
+                output_cb.push_back(1);
+                pack_reconfig_data_format(CTArgs::output_indices_cb);
+                pack_tile(1, CTArgs::output_indices_cb);
+                output_indices_cb.push_back(1);
+                tile_regs_release();
+#else
                 CircularBuffer run_scores_cb(CTArgs::run_scores_cb);
                 CircularBuffer run_idx_cb(CTArgs::run_idx_cb);
                 CircularBuffer run_bias_cb(CTArgs::run_bias_cb);
@@ -344,6 +417,7 @@ struct GeneralizedMoeGate {
                 pack_tile(1, CTArgs::output_indices_cb);
                 output_indices_cb.push_back(1);
                 tile_regs_release();
+#endif  // GMG_DEST_RESIDENT
             }
 #endif
         }

@@ -103,6 +103,36 @@ ALWI void generalized_moe_gate_relocate_run() {
         VectorMode::RC_custom)));
 }
 
+// Relocate a run between DEST TILE bases (park into an unused tile / restore back) — the primitive the
+// DEST-resident (no-L1) multi-block combine uses. Generalizes generalized_moe_gate_relocate_run with
+// tile-granular from/to bases (multiples of 64): e.g. park {0,2}@tiles0-2 -> {0,2}@tiles4-6 (base 256),
+// then restore {0,2}@tiles4-6 -> {4,6}@tiles0-2. SFPU (MATH).
+template <uint32_t from_base, uint32_t from_lo, uint32_t from_hi, uint32_t to_base, uint32_t to_lo, uint32_t to_hi>
+ALWI void generalized_moe_gate_relocate_run_tiled() {
+    MATH((SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        generalized_moe_gate_copy_run_tiled,
+        (APPROX, DST_ACCUM_MODE, from_base, from_lo, from_hi, to_base, to_lo, to_hi),
+        0,
+        VectorMode::RC_custom)));
+}
+
+// UN-MASK a parked run's shadow region so it is readable in a new acquire. A tile_regs_release() in full-sync
+// mode issues ZEROACC CLR_ALL, which SETS the per-row zero-flags on ALL 16 DEST tiles (reads then return 0) but
+// does NOT physically overwrite the DEST RAM. So a run parked in an unused shadow tile survives the release
+// physically — it is only masked. This clears the zero-flags (ZEROACC clear_zero_flags=1) on the three shadow
+// faces (scores'/idx'/bias' = shadow_base + {0,64,128}, face = row/16), revealing the parked run for a
+// subsequent SFPU read. Only touches the shadow faces, so the current block's tiles 0-3 are undisturbed.
+// shadow_base is a DEST row offset (multiple of dst_tile_offset=64). MATH (ZEROACC is a MATH-thread op).
+template <uint32_t shadow_base>
+ALWI void generalized_moe_gate_unmask_shadow() {
+    MATH((TTI_ZEROACC(
+        p_zeroacc::CLR_16, DST_ACCUM_MODE, 1 /*clear_zero_flags=UN-mask*/, ADDR_MOD_1, (shadow_base + 0) / 16)));
+    MATH((TTI_ZEROACC(p_zeroacc::CLR_16, DST_ACCUM_MODE, 1, ADDR_MOD_1, (shadow_base + 64) / 16)));
+    MATH((TTI_ZEROACC(p_zeroacc::CLR_16, DST_ACCUM_MODE, 1, ADDR_MOD_1, (shadow_base + 128) / 16)));
+}
+
 // produce_run: for the multi-block (>256) path, end the ungrouped pipeline at merge16_to_run (a
 // re-mergeable top-8 RUN at {run_store_lo, run_store_hi}, idx += idx_offset) and SKIP normalize+step2.
 // Default (produce_run=false) = the single-256 path: finalize (merge + normalize) + step2.
