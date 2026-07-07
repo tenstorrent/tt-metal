@@ -73,10 +73,12 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
         "TT_METAL_FABRIC_TRIMMING_OVERRIDE and TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE are mutually exclusive. "
         "Capture mode instruments routers to record usage; override mode applies forced channel settings. "
         "Enable only one at a time.");
+    bool profile_preserves_vc0_forwarding = false;
     if (rtoptions.has_fabric_trimming_profile()) {
         const auto& path = rtoptions.get_fabric_trimming_profile_path();
         log_info(tt::LogFabric, "Loading channel trimming profile: {}", path);
         channel_trimming_overrides_ = load_channel_trimming_overrides(path);
+        profile_preserves_vc0_forwarding = load_channel_trimming_preserve_vc0_forwarding(path);
     }
 
     // Load global overrides from override file if specified
@@ -84,6 +86,21 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
         const auto& override_path = rtoptions.get_fabric_trimming_override_path();
         log_info(tt::LogFabric, "Loading channel trimming global overrides: {}", override_path);
         channel_trimming_global_overrides_ = load_channel_trimming_global_overrides(override_path);
+    }
+
+    // A profile with `preserve_vc0_forwarding: true` keeps VC0 topology-complete for
+    // data-dependent all-to-all workloads (e.g. MoE dispatch/combine): a single capture
+    // cannot cover every VC0 forwarding path, so trimming VC0 from one run deadlocks other
+    // routings. We express this by force-enabling all VC0 sender+receiver channels, which
+    // also makes try_derive_vc0_trim_fast_path_info() return nullopt (no speedy/terminal
+    // collapse). VC1/VC2 are still trimmed per the capture. This composes with an explicit
+    // override file (VC0 is simply forced on regardless).
+    if (profile_preserves_vc0_forwarding) {
+        log_info(
+            tt::LogFabric, "Channel trimming profile requests preserve_vc0_forwarding: keeping VC0 topology-complete");
+        auto& vc0 = channel_trimming_global_overrides_.per_vc[0];
+        vc0.force_enable_all_sender_channels = true;
+        vc0.force_enable_all_receiver_channels = true;
     }
 
     this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
