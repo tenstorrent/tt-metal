@@ -80,30 +80,14 @@ void ObjectIntentTracker::pre_launch_snapshot(
     }
 }
 
-void ObjectIntentTracker::setup_kernel_tls(
-    const EmuleOobTensorState& oob, uint64_t* local_log, uint32_t cap, uint32_t* count) {
-    if (!oob.object_intent_strict) {
-        __emule_l1_resolved_ranges = nullptr;
-        __emule_l1_resolved_ranges_count = nullptr;
-        __emule_l1_resolved_ranges_capacity = 0;
-        return;
-    }
-    __emule_l1_resolved_ranges = local_log;
-    __emule_l1_resolved_ranges_count = count;
-    __emule_l1_resolved_ranges_capacity = cap;
-}
-
-void ObjectIntentTracker::teardown_kernel_tls(
-    const EmuleOobTensorState& oob, const uint64_t* local_log, uint32_t local_count) {
-    __emule_l1_resolved_ranges = nullptr;
-    __emule_l1_resolved_ranges_count = nullptr;
-    __emule_l1_resolved_ranges_capacity = 0;
-    // snapshots_ non-empty ⇒ single-kernel core (one thread here): gating on it keeps
+void ObjectIntentTracker::accumulate_resolved(
+    const EmuleOobTensorState& oob, const uint64_t* resolved_log, uint32_t count) {
+    // snapshots_ non-empty ⇒ single-kernel core (one fiber here): gating on it keeps
     // this append off multi-kernel cores, where concurrent inserts would race.
-    if (!oob.object_intent_strict || snapshots_.empty() || local_count == 0) {
+    if (!oob.object_intent_strict || snapshots_.empty() || count == 0) {
         return;
     }
-    resolved_acc_.insert(resolved_acc_.end(), local_log, local_log + local_count);
+    resolved_acc_.insert(resolved_acc_.end(), resolved_log, resolved_log + count);
 }
 
 void ObjectIntentTracker::verify_post_launch(

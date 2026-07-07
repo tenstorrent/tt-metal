@@ -94,7 +94,11 @@ void ttnn_device(nb::module_& mod) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    mod.def("close_device", [](ttnn::MeshDevice& device) { ttnn::close_device(device); }, nb::arg("device"));
+    mod.def(
+        "close_device",
+        [](ttnn::MeshDevice& device) { ttnn::close_device(device); },
+        nb::arg("device"),
+        nb::call_guard<nb::gil_scoped_release>());
 
     mod.def(
         "deallocate_buffers",
@@ -289,7 +293,11 @@ void device_module(nb::module_& m_device) {
         nb::arg("DispatchCoreConfig") = nb::none(),
         nb::kw_only(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
-    m_device.def("CloseDevice", [](MeshDevice* device) { device->close(); }, R"doc(
+    m_device.def(
+        "CloseDevice",
+        [](MeshDevice* device) { device->close(); },
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
         +------------------+------------------------+-----------------------+-------------+----------+
@@ -305,6 +313,7 @@ void device_module(nb::module_& m_device) {
                 device_entry.second->close();
             }
         },
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
@@ -716,7 +725,10 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "UnregisterProgramRealtimeProfilerCallback",
         [](uint64_t handle) {
-            tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            {
+                nb::gil_scoped_release release;
+                tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            }
             auto it = python_realtime_callback_refs.find(handle);
             if (it != python_realtime_callback_refs.end()) {
                 Py_DECREF(it->second);
@@ -724,7 +736,6 @@ void device_module(nb::module_& m_device) {
             }
         },
         nb::arg("handle"),
-        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Unregister a previously registered real-time profiler callback.
             This call waits for any in-flight invocations of the callback to finish.
