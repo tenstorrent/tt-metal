@@ -12,7 +12,7 @@ This document covers the Tenstorrent tt_dit implementation of Bria's **FIBO** te
 | **1** | **SmolLM3 text encoder** | **Done** | New `encoders/smollm3/`; decoder layer from Qwen25VL, all-hidden-states shell from Gemma |
 | **2** | **BriaFibo transformer** | **Done** | New `transformer_bria_fibo.py` from Flux1 + per-layer "concat-halves" text injection |
 | **3** | **Wan VAE + solver wiring** | **Done** | Reuse `vae_wan2_1.py` (T=1 decode) + `EulerSolver` + dynamic-shift scheduler |
-| 4 | Pipeline + Blackhole bringup | TODO | New `pipelines/bria_fibo/`; CFG batched=2; 2×2 mesh (`cfg=(1,0) sp=(2,0) tp=(2,1)`) |
+| **4** | **Pipeline + Blackhole bringup** | **Done** | New `pipelines/bria_fibo/`; unpadded per-branch CFG; 2×2 mesh (`cfg=(1,0) sp=(2,0) tp=(2,1)`) |
 
 ---
 
@@ -262,4 +262,70 @@ All tests pass PCC ≥ 0.99. The production-resolution decode (64×64 latent, ma
 ### Out of Scope / Deferred
 
 - **VAE encode** for `is_residual=True` remains blocked (`assert not is_residual` in `WanEncoder3D`) — FIBO's pipeline only needs decode.
+
+---
+
+## Sub-project 4: End-to-end Pipeline
+
+### Architecture
+
+`BriaFiboPipeline` (`pipelines/bria_fibo/pipeline_bria_fibo.py`) wires the three validated components into one text→image flow-match denoise loop, mirroring `pipelines/flux1/pipeline_flux1.py` with the FIBO deltas below. It runs on the 2×2 Blackhole mesh as a single submesh: `DiTParallelConfig.from_tuples(cfg=(1,0), sp=(2,0), tp=(2,1))`, one `CCLManager`, one `BriaFiboTransformer`, one `EulerSolver`. The encoder runs fully replicated (`tp=1`, no CCL); the VAE decoder is configured hw-parallel `(2,2)`. No inter-stage eviction (all of encoder + transformer + VAE stay resident; no OOM observed).
+
+`__call__(prompt, *, negative_prompt="", height=1024, width=1024, num_inference_steps=30, guidance_scale=5.0, seed=0, latents=None, output_type="pil")`:
+
+1. **Encode** the positive and negative prompts **separately** via the SmolLM3 wrapper (below); build two 46-entry `text_encoder_layers` lists (the 37→46 pad, below); move each branch's prompt + layers + RoPE to the submesh once (reused across all steps).
+2. **Latents (no 2×2 pack):** `(1, 48, h, w) → (1, h*w, 48)` with `h=w=height/16` (`in_channels == z_dim == 48`), sequence-sharded on the `sp` axis. `latents=` injects a fixed initial noise in this packed layout (used by the reference-PCC test).
+3. **RoPE:** flux-style ids `cat([zeros(T,3), _latent_image_ids(h,w)])` → `pos_embed` → split into a replicated prompt part (`[:T]`) and a sequence-sharded spatial part (`[T:]`); `head_dim=128 = 16+56+56`.
+4. **Schedule:** `mu = _calculate_shift(h*w, scheduler)`; `scheduler.set_timesteps(sigmas=linspace(1, 1/N, N), mu=mu)`; `solver.set_schedule(scheduler.sigmas.tolist())`.
+5. **Denoise loop:** per step, run the transformer **twice** (once per CFG branch), combine `v = uncond + guidance_scale·(cond − uncond)` (`ttnn.lerp`), then `solver.step`. Per-step deallocations + `synchronize_device` keep DRAM bounded across the untraced loop.
+6. **Decode:** all-gather the sp-sharded latent → `(1, 48, 1, h, w)` BCTHW → VAE decode → `unpatchify(patch_size=2)` + `clamp(-1,1)` → `VaeImageProcessor.postprocess`. `output_type="latent"` instead returns the pre-VAE latent (for the reference-PCC gate).
+
+### Text Encoder Wrapper + 37→46 Layer Build
+
+`text_encoder.py`'s `SmolLM3TextEncoderWrapper` adapts the sp1 encoder for the pipeline: it tokenizes with `AutoTokenizer` (replicating the reference's empty-prompt special case — a lone `bot_token_id=128000` for `""`), builds RoPE via the encoder's `create_rope_tensors`, calls `.encode()`, and returns `(prompt_embeds[1,T,4096], all_hidden_states)`. `build_text_encoder_layers` implements the reference's list rule exactly: SmolLM3 emits 37 hidden states but the transformer indexes 46 (8 dual + 38 single), so it pads with 9 copies of the last state (and right-trims if ever longer).
+
+### CFG: Unpadded Per-Branch Forwards (key design decision)
+
+The reference batches `cat([negative, positive])` and passes a padding **attention mask**. The tt transformer has no mask parameter, so instead the pipeline runs **batch=1, unpadded, per CFG branch** — each branch encodes at its *true* token length and gets its own transformer forward per step. With no padding there is no mask to apply, making this bit-faithful to the reference (whose mask is a no-op on unpadded tokens). This was confirmed by the end-to-end latent PCC below. Cost: two forwards per step (batched+masked CFG is a perf follow-up).
+
+### Files
+
+```
+models/tt_dit/
+  pipelines/bria_fibo/
+    __init__.py
+    text_encoder.py                 # SmolLM3TextEncoderWrapper + build_text_encoder_layers (37->46)
+    pipeline_bria_fibo.py           # BriaFiboPipeline, __call__, _decode_latents, CFG, host-VAE fallback
+  tests/models/bria_fibo/
+    test_pipeline.py                # layer-build (host), wrapper-encode PCC, end-to-end latent PCC, full image smoke
+```
+
+### Running the Tests
+
+```bash
+HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+  python_env/bin/python -m pytest models/tt_dit/tests/models/bria_fibo/test_pipeline.py -v
+```
+
+**Prerequisites:**
+
+- **Weights**: `briaai/FIBO` (gated). Pre-download all components used by the pipeline: `huggingface-cli download briaai/FIBO --include "text_encoder/*" "tokenizer/*" "transformer/*" "vae/*" "scheduler/*"`. Tests run offline (`HF_HUB_OFFLINE=1`) and `pytest.skip` if weights are absent.
+- **Devices**: the pipeline tests run on the 2×2 Blackhole mesh. The end-to-end latent PCC also loads the diffusers reference transformer on CPU as the oracle, so it uses a reduced resolution (256²) to stay tractable.
+
+### Measured PCCs (real `briaai/FIBO` weights, bf16 tt vs f32 HF reference, 2×2 Blackhole)
+
+| Test | Configuration | Result |
+|---|---|---|
+| Text-encoder wrapper vs reference `get_prompt_embeds` | representative prompt | 99.79% |
+| End-to-end latent trajectory vs diffusers `BriaFiboPipeline` | 256², 2 steps, identical injected noise | 99.69% |
+| End-to-end latent trajectory (higher-confidence) | 256², 4 steps | 99.12% |
+| Full image smoke | 1024², 30 steps | runs; finite, non-degenerate `(1024,1024,3)` image |
+
+The end-to-end latent PCC is measured against a full-precision diffusers reference fed *identical* injected noise (`latents=`), on the pre-VAE latent. PCC declines slightly with step count (99.69% → 99.12%) — accumulated bf16 drift over solver steps, not a wiring defect (a glue bug would crater PCC far below 0.99 at any step count). The glue is resolution-independent, so the reduced-resolution gate transfers to production resolution, where each component carries its own production PCC (sp1–sp3).
+
+### Out of Scope / Deferred
+
+- **On-device VAE decode on the 2×2 mesh**: the hw-parallel `(2,2)` residual decoder currently fails at weight load (`decoder.conv_in.weight` (1728,640) vs (1728,1024)) — a Wan hw-parallel *residual* weight-prep limitation (sp3 validated the residual VAE only at single-device `(1,1)`). The pipeline uses a **host-torch `AutoencoderKLWan` fallback** for decode (bit-faithful to the reference decode; the on-device path is attempted first and auto-activates if fixed). On-device fix: repair the residual hw-parallel `conv_in` weight-prep, or decode on a dedicated `(1,1)` submesh (sp3's validated config).
+- **Perf**: tracing the denoise loop (flux1 `Tracer`), batched+masked CFG (needs transformer attention-mask support), and DRAM/coresidence tuning are all follow-ups — this bringup is functional-first and untraced.
+- **VLM prompt→JSON front-end** is out of scope (the pipeline takes the text prompt directly).
 - **Pipeline wiring and end-to-end Blackhole bringup** (denoise loop calling the transformer + `EulerSolver`, then this VAE decoder) is sub-project 4, still TODO. Until that lands, the host (`torch`/diffusers) `AutoencoderKLWan` decode is an available stopgap for end-to-end testing.
