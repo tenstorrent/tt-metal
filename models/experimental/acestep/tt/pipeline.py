@@ -376,7 +376,12 @@ class AceStepPipeline:
 
     def _latent_len(self, seconds: float) -> int:
         n = max(2, int(round(seconds * self.LATENT_HZ)))
-        return n + (n % 2)  # even for patch_size=2
+        # Round UP to a multiple of 8 so t_prime = seq_len/patch_size is a multiple of 4. Certain
+        # t_prime values (measured: 125, i.e. seconds=10 -> seq_len 250) hit a degenerate DiT matmul
+        # program-config path that silently flattens the audio dynamic range to ~1.4x (static) while
+        # keeping the latent std normal. Multiples of 8 (t_prime 128/132/160...) all produce healthy
+        # 200x+ dynamic range. Rounds 250 -> 256 (10.24s), a negligible duration change.
+        return ((n + 7) // 8) * 8
 
     # SFT prompt template — the text encoder was trained with this EXACT format (the newlines are
     # load-bearing). Feeding the raw prompt (no template) produces meaningless conditioning -> static
