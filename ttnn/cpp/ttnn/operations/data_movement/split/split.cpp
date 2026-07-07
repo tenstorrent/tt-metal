@@ -31,7 +31,7 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, 
 
     const int Y = shape[2], X = shape[3];
     const Tensor& reshaped_tensor =
-        ttnn::reshape_on_device(input_tensor, ttnn::SmallVector<int32_t>{1, -1, Y, X}, mem_config);
+        ttnn::reshape_on_device(input_tensor, ttsl::SmallVector<int32_t>{1, -1, Y, X}, mem_config);
 
     auto part_reshaped = impl_split_last_dim_two_chunks_tiled(reshaped_tensor, mem_config);
 
@@ -39,7 +39,7 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, 
     results.reserve(part_reshaped.size());
     for (auto& part : part_reshaped) {
         results.emplace_back(
-            ttnn::reshape_on_device(part, ttnn::SmallVector<int32_t>{-1, (int32_t)shape[1], Y, X / 2}, mem_config));
+            ttnn::reshape_on_device(part, ttsl::SmallVector<int32_t>{-1, (int32_t)shape[1], Y, X / 2}, mem_config));
     }
 
     return results;
@@ -54,7 +54,7 @@ constexpr uint32_t SPLIT_BATCH_SIZE = 64;
 
 std::vector<ttnn::Tensor> split_with_slice_impl(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int64_t>& split_sizes,
+    const ttsl::SmallVector<int64_t>& split_sizes,
     const int32_t dim,
     const MemoryConfig& memory_config) {
     const auto& input_shape = input_tensor.logical_shape();
@@ -83,9 +83,9 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
         std::vector<ttnn::Tensor> results;
         results.reserve(num_chunks);
 
-        const ttnn::SmallVector<int64_t> steps(input_shape.rank(), 1);
-        ttnn::SmallVector<int64_t> begins(input_shape.rank(), 0);
-        ttnn::SmallVector<int64_t> ends(input_shape.cbegin(), input_shape.cend());
+        const ttsl::SmallVector<int64_t> steps(input_shape.rank(), 1);
+        ttsl::SmallVector<int64_t> begins(input_shape.rank(), 0);
+        ttsl::SmallVector<int64_t> ends(input_shape.cbegin(), input_shape.cend());
         const ttsl::Span<const int64_t> ssteps(steps);
 
         for (uint32_t b = 0; b < n_batches; b++) {
@@ -98,7 +98,7 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
             auto batch_tensor = ttnn::slice(input_tensor, sbegins, sends, ssteps, memory_config);
 
             // actual_batch <= SPLIT_BATCH_SIZE so this recurse goes to the flat loop below.
-            const ttnn::SmallVector<int64_t> inner_sizes(actual_batch, chunk_size);
+            const ttsl::SmallVector<int64_t> inner_sizes(actual_batch, chunk_size);
             auto inner = split_with_slice_impl(batch_tensor, inner_sizes, dim, memory_config);
             results.insert(results.end(), inner.begin(), inner.end());
         }
@@ -110,8 +110,8 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
     results.reserve(split_sizes.size());
 
     // int64_t coordinates (matching the batching path above) for large-dim consistency.
-    const ttnn::SmallVector<int64_t> steps(input_shape.rank(), 1);
-    ttnn::SmallVector<int64_t> begins(input_shape.rank(), 0), ends(input_shape.cbegin(), input_shape.cend());
+    const ttsl::SmallVector<int64_t> steps(input_shape.rank(), 1);
+    ttsl::SmallVector<int64_t> begins(input_shape.rank(), 0), ends(input_shape.cbegin(), input_shape.cend());
     const ttsl::Span<const int64_t> sbegins(begins), ssteps(steps), sends(ends);
 
     ends[dim] = 0;
@@ -127,7 +127,7 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
 
 std::vector<ttnn::Tensor> split(
     const ttnn::Tensor& input_tensor,
-    const SmallVector<int64_t>& split_sizes,
+    const ttsl::SmallVector<int64_t>& split_sizes,
     int64_t dim,
     const std::optional<MemoryConfig>& memory_config_arg) {
     // Capture the desired output memory config.
@@ -253,7 +253,7 @@ std::vector<ttnn::Tensor> split(
         }
         results.reserve(num_chunks);
         for (const auto& t : outputs_4d) {
-            ttnn::SmallVector<uint32_t> final_shape(input_shape.cbegin(), input_shape.cend());
+            ttsl::SmallVector<uint32_t> final_shape(input_shape.cbegin(), input_shape.cend());
             final_shape.back() = t.logical_shape()[-1];
             results.emplace_back(ttnn::view(t, ttnn::Shape(final_shape)));
         }
@@ -279,7 +279,7 @@ std::vector<ttnn::Tensor> split(
 
     const auto num_chunks = std::ceil(static_cast<float>(input_shape[normalized_dim]) / static_cast<float>(split_size));
 
-    const ttnn::SmallVector<int64_t> split_sizes(num_chunks, split_size);
+    const ttsl::SmallVector<int64_t> split_sizes(num_chunks, split_size);
     // Pass memory_config_arg directly so the split_sizes overload applies the
     // same sharding-default logic (sharded input → DRAM output when no explicit config).
     return ttnn::split(input_tensor, split_sizes, normalized_dim, memory_config_arg);

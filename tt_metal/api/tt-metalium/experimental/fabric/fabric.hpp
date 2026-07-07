@@ -66,7 +66,7 @@ void append_fabric_connection_rt_args(
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
     ProgramOrDescriptor& worker_program_or_desc,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER);
 
@@ -89,7 +89,7 @@ void append_routing_plane_connection_manager_rt_args(
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     FabricApiType api_type = FabricApiType::Linear,
     CoreType core_type = CoreType::WORKER);
@@ -103,7 +103,7 @@ uint32_t append_routing_plane_connection_manager_rt_args(
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     FabricApiType api_type = FabricApiType::Linear,
     CoreType core_type = CoreType::WORKER);
@@ -215,7 +215,7 @@ public:
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
         ProgramOrDescriptor& mux_program_or_desc,
-        const CoreCoord& mux_logical_core) const;
+        const tt::tt_metal::CoreCoord& mux_logical_core) const;
 
     uint8_t get_num_channels(FabricMuxChannelType channel_type) const;
     uint8_t get_num_buffers(FabricMuxChannelType channel_type) const;

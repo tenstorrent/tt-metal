@@ -113,7 +113,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         {{tt::tt_fabric::RoutingDirection::N, tt::tt_fabric::RoutingDirection::S},
          {tt::tt_fabric::RoutingDirection::W, tt::tt_fabric::RoutingDirection::E}}};
 
-    ttnn::SmallVector<size_t> cluster_axes;
+    ttsl::SmallVector<size_t> cluster_axes;
     if (cluster_axis.has_value()) {
         cluster_axes = {cluster_axis.value()};
     } else {
