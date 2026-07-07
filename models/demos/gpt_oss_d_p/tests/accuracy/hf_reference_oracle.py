@@ -166,8 +166,10 @@ def main():
             # past_key_values stores pre-RoPE K; apply RoPE here to match what TT
             # writes into fill_cache (post-RoPE).  Use the model's own rotary_emb so
             # frequencies / scaling are identical to the forward pass.
+            from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
+
             position_ids = torch.arange(len(ids), dtype=torch.long).unsqueeze(0)
-            rope_emb = model.model.layers[0].self_attn.rotary_emb
+            rope_emb = GptOssRotaryEmbedding(model.config)
             dummy = torch.zeros(1, len(ids), model.config.hidden_size)
             cos, sin = rope_emb(dummy, position_ids)
             # cos/sin: [1, seq_len, head_dim//2] (HF unique-values format)
