@@ -153,7 +153,7 @@ def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
 
 
 def get_reduce_extents(
-    mathop: MathOperation,
+    math_op: MathOperation,
     reduce_pool: ReducePool,
     formats: InputOutputFormat,
     dimension_combinations: list[int],
@@ -172,7 +172,7 @@ def get_reduce_extents(
     """
     full = [TILE_DIM]
     if (
-        mathop != MathOperation.ReduceColumn
+        math_op != MathOperation.ReduceColumn
         or dimension_combinations != [TILE_DIM, TILE_DIM]
         or reduce_pool == ReducePool.Average
     ):
