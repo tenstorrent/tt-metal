@@ -13,6 +13,10 @@ With --save-layers, also captures the hidden-state output of each decoder layer 
 post-residual tensor after attention + MLP) as float32 .npy files.  These are used by
 layer_activations_prefill.py to do per-layer PCC comparisons against the TT model.
 
+With --save-kv, captures the K and V tensors from past_key_values for each decoder
+layer as float32 .npy files (shape [num_kv_heads, seq_len, head_dim]).  These are used
+by kv_cache_prefill.py to do per-layer KV cache PCC comparisons against the TT model.
+
 CPU forward of the full 120B model is I/O-bound — expect several minutes per prompt.
 Run once; results persist in --out.
 
@@ -28,6 +32,12 @@ Run (logits + per-layer activations for first 5 layers):
       --out /data/jmalone/gpt_oss_ref \\
       --prompt "What are the prime factors of 1?" \\
       --save-layers --max-layers 5
+
+Run (logits + per-layer KV cache for first 5 layers):
+  python3 models/demos/gpt_oss_d_p/tests/accuracy/hf_reference_oracle.py \\
+      --out /data/jmalone/gpt_oss_ref \\
+      --prompt "What are the prime factors of 1?" \\
+      --save-kv --max-layers 5
 """
 
 import argparse
@@ -56,6 +66,11 @@ def main():
         help="also save per-layer hidden-state activations for layer_activations_prefill.py",
     )
     ap.add_argument(
+        "--save-kv",
+        action="store_true",
+        help="also save per-layer K and V cache tensors for kv_cache_prefill.py",
+    )
+    ap.add_argument(
         "--max-layers",
         type=int,
         default=None,
@@ -79,10 +94,13 @@ def main():
     print("[oracle] model loaded", flush=True)
 
     num_model_layers = len(model.model.layers)
-    if args.save_layers:
+    if args.save_layers or args.save_kv:
         num_capture = args.max_layers if args.max_layers is not None else num_model_layers
         num_capture = min(num_capture, num_model_layers)
-        print(f"[oracle] will capture hidden states for layers 0..{num_capture - 1}", flush=True)
+        if args.save_layers:
+            print(f"[oracle] will capture hidden states for layers 0..{num_capture - 1}", flush=True)
+        if args.save_kv:
+            print(f"[oracle] will capture KV cache for layers 0..{num_capture - 1}", flush=True)
 
     # Load any existing results so we can append without overwriting.
     results_path = outdir / "ref_results.json"
@@ -124,7 +142,7 @@ def main():
                 hooks.append(model.model.layers[i].register_forward_hook(make_hook(i)))
 
         with torch.no_grad():
-            out = model(input_ids=input_ids)
+            out = model(input_ids=input_ids, use_cache=True)
 
         for h in hooks:
             h.remove()
@@ -144,6 +162,20 @@ def main():
         if layer_files:
             print(f"[oracle] saved {len(layer_files)} layer activation file(s)", flush=True)
 
+        kv_files: dict[str, dict[str, str]] = {}
+        if args.save_kv and out.past_key_values is not None:
+            for i, (k, v) in enumerate(out.past_key_values):
+                if i >= num_capture:
+                    break
+                # k, v shape from HF: [batch, num_kv_heads, seq_len, head_dim] in bfloat16
+                # Save as float32, drop batch dim -> [num_kv_heads, seq_len, head_dim]
+                k_fname = f"kv_k_{i}_{key}.npy"
+                v_fname = f"kv_v_{i}_{key}.npy"
+                np.save(outdir / k_fname, k[0].float().numpy())
+                np.save(outdir / v_fname, v[0].float().numpy())
+                kv_files[str(i)] = {"k": k_fname, "v": v_fname}
+            print(f"[oracle] saved {len(kv_files)} KV cache layer(s)", flush=True)
+
         rec = {
             "prompt": prompt,
             "chat_template": args.chat_template,
@@ -158,6 +190,8 @@ def main():
         }
         if layer_files:
             rec["layer_files"] = layer_files
+        if kv_files:
+            rec["kv_files"] = kv_files
 
         # Replace existing record for the same prompt, or append.
         if key in existing_by_key:
