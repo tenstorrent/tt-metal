@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import pytest
 
 from models.experimental.audiox.demo.media import prepare_audio_prompt, prepare_video_prompt, resample_output_audio
 
@@ -20,13 +19,13 @@ def test_prepare_video_prompt_repeats_single_frame():
     assert torch.all(prompt == 1.0)
 
 
-def test_prepare_video_prompt_rejects_non_rgb_frames():
-    with pytest.raises(ValueError, match="expected RGB frames"):
+def test_prepare_video_prompt_rejects_non_rgb_frames(expect_error):
+    with expect_error(ValueError, "expected RGB frames"):
         prepare_video_prompt(torch.ones(2, 1, 10, 10), target_frames=4, image_size=10)
 
 
-def test_prepare_video_prompt_rejects_bad_rank():
-    with pytest.raises(ValueError, match=r"expected \[T, C, H, W\] frames"):
+def test_prepare_video_prompt_rejects_bad_rank(expect_error):
+    with expect_error(ValueError, r"expected \[T, C, H, W\] frames"):
         prepare_video_prompt(torch.ones(3, 10, 10), target_frames=4, image_size=10)
 
 
