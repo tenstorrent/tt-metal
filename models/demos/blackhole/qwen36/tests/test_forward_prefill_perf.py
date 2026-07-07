@@ -89,6 +89,31 @@ except Exception:  # tracy not built / not importable
         pass
 
 
+# Bundled Qwen3.6-27B config.json (dims only, no weights) so synth-weight perf/sim
+# runs work with no HF_MODEL and no checkpoint download. Provenance: the model's
+# public config.json (Qwen/Qwen3.6-27B); it carries no weights.
+_BUNDLED_CONFIG = os.path.join(os.path.dirname(__file__), "qwen36_27b_config.json")
+
+
+def _ensure_hf_model(use_synth):
+    """Resolve HF_MODEL. If unset: for synth-weight runs, fall back to the bundled
+    config.json (copied into a temp dir named config.json, which AutoConfig reads) so
+    no HF_HOME/checkpoint is needed; otherwise use the normal default (may download)."""
+    if os.environ.get("HF_MODEL"):
+        return
+    if use_synth and os.path.isfile(_BUNDLED_CONFIG):
+        import shutil
+        import tempfile
+
+        cfg_dir = tempfile.mkdtemp(prefix="qwen36_cfg_")
+        shutil.copy(_BUNDLED_CONFIG, os.path.join(cfg_dir, "config.json"))
+        os.environ["HF_MODEL"] = cfg_dir
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")  # never reach the hub for a config we already have
+        logger.info(f"HF_MODEL unset + synth weights -> using bundled config.json ({cfg_dir})")
+    else:
+        os.environ.setdefault("HF_MODEL", model_path())
+
+
 def _synth_gdn_sd(args):
     """Random GDN state dict with the exact keys/shapes load_gdn_weights_tp expects.
 
@@ -145,14 +170,15 @@ def test_forward_prefill_perf(mesh_device, T, window, reset_seeds, ensure_gc, re
     Weights loaded (or synthesized); values don't affect device-kernel timing.
     The MEASURE_T* window sums all outer windows -> total device time for the ISL.
     """
-    os.environ.setdefault("HF_MODEL", model_path())
+    sim_tp = int(os.environ.get("GDN_PERF_SIM_TP", "0") or "0")
+    use_synth = sim_tp > 1 or os.environ.get("GDN_PERF_RANDOM_WEIGHTS") == "1"
+    _ensure_hf_model(use_synth)  # falls back to the bundled config.json when HF_MODEL is unset (synth runs)
     windowed = window < T
     nwin = (T + window - 1) // window
     # max_seq_len only needs to cover ONE outer window (each forward_prefill sees `window` tokens;
     # GDN state is O(1), so the ISL never appears as a single tensor dim).
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=max(256, window + 128))
     nd = mesh_device.get_num_devices()
-    sim_tp = int(os.environ.get("GDN_PERF_SIM_TP", "0") or "0")
     if sim_tp > 1 and nd > 1:
         logger.warning(f"GDN_PERF_SIM_TP={sim_tp} ignored: only applies on a single card (got {nd} devices, real TP)")
         sim_tp = 0
