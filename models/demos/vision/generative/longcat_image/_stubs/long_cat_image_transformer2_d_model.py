@@ -68,7 +68,23 @@ class _Transformer:
         self.ts_shift = float(getattr(tp, "downscale_freq_shift", 0.0))
         self.ts_scale = float(getattr(tp, "scale", 1.0))
         self.ts_max_period = int(getattr(tp, "max_period", 10000))
+        # Compute/weight dtype. Default BF16 keeps the graduated per-component
+        # behavior (the 6.27B model fits bf16 comfortably). The e2e pipeline sets
+        # this to ttnn.float32 BEFORE the first call: under classifier-free
+        # guidance the noise_pred error is amplified by `guidance_scale`, so the
+        # DiT must run fp32 (weights ~25 GB, still fits a 32 GB card with a small
+        # activation footprint at these seq lengths). Still native ttnn.
+        self.wdtype = BF16
+        # 16-bit bf16-limb emulated matmul for the linears. The Tensix multiplier
+        # keeps only ~11 mantissa bits even on fp32 inputs, so fp32 weights alone
+        # do not recover precision; under classifier-free guidance (error ×
+        # guidance_scale) that ~1.5e-3 per-matmul error is amplified. Splitting each
+        # operand into hi/lo bf16 limbs (hi·hi + lo·hi + hi·lo) lifts the effective
+        # mantissa to ~16 bits — memory-neutral (2×bf16 = 1×fp32). Off by default
+        # (graduated per-component behavior unchanged); the e2e pipeline turns it on.
+        self.limb = False
         self._lin = {}
+        self._emul_bf16 = {}
         self._rms = {}
         self._R = None
         self._compute = None
@@ -81,31 +97,77 @@ class _Transformer:
             )
         return self._compute
 
-    def _to_ttnn(self, t, dtype=BF16):
+    def _torch_dtype(self):
+        return torch.float32 if self.wdtype == F32 else torch.bfloat16
+
+    def _to_ttnn(self, t, dtype=None):
+        dtype = dtype or self.wdtype
         if isinstance(t, ttnn.Tensor):
             if t.layout != TILE:
                 t = ttnn.to_layout(t, TILE)
             if t.dtype != dtype:
                 t = ttnn.typecast(t, dtype)
             return t
-        td = t.to(torch.bfloat16) if dtype == BF16 else t.to(torch.float32)
+        td = t.to(torch.float32) if dtype == F32 else t.to(torch.bfloat16)
         return ttnn.from_torch(td, dtype=dtype, layout=TILE, device=self.device, memory_config=DRAM)
 
+    @staticmethod
+    def _limbs(x):
+        hi = ttnn.typecast(ttnn.typecast(x, BF16), F32)
+        lo = ttnn.subtract(x, hi)
+        return hi, lo
+
+    def _emul_linear(self, x, tm):
+        # 16-bit emulated linear with bf16-stored weight limbs (memory-neutral).
+        key = id(tm)
+        if key not in self._emul_bf16:
+            w = tm.weight.detach().to(torch.float32)
+            wh = w.to(torch.bfloat16).to(torch.float32)
+            wl = (w - wh).to(torch.bfloat16)
+            b = tm.bias
+            self._emul_bf16[key] = (
+                ttnn.from_torch(wh.to(torch.bfloat16), dtype=BF16, layout=TILE, device=self.device, memory_config=DRAM),
+                ttnn.from_torch(wl, dtype=BF16, layout=TILE, device=self.device, memory_config=DRAM),
+                ttnn.from_torch(
+                    b.detach().reshape(1, 1, -1).to(torch.float32),
+                    dtype=F32, layout=TILE, device=self.device, memory_config=DRAM,
+                )
+                if b is not None
+                else None,
+            )
+        wh, wl, bt = self._emul_bf16[key]
+        xf = x if x.dtype == F32 else ttnn.typecast(x, F32)
+        xh, xl = self._limbs(xf)
+        xhb = ttnn.typecast(xh, BF16)
+        xlb = ttnn.typecast(xl, BF16)
+        ck = self._ck()
+        y = ttnn.linear(xhb, wh, transpose_b=True, memory_config=DRAM, dtype=F32, compute_kernel_config=ck)
+        t = ttnn.linear(xlb, wh, transpose_b=True, memory_config=DRAM, dtype=F32, compute_kernel_config=ck)
+        y = ttnn.add(y, t)
+        ttnn.deallocate(t)
+        t = ttnn.linear(xhb, wl, transpose_b=True, memory_config=DRAM, dtype=F32, compute_kernel_config=ck)
+        y = ttnn.add(y, t)
+        ttnn.deallocate(t)
+        return ttnn.add(y, bt) if bt is not None else y
+
     def _linear(self, x, tm):
+        if self.limb:
+            return self._emul_linear(x, tm)
         key = id(tm)
         if key not in self._lin:
             b = tm.bias
+            tdt = self._torch_dtype()
             self._lin[key] = (
                 ttnn.from_torch(
-                    tm.weight.detach().to(torch.bfloat16),
-                    dtype=BF16,
+                    tm.weight.detach().to(tdt),
+                    dtype=self.wdtype,
                     layout=TILE,
                     device=self.device,
                     memory_config=DRAM,
                 ),
                 ttnn.from_torch(
-                    b.detach().reshape(1, 1, -1).to(torch.bfloat16),
-                    dtype=BF16,
+                    b.detach().reshape(1, 1, -1).to(tdt),
+                    dtype=self.wdtype,
                     layout=TILE,
                     device=self.device,
                     memory_config=DRAM,
@@ -115,14 +177,14 @@ class _Transformer:
             )
         wt, bt = self._lin[key]
         return ttnn.linear(
-            x, wt, bias=bt, transpose_b=True, memory_config=DRAM, dtype=BF16, compute_kernel_config=self._ck()
+            x, wt, bias=bt, transpose_b=True, memory_config=DRAM, dtype=self.wdtype, compute_kernel_config=self._ck()
         )
 
     def _rms_weight(self, norm):
         key = id(norm)
         if key not in self._rms:
-            w = norm.weight.detach().reshape(1, 1, 1, -1).to(torch.bfloat16)
-            self._rms[key] = ttnn.from_torch(w, dtype=BF16, layout=TILE, device=self.device, memory_config=DRAM)
+            w = norm.weight.detach().reshape(1, 1, 1, -1).to(self._torch_dtype())
+            self._rms[key] = ttnn.from_torch(w, dtype=self.wdtype, layout=TILE, device=self.device, memory_config=DRAM)
         return self._rms[key]
 
     def _R_mat(self):
@@ -132,7 +194,7 @@ class _Transformer:
             for i in range(d // 2):
                 R[2 * i, 2 * i + 1] = 1.0  # (x@R)[2i+1] = x[2i]
                 R[2 * i + 1, 2 * i] = -1.0  # (x@R)[2i]   = -x[2i+1]
-            self._R = ttnn.from_torch(R, dtype=BF16, layout=TILE, device=self.device, memory_config=DRAM)
+            self._R = ttnn.from_torch(R, dtype=self.wdtype, layout=TILE, device=self.device, memory_config=DRAM)
         return self._R
 
     def _layernorm(self, x, eps=1e-6):
@@ -162,7 +224,7 @@ class _Transformer:
 
     def _rope(self, x, cos, sin):
         # x [1,heads,S,head_dim]; cos/sin [1,1,S,head_dim]; flux unbind_dim=-1.
-        xr = ttnn.matmul(x, self._R_mat(), compute_kernel_config=self._ck(), dtype=BF16)
+        xr = ttnn.matmul(x, self._R_mat(), compute_kernel_config=self._ck(), dtype=self.wdtype)
         return ttnn.add(ttnn.mul(x, cos), ttnn.mul(xr, sin))
 
     def _ada_mod(self, temb, lin, n):
@@ -184,7 +246,7 @@ class _Transformer:
         scores = ttnn.matmul(q, k, transpose_b=True, dtype=F32, compute_kernel_config=self._ck(), memory_config=DRAM)
         scores = ttnn.multiply(scores, self.scale)
         probs = ttnn.softmax(scores, dim=-1)
-        out = ttnn.matmul(probs, v, dtype=BF16, compute_kernel_config=self._ck(), memory_config=DRAM)
+        out = ttnn.matmul(probs, v, dtype=self.wdtype, compute_kernel_config=self._ck(), memory_config=DRAM)
         return self._merge_heads(out, S)
 
     def _double_attn(self, a, norm_hs, norm_enc, cos, sin, img_len, txt_len):
@@ -208,7 +270,7 @@ class _Transformer:
         scores = ttnn.matmul(q, k, transpose_b=True, dtype=F32, compute_kernel_config=self._ck(), memory_config=DRAM)
         scores = ttnn.multiply(scores, self.scale)
         probs = ttnn.softmax(scores, dim=-1)
-        out = ttnn.matmul(probs, v, dtype=BF16, compute_kernel_config=self._ck(), memory_config=DRAM)
+        out = ttnn.matmul(probs, v, dtype=self.wdtype, compute_kernel_config=self._ck(), memory_config=DRAM)
         out = self._merge_heads(out, S)  # [1,S,dim]
 
         enc_attn = ttnn.slice(out, [0, 0, 0], [1, txt_len, self.dim], [1, 1, 1])
