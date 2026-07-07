@@ -19,7 +19,6 @@
 #include "common/core_coord.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/context/metal_env_impl.hpp"
-#include "impl/dispatch/dispatch_engine_cores.hpp"
 
 namespace tt {
 
@@ -79,7 +78,7 @@ inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_dispatch_cores(
     const uint8_t num_hw_cqs,
     const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     if (env.get_cluster().arch() == tt::ARCH::QUASAR) {
-        return tt::tt_metal::detail::get_quasar_dispatch_cores(env, device_id, num_hw_cqs, dispatch_core_config);
+        return env.get_quasar_dispatch_cores(device_id, num_hw_cqs, dispatch_core_config);
     }
     const core_descriptor_t& core_desc = get_core_descriptor_config(env, device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.logical_dispatch_cores;
