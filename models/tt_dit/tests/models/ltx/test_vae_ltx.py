@@ -11,7 +11,6 @@ Torch references use diffusers LTX-2 VAE modules (mirrors test_vae_wan2_1.py / t
 from __future__ import annotations
 
 import os
-import time
 from typing import Any
 
 import pytest
@@ -20,6 +19,7 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
+from tracy import signpost
 from models.tt_dit.models.vae.vae_ltx import (
     LTXCausalConv3d,
     LTXDepthToSpaceUpsample,
@@ -757,9 +757,6 @@ def test_ltx_video_decoder(
     _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width, mean=mean, std=std)
 
 
-# Device-time profile of the full production decoder at 1080p — no torch reference,
-# no PCC. The torch VideoDecoder forward at 145f/1080p dominates wall time and adds
-# nothing to a device profile, so we build the torch module for its state_dict only.
 _NUM_FRAMES = 145
 _HEIGHT = 1088
 _WIDTH = 1920
@@ -822,27 +819,17 @@ def _latent():
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 def test_prof_vae_ltx_devicetime(mesh_device, device_params):
-    # Run under: python -m tracy -p -r -m pytest <this>::test_prof_vae_ltx_devicetime
-    # Exactly one forward so the CSV holds one instance of every op — per-device
-    # Σ(DEVICE FW DURATION) is then the true device-active time for one decode.
-    # No per-block profiler flushes (they force host<->device syncs that inflate host
-    # wall without changing device kernel durations); TT_METAL_PROFILER_MID_RUN_DUMP=1
-    # drains the on-device buffer instead. Device columns are valid on the first (cold)
-    # forward; only host times are inflated by JIT compile, which we don't report.
     mesh = mesh_device.create_submesh(ttnn.MeshShape(4, 8))
     tt_decoder = _build_tt_decoder(mesh)
     latent = _latent()
 
-    from tracy import signpost
-
+    # One forward only: the decoder emits ~10x a transformer block's ops, so warm-ups
+    # would overflow the profiler DRAM buffer. Device kernel durations are warm-independent.
     signpost("start")
-    t0 = time.perf_counter()
     _ = tt_decoder(latent)
     ttnn.synchronize_device(mesh)
-    host_wall = (time.perf_counter() - t0) * 1000
     signpost("stop")
     ttnn.ReadDeviceProfiler(mesh)
-    print(f"\nSINGLE_FORWARD_HOST_WALL_MS={host_wall:.2f}", flush=True)
 
 
 @pytest.mark.parametrize("num_frames, height, width", _LTX_DECODER_2K_SHAPE_PARAMS)

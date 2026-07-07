@@ -19,6 +19,7 @@ from loguru import logger
 from safetensors.torch import load_file
 
 import ttnn
+from tracy import signpost
 from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
 from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerBlock, LTXTransformerModel
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
@@ -875,15 +876,9 @@ def test_ltx_transformer_block(
             video_padding_mask=v_pad_sp,
         )
 
-    # Bracket the block forward with signposts so a profiled run measures only the
-    # block's device time, excluding the test's input-prep/output-gather ops. Isolate with:
-    # tt-perf-report --start-signpost start --end-signpost stop <csv>. Device kernel
-    # durations are identical warm or cold, so no warm-up is needed. No-op off-profiler.
-    try:
-        from tracy import signpost
-    except ImportError:
-        signpost = lambda *a, **k: None
-
+    for _ in range(2):
+        tt_out = tt_block(**forward_kwargs)
+    ttnn.synchronize_device(mesh_device)
     signpost("start")
     tt_out = tt_block(**forward_kwargs)
     ttnn.synchronize_device(mesh_device)
