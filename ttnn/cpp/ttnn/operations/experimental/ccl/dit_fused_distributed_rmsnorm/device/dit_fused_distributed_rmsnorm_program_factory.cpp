@@ -211,6 +211,8 @@ bool decide_block_major_post(
     bool has_bias,
     uint32_t weight_tile_bytes,
     uint32_t bias_tile_bytes,
+    uint32_t weight_cb_tiles,
+    uint32_t bias_cb_tiles,
     bool fuse_rope,
     bool is_layernorm,
     uint64_t l1_cap_bytes) {
@@ -220,9 +222,13 @@ bool decide_block_major_post(
     // rotated_input_cb is whole-row for RoPE; LayerNorm always uses it as the
     // (x-mean) xmm buffer, so it's whole-row there too (RMS no-rope leaves it tiny).
     whole_row += (fuse_rope || is_layernorm) ? static_cast<uint64_t>(padded) * intermediate_tile_bytes : 0ull;
-    whole_row += 2ull * padded * output_tile_bytes;                                             // output_cb (2 rows)
-    whole_row += has_weight ? static_cast<uint64_t>(num_tile_cols) * weight_tile_bytes : 0ull;  // weight_cb
-    whole_row += has_bias ? static_cast<uint64_t>(num_tile_cols) * bias_tile_bytes : 0ull;      // bias_cb
+    whole_row += 2ull * padded * output_tile_bytes;  // output_cb (2 rows)
+    // weight_cb / bias_cb are the TRUE resident tile counts, not num_tile_cols: per-batch adaLN
+    // keeps all `batch` rows resident (batch*num_tile_cols) and per-token holds chunk_size_rows
+    // rows. block-major does NOT shrink these (only the intermediate/output whole-row CBs), so
+    // the decision must count them at full size or a wide per-batch shard silently overflows L1.
+    whole_row += has_weight ? static_cast<uint64_t>(weight_cb_tiles) * weight_tile_bytes : 0ull;  // weight_cb
+    whole_row += has_bias ? static_cast<uint64_t>(bias_cb_tiles) * bias_tile_bytes : 0ull;        // bias_cb
     // Streamed input_cb + resident cos/sin + the dozen small fp32 stat/scalar CBs +
     // forwarder packet/header. Calibrated against the observed FLUX TP=2 feat-3072
     // streamed-input allocation (1,601,824 B at the same big-CB sum).
@@ -290,15 +296,21 @@ DitFusedDistributedRmsnormSizing compute_sizing(
     s.stick_bytes = s.stats_per_token * 128u;
     // Worker cap = device compute grid − forwarder cores. Derived from the input's
     // device so create_stats_buffer / validate / compute_output_specs / create_at all
-    // agree on num_workers (they share this single-source-of-truth path).
-    const uint32_t worker_cap = derive_worker_cap(
-        input.device()->compute_with_storage_grid_size(),
-        args.num_links,
-        input.device()->arch(),
-        s.stick_bytes,
-        args.ring_size,
-        s.num_tile_rows);
-    s.num_workers = s.is_tp_1 ? 1u : pick_num_workers_tp_gt_1(s.num_tile_rows, worker_cap);
+    // agree on num_workers (they share this single-source-of-truth path). Only evaluated
+    // on the !is_tp_1 (all-gather) branch: derive_worker_cap calls into fabric
+    // (get_tt_fabric_max_payload_size_bytes), which reaches the fabric context — null when
+    // the op runs on a single device with fabric uninitialized (TP=1). is_tp_1 forces
+    // num_workers=1 and never uses the cap, so short-circuit before touching fabric.
+    s.num_workers = s.is_tp_1 ? 1u
+                              : pick_num_workers_tp_gt_1(
+                                    s.num_tile_rows,
+                                    derive_worker_cap(
+                                        input.device()->compute_with_storage_grid_size(),
+                                        args.num_links,
+                                        input.device()->arch(),
+                                        s.stick_bytes,
+                                        args.ring_size,
+                                        s.num_tile_rows));
     // use_mux selects the fabric-forwarder all-gather path (+ DRAM scratch);
     // !use_mux (is_tp_1) reduces locally with no fabric.
     s.use_mux = !s.is_tp_1;
@@ -632,6 +644,18 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     }
     // welford_zero_cb is resident for LN regardless of layout; reserve it from the cap too.
     l1_cap_bytes -= welford_zero_bytes;
+    // Resident weight/bias CB tile counts — MUST match the create_cb sizing below:
+    // per-token holds chunk_size_rows rows, per-batch holds all `batch` rows, broadcast holds 1.
+    const uint32_t weight_cb_tiles_est =
+        has_weight ? (per_token_weight ? chunk_size_rows * num_tile_cols
+                      : per_batch_weight ? batch * num_tile_cols
+                                         : num_tile_cols)
+                   : 0u;
+    const uint32_t bias_cb_tiles_est =
+        has_bias ? (per_token_bias ? chunk_size_rows * num_tile_cols
+                    : per_batch_bias ? batch * num_tile_cols
+                                     : num_tile_cols)
+                 : 0u;
     const bool overflows_resident_post = decide_block_major_post(
         num_tile_cols,
         block_size,
@@ -641,6 +665,8 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         has_bias,
         weight_tile_sz,
         bias_tile_sz,
+        weight_cb_tiles_est,
+        bias_cb_tiles_est,
         fuse_rope,
         is_layernorm,
         l1_cap_bytes);
@@ -973,7 +999,12 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // Packet header CB. The forwarder reserves 2 header slots (fwd+bwd) from it,
     // so on the AG path it lives on the FORWARDER cores. is_tp_1's drain-only
     // writer never touches it (1-slot stub on the worker cores).
-    const uint32_t packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    // get_tt_fabric_packet_header_size_bytes() reaches the fabric context (null at TP=1 on a
+    // single device with fabric uninitialized). Only the AG path (use_mux) uses this CB, so on
+    // the is_tp_1 path use a fixed stub page size instead of querying fabric — the stub is
+    // allocated for CB-index consistency but never read.
+    const uint32_t packet_header_size_bytes =
+        use_mux ? tt::tt_fabric::get_tt_fabric_packet_header_size_bytes() : sizeof(uint32_t);
     {
         const uint32_t header_tiles = use_mux ? 4u : 1u;
         const CoreRangeSet& header_cores = use_mux ? forwarder_core_set : worker_core_set;
@@ -1373,9 +1404,15 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // Per-forwarder runtime args: stats_dram, out_ready GlobalSemaphore, the
     // group's worker NoC coords, present_count[r], then fwd+bwd fabric-connection
     // args on this forwarder's routing plane (link_idx = f).
+    //
+    // Guarded on num_forwarders>0 (== use_mux == !is_tp_1): the TP=1 / per_head_norm
+    // path has no forwarders and no all-gather, and may run on a single device with
+    // fabric NOT initialized. get_fabric_node_id() reaches into the fabric context
+    // (null when fabric is down), so it must not be called on the no-fabric path.
     // ------------------------------------------------------------------------
-    const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-    for (uint32_t f = 0; f < num_forwarders; f++) {
+    if (num_forwarders > 0) {
+        const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
+        for (uint32_t f = 0; f < num_forwarders; f++) {
         const auto& core = forwarder_cores[f];
         const uint32_t group_begin = f * workers_per_forwarder;
         const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
@@ -1404,6 +1441,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
                 local_node_id, backward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
         }
         SetRuntimeArgs(program, forwarder_kernel_ids[f], core, fwd_rt);
+        }
     }
 
     return {
