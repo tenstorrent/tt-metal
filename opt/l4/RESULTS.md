@@ -54,7 +54,7 @@ compile in the device window). Iteration-time win confirmed.
 | **num_links 2→3/4** | — | **infeasible.** num_links=2 is the BH-galaxy fabric wall (`"BHGLX":(2,2)`), not a knob. |
 | **Ring→Linear topology** | — | Ring is optimal (it's what unlocks the fused AG/RS dataflow). |
 | **CCL reshards** | — | already tight (Megatron AG-at-entry / RS-at-exit; no removable round-trip). |
-| **SDPA-input bf8 CCL transfer** (Lever 5) | gated | **untested** — attacks the confirmed comms bottleneck (halves K/V ring-gather bytes) but adds q/k/v typecasts that may offset it; the one marginal lever left. Uncertain ~1–3%. |
+| **SDPA-input bf8 CCL transfer** (Lever 5) | gated | **REJECT: 6.48s (−0.04s, noise) at PCC 0.876** (down from ~0.90). Wired the dead `_sdpa_input_dtype` hook + bf8 K/V gather buffers; the added q/k/v typecasts (48 blk × 2 stages) offset the halved fabric bytes. Spends quality margin for ~0 speed — the ring gather isn't the bandwidth-limited critical path at this scale. |
 
 ## 3. Why 3s is a communication-bound wall (the technical answer to "galaxy should hit 3s")
 
