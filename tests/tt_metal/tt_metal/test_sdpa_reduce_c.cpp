@@ -51,10 +51,15 @@ static std::vector<bfloat16> golden_reduce_c(
     const std::vector<bfloat16>& prev_max_first_col,
     uint32_t q_chunk_size,
     uint32_t k_chunk_size,
-    bool do_eltwise_max) {
+    bool do_eltwise_max,
+    uint32_t num_faces = 4) {
     const uint32_t rows = q_chunk_size * 32;
     const uint32_t cols = k_chunk_size * 32;
     const uint32_t stats_cols = 32;
+
+    // For a 16x32 tiny tile (num_faces=2) only the first face-row (rows 0-15 of each 32-row tile)
+    // is reduced by MATH; rows 16-31 of every tile hold no valid reduced output.
+    const uint32_t face_rows = (num_faces == 2) ? 16 : 32;
 
     bool prev_max_larger = false;
 
@@ -62,6 +67,10 @@ static std::vector<bfloat16> golden_reduce_c(
     std::vector<bfloat16> out(rows * stats_cols, static_cast<bfloat16>(0.0f));
 
     for (uint32_t r = 0; r < rows; ++r) {
+        // Skip rows in the second face-row of each tile when the operand is a 16x32 tiny tile.
+        if ((r % 32) >= face_rows) {
+            continue;
+        }
         auto row_begin = qk_im_rm.begin() + r * cols;
         auto row_end = row_begin + cols;
         float row_max = -std::numeric_limits<float>::infinity();
@@ -89,18 +98,25 @@ static std::vector<bfloat16> golden_reduce_c(
 }
 
 static float compare_first_col_mse(
-    const std::vector<bfloat16>& result_rm, const std::vector<bfloat16>& golden_first_col_rm) {
+    const std::vector<bfloat16>& result_rm, const std::vector<bfloat16>& golden_first_col_rm, uint32_t num_faces = 4) {
     // result_rm is rows x 32 row-major (from untilize); we compare only column 0 vs golden_first_col_rm (rows x 32,
-    // only col0 set)
+    // only col0 set). For a 16x32 tiny tile (num_faces=2) only the first face-row (rows 0-15 of each
+    // 32-row tile) carries valid output, so rows 16-31 of every tile are excluded from the comparison.
     const uint32_t rows = golden_first_col_rm.size() / 32;
+    const uint32_t face_rows = (num_faces == 2) ? 16 : 32;
     float mse = 0.0f;
+    uint32_t counted = 0;
     for (uint32_t r = 0; r < rows; ++r) {
+        if ((r % 32) >= face_rows) {
+            continue;
+        }
         float a = static_cast<float>(result_rm[(r * 32) + 0]);
         float b = static_cast<float>(golden_first_col_rm[(r * 32) + 0]);
         float d = a - b;
         mse += d * d;
+        ++counted;
     }
-    mse /= rows;
+    mse /= (counted > 0 ? counted : 1);
     return mse;
 }
 
@@ -111,18 +127,20 @@ static bool test_sdpa_reduce_c(
     bool fp32_dest_acc_en,
     bool do_eltwise_max,
     const std::string& kernel_path,
-    const std::string& kernel_name) {
+    const std::string& kernel_name,
+    uint32_t num_faces = 4) {
     bool pass = true;
 
     log_info(
         LogTest,
         "Running {} test with q_chunk_size: {}, k_chunk_size: {}, fp32_dest_acc_en: {}, "
-        "do_eltwise_max: {}",
+        "do_eltwise_max: {}, num_faces: {}",
         kernel_name,
         q_chunk_size,
         k_chunk_size,
         fp32_dest_acc_en,
-        do_eltwise_max);
+        do_eltwise_max,
+        num_faces);
 
     // Get device and command queue from mesh
     tt_metal::IDevice* device = mesh_device->get_devices().at(0);
@@ -218,7 +236,8 @@ static bool test_sdpa_reduce_c(
         cb_identity_scale_id,
         q_chunk_size,
         k_chunk_size,
-        static_cast<uint32_t>(do_eltwise_max ? 1 : 0)};
+        static_cast<uint32_t>(do_eltwise_max ? 1 : 0),
+        num_faces};
     std::map<std::string, std::string> compute_defines;
     compute_defines["EXP_APPROX_MODE"] = "0";
     compute_defines["REDUCE_GRANULARITY"] = "1";
@@ -271,10 +290,10 @@ static bool test_sdpa_reduce_c(
     auto out_max_rm = untilize_nfaces(out_max_bfp16, q_chunk_size * 32, 32);
 
     // Golden
-    auto golden_first_col_rm =
-        golden_reduce_c(qk_im_tensor.get_values(), prev_max_first_col, q_chunk_size, k_chunk_size, do_eltwise_max);
+    auto golden_first_col_rm = golden_reduce_c(
+        qk_im_tensor.get_values(), prev_max_first_col, q_chunk_size, k_chunk_size, do_eltwise_max, num_faces);
 
-    float mse = compare_first_col_mse(out_max_rm, golden_first_col_rm);
+    float mse = compare_first_col_mse(out_max_rm, golden_first_col_rm, num_faces);
     const float max_mse = 0.0f;  // expect exact max match in first column
     log_info(LogTest, "{} first-col mse: {} (do_eltwise: {})", kernel_name, mse, do_eltwise_max);
     if (mse > max_mse) {
@@ -341,6 +360,52 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
                                 k_chunk_size,
                                 fp32_dest_acc_en,
                                 do_elt);
+                        }
+                        pass &= this_passed;
+                    }
+                }
+            }
+        }
+    }
+
+    // 16x32 tiny-tile (num_faces=2, one face-row) case for the block-based reduce.
+    // Threads num_faces=2 through reduce_block_max_row_init / reduce_block_max_row on both the
+    // UNPACK and MATH sides. Only the first face-row (rows 0-15 of each 32-row tile) is reduced;
+    // the golden/comparison exclude the second face-row accordingly.
+    {
+        const std::string tiny_kernel_path =
+            "tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_block_max_row/compute.cpp";
+        const std::string tiny_kernel_name = "reduce_block_max_row_tiny_16x32";
+        constexpr uint32_t tiny_num_faces = 2;
+        for (uint32_t q_chunk_size : q_chunk_sizes) {
+            for (uint32_t k_chunk_size : k_chunk_sizes) {
+                for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
+                    // 16x32 tiny-tile reduce_block_max_row is only supported in non-fp32 dest mode
+                    // (the LLK static_asserts fp32 + num_faces==2). fp32 16x32 is a future item.
+                    if (fp32_dest_acc_en) {
+                        continue;
+                    }
+                    for (bool do_elt : do_eltwise) {
+                        bool this_passed = test_sdpa_reduce_c(
+                            devices_[0],
+                            q_chunk_size,
+                            k_chunk_size,
+                            fp32_dest_acc_en,
+                            do_elt,
+                            tiny_kernel_path,
+                            tiny_kernel_name,
+                            tiny_num_faces);
+                        if (!this_passed) {
+                            log_error(
+                                LogTest,
+                                "Test Failed for kernel: {}, q_chunk_size: {}, k_chunk_size: {}"
+                                "fp32_dest_acc_en: {}, do_eltwise: {}, num_faces: {}",
+                                tiny_kernel_name,
+                                q_chunk_size,
+                                k_chunk_size,
+                                fp32_dest_acc_en,
+                                do_elt,
+                                tiny_num_faces);
                         }
                         pass &= this_passed;
                     }

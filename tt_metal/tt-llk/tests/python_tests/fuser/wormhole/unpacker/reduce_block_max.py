@@ -27,7 +27,8 @@ class ReduceBlockMaxUnpacker(Unpacker):
     ) -> str:
         ct_dim = block.block_tiles_x
         dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_unpack_AB_reduce_block_max_row_init_<{ct_dim}, {dest_acc}>();\n"
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        return f"_llk_unpack_AB_reduce_block_max_row_init_<{ct_dim}, {dest_acc}, /*respect_trigger=*/false, {num_faces}>();\n"
 
     def unpack(
         self,

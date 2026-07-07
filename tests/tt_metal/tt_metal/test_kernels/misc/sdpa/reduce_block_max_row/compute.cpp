@@ -20,6 +20,8 @@ void kernel_main() {
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(4);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t do_eltwise = get_compile_time_arg_val(6);
+    // Operand tile geometry: 4 faces for a 32x32 tile, 2 faces for a 16x32 tiny tile.
+    constexpr uint32_t num_faces = get_compile_time_arg_val(7);
 
     // Init compute
     compute_kernel_hw_startup<SrcOrder::Reverse>(qk_im_cb, qk_im_cb, qk_im_cb);
@@ -48,8 +50,8 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < rows; i++) {
         tile_regs_acquire();
-        reduce_block_max_row_init<cols>(out_max_cb);
-        reduce_block_max_row<cols>(qk_im_cb, scale_cb, i * cols, reduce_dst_idx);
+        reduce_block_max_row_init<cols, /*respect_trigger=*/false, num_faces>(out_max_cb);
+        reduce_block_max_row<cols, /*respect_trigger=*/false, num_faces>(qk_im_cb, scale_cb, i * cols, reduce_dst_idx);
         reduce_block_max_row_uninit(qk_im_cb);
 
         if (do_eltwise) {

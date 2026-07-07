@@ -31,7 +31,8 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
     ) -> str:
         ct_dim = block.block_tiles_x
         dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_reduce_block_max_row_init_runtime_<{dest_acc}>({ct_dim});\n"
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        return f"_llk_math_reduce_block_max_row_init_runtime_<{dest_acc}>({ct_dim}, {num_faces});\n"
 
     def calculate(
         self,
@@ -41,7 +42,8 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
         block: BlockData,
     ) -> str:
         dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_reduce_block_max_row_runtime_<{dest_acc}>({block.tile_id_block});\n"
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        return f"_llk_math_reduce_block_max_row_runtime_<{dest_acc}>({block.tile_id_block}, {num_faces});\n"
 
     def uninit(
         self,

@@ -51,15 +51,17 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(std::uint32_
  * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
- * - Operand tile size is 32x32
+ * - Operand tile is num_faces faces (4 for a 32x32 tile, 2 for a 16x32 tiny tile)
  * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
  * - Does only MAX pool on ROW dimension
+ *
+ * @param num_faces Number of faces in the operand tile (4 for 32x32, 2 for a 16x32 tiny tile).
  *
  * This function should NOT be used as a substitute for native reduce unpacking LLK initialization.
  * Use the standard _llk_unpack_AB_reduce_init_ for general-purpose reduction operations.
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim, bool respect_trigger = false)
+inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4)
 {
     if constexpr (is_fp32_dest_acc_en)
     {
@@ -70,8 +72,8 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
 
-    TTI_SETADCXX(p_setadc::UNP_B, FACE_R_DIM * FACE_C_DIM - 1, 0x0);       // Unpack a single face of a scaler
-    TTI_SETADCXX(p_setadc::UNP_A, 4 * (FACE_R_DIM * FACE_C_DIM) - 1, 0x0); // Unpack a whole tile of an operand
+    TTI_SETADCXX(p_setadc::UNP_B, FACE_R_DIM * FACE_C_DIM - 1, 0x0);              // Unpack a single face of a scaler
+    TT_SETADCXX(p_setadc::UNP_A, num_faces * (FACE_R_DIM * FACE_C_DIM) - 1, 0x0); // Unpack num_faces faces of an operand
 
     // save the following state that is going to be modified:
     // tile x, y, and z dims for both unpackers
