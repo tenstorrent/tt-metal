@@ -290,13 +290,22 @@ class TtPrefillBlock(LightweightModule):
                 is_balanced=is_balanced,
             )
         else:
+            # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
+            # so GLM-5.1 (hidden 6144, dense intermediate 12288) doesn't inherit the 7168 default. emb_dim
+            # is always safe (== default for 7168-dim models); hidden_dim only overrides when the config
+            # exposes intermediate_size (GLM does; DSv3/Kimi fall back to the TtFfn default).
+            _dense_ffn_kwargs = {}
+            if getattr(config, "intermediate_size", None):
+                _dense_ffn_kwargs["hidden_dim"] = config.intermediate_size
             self.ffn = TtFfn(
                 mesh_device=mesh_device,
                 torch_weights=state_dict.get("ffn_weights"),  # None if cache exists
+                emb_dim=emb_dim,
                 num_links=num_links,
                 topology=topology,
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.ffn",
+                **_dense_ffn_kwargs,
             )
 
     @staticmethod

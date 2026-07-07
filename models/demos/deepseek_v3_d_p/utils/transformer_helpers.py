@@ -632,6 +632,22 @@ def load_and_compute_layer_by_layer(
                 "ffn_norm_weight": layer_dequant["post_attention_layernorm.weight"],
             }
 
+            # DSA-sparse variants (GLM-5.1, DeepSeek-V3.2) carry lightning-indexer weights; include them
+            # so ttMLA.build_ttnn_cache writes a complete sparse cache — it resolves has_indexer from the
+            # config and errors if the indexer host weights are missing. Auto-engages only when present
+            # (dense DeepSeek-R1 / Kimi checkpoints have no self_attn.indexer.*). The checkpoint's
+            # k_norm.bias maps to the indexer's k_norm_bias.weight slot (see TtIndexer.WEIGHT_NAMES).
+            if "self_attn.indexer.wq_b.weight" in layer_dequant:
+                layer_dict["mla_weights"].update(
+                    {
+                        "indexer.wq_b.weight": layer_dequant["self_attn.indexer.wq_b.weight"],
+                        "indexer.wk.weight": layer_dequant["self_attn.indexer.wk.weight"],
+                        "indexer.k_norm.weight": layer_dequant["self_attn.indexer.k_norm.weight"],
+                        "indexer.k_norm_bias.weight": layer_dequant["self_attn.indexer.k_norm.bias"],
+                        "indexer.weights_proj.weight": layer_dequant["self_attn.indexer.weights_proj.weight"],
+                    }
+                )
+
             if is_dense:
                 layer_dict["ffn_weights"] = {
                     "gate_proj": layer_dequant["mlp.gate_proj.weight"],
@@ -971,7 +987,26 @@ class DebugTraceData:
     metadata: dict  # raw metadata.json contents
 
 
-def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTraceData:
+def _read_trace_rows(tensor_dir: Path, key: str, end: int | None):
+    """Read `key` from a chunked_group_a_v1 tensor dir (rows_<s>_<e>.safetensors shards), concatenating
+    up to `end` rows (or all). Used to slice a long trace (e.g. the 55k GLM golden) down to a test's isl."""
+    import glob as _glob
+
+    from safetensors import safe_open
+
+    parts, got = [], 0
+    for shard in sorted(_glob.glob(str(tensor_dir / "rows_*.safetensors"))):
+        with safe_open(shard, framework="pt") as f:
+            t = f.get_tensor(key)
+        parts.append(t)
+        got += t.shape[0]
+        if end is not None and got >= end:
+            break
+    out = torch.cat(parts, 0) if len(parts) > 1 else parts[0]
+    return out[:end] if end is not None else out
+
+
+def load_debug_trace(trace_dir: Path, num_layers: int | None = None, isl: int | None = None) -> DebugTraceData:
     """
     Load reference tensors from a bit_sculpt debug trace directory.
 
@@ -998,6 +1033,12 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTra
         num_layers = metadata["n_layers"]
 
     token_ids = torch.tensor([metadata["token_ids"]], dtype=torch.int64)
+    if isl is not None:
+        token_ids = token_ids[:, :isl]  # chop a long trace (e.g. the 55k GLM golden) to this test's isl
+    # chunked_group_a_v1 layout (row-sharded decoder_io/ + kv_cache/layer_i/) — used by the GLM 55k golden;
+    # read + slice to isl instead of requiring a dedicated isl-sized standard-layout trace.
+    chunked_dir = trace_dir / "decoder_io"
+    is_chunked_layout = chunked_dir.is_dir()
     logger.info(f"Loaded {token_ids.shape[1]} tokens from {trace_dir.name}")
 
     ref_snapshots = {}
@@ -1005,25 +1046,39 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTra
     hs_flat = trace_dir / "hidden_states.safetensors"
     per_layer_format = hs_dir.is_dir()
 
-    if per_layer_format:
+    if is_chunked_layout:
+        for i in range(num_layers):
+            key = f"decoder_output_layer_{i}"
+            t = _read_trace_rows(chunked_dir / key, key, isl)
+            ref_snapshots[f"layer_{i}"] = t.unsqueeze(0)
+        logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from decoder_io/ (chunked_group_a_v1, isl={isl})")
+    elif per_layer_format:
         for i in range(num_layers):
             layer_path = hs_dir / f"layer_{i}.safetensors"
             with safe_open(layer_path, framework="pt") as f:
                 key = f"decoder_output_layer_{i}"
-                ref_snapshots[f"layer_{i}"] = f.get_tensor(key).unsqueeze(0)
+                t = f.get_tensor(key)
+                ref_snapshots[f"layer_{i}"] = (t[:isl] if isl is not None else t).unsqueeze(0)
         logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from hidden_states/ (per-layer files)")
     else:
         with safe_open(hs_flat, framework="pt") as f:
             for i in range(num_layers):
                 key = f"decoder_output_layer_{i}"
-                ref_snapshots[f"layer_{i}"] = f.get_tensor(key).unsqueeze(0)
+                t = f.get_tensor(key)
+                ref_snapshots[f"layer_{i}"] = (t[:isl] if isl is not None else t).unsqueeze(0)
         logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from hidden_states.safetensors")
 
     ref_kvpe_list = []
     kv_dir = trace_dir / "kv_cache"
     kv_flat = trace_dir / "kv_cache.safetensors"
 
-    if per_layer_format and kv_dir.is_dir():
+    if is_chunked_layout:
+        for i in range(num_layers):
+            key = f"kv_post_transform_layer_{i}"
+            kv = _read_trace_rows(kv_dir / f"layer_{i}", key, isl)
+            ref_kvpe_list.append(kv.unsqueeze(0).unsqueeze(0))
+        logger.info(f"Loaded {len(ref_kvpe_list)} KVPE layers from kv_cache/ (chunked_group_a_v1, isl={isl})")
+    elif per_layer_format and kv_dir.is_dir():
         # Detect key prefix from the first layer file
         with safe_open(kv_dir / "layer_0.safetensors", framework="pt") as f:
             available_keys = set(f.keys())

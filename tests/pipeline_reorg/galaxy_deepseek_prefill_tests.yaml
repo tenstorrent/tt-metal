@@ -114,9 +114,8 @@
     # collected fabric id back to `line` — which the -k filter below then selects.
     export DS_SPARSE_FABRIC=line
     # Sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. Random weights + on-the-fly CPU truth
-    # -> no staged V3.2 weights needed; R1 supplies the (shared-dim) config. GLM is tp<=2, so it skips on
-    # the 8x4 (tp=4) Galaxy mesh and is covered on the LoudBox instead. The sparse suite carries no tier
-    # markers, so there is no -m gate. 8x4 is the full Galaxy mesh.
+    # -> no staged V3.2 weights needed; R1 supplies the (shared-dim) config. The sparse suite carries no
+    # tier markers, so there is no -m gate. 8x4 is the full Galaxy mesh.
     pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "deepseek_v32 and 8x4 and line" -vvv --tb=short
   test_type: dsa_mla
   test_group: module
@@ -124,6 +123,54 @@
     bh_galaxy:
       timeout: 10
   owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+
+- name: "(Galaxy) DeepSeek Prefill - DSA MLA (GLM-5.1)"
+  cmd: |
+    export MESH_DEVICE=TG
+    export GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache
+    export DS_SPARSE_FABRIC=line
+    # GLM-5.1 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. Random weights + on-the-fly CPU
+    # truth -> no staged weights.
+    pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_1 and 8x4 and line" -vvv --tb=short
+  test_type: dsa_mla_glm
+  test_group: module
+  skus:
+    bh_galaxy:
+      timeout: 5
+  owner_id: U09LK84G4TF  # Nikola Milicevic
+  team: models
+
+- name: "(Galaxy) DeepSeek Prefill - GLM MoE"
+  cmd: |
+    export MESH_DEVICE=TG
+    # GLM-5.1 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "mesh-8x4 and (pcc-device-glm-256 or perf-device-glm-256)" -vvv --tb=short
+  test_type: glm_moe
+  test_group: module
+  skus:
+    bh_galaxy:
+      timeout: 20
+  owner_id: U09LK84G4TF  # Nikola Milicevic
+  team: models
+
+- name: "(Galaxy) DeepSeek Prefill - GLM-5.1 Prefill Block"
+  cmd: |
+    export MESH_DEVICE=TG
+    export DS_SPARSE_FABRIC=line
+    export GLM51_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.1-FP8
+    export TT_GLM51_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/zai-org/GLM-5.1-FP8-Cache
+    export GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache
+    # Fused GLM decoder block (sparse-SDPA MLA + norm/residual + dense/MoE FFN, layers 0 and 3) vs the
+    # composed CPU reference (reference.glm_5_1). Real weights via the prebuilt ttnn cache when present
+    # (loaded, like the transformer tests); random fallback otherwise. Never rebuilds the cache.
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and mesh-8x4" -vvv --tb=short --timeout=300
+  test_type: glm_prefill_block
+  test_group: module
+  skus:
+    bh_galaxy:
+      timeout: 5
+  owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
 
 - name: "(Galaxy) DeepSeek Prefill - Kimi MoE"

@@ -11,7 +11,8 @@ on:
           Comma-separated stages to run, e.g. "mla,prefill_block,kimi_moe".
           Empty or "all" runs every stage. Valid stages: moe_gate, mla, mla_chunked,
           kv_cache_table, prefill_block, prefill_transformer, kimi_mla, kimi_moe,
-          kimi_prefill_block, prefill_block_determinism, prefill_transformer_determinism.
+          kimi_prefill_block, dsa_mla, dsa_mla_glm, glm_moe, prefill_block_determinism,
+          prefill_transformer_determinism.
           The "module" group also runs every stage; the "sdpa_perf" group runs the
           ring joint SDPA perf checks (built with the profiler).
         required: false

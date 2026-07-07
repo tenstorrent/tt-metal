@@ -509,6 +509,13 @@ class ttMLA:
     def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
         """Resolve the tuned matmul config for this weight/seq_len, applying head-count and
         chunked-mode gating. Returns None when no tuned config applies (caller falls back to defaults).
+
+        The gating *tags* (num_heads / q_lora_rank / chunked_only) are declared in the config
+        (mla_config.py); only the *match* is resolved here at runtime, because it depends on this live
+        ttMLA. chunked_only in particular is a per-instance property (single-shot vs chunked runner) that
+        the static, shared config can't know — so keeping all three checks together at this single
+        consume-time point is more cohesive than splitting head/q_lora filtering into the config and
+        leaving chunked here.
         """
         cfg = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
         # Some tuned configs are head-count specific (the chunked-prefill 640 set was tuned for Kimi's
@@ -516,6 +523,12 @@ class ttMLA:
         # the num_heads it was tuned for; when it doesn't match this model, fall back so a different
         # variant at the same seq_len_local doesn't pick up a dimensionally-invalid program_config.
         if cfg is not None and cfg.get("num_heads") not in (None, self.num_heads):
+            cfg = None
+        # Some of those configs are additionally q_lora_rank-specific: the 640 set's program_configs are
+        # dimensionally valid at Kimi's q_lora_rank (1536) but overflow the grid at GLM-5.1's (2048), even
+        # though both have 64 heads. When a config declares a q_lora_rank that doesn't match this model,
+        # fall back so a same-heads/same-seq variant doesn't pick up an invalid program_config.
+        if cfg is not None and cfg.get("q_lora_rank") not in (None, self.q_lora_rank):
             cfg = None
         # The chunked-prefill 640 set is only dimensionally valid in chunked mode (e.g. wkv_b1/wkv_b2
         # are true batched per-head matmuls over the per-head SDPA output; the single-shot path applies
