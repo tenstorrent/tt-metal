@@ -754,10 +754,10 @@ jobs:
                 ENABLED_SKUS="wh_n300_civ2"
                 ;;
               P100a)
-                ENABLED_SKUS="wh_p100"
+                ENABLED_SKUS="bh_p100"
                 ;;
               P150b)
-                ENABLED_SKUS="wh_p150b_civ2"
+                ENABLED_SKUS="bh_p150b_civ2"
                 ;;
               n300-llmbox)
                 ENABLED_SKUS="wh_llmbox"
