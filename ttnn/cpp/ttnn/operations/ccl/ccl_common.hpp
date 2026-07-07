@@ -24,6 +24,9 @@ namespace ttnn::ccl {
 
 bool is_fabric_2d();
 
+// Warn about ideal packet size
+void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size);
+
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
 tt::tt_fabric::Topology get_usable_topology(

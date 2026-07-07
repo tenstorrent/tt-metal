@@ -200,6 +200,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
     const uint32_t num_output_chunks = num_input_pages * split_factor;
 
+    ::ttnn::ccl::validate_packet_size(input_tensor.device()->arch(), packet_size, output_chunk_size);
+
     // --- CB sizing ---
     // cb_page_size is a multiple of input_page_size, which is itself a multiple of
     // output_chunk_size = min(input, output), so the kernel increments both
