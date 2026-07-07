@@ -162,12 +162,9 @@ class AceStepDiTLayer(LightweightModule):
         # scale_shift_table broadcasts over batch; temb carries the per-sample timestep.
         sst = ttnn.reshape(self.scale_shift_table, (1, 6, 1, self.config.dim))
         mod = ttnn.add(sst, temb)  # [1,6,B,dim]
-        shift_msa = mod[:, 0:1, :, :]
-        scale_msa = mod[:, 1:2, :, :]
-        gate_msa = mod[:, 2:3, :, :]
-        c_shift = mod[:, 3:4, :, :]
-        c_scale = mod[:, 4:5, :, :]
-        c_gate = mod[:, 5:6, :, :]
+        # One ttnn.chunk instead of 6 separate slices (0.105ms vs 0.143ms/layer, PCC 1.0). Matches the
+        # reference's (scale_shift_table + temb).chunk(6, dim=1).
+        shift_msa, scale_msa, gate_msa, c_shift, c_scale, c_gate = ttnn.chunk(mod, 6, dim=1)
 
         # 1. Self-attention with AdaLN: n = norm(x)*scale+shift (scale row is pre-incremented by 1.0
         # at construction, so this is the reference's norm*(1+scale)+shift). x = x + attn(n)*gate.

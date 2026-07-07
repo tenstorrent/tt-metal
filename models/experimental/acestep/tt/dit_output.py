@@ -77,8 +77,7 @@ class DiTOutput(LightweightModule):
         # Modulation: scale_shift_table[1,2,dim] + temb[1,1,B,dim].unsqueeze -> [1,2,B,dim] chunk(2).
         sst = ttnn.reshape(self.scale_shift_table, (1, 2, 1, cfg.dim))
         mod = ttnn.add(sst, temb)  # broadcast temb [1,1,B,dim] over the 2-axis
-        shift = mod[:, 0:1, :, :]
-        scale = mod[:, 1:2, :, :]
+        shift, scale = ttnn.chunk(mod, 2, dim=1)  # one chunk vs 2 slices
 
         x = self.norm_out.forward(x, mode="prefill")
         x = ttnn.mac(x, ttnn.add(scale, 1.0), shift)  # norm*(1+scale)+shift, fused mul+add
