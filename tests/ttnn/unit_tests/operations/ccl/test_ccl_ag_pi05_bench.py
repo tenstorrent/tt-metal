@@ -1,21 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Benchmark the pi0.5 prefill all_gather against PR #48301's new ttnn.all_gather.
+"""Benchmark the pi0.5 prefill all_gather (TP=8) against PR #48301's new ttnn.all_gather.
 
-Four combinations (impl x fabric/mesh), each x {bf16, bf8}:
+Two impls, each x {bf16, bf8}, on the 8-device (TP=8) pi0.5 use case:
 
-  test_ag_8dev_async   all_gather_async, FABRIC_1D,      1x8, Topology.Ring  (pi0.5's real AG)
-  test_ag_8dev_ttnn    ttnn.all_gather,  FABRIC_1D,      1x8  (-> Linear; new op can't ring here)
-  test_ag_ring4_async  all_gather_async, FABRIC_1D_RING, 1x4, Topology.Ring
-  test_ag_ring4_ttnn   ttnn.all_gather,  FABRIC_1D_RING, 1x4  (-> Ring)
+  test_ag_8dev_async   all_gather_async, FABRIC_1D, 1x8, Topology.Ring  (pi0.5's real AG)
+  test_ag_8dev_ttnn    ttnn.all_gather,  FABRIC_1D, 1x8  (-> Linear; new op can't ring 8 here)
 
-Gathered output is always [1,1,768,2048]; per-device input is [1,1,768,2048/TP].
+Gathered output is [1,1,768,2048]; per-device input is [1,1,768,256].
 
-Why two meshes: on these chips (TT_VISIBLE_DEVICES=8..15) FABRIC_1D enumerates a 1x8
-mesh (8 devices), but FABRIC_1D_RING enumerates only a 2x2 (4 devices) — so the new
-op's ring path is only reachable at TP=4. The new ttnn.all_gather derives ring-vs-linear
-from the fabric config (FABRIC_1D_RING -> ring, FABRIC_1D -> linear) and ignores the
-deprecated op-level topology arg; all_gather_async honors topology=Ring directly.
+The new ttnn.all_gather derives ring-vs-linear from the fabric config (FABRIC_1D -> linear,
+FABRIC_1D_RING -> ring) and ignores the deprecated op-level topology arg. On these chips the
+8 visible devices (TT_VISIBLE_DEVICES=8..15) are a 2x4 subtorus whose only wrapping (ring)
+dimension is size 4, so FABRIC_1D_RING can't span 8 -> the new op is forced to Linear at TP=8.
+all_gather_async takes topology=Ring as an op arg and rings all 8 under FABRIC_1D. pi0.5 prefill
+needs TP=8, so the 4-device ring case is out of scope.
 
 Run under tracy and read DEVICE KERNEL DURATION (pick a clean DEVICE ID — the marker
 bug corrupts some chips with ~4.5e12 ns values):
@@ -85,8 +84,13 @@ def _run_async(mesh, tp, dtype):
     sems = [ttnn.create_global_semaphore(mesh, crs, 0) for _ in range(2)]
     barrier = ttnn.create_global_semaphore(mesh, crs, 0)
     out = ttnn.from_torch(
-        torch.zeros(1, 1, _SEQ, _HIDDEN), dtype=dtype, layout=ttnn.TILE_LAYOUT,
-        device=mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh), memory_config=_MEM)
+        torch.zeros(1, 1, _SEQ, _HIDDEN),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        memory_config=_MEM,
+    )
 
     def run():
         return ttnn.experimental.all_gather_async(
@@ -128,15 +132,3 @@ def test_ag_8dev_async(dtype):
 def test_ag_8dev_ttnn(dtype):
     """PR #48301 ttnn.all_gather, FABRIC_1D, 8 devices (derives Linear)."""
     _bench(ttnn.FabricConfig.FABRIC_1D, 8, "ttnn", dtype, "8dev ttnn.all_gather (linear)")
-
-
-@pytest.mark.parametrize("dtype", _DTYPES, ids=_DTYPE_IDS)
-def test_ag_ring4_async(dtype):
-    """all_gather_async, FABRIC_1D_RING, 4-device ring (Topology.Ring)."""
-    _bench(ttnn.FabricConfig.FABRIC_1D_RING, 4, "async", dtype, "ring4 async")
-
-
-@pytest.mark.parametrize("dtype", _DTYPES, ids=_DTYPE_IDS)
-def test_ag_ring4_ttnn(dtype):
-    """PR #48301 ttnn.all_gather, FABRIC_1D_RING, 4-device ring (derives Ring)."""
-    _bench(ttnn.FabricConfig.FABRIC_1D_RING, 4, "ttnn", dtype, "ring4 ttnn.all_gather")
