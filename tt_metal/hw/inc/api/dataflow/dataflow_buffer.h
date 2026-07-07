@@ -89,6 +89,15 @@ public:
     void pop_front(uint16_t num_entries) { pop_front_impl(num_entries); }
     // Explicit sync APIs end
 
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+    // Test-only free helpers (defined in internal/tt-2xx/dataflow_buffer_test_helpers.h,
+    // NOT part of the public DFB API). Granted friend access to advance the
+    // implicit-sync shadow state alongside the HW counter. See that header for
+    // semantics + usage rules.
+    friend void preload_posted_counter(DataflowBuffer&, uint16_t);
+    friend void preload_acked_counter(DataflowBuffer&, uint16_t);
+#endif
+
 #ifndef COMPILE_FOR_TRISC
 #ifndef ARCH_QUASAR
     bool pages_reservable_at_back(int32_t num_pages) const;
