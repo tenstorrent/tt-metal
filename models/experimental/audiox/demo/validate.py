@@ -178,7 +178,9 @@ def _summarize_run_details(output_path: Path, elapsed_seconds: float, details: d
     return summary
 
 
-def _run_cpu_reference(args: argparse.Namespace, cpu_output: Path, *, synthetic_video_prompt: torch.Tensor | None) -> dict:
+def _run_cpu_reference(
+    args: argparse.Namespace, cpu_output: Path, *, synthetic_video_prompt: torch.Tensor | None
+) -> dict:
     started_at = time.perf_counter()
     details = run_demo(
         checkpoint=args.checkpoint,
@@ -202,7 +204,9 @@ def _run_cpu_reference(args: argparse.Namespace, cpu_output: Path, *, synthetic_
     return summary
 
 
-def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_video_prompt: torch.Tensor | None) -> dict:
+def _run_tt_reference(
+    args: argparse.Namespace, tt_output: Path, *, synthetic_video_prompt: torch.Tensor | None
+) -> dict:
     from models.experimental.audiox.demo.tt_demo import TtAudioXSession, close_tt_device, open_tt_device, run_tt_demo
 
     if args.tt_warm_runs <= 1:
@@ -241,7 +245,9 @@ def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_vi
     try:
         session = TtAudioXSession(args.checkpoint, device, seed=args.seed)
         for run_index in range(1, args.tt_warm_runs + 1):
-            output_path = tt_output if run_index == args.tt_warm_runs else tt_output.with_name(f"tt_warmup_run{run_index}.wav")
+            output_path = (
+                tt_output if run_index == args.tt_warm_runs else tt_output.with_name(f"tt_warmup_run{run_index}.wav")
+            )
             started_at = time.perf_counter()
             run_details = session.run(
                 prompt=args.prompt,
@@ -284,9 +290,7 @@ def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_vi
     measured_details["steps"] = args.steps
     summary = _summarize_run_details(measured_details["output_path"], measured_elapsed_seconds, measured_details)
     summary["_latent"] = measured_details["latent"]
-    summary["latent_comparison_anchor"] = (
-        f"tt_warm_run_{args.tt_warm_runs}" if warm_runs else "tt_run_1"
-    )
+    summary["latent_comparison_anchor"] = f"tt_warm_run_{args.tt_warm_runs}" if warm_runs else "tt_run_1"
     if warm_runs:
         summary["warm_runs"] = warm_runs
     return summary
@@ -326,7 +330,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     args = p.parse_args(argv)
     if args.synthetic_video and (args.video is not None or args.image is not None):
         p.error("pass at most one of --synthetic-video, --video, or --image")
-    if not args.prompt and args.video is None and args.image is None and args.audio is None and not args.synthetic_video:
+    if (
+        not args.prompt
+        and args.video is None
+        and args.image is None
+        and args.audio is None
+        and not args.synthetic_video
+    ):
         p.error("at least one of --prompt, --video, --image, or --audio is required")
     if args.tt_only and not args.tt:
         p.error("--tt-only requires --tt")
@@ -352,7 +362,9 @@ def main(argv: list[str] | None = None) -> int:
         "steps": args.steps,
         "seed": args.seed,
         "duration_seconds": int(args.duration_seconds),
-        "cpu": None if args.tt_only else _run_cpu_reference(args, cpu_output, synthetic_video_prompt=synthetic_video_prompt),
+        "cpu": None
+        if args.tt_only
+        else _run_cpu_reference(args, cpu_output, synthetic_video_prompt=synthetic_video_prompt),
         "tt": None,
         "comparison": None,
         "latent_comparison": None,
@@ -386,16 +398,14 @@ def main(argv: list[str] | None = None) -> int:
 
     report["stage1_checks"] = {
         "valid_16khz": (
-            bool(report["tt"]["valid_16khz"]) if report["cpu"] is None else bool(report["cpu"]["valid_16khz"]) and (
-                report["tt"] is None or bool(report["tt"]["valid_16khz"])
-            )
+            bool(report["tt"]["valid_16khz"])
+            if report["cpu"] is None
+            else bool(report["cpu"]["valid_16khz"]) and (report["tt"] is None or bool(report["tt"]["valid_16khz"]))
         ),
         "tt_runs_without_error": report["tt"] is not None,
         "same_shape": None if report["comparison"] is None else report["comparison"]["same_shape"],
         "same_sample_rate": None if report["comparison"] is None else report["comparison"]["same_sample_rate"],
-        "tt_generation_time_lt_30s": None
-        if tt_perf_summary is None
-        else tt_perf_summary["generation_seconds"] < 30.0,
+        "tt_generation_time_lt_30s": None if tt_perf_summary is None else tt_perf_summary["generation_seconds"] < 30.0,
         "tt_diffusion_tps_ge_20": None
         if tt_perf_summary is None
         else tt_perf_summary["diffusion_tokens_per_second"] >= 20.0,
