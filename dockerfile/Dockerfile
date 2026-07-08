@@ -146,6 +146,7 @@ ENV PATH="/usr/local/bin:$PATH"
 FROM ci-build AS ci-test
 
 ARG UBUNTU_VERSION
+ARG TT_SMI_VERSION=5.2.0
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
 # Create directories for infra
@@ -171,6 +172,16 @@ RUN umask 000 && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt && \
     uv pip check
+
+# Install tt-smi from GitHub releases and make it executable for all users
+# (notably the default non-root container user). Verify the installed version
+# matches TT_SMI_VERSION in the same command.
+# Installed as a binary (not the PyPI package) because the PyPI tt-smi hard-pins
+# tt-umd==0.9.5, which conflicts with tt-umd==0.9.6 from tools/triage/requirements.txt.
+RUN curl -fsSL -o /usr/local/bin/tt-smi \
+    "https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/tt-smi-${TT_SMI_VERSION}-ubuntu-${UBUNTU_VERSION}" && \
+    chmod a+rx /usr/local/bin/tt-smi && \
+    tt-smi --version | grep -q "${TT_SMI_VERSION}"
 
 #############################################################
 

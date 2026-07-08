@@ -180,6 +180,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-1xx/blackhole/cfg_defines.h
     inc/internal/tt-1xx/blackhole/core_config.h
     inc/internal/tt-1xx/blackhole/dev_mem_map.h
+    inc/internal/tt-1xx/blackhole/device_print_mem.h
     inc/internal/tt-1xx/blackhole/eth_chan_noc_mapping.h
     inc/internal/tt-1xx/blackhole/eth_fw_api.h
     inc/internal/tt-1xx/blackhole/eth_l1_address_map.h
@@ -202,6 +203,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/cfg_defines.h
     inc/internal/tt-2xx/quasar/core_config.h
     inc/internal/tt-2xx/quasar/dev_mem_map.h
+    inc/internal/tt-2xx/quasar/device_print_mem.h
     inc/internal/tt-2xx/quasar/eth_chan_noc_mapping.h
     inc/internal/tt-2xx/quasar/eth_fw_api.h
     inc/internal/tt-2xx/quasar/eth_l1_address_map.h
@@ -218,6 +220,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-1xx/wormhole/c_tensix_core.h
     inc/internal/tt-1xx/wormhole/core_config.h
     inc/internal/tt-1xx/wormhole/dev_mem_map.h
+    inc/internal/tt-1xx/wormhole/device_print_mem.h
     inc/internal/tt-1xx/wormhole/eth_chan_noc_mapping.h
     inc/internal/tt-1xx/wormhole/eth_fw_api.h
     inc/internal/tt-1xx/wormhole/eth_l1_address_map.h
