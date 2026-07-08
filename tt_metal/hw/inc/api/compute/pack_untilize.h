@@ -41,7 +41,7 @@ ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __buil
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
     PACK((
         llk_pack_untilize_init<block_ct_dim, full_ct_dim, false /*diagonal*/, narrow_row, row_num_datums, dense>(ocb)));
-    PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>()));
+    PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>(ocb)));
 #else
     static_assert(narrow_row == false, "non-default narrow_row not supported on Quasar");
     static_assert(row_num_datums == TILE_C_DIM, "non-default row_num_datums not supported on Quasar");
@@ -82,7 +82,7 @@ pack_untilize_dest_init_impl(
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false /*diagonal*/, narrow_row, row_num_datums, dense>(
         ocb, face_r_dim, num_faces)));
 #pragma GCC diagnostic pop
-    PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>()));
+    PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>(ocb)));
 #else
     static_assert(narrow_row == false, "non-default narrow_row not supported on Quasar");
     static_assert(row_num_datums == TILE_C_DIM, "non-default row_num_datums not supported on Quasar");
@@ -519,7 +519,7 @@ ALWI void pack_untilize_uninit(uint32_t ocb) {
     // Init is called to ensure special untilize init overrides are cleaned up.
     {
         LLK_SAN_SILENT_ZONE();
-        PACK((llk_init_packer_dest_offset_registers<PackMode::Default>()));
+        PACK((llk_init_packer_dest_offset_registers<PackMode::Default>(ocb)));
         PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
         PACK((llk_pack_init(ocb)));
     }

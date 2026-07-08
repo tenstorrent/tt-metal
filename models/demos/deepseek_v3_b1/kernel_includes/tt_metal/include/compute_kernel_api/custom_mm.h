@@ -54,7 +54,7 @@ ALWI void custom_mm_block_init(
     MATH((llk_math_hw_configure<fp32_dest_acc_en>(in0_cb_id, in1_cb_id)));
     MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
 
-    PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>()));
+    PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
     PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
     if constexpr (dense_packing) {

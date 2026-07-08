@@ -85,7 +85,7 @@ custom_pack_untilize_dest_init(
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(
         ocb, face_r_dim, num_faces)));
 #pragma GCC diagnostic pop
-    PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false>()));
+    PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false>(ocb)));
 }
 
 }  // namespace ckernel
