@@ -11,8 +11,6 @@ causal on the height (time) axis. Single-chip.
 
 from __future__ import annotations
 
-from collections import OrderedDict
-
 import einops
 import torch
 
@@ -21,7 +19,7 @@ import ttnn
 from ...layers.audio_ops import Conv2dViaConv3d
 from ...layers.module import Module, ModuleList
 from ...utils.conv3d import conv_pad_in_channels
-from ...utils.tracing import Tracer
+from ...utils.tracing import traced_function
 
 LATENT_DOWNSAMPLE_FACTOR = 4
 
@@ -279,7 +277,6 @@ class MelDecoder(Module):
         mel_bins: int | None = None,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
-        max_traces: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -305,16 +302,11 @@ class MelDecoder(Module):
         self._stats_std = torch.ones(ch)
         self._stats_mean = torch.zeros(ch)
 
-        # forward_traced state, mirroring Vocoder: capture the pure-device graph once per
-        # input shape and replay it (the conv ops are host-dispatch-bound, so this removes
-        # the dominant per-op dispatch cost). _target_shape is set per-input by
-        # _host_to_device and read by _device_to_host, so it is not baked into the graph.
-        # A manual shape-keyed cache (not @traced_function) is used so the pipeline can
-        # explicitly release_trace on shutdown/re-warm, which the decorator does not expose.
+        # Traced decode: _forward_device is @traced_function, keyed per input shape via
+        # tracer_trace_key. _target_shape is set per-input by _host_to_device and read by
+        # _device_to_host, so it stays off the captured graph.
         self.use_trace = False
         self._target_shape: tuple[int, int, int, int] | None = None
-        self._traces: "OrderedDict[tuple, Tracer]" = OrderedDict()
-        self._max_traces = max_traces
 
         self.patchifier = AudioPatchifier()
 
@@ -471,6 +463,7 @@ class MelDecoder(Module):
             sample_bhwc_padded, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
         )
 
+    @traced_function(device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False)
     def _forward_device(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """The pure on-device decode graph (conv_in → conv_out). Captured for trace replay."""
         x = self.conv_in(x)
@@ -501,25 +494,16 @@ class MelDecoder(Module):
         return self._device_to_host(y)
 
     def forward_traced(self, latent: torch.Tensor) -> torch.Tensor:
-        """Same result as ``forward`` but captures the device graph once per input shape and
-        replays it, removing per-op host dispatch. Requires the mesh opened with a
-        ``trace_region_size`` large enough for the resident trace."""
-        shape_key = tuple(latent.shape)
-        tracer = self._traces.get(shape_key)
-        if tracer is None:
-            tracer = Tracer(self._forward_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True)
-            self._traces[shape_key] = tracer
-            if self._max_traces is not None:
-                while len(self._traces) > self._max_traces:
-                    _, evicted = self._traces.popitem(last=False)  # LRU
-                    evicted.release_trace()
-        self._traces.move_to_end(shape_key)  # LRU touch
+        """Like ``forward`` but captures the device graph per input shape and replays it (removing
+        per-op host dispatch). The first call at a shape captures on warm state — the pipeline warms
+        the decode eagerly at warmup — and later calls replay. Requires a ``trace_region_size`` large
+        enough for the resident trace."""
         # _host_to_device sets self._target_shape for this shape (read by _device_to_host).
-        y = tracer(self._host_to_device(latent), tracer_blocking_execution=False, tracer_execute_on_capture=False)
+        x = self._host_to_device(latent)
+        y = self._forward_device(x, traced=True, tracer_trace_key=tuple(latent.shape))
         return self._device_to_host(y)
 
     def release_trace(self) -> None:
-        """Free all captured traces (call on shutdown, or before re-warming a new bucket set)."""
-        for tracer in self._traces.values():
+        """Free all captured decode traces (call on shutdown or before re-warming)."""
+        for tracer in type(self)._forward_device._tracers_keyed.get(self, {}).values():
             tracer.release_trace()
-        self._traces.clear()

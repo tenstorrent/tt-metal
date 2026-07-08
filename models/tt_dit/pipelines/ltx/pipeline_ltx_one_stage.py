@@ -14,6 +14,7 @@ import time
 import torch
 from loguru import logger
 
+from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.video import export_video_audio
 from .pipeline_ltx import DEFAULT_NEGATIVE_PROMPT, LTXPipeline, latent_grid
 
@@ -53,6 +54,14 @@ class LTXOneStagePipeline(LTXPipeline):
         )
 
         self._warmup_decode(num_frames, height, width)
+
+        # Warm the on-device audio decode eagerly so the first real (traced) decode captures on
+        # warm state at a deterministic free-list.
+        als = AudioLatentShape.from_video_pixel_shape(
+            VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
+        )
+        self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames)
+
         self._prepare_transformer(0)
         logger.info(f"warmup (AV) done in {time.time() - t0:.1f}s")
 
