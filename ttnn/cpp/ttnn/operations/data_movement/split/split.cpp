@@ -59,10 +59,11 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
     const MemoryConfig& memory_config) {
     const auto& input_shape = input_tensor.logical_shape();
 
-    // torch requires split size to sum to dim size but since we are using slice we can be more permissive.
+    // Callers (both public split overloads) enforce torch-parity: split sizes sum exactly to the
+    // dimension size. This internal check guards against a malformed size list reaching the slicer.
     TT_FATAL(
-        std::accumulate(split_sizes.begin(), split_sizes.end(), 0L) >= input_shape[dim],
-        "Split sizes should sum to at least dimension size. Split sizes: {} dimension {}",
+        std::accumulate(split_sizes.begin(), split_sizes.end(), 0L) == input_shape[dim],
+        "Split sizes should sum exactly to dimension size. Split sizes: {} dimension {}",
         split_sizes,
         input_shape[dim]);
 
@@ -274,6 +275,18 @@ std::vector<ttnn::Tensor> split(
 
     const auto& input_shape = working_input.logical_shape();
     int64_t normalized_dim = input_shape.get_normalized_index(dim);
+
+    // Match torch.split semantics: the requested chunk sizes must sum exactly to the size of
+    // the split dimension. torch raises for both under- and over-covering size lists.
+    const int64_t split_sizes_sum = std::accumulate(split_sizes.begin(), split_sizes.end(), int64_t{0});
+    TT_FATAL(
+        split_sizes_sum == static_cast<int64_t>(input_shape[normalized_dim]),
+        "split_sizes must sum exactly to the size of dimension {} ({}), but got sizes {} summing to {}",
+        normalized_dim,
+        input_shape[normalized_dim],
+        split_sizes,
+        split_sizes_sum);
+
     std::vector<ttnn::Tensor> results;
 
     const uint32_t num_chunks = static_cast<uint32_t>(split_sizes.size());
@@ -381,9 +394,17 @@ std::vector<ttnn::Tensor> split(
     const auto& input_shape = input_tensor.logical_shape();
     int64_t normalized_dim = input_shape.get_normalized_index(dim);
 
-    const auto num_chunks = std::ceil(static_cast<float>(input_shape[normalized_dim]) / static_cast<float>(split_size));
+    // Match torch.split: ceil(dim_size / split_size) chunks of size split_size, with a
+    // smaller final chunk when the dimension is not evenly divisible. Build the size list
+    // so it sums exactly to the dimension (the last entry holds the remainder), which keeps
+    // the list overload's strict torch-parity sum check satisfied.
+    const int64_t dim_size = static_cast<int64_t>(input_shape[normalized_dim]);
+    const int64_t num_chunks = (dim_size + split_size - 1) / split_size;
 
-    const ttsl::SmallVector<int64_t> split_sizes(num_chunks, split_size);
+    ttsl::SmallVector<int64_t> split_sizes(num_chunks, split_size);
+    if (num_chunks > 0) {
+        split_sizes.back() = dim_size - split_size * (num_chunks - 1);
+    }
     // Pass memory_config_arg directly so the split_sizes overload applies the
     // same sharding-default logic (sharded input → DRAM output when no explicit config).
     return ttnn::split(input_tensor, split_sizes, normalized_dim, memory_config_arg);
