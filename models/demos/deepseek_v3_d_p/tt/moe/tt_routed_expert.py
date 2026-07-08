@@ -412,8 +412,10 @@ class TtRoutedExpert(LightweightModule):
         """
         logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
-        # Convert input to activations dtype if needed
-        if dispatched_buffer.dtype != self.activations_dtype:
+        # ROW_MAJOR input is the Blackhole fused path: the op tilizes x and packs
+        # bf8 internally, so it must stay bf16. Otherwise match the activations
+        # dtype for the per-expert extract loop.
+        if dispatched_buffer.layout != ttnn.ROW_MAJOR_LAYOUT and dispatched_buffer.dtype != self.activations_dtype:
             logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
             dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
 
