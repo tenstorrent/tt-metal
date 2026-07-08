@@ -166,6 +166,21 @@ def main():
         "the previous layer.  Isolates per-layer K/V correctness from upstream compounding "
         "errors.  Requires oracle produced with --save-layers as well as --save-kv.",
     )
+    ap.add_argument(
+        "--oracle-input-every",
+        type=int,
+        default=None,
+        help="inject oracle hidden_states before layers whose index is a multiple of N "
+        "(and layer 1, so layer 0 output is always oracle-derived once).  Reveals "
+        "per-layer degradation rate.  Requires oracle with --save-layers.",
+    )
+    ap.add_argument(
+        "--row0-buckets",
+        action="store_true",
+        help="for SP>1 with --verbose-rows, also print row-0 PCC split into position "
+        "buckets [0..15], [16..127], [128..end].  Isolates attention-sink-sensitive "
+        "short-context tokens from the rest of the row.",
+    )
     args = ap.parse_args()
 
     if args.prompt_file is not None:
@@ -322,14 +337,24 @@ def main():
 
         max_layer_idx = max(layers_to_test)
 
-        layer_files = record.get("layer_files", {}) if args.use_oracle_input else {}
-        if args.use_oracle_input and not layer_files:
+        want_oracle_input = args.use_oracle_input or args.oracle_input_every is not None
+        layer_files = record.get("layer_files", {}) if want_oracle_input else {}
+        if want_oracle_input and not layer_files:
             print(
-                "[kv_cache] ERROR: --use-oracle-input requires oracle produced with --save-layers "
-                "(no layer_files in ref_results.json)",
+                "[kv_cache] ERROR: --use-oracle-input / --oracle-input-every requires oracle "
+                "produced with --save-layers (no layer_files in ref_results.json)",
                 flush=True,
             )
             return 1
+
+        def _should_inject(layer_idx: int) -> bool:
+            if layer_idx == 0 or str(layer_idx - 1) not in layer_files:
+                return False
+            if args.use_oracle_input:
+                return True
+            if args.oracle_input_every is not None and args.oracle_input_every > 0:
+                return layer_idx % args.oracle_input_every == 0
+            return False
 
         for i, decoder_layer in enumerate(model.layers):
             layer_kv = decoder_layer.self_attn.kv_cache  # [k_cache, v_cache] on device
@@ -337,7 +362,7 @@ def main():
             # Optionally replace running hidden_states with oracle input for this layer.
             # For layer 0 the input is the token embedding, which is already correct
             # (layer 0 K PCC≈0.9996 in the baseline run), so we leave it as-is.
-            if args.use_oracle_input and i > 0 and str(i - 1) in layer_files:
+            if _should_inject(i):
                 oracle_hs = np.load(oracle_dir / layer_files[str(i - 1)])  # [1, real_len, hidden_size]
                 hidden_states.deallocate(True)
                 hidden_states = _oracle_hidden_states_to_tt(mesh, oracle_hs, sp, isl_per_row, max_seq_len)
@@ -389,6 +414,23 @@ def main():
                         f"K={row_pcc_k:.4f}  V={row_pcc_v:.4f}",
                         flush=True,
                     )
+
+                if args.row0_buckets:
+                    # Split row 0 into short-context vs long-context ranges to test the
+                    # attention-sink hypothesis: with a sliding window of ~128, only Q
+                    # tokens at positions < window have fewer than window real K neighbors
+                    # in the softmax denominator and are extra sensitive to sink noise.
+                    row0_end = min(isl_per_row, real_len)
+                    bucket_edges = [0, 16, 128, row0_end]
+                    for lo, hi in zip(bucket_edges[:-1], bucket_edges[1:]):
+                        if lo >= hi:
+                            continue
+                        b_k = _pcc(tt_k[:, lo:hi, :], oracle_k[:, lo:hi, :])
+                        b_v = _pcc(tt_v[:, lo:hi, :], oracle_v[:, lo:hi, :])
+                        print(
+                            f"[kv_cache]          row 0 bucket pos {lo:5d}-{hi-1:5d}: " f"K={b_k:.4f}  V={b_v:.4f}",
+                            flush=True,
+                        )
 
             if i >= max_layer_idx:
                 hidden_states.deallocate(True)
