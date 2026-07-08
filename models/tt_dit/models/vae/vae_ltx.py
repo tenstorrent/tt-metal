@@ -948,9 +948,8 @@ class LTXSpaceToDepthDownsample(Module):
 
         # A per-device space-to-depth fold is only correct when each shard's spatial extent is
         # divisible by the stride; otherwise a (p2, p3) patch straddles a shard boundary and the
-        # per-device zero-pad below injects garbage into the *interior* of the gathered latent
-        # (this corrupted the I2V conditioning latent at production resolutions). When that happens
-        # — global dim divisible by the stride but per-device dim not — gather the sharded spatial
+        # per-device zero-pad below injects garbage into the *interior* of the gathered latent.
+        # When that happens — global dim divisible by the stride but per-device dim not — gather the sharded spatial
         # axes, fold on the full extent, then re-shard.
         h_factor = self.parallel_config.height_parallel.factor
         w_factor = self.parallel_config.width_parallel.factor

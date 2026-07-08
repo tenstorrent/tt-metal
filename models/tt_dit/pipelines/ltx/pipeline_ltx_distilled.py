@@ -440,8 +440,8 @@ class LTXDistilledPipeline(LTXPipeline):
             audio_lat = audio_lat * (1 - sigmas[0]) + noise_a * sigmas[0]
         else:
             torch.manual_seed(seed)
-            # Consume the same RNG draws the prior video_N-sized randn did, keeping the audio
-            # stream bit-identical to prior runs.
+            # Consume the same RNG draws a video_N-sized randn would, so the audio noise stream
+            # stays independent of video sequence length.
             _ = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16)
             audio_lat_real = torch.randn(B, audio_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
             audio_lat = torch.zeros(B, audio_N, self.in_channels)

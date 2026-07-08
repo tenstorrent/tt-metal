@@ -38,8 +38,7 @@ class ConnectorBlock(Module):
         self.eps = eps
         tp_axis = parallel_config.tensor_parallel.mesh_axis
 
-        # fp32 weights + HiFi4: matches the host reference; bf16 rounding here costs audio PCC
-        # (0.9999→0.9986) at no latency saving on BH.
+        # fp32 weights + HiFi4: bf16 rounding here costs audio PCC at no latency saving on BH.
         lin_dtype = ttnn.float32
         fidelity = ttnn.MathFidelity.HiFi4
 
