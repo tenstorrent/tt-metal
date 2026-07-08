@@ -47,16 +47,9 @@ from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.fuse_loras import LoraSpec, fuse_loras_into
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.mochi import get_rot_transformation_mat
-from ...utils.patchifiers import (
-    AudioLatentShape,
-    VideoLatentShape,
-    VideoPixelShape,
-    audio_get_patch_grid_bounds,
-    get_pixel_coords,
-    video_get_patch_grid_bounds,
-)
+from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.progress import Watchdog
-from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor, set_kernel_prewarm_capturing
 from ...utils.video import Audio
 
@@ -402,7 +395,14 @@ class LTXPipeline:
                 # capture pass: capture-only skips dispatch, so trace capture must wait for the real pass.
                 _kp = ttnn._ttnn.device
                 _cold = _kp.kernel_prewarm_cold_start_needed()
-                if _cold:
+                # The capture pass runs the pipeline once capture-only (no dispatch) to record the
+                # kernel manifest, then batch-compiles it off-device. A weight-evicting tier
+                # (dynamic_load / TT_DIT_HOST_WEIGHT_CACHE) frees the DiT weights during that pass, but
+                # capture-only skips the dispatch that would reset the reload bookkeeping, so the real
+                # warmup below reads an evicted weight (`parameter has no data`). Skip the capture for
+                # those tiers and let the real warmup compile in-window. The default 3-stage prewarm
+                # compiles off-device before the reservation, so it never reaches here (_cold is False).
+                if _cold and not self.dynamic_load:
                     logger.info("cold build_key: capturing kernel manifest for off-device batch compile")
                     _kp.kernel_prewarm_set_capture_only(True)
                     # Capture at the run's OWN traced setting: a traced run's real kernels are the
@@ -437,6 +437,11 @@ class LTXPipeline:
                     # processes never shared this state; one process must reset it.
                     self.release_traces()
                     self.mesh_device.clear_program_cache()
+                elif _cold:
+                    logger.info(
+                        "cold build_key + dynamic_load: skipping in-process off-device capture "
+                        "(weight-evicting tier); the real warmup compiles in-window"
+                    )
                 # On cold-start the real warmup runs capture_all so it dispatches AND trace-captures every
                 # component (denoise/VAE/vocoder) while warm -- gen then replays instead of doing a
                 # first-time capture that would write device statics an iter_fast warmup never initialized
