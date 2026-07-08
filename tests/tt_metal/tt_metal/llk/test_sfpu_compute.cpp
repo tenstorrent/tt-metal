@@ -724,10 +724,10 @@ std::vector<uint32_t> run_sfpu_pipeline(
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    auto unpack_modes =
-        test_config.unpack_to_dest_fp32
-            ? experimental::ComputeUnpackToDestModes{{IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
-            : experimental::ComputeUnpackToDestModes{};
+    experimental::ComputeUnpackToDestModes unpack_modes{};
+    if (test_config.unpack_to_dest_fp32) {
+        unpack_modes = {{IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+    }
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32,
