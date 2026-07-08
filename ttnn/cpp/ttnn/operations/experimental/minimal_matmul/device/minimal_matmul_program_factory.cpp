@@ -423,6 +423,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // Create semaphores
         fused_op_signaler->init_fused_op(program, device, in0_sender_cores);
         defines["FUSE_AG"] = "1";
+        // Stream the in0 read in this many M-row bands, matching the AG's per-band delivery/signal so
+        // band s's read overlaps band s+1's fabric write. Must equal the AG program's IN0_SUB_CHUNKS.
+        const char* in0_sub_chunks_env = std::getenv("IN0_SUB_CHUNKS");
+        defines["IN0_SUB_CHUNKS"] = (in0_sub_chunks_env != nullptr) ? in0_sub_chunks_env : "1";
         // Consume the middle forward/backward k-blocks 1-backward-1-forward instead of grouped.
         // Env override lets A/B runs disable it (AG_ALTERNATE_MIDDLE=0) without a rebuild-time edit.
         const char* alt_middle_env = std::getenv("AG_ALTERNATE_MIDDLE");

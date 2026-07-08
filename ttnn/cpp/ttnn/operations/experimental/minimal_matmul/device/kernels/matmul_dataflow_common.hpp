@@ -93,7 +93,11 @@ void read_in0_block_sync(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    // When false, issue the async reads but skip the completion barrier, so a caller reading the
+    // block in M-row bands can keep band s's reads in flight while it waits for band s+1's data and
+    // barrier once after the last band.
+    bool issue_barrier = true) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
@@ -123,7 +127,9 @@ void read_in0_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_read_barrier();
+    if (issue_barrier) {
+        noc_async_read_barrier();
+    }
 }
 
 /**

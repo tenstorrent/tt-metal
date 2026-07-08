@@ -280,23 +280,62 @@ void kernel_main() {
                     }
 #endif
 #ifndef SKIP_IN0_DRAM_READ
-                    // Skipped under SKIP_IN0_DRAM_READ to isolate the in0 read cost; the semaphore wait in
-                    // compute_actual_k_block_iter above still runs, so the CB is pushed with stale L1 (garbage PCC).
-                    read_in0_block_sync<M_block_tiles, K_block_tiles>(
-                        in0_reader,
-                        in0_shape,
-                        in0_start_address,
-                        in0_tile_size,
+#if IN0_SUB_CHUNKS > 1
+                    // Stream the in0 block in IN0_SUB_CHUNKS M-row bands so band s's DRAM read overlaps
+                    // band s+1's fabric delivery. compute_actual_k_block_iter already awaited band 0;
+                    // wait_for_dir awaits each later band's aggregator signal. Only remote directions
+                    // are band-signaled -- self/local (dir 2) has no fabric wait, so read it whole.
+                    const uint8_t k_dir = fused_op_receiver.streamed_dir;
+                    if (n_block_iter == 0 && k_dir != 2) {
+                        const uint32_t total_rows = m_tile_end - m_tile;
+                        const uint32_t band_rows = (total_rows + IN0_SUB_CHUNKS - 1) / IN0_SUB_CHUNKS;
+                        for (uint32_t sub = 0; sub < IN0_SUB_CHUNKS; sub++) {
+                            const uint32_t band_start = m_tile + sub * band_rows;
+                            if (band_start >= m_tile_end) {
+                                break;
+                            }
+                            if (sub > 0) {
+                                fused_op_receiver.wait_for_dir(k_dir);
+                            }
+                            const uint32_t band_end =
+                                (band_start + band_rows < m_tile_end) ? (band_start + band_rows) : m_tile_end;
+                            read_in0_block_sync<M_block_tiles, K_block_tiles>(
+                                in0_reader,
+                                in0_shape,
+                                in0_start_address + sub * band_rows * K_block_tiles * in0_tile_size,
+                                in0_tile_size,
 #ifdef READ_FROM_LOCAL_INPUT
-                        in3_reader,
-                        fused_op_receiver.local_k_start,
-                        fused_op_receiver.local_k_end,
-                        fused_op_receiver.input_tensor_Wt,
+                                in3_reader,
+                                fused_op_receiver.local_k_start,
+                                fused_op_receiver.local_k_end,
+                                fused_op_receiver.input_tensor_Wt,
 #endif
-                        m_tile,
-                        m_tile_end,
-                        k_block * K_block_tiles,
-                        (k_block + 1) * K_block_tiles);
+                                band_start,
+                                band_end,
+                                k_block * K_block_tiles,
+                                (k_block + 1) * K_block_tiles,
+                                /*issue_barrier=*/false);
+                        }
+                        noc_async_read_barrier();  // one barrier: every band's reads stayed in flight
+                    } else
+#endif
+                    {
+                        read_in0_block_sync<M_block_tiles, K_block_tiles>(
+                            in0_reader,
+                            in0_shape,
+                            in0_start_address,
+                            in0_tile_size,
+#ifdef READ_FROM_LOCAL_INPUT
+                            in3_reader,
+                            fused_op_receiver.local_k_start,
+                            fused_op_receiver.local_k_end,
+                            fused_op_receiver.input_tensor_Wt,
+#endif
+                            m_tile,
+                            m_tile_end,
+                            k_block * K_block_tiles,
+                            (k_block + 1) * K_block_tiles);
+                    }
 #else
                     (void)k_block;  // still computed for its semaphore side effects; just not read from
 #endif
