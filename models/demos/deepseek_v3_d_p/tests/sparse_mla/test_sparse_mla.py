@@ -27,7 +27,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import (
 )
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
@@ -36,6 +36,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 SPARSE_OUTPUT_PCC = 0.98
 SPARSE_KVPE_PCC = 0.99
+# Indexer key cache is stored bf8 on device vs the bf16 CPU reference, so it carries block-float
+# quantization noise. Measured ~0.99991 on 2x4 BH (both variants, chunked + rotated), tracking the
+# bf16 KVPE cache; 0.999 keeps ample bf8 headroom while still catching a real write regression.
+SPARSE_INDEX_PCC = 0.999
 SPARSE_VARIANTS = ["deepseek_v32", "glm_5_1"]
 
 # ---------------------------------------------------------------------------
@@ -159,6 +163,31 @@ def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot
     )
 
 
+def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk):
+    """Read the block-cyclic indexer key cache back to a natural-order [S, index_head_dim] tensor in the
+    CPU reference's RoPE frame, so it can be PCC'd against SparseMLAReference.index_cache.
+
+    Same SP-shard concat + block-cyclic un-rotation as the KVPE cache (blockcyclic_positions). The device
+    stores the RoPE half INTERLEAVED for both variants (the indexed RoPE op is interleaved-only; the DS
+    path permutes half-split->interleaved before it). The CPU reference stores it interleaved for GLM
+    (index_rope_interleave=True) but HALF-SPLIT for DS, so for DS we reindex the device's RoPE dims back
+    to half-split (interleaved_to_halfsplit_perm) before comparing; the non-RoPE dims match directly."""
+    sp = mesh_device.shape[0]
+    cache_sr = ttnn.to_torch(
+        tt_index_kv_cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    ).to(torch.bfloat16)[:, :1]
+    p = blockcyclic_positions(sp, chunk, cache_sr.shape[2])
+    nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
+    nat[p] = cache_sr[0, 0]
+    if not getattr(config, "index_rope_interleave", False):  # DS: device interleaved -> reference half-split
+        rope_dim = config.qk_rope_head_dim
+        perm = interleaved_to_halfsplit_perm(rope_dim)
+        nat = nat.clone()
+        nat[:, :rope_dim] = nat[:, :rope_dim][:, perm]
+    return nat
+
+
 def run_sparse_mla_accuracy_case(
     variant, config, mesh_device, seq_len, topology, ds_layer=None, ds_checkpoint=None, ds_repo=None
 ):
@@ -204,7 +233,9 @@ def run_sparse_mla_accuracy_case(
 
     cache_dir = cpu_ref_cache_dir(variant)
     logger.info(f"[{variant.name}] sparse MLA accuracy: running CPU reference")
-    ref_output, ref_kvpe = run_cpu_reference(
+    # accuracy runs the indexer's natural single-shot path (no block-cyclic index_kv_cache to read
+    # back), so the index-cache reference is unused here — chunked/rotated cover the block-cyclic cache.
+    ref_output, ref_kvpe, _ = run_cpu_reference(
         config, weights, hidden_states, seq_len, cache_dir, cache_tag=f"{src_tag}_funcidx"
     )
 
@@ -375,7 +406,7 @@ def run_sparse_mla_chunked_case(
 
     cache_dir = cpu_ref_cache_dir(variant)
     logger.info(f"[{variant.name}] sparse MLA chunked: running CPU reference")
-    ref_output, ref_kvpe = run_cpu_reference_chunked(
+    ref_output, ref_kvpe, ref_index = run_cpu_reference_chunked(
         config, weights, hidden, seq_len, chunk, cache_dir, cache_tag=f"{src_tag}_funcidx"
     )
 
@@ -393,6 +424,11 @@ def run_sparse_mla_chunked_case(
     nat[p] = cache_sr[0, 0]
     _, m = comp_pcc(ref_kvpe, nat[:seq_len].unsqueeze(0), 0)
     logger.info(f"[{variant.name}] kvpe prefix: {m}")
+
+    logger.debug(f"[{variant.name}] sparse MLA chunked: collecting indexer key cache")
+    idx_nat = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk)
+    _, idx_pcc = assert_with_pcc(ref_index[0, :seq_len], idx_nat[:seq_len], SPARSE_INDEX_PCC)
+    logger.info(f"[{variant.name}] Chunked indexer cache PCC: {idx_pcc}")
 
     _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output, SPARSE_OUTPUT_PCC)
     logger.info(f"[{variant.name}] Chunked output PCC: {pcc_message}")
@@ -432,12 +468,13 @@ def run_sparse_mla_rotated_case(
 
     hidden = make_hidden(total_len, config.hidden_size, seed)[0]  # [total_len, H]
     cache_dir = cpu_ref_cache_dir(variant)
-    ref_output, ref_kvpe = run_cpu_reference(
+    ref_output, ref_kvpe, ref_index = run_cpu_reference(
         config, weights, hidden.unsqueeze(0), total_len, cache_dir, cache_tag=f"{src_tag}_rot{total_len}_funcidx"
     )
     ref_output = ref_output[0]  # [total_len, out_dim]
     out_dim = ref_output.shape[-1]
     ref_kvpe = ref_kvpe.reshape(-1, ref_kvpe.shape[-1])  # [total_len, kvpe_dim]
+    ref_index = ref_index[0]  # [total_len, index_head_dim]
 
     tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len_cache, mesh_shape, sp_axis, slot_num=1)
     mla_tt = ttMLA(
@@ -513,6 +550,17 @@ def run_sparse_mla_rotated_case(
         logger.info(f"[{variant.name}] KVPE cache region iter {i} [{s}:{s + isl}]: {m}")
     _, mk = comp_pcc(ref_kvpe[:total_len], nat[:total_len], 0)
     logger.info(f"[{variant.name}] KVPE cache full PCC: {mk}")
+
+    # Same isolation for the block-cyclic INDEXER key cache — the untested-on-main tensor. Per-iter region
+    # PCCs are logged for diagnosis (they localize a rotated-write bug to the offending iter); the full-cache
+    # PCC is the gate, so a silent indexer-cache write regression fails here, not just via the output.
+    idx_nat = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk_size_global)
+    for i, isl in enumerate(iters_isl):
+        s = sum(iters_isl[:i])
+        _, m = comp_pcc(ref_index[s : s + isl], idx_nat[s : s + isl], 0)
+        logger.info(f"[{variant.name}] indexer cache region iter {i} [{s}:{s + isl}]: {m}")
+    _, imsg = assert_with_pcc(ref_index[:total_len], idx_nat[:total_len], SPARSE_INDEX_PCC)
+    logger.info(f"[{variant.name}] indexer cache full PCC: {imsg}")
 
     _, msg = assert_with_pcc(
         ref_output.reshape(1, 1, total_len, out_dim), out_accum.reshape(1, 1, total_len, out_dim), SPARSE_OUTPUT_PCC
