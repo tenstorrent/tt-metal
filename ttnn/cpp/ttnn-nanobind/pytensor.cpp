@@ -57,6 +57,8 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include "tt_metal/impl/tensor/mesh_tensor_impl.hpp"
 
 #include <tracy/Tracy.hpp>
 
@@ -1802,10 +1804,12 @@ void pytensor_module(nb::module_& mod) {
                 per_shard_bytes);
 
             auto* dst_base = static_cast<std::byte*>(dest.data());
-            // get_mesh_buffer_leak_ownership() is the public accessor for the
-            // underlying shared_ptr<MeshBuffer>; we don't need to touch the
-            // MeshTensorImpl (which is only forward-declared in this TU).
-            auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
+            // Use impl().raw_mesh_buffer() to get the shared_ptr<MeshBuffer> needed
+            // by enqueue_read_shards. The old get_mesh_buffer_leak_ownership() on
+            // DeviceStorage was removed post-rebase; mesh_buffer_invariant_breaking()
+            // on MeshTensor is private (friend of DeviceStorage only), so we go
+            // through the public MeshTensorImpl accessor instead.
+            auto mesh_buffer = device_tensor.device_storage().get_mesh_tensor().impl().raw_mesh_buffer();
             auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
 
             // Build one ShardDataTransfer per coord, each pointing into the right

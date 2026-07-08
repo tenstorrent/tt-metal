@@ -306,6 +306,114 @@ def test_embedding_perf(mesh_device, batch_size):
     logger.info("=" * 60)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Long-context trace test: batch 12, seq_len 8192
+# ──────────────────────────────────────────────────────────────────────────────
+
+SEQ_LEN_8192 = 8192
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 50_000_000, "num_command_queues": 1}],
+    indirect=True,
+)
+def test_embedding_perf_b12_s8192(mesh_device):
+    """Trace-capture perf test: batch=12, seq_len=8192.
+
+    Follows the same single-CQ pattern as ``test_embedding_perf`` (batch 1,
+    seq_len 512) but targets the long-context serving shape:
+      - batch_size  = 12
+      - seq_len     = 8192
+
+    Each iteration:
+        1. Generate fresh random inputs on host.
+        2. copy_host_to_device_tensor() → overwrite the trace's fixed input slots.
+        3. execute_trace(blocking=True) → timed device compute only.
+
+    Reports avg / best ms, embeddings/s, and tokens/s.
+    """
+    batch_size = 12
+    dtype = ttnn.bfloat8_b
+    mask_dtype = dtype  # bfloat8_b is safe for this batch size
+    device_name = determine_device_name(mesh_device)[0]
+
+    # ── Build model ──────────────────────────────────────────────────
+    logger.info(f"Building model (B{batch_size} S{SEQ_LEN_8192}): {device_name}")
+    t0 = time.perf_counter()
+    model_args, model, _ = create_tt_model(
+        mesh_device=mesh_device,
+        max_batch_size=batch_size,
+        max_seq_len=SEQ_LEN_8192,
+        dtype=dtype,
+    )
+    build_time = time.perf_counter() - t0
+    logger.info(f"Model built in {build_time:.1f}s")
+
+    # ── Prepare inputs ───────────────────────────────────────────────
+    host_inputs = prepare_inputs(model_args.tokenizer, batch_size, SEQ_LEN_8192, model_args.pad_token_id)
+    host_tensors = to_host_tensors(host_inputs, mask_dtype)
+    device_tensors = allocate_device_tensors(host_tensors, mesh_device)
+
+    # ── Warmup (compile) ─────────────────────────────────────────────
+    logger.info("Compiling (first forward)...")
+    t0 = time.perf_counter()
+    out = model.forward(**device_tensors)
+    ttnn.synchronize_device(mesh_device)
+    compile_time = time.perf_counter() - t0
+    ttnn.deallocate(out)
+    logger.info(f"Compile: {compile_time:.2f}s")
+
+    # ── Trace capture ────────────────────────────────────────────────
+    logger.info("Capturing trace...")
+    model.capture_trace(**device_tensors, mesh_device=mesh_device, cq_id=0)
+
+    # Trace warmup
+    for _ in range(3):
+        model.execute_trace(blocking=True)
+
+    # ── Benchmark ────────────────────────────────────────────────────
+    logger.info(f"Running {NUM_ITERATIONS} trace replay iterations (B{batch_size} S{SEQ_LEN_8192})...")
+    times = []
+    for _ in range(NUM_ITERATIONS):
+        new_host_inputs = prepare_inputs(model_args.tokenizer, batch_size, SEQ_LEN_8192, model_args.pad_token_id)
+        new_host_tensors = to_host_tensors(new_host_inputs, mask_dtype)
+        copy_inputs_to_device(new_host_tensors, device_tensors)
+
+        t0 = time.perf_counter()
+        model.execute_trace(blocking=True)
+        t1 = time.perf_counter()
+        times.append(t1 - t0)
+
+    model.release_trace()
+
+    # ── Results ──────────────────────────────────────────────────────
+    times_ms = sorted(t * 1000 for t in times)
+    avg_ms = sum(times_ms) / len(times_ms)
+    best_ms = times_ms[0]
+    total_tokens = batch_size * SEQ_LEN_8192
+
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info(f"  BGE-M3 Performance — B12 S8192  ({device_name})")
+    logger.info("=" * 60)
+    logger.info(f"  Batch size:           {batch_size}")
+    logger.info(f"  Seq length:           {SEQ_LEN_8192}")
+    logger.info(f"  Total tokens:         {total_tokens}")
+    logger.info(f"  Iterations:           {NUM_ITERATIONS}")
+    logger.info("-" * 60)
+    logger.info(f"  Model build time:     {build_time:.1f}s")
+    logger.info(f"  Compile (1st run):    {compile_time:.2f}s")
+    logger.info("-" * 60)
+    logger.info(f"  Avg prefill time:     {avg_ms:.3f}ms")
+    logger.info(f"  Best prefill time:    {best_ms:.3f}ms")
+    logger.info(f"  Avg embeddings/s:     {batch_size / (avg_ms / 1000):.1f}")
+    logger.info(f"  Best embeddings/s:    {batch_size / (best_ms / 1000):.1f}")
+    logger.info(f"  Avg tokens/s:         {total_tokens / (avg_ms / 1000):.0f}")
+    logger.info(f"  Best tokens/s:        {total_tokens / (best_ms / 1000):.0f}")
+    logger.info("=" * 60)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Dual command queue (2-CQ) trace replay
 # ─────────────────────────────────────────────────────────────────────────────
