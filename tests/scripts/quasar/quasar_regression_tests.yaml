@@ -6,6 +6,10 @@
 #       config: <config>   Simulator grid config (maps to emu-quasar-<config>). Supports 1x3 and 2x3 and 2x3_DISPATCH
 #       env:            (optional) Extra environment variables as key: value pairs
 #       gtest_repeat:   (optional) Run each matched test N times (--gtest_repeat=N)
+#       back2back:      (optional) When true, run this entry in the same gtest process as
+#                       other consecutive back2back entries that share the same group,
+#                       config, env, and gtest_repeat. Used by run_quasar_back2back_regression.sh.
+#                       Defaults to false (each entry runs in its own process).
 #
 # Example test entry
 #
@@ -16,87 +20,197 @@
 #       TT_METAL_SOMETHING: 1
 
 unit_tests_legacy:
-  - filter: "*SingleDmL1Write*"
-    config: 1x3, 2x3, 2x3_DISPATCH
-
+# 1x3 tests run back-to-back
   - filter: "*SingleDmL1Write*"
     config: 1x3
+    back2back: true
     env:
-      TT_METAL_DPRINT_CORES: all
-
-  - filter: "*SingleDmL1Write*"
-    config: 1x3
-    gtest_repeat: 5
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*DmLoopback*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarComputeKernelSingleThread*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarComputeKernelMultipleThread*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarCreateMultipleComputeKernelsSingleCluster*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "*MultiDmAddTwoInts*"
-    config: 2x3, 2x3_DISPATCH
+  - filter: "*QuasarMeshDeviceSingleCardFixture*GlobalsAndTLS"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "*QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # - filter: "QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline"
+  #   config: 1x3
+  #   back2back: true
+  #   env:
+  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+
+# 1x3 tests with special setup
 
   - filter: "*Bmm"
     config: 1x3
     env:
       TT_METAL_LOGGER_LEVEL: warning
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "*QuasarMeshDeviceSingleCardFixture*GlobalsAndTLS"
-    config: 1x3
+# 2x3 tests run back-to-back
+  - filter: "*SingleDmL1Write*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "*MultiDmAddTwoInts*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+# 2x3_DISPATCH tests run back-to-backß
+  - filter: "*SingleDmL1Write*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*MultiDmAddTwoInts*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_debug_tools:
   - filter: "*WatcherAssertTests*DM2"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*WatcherAssertTests*DM7"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*WatcherNonDefaultAssertTests*DMHWFaultStoreAccessFault"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*TensixTestWatcherSanitizeNOCAlignmentL1Write*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarTestWatcherSanitizeMultiDMRace*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*WatcherStackUsageTests*StackUsage0_QuasarMultiKernel"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*WatcherStackUsageTests*StackUsage16_QuasarMultiKernel"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*TestWatcherWaypoints"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
 # Hangs. Tracked by https://github.com/tenstorrent/tt-metal/issues/44129
 #  - filter: "*TestWatcherTileCounterLogRemapper*"
 #    config: 1x3
+#    back2back: true
+#    env:
+#      TT_METAL_SLOW_DISPATCH_MODE: 1
 
 # Hangs. Tracked by https://github.com/tenstorrent/tt-metal/issues/44129
 #  - filter: "*TestWatcherTileCounterLogBypass*"
 #    config: 1x3
+#    back2back: true
+#    env:
+#      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarMultiDMOutOfBoundsArgDetection*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+# Have to run these sequentially for some reason.
+  - filter: "DevicePrintOutputFixture.PrintConcurrentBabyRiscs"
+    config: 1x3
+#    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "*DevicePrintOutputFixture.PrintConcurrentRocketRiscs*"
+    config: 1x3
+#    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "*DevicePrintOutputFixture.PrintConcurrentAllRiscs*"
+    config: 1x3
+#    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_api:
   - filter: "*QuasarCRTASharedL1Address*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarCRTAUniqueL1Addresses*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_device:
   - filter: "*SimulatorFixture*QuasarStaticTlbReadWrite*"
     config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1

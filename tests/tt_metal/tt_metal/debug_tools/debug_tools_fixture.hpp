@@ -13,15 +13,20 @@
 #include <impl/debug/watcher_server.hpp>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <chrono>
 #include <cstring>
 #include <cerrno>
+#include <set>
+#include <thread>
 #include "tt_stl/assert.hpp"
 #include "fmt/format.h"
 
 // Access to internal API: BuildEnvManager, CompileProgram, get_kernel
 #include "jit_build/build_env_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "tt_metal/llrt/rtoptions.hpp"
 
 namespace tt::tt_metal {
 
@@ -73,6 +78,25 @@ protected:
         }
         id_to_device_.clear();
         this->devices_.clear();
+    }
+
+    // Stop Tensix RISCs spinning in assert_and_hang(). MetalContext relaunches firmware automatically
+    // before DPRINT attaches when it detects a tripped watcher assert or prior watcher error.
+    void HaltHungWorkerCores() {
+        auto& cluster = MetalContext::instance().get_cluster();
+        for (auto& [device_id, device] : id_to_device_) {
+            IDevice* dev = device->get_devices()[0];
+            const CoreCoord grid_size = dev->logical_grid_size();
+            const ChipId chip = dev->id();
+            for (uint32_t y = 0; y < grid_size.y; ++y) {
+                for (uint32_t x = 0; x < grid_size.x; ++x) {
+                    CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+                        chip, CoreCoord(x, y), CoreType::WORKER);
+                    cluster.assert_risc_reset_at_core(tt_cxy_pair(chip, virtual_core), tt::umd::RiscType::ALL);
+                }
+            }
+            cluster.l1_barrier(chip);
+        }
     }
 
     template <typename T>
@@ -144,10 +168,27 @@ protected:
         // Parent class initializes devices and any necessary flags
         DebugToolsMeshFixture::SetUp();
 
-        MetalContext::instance().watcher_server()->clear_log();
+        auto* watcher = MetalContext::instance().watcher_server().get();
+        watcher->detach_devices();
+        watcher->set_killed_due_to_error_flag(false);
+        watcher->set_exception_message("");
+        watcher->attach_devices();
+        watcher->clear_log();
     }
 
     void TearDown() override {
+        auto* watcher = MetalContext::instance().watcher_server().get();
+        const bool watcher_reported_error = watcher->killed_due_to_error() || !watcher->exception_message().empty();
+        if (watcher_reported_error) {
+            HaltHungWorkerCores();
+        }
+        // Let the watcher thread finish any in-flight assert handling while test_mode is still enabled.
+        std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
+        watcher->detach_devices();
+        watcher->init_devices();
+        watcher->set_killed_due_to_error_flag(false);
+        watcher->set_exception_message("");
+
         // Parent class tears down devices
         DebugToolsMeshFixture::TearDown();
 
@@ -298,6 +339,14 @@ protected:
     }
 
     void TearDown() override {
+        // On mock/emulated targets MetalContext::teardown() skips dprint detach; disable device-side
+        // print buffers explicitly before closing devices so the next test gets a clean attach.
+        if (auto* dprint_server = MetalContext::instance().dprint_server().get()) {
+            if (MetalContext::instance().get_cluster().is_mock_or_emulated()) {
+                dprint_server->detach_devices();
+            }
+        }
+
         // Parent class tears down devices
         DebugToolsMeshFixture::TearDown();
         ExtraTearDown();
