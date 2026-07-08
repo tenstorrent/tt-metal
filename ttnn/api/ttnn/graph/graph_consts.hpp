@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,8 +33,6 @@ constexpr auto kGloballyAllocated = "globally_allocated";
 constexpr auto kDeviceId = "device_id";
 constexpr auto kDurationNs = "duration_ns";
 constexpr auto kMaxSizePerBank = "max_size_per_bank";
-constexpr auto kExactBufferType = "exact_buffer_type";
-constexpr auto kBufferTypeValue = "buffer_type_value";
 
 // node names
 constexpr auto kNodeBuffer = "buffer";
@@ -62,6 +60,8 @@ constexpr auto kReportDevices = "devices";
 constexpr auto kReportMetadata = "metadata";
 constexpr auto kReportTimestampNs = "capture_timestamp_ns";
 constexpr auto kReportTotalDurationNs = "total_duration_ns";
+constexpr auto kReportRank = "rank";
+constexpr auto kReportWorldSize = "world_size";
 
 // device info keys
 constexpr auto kDeviceNumYCores = "num_y_cores";

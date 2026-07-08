@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,6 +29,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
     state_configure(icb0, icb1, ocb, call_line);
 
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
@@ -39,7 +40,18 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
+#else
+    UNPACK((llk_unpack_hw_configure(icb0, icb1)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
+
+    MATH((llk_math_pack_sync_init()));
+    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
+
+    PACK((llk_pack_hw_configure(ocb)));
+    PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init()));
+#endif
 }
 
 // clang-format off
@@ -62,16 +74,11 @@ ALWI void binary_tiles_init(
     uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
 
-    if constexpr (eltwise_binary_type == ELWMUL) {
-        MATH((llk_math_eltwise_binary_init_with_operands<eltwise_binary_type, NONE, MATH_FIDELITY>(
-            icb0, icb1, acc_to_dest)));
-    } else {
-        MATH((llk_math_eltwise_binary_init_with_operands<eltwise_binary_type, NONE, MathFidelity::LoFi>(
-            icb0, icb1, acc_to_dest)));
-    }
+    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY>(
+        icb0, icb1, acc_to_dest)));
 
     if constexpr (full_init) {
-        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/)));
+        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, Transpose::None)));
     }
 }
 
@@ -86,7 +93,10 @@ ALWI void binary_tiles_init(
  */
 // clang-format on
 ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    binary_tiles_init<true, ELWMUL>(icb0, icb1, false, call_line);
+    // acc_to_dest is unused for WH/BH and accumulation is default behaviour.
+    // For back compatibility with Quasar, acc_to_dest=true in this API for all ops.
+    // More control is provided with 3-arg version of init API.
+    binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWMUL>(icb0, icb1, true /* acc_to_dest */, call_line);
 }
 
 // clang-format off
@@ -97,12 +107,28 @@ ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __bu
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A + B + dst_tile_idx of add_tiles | bool     | 0,1         | False |
+ */
+// clang-format on
+ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t acc_to_dest, uint32_t call_line = __builtin_LINE()) {
+    binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWMUL>(
+        icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
+}
+
+// clang-format off
+/**
+ * Short init function
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest    | If true, operation = A + B + dst_tile_idx of add_tiles        | bool     | 0,1         | False    |
  */
 // clang-format on
 ALWI void add_tiles_init(
     uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
-    binary_tiles_init<true, ELWADD>(icb0, icb1, acc_to_dest, call_line);
+    binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWADD>(
+        icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
 }
 
 // clang-format off
@@ -113,12 +139,13 @@ ALWI void add_tiles_init(
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles | bool     | 0,1         | False |
+ * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles        | bool     | 0,1         | False    |
  */
 // clang-format on
 ALWI void sub_tiles_init(
     uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
-    binary_tiles_init<true, ELWSUB>(icb0, icb1, acc_to_dest, call_line);
+    binary_tiles_init<true /* full_init */, EltwiseBinaryType::ELWSUB>(
+        icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
 }
 
 // clang-format off
@@ -150,8 +177,12 @@ ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
     // first = false;
 
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
-    MATH((llk_math_eltwise_binary<ELWMUL, NONE, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-        icb0, icb1, idst, true)));
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::NONE,
+          DST_ACCUM_MODE,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
 }
 
 // clang-format off
@@ -174,8 +205,12 @@ ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
 // clang-format on
 ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
-    MATH((llk_math_eltwise_binary<ELWADD, NONE, DST_ACCUM_MODE, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
-        icb0, icb1, idst, true)));
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWADD,
+          BroadcastType::NONE,
+          DST_ACCUM_MODE,
+          MathFidelity::LoFi,
+          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
 }
 
 // clang-format off
@@ -198,24 +233,30 @@ ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
 // clang-format on
 ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
-    MATH((llk_math_eltwise_binary<ELWSUB, NONE, DST_ACCUM_MODE, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
-        icb0, icb1, idst, true)));
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWSUB,
+          BroadcastType::NONE,
+          DST_ACCUM_MODE,
+          MathFidelity::LoFi,
+          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 template <
-    EltwiseBinaryType eltwise_binary_type = ELWADD,
+    EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, call_line);
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
-    if constexpr (eltwise_binary_type == ELWMUL) {
-        MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest>(false)));
-    } else {
-        MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MathFidelity::LoFi, binary_reuse_dest>(false)));
-    }
+#ifndef ARCH_QUASAR
+    UNPACK(constexpr bool acc_to_dest = true);
+#else
+    UNPACK(constexpr bool acc_to_dest = false);
+#endif
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, binary_reuse_dest>(false, false, icb0)));
+    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
+        icb0, icb0, false /* acc_to_dest */)));
 }
 
 // clang-format off
@@ -243,17 +284,21 @@ ALWI void binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __bui
  */
 // clang-format on
 template <
-    EltwiseBinaryType eltwise_binary_type = ELWADD,
+    EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    UNPACK((llk_unpack_A<BroadcastType::NONE, true, binary_reuse_dest>(in_cb_id, in_tile_index)));
-    if constexpr (eltwise_binary_type == ELWMUL) {
-        MATH((llk_math_eltwise_binary<eltwise_binary_type, NONE, DST_ACCUM_MODE, MATH_FIDELITY, binary_reuse_dest>(
-            in_cb_id, in_cb_id, dst_tile_index, true)));
-    } else {
-        MATH((llk_math_eltwise_binary<eltwise_binary_type, NONE, DST_ACCUM_MODE, MathFidelity::LoFi, binary_reuse_dest>(
-            in_cb_id, in_cb_id, dst_tile_index, true)));
-    }
+#ifndef ARCH_QUASAR
+    UNPACK(constexpr bool acc_to_dest = true);
+#else
+    UNPACK(constexpr bool acc_to_dest = false);
+#endif
+    UNPACK((llk_unpack_A<BroadcastType::NONE, acc_to_dest, binary_reuse_dest>(in_cb_id, in_tile_index)));
+    MATH((llk_math_eltwise_binary<
+          eltwise_binary_type,
+          BroadcastType::NONE,
+          DST_ACCUM_MODE,
+          MATH_FIDELITY,
+          binary_reuse_dest>(in_cb_id, in_cb_id, dst_tile_index, true /* clear_fp32_dst_acc */)));
 }
 
 }  // namespace ckernel

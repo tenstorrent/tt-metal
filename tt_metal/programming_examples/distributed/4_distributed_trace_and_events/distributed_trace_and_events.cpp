@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -84,7 +84,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
-    std::vector<uint32_t> writer_compile_time_args;
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_compile_time_args);
     auto unary_writer_kernel = tt_metal::CreateKernel(
         *program,
@@ -102,7 +102,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
         {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op_index]}};
     auto eltwise_binary_kernel = tt_metal::CreateKernel(
         *program,
-        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
         cores_for_program,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 

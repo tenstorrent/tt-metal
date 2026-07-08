@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "matmul_wo_ring_common.h"
 
 void kernel_main() {
@@ -17,8 +18,10 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 
     // CBs
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_out = tt::CBIndex::c_4;
+    constexpr auto cb_s2c_in2_id = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_out_id = tt::CBIndex::c_4;
+
+    CircularBuffer cb_s2c_in2(cb_s2c_in2_id);
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
@@ -34,11 +37,11 @@ void kernel_main() {
     uint32_t semaphore_value = num_cores;
 
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
-        cb_reserve_back(cb_s2c_in2, num_cores);
+        cb_s2c_in2.reserve_back(num_cores);
 
         // Wait for all 12 cores to send their data to this core
         noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value);
-        cb_push_back(cb_s2c_in2, num_cores);
+        cb_s2c_in2.push_back(num_cores);
         semaphore_value += num_cores;
     }
 }

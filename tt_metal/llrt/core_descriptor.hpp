@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -89,5 +89,14 @@ inline const std::vector<CoreCoord>& get_logical_fabric_mux_cores(
     const core_descriptor_t& core_desc = get_core_descriptor_config(env, device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.logical_fabric_mux_cores;
 }
+
+// When FabricTensix is DISABLED, wormhole_b0_80_arch.yaml omits fabric_mux_cores, but the same tensix
+// locations are still reserved for fabric mux on boards that use the fabric-mux descriptor layout.
+// Used for heuristics (e.g. real-time profiler spare-core selection) that must not collide with mux rows/columns.
+std::vector<CoreCoord> get_logical_fabric_mux_cores_wh_b0_worker_fabric_mux_yaml_overlay(
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
+    uint8_t num_hw_cqs,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
 }  // namespace tt

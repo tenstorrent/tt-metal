@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -239,7 +239,7 @@ def vit(
         config,
         embeddings_output,
         attention_mask=attention_mask,
-        parameters=parameters.vit.encoder,
+        parameters=parameters.vit.encoder if "encoder" in parameters.vit else parameters.vit.layers,
     )
 
     # Final LayerNorm

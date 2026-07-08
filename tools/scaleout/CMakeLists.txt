@@ -47,6 +47,7 @@ target_sources(
         FILES
             board/board.hpp
             cabling_generator/cabling_generator.hpp
+            cabling_generator/regen_descriptors.hpp
             connector/connector.hpp
             factory_system_descriptor/utils.hpp
             node/node_types.hpp
@@ -55,6 +56,7 @@ target_sources(
         node/node_types.cpp
         board/board.cpp
         cabling_generator/cabling_generator.cpp
+        cabling_generator/regen_descriptors.cpp
         connector/connector.cpp
         factory_system_descriptor/utils.cpp
         ${GENERATED_PROTO_SRCS}
@@ -75,7 +77,7 @@ target_link_libraries(
     scaleout_tools
     PUBLIC
         TT::STL
-        umd::device
+        umd::tt-umd
     PRIVATE
         enchantum::enchantum
         tt-logger::tt-logger
@@ -151,6 +153,27 @@ target_include_directories(run_cabling_generator SYSTEM PRIVATE ${CMAKE_CURRENT_
 
 target_link_libraries(
     run_cabling_generator
+    PRIVATE
+        scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
+
+add_executable(run_regen_descriptors src/run_regen_descriptors.cpp)
+
+set_target_properties(
+    run_regen_descriptors
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${Metalium_BINARY_DIR}/tools/scaleout
+)
+
+add_dependencies(run_regen_descriptors scaleout_generated_protos)
+
+target_include_directories(run_regen_descriptors SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+    run_regen_descriptors
     PRIVATE
         scaleout_tools
         protobuf::libprotobuf
@@ -245,3 +268,77 @@ target_link_libraries(
         protobuf::libprotobuf
         cxxopts::cxxopts
 )
+
+if(ENABLE_DISTRIBUTED)
+    # Generate rank bindings tool
+    add_executable(generate_rank_bindings src/generate_rank_bindings.cpp)
+
+    set_target_properties(
+        generate_rank_bindings
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${Metalium_BINARY_DIR}/tools/scaleout
+            BUILD_RPATH
+                "$ORIGIN/../../lib"
+            INSTALL_RPATH
+                "$ORIGIN/../lib"
+    )
+
+    add_dependencies(
+        generate_rank_bindings
+        scaleout_generated_protos
+        fabric_generated_protos
+        fabric
+    )
+
+    target_include_directories(
+        generate_rank_bindings
+        PRIVATE
+            "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+        SYSTEM
+        PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR}
+            $<TARGET_PROPERTY:fabric,BINARY_DIR>
+    )
+
+    target_link_libraries(
+        generate_rank_bindings
+        PRIVATE
+            scaleout_tools
+            tt_metal
+            OpenMPI::MPI
+            protobuf::libprotobuf
+            cxxopts::cxxopts
+            $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
+    )
+    target_compile_definitions(generate_rank_bindings PRIVATE OPEN_MPI=1)
+
+    # Install generate_rank_bindings executable
+    if(TT_INSTALL)
+        install(
+            TARGETS
+                generate_rank_bindings
+            RUNTIME
+                DESTINATION ${CMAKE_INSTALL_BINDIR}
+                COMPONENT metalium-runtime
+        )
+
+        # PGDs used by generate_rank_bindings find_and_load_pgd() (default + arch/cluster-specific under
+        # TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/). Mirror that tree under the install datadir.
+        file(
+            GLOB _generate_rank_bindings_pgd_files
+            CONFIGURE_DEPENDS
+            "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_fabric/physical_groupings/*.textproto"
+        )
+        if(_generate_rank_bindings_pgd_files)
+            install(
+                FILES
+                    ${_generate_rank_bindings_pgd_files}
+                DESTINATION ${CMAKE_INSTALL_DATADIR}/tt-metalium/tests/tt_metal/tt_fabric/physical_groupings
+                COMPONENT metalium-runtime
+            )
+        endif()
+    endif()
+endif()

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -268,7 +268,7 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
     env_impl_.initialize_fabric_config();
 
     // Mock devices don't support fabric operations
-    bool is_mock = env_impl_.get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    bool is_mock = env_impl_.get_cluster().is_mock_or_emulated();
     if (any_remote_devices && !is_mock) {
         auto fabric_config = ctx_.get_fabric_config();
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
@@ -639,6 +639,21 @@ bool DeviceManager::is_dispatch_firmware_active() const {
     return it != initializers_.end() && it->second->is_initialized();
 }
 
+bool DeviceManager::is_rt_profiler_device_init_complete(ChipId chip_id) const {
+    std::lock_guard<std::mutex> lock(lock_);
+    return rt_profiler_device_init_complete_.contains(chip_id);
+}
+
+void DeviceManager::mark_rt_profiler_device_init_complete(ChipId chip_id) {
+    std::lock_guard<std::mutex> lock(lock_);
+    rt_profiler_device_init_complete_.insert(chip_id);
+}
+
+void DeviceManager::clear_rt_profiler_device_init_complete(ChipId chip_id) {
+    std::lock_guard<std::mutex> lock(lock_);
+    rt_profiler_device_init_complete_.erase(chip_id);
+}
+
 bool DeviceManager::close_device(ChipId device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
@@ -684,27 +699,45 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
         mmio_devices_to_close.insert(mmio_device_id);
     }
 
-    // Order matters
-    TT_ASSERT(init_done_.contains(DispatchKernelInitializer::key));
-    initializers_[DispatchKernelInitializer::key]->teardown(init_done_);
+    // Teardown in reverse initialization order.  Dispatch/Fabric/Profiler are
+    // conditional because ScopedDevices is created with
+    // initialize_fabric_and_dispatch_fw=false and the actual init happens later
+    // in create_unit_meshes.  If an exception interrupts that second phase,
+    // cleanup must still succeed for the components that *were* initialized.
+    if (init_done_.contains(DispatchKernelInitializer::key)) {
+        initializers_[DispatchKernelInitializer::key]->teardown(init_done_);
+    }
 
-    TT_ASSERT(init_done_.contains(FabricFirmwareInitializer::key));
-    initializers_[FabricFirmwareInitializer::key]->teardown(init_done_);
+    if (init_done_.contains(FabricFirmwareInitializer::key)) {
+        initializers_[FabricFirmwareInitializer::key]->teardown(init_done_);
+    }
 
-    TT_ASSERT(init_done_.contains(ProfilerInitializer::key));
-    initializers_[ProfilerInitializer::key]->teardown(init_done_);
+    if (init_done_.contains(ProfilerInitializer::key)) {
+        initializers_[ProfilerInitializer::key]->teardown(init_done_);
+    }
 
-    TT_ASSERT(init_done_.contains(CommandQueueInitializer::key));
-    initializers_[CommandQueueInitializer::key]->teardown(init_done_);
+    if (init_done_.contains(CommandQueueInitializer::key)) {
+        initializers_[CommandQueueInitializer::key]->teardown(init_done_);
+    }
 
     TT_FATAL(init_done_.empty(), "All firmware initializers must remove themselves from init_done_ during teardown");
-    initializers_[DispatchKernelInitializer::key]->post_teardown();
-    initializers_[FabricFirmwareInitializer::key]->post_teardown();
-    initializers_[ProfilerInitializer::key]->post_teardown();
-    initializers_[CommandQueueInitializer::key]->post_teardown();
+
+    if (initializers_.contains(DispatchKernelInitializer::key)) {
+        initializers_[DispatchKernelInitializer::key]->post_teardown();
+    }
+    if (initializers_.contains(FabricFirmwareInitializer::key)) {
+        initializers_[FabricFirmwareInitializer::key]->post_teardown();
+    }
+    if (initializers_.contains(ProfilerInitializer::key)) {
+        initializers_[ProfilerInitializer::key]->post_teardown();
+    }
+    if (initializers_.contains(CommandQueueInitializer::key)) {
+        initializers_[CommandQueueInitializer::key]->post_teardown();
+    }
 
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {
+        clear_rt_profiler_device_init_complete(dev_id);
         auto* dev = this->get_active_device(dev_id);
         pass &= dev->close();
     }
@@ -715,6 +748,7 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
 DeviceManager::~DeviceManager() {
     for (const auto& dev : this->devices_) {
         if (dev != nullptr and dev->is_initialized()) {
+            clear_rt_profiler_device_init_complete(dev->id());
             // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DeviceManager
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
             // DispatchMemMap to the device, so it doesn't go out of scope before the device is closed.

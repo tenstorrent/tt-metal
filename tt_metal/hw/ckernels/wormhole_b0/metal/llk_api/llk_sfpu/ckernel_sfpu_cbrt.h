@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-FileCopyrightText: © 2026 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -37,35 +37,33 @@ inline void calculate_cube_root() {
         // f = (0x548c2b4b - i * 1.0/3.0) / 256.0 + 2^23
         //   = (0x548c2b4b/256.0 - i * 1.0/3.0/256.0) + 2^23
 
-        sfpi::vFloat f = sfpi::int32_to_float(sfpi::reinterpret<sfpi::vInt>(x), 0);
+        sfpi::vFloat f = sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(x), sfpi::RoundMode::Nearest);
 
         f = f * negative_third_256 + magic;
 
         // Now, left-shift by 8 to restore integer result.
 
-        sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(f) << 8);
+        sfpi::vFloat y = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(f) << 8);
 
         if constexpr (is_fp32_dest_acc_en) {
             sfpi::vFloat c = (x * y) * (y * y);
             y = y * (c * (sfpi::vConstFloatPrgm2 * c + sfpi::vConstFloatPrgm1) + sfpi::vConstFloatPrgm0);
 
             sfpi::vFloat d = x * (y * y);
-            c = d * y + sfpi::vConstNeg1;
+            c = d * y + -1.0f;
             sfpi::vFloat negative_third = sfpi::addexp(negative_third_256, 8);
-            sfpi::vFloat t = c * negative_third + sfpi::vConst1;
-            d = sfpi::setsgn(d, a);
+            sfpi::vFloat t = c * negative_third + 1.0f;
+            d = sfpi::copysgn(d, a);
             y = d * (t * t);
-
-            sfpi::dst_reg[0] = y;
         } else {
             sfpi::vFloat d = x * (y * y);
             sfpi::vFloat c = d * y;
             sfpi::vFloat t = c * (sfpi::vConstFloatPrgm2 * c + sfpi::vConstFloatPrgm1) + sfpi::vConstFloatPrgm0;
-            d = sfpi::setsgn(d, a);
+            d = sfpi::copysgn(d, a);
             y = d * (t * t);
-
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
         }
+        sfpi::dst_reg[0] = y;
         sfpi::dst_reg++;
     }
 }

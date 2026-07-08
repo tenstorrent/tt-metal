@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,11 +15,10 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
-#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-#include "internal/dataflow_buffer_init.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
@@ -50,7 +49,12 @@ uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
+#if defined(UCK_CHLKC_PACK)
+thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_PACK] __attribute__((used));
+thread_local uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used));
+#else
+thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
+#endif
 #endif
 
 namespace ckernel {
@@ -66,28 +70,16 @@ namespace ckernel {
 // volatile tt_reg_ptr uint* const regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
 #undef PTR_CONST
 
-uint32_t cfg_state_id __attribute__((used)) = 0;    // Flip between 0 and 1 to keep state between kernel calls
-uint32_t dest_offset_id __attribute__((used)) = 0;  // Flip between 0 and 1 to keep dest pointer between kernel calls
-
-uint32_t op_info_offset __attribute__((used)) = 0;
+// Flip between 0 and 1 to keep state between kernel calls
+thread_local uint32_t cfg_state_id __attribute__((used)) = 0;
+thread_local uint32_t op_info_offset __attribute__((used)) = 0;
+namespace trisc {
+// Flip between 0 and 1 to keep dest pointer between kernel calls
+thread_local uint32_t dest_register_offset __attribute__((used)) = 0;
+}  // namespace trisc
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
 }  // namespace ckernel
-
-#if !defined(UCK_CHLKC_MATH)
-uint32_t tt_l1_ptr* cb_l1_base __attribute__((used));
-#endif
-
-#if defined(UCK_CHLKC_UNPACK)
-constexpr bool cb_init_read = true;
-#else
-constexpr bool cb_init_read = false;
-#endif
-#if defined(UCK_CHLKC_PACK)
-constexpr bool cb_init_write = true;
-#else
-constexpr bool cb_init_write = false;
-#endif
 
 using namespace ckernel;
 
@@ -104,18 +96,36 @@ void init_sync_registers() {
     // }
 }
 
+inline void enable_cc_stack() {
+#if defined(UCK_CHLKC_MATH)
+    constexpr uint32_t SFPENCC_IMM12_BOTH = 3;
+    constexpr uint32_t SFPENCC_MOD1_EI_RI = 10;
+    TTI_SFPENCC(SFPENCC_IMM12_BOTH, SFPENCC_MOD1_EI_RI);  // Enable all the SFPU lanes
+#endif
+}
+
 extern "C" uint32_t _start1() {
     configure_csr();
     uint32_t hartid = internal_::get_hw_thread_idx();
-    DPRINT << "hartid: " << hartid << ENDL();
+    uint32_t neo_id = internal_::get_neo_id();
+    uint32_t trisc_id = internal_::get_trisc_id();
+    DEVICE_PRINT("hartid: {}\n", hartid);
     volatile tt_l1_ptr uint8_t* const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))
                                                        ->subordinate_sync.map[hartid];  // first entry is for NCRISC
     WAYPOINT("I");
 
-    extern uint32_t __ldm_data_start[];
-    do_crt1(__ldm_data_start);
+    if (neo_id == 0) {
+        extern uint32_t __ldm_data_start[];
+        do_crt1(__ldm_data_start);
+        (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] =
+            SHARED_GLOBALS_READY_GO;
+    }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
+
+    while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
+           SHARED_GLOBALS_READY_GO) {
+    }
     // Initialize GPRs to all 0s
 #pragma GCC unroll 0
     for (int i = 0; i < 64; i++) {
@@ -124,9 +134,10 @@ extern "C" uint32_t _start1() {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     *trisc_run = RUN_SYNC_MSG_DONE;
-
+    setup_isr_csrs();
+    enable_cc_stack();
     DeviceProfilerInit();
-    DPRINT << "TRISC-FW: initialized" << ENDL();
+    DPRINT("TRISC-FW: initialized\n");
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
@@ -136,20 +147,18 @@ extern "C" uint32_t _start1() {
                     *trisc_run = RUN_SYNC_MSG_DONE;
                 }
             }
-            invalidate_l1_cache();
         }
         DeviceZoneScopedMainN("TRISC-FW");
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
-        uint32_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
-
+        uintptr_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
-        experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+        setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
 #endif
 
         // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when PR #38124 is merged
@@ -190,19 +199,18 @@ extern "C" uint32_t _start1() {
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
         WAYPOINT("R");
-        uint32_t kernel_lma =
+        uintptr_t kernel_lma =
             (kernel_config_base +
              launch_msg->kernel_config.kernel_text_offset[hartid]);  // TODO verify if depends on kernel
-        asm("FENCE.i");
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
         DEVICE_PRINT_KERNEL_FINISHED();
 
         // Signal completion
-        DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
+        DPRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
         tensix_sync();
         *trisc_run = RUN_SYNC_MSG_DONE;
-        DPRINT << "COMPLETION SIGNED OFF" << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
+        DPRINT("COMPLETION SIGNED OFF {:x}\n", (uint32_t)*trisc_run);
     }
 }

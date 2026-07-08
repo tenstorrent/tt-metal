@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -150,7 +150,7 @@ def run_all_gather_impl(
     )
 
     if use_bias:
-        bias_tensor = torch.randn([1, matmul_output_dim * num_devices]).float()
+        bias_tensor = torch.randn([1, matmul_output_dim * num_devices]).bfloat16()
         bias_tensor_padded = bias_tensor.unsqueeze(0).unsqueeze(0)
         bias_tt = ttnn.from_torch(
             bias_tensor_padded,

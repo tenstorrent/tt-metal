@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,8 +34,8 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC /*noc_index*/) :
 
     CoreCoord enqueue_program_dispatch_core;
     CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    if (this->device_->num_hw_cqs() == 1 or core_type == CoreType::WORKER) {
-        // dispatch_s exists with this configuration. Workers write to dispatch_s
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        // dispatch_s exists with this configuration. Workers write to dispatch_s.
         enqueue_program_dispatch_core =
             MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_->id(), channel, id);
     } else {
@@ -56,9 +56,12 @@ uint32_t HWCommandQueue::id() const { return this->id_; }
 SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager_; }
 
 void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
-    uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) {
-    program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager_, id_, num_dispatch_sems);
-    program_dispatch::set_go_signal_noc_data_on_dispatch(device_, noc_mcast_unicast_data, this->manager_, id_);
+    uint32_t num_dispatch_sems,
+    const vector_aligned<uint32_t>& noc_mcast_unicast_data,
+    ttsl::Span<const uint32_t> workers_per_sub_device) {
+    program_dispatch::set_num_worker_sems_on_dispatch(
+        this->manager_, id_, num_dispatch_sems, workers_per_sub_device);
+    program_dispatch::set_go_signal_noc_data_on_dispatch(noc_mcast_unicast_data, this->manager_, id_);
 }
 
 Device* HWCommandQueue::device() { return this->device_; }

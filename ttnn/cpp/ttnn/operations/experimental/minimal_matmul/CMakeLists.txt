@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_minimal_matmul ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::MinimalMatmul ALIAS ttnn_op_experimental_minimal_matmul)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_minimal_matmul TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_minimal_matmul TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_minimal_matmul)
 
 set_target_properties(
@@ -19,16 +21,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_MINIMAL_MATMUL_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        minimal_matmul.cpp
-        minimal_matmul_split.cpp
-        device/minimal_matmul_device_operation.cpp
-        device/minimal_matmul_program_factory.cpp
+        ${TTNN_OP_EXPERIMENTAL_MINIMAL_MATMUL_SRCS}
 )
 
 # Disable unity build for program factory files to avoid symbol collisions
@@ -39,13 +38,7 @@ set_source_files_properties(
             ON
 )
 
-target_include_directories(ttnn_op_experimental_minimal_matmul PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_minimal_matmul
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_minimal_matmul PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -56,4 +49,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_minimal_matmul LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_experimental_minimal_matmul FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

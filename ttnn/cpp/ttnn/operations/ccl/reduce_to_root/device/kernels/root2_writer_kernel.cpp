@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -68,6 +68,8 @@ void kernel_main() {
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
+    Noc noc;
+
     // device 2 writer receives data from compute kernel and sends it to device 1
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
@@ -114,19 +116,22 @@ void kernel_main() {
     noc_semaphore_set(local_semaphore_ptr, 0);
     cb_wait_front(cb_id_l, input_num_tiles);
     uint32_t src_page_base_addr = get_read_ptr(cb_id_l);
-    tt_memmove<true, false, false, 0>(packet_base_addr, src_page_base_addr, payload_size_bytes);
+    tt_memmove<true, false, false, 0>(noc, packet_base_addr, src_page_base_addr, payload_size_bytes);
     cb_pop_front(cb_id_l, input_num_tiles);
 
     cb_wait_front(cb_id_s, 1);
     const uint32_t src_page_base_addr_s = get_read_ptr(cb_id_s);
     tt_memmove<true, false, false, 0>(
-        packet_base_addr + payload_size_bytes, src_page_base_addr_s, aligned_page_size_bytes);
+        noc, packet_base_addr + payload_size_bytes, src_page_base_addr_s, aligned_page_size_bytes);
     cb_pop_front(cb_id_s, 1);
 
     cb_wait_front(cb_id_m, 1);
     const uint32_t src_page_base_addr_m = get_read_ptr(cb_id_m);
     tt_memmove<true, false, false, 0>(
-        packet_base_addr + payload_size_bytes + aligned_page_size_bytes, src_page_base_addr_m, aligned_page_size_bytes);
+        noc,
+        packet_base_addr + payload_size_bytes + aligned_page_size_bytes,
+        src_page_base_addr_m,
+        aligned_page_size_bytes);
     cb_pop_front(cb_id_m, 1);
     cb_push_back(packet_cb_id, 1);
 

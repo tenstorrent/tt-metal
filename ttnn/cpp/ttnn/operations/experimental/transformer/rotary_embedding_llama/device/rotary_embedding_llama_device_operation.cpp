@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -225,12 +225,6 @@ RotaryEmbeddingLlamaDeviceOperation::tensor_return_value_t RotaryEmbeddingLlamaD
         compute_output_specs(operation_attributes, tensor_args)[0], tensor_args.input_tensor.device());
 }
 
-ttsl::hash::hash_t RotaryEmbeddingLlamaDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tt::tt_metal::operation::hash_operation<RotaryEmbeddingLlamaDeviceOperation>(
-        operation_attributes, tensor_args);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
@@ -248,7 +242,7 @@ tt::tt_metal::Tensor rotary_embedding_llama(
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
 
     tt::tt_metal::MemoryConfig default_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     if (input_tensor.storage_type() == StorageType::DEVICE) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,6 @@ void kernel_main() {
     constexpr uint32_t cb_value = get_compile_time_arg_val(0);
     constexpr uint32_t elems_per_page = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t tensor_width_in_pages = get_compile_time_arg_val(4);
     constexpr auto dst_args = TensorAccessorArgs<5>();
 
@@ -28,7 +27,7 @@ void kernel_main() {
     uint32_t write_addr = get_write_ptr(cb_value);
 
     if (val.u == 0) {
-        zero_buffer(write_addr, page_size);
+        zero_buffer(cb_value, page_size);
     } else {
 #ifdef OUTPUT_DTYPE_BFLOAT16
         auto ptr = reinterpret_cast<uint16_t*>(write_addr);
@@ -52,7 +51,7 @@ void kernel_main() {
 
     cb_push_back(cb_value, 1);
 
-    const auto dst_accessor = TensorAccessor(dst_args, output_addr, aligned_page_size);
+    const auto dst_accessor = TensorAccessor(dst_args, output_addr);
 
     cb_wait_front(cb_value, 1);
 

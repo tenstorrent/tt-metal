@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,13 +13,13 @@
 
 template <typename T>
 std::vector<uint32_t> pack_as_bfp4_tiles(
-    tt::stl::Span<const T> data,
+    ttsl::Span<const T> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
 std::vector<float> unpack_bfp4_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> bfp_tiles,
+    ttsl::Span<const uint32_t> bfp_tiles,
     bool row_major_output,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);

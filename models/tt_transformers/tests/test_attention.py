@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -70,8 +70,9 @@ def test_attention_inference(
 ):
     mode = Mode.DECODE
     dtype = ttnn.bfloat8_b
-    pcc = 0.986  # pcc reduced from .99 while investigating issue #36378
+    pcc = 0.99
     llama90b_hf_rope_pcc = 0.97
+    llama33_70b_mllama_rope_pcc = 0.9891
     num_tensors = 2
     prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
 
@@ -88,6 +89,8 @@ def test_attention_inference(
     )
     if model_args.model_name == "Llama-3.2-90B-Instruct" and use_hf_rope:
         pcc = llama90b_hf_rope_pcc
+    elif model_args.model_name == "Llama-3.3-70B-Instruct" and not use_hf_rope:
+        pcc = llama33_70b_mllama_rope_pcc
     model_args.n_layers = 1  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()

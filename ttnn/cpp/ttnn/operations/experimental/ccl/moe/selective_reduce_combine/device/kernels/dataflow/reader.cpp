@@ -1,9 +1,12 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 
 namespace detail {
 
@@ -73,8 +76,15 @@ void kernel_main() {
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
     constexpr uint32_t num_local_experts = get_named_compile_time_arg_val("num_local_experts");
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
+    constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
     constexpr uint32_t global_num_tokens = get_named_compile_time_arg_val("global_num_tokens");
     constexpr uint32_t select_experts_k = get_named_compile_time_arg_val("select_experts_k");
+    constexpr uint32_t sync_semaphore_id = get_named_compile_time_arg_val("sync_semaphore_id");
+    constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
+    constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
+    constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
+    constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
+    constexpr uint32_t worker_bounding_box_size = get_named_compile_time_arg_val("worker_bounding_box_size");
 
     constexpr uint32_t aligned_activations_page_size = aligned_token_activations_page_size_bytes / sizeof(uint32_t);
 
@@ -88,26 +98,47 @@ void kernel_main() {
     const auto dense_token_counts_addr = get_arg_val<uint32_t>(arg_index++);
     const auto token_activations_addr = get_arg_val<uint32_t>(arg_index++);
     const auto token_parallel_core_id = get_arg_val<uint32_t>(arg_index++);
+    const bool sync_core = get_arg_val<uint32_t>(arg_index++);
 
-    const auto dense_token_maps_addrgen =
-        TensorAccessor(dense_token_maps_ta_args, dense_token_maps_addr, dense_token_maps_page_size_bytes);
-    const auto token_counts_addrgen =
-        TensorAccessor(dense_token_counts_ta_args, dense_token_counts_addr, token_counts_page_size_bytes);
-    const auto token_activations_addrgen =
-        TensorAccessor(token_activations_ta_args, token_activations_addr, token_activations_page_size_bytes);
+    Noc noc1_obj(1);
+    Semaphore<> sync_sem(sync_semaphore_id);
+    CircularBuffer cb_token_counts(token_counts_cb_id);
+    CircularBuffer cb_token_activations(token_activations_cb_id);
+    CircularBuffer cb_dense_token_maps(dense_token_maps_cb_id);
+
+    const auto dense_token_maps_addrgen = TensorAccessor(dense_token_maps_ta_args, dense_token_maps_addr);
+    const auto token_counts_addrgen = TensorAccessor(dense_token_counts_ta_args, dense_token_counts_addr);
+    const auto token_activations_addrgen = TensorAccessor(token_activations_ta_args, token_activations_addr);
+
+    // wait for metadata to be ready
+    if (sync_core) {
+        sync_sem.wait(1);
+        // swap start/end coordinates because this kernel is using NOC1
+        sync_sem.set_multicast(
+            noc1_obj,
+            noc_x_end,
+            noc_y_end,
+            noc_x_start,
+            noc_y_start,
+            worker_bounding_box_size - 1,
+            /*linked=*/false);
+        noc1_obj.async_writes_flushed();
+
+    } else {
+        sync_sem.wait(1);
+    }
 
     // read dense token counts
-    cb_reserve_back(token_counts_cb_id, 1);
-    const uint32_t token_counts_l1_addr = get_write_ptr(token_counts_cb_id);
-    const uint64_t token_counts_noc_addr = get_noc_addr(0, token_counts_addrgen);
-    noc_async_read(token_counts_noc_addr, token_counts_l1_addr, token_counts_page_size_bytes);
-    noc_async_read_barrier();
+    cb_token_counts.reserve_back(1);
+    const uint32_t token_counts_l1_addr = cb_token_counts.get_write_ptr();
+    noc1_obj.async_read(token_counts_addrgen, cb_token_counts, token_counts_page_size_bytes, {.page_id = 0}, {});
+    noc1_obj.async_read_barrier();
 
     // read activations
-    cb_reserve_back(token_activations_cb_id, 1);
-    const uint32_t token_activations_l1_addr = get_write_ptr(token_activations_cb_id);
-    const uint64_t token_activations_noc_addr = get_noc_addr(0, token_activations_addrgen);
-    noc_async_read(token_activations_noc_addr, token_activations_l1_addr, aligned_token_activations_page_size_bytes);
+    cb_token_activations.reserve_back(1);
+    const uint32_t token_activations_l1_addr = cb_token_activations.get_write_ptr();
+    noc1_obj.async_read(
+        token_activations_addrgen, cb_token_activations, aligned_token_activations_page_size_bytes, {.page_id = 0}, {});
 
     // split work
     auto* token_counts_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_counts_l1_addr);
@@ -117,17 +148,20 @@ void kernel_main() {
         token_parallel_core_id, token_counts_l1_ptr, token_split_counts, token_split_offsets);
 
     // read dense token maps
-    cb_reserve_back(dense_token_maps_cb_id, num_local_experts);
-    const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
+    cb_dense_token_maps.reserve_back(num_local_experts);
+    const uint32_t dense_token_maps_l1_addr = cb_dense_token_maps.get_write_ptr();
     for (uint32_t e = 0, l1_offset = 0, maps_page = 0; e < num_local_experts; ++e) {
-        const uint64_t dense_token_maps_noc_addr = get_noc_addr(maps_page++, dense_token_maps_addrgen);
-        noc_async_read(
-            dense_token_maps_noc_addr, dense_token_maps_l1_addr + l1_offset, dense_token_maps_page_size_bytes);
+        noc1_obj.async_read(
+            dense_token_maps_addrgen,
+            cb_dense_token_maps,
+            dense_token_maps_page_size_bytes,
+            {.page_id = maps_page++},
+            {.offset_bytes = l1_offset});
         l1_offset += dense_token_maps_page_size_bytes;
     }
 
     // wait for activations and dense token maps
-    noc_async_read_barrier();
+    noc1_obj.async_read_barrier();
 
     auto* dense_token_maps_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dense_token_maps_l1_addr);
     auto* token_activations_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_activations_l1_addr);
@@ -150,7 +184,9 @@ void kernel_main() {
         token_counts_l1_ptr[num_local_experts + 2 * num_local_experts + e] = token_activation_offsets[e];
     }
 
-    cb_push_back(token_counts_cb_id, 1);
-    cb_push_back(dense_token_maps_cb_id, num_local_experts);
-    cb_push_back(token_activations_cb_id, 1);
+    cb_token_counts.push_back(1);
+    cb_dense_token_maps.push_back(num_local_experts);
+    cb_token_activations.push_back(1);
+
+    sync_sem.set(0);
 }

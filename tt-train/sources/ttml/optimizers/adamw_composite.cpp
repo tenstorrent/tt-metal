@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,12 +35,12 @@ MorehAdamW::MorehAdamW(serialization::NamedParameters parameters, const AdamWCom
             m_first_moment.emplace(
                 key,
                 autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                     /* requires_grad */ false));
             m_second_moment.emplace(
                 key,
                 autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                     /* requires_grad */ false));
         }
     }
@@ -67,14 +67,14 @@ void MorehAdamW::step() {
             continue;
         }
         auto& second_moment_ptr = m_second_moment.at(key);
-        const auto& first_moment = first_moment_ptr->get_value(autograd::PreferredPrecision::FULL);
-        const auto& second_moment = second_moment_ptr->get_value(autograd::PreferredPrecision::FULL);
+        const auto& first_moment = first_moment_ptr->get_value(autograd::PreferredPrecision::HALF);
+        const auto& second_moment = second_moment_ptr->get_value(autograd::PreferredPrecision::HALF);
 
         auto gradients = tensor_ptr->get_grad();
 
-        auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::FULL);
+        auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::HALF);
         ttnn::moreh_adamw(
-            tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
+            tensor_ptr->get_value(autograd::PreferredPrecision::HALF),
             gradients,
             first_moment,
             second_moment,
@@ -103,6 +103,7 @@ void MorehAdamW::step() {
     state_dict[kFirstMoment] = m_first_moment;
     state_dict[kSecondMoment] = m_second_moment;
     state_dict[kSteps] = m_steps;
+    state_dict["lr"] = m_config.lr;
 
     return state_dict;
 }
@@ -111,6 +112,7 @@ void MorehAdamW::set_state_dict(const serialization::StateDict& dict) {
     m_first_moment = std::get<serialization::NamedParameters>(dict.at(kFirstMoment));
     m_second_moment = std::get<serialization::NamedParameters>(dict.at(kSecondMoment));
     m_steps = serialization::get_value_type<size_t>(dict, kSteps);
+    set_lr(serialization::get_value_type<float>(dict, "lr"));
 }
 
 [[nodiscard]] size_t MorehAdamW::get_steps() const {
@@ -135,25 +137,25 @@ AdamWComposite::AdamWComposite(serialization::NamedParameters parameters, const 
             m_first_moment.emplace(
                 key,
                 autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                     /* requires_grad */ false));
             m_second_moment.emplace(
                 key,
                 autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                     /* requires_grad */ false));
             if (m_config.amsgrad) {
                 m_max_exp_avg_sq.emplace(
                     key,
                     autograd::create_tensor(
-                        core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                        core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                         /* requires_grad */ false));
             }
             if (m_config.kahan_summation) {
                 m_kahan_compensation.emplace(
                     key,
                     autograd::create_tensor(
-                        core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                        core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                         /* requires_grad */ false));
             }
         }
@@ -181,17 +183,17 @@ void AdamWComposite::step() {
             continue;
         }
         auto& second_moment_ptr = m_second_moment.at(key);
-        auto first_moment = first_moment_ptr->get_value(autograd::PreferredPrecision::FULL);
-        auto second_moment = second_moment_ptr->get_value(autograd::PreferredPrecision::FULL);
+        auto first_moment = first_moment_ptr->get_value(autograd::PreferredPrecision::HALF);
+        auto second_moment = second_moment_ptr->get_value(autograd::PreferredPrecision::HALF);
 
         auto gradients = tensor_ptr->get_grad();
 
         if (m_config.weight_decay != 0.0F) {
             auto weight_decay_update = ttnn::multiply(
-                tensor_ptr->get_value(autograd::PreferredPrecision::FULL), m_config.weight_decay * m_config.lr);
+                tensor_ptr->get_value(autograd::PreferredPrecision::HALF), m_config.weight_decay * m_config.lr);
             // weights -= weight_decay * lr * weights
             tensor_ptr->set_value(
-                ttnn::subtract(tensor_ptr->get_value(autograd::PreferredPrecision::FULL), weight_decay_update));
+                ttnn::subtract(tensor_ptr->get_value(autograd::PreferredPrecision::HALF), weight_decay_update));
         }
 
         // first moment = beta1 * first moment + (1 - beta1) * gradients
@@ -202,7 +204,8 @@ void AdamWComposite::step() {
             ttnn::multiply(second_moment, m_config.beta2),
             ttnn::multiply(ttnn::square(gradients), 1.F - m_config.beta2));
         // first_moment_hat = first_moment / (1 - beta1^steps)
-        auto first_moment_hat = ttnn::multiply(first_moment, 1.F / (1.F - std::pow(m_config.beta1, m_steps)));
+        auto first_moment_hat =
+            ttnn::multiply(first_moment, static_cast<float>(1.F / (1.F - std::pow(m_config.beta1, m_steps))));
 
         first_moment_ptr->set_value(first_moment);
         second_moment_ptr->set_value(second_moment);
@@ -211,16 +214,18 @@ void AdamWComposite::step() {
         ttnn::Tensor denom_tensor;
         if (m_config.amsgrad) {
             auto& max_exp_avg_sq_ptr = m_max_exp_avg_sq.at(key);
-            auto max_exp_avg_sq = max_exp_avg_sq_ptr->get_value(autograd::PreferredPrecision::FULL);
+            auto max_exp_avg_sq = max_exp_avg_sq_ptr->get_value(autograd::PreferredPrecision::HALF);
             // max_exp_avg_sq = max(max_exp_avg_sq, second_moment)
             max_exp_avg_sq = ttnn::maximum(max_exp_avg_sq, second_moment);
             max_exp_avg_sq_ptr->set_value(max_exp_avg_sq);
             // Apply bias correction after taking max
-            auto max_exp_avg_sq_hat = ttnn::multiply(max_exp_avg_sq, 1.F / (1.F - std::pow(m_config.beta2, m_steps)));
+            auto max_exp_avg_sq_hat =
+                ttnn::multiply(max_exp_avg_sq, static_cast<float>(1.0f / (1.0f - std::pow(m_config.beta2, m_steps))));
             denom_tensor = ttnn::add(ttnn::sqrt(max_exp_avg_sq_hat), m_config.epsilon);
         } else {
             // second_moment_hat = second_moment / (1 - beta2^steps)
-            auto second_moment_hat = ttnn::multiply(second_moment, 1.F / (1.F - std::pow(m_config.beta2, m_steps)));
+            auto second_moment_hat =
+                ttnn::multiply(second_moment, static_cast<float>(1.0f / (1.0f - std::pow(m_config.beta2, m_steps))));
             denom_tensor = ttnn::add(ttnn::sqrt(second_moment_hat), m_config.epsilon);
         }
 
@@ -228,13 +233,13 @@ void AdamWComposite::step() {
         auto update_tensor = ttnn_fixed::divide(ttnn::multiply(first_moment_hat, -m_config.lr), denom_tensor);
 
         if (!m_config.kahan_summation) {
-            tensor_ptr->set_value(ttnn::add(tensor_ptr->get_value(autograd::PreferredPrecision::FULL), update_tensor));
+            tensor_ptr->set_value(ttnn::add(tensor_ptr->get_value(autograd::PreferredPrecision::HALF), update_tensor));
         } else {
-            auto value_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::FULL);
+            auto value_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::HALF);
 
             const auto& kahan_compensation_ptr = m_kahan_compensation.at(key);
             // A running compensation for lost low-order bits
-            auto compensation_tensor = kahan_compensation_ptr->get_value(autograd::PreferredPrecision::FULL);
+            auto compensation_tensor = kahan_compensation_ptr->get_value(autograd::PreferredPrecision::HALF);
             // Adjust the update with the compensation
             auto adjusted_update = ttnn::subtract(update_tensor, compensation_tensor);
             // Update the value with the adjusted update
@@ -256,6 +261,7 @@ void AdamWComposite::step() {
     state_dict[kMaxExpAvgSq] = m_max_exp_avg_sq;
     state_dict[kKahanCompensation] = m_kahan_compensation;
     state_dict[kSteps] = m_steps;
+    state_dict["lr"] = m_config.lr;
 
     return state_dict;
 }
@@ -266,6 +272,7 @@ void AdamWComposite::set_state_dict(const serialization::StateDict& dict) {
     m_max_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at(kMaxExpAvgSq));
     m_kahan_compensation = std::get<serialization::NamedParameters>(dict.at(kKahanCompensation));
     m_steps = serialization::get_value_type<size_t>(dict, kSteps);
+    set_lr(serialization::get_value_type<float>(dict, "lr"));
 }
 
 [[nodiscard]] size_t AdamWComposite::get_steps() const {

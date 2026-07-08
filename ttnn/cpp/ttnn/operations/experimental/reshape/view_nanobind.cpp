@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,7 +50,7 @@ void bind_view(nb::module_& mod) {
             nb::arg("H"),
             nb::arg("W")),
         ttnn::overload_t(
-            static_cast<ttnn::Tensor (*)(const ttnn::Tensor&, const ttnn::SmallVector<int32_t>&)>(
+            static_cast<ttnn::Tensor (*)(const ttnn::Tensor&, const ttsl::SmallVector<int32_t>&)>(
                 &ttnn::experimental::view),
             nb::arg("input_tensor"),
             nb::arg("shape")));

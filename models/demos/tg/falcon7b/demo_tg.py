@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -105,5 +105,4 @@ def test_demo_multichip(
         expected_greedy_output_path=expected_greedy_output_path,
         json_perf_targets=json_perf_targets,
         is_ci_env=is_ci_env,
-        galaxy_type=galaxy_type,
     )

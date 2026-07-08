@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_sliding_window ${LIB_TYPE})
 add_library(TTNN::Ops::SlidingWindow ALIAS ttnn_op_sliding_window)
 
-tt_reuse_precompile_headers(ttnn_op_sliding_window TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_sliding_window TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_sliding_window)
 set_target_properties(
     ttnn_op_sliding_window
@@ -18,17 +20,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES sliding_window.hpp op_slicing/op_slicing.hpp
+        FILES ${TTNN_OP_SLIDING_WINDOW_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        halo/device/halo_device_operation.cpp
-        halo/device/untilize_with_halo_program_factory.cpp
-        halo/halo.cpp
-        sliding_window.cpp
-        op_slicing/op_slicing.cpp
+        ${TTNN_OP_SLIDING_WINDOW_SRCS}
 )
 
 target_include_directories(ttnn_op_sliding_window PRIVATE ${FixmeOpIncDirs})

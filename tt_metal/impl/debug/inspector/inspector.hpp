@@ -1,12 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
+#include "impl/context/context_types.hpp"
 #include "impl/program/program_impl.hpp"
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_coord.hpp"
 
@@ -26,7 +30,7 @@ class Inspector {
 public:
     static bool is_enabled();
 
-    static std::unique_ptr<inspector::Data> initialize();
+    static std::unique_ptr<inspector::Data> initialize(std::optional<int> rank, ContextId context_id);
     static void serialize_rpc();
 
     static void program_created(const detail::ProgramImpl* program) noexcept;
@@ -41,7 +45,8 @@ public:
         const detail::ProgramImpl* program,
         const IDevice* device,
         const std::shared_ptr<Kernel>& kernel,
-        const tt::tt_metal::JitBuildOptions& build_options) noexcept;
+        const tt::tt_metal::JitBuildOptions& build_options,
+        const std::string& binary_root) noexcept;
     static void program_compile_finished(
         const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
 
@@ -58,12 +63,13 @@ public:
         std::size_t program_id) noexcept;
     static void mesh_workload_set_program_binary_status(
         const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
-    static void mesh_workload_set_operation_name_and_parameters(
+    static void emit_debug_entry(
         const distributed::MeshWorkloadImpl* mesh_workload,
+        uint64_t runtime_id,
         std::string_view operation_name,
-        std::string_view operation_parameters) noexcept;
-    static void mesh_workload_set_runtime_id(
-        const distributed::MeshWorkloadImpl* mesh_workload, uint64_t runtime_id) noexcept;
+        std::vector<TensorSpec> tensor_specs,
+        std::optional<distributed::MeshTraceId> trace_id = std::nullopt) noexcept;
+    static void release_trace(distributed::MeshTraceId trace_id) noexcept;
 
     // static method for logging dispatch core info
     static void set_dispatch_core_info(
@@ -92,10 +98,11 @@ public:
     // static method for clearing all core info to clear stale entries
     static void clear_all_core_info();
 
-    // Helper function to get ELF path from watcher kernel id, used for resolving format strings in dprint server
-    // If data is available, returns ELF path. If data is not available (e.g. inspector disabled, or no kernel data for
-    // the given id), returns empty string.
-    static std::string get_kernel_path_from_watcher_kernel_id(int watcher_kernel_id);
+    // Helper function to get the ELF path for a given kernel and processor index (risc_id). The mapping
+    // is captured at compile time, so it remains valid after the Kernel object has been destroyed and
+    // correctly resolves riscs that share a single binary. Returns an empty string if data is not available.
+    static std::string get_kernel_elf_path(int watcher_kernel_id, uint32_t processor_index);
+    static void enable_kernel_path_collection();
 
     static inspector::RpcServer& get_rpc_server();
 

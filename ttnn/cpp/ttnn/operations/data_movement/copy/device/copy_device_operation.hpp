@@ -1,14 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <optional>
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
+#include <variant>
+
 #include "copy_device_operation_types.hpp"
-#include "copy_program_factory.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -17,7 +19,32 @@ struct CopyDeviceOperation {
     using tensor_args_t = ttnn::prim::CopyInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<CopyProgramFactory>;
+
+    struct SameMemoryConfig {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    struct DefaultRowMajor {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    struct DefaultTilized {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    using program_factory_t = std::variant<SameMemoryConfig, DefaultRowMajor, DefaultTilized>;
+
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

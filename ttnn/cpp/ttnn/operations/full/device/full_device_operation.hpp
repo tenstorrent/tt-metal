@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,12 +6,14 @@
 
 #include <variant>
 
-#include "ttnn/decorators.hpp"
+#include <tt_stl/small_vector.hpp>
+
 #include "ttnn/tensor/types.hpp"
 #include "full_device_operation_types.hpp"
 #include "full_program_factory_interleaved.hpp"
 #include "full_program_factory_sharded.hpp"
 #include "full_program_factory_nd_sharded.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::full {
 
@@ -33,7 +35,7 @@ struct FullDeviceOperation {
 
 namespace ttnn::prim {
 ttnn::operations::full::FullDeviceOperation::tensor_return_value_t full(
-    ttnn::SmallVector<uint32_t> shape,
+    ttsl::SmallVector<uint32_t> shape,
     std::variant<float, int> fill_value,
     ttnn::MeshDevice* mesh_device,
     const DataType& dtype,

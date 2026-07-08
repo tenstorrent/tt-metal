@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -485,7 +485,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
         // On sub device 1.
         tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             CoreRangeSet(CoreRange({0, 0}, {2, 2})),
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -497,7 +497,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
         // On sub device 2.
         tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             CoreRangeSet(CoreRange({3, 3}, {3, 3})),
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});

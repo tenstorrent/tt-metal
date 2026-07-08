@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,33 +24,49 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     }
 
     const auto& input_tensors = tensor_args.input_tensors;
-    const bool is_sharded = input_tensors[0].is_sharded();
 
-    if (!is_sharded) {
+    if (const bool input_is_sharded = input_tensors[0].is_sharded(); !input_is_sharded) {
         return ConcatProgramFactory{};
     }
 
-    // Sharded cases - determine which specific factory to use
-    const bool output_is_sharded = args.output_mem_config.is_sharded();
-
-    if (output_is_sharded) {
-        // Sharded-to-sharded (s2s) cases
-        if (input_tensors.size() == 2) {
-            // Optimized 2-tensor case
-            TT_FATAL(
-                input_tensors[0].layout() == input_tensors[1].layout(),
-                "Expected all input tensors to have the same layout for 2-tensor sharded concat");
-
-            if (input_tensors[0].layout() == Layout::ROW_MAJOR) {
-                return ConcatS2SRMProgramFactory{};
-            }
-            return ConcatS2STiledProgramFactory{};
-
-        }  // Multi-tensor s2s case
-        return ConcatS2SMultiProgramFactory{};
+    if (const bool output_is_sharded = args.output_mem_config.is_sharded(); !output_is_sharded) {
+        return ConcatS2IProgramFactory{};
     }
-    // Sharded-to-interleaved (s2i) case
-    return ConcatS2IProgramFactory{};
+
+    const bool input_nd_sharded = (TensorMemoryLayout::ND_SHARDED == input_tensors[0].memory_config().memory_layout());
+    const bool output_nd_sharded = (TensorMemoryLayout::ND_SHARDED == args.output_mem_config.memory_layout());
+    if (!input_nd_sharded && !output_nd_sharded) {
+        const auto memory_layout = input_tensors[0].memory_config().memory_layout();
+
+        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            return ConcatBlockShardedProgramFactory{};
+        }
+
+        // specific cases for 2 tensors
+        if (input_tensors.size() == 2) {
+            if (input_tensors[0].layout() == input_tensors[1].layout()) {
+                if (3 == args.dim) {
+                    if (input_tensors[0].layout() == Layout::ROW_MAJOR &&
+                        0 == input_tensors[0].padded_shape()[-1] % args.groups &&
+                        0 == input_tensors[1].padded_shape()[-1] % args.groups) {
+                        return ConcatS2SRMProgramFactory{};
+                    }
+                    if (input_tensors[0].shard_spec().has_value() && input_tensors[1].shard_spec().has_value()) {
+                        return ConcatS2STiledProgramFactory{};
+                    }
+                }
+            }
+        }
+
+        // specific cases sharded to sharded for dim 2 and 3 (no ND sharding)
+        if (2 == args.dim || 3 == args.dim) {
+            return ConcatS2SMultiProgramFactory{};
+        }
+    }
+
+    // default factory
+    // including ND sharded tensors
+    return ConcatProgramFactory{};
 }
 
 void ConcatDeviceOperation::validate_on_program_cache_miss(
@@ -67,8 +83,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     bool shard_first = input_tensors[0].is_sharded();
     bool warn_about_alignment = false;
 
-    for (int i = 0; i < input_tensors.size(); i++) {
-        const Tensor& in_ref = input_tensors[i];
+    for (const auto& in_ref : input_tensors) {
         TT_FATAL(in_ref.buffer(), "Operand to concat needs to be allocated in a buffer on device.");
         TT_FATAL(in_ref.device(), "Operand to concat needs to be on device.");
         TT_FATAL(in_ref.device() == first_input.device(), "Operands to concat need to be on the same device.");
@@ -95,13 +110,9 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 in_ref.memory_config().memory_layout() == first_input.memory_config().memory_layout(),
                 "Sharded tensors must have the same memory layout.");
-            // TODO(jerrysky3): Remove this when we replace the two tensors concat kernel with the general one.
             TT_FATAL(
-                input_tensors.size() > 2 || in_ref.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
-                "Width sharded inputs are not supported for two tensors concat yet");
-            TT_FATAL(
-                in_ref.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
-                "Block sharded inputs are not supported");
+                in_ref.shard_spec().value().orientation == first_input.shard_spec().value().orientation,
+                "Sharded tensors must have the same shard orientation.");
         }
     }
     if (warn_about_alignment) {
@@ -117,18 +128,22 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             args.output_mem_config.memory_layout() == memory_layout,
             "Sharded output and inputs must have the same memory layout.");
-        TT_FATAL(args.output_mem_config.is_sharded(), "Output must be sharded if input is sharded.");
         TT_FATAL(
             args.output_mem_config.shard_spec().value().grid == first_input.shard_spec().value().grid,
             "Sharded output and inputs must have the same grid.");
+        TT_FATAL(
+            args.output_mem_config.shard_spec().value().orientation == first_input.shard_spec().value().orientation,
+            "Sharded output and inputs must have the same shard orientation.");
         if (args.dim == shape_first.rank() - 1) {
             TT_FATAL(
-                memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Only support width concat on height-sharded tensors.");
+                memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+                    memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+                "Only support width concat on height-sharded or block-sharded tensors.");
         } else if (args.dim == shape_first.rank() - 2) {
             TT_FATAL(
-                memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
-                "Only support height concat on width-sharded tensors.");
+                memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                    memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+                "Only support height concat on width-sharded or block-sharded tensors.");
         } else {
             TT_FATAL(false, "Only width or height concat on sharded tensors");
         }
@@ -137,6 +152,16 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             "Groups > 1 is only supported on height-sharded tensors (groups={} and memory_layout={} was provided)",
             args.groups,
             memory_layout);
+        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            TT_FATAL(
+                tensor_args.input_tensors.size() <= 16,
+                "Block-sharded concat supports a maximum of 16 input tensors (got {}). "
+                "Batching is not supported for block-sharded concat.",
+                tensor_args.input_tensors.size());
+            TT_FATAL(
+                first_input.shard_spec().value().grid.ranges().size() == 1,
+                "Block-sharded concat requires a single contiguous rectangular CoreRange.");
+        }
     }
 }
 
@@ -158,6 +183,44 @@ Tensor ConcatDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());
+}
+
+ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto factory = select_program_factory(operation_attributes, tensor_args);
+    auto hash = tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
+        operation_attributes.dim,
+        operation_attributes.groups,
+        operation_attributes.output_mem_config,
+        operation_attributes.sub_core_grids,
+        factory.index(),
+        tensor_args.input_tensors.size());
+
+    for (std::size_t tensor_index = 0; tensor_index < tensor_args.input_tensors.size(); ++tensor_index) {
+        const auto& tensor = tensor_args.input_tensors[tensor_index];
+        hash = ttsl::hash::hash_objects(
+            hash,
+            tensor_index,
+            tensor.logical_shape().rank(),
+            tensor.logical_shape(),
+            tensor.padded_shape(),
+            tensor.layout(),
+            tensor.dtype(),
+            tensor.memory_config());
+    }
+
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    hash = ttsl::hash::hash_objects(
+        hash,
+        tensor_args.input_tensors.size(),
+        output_spec.logical_shape().rank(),
+        output_spec.logical_shape(),
+        output_spec.padded_shape(),
+        output_spec.layout(),
+        output_spec.data_type(),
+        output_spec.memory_config());
+
+    return hash;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
@@ -190,7 +253,7 @@ namespace {
 using namespace tt::constants;
 
 // Calculate maximum tensors per concat based on runtime args limit
-uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tensors, const std::int64_t dim) {
+uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tensors) {
     // Runtime args are limited by available L1 kernel config memory.
     // The general limit is 341 uint32_t args (from kernel_types.hpp:max_runtime_args),
     // but concat kernels are compiled with NUM_RUNTIME_ARGS=256.
@@ -202,8 +265,8 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
     //     - src0_cb_index: 1
     //     - num_input_tensors: 1
     //     - page_size_per_tensor[N]: N
-    //     - TensorAccessorArgs[N]: N (for interleaved buffers, 1 arg per tensor)
-    //   Total compile-time: 2 + 2N
+    //     - TensorAccessorArgs[N]: 2*N (args_config + aligned_page_size per tensor)
+    //   Total compile-time: 2 + 3N
     //
     //   Runtime args per core:
     //     - num_pages_per_core: 1
@@ -214,43 +277,38 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
     //     - page_id_per_tensor[N]: N
     //   Total runtime: 3 + 3N
     //
-    //   TOTAL ARGS VALIDATED: (2 + 2N) + (3 + 3N) = 5 + 5N
+    //   TOTAL ARGS: (2 + 3N) + (3 + 3N) = 5 + 6N
     //
-    // Empirical evidence (GitHub issue #22845):
-    //   - N=50: SUCCESS (5 + 250 = 255 ≤ 256) ✓
-    //   - N=55: FAILURE (5 + 275 = 280 > 256) ✗
-    //     Error: "278 unique+common runtime args ... Max allowable is 256"
+    // Theoretical limit: 5 + 6N <= 256  =>  N <= 41.8  =>  N_max = 41
     //
-    // Formula: 5 + 5N ≤ 256  =>  N ≤ 50.2  =>  N_max = 50
+    // Empirical testing shows N=47 works across all dispatch core types.
+    // We use 47 as a universal safe limit for interleaved concat.
     //
     // IMPORTANT: This limit does NOT depend on:
     //   - Tensor shape/size (only number of tensors matters)
-    //   - Hardware architecture (Wormhole vs Blackhole use same limit)
     //   - Tensor dtype (bfloat16 vs float32, etc.)
     //
     // It DOES depend on:
     //   - Memory layout (sharded vs interleaved - different kernels)
-    //   - Tensor layout (ROW_MAJOR vs TILE - affects TensorAccessorArgs)
 
     const bool is_sharded = input_tensors[0].is_sharded();
 
-    // Effective kernel limit (empirically determined to be 256, not 341)
-    constexpr uint32_t effective_args_limit = 256;
-
-    uint32_t base_args;
-    uint32_t args_per_tensor;
-
     if (is_sharded) {
-        // Sharded concat uses different kernels with different arg patterns
-        // s2s_concat_multi_core (line 522-523 in concat_program_factory.cpp):
-        //   Compile-time: cb_dst_id, page_size, output_stride, num_input_tensors = 4
-        //   Runtime per kernel: 4 * num_input_tensors (per reader/writer)
-        //
-        // Using conservative estimate based on runtime args dominance
-        base_args = 4;
-        args_per_tensor = 4;
+        const auto memory_layout = input_tensors[0].memory_config().memory_layout();
 
-        // Safety margin: reduce by 10% for sharded due to potential additional overhead
+        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            // Block-sharded factory uses CB IDs 0..N-1 for inputs and CB 16 for output,
+            // so the hard max is 16 inputs.
+            constexpr uint32_t block_sharded_max = 16;
+            log_debug(tt::LogOp, "ttnn.concat: Block-sharded concat - max_tensors = {}", block_sharded_max);
+            return block_sharded_max;
+        }
+
+        // Other sharded layouts (height/width) use different kernels with different arg patterns
+        constexpr uint32_t effective_args_limit = 256;
+        constexpr uint32_t base_args = 4;
+        constexpr uint32_t args_per_tensor = 4;
+
         uint32_t theoretical_max = (effective_args_limit - base_args) / args_per_tensor;
         uint32_t safe_max = static_cast<uint32_t>(theoretical_max * 0.9);
 
@@ -258,30 +316,13 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
             tt::LogOp, "ttnn.concat: Sharded concat - theoretical_max = {}, safe_max = {}", theoretical_max, safe_max);
 
         return std::max(2u, safe_max);
-    }  // Interleaved concat - precise calculation
-    // Formula: 5 + 5N ≤ 256
-    const Layout layout = input_tensors[0].layout();
-    base_args = 5;
-    args_per_tensor = 5;
+    }
 
-    uint32_t max_tensors = (effective_args_limit - base_args) / args_per_tensor;
+    // Universal safe limit for interleaved concat across all dispatch core types.
+    // See GitHub issue #42105 for details on why per-dispatch-type limits were unreliable.
+    constexpr uint32_t max_tensors = 47;
 
-    // Verify our calculation matches empirical evidence
-    uint32_t total_args_at_limit = base_args + (args_per_tensor * max_tensors);
-    log_debug(
-        tt::LogOp,
-        "ttnn.concat: Interleaved concat - max_tensors = {}, total_args = {} (limit = {}, layout = {}, dim = {})",
-        max_tensors,
-        total_args_at_limit,
-        effective_args_limit,
-        layout,
-        dim);
-    // Ensure variables are used even if log_debug is compiled out
-    (void)total_args_at_limit;
-    (void)layout;
-
-    // Should be exactly 50 based on our formula: (256 - 5) / 5 = 50.2 => 50
-    TT_FATAL(max_tensors == 50, "Unexpected max_tensors calculation: expected 50, got {}", max_tensors);
+    log_debug(tt::LogOp, "ttnn.concat: Interleaved concat - max_tensors = {}", max_tensors);
 
     return max_tensors;
 }
@@ -294,6 +335,7 @@ Tensor concat_impl(
     const MemoryConfig& output_mem_config,
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
+
     for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     }
@@ -307,8 +349,16 @@ Tensor concat_impl(
     }
 
     // Handle large number of tensors by splitting into batches
-    const uint32_t max_tensors_per_concat = calculate_max_tensors_per_concat(input_tensors, dim);
+    // calculate_max_tensors_per_concat returns the maximum safe value (47 for interleaved)
+    // We batch when we have MORE than the safe limit, using batches of exactly the safe limit
+    const uint32_t max_tensors_per_concat = calculate_max_tensors_per_concat(input_tensors);
     if (input_tensors.size() > max_tensors_per_concat) {
+        TT_FATAL(
+            !(input_tensors[0].is_sharded() &&
+              input_tensors[0].memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED),
+            "Block-sharded concat supports at most 16 input tensors (got {}). "
+            "Batching with intermediate shard specs is not supported for block-sharded concat.",
+            input_tensors.size());
         // Split into batches and concat each batch
         std::vector<Tensor> intermediate_results;
         const size_t num_batches = tt::div_up(input_tensors.size(), max_tensors_per_concat);
@@ -348,7 +398,50 @@ Tensor concat_impl(
     uint32_t normalized_dim = input_tensors[0].logical_shape().get_normalized_index(dim);
 
     if (input_tensors[0].is_sharded()) {
-        return ttnn::prim::concat(input_tensors, dim, groups, output_mem_config);
+        if (output_mem_config.is_sharded()) {
+            return ttnn::prim::concat(input_tensors, dim, groups, output_mem_config);
+        }
+        // Sharded inputs with interleaved output:
+        // Do sharded concat with a computed sharded output config, then convert to interleaved.
+        // Only valid when sharding type is compatible with the concat dimension:
+        //   width concat (dim=-1) → HEIGHT_SHARDED or BLOCK_SHARDED
+        //   height concat (dim=-2) → WIDTH_SHARDED or BLOCK_SHARDED
+        const bool is_width_concat = normalized_dim == ref_rank - 1;
+        const bool is_height_concat = normalized_dim == ref_rank - 2;
+        const auto memory_layout = input_tensors[0].memory_config().memory_layout();
+        const bool shard_dim_compatible = (is_width_concat && (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+                                                               memory_layout == TensorMemoryLayout::BLOCK_SHARDED)) ||
+                                          (is_height_concat && (memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                                                                memory_layout == TensorMemoryLayout::BLOCK_SHARDED));
+        if (shard_dim_compatible) {
+            const auto& first_shard = input_tensors[0].shard_spec().value();
+            auto output_shard_shape = first_shard.shape;
+            const uint32_t shard_concat_idx = is_width_concat ? 1 : 0;
+            output_shard_shape[shard_concat_idx] = 0;
+            for (const auto& t : input_tensors) {
+                output_shard_shape[shard_concat_idx] += t.shard_spec().value().shape[shard_concat_idx];
+            }
+            auto temp_shard_spec = ShardSpec(first_shard.grid, output_shard_shape, first_shard.orientation);
+            auto temp_sharded_config =
+                MemoryConfig(input_tensors[0].memory_config().memory_layout(), BufferType::L1, temp_shard_spec);
+
+            auto sharded_result = ttnn::prim::concat(input_tensors, dim, groups, temp_sharded_config);
+            return ttnn::to_memory_config(sharded_result, output_mem_config, std::nullopt);
+        }
+        // Incompatible shard type + dim, or non-H/W dim: unshard inputs, then interleaved concat
+        log_warning(
+            tt::LogOp,
+            "ttnn.concat: Sharded inputs with dim={} are not natively supported for {} layout. "
+            "Falling back to interleaved concat (inputs will be unsharded). "
+            "For best performance, unshard inputs explicitly or concat on supported dimensions (height or width).",
+            normalized_dim,
+            memory_layout);
+        std::vector<Tensor> interleaved_inputs;
+        interleaved_inputs.reserve(input_tensors.size());
+        for (const auto& input_tensor : input_tensors) {
+            interleaved_inputs.push_back(ttnn::to_memory_config(input_tensor, output_mem_config, std::nullopt));
+        }
+        return concat_impl(interleaved_inputs, dim, groups, output_mem_config, sub_core_grids);
     }
     if (input_tensors[0].layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
         for (const auto& input_tensor : input_tensors) {
@@ -388,6 +481,18 @@ Tensor concat_impl(
         }
     }
 
+    if (output_mem_config.is_sharded() && target_layout == Layout::ROW_MAJOR &&
+        output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        // For width/block-sharded RM output the buffer page width equals the shard width,
+        // which is narrower than the full-row pages the concat pipeline produces.
+        // Fall back to interleaved concat + to_memory_config for these cases.
+        // Height-sharded RM pages span the full tensor width (same as interleaved),
+        // so they flow through ConcatProgramFactory natively via TensorAccessor.
+        auto interleaved_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+        auto interleaved_result =
+            ttnn::prim::concat(formatted_tensors, dim, groups, interleaved_config, sub_core_grids);
+        return ttnn::to_memory_config(interleaved_result, output_mem_config, std::nullopt);
+    }
     return ttnn::prim::concat(formatted_tensors, dim, groups, output_mem_config, sub_core_grids);
 }
 

@@ -1,0 +1,102 @@
+# Quasar emulator regression tests
+#
+# Structure:
+#   <group>:            Binary name under build/test/tt_metal/
+#     - filter: <glob>  GTest filter pattern
+#       config: <config>   Simulator grid config (maps to emu-quasar-<config>). Supports 1x3 and 2x3 and 2x3_DISPATCH
+#       env:            (optional) Extra environment variables as key: value pairs
+#       gtest_repeat:   (optional) Run each matched test N times (--gtest_repeat=N)
+#
+# Example test entry
+#
+# unit_tests_legacy:
+#   - filter: "*SingleDmL1Write*"
+#     config: 1x3
+#     env:
+#       TT_METAL_SOMETHING: 1
+
+unit_tests_legacy:
+  - filter: "*SingleDmL1Write*"
+    config: 1x3, 2x3, 2x3_DISPATCH
+
+  - filter: "*SingleDmL1Write*"
+    config: 1x3
+    env:
+      TT_METAL_DPRINT_CORES: all
+
+  - filter: "*SingleDmL1Write*"
+    config: 1x3
+    gtest_repeat: 5
+
+  - filter: "*DmLoopback*"
+    config: 1x3
+
+  - filter: "*QuasarComputeKernelSingleThread*"
+    config: 1x3
+
+  - filter: "*QuasarComputeKernelMultipleThread*"
+    config: 1x3
+
+  - filter: "*QuasarCreateMultipleComputeKernelsSingleCluster*"
+    config: 1x3
+
+  - filter: "*MultiDmAddTwoInts*"
+    config: 2x3, 2x3_DISPATCH
+
+  - filter: "*Bmm"
+    config: 1x3
+    env:
+      TT_METAL_LOGGER_LEVEL: warning
+
+  - filter: "*QuasarMeshDeviceSingleCardFixture*GlobalsAndTLS"
+    config: 1x3
+
+unit_tests_debug_tools:
+  - filter: "*WatcherAssertTests*DM2"
+    config: 1x3
+
+  - filter: "*WatcherAssertTests*DM7"
+    config: 1x3
+
+  - filter: "*WatcherNonDefaultAssertTests*DMHWFaultStoreAccessFault"
+    config: 1x3
+
+  - filter: "*TensixTestWatcherSanitizeNOCAlignmentL1Write*"
+    config: 1x3
+
+  - filter: "*QuasarTestWatcherSanitizeMultiDMRace*"
+    config: 1x3
+
+  - filter: "*WatcherStackUsageTests*StackUsage0_QuasarMultiKernel"
+    config: 1x3
+
+  - filter: "*WatcherStackUsageTests*StackUsage16_QuasarMultiKernel"
+    config: 1x3
+
+  - filter: "*TestWatcherWaypoints"
+    config: 1x3
+
+# Hangs. Tracked by https://github.com/tenstorrent/tt-metal/issues/44129
+#  - filter: "*TestWatcherTileCounterLogRemapper*"
+#    config: 1x3
+
+# Hangs. Tracked by https://github.com/tenstorrent/tt-metal/issues/44129
+#  - filter: "*TestWatcherTileCounterLogBypass*"
+#    config: 1x3
+
+  - filter: "*QuasarMultiDMOutOfBoundsArgDetection*"
+    config: 1x3
+
+unit_tests_api:
+  - filter: "*QuasarCRTASharedL1Address*"
+    config: 1x3
+
+  - filter: "*QuasarCRTAUniqueL1Addresses*"
+    config: 1x3
+
+  - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"
+    config: 1x3
+
+unit_tests_device:
+  - filter: "*SimulatorFixture*QuasarStaticTlbReadWrite*"
+    config: 1x3

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr auto cache_args = TensorAccessorArgs<6>();
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
-    const auto s0 = TensorAccessor(cache_args, cache_addr, cache_tile_bytes);
+    const auto s0 = TensorAccessor(cache_args, cache_addr);
 
     uint32_t cache_id = cache_start_id;
     uint32_t b = batch_start_id;
@@ -45,7 +45,7 @@ void kernel_main() {
                 // Wait on compute to untilize a block. Update that block in L1.
                 cb_wait_front(untilized_cache_cb_id, Wt);
                 cb_reserve_back(untilized_cache2_cb_id, Wt);
-                uint32_t cache_l1_write_addr = get_write_ptr(untilized_cache_cb_id) + offset;
+                uint32_t cache_l1_write_addr = get_read_ptr(untilized_cache_cb_id) + offset;
                 noc_async_read(input_l1_read_addr, cache_l1_write_addr, Wbytes);
                 input_l1_read_addr += Wbytes;
                 noc_async_read_barrier();
@@ -58,7 +58,7 @@ void kernel_main() {
                 cb_wait_front(cache_cb_id, Wt);
                 uint32_t out_l1_read_addr = get_read_ptr(cache_cb_id);
                 for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-                    noc_async_write_tile(curr_cache_id, s0, out_l1_read_addr);
+                    noc_async_write_page(curr_cache_id, s0, out_l1_read_addr);
                     out_l1_read_addr += cache_tile_bytes;
                 }
                 cache_id += cache_batch_num_tiles;  // Input is read in by batch, then heads so skip to next batch

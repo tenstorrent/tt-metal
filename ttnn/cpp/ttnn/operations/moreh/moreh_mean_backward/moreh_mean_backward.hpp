@@ -1,16 +1,16 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 
 Tensor moreh_mean_backward(
     const Tensor& output_grad,
-    std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim = std::nullopt,
+    std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>> dim = std::nullopt,
     bool keepdim = false,
     const std::optional<ttnn::Shape>& input_grad_shape = std::nullopt,
     const std::optional<Tensor>& input_grad = std::nullopt,

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -28,7 +28,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     measure_perf_us,
 )
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
@@ -307,7 +307,7 @@ def _build_distributed_norm_inputs(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(DistributedRMSNorm, mode, hf_config, mesh_device)
+    model_config = get_model_config(DistributedRMSNorm, mode, hf_config, mesh_device, batch_size_per_row=USERS_PER_ROW)
     model_state = DistributedRMSNorm.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
 
@@ -362,8 +362,8 @@ def _build_distributed_norm_inputs(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 2967552,
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,
         }
     ],
     indirect=True,

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -27,15 +27,31 @@ REPORT_DIR = METAL_HOME / "generated/test_reports"
 FAKE_TEST_ID = "fake/test_hang.py::test_hung_operation[device0]"
 
 
+@pytest.fixture
+def reset_device_after_hang():
+    """Always reset the card after the test.
+
+    This test intentionally hangs the device and has no opt-out — there's no
+    failure mode where a caller wants to keep the broken state. Without a
+    reset here, subsequent test files (e.g. test_triage.py's manual-hang
+    fixture) start on a broken device and fail with "Inspector data unavailable".
+    """
+    yield
+    subprocess.run(["tt-smi", "-r"], check=True)
+
+
 @pytest.mark.skipif(not HANG_APP.exists(), reason="Hang app binary not built")
 @pytest.mark.skipif(not TRIAGE_SCRIPT.exists(), reason="tt-triage.py not found")
 @pytest.mark.skipif(not HANG_REPORT_SCRIPT.exists(), reason="hang_report.py not found")
-def test_hang_generates_junit_xml():
+def test_hang_generates_junit_xml(reset_device_after_hang):
     existing = set(REPORT_DIR.glob("hang_report_*.xml")) if REPORT_DIR.exists() else set()
 
+    triage_output_path = METAL_HOME / "generated/triage_output.txt"
+    if triage_output_path.exists():
+        triage_output_path.unlink()
     hang_report_cmd = f"python3 {HANG_REPORT_SCRIPT}"
     triage_cmd = f"python3 {TRIAGE_SCRIPT} --disable-progress --skip-version-check --triage-summary-path=generated/triage_summary.txt"
-    dispatch_cmd = f"{hang_report_cmd}; {triage_cmd} 1>&2; {hang_report_cmd} --update"
+    dispatch_cmd = f"{hang_report_cmd}; mkdir -p generated; {triage_cmd} 2>&1 | tee {triage_output_path} 1>&2; {hang_report_cmd} --update"
 
     result = subprocess.run(
         [str(HANG_APP)],
@@ -71,3 +87,6 @@ def test_hang_generates_junit_xml():
     failure = testcase.find("failure")
     assert "[HANG DETECTED]" in (failure.get("message") or "")
     assert "Triage summary" in (failure.text or "")
+
+    assert triage_output_path.exists(), f"Triage output file not created at {triage_output_path}"
+    assert triage_output_path.stat().st_size > 0, "Triage output file is empty"

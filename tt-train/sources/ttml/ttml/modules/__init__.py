@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,10 +9,11 @@
 from _ttml.modules import InferenceMode, ModuleBase, RunMode
 
 # Python implementations
-from .linear import LinearLayer
-from .lora import LoraConfig, LoraLinear, LoraModel
+from .embedding import Embedding
+from .linear import LinearLayer, ColumnParallelLinear, RowParallelLinear
+from .lora import LoraConfig, LoraLinear, LoraColumnParallelLinear, LoraRowParallelLinear, LoraModel
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
-from .parameter import Buffer, Parameter
+from .parameter import Buffer, Parameter, TensorMetadata
 
 __all__ = [
     # C++ bindings
@@ -20,13 +21,19 @@ __all__ = [
     "ModuleBase",
     "RunMode",
     # Python classes
+    "ColumnParallelLinear",
+    "RowParallelLinear",
     "AbstractModuleBase",
     "Buffer",
+    "Embedding",
     "LinearLayer",
+    "LoraColumnParallelLinear",
     "LoraConfig",
     "LoraLinear",
     "LoraModel",
+    "LoraRowParallelLinear",
     "ModuleDict",
     "ModuleList",
     "Parameter",
+    "TensorMetadata",
 ]

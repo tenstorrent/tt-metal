@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,7 +65,7 @@ public:
     FabricSwitchManager& operator=(FabricSwitchManager&&) = delete;
 
 private:
-    friend class tt::stl::Indestructible<FabricSwitchManager>;
+    friend class ttsl::Indestructible<FabricSwitchManager>;
     FabricSwitchManager() = default;
     ~FabricSwitchManager() = default;
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Deepseek MoE Gate unified kernel
@@ -39,7 +39,8 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
     using MoeGateCTArgs = deepseek_b1_ops::DeepseekMoeGate::WriterCTArgs<
         get_named_compile_time_arg_val("moe_gate_output_cb"),
-        get_named_compile_time_arg_val("moe_gate_output_indices_cb")>;
+        get_named_compile_time_arg_val("moe_gate_output_indices_cb"),
+        true>;
 
 #elif defined(COMPILE_FOR_TRISC)
     using MoeGateCTArgs = deepseek_b1_ops::DeepseekMoeGate::ComputeCTArgs<

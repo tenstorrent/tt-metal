@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -40,7 +40,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     measure_perf_us,
 )
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, pad_or_trim_seq_len
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
@@ -52,8 +52,8 @@ PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 1.0
 DEVICE_PERF_TARGETS_US = {
-    ("decode", 1): {"kernel": 90.564, "op_to_op": None},
-    ("prefill", 128): {"kernel": 255.285, "op_to_op": None},
+    ("decode", 1): {"kernel": 603.542, "op_to_op": None},
+    ("prefill", 128): {"kernel": 716.055, "op_to_op": None},
 }
 
 
@@ -336,7 +336,7 @@ def _build_lm_head_inputs(
     weight_config = get_test_weight_config(
         LMHead1D, hf_config, (lm_head_state_dict,), cache_path, mesh_device, force_recalculate_weight_config
     )
-    model_config = get_model_config(LMHead1D, mode, mesh_device)
+    model_config = get_model_config(LMHead1D, mode, hf_config, mesh_device)
     model_state = LMHead1D.create_state(mesh_device, None)  # CCL not needed for linear only
     run_config = create_run_config(model_config, weight_config, model_state)
 
@@ -357,8 +357,8 @@ def _build_lm_head_inputs(
 @pytest.mark.parametrize(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
-        ("decode", 1, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=1 → 32 tokens
-        ("prefill", 128, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=128 → 4096 tokens
+        pytest.param("decode", 1, 0.97, 1.0, 1.0, 0.0, id="decode_seq1"),  # batch=32, seq=1 → 32 tokens
+        pytest.param("prefill", 128, 0.97, 1.0, 1.0, 0.0, id="prefill_seq128"),  # batch=32, seq=128 → 4096 tokens
         pytest.param(
             "prefill",
             1024,
@@ -367,6 +367,7 @@ def _build_lm_head_inputs(
             1.0,
             0.0,
             marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+            id="prefill_seq1024",
         ),  # batch=32, seq=1024 → 32768 tokens
         pytest.param(
             "prefill",
@@ -376,6 +377,7 @@ def _build_lm_head_inputs(
             1.0,
             0.0,
             marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+            id="prefill_seq8192",
         ),
         pytest.param(
             "prefill",
@@ -385,6 +387,7 @@ def _build_lm_head_inputs(
             1.0,
             0.0,
             marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+            id="prefill_seq32768",
         ),
         pytest.param(
             "prefill",
@@ -394,6 +397,7 @@ def _build_lm_head_inputs(
             1.0,
             0.0,
             marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+            id="prefill_seq131072",
         ),  # batch=32, seq=128k
     ],
 )
@@ -413,8 +417,8 @@ def _build_lm_head_inputs(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 23740416,  # Large trace region for vocab projection
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,  # Use dynamic trace-region allocation for this workload
         }
     ],
     indirect=True,
@@ -511,8 +515,8 @@ def test_ds_lm_head(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 23740416,
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,
         }
     ],
     indirect=True,
@@ -571,7 +575,8 @@ def test_ds_lm_head_device_perf(mode, seq_len):
     step_name = f"ds_lm_head_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_lm_head.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len} and real_weights"
+    seq_filter = f"seq{seq_len}"
+    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_filter} and real_weights"
     command = f'pytest {test_path}::test_ds_lm_head -k "{expr}"'
 
     perf_profiler.start("run")

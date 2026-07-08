@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,14 +13,17 @@ namespace tt::tt_metal {
 
 struct FirmwareVersions {
     std::optional<tt::umd::semver_t> eth_fw;
+    std::optional<tt::umd::FirmwareBundleVersion> firmware_bundle;
 };
 
 struct FirmwareCapabilityRequest {
     bool enable_2_erisc_mode = false;
+    bool dram_programmable_cores = false;
 };
 
 struct FirmwareCapabilityResult {
     bool enable_2_erisc_mode = false;
+    bool dram_programmable_cores = false;
 };
 
 /**

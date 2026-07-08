@@ -29,7 +29,8 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_perf_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -93,7 +94,8 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -114,7 +116,6 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           source tests/scripts/t3000/run_t3000_perf_tests.sh
-          echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
           env python3 models/perf/merge_perf_results.py
       - name: Save environment data
@@ -152,7 +153,7 @@ jobs:
           fi
       - name: Upload Models perf report
         if: ${{ steps.check-perf-report.outputs.perf_report_filename != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-wormhole_b0-${{ matrix.test-group.model-name }}-bare-metal

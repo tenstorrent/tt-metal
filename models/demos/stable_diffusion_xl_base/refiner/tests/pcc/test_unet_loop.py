@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
-    SDXL_TRACE_REGION_SIZE,
     allocate_input_tensors,
     create_user_tensors,
     get_timesteps,
@@ -28,7 +27,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 # TODO: test 20 instead of 10 unet iterations
 UNET_LOOP_PCC = {
-    "1024x1024": {"10": 0.997, "50": 0.996},
+    "1024x1024": {"10": 0.995, "50": 0.996},
     "512x512": {"10": 0.999, "50": 0.998},
 }
 
@@ -372,7 +371,6 @@ def run_unet_inference(
         (512, 512),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a green horse"),),

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -102,5 +102,5 @@ inline void llk_unpack_AB_reduce_block_max_row(
  */
 template <bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row_uninit() {
-    _llk_unpack_AB_reduce_block_max_row_uninit_<respect_trigger>(FACE_R_DIM, FACE_R_DIM);
+    _llk_unpack_AB_reduce_block_max_row_uninit_<respect_trigger>();
 }

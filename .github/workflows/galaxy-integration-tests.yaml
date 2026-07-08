@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - all
-          - llama3
           - resnet50
           - unit
           - sd35
@@ -47,23 +46,27 @@ on:
     - cron: "0 3 * * *" # Every day at 3:00 UTC
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
   galaxy-integration-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     uses: ./.github/workflows/galaxy-integration-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: wh_galaxy
       model: ${{ inputs.model || 'all' }}

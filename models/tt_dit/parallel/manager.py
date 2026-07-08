@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 
-from ..utils.tensor import bf16_tensor
+from ..utils.tensor import bf16_tensor, local_device_to_torch
 
 
 class CCLManager:
@@ -38,7 +38,9 @@ class CCLManager:
         # Initialize semaphores for reduce scatter and all gather and neighbor pad
         self._init_semaphores()
         self.rs_ping_pong_idx = [0, 0]
+        self.rs_ping_pong_idx_fused = [0, 0]
         self.ag_ping_pong_idx = [0, 0]
+        self.exp_ring_ping_pong_idx = [0, 0]
         self.np_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
@@ -64,11 +66,24 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
         }
 
+        # 3 * 2 for ping pong semaphores for fused reduce scatter
+        self.rs_ping_pong_semaphores_fused = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
+        }
+
         # Initialize semaphores for all gather ping pong - separate for each mesh axis
         ag_n_sems = 2 * 2  # 2 semaphores * 2 for ping pong (2 buffers)
         self.ag_ping_pong_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
+        }
+
+        # Initialize exp ring joint SDPA semaphores (num_links per set, 2 sets for ping pong)
+        exp_ring_n_sems = self.num_links * 2
+        self.exp_ring_ping_pong_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(exp_ring_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(exp_ring_n_sems)],
         }
 
         # Initialize neighbor pad semaphores
@@ -193,6 +208,21 @@ class CCLManager:
         self.rs_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.rs_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
+    def get_rs_ping_pong_semaphore_fused(self, mesh_axis):
+        """
+        Get semaphores for reduce scatter ping pong operations.
+
+        Args:
+            mesh_axis: The mesh axis (0 or 1) to get semaphores for
+
+        Returns:
+            List of 3 semaphores for the current ping pong cycle
+        """
+        cur_idx = self.rs_ping_pong_idx_fused[mesh_axis]
+        n_sems = 3
+        self.rs_ping_pong_idx_fused[mesh_axis] = (cur_idx + 1) % 2
+        return self.rs_ping_pong_semaphores_fused[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
+
     def get_ag_ping_pong_semaphore(self, mesh_axis):
         """
         Get semaphores for all gather ping pong operations.
@@ -207,6 +237,21 @@ class CCLManager:
         n_sems = 2
         self.ag_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.ag_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
+
+    def get_exp_ring_ping_pong_semaphore(self, mesh_axis):
+        """
+        Get semaphores for exp ring joint SDPA operations.
+
+        Args:
+            mesh_axis: The mesh axis (0 or 1) to get semaphores for
+
+        Returns:
+            List of num_links semaphores for the current ping pong cycle
+        """
+        cur_idx = self.exp_ring_ping_pong_idx[mesh_axis]
+        n_sems = self.num_links
+        self.exp_ring_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.exp_ring_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
     def get_np_ping_pong_semaphore(self, mesh_axis):
         """
@@ -235,7 +280,9 @@ class CCLManager:
         self.barrier_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.barrier_semaphores[mesh_axis][cur_idx]
 
-    def get_np_ping_pong_buffer(self, input_shape, dims, pad_left, pad_right, dtype=ttnn.bfloat16):
+    def get_np_ping_pong_buffer(
+        self, input_shape, dims, pad_left, pad_right, dtype=ttnn.bfloat16, t_front_pad: int = 0
+    ):
         """
         Get or create ping pong buffers for neighbor pad operations.
         Caches buffers based on output shape and dtype.
@@ -246,6 +293,7 @@ class CCLManager:
             pad_left: List of left padding amounts per dim
             pad_right: List of right padding amounts per dim
             dtype: Tensor dtype
+            t_front_pad: Number of T-front zero frames to prepend (fused T-causal padding)
 
         Returns:
             Current ping pong buffer (alternates between two buffers)
@@ -253,6 +301,8 @@ class CCLManager:
         output_shape = list(input_shape)
         for i, dim in enumerate(dims):
             output_shape[dim] += pad_left[i] + pad_right[i]
+        if t_front_pad > 0:
+            output_shape[dims[0] - 1] += t_front_pad
 
         cache_key = ("np", tuple(output_shape), dtype)
 
@@ -290,6 +340,8 @@ class CCLManager:
         axes: list,
         neighbor_sems: list,
         num_links: list,
+        logical_h: int = 0,
+        t_front_pad: int = 0,
     ) -> ttnn.Tensor:
         """
         Helper function to neighbor-pad a tensor with a persistent output buffer.
@@ -304,6 +356,8 @@ class CCLManager:
             neighbor_sems=neighbor_sems,
             num_links=num_links,
             use_persistent_buffer=True,
+            logical_h=logical_h,
+            t_front_pad=t_front_pad,
         )
 
     def neighbor_pad(
@@ -319,13 +373,15 @@ class CCLManager:
         neighbor_sems: list,
         num_links: list,
         use_persistent_buffer: bool = False,
+        logical_h: int = 0,
+        t_front_pad: int = 0,
     ) -> ttnn.Tensor:
         barrier_sem = self.get_barrier_semaphore(axes[0])
 
         persistent_buf = None
         if use_persistent_buffer:
             persistent_buf = self.get_np_ping_pong_buffer(
-                tensor.shape, dims, pad_left, pad_right, dtype=tensor.get_dtype()
+                tensor.shape, dims, pad_left, pad_right, dtype=tensor.get_dtype(), t_front_pad=t_front_pad
             )
 
         return ttnn.experimental.neighbor_pad_async(
@@ -340,6 +396,8 @@ class CCLManager:
             num_links=num_links,
             topology=self.topology,
             persistent_output_buffer=persistent_buf,
+            logical_h=logical_h,
+            t_front_pad=t_front_pad,
         )
 
     def reset_global_semaphores(self):
@@ -505,4 +563,4 @@ class CCLManager:
                     use_hyperparams=True,
                     use_persistent_buffer=use_persistent_buffer,
                 )
-        return ttnn.to_torch(ttnn.get_device_tensors(device_tensor)[0])
+        return local_device_to_torch(device_tensor)

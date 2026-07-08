@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -950,7 +950,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
             for (auto& slot : composed[kind]) {
                 if (slot.second.lo_relocs.empty()) {
                     TT_THROW(
-                        "{}: R_RISCV_{}HI20 relocation at {:#x} has no matching R_RISCV_{}LO12",
+                        "{}: {} relocation at {:#x} has no matching {}",
                         path_,
                         r_names[kind][false],
                         slot.first,

@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
@@ -25,8 +26,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_working = get_compile_time_arg_val(5);  // scratch
     constexpr auto output_args = TensorAccessorArgs<6>();
 
-    const auto output_addrgen = TensorAccessor(output_args, output_base_addr, Tile_size_bytes);
+    const auto output_addrgen = TensorAccessor(output_args, output_base_addr);
 
+    Noc noc;
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
     cb_reserve_back(cb_id_working, 1);
@@ -38,10 +40,6 @@ void kernel_main() {
         uint32_t input_base_addr, previous_input_page_idx = std::numeric_limits<uint32_t>::max();
         for (uint32_t seg_idx = 0; seg_idx < Max_Map_Entries; ++seg_idx) {
             if (map_ptr[seg_idx].num_elements == 0) {
-                if (output_page_idx == end_output_page - 1 && seg_idx == Max_Map_Entries - 1) {
-                    noc_async_write_barrier();
-                    cb_pop_front(cb_id_input, 1);
-                }
                 continue;
             }
 
@@ -62,15 +60,22 @@ void kernel_main() {
             const uint32_t output_addr = working_write_addr + map_ptr[seg_idx].output_page_offset * element_sz_bytes;
             const uint32_t input_addr = input_base_addr + map_ptr[seg_idx].input_page_offset * element_sz_bytes;
             const uint32_t szbytes = map_ptr[seg_idx].num_elements * element_sz_bytes;
-            tt_memmove<false, true, false, Tile_size_bytes>(output_addr, input_addr, szbytes);
+            tt_memmove<false, true, false, Tile_size_bytes>(noc, output_addr, input_addr, szbytes);
         }
         noc_async_write_barrier();
 
         const uint64_t output_noc_addr = output_addrgen.get_noc_addr(output_page_idx);
-        enhanced_noc_async_write<Tile_size_bytes, true>(working_write_addr, output_noc_addr, Tile_size_bytes);
+        enhanced_noc_async_write<Tile_size_bytes, true>(noc, working_write_addr, output_noc_addr, Tile_size_bytes);
         noc_async_write_barrier();
 
         cb_pop_front(cb_id_mapping, 1);
+    }
+    // The per-transition pop only releases the previous input page's tile, so the final input
+    // tile waited inside the loop is still held here. Pop it once to leave the input CB balanced.
+    // Gated on `first` so a core that processed no segments does not pop a tile it never waited.
+    if (!first) {
+        noc_async_write_barrier();
+        cb_pop_front(cb_id_input, 1);
     }
     cb_push_back(cb_id_working, 1);
 }

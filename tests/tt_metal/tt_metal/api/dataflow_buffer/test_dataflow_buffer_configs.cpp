@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,15 +21,19 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/hw/inc/internal/dataflow_buffer_interface.h"
+#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include <gmock/gmock.h>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "../metal2_host_api/test_helpers.hpp"
 
 namespace tt::tt_metal {
 
@@ -50,19 +54,27 @@ void validate_dfb_tile_counters(
     const CoreCoord& logical_core,
     const experimental::dfb::DataflowBufferConfig& config,
     const DFBTileCounterExpectation& expectation) {
+    // risc_mask/groups are only populated by finalize_dataflow_buffer_configs(); these
+    // host-side config tests inspect that state without launching, so finalize here.
+    // Idempotent (finalize skips already-finalized DFBs) -> no-op for the MultiCore/Reentry
+    // tests that finalize explicitly.
+    program.impl().finalize_dataflow_buffer_configs();
     auto dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1) << "Expected exactly 1 DFB on core";
 
     const auto& dfb = dfbs[0];
 
     ASSERT_EQ(dfb->risc_mask, config.producer_risc_mask | config.consumer_risc_mask);
-    ASSERT_EQ(dfb->risc_configs.size(), config.num_producers + config.num_consumers);
+    ASSERT_FALSE(dfb->groups.empty()) << "DFB has no groups (configs not finalized?)";
+    // All single-core tests produce exactly one DfbGroup.
+    const auto& hw_risc_configs = dfb->groups[0].hw_risc_configs;
+    ASSERT_EQ(hw_risc_configs.size(), config.num_producers + config.num_consumers);
 
     // risc ID to risc config maps
     std::map<uint8_t, const experimental::dfb::detail::DFBRiscConfig*> producer_configs;
     std::map<uint8_t, const experimental::dfb::detail::DFBRiscConfig*> consumer_configs;
 
-    for (const auto& rc : dfb->risc_configs) {
+    for (const auto& rc : hw_risc_configs) {
         if (rc.is_producer) {
             producer_configs[rc.risc_id] = &rc;
         } else {
@@ -88,7 +100,7 @@ void validate_dfb_tile_counters(
             uint8_t expected_tensix_id = (risc_id - 8) % 4;
             for (uint8_t tc = 0; tc < rc->config.num_tcs_to_rr; tc++) {
                 auto ptc = rc->config.packed_tile_counter[tc];
-                uint8_t actual_tensix_id = ::experimental::get_tensix_id(ptc);
+                uint8_t actual_tensix_id = ::dfb::get_tensix_id(ptc);
                 EXPECT_EQ(actual_tensix_id, expected_tensix_id)
                     << "Tensix producer RISC " << (int)risc_id << " TC[" << (int)tc
                     << "] must use tensix_id=" << (int)expected_tensix_id << " but has " << (int)actual_tensix_id;
@@ -102,7 +114,7 @@ void validate_dfb_tile_counters(
             uint8_t expected_tensix_id = (risc_id - 8) % 4;
             for (uint8_t tc = 0; tc < rc->config.num_tcs_to_rr; tc++) {
                 auto ptc = rc->config.packed_tile_counter[tc];
-                uint8_t actual_tensix_id = ::experimental::get_tensix_id(ptc);
+                uint8_t actual_tensix_id = ::dfb::get_tensix_id(ptc);
                 EXPECT_EQ(actual_tensix_id, expected_tensix_id)
                     << "Tensix consumer RISC " << (int)risc_id << " TC[" << (int)tc
                     << "] must use tensix_id=" << (int)expected_tensix_id << " but has " << (int)actual_tensix_id;
@@ -110,24 +122,33 @@ void validate_dfb_tile_counters(
         }
     }
 
-    // For BLOCKED mode, validate remapper pair indices
-    if (config.cap == ::experimental::AccessPattern::BLOCKED) {
+    // ALL mode engages the remapper ONLY when a Tensix endpoint is involved. Pure DM->DM ALL
+    // broadcasts via broadcast_tc, so remapper_pair_index / consumer_tcs are intentionally left
+    // at 0 (in dataflow_buffer.cpp they are populated only inside `if (use_remapper)`, and
+    // use_remapper == ALL && !dm_dm_all). Tensix RISCs occupy mask bits 0x0F00.
+    const bool dm_dm_all = config.cap == dfb::AccessPattern::ALL &&
+                           (config.producer_risc_mask & 0x0F00) == 0 &&
+                           (config.consumer_risc_mask & 0x0F00) == 0;
+    const bool uses_remapper = config.cap == dfb::AccessPattern::ALL && !dm_dm_all;
+
+    // For remapper-based ALL, validate remapper pair indices are unique per producer.
+    if (uses_remapper) {
         std::set<uint8_t> seen_remapper_indices;
         for (const auto& [risc_id, rc] : producer_configs) {
             uint8_t remapper_idx = rc->config.remapper_pair_index;
 
             // Check valid range (0-63)
-            EXPECT_LT(remapper_idx, 64) << "BLOCKED: Producer RISC " << (int)risc_id
+            EXPECT_LT(remapper_idx, 64) << "ALL: Producer RISC " << (int)risc_id
                                         << " has invalid remapper_pair_index " << (int)remapper_idx
                                         << " (must be 0-63)";
 
             // Check uniqueness among producers
             EXPECT_EQ(seen_remapper_indices.count(remapper_idx), 0)
-                << "BLOCKED: Producer RISC " << (int)risc_id << " has duplicate remapper_pair_index "
+                << "ALL: Producer RISC " << (int)risc_id << " has duplicate remapper_pair_index "
                 << (int)remapper_idx;
             seen_remapper_indices.insert(remapper_idx);
 
-            log_info(tt::LogTest, "BLOCKED: Producer {} has remapper_pair_index {}", risc_id, remapper_idx);
+            log_info(tt::LogTest, "ALL: Producer {} has remapper_pair_index {}", risc_id, remapper_idx);
         }
     }
 
@@ -137,7 +158,7 @@ void validate_dfb_tile_counters(
 
         const auto* producer_rc = producer_it->second;
 
-        // For BLOCKED mode, accumulate expected_consumer_tcs across all pairings for this producer
+        // For ALL mode, accumulate expected_consumer_tcs across all pairings for this producer
         uint32_t expected_consumer_tcs = 0;
         size_t consumer_idx = 0;
 
@@ -153,35 +174,35 @@ void validate_dfb_tile_counters(
             auto producer_ptc = producer_rc->config.packed_tile_counter[producer_tc_slot];
             auto consumer_ptc = consumer_rc->config.packed_tile_counter[consumer_tc_slot];
 
-            if (config.cap == ::experimental::AccessPattern::BLOCKED) {
-                // For BLOCKED mode, consumer TCs are different from producer TC (remapper-based)
+            if (config.cap == dfb::AccessPattern::ALL) {
+                // For ALL mode, consumer TCs are different from producer TC (remapper-based)
                 // Accumulate the consumer TC IDs into expected_consumer_tcs
                 if (consumer_idx < 4) {
-                    uint8_t consumer_tc_id = ::experimental::get_counter_id(consumer_ptc);
+                    uint8_t consumer_tc_id = ::dfb::get_counter_id(consumer_ptc);
                     expected_consumer_tcs |= (consumer_tc_id & 0x1F) << (consumer_idx * 5);
                     consumer_idx++;
                 }
 
                 log_info(
                     tt::LogTest,
-                    "BLOCKED: Producer {} TC[{}]=(tensix:{}, tc:{}) -> Consumer {} TC[{}]=(tensix:{}, tc:{})",
+                    "ALL: Producer {} TC[{}]=(tensix:{}, tc:{}) -> Consumer {} TC[{}]=(tensix:{}, tc:{})",
                     producer_risc_id,
                     producer_tc_slot,
-                    ::experimental::get_tensix_id(producer_ptc),
-                    ::experimental::get_counter_id(producer_ptc),
+                    ::dfb::get_tensix_id(producer_ptc),
+                    ::dfb::get_counter_id(producer_ptc),
                     consumer_risc_id,
                     consumer_tc_slot,
-                    ::experimental::get_tensix_id(consumer_ptc),
-                    ::experimental::get_counter_id(consumer_ptc));
+                    ::dfb::get_tensix_id(consumer_ptc),
+                    ::dfb::get_counter_id(consumer_ptc));
             } else {
                 // For STRIDED mode, producer and consumer should share the exact same TC
                 EXPECT_EQ(producer_ptc, consumer_ptc)
                     << "STRIDED: Producer " << (int)producer_risc_id << " TC[" << (int)producer_tc_slot
                     << "] should share TC with Consumer " << (int)consumer_risc_id << " TC[" << (int)consumer_tc_slot
-                    << "]. Producer has (tensix:" << (int)::experimental::get_tensix_id(producer_ptc)
-                    << ", tc:" << (int)::experimental::get_counter_id(producer_ptc)
-                    << "), Consumer has (tensix:" << (int)::experimental::get_tensix_id(consumer_ptc)
-                    << ", tc:" << (int)::experimental::get_counter_id(consumer_ptc) << ")";
+                    << "]. Producer has (tensix:" << (int)::dfb::get_tensix_id(producer_ptc)
+                    << ", tc:" << (int)::dfb::get_counter_id(producer_ptc)
+                    << "), Consumer has (tensix:" << (int)::dfb::get_tensix_id(consumer_ptc)
+                    << ", tc:" << (int)::dfb::get_counter_id(consumer_ptc) << ")";
 
                 log_info(
                     tt::LogTest,
@@ -190,23 +211,32 @@ void validate_dfb_tile_counters(
                     producer_tc_slot,
                     consumer_risc_id,
                     consumer_tc_slot,
-                    ::experimental::get_tensix_id(producer_ptc),
-                    ::experimental::get_counter_id(producer_ptc));
+                    ::dfb::get_tensix_id(producer_ptc),
+                    ::dfb::get_counter_id(producer_ptc));
             }
         }
 
-        if (config.cap == ::experimental::AccessPattern::BLOCKED) {
+        if (uses_remapper) {
             uint32_t actual_consumer_tcs = producer_rc->config.consumer_tcs;
             ASSERT_EQ(actual_consumer_tcs, expected_consumer_tcs)
-                << "BLOCKED: Producer " << (int)producer_risc_id << " consumer_tcs mismatch. "
+                << "ALL: Producer " << (int)producer_risc_id << " consumer_tcs mismatch. "
                 << "Expected: 0x" << std::hex << expected_consumer_tcs << ", Actual: 0x" << actual_consumer_tcs
                 << std::dec;
 
             log_info(
                 tt::LogTest,
-                "BLOCKED: Producer {} consumer_tcs validated: 0x{:x}",
+                "ALL: Producer {} consumer_tcs validated: 0x{:x}",
                 producer_risc_id,
                 actual_consumer_tcs);
+        } else if (dm_dm_all) {
+            // DM->DM ALL broadcasts via broadcast_tc; the remapper-only fields must stay unset.
+            EXPECT_EQ(producer_rc->config.consumer_tcs, 0u)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id
+                << " must not populate consumer_tcs (broadcast_tc path, remapper unused)";
+            EXPECT_TRUE(producer_rc->config.broadcast_tc)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id << " must have broadcast_tc set";
+            EXPECT_EQ(producer_rc->config.remapper_pair_index, 0)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id << " must not allocate a remapper pair index";
         }
     }
 }
@@ -220,11 +250,12 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0x1,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -234,7 +265,7 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
         .expected_producer_tc_count = 1,  // 1 producer with 1 consumer -> 1 TC per producer
         .expected_consumer_tc_count = 1,  // 1 consumer with 1 producer -> 1 TC per consumer
         .producer_to_consumer_pairings = {
-            {0, {{0, 0, 0}}},  // Producer 0 TC[0] pairs with Consumer risc 0 TC[0]
+            {0, {{4, 0, 0}}},  // Producer 0 TC[0] pairs with Consumer risc 4 TC[0]  (consumer_risc_mask 0x10 -> risc 4; matches DMTensixTest1xDFB4Sx1SConfig)
         }};
 
     validate_dfb_tile_counters(program, logical_core, config, expectation);
@@ -249,11 +280,12 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0x1,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -283,11 +315,12 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB4Sx1SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -315,11 +348,12 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -347,11 +381,12 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0xF0,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -379,11 +414,12 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0x3,
         .num_producers = 2,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x3C,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -417,11 +453,12 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x30,
         .num_consumers = 2,
-        .cap = ::experimental::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -449,19 +486,20 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx1BConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0x1,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x2,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::BLOCKED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::ALL,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
-        .expected_consumer_tc_count = 1,  // BLOCKED: each consumer has num_producers TCs = 1
+        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_consumer_tc_count = 1,  // ALL: each consumer has num_producers TCs = 1
         .producer_to_consumer_pairings = {
             {0, {{1, 0, 0}}},  // Producer 0 TC[0] maps to Consumer risc 1 TC[0] via remapper
         }};
@@ -478,19 +516,20 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0x1,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::ALL,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
-        .expected_consumer_tc_count = 1,  // BLOCKED: each consumer has num_producers TCs = 1
+        .expected_producer_tc_count = 4,  // ALL: producer broadcasts to num_consumers=4 TCs
+        .expected_consumer_tc_count = 1,  // ALL: each consumer has num_producers TCs = 1
         .producer_to_consumer_pairings = {
             {0,
              {
@@ -512,19 +551,20 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1BConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::BLOCKED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::ALL,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
-        .expected_consumer_tc_count = 4,  // BLOCKED: each consumer has num_producers TCs = 4
+        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_consumer_tc_count = 4,  // ALL: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0, {{4, 0, 0}}},  // Producer 0 TC[0] maps to Consumer risc 4 TC[0] via remapper
             {1, {{4, 0, 1}}},  // Producer 1 TC[0] maps to Consumer risc 4 TC[1] via remapper
@@ -544,19 +584,20 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0xF0,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::ALL,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
-        .expected_consumer_tc_count = 4,  // BLOCKED: each consumer has num_producers TCs = 4
+        .expected_producer_tc_count = 4,  // ALL: producer broadcasts to num_consumers=4 TCs
+        .expected_consumer_tc_count = 4,  // ALL: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0,
              {
@@ -600,19 +641,20 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x30,
         .num_consumers = 2,
-        .cap = ::experimental::AccessPattern::BLOCKED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::ALL,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
-        .expected_consumer_tc_count = 4,  // BLOCKED: each consumer has num_producers TCs = 4
+        .expected_producer_tc_count = 2,  // ALL: producer broadcasts to num_consumers=2 TCs
+        .expected_consumer_tc_count = 4,  // ALL: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0,
              {
@@ -641,7 +683,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
 
 // 2S x 4B: 2 producers (riscs 0,1) with 4 blocked consumers (riscs 2,3,4,5)
 // Each producer has 1 TC, each consumer has 2 TCs (num_producers TCs)
-// BLOCKED: Each consumer's TC[i] pairs with producer[i]
+// ALL: Each consumer's TC[i] pairs with producer[i]
 TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
@@ -651,11 +693,12 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0x3,
         .num_producers = 2,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x3C,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
-        .enable_implicit_sync = false};
+        .cap = dfb::AccessPattern::ALL,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -663,8 +706,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
 
     // consumer_risc_mask 0x3C = riscs 2,3,4,5
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
-        .expected_consumer_tc_count = 2,  // BLOCKED: each consumer has num_producers TCs = 2
+        .expected_producer_tc_count = 4,  // ALL: producer broadcasts to num_consumers=4 TCs
+        .expected_consumer_tc_count = 2,  // ALL: each consumer has num_producers TCs = 2
         .producer_to_consumer_pairings = {
             {0,
              {
@@ -683,6 +726,382 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
         }};
 
     validate_dfb_tile_counters(program, logical_core, config, expectation);
+}
+
+// ---------------------------------------------------------------------------
+// Multi-core DFB tests
+// ---------------------------------------------------------------------------
+
+// Helper: validate that a multi-core DFB has the expected number of DfbGroups
+// and that each core's hw_risc_configs matches a single reference group
+// (i.e. all cores have identical TC/remapper assignments).
+static void validate_multicore_dfb_groups(
+    Program& program,
+    const CoreRangeSet& core_range_set,
+    uint32_t expected_num_groups,
+    uint32_t expected_cores_per_group) {
+    // Collect DFBs from the first core; they should all be on every core.
+    CoreCoord first_core = core_range_set.ranges()[0].start_coord;
+    auto dfbs = program.impl().dataflow_buffers_on_core(first_core);
+    ASSERT_EQ(dfbs.size(), 1) << "Expected exactly 1 DFB on core";
+    const auto& dfb = dfbs[0];
+
+    ASSERT_EQ(dfb->groups.size(), expected_num_groups)
+        << "Expected " << expected_num_groups << " DfbGroup(s)";
+
+    for (const auto& grp : dfb->groups) {
+        EXPECT_EQ(grp.l1_by_core.size(), expected_cores_per_group)
+            << "DfbGroup should have " << expected_cores_per_group << " core(s)";
+    }
+
+    // All cores in the core_range_set should appear somewhere in l1_by_core.
+    std::set<CoreCoord> accounted_cores;
+    for (const auto& grp : dfb->groups) {
+        for (const auto& [c, _] : grp.l1_by_core) {
+            accounted_cores.insert(c);
+        }
+    }
+    for (const CoreRange& cr : core_range_set.ranges()) {
+        for (auto x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
+            for (auto y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
+                EXPECT_EQ(accounted_cores.count(CoreCoord(x, y)), 1u)
+                    << "Core (" << x << "," << y << ") not found in any DfbGroup";
+            }
+        }
+    }
+}
+
+// Multi-core DFB, no implicit sync: 2 cores, 1 producer, 1 consumer, STRIDED.
+// Expected: 1 DfbGroup (homogeneous HW config) with 2 cores.
+TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x2,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
+
+    Program program = CreateProgram();
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));  // 2 cores: (0,0) and (1,0)
+    experimental::dfb::CreateDataflowBuffer(program, core_range_set, config);
+
+    // Finalize configs explicitly (normally done during compile/ConfigureDeviceWithProgram).
+    program.impl().finalize_dataflow_buffer_configs();
+
+    // Both cores have identical TC config → 1 group with 2 cores.
+    validate_multicore_dfb_groups(program, core_range_set, /*expected_num_groups=*/1, /*expected_cores_per_group=*/2);
+
+    // Each core should have TC index 0 (independent per-core allocator starting from 0).
+    for (const CoreRange& cr : core_range_set.ranges()) {
+        for (auto x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
+            for (auto y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
+                CoreCoord core(x, y);
+                auto dfbs = program.impl().dataflow_buffers_on_core(core);
+                ASSERT_EQ(dfbs.size(), 1);
+                const auto& dfb = dfbs[0];
+                // Find this core's group
+                const experimental::dfb::detail::DfbGroup* found_grp = nullptr;
+                for (const auto& grp : dfb->groups) {
+                    for (const auto& [c, _] : grp.l1_by_core) {
+                        if (c == core) { found_grp = &grp; break; }
+                    }
+                    if (found_grp) {
+                        break;
+                    }
+                }
+                ASSERT_NE(found_grp, nullptr) << "Core (" << x << "," << y << ") not found in any DfbGroup";
+
+                // Validate TC index is 0 (first allocation from fresh per-core allocator).
+                for (const auto& rc : found_grp->hw_risc_configs) {
+                    for (uint8_t tc = 0; tc < rc.config.num_tcs_to_rr; tc++) {
+                        auto ptc = rc.config.packed_tile_counter[tc];
+                        EXPECT_EQ(::dfb::get_counter_id(ptc), tc)
+                            << "Core (" << x << "," << y << ") RISC " << (int)rc.risc_id
+                            << " TC[" << (int)tc << "] should have counter_id=" << (int)tc;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Multi-core DFB, with implicit sync: 2 cores, 1 producer, 1 consumer, STRIDED.
+// Txn IDs should be allocated once (core-invariant) and identical across cores.
+TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x2,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = true,
+        .enable_consumer_implicit_sync = true};
+
+    Program program = CreateProgram();
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));  // 2 cores
+    experimental::dfb::CreateDataflowBuffer(program, core_range_set, config);
+
+    program.impl().finalize_dataflow_buffer_configs();
+
+    // Should still produce 1 group (identical HW config on both cores).
+    validate_multicore_dfb_groups(program, core_range_set, /*expected_num_groups=*/1, /*expected_cores_per_group=*/2);
+
+    // Txn ID descriptors are core-invariant: allocated once during finalization.
+    CoreCoord first_core(0, 0);
+    auto dfbs = program.impl().dataflow_buffers_on_core(first_core);
+    ASSERT_EQ(dfbs.size(), 1);
+    const auto& dfb = dfbs[0];
+
+    EXPECT_EQ(dfb->producer_txn_descriptor.num_txn_ids, 2u)
+        << "Expected 2 producer txn IDs (double-buffering)";
+    EXPECT_EQ(dfb->consumer_txn_descriptor.num_txn_ids, 2u)
+        << "Expected 2 consumer txn IDs (double-buffering)";
+}
+
+// Identical-config multi-core: assert one DfbGroup is produced (multicast-ready).
+TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 512,
+        .num_entries = 8,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x2,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
+
+    Program program = CreateProgram();
+    // 4 cores in a 2x2 grid — all identical config → should produce 1 DfbGroup.
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 1)));
+    experimental::dfb::CreateDataflowBuffer(program, core_range_set, config);
+
+    program.impl().finalize_dataflow_buffer_configs();
+
+    // All 4 cores have the same HW config → 1 DfbGroup with 4 cores.
+    validate_multicore_dfb_groups(program, core_range_set, /*expected_num_groups=*/1, /*expected_cores_per_group=*/4);
+}
+
+// ---------------------------------------------------------------------------
+// Intra-tensix DFB config test
+// ---------------------------------------------------------------------------
+
+// Validates an intra-tensix DFB (pack TRISC producer → unpack TRISC consumer, same Neo):
+//   - Exactly one per-risc config entry (shared Neo bit) marked is_producer=true.
+//   - The tensix-only TC (id ≥ TC_TENSIX_POOL_START) is assigned to Neo tensix_id derived from producer_risc_mask.
+void validate_intra_tensix_dfb(
+    Program& program,
+    const CoreCoord& logical_core,
+    const experimental::dfb::DataflowBufferConfig& config) {
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+    ASSERT_EQ(dfbs.size(), 1u) << "Expected exactly 1 DFB on core";
+    const auto& dfb = dfbs[0];
+
+    ASSERT_EQ(dfb->risc_mask, config.producer_risc_mask)
+        << "Intra-tensix risc_mask should equal producer_risc_mask (same Neo bit)";
+    ASSERT_FALSE(dfb->use_remapper) << "Intra-tensix DFB must not use the remapper";
+    ASSERT_FALSE(dfb->groups.empty()) << "DFB has no groups (configs not finalized?)";
+
+    const auto& hw_risc_configs = dfb->groups[0].hw_risc_configs;
+    ASSERT_EQ(hw_risc_configs.size(), 1u)
+        << "Intra-tensix DFB should have exactly 1 per-risc config entry (shared Neo)";
+
+    const auto& rc = hw_risc_configs[0];
+    EXPECT_TRUE(rc.is_producer) << "Intra-tensix per-risc entry must be marked is_producer (pack TRISC inits TC)";
+
+    uint8_t expected_tensix_id =
+        static_cast<uint8_t>(__builtin_ctz(config.producer_risc_mask >> ::dfb::TENSIX_RISC_OFFSET));
+    uint8_t expected_risc_id = static_cast<uint8_t>(::dfb::TENSIX_RISC_OFFSET + expected_tensix_id);
+    EXPECT_EQ(rc.risc_id, expected_risc_id)
+        << "Intra-tensix per-risc risc_id should match Neo bit in producer_risc_mask";
+
+    ASSERT_EQ(rc.config.num_tcs_to_rr, 1u) << "Intra-tensix DFB should have exactly 1 TC";
+    uint8_t tc_id = ::dfb::get_counter_id(rc.config.packed_tile_counter[0]);
+    uint8_t actual_tensix_id = ::dfb::get_tensix_id(rc.config.packed_tile_counter[0]);
+    EXPECT_EQ(actual_tensix_id, expected_tensix_id) << "TC tensix_id must match Neo";
+    EXPECT_GE(tc_id, ::dfb::TC_TENSIX_POOL_START)
+        << "Intra-tensix DFB must use a Tensix-only TC (id ≥ " << (int)::dfb::TC_TENSIX_POOL_START << ")";
+
+    log_info(
+        tt::LogTest,
+        "Intra-tensix DFB: Neo{} Tensix-only TC (tensix_id={}, tc_id={})",
+        expected_tensix_id, (int)actual_tensix_id, (int)tc_id);
+}
+
+TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    // Intra-tensix: pack TRISC (producer) → unpack TRISC (consumer) on Neo0.
+    // producer_risc_mask == consumer_risc_mask == bit 8 (Neo0).
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 4,
+        .producer_risc_mask = 0x100,  // bit 8 = Neo0
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x100,  // bit 8 = Neo0 (same as producer — intentional for INTRA)
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false,
+        .tensix_scope = experimental::dfb::TensixScope::INTRA};
+
+    Program program = CreateProgram();
+    CoreCoord logical_core = CoreCoord(0, 0);
+    experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
+
+    validate_intra_tensix_dfb(program, logical_core, config);
+}
+
+// Run args for the minimal spec's two kernels (both declare empty RTA schemas, so empty arg sets).
+inline experimental::ProgramRunArgs MakeMinimalRunArgs(const experimental::NodeCoord& node) {
+    auto kernel_args = [&](const char* name) {
+        return experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{name},
+            .advanced_options =
+                experimental::AdvancedKernelRunArgs{.runtime_varargs = {{node, {}}}, .common_runtime_varargs = {}},
+        };
+    };
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args.push_back(kernel_args("dm_kernel"));
+    params.kernel_run_args.push_back(kernel_args("compute_kernel"));
+    return params;
+}
+
+// num_entries override on a finalized DFB recomputes the txn descriptor in place while PRESERVING the
+// TC assignment and transaction IDs (only the threshold changes for the new ring depth).
+TEST_F(MeshDeviceFixture, DFBReentryOverridePreservesTcAndRecomputesTxn) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB transaction IDs / tile counters require Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    ASSERT_TRUE(dfb->configs_finalized);
+    ASSERT_TRUE(dfb->config.enable_producer_implicit_sync);
+    ASSERT_GT(dfb->producer_txn_descriptor.num_txn_ids, 0);
+
+    // Snapshot TC assignment + transaction IDs before the override.
+    auto snapshot_tcs = [](const auto& d) {
+        std::vector<uint32_t> tcs;
+        for (const auto& group : d->groups) {
+            for (const auto& rc : group.hw_risc_configs) {
+                for (uint8_t i = 0; i < rc.config.num_tcs_to_rr; ++i) {
+                    tcs.push_back(static_cast<uint32_t>(rc.config.packed_tile_counter[i]));
+                }
+            }
+        }
+        return tcs;
+    };
+    const std::vector<uint32_t> tcs_before = snapshot_tcs(dfb);
+    const uint8_t num_txn_ids_before = dfb->producer_txn_descriptor.num_txn_ids;
+    const std::vector<uint8_t> txn_ids_before(
+        dfb->producer_txn_descriptor.txn_ids, dfb->producer_txn_descriptor.txn_ids + num_txn_ids_before);
+    const uint8_t threshold_before = dfb->producer_txn_descriptor.num_entries_to_process_threshold;
+
+    // Override num_entries 2 -> 4 (still divisible by the preserved txn-id divisor).
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .num_entries = 4});
+    EXPECT_NO_THROW(experimental::SetProgramRunArgs(program, params));
+
+    // Size-derived state updated.
+    EXPECT_EQ(dfb->config.num_entries, 4u);
+    EXPECT_EQ(dfb->capacity, 4u);
+    EXPECT_TRUE(dfb->configs_finalized);  // not reset
+
+    // TC assignment + transaction IDs preserved.
+    EXPECT_EQ(snapshot_tcs(dfb), tcs_before);
+    EXPECT_EQ(dfb->producer_txn_descriptor.num_txn_ids, num_txn_ids_before);
+    const std::vector<uint8_t> txn_ids_after(
+        dfb->producer_txn_descriptor.txn_ids,
+        dfb->producer_txn_descriptor.txn_ids + dfb->producer_txn_descriptor.num_txn_ids);
+    EXPECT_EQ(txn_ids_after, txn_ids_before);
+
+    // Threshold recomputed for the new num_entries (threshold = num_entries / num_txn_ids).
+    EXPECT_EQ(dfb->producer_txn_descriptor.num_entries_to_process_threshold, threshold_before * 2);
+}
+
+// On re-entry the txn-id count is preserved, so a num_entries override that breaks the preserved divisor
+// is rejected up front with an actionable message.
+TEST_F(MeshDeviceFixture, DFBReentryNumEntriesViolatesTxnDivisorFails) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB transaction-id divisor check requires Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .num_entries = 3});
+
+    EXPECT_THAT(
+        [&] { experimental::SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("num_entries override 3 is not divisible by")));
+}
+
+// An entry_size override that pushes the TRISC ring extent past the uint16 L1-aligned-unit limit is
+// rejected by the ring-extent re-validation.
+TEST_F(MeshDeviceFixture, DFBReentryEntrySizeRingExtentFails) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB ring-extent check requires Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .entry_size = 64u * 1024u * 1024u});
+
+    EXPECT_THAT(
+        [&] { experimental::SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("exceeds uint16_t; reduce capacity, stride, or entry_size")));
+}
+
+// capacity (num_entries / max(producers, consumers)) is stored as uint16_t (the tile-counter register
+// width); an override that pushes it past the max is rejected rather than silently truncated.
+TEST_F(MeshDeviceFixture, DFBOverrideCapacityExceedsUint16Fails) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB capacity / tile-counter limit requires Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back(
+        {.dfb = experimental::DFBSpecName{"dfb_0"}, .num_entries = 70000});  // capacity 70000 > 65535
+    EXPECT_THAT(
+        [&] { experimental::SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("capacity 70000 exceeds the maximum 65535")));
 }
 
 }  // end namespace tt::tt_metal

@@ -1,6 +1,7 @@
 add_subdirectory(distributed)
 add_subdirectory(tt_fabric)
 add_subdirectory(tt_metal)
+add_subdirectory(test_utils)
 add_subdirectory(multihost)
 add_subdirectory(tools)
 add_subdirectory(llrt)

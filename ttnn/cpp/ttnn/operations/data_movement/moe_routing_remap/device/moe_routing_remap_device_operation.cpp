@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,7 +54,8 @@ MoeRoutingRemapDeviceOperation::spec_return_value_t MoeRoutingRemapDeviceOperati
     const auto& routing_weights = tensor_args.input_routing_weights;
 
     const auto mem_config = operation_attributes.output_mem_config.value_or(routing_weights.memory_config());
-    return routing_weights.tensor_spec().with_memory_config(mem_config);
+    const auto& old_spec = routing_weights.tensor_spec();
+    return TensorSpec(old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(mem_config));
 }
 
 MoeRoutingRemapDeviceOperation::tensor_return_value_t MoeRoutingRemapDeviceOperation::create_output_tensors(

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,7 @@ enum class UnaryOpType {
     EXP,
     RECIP,
     GELU,
+    GELU_TANH,
     RELU,
     SQRT,
     SIGMOID,
@@ -132,6 +133,8 @@ enum class UnaryOpType {
     LOGIT,
     XIELU,
     LGAMMA,
+    DIGAMMA,
+    POLYGAMMA,
 };
 
 enum class VecMode {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,9 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
@@ -23,7 +26,9 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<3>();
 
-    const auto s0 = TensorAccessor(dst_args, input_addr, page_size);
+    const auto s0 = TensorAccessor(dst_args, input_addr);
+    Noc noc;
+    CircularBuffer cb_input(input_cb_id);
 
     bool within_input_region;
     uint32_t input_page_offset = start_offset;
@@ -46,12 +51,10 @@ void kernel_main() {
         }
 
         if (within_input_region) {
-            cb_reserve_back(input_cb_id, 1);
-            uint32_t l1_write_addr = get_write_ptr(input_cb_id);
-            uint64_t src_noc_addr = s0.get_noc_addr(input_page_offset);
-            noc_async_read(src_noc_addr, l1_write_addr, page_size);
-            noc_async_read_barrier();
-            cb_push_back(input_cb_id, 1);
+            cb_input.reserve_back(1);
+            noc.async_read(s0, cb_input, page_size, {.page_id = input_page_offset}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_input.push_back(1);
             input_page_offset++;
             advance_tensor_index(input_id_per_dim, input_page_shape, num_dims);
         }

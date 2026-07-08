@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -76,4 +76,12 @@ class TTMLDataloader(ABC):
     @abstractmethod
     def __len__(self) -> int:
         """Total number of batches available in one pass over the dataset."""
+        pass
+
+    def get_state_dict(self) -> dict:
+        """Serializable iteration state for checkpoint/resume. Stateless loaders return ``{}``."""
+        return {}
+
+    def set_state_dict(self, state: dict) -> None:
+        """Restore iteration state produced by :meth:`get_state_dict`. No-op by default."""
         pass

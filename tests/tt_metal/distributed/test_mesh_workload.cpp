@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -86,17 +86,17 @@ std::vector<CBHandle> initialize_dummy_circular_buffers(
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
 std::shared_ptr<Program> initialize_dummy_program(CoreCoord worker_grid_size) {
@@ -215,13 +215,15 @@ TEST_P(MeshWorkloadTestSuiteSubmeshFixture, QuiesceSubmeshesAllowsAlternatingWor
     // Single-core no-op program for submesh
     Program submesh_program = CreateProgram();
     CoreCoord single_core = {0, 0};
-    CreateKernel(submesh_program, "tt_metal/kernels/compute/blank.cpp", single_core, ComputeConfig{});
+    CreateKernel(
+        submesh_program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", single_core, ComputeConfig{});
     MeshWorkload submesh_workload;
     submesh_workload.add_program(MeshCoordinateRange(submesh->shape()), std::move(submesh_program));
 
     // Single-core no-op program for parent mesh
     Program parent_program = CreateProgram();
-    CreateKernel(parent_program, "tt_metal/kernels/compute/blank.cpp", single_core, ComputeConfig{});
+    CreateKernel(
+        parent_program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", single_core, ComputeConfig{});
     MeshWorkload parent_workload;
     parent_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(parent_program));
 
@@ -375,6 +377,42 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
         }
     }
     Finish(mesh_device_->mesh_command_queue());
+}
+
+// 4x8 benchmark: 32 unique programs on 32 devices (1:1 mapping)
+// Expects parallel dispatch with thread pool.
+// This replicates the deepseek blitz case of 32 independent programs dispatched across 32 devices on a GLX
+TEST_F(MeshDeviceFixture4x8DispatchAgnostic, ParallelizationBenchmark) {
+    constexpr uint32_t num_programs = 32;
+    constexpr uint32_t num_devices = 32;
+
+    auto programs = tt::tt_metal::distributed::test::utils::create_benchmark_programs(
+        num_programs, mesh_device_->compute_with_storage_grid_size(), true);
+
+    std::vector<MeshCoordinateRange> devices;
+    devices.reserve(num_devices);
+    for (uint32_t d = 0; d < num_devices; d++) {
+        devices.emplace_back(MeshCoordinate{d / 8, d % 8});
+    }
+
+    MeshWorkload workload;
+    for (uint32_t d = 0; d < num_devices; d++) {
+        workload.add_program(devices[d], std::move(*programs[d]));
+    }
+
+    auto t0 = std::chrono::steady_clock::now();
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    auto t1 = std::chrono::steady_clock::now();
+    Finish(mesh_device_->mesh_command_queue());
+    auto t2 = std::chrono::steady_clock::now();
+
+    auto enqueue_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    auto finish_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+
+    log_info(tt::LogTest, "ParallelizationBenchmark: {} programs on {} devices", num_programs, num_devices);
+    log_info(tt::LogTest, "Enqueue time: {} ms", enqueue_ms);
+    log_info(tt::LogTest, "Finish time: {} ms", finish_ms);
+    log_info(tt::LogTest, "Total time: {} ms", enqueue_ms + finish_ms);
 }
 
 TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {

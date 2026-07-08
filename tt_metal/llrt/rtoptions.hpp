@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,10 +12,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -115,7 +117,8 @@ struct InspectorSettings {
     uint16_t rpc_server_port = 50051;
     bool rpc_server_enabled = true;
     bool serialize_on_dispatch_timeout = true;
-    std::string rpc_server_address() const { return rpc_server_host + ":" + std::to_string(rpc_server_port); }
+    bool capture_tensor_specs = true;
+    bool log_runtime_entries = false;
 };
 
 template <typename T>
@@ -146,6 +149,21 @@ struct FabricTelemetrySettings {
     bool is_telemetry_enabled(uint32_t phys_chip_id, uint32_t channel_id, uint32_t risc_id) const {
         return chips.matches(phys_chip_id) && channels.matches(channel_id) && eriscs.matches(risc_id);
     }
+};
+
+struct SanitizerSettings {
+    bool enabled = false;
+
+    std::optional<bool> pedantic = std::nullopt;
+    std::optional<bool> warn = std::nullopt;
+    std::optional<bool> error = std::nullopt;
+
+    // default off after sanitizer becomes stable.
+    std::optional<bool> info = std::nullopt;
+    std::optional<bool> fault = std::nullopt;
+
+    // llk developer special mode.
+    std::optional<bool> internal = std::nullopt;
 };
 
 class RunTimeOptions {
@@ -211,6 +229,8 @@ class RunTimeOptions {
     uint32_t cmac_tx_rate_cycles_ = 0;  // default: full rate
     bool experimental_noc_debug_dump_enabled = false;
 
+    bool checkpoint_enabled = false;
+
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
     // should remain the same size as normal, unlike with null_kernels.
@@ -218,6 +238,8 @@ class RunTimeOptions {
 
     bool clear_l1 = false;
     bool clear_dram = false;
+
+    size_t pinned_memory_cache_limit_bytes = 4ULL * 1024 * 1024 * 1024;
 
     bool skip_loading_fw = false;
 
@@ -282,6 +304,10 @@ class RunTimeOptions {
     // Enable fabric performance telemetry
     bool enable_fabric_bw_telemetry = false;
 
+    /// When true, topology mapping prefers the SAT backend (same rule as TT_TOPOLOGY_SOLVER_ENGINE / Auto in
+    /// solve_topology_mapping). Set from env at RunTimeOptions construction.
+    bool topology_mapping_use_sat_engine_ = false;
+
     // Enable channel trimming resource usage capture
     bool enable_channel_trimming_capture = false;
 
@@ -293,6 +319,9 @@ class RunTimeOptions {
 
     // Enable fabric VC2 (neighbour exchange, single-hop)
     bool enable_fabric_vc2 = false;
+
+    // EXPERIMENTAL: Enable VC1 inter-mesh pass-through routing (A->B->C). Not deadlock-safe.
+    bool enable_fabric_mesh_pass_through = false;
 
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
@@ -310,6 +339,9 @@ class RunTimeOptions {
     // Dispatch kernel progress update period in milliseconds (default 100ms)
     uint32_t dispatch_progress_update_ms = 100;
 
+    // Disable dispatch telemetry
+    bool dispatch_telemetry_disabled = false;
+
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
 
@@ -318,6 +350,12 @@ class RunTimeOptions {
 
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
+
+    // Store command queues in device DRAM
+    bool dram_backed_cq = false;
+
+    // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
+    bool simulator_direct_tensor_writes = false;
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -339,8 +377,24 @@ class RunTimeOptions {
     // Disable use of pre-compiled firmware and fall back to JIT compilation.
     bool disable_precompiled_fw = false;
 
-    // Use new DEVICE_PRINT system instead of legacy DPRINT
-    bool use_device_print = false;
+    // Time (in microseconds) between DEVICE_PRINT dispatch stall-detection passes
+    // and full-dispatch passes on dispatch_s.
+    uint32_t device_print_dispatch_stall_us = 50;
+    uint32_t device_print_dispatch_full_us = 100000;  // 100 ms
+
+    // Override for the dispatch_s DEVICE_PRINT dispatch L1 cache buffer size, in bytes.
+    // 0 means "use the per-arch default" (DispatchMemMap::dispatch_s_device_print_l1_cache_size()).
+    // Bump this if dispatch_s logs that it self-disabled because the buffer was too small.
+    uint32_t device_print_dispatch_l1_cache_bytes = 0;
+
+    // Enable hybrid lockstep + per-core L1 allocator mode
+    bool allocator_mode_hybrid = false;
+
+    // Disable shared memory tracking for tt-smi
+    bool shm_tracking_disabled = false;
+    bool shm_verbose = false;
+
+    SanitizerSettings sanitizer_settings;
 
 public:
     RunTimeOptions();
@@ -373,6 +427,7 @@ public:
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled.store(enabled, std::memory_order_relaxed); }
     // Return a hash string of which watcher features are enabled
     std::string get_watcher_hash() const;
+    std::string get_sanitizer_hash() const;
     int get_watcher_interval() const { return watcher_settings.interval_ms.load(std::memory_order_relaxed); }
     void set_watcher_interval(int interval_ms) {
         watcher_settings.interval_ms.store(interval_ms, std::memory_order_relaxed);
@@ -407,7 +462,6 @@ public:
     }
     const std::set<std::string>& get_watcher_disabled_features() const { return watcher_disabled_features; }
     bool watcher_status_disabled() const { return watcher_feature_disabled(watcher_waypoint_str); }
-    bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
     bool watcher_assert_disabled() const { return watcher_feature_disabled(watcher_assert_str); }
     bool watcher_pause_disabled() const { return watcher_feature_disabled(watcher_pause_str); }
     bool watcher_ring_buffer_disabled() const { return watcher_feature_disabled(watcher_ring_buffer_str); }
@@ -417,6 +471,11 @@ public:
     bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
     bool watcher_cb_sanitize_disabled() const { return watcher_feature_disabled(watcher_cb_sanitize_str); }
 
+    // TODO: Remove these Watcher NOC sanitize functions once NOC sanitization is supported on Quasar in fast dispatch
+    // (#45878)
+    bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
+    void disable_watcher_noc_sanitize() { watcher_disabled_features.insert(watcher_noc_sanitize_str); }
+
     bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
     void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }
 
@@ -424,6 +483,11 @@ public:
     void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
 
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
+
+    bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+
+    bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
+    bool get_shm_verbose() const { return shm_verbose; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
@@ -436,10 +500,11 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
-    std::string get_inspector_rpc_server_address() const {
-        return inspector_settings.rpc_server_host + ":" + std::to_string(inspector_settings.rpc_server_port);
-    }
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
+    bool get_inspector_capture_tensor_specs() const { return inspector_settings.capture_tensor_specs; }
+    void set_inspector_capture_tensor_specs(bool enabled) { inspector_settings.capture_tensor_specs = enabled; }
+    bool get_inspector_log_runtime_entries() const { return inspector_settings.log_runtime_entries; }
+    void set_inspector_log_runtime_entries(bool enabled) { inspector_settings.log_runtime_entries = enabled; }
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
@@ -535,11 +600,11 @@ public:
         std::string compile_hash_str = fmt::format(
             "{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
+            get_sanitizer_hash(),
             get_kernels_early_return(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
-            get_disable_fabric_2_erisc_mode(),
-            get_use_device_print());
+            get_disable_fabric_2_erisc_mode());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -583,6 +648,9 @@ public:
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
 
+    void set_checkpoint_enabled(bool v) { checkpoint_enabled = v; }
+    bool get_checkpoint_enabled() const { return checkpoint_enabled; }
+
     void set_kernels_nullified(bool v) { null_kernels = v; }
     bool get_kernels_nullified() const { return null_kernels; }
 
@@ -594,6 +662,9 @@ public:
 
     bool get_clear_dram() const { return clear_dram; }
     void set_clear_dram(bool clear) { clear_dram = clear; }
+
+    size_t get_pinned_memory_cache_limit_bytes() const { return pinned_memory_cache_limit_bytes; }
+    void set_pinned_memory_cache_limit_bytes(size_t limit_bytes) { pinned_memory_cache_limit_bytes = limit_bytes; }
 
     std::string get_visible_devices() const { return visible_devices; }
     std::string get_arch_name() const { return arch_name; }
@@ -633,11 +704,14 @@ public:
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
+    bool is_simulator_or_emulated() const {
+        return runtime_target_device_ == TargetDevice::Simulator || runtime_target_device_ == TargetDevice::Emule;
+    }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
-        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint);
+        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint) && !profiler_enabled;
     }
     bool get_fast_dispatch() const { return fast_dispatch; }
 
@@ -672,6 +746,8 @@ public:
     //
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
     bool get_enable_fabric_bw_telemetry() const { return enable_fabric_bw_telemetry; }
+
+    bool get_topology_mapping_use_sat_engine() const { return topology_mapping_use_sat_engine_; }
     void set_enable_fabric_bw_telemetry(bool enable) { enable_fabric_bw_telemetry = enable; }
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
@@ -707,32 +783,64 @@ public:
     bool get_enable_fabric_vc2() const { return enable_fabric_vc2; }
     void set_enable_fabric_vc2(bool enable) { enable_fabric_vc2 = enable; }
 
+    // EXPERIMENTAL: Fabric VC1 inter-mesh pass-through enable (A->B->C). Not deadlock-safe.
+    bool get_enable_fabric_mesh_pass_through() const { return enable_fabric_mesh_pass_through; }
+    void set_enable_fabric_mesh_pass_through(bool enable) { enable_fabric_mesh_pass_through = enable; }
+
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
-    // Set mock cluster descriptor from filename (prepends base path automatically)
+    // Set mock cluster descriptor from a filename.
+    // Searches the tt-cluster-descriptors submodule first (these take precedence when
+    // the same filename exists in both locations), then falls back to the UMD
+    // cluster_descriptor_examples directory.
+    // The descriptors submodule is organized into architecture subdirectories
+    // (wormhole/, blackhole/, superclusters/...), so a bare filename is resolved by
+    // recursively searching the submodule tree.
     // NOTE: Must be called before Cluster is created (e.g., in MetalContext constructor).
-    // Path depends on UMD's cluster_descriptor_examples directory structure.
     void set_mock_cluster_desc(const std::string& filename) {
         if (filename.empty()) {
             return;
         }
-        mock_cluster_desc_path =
-            get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
-        // Set target device to Mock if simulator is not enabled
-        if (simulator_path.empty()) {
-            runtime_target_device_ = tt::TargetDevice::Mock;
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::path root = get_root_dir();
+        const fs::path custom_root = root / "tt_metal/third_party/tt-cluster-descriptors";
+
+        // Try the path as given (relative to the submodule root), then fall back to a
+        // recursive search by filename across the arch subdirectories.
+        fs::path resolved = custom_root / filename;
+        if (!(fs::exists(resolved, ec) && !ec)) {
+            resolved.clear();
+            const fs::path wanted = fs::path(filename).filename();
+            if (fs::exists(custom_root, ec) && !ec) {
+                for (auto it = fs::recursive_directory_iterator(custom_root, ec);
+                     !ec && it != fs::recursive_directory_iterator();
+                     it.increment(ec)) {
+                    if (!it->is_directory(ec) && it->path().filename() == wanted) {
+                        resolved = it->path();
+                        break;
+                    }
+                }
+            }
         }
+
+        mock_cluster_desc_path =
+            !resolved.empty()
+                ? resolved.string()
+                : (root / "tt_metal/third_party/umd/tests/cluster_descriptor_examples" / filename).string();
+        // Mock mode always overrides the simulator: configure_mock_mode() is an explicit
+        // request for a fully mocked environment, so libttsim must not be used even if
+        // TT_METAL_SIMULATOR is set in the environment.
+        runtime_target_device_ = tt::TargetDevice::Mock;
     }
     void clear_mock_cluster_desc() {
         mock_cluster_desc_path.clear();
-        // Only reset to Silicon if simulator is not enabled
-        if (simulator_path.empty()) {
-            runtime_target_device_ = tt::TargetDevice::Silicon;
-        }
+        // Restore to Simulator if TT_METAL_SIMULATOR was set, otherwise Silicon.
+        runtime_target_device_ = simulator_path.empty() ? tt::TargetDevice::Silicon : tt::TargetDevice::Simulator;
     }
 
     // Target device accessor
@@ -741,6 +849,9 @@ public:
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
     uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
+
+    bool get_dispatch_telemetry_disabled() const { return dispatch_telemetry_disabled; }
+
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
@@ -748,6 +859,11 @@ public:
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
+
+    bool get_dram_backed_cq() const { return dram_backed_cq; }
+    void set_dram_backed_cq(bool enable) { dram_backed_cq = enable; }
+
+    bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
@@ -763,8 +879,16 @@ public:
     bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
     void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
 
-    bool get_use_device_print() const { return use_device_print; }
-    void set_use_device_print(bool use) { use_device_print = use; }
+    uint32_t get_device_print_dispatch_stall_us() const { return device_print_dispatch_stall_us; }
+    void set_device_print_dispatch_stall_us(uint32_t v) { device_print_dispatch_stall_us = v; }
+
+    uint32_t get_device_print_dispatch_full_us() const { return device_print_dispatch_full_us; }
+    void set_device_print_dispatch_full_us(uint32_t v) { device_print_dispatch_full_us = v; }
+
+    uint32_t get_device_print_dispatch_l1_cache_bytes() const { return device_print_dispatch_l1_cache_bytes; }
+    void set_device_print_dispatch_l1_cache_bytes(uint32_t v) { device_print_dispatch_l1_cache_bytes = v; }
+
+    const SanitizerSettings& get_sanitizer_settings() const { return sanitizer_settings; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)

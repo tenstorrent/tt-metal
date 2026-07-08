@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,8 @@
 #include <tt-metalium/memory_pin.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/overloaded.hpp>
+
+#include "distributed/pinned_memory_cache.hpp"
 
 #include <memory>
 #include <utility>
@@ -39,9 +41,18 @@ void HostBuffer::swap(HostBuffer& other) noexcept {
     swap(pinned_memory_, other.pinned_memory_);
 }
 
-tt::stl::Span<std::byte> HostBuffer::view_bytes() & noexcept { return view_; }
+void HostBuffer::register_pinned_memory_cache_release_callback() {
+    if (pin_ == nullptr || view_.empty()) {
+        return;
+    }
+    const void* host_address = static_cast<const void*>(view_.data());
+    pin_.add_final_release_callback(
+        [host_address]() { experimental::PinnedMemoryCache::instance().release(host_address); });
+}
 
-tt::stl::Span<const std::byte> HostBuffer::view_bytes() const& noexcept { return view_; }
+ttsl::Span<std::byte> HostBuffer::view_bytes() & noexcept { return view_; }
+
+ttsl::Span<const std::byte> HostBuffer::view_bytes() const& noexcept { return view_; }
 
 bool operator==(const HostBuffer& a, const HostBuffer& b) noexcept {
     auto a_view = a.view_bytes();

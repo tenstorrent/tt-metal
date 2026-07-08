@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 // Version: FFN1.3.0
@@ -37,6 +37,8 @@
 #include <cstdint>
 #include "remapper_common.hpp"
 #include "overlay_addresses.h"
+
+namespace overlay {
 
 /**
  * @brief Generic API for Counter Remapper Configuration
@@ -870,5 +872,7 @@ public:
         return clientL_configs[0];
     }
 };
+
+}  // namespace overlay
 
 #endif  // __DM__REMAPPER_API_HPP__

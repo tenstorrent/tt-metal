@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -102,7 +102,6 @@ uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const
     return (mesh_coordinate[0] * mesh_view.num_cols()) + mesh_coordinate[1];
 }
 
-// TODO: once #27196 is fixed we can remove the is_mesh_mmio_capable check
 size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<size_t> cluster_axis) {
     auto mesh_range = tt::tt_metal::distributed::MeshCoordinateRange(mesh_device.shape());
     auto mesh_range_set = tt::tt_metal::distributed::MeshCoordinateRangeSet(mesh_range);
@@ -114,7 +113,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         {{tt::tt_fabric::RoutingDirection::N, tt::tt_fabric::RoutingDirection::S},
          {tt::tt_fabric::RoutingDirection::W, tt::tt_fabric::RoutingDirection::E}}};
 
-    ttnn::SmallVector<size_t> cluster_axes;
+    ttsl::SmallVector<size_t> cluster_axes;
     if (cluster_axis.has_value()) {
         cluster_axes = {cluster_axis.value()};
     } else {
@@ -139,26 +138,13 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
     };
 
     size_t num_available_routing_planes = std::numeric_limits<size_t>::max();
-    bool is_mesh_mmio_capable = true;
     for (const auto& coord : mesh_range_set.coords()) {
-        // TODO: remove usage of get_device, need api to return correct routing planes accounting for fast dispatch
-        // usage should only be active for T3K
-        if (mesh_device.is_local(coord)) {
-            auto* device = mesh_device.get_device(coord);
-            bool is_mmio_capable = device->is_mmio_capable();
-            is_mesh_mmio_capable &= is_mmio_capable;
-            log_debug(tt::LogOp, "mesh_coordinate: {}, is_mmio_capable: {}", coord, is_mmio_capable);
-        }
         const auto fabric_node_id = mesh_device.get_fabric_node_id(coord);
 
         for (const auto axis : cluster_axes) {
             for (const auto direction : directions[axis]) {
                 if (applicable_to_coord(coord, axis, mesh_shape[axis], direction)) {
-                    auto planes_in_direction =
-                        tt::tt_fabric::get_num_available_routing_planes_in_direction(fabric_node_id, direction);
-                    // if the device is not mmio capable then one link on some axis will be unavailable
-                    // ideally we only subtract if we're targeting that cluster axis, but we don't have access to that
-                    // information here to be safe, we subtract 1 regardless of the axis when the axis is not available
+                    auto planes_in_direction = tt::tt_fabric::get_num_usable_routing_planes(fabric_node_id, direction);
                     log_debug(
                         tt::LogOp,
                         "fabric_node_id: {}, direction: {}, planes_in_direction: {}",
@@ -169,9 +155,6 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
                 }
             }
         }
-    }
-    if (!is_mesh_mmio_capable && num_available_routing_planes > 1) {
-        num_available_routing_planes -= 1;
     }
     log_debug(tt::LogOp, "num_available_routing_planes without max logic: {}", num_available_routing_planes);
     return std::max(num_available_routing_planes, 1ul);

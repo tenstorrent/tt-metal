@@ -1,17 +1,17 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<uint32_t>& output_padded_shape,
+    const ttsl::SmallVector<uint32_t>& output_padded_shape,
     tt::tt_metal::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<DataType> output_dtype = std::nullopt,

@@ -7,9 +7,12 @@ package tt.tt_fabric.proto;
 // in a declarative way without requiring explicit ASIC IDs.
 //
 // KEY DESIGN DECISIONS:
-// - ASIC locations (1-8) are predefined constants in the schema (enum values)
-// - Groupings can only reference ASIC locations OR other groupings
-// - ASIC locations are defined as an enum with values 1-8
+// - ASIC locations 0-8 are predefined enum constants (AsicLocation)
+// - Each grouping is either a leaf (every instance uses asic_location) or composite (every instance uses
+//   grouping_ref). A single grouping must not mix ASIC locations and grouping references in different
+//   instances (enforced by runtime validation in PhysicalGroupingDescriptor).
+// - Different groupings in the same descriptor may use different styles (e.g. one MESH leaf with ASIC
+//   locations, another MESH that only references trays).
 //
 // VALIDATION RULES - ALL ENCODED IN SCHEMA STRUCTURE:
 //
@@ -28,20 +31,21 @@ package tt.tt_fabric.proto;
 //   - All groupings: at least 1 instance required
 //   - ENFORCED BY: repeated Instance instances (must be non-empty)
 //
-// RULE 5: GROUPING STRUCTURE (ENFORCED BY SCHEMA STRUCTURE - repeated Instance)
-//   - Each Grouping contains a list of instances
-//   - Each instance must have a unique id and can be either an ASIC location OR a grouping reference (enforced by oneof)
-//   - ENFORCED BY: repeated Instance instances, where Instance has oneof { asic_location | grouping_ref }
-//   - Can mix ASIC locations and grouping references in the same grouping
+// RULE 5: GROUPING STRUCTURE (schema + runtime validation)
+//   - Each Grouping contains a list of instances with unique ids
+//   - Each Instance uses oneof { asic_location | grouping_ref } (exactly one per instance)
+//   - RUNTIME: Within one Grouping, all instances must use the same branch of that oneof — either every
+//     instance is an ASIC location (leaf grouping) or every instance is a grouping_ref (composite).
+//     Mixing ASIC locations and grouping references across instances in the same Grouping is invalid.
 //
 // Example textproto:
-//   # Using predefined keywords (preset_type)
+//   # Tray as a custom grouping; tray_id only inside location { ... }
 //   groupings {
-//     name: "tray_1_cluster_0"
-//     preset_type: TRAY_1
+//     name: "tray_1"
+//     custom_type: "tray_1"
 //     instances: [
-//       { id: 0 asic_location: ASIC_LOCATION_1 },
-//       { id: 1 asic_location: ASIC_LOCATION_2 },
+//       { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_1 } },
+//       { id: 1 location { asic_location: ASIC_LOCATION_2 tray_id: TRAY_1 } },
 //       # ... through ASIC_LOCATION_8
 //     ]
 //   }
@@ -49,8 +53,8 @@ package tt.tt_fabric.proto;
 //     name: "mesh_16x8_quad"
 //     preset_type: MESH
 //     instances: [
-//       { id: 0 grouping_ref { preset_type: TRAY_1 } },
-//       { id: 1 grouping_ref { preset_type: TRAY_2 } }
+//       { id: 0 grouping_ref { custom_type: "tray_1" } },
+//       { id: 1 grouping_ref { custom_type: "tray_2" } }
 //     ]
     //     row_major_mesh {
     //       dims: [2, 1]
@@ -105,13 +109,11 @@ package tt.tt_fabric.proto;
     //     }
     //   }
 
-// ASIC Location - predefined constants for ASIC positions 1-8 within a tray
+// ASIC Location - predefined constants for ASIC positions 0-8 within a tray
 // These enum values are always available for use in grouping definitions
 enum AsicLocation {
-    // Reserved value - protobuf requires enum to start at 0
-    ASIC_LOCATION_UNSPECIFIED = 0;
-
-    // ASIC locations 1-8 (predefined constants)
+    // ASIC locations 0-8 (predefined constants)
+    ASIC_LOCATION_0 = 0;
     ASIC_LOCATION_1 = 1;
     ASIC_LOCATION_2 = 2;
     ASIC_LOCATION_3 = 3;
@@ -120,15 +122,26 @@ enum AsicLocation {
     ASIC_LOCATION_6 = 6;
     ASIC_LOCATION_7 = 7;
     ASIC_LOCATION_8 = 8;
+
+    // Unspecified location - means "any ASIC ID" (no constraint during solving)
+    // When used, the solver will not add an ASIC location constraint, allowing
+    // the ASIC to be assigned to any available ASIC ID
+    ASIC_LOCATION_UNSPECIFIED = 256;
+}
+
+// Tray identifier for instances (optional on Instance; default is UNSET when omitted).
+enum TrayId {
+    TRAY_ID_UNSET = 0;
+    TRAY_1 = 1;
+    TRAY_2 = 2;
+    TRAY_3 = 3;
+    TRAY_4 = 4;
 }
 
 // Predefined grouping keywords - special reserved names for preset groups
 enum GroupingKeyword {
     GROUPING_KEYWORD_UNSPECIFIED = 0;
-    TRAY_1 = 1;
-    TRAY_2 = 2;
-    TRAY_3 = 3;
-    TRAY_4 = 4;
+    reserved 1, 2, 3, 4;  // formerly TRAY_1 .. TRAY_4 preset grouping types
     HOSTS = 5;
     MESH = 6;
 }
@@ -141,12 +154,21 @@ message GroupingReference {
     // VALIDATION: Must match at least one Grouping.type in PhysicalGroupings.groupings
     // Forward references are allowed (can reference a grouping defined later in the file)
     oneof grouping_type {
-        // Predefined keyword (TRAY_1, TRAY_2, TRAY_3, TRAY_4, MESH)
+        // Predefined keyword (HOSTS, MESH)
         GroupingKeyword preset_type = 1;
 
         // Custom grouping type (e.g., "hosts", "meshes", "pods", "superpods", "halftray")
         string custom_type = 2;
     }
+}
+
+// Physical ASIC slot: board location within a tray plus optional tray constraint.
+message Location {
+    // ASIC position within the tray (ASIC_LOCATION_1 .. ASIC_LOCATION_8, or UNSPECIFIED).
+    AsicLocation asic_location = 1;
+
+    // Optional tray constraint. Defaults to TRAY_ID_UNSET when omitted (no tray constraint for this node).
+    optional TrayId tray_id = 2;
 }
 
 // A single instance in a grouping - represents one unit
@@ -158,10 +180,10 @@ message Instance {
 
     // Instance type - EXACTLY ONE must be set (enforced by oneof)
     oneof instance_type {
-        // Single ASIC location enum value
-        AsicLocation asic_location = 2;
+        // Physical ASIC slot (asic_location + optional tray_id)
+        Location location = 2;
 
-        // Reference to another grouping
+        // Reference to another grouping (e.g. custom_type: "tray_1")
         GroupingReference grouping_ref = 3;
     }
 }
@@ -225,7 +247,7 @@ message Grouping {
     //   - Multiple Grouping messages can have the same type (allowed for custom groupings)
     //   - Examples: preset_type: MESH, custom_type: "pods", custom_type: "superpods"
     oneof type {
-        // Predefined keyword (TRAY_1, TRAY_2, TRAY_3, TRAY_4, MESH)
+        // Predefined keyword (HOSTS, MESH)
         GroupingKeyword preset_type = 2;
 
         // Custom grouping type (e.g., "meshes", "pods", "superpods", "clusters", "halftray", "trays", "hosts")
@@ -239,7 +261,7 @@ message Grouping {
     //   - Each instance must have a unique id within this grouping
     //   - Each instance must have exactly one of: asic_location or grouping_ref (enforced by oneof)
     //   - At least 1 instance required
-    // Example for trays: [Instance { id: 0 asic_location: ASIC_LOCATION_1 }, ...]
+    // Example for trays: [Instance { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_1 } }, ...]
     // Example for meshes: [Instance { id: 0 grouping_ref { custom_type: "hosts" } }, ...]
     // Example for pods: [Instance { id: 0 grouping_ref { custom_type: "meshes" } }, Instance { id: 1 grouping_ref { custom_type: "meshes" } }]
     repeated Instance instances = 4;

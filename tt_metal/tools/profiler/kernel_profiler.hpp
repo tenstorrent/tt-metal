@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -210,6 +210,10 @@ inline __attribute__((always_inline)) void set_profiler_zone_valid(bool conditio
     profiler_control_buffer[PROFILER_DONE] = !condition;
 }
 
+inline __attribute__((always_inline)) bool get_profiler_zone_valid() {
+    return profiler_control_buffer[PROFILER_DONE] == 1;
+}
+
 inline __attribute__((always_inline)) void risc_finished_profiling() {
     for (int i = 0; i < SUM_COUNT; i++) {
         if (sums[i] > 0) {
@@ -261,7 +265,17 @@ inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
 FORCE_INLINE
 void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
     WAYPOINT("NPPW");
-    while (!ncrisc_noc_posted_writes_sent(noc));
+#if !defined(KERNEL_BUILD)
+    constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
+#endif
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        do {
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
+    } else {
+        while (!ncrisc_noc_posted_writes_sent(noc));
+    }
+    invalidate_l1_cache();
     WAYPOINT("NPPD");
 }
 
@@ -665,7 +679,7 @@ __attribute__((noinline)) void trace_only_init() {
 // Dispatch and enabled
 #elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
-#define DeviceZoneScopedN(name)                                                         \
+#define DeviceZoneScopedN(name)                                                          \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));           \
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
@@ -683,11 +697,11 @@ __attribute__((noinline)) void trace_only_init() {
 // Dispatch but disabled
 #else
 
-#define DeviceZoneScopedN(name)
+#define DeviceZoneScopedN(name) (void(sizeof(name)))
 
-#define DeviceTimestampedData(data_id, data)
+#define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
 
-#define DeviceRecordEvent(event_id)
+#define DeviceRecordEvent(event_id) (void(sizeof(event_id)))
 
 #endif
 
@@ -737,25 +751,30 @@ __attribute__((noinline)) void trace_only_init() {
 
 #else
 
-#define DeviceValidateProfiler(condition)
+// The void(sizeof(FOO)) idiom (a) ensures FOO is syntactically and
+// semantically sane and (b) means that we avoid 'var-set-but-unused'
+// diagnostics, if the only use of a particular var is here.  The
+// sizeof argument is processed in a non-evaluating context -- no code
+// is generated.
+#define DeviceValidateProfiler(condition) (void(sizeof(condition)))
 
-#define DeviceZoneScopedMainN(name)
+#define DeviceZoneScopedMainN(name) (void(name))
 
-#define DeviceZoneScopedMainChildN(name)
+#define DeviceZoneScopedMainChildN(name) (void(name))
 
-#define DeviceZoneScopedN(name)
+#define DeviceZoneScopedN(name) (void(name))
 
-#define DeviceZoneScopedSumN1(name)
+#define DeviceZoneScopedSumN1(name) (void(name))
 
-#define DeviceZoneScopedSumN2(name)
+#define DeviceZoneScopedSumN2(name) (void(name))
 
 #define DeviceTraceOnlyProfilerInit()
 
-#define DeviceZoneSetCounter(counter)
+#define DeviceZoneSetCounter(counter) (void(sizeof(counter)))
 
-#define DeviceTimestampedData(data_id, data)
+#define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
 
-#define DeviceRecordEvent(event_id)
+#define DeviceRecordEvent(event_id) (void(sizeof(event_id)))
 
 #define DeviceProfilerInit()
 

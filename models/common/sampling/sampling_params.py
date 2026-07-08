@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,3 +21,4 @@ class SamplingParams:
     repetition_penalty: float | list[float] = 1.0
     seed: int | list[int] | None = None
     enable_log_probs: bool | list[bool] = False
+    num_logprobs: int | list[int] = 0

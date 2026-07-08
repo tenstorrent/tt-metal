@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,9 +11,8 @@
 #include "factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include <variant>
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 
@@ -52,7 +51,6 @@ Tensor untilize_with_unpadding(
     const std::optional<MemoryConfig>& output_mem_config,
     bool use_multicore,
     bool fp32_dest_acc_en,
-    bool enough_space_width,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids);
 

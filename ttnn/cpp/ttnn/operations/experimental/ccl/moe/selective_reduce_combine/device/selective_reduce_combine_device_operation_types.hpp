@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 #include <optional>
 
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -19,10 +20,9 @@ struct SelectiveReduceCombineParams {
     uint32_t batch_size;
     uint32_t seq_size;
     uint32_t select_experts_k;
-    uint32_t experts;
     uint32_t num_links;
 
-    std::optional<uint32_t> axis;
+    uint32_t axis;
     tt::tt_fabric::Topology topology;
 
     uint32_t num_token_parallel_cores;
@@ -39,7 +39,6 @@ struct SelectiveReduceCombineParams {
         attrs.emplace_back("batch_size", batch_size);
         attrs.emplace_back("seq_size", seq_size);
         attrs.emplace_back("select_experts_k", select_experts_k);
-        attrs.emplace_back("experts", experts);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("axis", axis);
         attrs.emplace_back("num_token_parallel_cores", num_token_parallel_cores);

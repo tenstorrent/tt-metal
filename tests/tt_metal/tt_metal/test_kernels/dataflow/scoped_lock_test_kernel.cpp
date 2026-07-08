@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     uint32_t l1_buffer_addr = get_arg_val<uint32_t>(0);
@@ -15,10 +15,10 @@ void kernel_main() {
     uint32_t other_noc_x = get_arg_val<uint32_t>(4);
     uint32_t other_noc_y = get_arg_val<uint32_t>(5);
 
-    experimental::Semaphore my_sem(my_sem_id);
-    experimental::Semaphore other_sem(other_sem_id);
-    experimental::Noc noc;
-    experimental::CoreLocalMem<uint32_t> buffer(l1_buffer_addr);
+    Semaphore my_sem(my_sem_id);
+    Semaphore other_sem(other_sem_id);
+    Noc noc;
+    CoreLocalMem<uint32_t> buffer(l1_buffer_addr);
 
     {
         // Lock this buffer for num_elements

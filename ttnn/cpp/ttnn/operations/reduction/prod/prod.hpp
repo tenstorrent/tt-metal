@@ -1,12 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <optional>
-
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 
@@ -19,7 +18,7 @@ Tensor prod(
 Tensor prod(
     const Tensor& input,
     const Tensor& output,
-    SmallVector<int64_t>& dims,
+    ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace ttnn

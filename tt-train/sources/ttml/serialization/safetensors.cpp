@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -156,7 +156,7 @@ std::vector<float> SafetensorSerialization::bytes_to_float_vec(
                         ++shift;
                     }
                     hm &= 0x03FFu;
-                    e = 127 - 15 - shift;
+                    e = 127 - 14 - shift;
                     m = (uint32_t)hm << 13;
                 }
             } else if (he == 0x1Fu) {  // inf/NaN

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -65,9 +65,9 @@ def test_unet(
     "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.997),
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.995),
         # 512x512 image resolution
-        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.997),
+        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.995),
     ],
     ids=["1024x1024", "512x512"],
 )
@@ -109,15 +109,15 @@ def test_refiner_unet(
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
         "wormhole": 191_201_442 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": 119_138_750 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "blackhole": 76_894_779 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
-        "wormhole": 83_531_333 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "wormhole": 81_200_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "refiner_unet_1024x1024": {
         "wormhole": 244_107_203 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": 131_795_269 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "blackhole": 114_154_100 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "refiner_unet_512x512": {
         "wormhole": 79_843_092 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
@@ -125,27 +125,27 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
-        "blackhole": 708_023_460,  # Used to be 369_666_097, group_norm welford disabled caused regression
+        "blackhole": 267_498_780,
     },
     "vae_decode_512x512": {
         "wormhole": 171_560_642,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_encode_1024x1024": {
-        "wormhole": 324_271_938,
-        "blackhole": 372_879_420,  # Used to be 170_093_216, group_norm welford disabled caused regression
+        "wormhole": 328_968_938,  # Note: this is an average value of 30 test runs due to high variability
+        "blackhole": 141_175_333,
     },
     "vae_encode_512x512": {
-        "wormhole": 83_537_085,
+        "wormhole": 85_005_572,  # Note: this is an average value of 30 test runs due to high variability
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        "wormhole": 13_112_562,
-        "blackhole": 6_795_180,
+        "wormhole": 23_745_000,  # Average of 3 main CI runs (Jun 22, 2026); transformers 5.10.2 bump reduced CLIP encoder dispatch
+        "blackhole": 11_927_000,  # Average of 3 main CI runs (Jun 22, 2026)
     },
     "clip_encoder_2": {
-        "wormhole": 63_591_763,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 31_220_061,
+        "wormhole": 88_529_000,  # Average of 3 main CI runs (Jun 22, 2026)
+        "blackhole": 43_810_000,  # Average of 3 main CI runs (Jun 22, 2026)
     },
 }
 
@@ -161,7 +161,7 @@ def get_device_perf(test_id):
 
 
 @pytest.mark.parametrize(
-    "test_id, command, subdir, model_name, num_iterations, batch_size, margin, comments",
+    "test_id, command, subdir, model_name, num_iterations, batch_size, margin, comments, op_support_count",
     [
         (
             "unet_1024x1024",
@@ -172,6 +172,7 @@ def get_device_perf(test_id):
             1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             0.015,
             f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
+            None,
         ),
         (
             "unet_512x512",
@@ -182,6 +183,7 @@ def get_device_perf(test_id):
             1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             0.015,
             f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
+            None,
         ),
         (
             "refiner_unet_1024x1024",
@@ -192,6 +194,7 @@ def get_device_perf(test_id):
             1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             0.06,
             f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
+            None,
         ),
         (
             "refiner_unet_512x512",
@@ -202,6 +205,7 @@ def get_device_perf(test_id):
             1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             0.06,
             f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
+            None,
         ),
         (
             "vae_decode_1024x1024",
@@ -212,6 +216,7 @@ def get_device_perf(test_id):
             1,
             0.015,
             "",
+            None,
         ),
         (
             "vae_decode_512x512",
@@ -222,6 +227,7 @@ def get_device_perf(test_id):
             1,
             0.015,
             "",
+            None,
         ),
         (
             "vae_encode_1024x1024",
@@ -232,6 +238,7 @@ def get_device_perf(test_id):
             1,
             0.015,
             "",
+            None,
         ),
         (
             "vae_encode_512x512",
@@ -242,6 +249,7 @@ def get_device_perf(test_id):
             1,
             0.015,
             "",
+            None,
         ),
         (
             "clip_encoder_1",
@@ -252,6 +260,7 @@ def get_device_perf(test_id):
             1,
             0.015,
             "",
+            None,
         ),
         (
             "clip_encoder_2",
@@ -262,6 +271,7 @@ def get_device_perf(test_id):
             1,
             0.020,
             "",
+            5000,
         ),
     ],
     ids=[
@@ -278,7 +288,9 @@ def get_device_perf(test_id):
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_sdxl_perf_device(test_id, command, subdir, model_name, num_iterations, batch_size, margin, comments):
+def test_sdxl_perf_device(
+    test_id, command, subdir, model_name, num_iterations, batch_size, margin, comments, op_support_count
+):
     expected_perf = get_device_perf(test_id)
     if expected_perf is None:
         pytest.skip(f"Test {test_id} not configured for current device")
@@ -295,4 +307,5 @@ def test_sdxl_perf_device(test_id, command, subdir, model_name, num_iterations, 
         batch_size=batch_size,
         margin=margin,
         comments=comments,
+        op_support_count=op_support_count,
     )

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,8 @@ import ttnn
 import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.common.utility_functions import skip_for_blackhole, skip_with_watcher
+
+pytestmark = pytest.mark.use_module_device
 
 
 def _out_size(in_size, pad, stride, k, dilation):
@@ -186,17 +188,51 @@ def run_conv3d_test(
     assert pcc_passed, pcc_message
 
 
-@pytest.mark.parametrize("B", [1, 2])
-@pytest.mark.parametrize("C_in", [12, 64])
-@pytest.mark.parametrize("C_out", [64, 48])
-@pytest.mark.parametrize("T", [8, 11])
-@pytest.mark.parametrize("H", [10, 13])
-@pytest.mark.parametrize("W", [9, 12])
-@pytest.mark.parametrize("kernel_size", [(3, 3, 3), (1, 1, 1)], ids=["kernel_333", "kernel_111"])
-@pytest.mark.parametrize("stride", [(1, 1, 1), (2, 2, 2)], ids=["stride_111", "stride_222"])
-@pytest.mark.parametrize("groups", [1, 2, 4], ids=["groups_1", "groups_2", "groups_4"])
-@pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
-@pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+@pytest.mark.parametrize(
+    "B, C_in, C_out, T, H, W, kernel_size, stride, groups, padding, padding_mode",
+    [
+        # fmt: off
+        # 1. baseline: k333, s111, g1, zeros, aligned Cin/Cout
+        (1, 64, 64, 8, 10, 9, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"),
+        # 2. grouped conv + replicate padding
+        (1, 64, 64, 8, 10, 9, (3, 3, 3), (1, 1, 1), 4, (0, 1, 1), "replicate"),
+        # 3. kernel 1×1×1 + non-aligned Cout
+        (1, 64, 48, 8, 10, 9, (1, 1, 1), (1, 1, 1), 1, (0, 1, 1), "zeros"),
+        # 4. stride 2×2×2
+        (1, 64, 64, 8, 10, 9, (3, 3, 3), (2, 2, 2), 1, (0, 1, 1), "zeros"),
+        # 5. stride 2×2×2 + groups + replicate + non-aligned Cout
+        (1, 64, 48, 8, 10, 9, (3, 3, 3), (2, 2, 2), 4, (0, 1, 1), "replicate"),
+        # 6. kernel 1×1×1 + stride 2×2×2
+        (1, 64, 64, 8, 10, 9, (1, 1, 1), (2, 2, 2), 1, (0, 1, 1), "zeros"),
+        # 7. non-aligned Cin (12), k333, s111
+        (1, 12, 64, 8, 10, 9, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"),
+        # 8. non-aligned Cin + kernel 1×1×1 + stride 2×2×2 + non-aligned Cout
+        (1, 12, 48, 8, 10, 9, (1, 1, 1), (2, 2, 2), 1, (0, 1, 1), "zeros"),
+        # 9. non-aligned Cin + groups + replicate + non-aligned Cout
+        (1, 12, 48, 8, 10, 9, (3, 3, 3), (1, 1, 1), 4, (0, 1, 1), "replicate"),
+        # 10. batch > 1
+        (2, 64, 64, 8, 10, 9, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"),
+        # 11. kernel 1×1×1 + groups + zeros
+        (1, 64, 64, 8, 10, 9, (1, 1, 1), (1, 1, 1), 4, (0, 1, 1), "zeros"),
+        # 12. stride 2×2×2 + replicate + non-aligned Cin
+        (1, 12, 64, 8, 10, 9, (3, 3, 3), (2, 2, 2), 1, (0, 1, 1), "replicate"),
+        # fmt: on
+    ],
+    ids=[
+        "k333_s111_g1_zeros_c64_c64",
+        "k333_s111_g4_replicate_c64_c64",
+        "k111_s111_g1_zeros_c64_c48",
+        "k333_s222_g1_zeros_c64_c64",
+        "k333_s222_g4_replicate_c64_c48",
+        "k111_s222_g1_zeros_c64_c64",
+        "k333_s111_g1_zeros_c12_c64",
+        "k111_s222_g1_zeros_c12_c48",
+        "k333_s111_g4_replicate_c12_c48",
+        "k333_s111_g1_zeros_c64_c64_B2",
+        "k111_s111_g4_zeros_c64_c64",
+        "k333_s222_g1_replicate_c12_c64",
+    ],
+)
 @skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_sweep_shapes(
     device,
@@ -213,17 +249,11 @@ def test_conv3d_sweep_shapes(
     padding_mode,
 ):
     input_shape = (B, C_in, T, H, W)
-    out_channels = C_out
-    kernel_size = kernel_size
-    stride = stride
-    groups = groups
-    padding = padding
-    padding_mode = padding_mode
     grid_size = device.compute_with_storage_grid_size()
     run_conv3d_test(
         device,
         input_shape,
-        out_channels,
+        C_out,
         kernel_size,
         stride,
         groups,
@@ -398,8 +428,9 @@ def test_conv3d_qwen_shapes(
         [(1, 64, 8, 10, 9), 64, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"],
         [(1, 64, 8, 10, 9), 64, (1, 1, 1), (1, 1, 1), 1, (0, 1, 1), "zeros"],
         [(1, 32, 4, 8, 8), 32, (3, 3, 3), (2, 2, 2), 1, (0, 1, 1), "zeros"],
+        [(2, 3, 2, 14, 14), 1280, (2, 14, 14), (2, 14, 14), 1, (0, 0, 0), "zeros"],
     ],
-    ids=["auto_block_k333", "auto_block_k111", "auto_block_stride222"],
+    ids=["auto_block_k333", "auto_block_k111", "auto_block_stride222", "auto_block_large_kernel"],
 )
 def test_conv3d_no_config(device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode):
     """Test Conv3d with no config (auto-blocking with conservative defaults)."""
@@ -476,4 +507,117 @@ def test_conv3d_float32(device):
         padding_mode="zeros",
         grid_size=grid_size,
         dtype=ttnn.DataType.FLOAT32,
+    )
+
+
+@pytest.mark.parametrize(
+    "C_in_block",
+    [32, 64],
+    ids=["block32_8x_reduction", "block64_4x_reduction"],
+)
+def test_conv3d_fp32_reduction_c_in_blocking(device, C_in_block):
+    """Test that fp32 intermediate CB prevents bf16 truncation in multi-block reduction.
+
+    Uses C_in=256 with kernel_size=(3,3,3) to maximize the accumulation range.
+    The baseline (C_in_block=256, single block, no reduction) establishes the
+    "correct" output. Then runs the same conv with smaller C_in_block using both
+    fp32 partials and bf16 partials, comparing mean absolute error vs baseline.
+
+    The fp32 path should have significantly lower error than bf16 (typically 5-10x),
+    confirming that fp32 intermediate CBs prevent truncation between partial sums.
+    """
+    input_shape = (1, 256, 4, 5, 5)
+    out_channels = 32
+    kernel_size = (3, 3, 3)
+    stride = (1, 1, 1)
+    padding = (0, 1, 1)
+    padding_mode = "zeros"
+
+    tt_input, conv3d_module, gt_output, _, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, 1, padding, padding_mode, device
+    )
+    N, D_out, H_out, W_out = output_dims
+    C = input_shape[1]
+
+    results = {}
+    for label, c_in_blk, fp32_acc in [
+        ("baseline", C, True),
+        ("fp32", C_in_block, True),
+        ("bf16", C_in_block, False),
+    ]:
+        tt_input = prepare_input_tensor(
+            torch.randn(input_shape, dtype=torch.float32, generator=torch.manual_seed(42)), C, device
+        )
+
+        kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_acc,
+            packer_l1_acc=False,
+        )
+        config = create_conv3d_config(
+            C_in_block=c_in_blk,
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        )
+
+        w = conv3d_module.weight.data
+        tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+        tt_weight = ttnn.experimental.prepare_conv3d_weights(
+            weight_tensor=tt_weight, groups=1, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+        )
+        tt_bias = ttnn.from_torch(
+            conv3d_module.bias.data.reshape(1, -1),
+            device=device,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            pad_value=0,
+        )
+
+        tt_output = ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            device=device,
+            bias_tensor=tt_bias,
+            dtype=ttnn.bfloat16,
+            output_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            padding_mode=padding_mode,
+            groups=1,
+            config=config,
+            compute_kernel_config=kernel_config,
+        )
+
+        results[label] = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    baseline_output = results["baseline"]
+    _, baseline_pcc_msg = check_with_pcc(gt_output, baseline_output, pcc=0.999)
+    logger.info(f"Baseline (C_in_block={C}, no reduction) vs torch: {baseline_pcc_msg}")
+
+    fp32_match, fp32_vs_baseline = check_with_pcc(baseline_output, results["fp32"], pcc=0.9999)
+    fp32_mean_err = (results["fp32"] - baseline_output).abs().mean().item()
+    logger.info(
+        f"fp32 partials (C_in_block={C_in_block}) vs baseline: {fp32_vs_baseline}, mean_err={fp32_mean_err:.6f}"
+    )
+
+    _, bf16_vs_baseline = check_with_pcc(baseline_output, results["bf16"], pcc=0.99)
+    bf16_mean_err = (results["bf16"] - baseline_output).abs().mean().item()
+    logger.info(
+        f"bf16 partials (C_in_block={C_in_block}) vs baseline: {bf16_vs_baseline}, mean_err={bf16_mean_err:.6f}"
+    )
+
+    assert fp32_match, f"fp32 partials (C_in_block={C_in_block}) diverged from baseline: {fp32_vs_baseline}"
+
+    if fp32_mean_err == 0:
+        error_ratio = float("inf")
+    else:
+        error_ratio = bf16_mean_err / fp32_mean_err
+    logger.info(
+        f"Error ratio bf16/fp32: {error_ratio:.1f}x (bf16 mean_err={bf16_mean_err:.6f}, fp32 mean_err={fp32_mean_err:.6f})"
+    )
+    assert error_ratio > 3.0, (
+        f"fp32 reduction should have significantly lower error than bf16, "
+        f"but ratio is only {error_ratio:.1f}x (fp32={fp32_mean_err:.6f}, bf16={bf16_mean_err:.6f})"
     )

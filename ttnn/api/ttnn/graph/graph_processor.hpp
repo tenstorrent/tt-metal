@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -63,7 +63,7 @@ public:
     void track_deallocate(tt::tt_metal::Buffer* buffer) override;
 
     void track_allocate_cb(
-        const CoreRangeSet& core_range,
+        const tt::tt_metal::CoreRangeSet& core_range,
         uint64_t addr,
         uint64_t size,
         bool is_globally_allocated,

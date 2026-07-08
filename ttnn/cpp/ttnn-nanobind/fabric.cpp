@@ -1,11 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fabric.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/core_coord.hpp>
@@ -130,6 +132,13 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("router_config") = nb::cast(tt::tt_fabric::FabricRouterConfig{}));
 
     mod.def(
+        "get_fabric_config",
+        &tt::tt_fabric::GetFabricConfig,
+        R"(
+            Returns the currently active global fabric configuration.
+        )");
+
+    mod.def(
         "setup_fabric_connection",
         [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
@@ -221,6 +230,25 @@ void bind_fabric_api(nb::module_& mod) {
         &tt::tt_fabric::get_tt_fabric_max_payload_size_bytes,
         R"(
             Returns the maximum fabric packet payload size in bytes.
+        )");
+
+    mod.def(
+        "get_physical_mesh_shapes",
+        []() {
+            // Return plain ints ({mesh_id: (rows, cols)}) to avoid MeshId/MeshShape
+            // Python-type friction -- callers just need the open shape per local mesh.
+            std::unordered_map<uint32_t, std::array<uint32_t, 2>> out;
+            for (const auto& [mid, shape] : tt::tt_fabric::get_physical_mesh_shapes()) {
+                out[*mid] = {shape[0], shape[1]};
+            }
+            return out;
+        },
+        R"(
+            Physical shape of each mesh local to this rank, read from the active mesh graph descriptor.
+
+            Returns a {mesh_id: (rows, cols)} map scoped to get_user_physical_mesh_ids() -- i.e. only
+            this rank's local mesh(es). This is exactly the shape to pass to open_mesh_device, so it is
+            safe to call before the device is opened (the control plane lazily inits from the MGD).
         )");
 }
 

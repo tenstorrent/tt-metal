@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -28,8 +28,8 @@ void kernel_main() {
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_src(cb_id_src);
+    Noc noc;
+    CircularBuffer cb_src(cb_id_src);
 
 #if SRC_SHARDED
     cb_src.reserve_back(src_num_tiles);
@@ -38,8 +38,8 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr auto src_args = TensorAccessorArgs<0, 0>();
     constexpr bool has_sharding = get_compile_time_arg_val(src_args.next_compile_time_args_offset()) == 1;
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
+    const uint32_t src_tile_bytes = cb_src.get_tile_size();
+    const auto src = TensorAccessor(src_args, src_addr);
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

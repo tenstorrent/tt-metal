@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,9 @@ struct SDPAParams {
     bool use_mla = false;
     std::optional<uint32_t> head_dim_v;
     std::optional<uint32_t> sliding_window_size;
+    // Windowed (block-diagonal) attention: when true, the mask is synthesized on-device from the
+    // cu_window_seqlens tensor instead of being read from attn_mask. Implies non-causal.
+    bool is_windowed = false;
 };
 
 struct SDPAInputs {
@@ -30,7 +33,12 @@ struct SDPAInputs {
     std::optional<Tensor> v;
     std::optional<Tensor> attn_mask;
     std::optional<Tensor> page_table;
+    // Mirrors SDPAParams::chunk_start_idx_tensor so ProgramDescriptor buffer bindings can patch cache hits.
+    std::optional<Tensor> chunk_start_idx_tensor;
     std::optional<Tensor> attention_sink;
+    // Cumulative window sequence lengths [num_windows + 1], int32/uint32, ROW_MAJOR. Present only in
+    // windowed mode; the writer builds the block-diagonal mask from it.
+    std::optional<Tensor> cu_window_seqlens;
 };
 
 }  // namespace ttnn::prim

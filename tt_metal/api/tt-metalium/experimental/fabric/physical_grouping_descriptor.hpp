@@ -1,12 +1,17 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <map>
+#include <numeric>
 #include <ostream>
+#include <set>
 #include <string>
+#include <utility>
 #include <filesystem>
 #include <memory>
 #include <vector>
@@ -40,7 +45,7 @@ struct GroupingItemInfo {
 
     ItemType type;
     tt::tt_metal::ASICLocation asic_location{0};  // Only valid if type == ASIC_LOCATION
-    tt::tt_metal::TrayID tray_id{0};              // Tray ID (1-4) if available, 0 otherwise
+    tt::tt_metal::TrayID tray_id{0};              // From optional instance tray_id (asic_location only); 0 = UNSET
 
     std::string grouping_name;   // Only valid if type == GROUPING_REF
     std::vector<CornerOrientation>
@@ -54,11 +59,21 @@ struct GroupingItemInfo {
 // Grouping information
 struct GroupingInfo {
     std::string name;  // Unique identifier/name for this specific grouping instance
-    std::string type;  // Type of grouping (e.g., "MESH", "TRAY_1", "meshes", "pods")
-    std::vector<GroupingItemInfo> items;  // items[i] is the item for graph node i (0..n-1)
+    std::string type;  // Type of grouping (e.g., "MESH", "tray", "meshes", "pods")
+    // items[node_id] is the item for graph node node_id. Flattened meshes may use non-contiguous IDs;
+    // in that case size is max_node_id+1 (only indices present in adjacency_graph are meaningful).
+    std::vector<GroupingItemInfo> items;
     uint32_t asic_count = 0;  // Total ASICs provided by this grouping, calculated bottom-up during population
 
-    // Adjacency graph. For flattened groupings, nodes are 0..n-1 and items[i] = item for node i.
+    // How PGD instances (sub-groupings) tile in row-major order, from row_major_mesh { dims: [...] }.
+    // Empty for all_to_all/custom/no connection. Used when joining sub-meshes during flattening.
+    std::vector<int32_t> instance_tile_layout_dims;
+
+    // Row-major [rows, cols] of all ASIC nodes after flattening (e.g. [32, 4] for a 128-ASIC mesh).
+    // Empty until flattening completes. Used for MGD topology matching and torus variant rebuild.
+    std::vector<int32_t> flattened_node_grid_dims;
+
+    // Adjacency graph. For flattened groupings, items[node_id] matches each node in the graph.
     // Empty graph if no connection type is specified.
     AdjacencyGraph<uint32_t> adjacency_graph;
 };
@@ -111,14 +126,57 @@ public:
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
+    // Build one GroupingInfo per MGD mesh instance for PSD placement fallback when PGD groupings fail to embed.
+    // Includes torus wrap-around edges when the MGD device topology uses RING dimensions.
+    // Intended for use by topology_mapper_utils when no PGD grouping successfully embeds into the PSD.
+    static std::vector<GroupingInfo> get_mgd_mesh_groupings_for_placement(
+        const MeshGraphDescriptor& mesh_graph_descriptor);
+
     // Find any valid mapping of a grouping to a physical system descriptor
     // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
     // Returns empty set if no valid mapping exists
-    // errors_out can be provided to get detailed error messages (optional, can be nullptr)
+    std::unordered_set<tt::tt_metal::AsicID> find_any_in_psd(
+        const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+
+    // Find any valid mapping of a grouping to a physical system descriptor
+    // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
+    // Returns empty set if no valid mapping exists
+    // errors_out will be populated with detailed error messages if mapping fails
     std::unordered_set<tt::tt_metal::AsicID> find_any_in_psd(
         const GroupingInfo& grouping,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::vector<std::string>* errors_out = nullptr) const;
+        std::vector<std::string>& errors_out) const;
+
+    // Find one maximal disjoint packing of the input `groupings` on the physical system descriptor.
+    // Returns a vector of unordered_sets. Each element is one mesh footprint (ASIC IDs for a single placement).
+    // No two elements share an ASIC. When multiple PGD grouping variants are provided, the variant with the
+    // highest total ASIC coverage is chosen; alternatives are not mixed in the same packing.
+    // Returns an empty vector if no valid packing exists.
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
+        const std::vector<GroupingInfo>& groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+
+    // Same semantics as the overload without `errors_out`.
+    // Additionally, `errors_out` receives detailed messages when mapping fails or no valid combined mapping can be
+    // formed.
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
+        const std::vector<GroupingInfo>& groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        std::vector<std::string>& errors_out) const;
+
+    // Same as find_all_in_psd above, but uses a prebuilt flat ASIC adjacency graph from the PSD (from
+    // build_flat_adjacency_map_from_psd). Callers that already built the graph can pass it to avoid a
+    // duplicate O(|PSD|) scan and graph construction.
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
+        const std::vector<GroupingInfo>& groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph) const;
+
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
+        const std::vector<GroupingInfo>& groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
+        std::vector<std::string>& errors_out) const;
 
     // Build flattened adjacency meshes - one per possibility based on possible groupings that can be formed
     // Returns vector of GroupingInfo objects, each with adjacency_graph populated and node metadata maps filled
@@ -127,6 +185,39 @@ public:
     // Overload that accepts a PhysicalSystemDescriptor reference for validation/filtering
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+
+    // Greedy minimum coverage over disjoint global groups (e.g. one set per host). Returns whether some single group
+    // has enough capacity for all targets, and the union of the largest groups until target count is covered.
+    template <typename TargetNode, typename GlobalNode>
+    static std::pair<bool, std::set<GlobalNode>> find_minimum_coverage_group(
+        const std::set<TargetNode>& all_targets, const std::vector<std::set<GlobalNode>>& global_groups) {
+        std::pair<bool, std::set<GlobalNode>> out{false, {}};
+        if (all_targets.empty() || global_groups.empty()) {
+            return out;
+        }
+        const std::size_t target_count = all_targets.size();
+        for (const auto& g : global_groups) {
+            if (g.size() >= target_count) {
+                out.first = true;
+                break;
+            }
+        }
+        std::vector<std::size_t> group_indices(global_groups.size());
+        std::iota(group_indices.begin(), group_indices.end(), 0);
+        std::sort(group_indices.begin(), group_indices.end(), [&](std::size_t a, std::size_t b) {
+            return global_groups[a].size() > global_groups[b].size();
+        });
+        std::size_t covered = 0;
+        for (std::size_t idx : group_indices) {
+            const auto& g = global_groups[idx];
+            out.second.insert(g.begin(), g.end());
+            covered += g.size();
+            if (covered >= target_count) {
+                break;
+            }
+        }
+        return out;
+    }
 
 private:
     // Data members
@@ -151,6 +242,11 @@ private:
     // Private helper that takes PSD pointer (used internally by public overloads)
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const;
+
+    // Fast feasibility check for (tray_id, asic_location) slot counts vs. the PSD. Used by
+    // build_flattened_adjacency_mesh to prune impossible flattened meshes before graph isomorphism.
+    static bool can_map_to_psd(
+        const GroupingInfo& grouping_info, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
 
     // Helper for reading files
     static std::string read_file_to_string(const std::filesystem::path& file_path);
@@ -196,12 +292,10 @@ private:
     static std::vector<std::string> static_validate(const proto::PhysicalGroupings& proto);
 
     // Internal validation helpers (used by static_validate)
-    static void uniquify_duplicate_names(proto::PhysicalGroupings& proto);
     static void validate_required_groupings(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_grouping_references(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_counts(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_grouping_structure(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
-    static void validate_unique_names(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
 };
 
 }  // namespace tt::tt_fabric

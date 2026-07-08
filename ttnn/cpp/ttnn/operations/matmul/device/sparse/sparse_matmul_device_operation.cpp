@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 #include <tt-metalium/work_split.hpp>
 
@@ -71,6 +72,41 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = tensor_args.input_tensors.at(1);
     const auto& sparsity = tensor_args.input_tensors.at(2);
 
+    TT_FATAL(
+        input_tensor_a.storage_type() == ttnn::StorageType::DEVICE &&
+            input_tensor_b.storage_type() == ttnn::StorageType::DEVICE &&
+            sparsity.storage_type() == ttnn::StorageType::DEVICE,
+        "All sparse matmul inputs must be on device");
+    TT_FATAL(
+        input_tensor_a.buffer() != nullptr && input_tensor_b.buffer() != nullptr && sparsity.buffer() != nullptr,
+        "All sparse matmul inputs must be allocated in buffers");
+    TT_FATAL(
+        input_tensor_a.device() == input_tensor_b.device() && input_tensor_a.device() == sparsity.device(),
+        "All sparse matmul inputs must be on the same device");
+    TT_FATAL(
+        input_tensor_a.layout() == ttnn::Layout::TILE,
+        "Input tensor A must be TILE layout, got {}",
+        input_tensor_a.layout());
+    TT_FATAL(
+        input_tensor_b.layout() == ttnn::Layout::TILE,
+        "Input tensor B must be TILE layout, got {}",
+        input_tensor_b.layout());
+    TT_FATAL(
+        is_floating_point(input_tensor_a.dtype()),
+        "Input tensor A must be a floating point type, got {}",
+        input_tensor_a.dtype());
+    TT_FATAL(
+        is_floating_point(input_tensor_b.dtype()),
+        "Input tensor B must be a floating point type, got {}",
+        input_tensor_b.dtype());
+    TT_FATAL(
+        sparsity.layout() == ttnn::Layout::ROW_MAJOR,
+        "Sparsity tensor must be ROW_MAJOR layout, got {}",
+        sparsity.layout());
+    TT_FATAL(
+        operation_attributes.is_input_a_sparse || operation_attributes.is_input_b_sparse,
+        "sparse_matmul requires at least one of is_input_a_sparse or is_input_b_sparse to be true");
+
     const auto& a_shape_padded = get_matmul_tensor_padded_shape(input_tensor_a, /*transpose=*/false);
     const auto& b_shape_padded = get_matmul_tensor_padded_shape(input_tensor_b, /*transpose=*/false);
     auto in0_tile = get_matmul_tile(input_tensor_a, /*transpose=*/false);
@@ -119,7 +155,9 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         b_shape_padded,
         in1_tile);
     TT_FATAL(
-        operation_attributes.nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", operation_attributes.nnz.value());
+        operation_attributes.nnz.value_or(1) > 0,
+        "nnz ({}) must be greater than 0",
+        operation_attributes.nnz.value_or(1));
 
     // Check that nnz is less than or equal to the length of all batch dimensions
     uint32_t batch_length_A = 1;
@@ -148,15 +186,27 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     // Check that sparsity has enough entries
     TT_FATAL(
         sparsity.logical_volume() == batch_length,
-        "sparsity.logical_volume() ({}) must be equal to the product of all batch dimensions ({})",
+        "sparsity logical_volume ({}) must equal batch_length ({}) "
+        "[sparsity_shape={}, is_input_a_sparse={}, is_input_b_sparse={}]",
         sparsity.logical_volume(),
-        batch_length);
+        batch_length,
+        sparsity.logical_shape(),
+        operation_attributes.is_input_a_sparse,
+        operation_attributes.is_input_b_sparse);
 
     TT_FATAL(
         operation_attributes.nnz.value_or(1) <= batch_length,
         "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
-        operation_attributes.nnz,
+        operation_attributes.nnz.value_or(1),
         batch_length);
+
+    // When nnz is supplied, the receiver and compute kernels loop exactly nnz times while the in0 sender
+    // only multicasts once per non-zero sparsity entry. The op therefore requires
+    // count_nonzero(sparsity) == nnz; a mismatch deadlocks the device (see issue #45943).
+    // count_nonzero(sparsity) is data-dependent and lives on device, so it cannot be checked here on the
+    // host -- it is the caller's responsibility to pass an exact nnz, and the contract is validated
+    // on-device in reader_bmm_tile_layout_in0_sender_padding.cpp (asserts loudly under watcher instead of
+    // hanging).
 }
 
 SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
@@ -247,8 +297,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
 // static ttsl::hash::hash_t SparseMatmulDeviceOperation::compute_program_hash(
 //     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-std::tuple<SparseMatmulDeviceOperation::operation_attributes_t, SparseMatmulDeviceOperation::tensor_args_t>
-SparseMatmulDeviceOperation::invoke(
+std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation_args(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
@@ -283,6 +332,41 @@ SparseMatmulDeviceOperation::invoke(
     return {parameters, SparseMatmulInputs{{input_tensor_a, input_tensor_b, sparsity}, {}, {optional_output_tensor}}};
 }
 
+SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& sparsity,
+    const std::optional<Tensor>& optional_output_tensor,
+    std::optional<uint32_t> nnz,
+    bool is_input_a_sparse,
+    bool is_input_b_sparse,
+    const std::optional<const MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const CoreCoord>& user_core_coord,
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    const std::optional<const GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    auto [params, inputs] = sparse_matmul_build_operation_args(
+        input_tensor_a,
+        input_tensor_b,
+        sparsity,
+        optional_output_tensor,
+        nnz,
+        is_input_a_sparse,
+        is_input_b_sparse,
+        memory_config,
+        std::move(dtype),
+        program_config,
+        std::move(compute_kernel_config),
+        user_core_coord,
+        output_tile,
+        global_cb,
+        sub_device_id);
+    return ttnn::device_operation::launch<SparseMatmulDeviceOperation>(params, inputs);
+}
+
 SparseMatmulParams create_sparse_matmul_attributes(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -307,6 +391,10 @@ SparseMatmulParams create_sparse_matmul_attributes(
 
     auto matmul_struct =
         create_matmul_attributes(input_tensor_a, input_tensor_b, matmul_attributes, {optional_output_tensors.at(0)});
+    if (matmul_struct.program_config.has_value()) {
+        auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+        operations::matmul::normalize_program_config(matmul_struct.program_config.value(), device_grid);
+    }
     return SparseMatmulParams{
         parameters.nnz,
         parameters.is_input_a_sparse,

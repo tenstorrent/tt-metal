@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--triage-summary-path=<path>]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -23,7 +23,10 @@ Options:
                                      Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
     --disable-colors                 Disable colored output. [default: False]
     --disable-progress               Disable progress bars. [default: False]
+    --disable-elf-cache              Re-parse ELF files on every access instead of caching. [default: False]
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
+    --llm-output                     Replace Rich tables on the console with a machine-readable report (CSV-formatted tables). Easier and cheaper for LLMs (and grep/CI) to consume. Implies --disable-colors.
+    --llm-output-path=<path>         Additionally write the machine-readable report to <path>. Can be combined with --llm-output; without it, Rich output still goes to the console.
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -48,6 +51,7 @@ import shutil
 import threading
 from time import time
 import traceback
+import sys
 import utils
 from collections.abc import Iterable
 from pathlib import Path
@@ -74,15 +78,34 @@ import importlib
 import importlib.metadata as importlib_metadata
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
-from rich.table import Table
 import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
 from ttexalens.umd_device import TimeoutDeviceRegisterError
-from typing import Any, Callable, Iterable, TypeVar
+from typing import Any, Callable, Iterable, TypeVar, cast
 from types import ModuleType
+
+
+def _raise_open_file_limit(desired: int = 65536) -> None:
+    """
+    Raise the open file limit for the current process to the desired value if possible.
+    This is necessary to avoid hitting the open file limit when processing many ELF files with the elf cache enabled.
+    If the file limit is already at or above the desired value, this function does nothing.
+    """
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        new_soft = desired if hard == resource.RLIM_INFINITY else min(desired, hard)
+        if new_soft <= soft:
+            return
+        resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+    except (ImportError, OSError, ValueError) as e:
+        utils.WARN(
+            f"Failed to raise open file limit: {e}. This may cause issues when processing many ELF files. Consider increasing the limit manually (ulimit -n {desired})."
+        )
 
 
 class ScriptPriority(Enum):
@@ -119,14 +142,20 @@ def triage_singleton(run_method: Callable[[ScriptArguments, Context], T], /) -> 
         len(signature.parameters) == 2 and "args" in signature.parameters and "context" in signature.parameters
     ), "run_method must have two arguments (args, context)."
 
-    # Create simple cache
-    cache: dict[tuple[int, int], T] = {}
+    # Cache results and exceptions so repeat calls don't re-run on already-failed setup.
+    cache: dict[tuple[int, int], tuple[bool, Any]] = {}
 
     def cache_wrapper(args: ScriptArguments, context: Context) -> T:
         cache_key = (id(args), id(context))
         if cache_key not in cache:
-            cache[cache_key] = run_method(args, context)
-        return cache[cache_key]
+            try:
+                cache[cache_key] = (True, run_method(args, context))
+            except Exception as e:
+                cache[cache_key] = (False, e)
+        ok, payload = cache[cache_key]
+        if not ok:
+            raise payload
+        return cast(T, payload)
 
     return cache_wrapper
 
@@ -223,7 +252,8 @@ class TriageScript:
             return result
         except TimeoutDeviceRegisterError:
             raise
-        except ValueError as e:
+        except (ValueError, TTTriageError) as e:
+            # User-facing exceptions: surface the message only, no traceback noise.
             if log_error:
                 self.failed = True
                 self.failure_message = f"{e}"
@@ -250,8 +280,9 @@ class TriageScript:
             script_name = os.path.splitext(os.path.basename(script_path))[0]
             script_module = importlib.import_module(script_name)
 
-            # Check if script has a configuration
-            script_config: ScriptConfig = script_module.script_config
+            # Check if script has a configuration. The value comes from a dynamically imported
+            # user module, so it may be missing/None at runtime even though the declared type isn't.
+            script_config: Any = script_module.script_config
             if script_config is None:
                 # This script does not have a configuration, which means it is not tt-triage script, skipping...
                 raise ValueError(f"Script {script_path} does not have script_config.")
@@ -289,15 +320,15 @@ class TriageScript:
                 documentation=script_module.__doc__,
             )
 
-            if triage_script.config.depends is None:
+            # 'depends' comes from a user-authored module and may be None or contain non-str
+            # entries at runtime, so normalize defensively despite the declared list[str] type.
+            depends: Any = triage_script.config.depends
+            if depends is None:
                 # If script does not have dependencies, set it to empty list
                 triage_script.config.depends = []
             else:
-                triage_script.config.depends = [
-                    dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py"
-                    for dep in triage_script.config.depends
-                ]
-                triage_script.config.depends = [os.path.join(base_path, dep) for dep in triage_script.config.depends]
+                normalized = [dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py" for dep in depends]
+                triage_script.config.depends = [os.path.join(base_path, dep) for dep in normalized]
 
             return triage_script
         finally:
@@ -327,6 +358,23 @@ class TriageScript:
                 script.depends.append(scripts[dep])
         return scripts
 
+    @staticmethod
+    def discover_all_in_directory(directory: str) -> dict[str, "TriageScript"]:
+        directory = os.path.abspath(directory)
+        scripts: dict[str, TriageScript] = {}
+        for fname in os.listdir(directory):
+            if not fname.endswith(".py") or fname == os.path.basename(__file__):
+                continue
+            script_path = os.path.join(directory, fname)
+            try:
+                triage_script = TriageScript.load(script_path)
+                if triage_script.config.disabled:
+                    continue
+            except Exception:
+                continue
+            scripts[script_path] = triage_script
+        return scripts
+
 
 def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScript]:
     # Build script dependents graph and script missing dependencies map
@@ -340,7 +388,7 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
 
     # Min-heap for runnable scripts: (-priority, script name, script object)
     # Negative priority because heapq is a min-heap
-    heap = []
+    heap: list[tuple[int, str, TriageScript]] = []
 
     # Initialize heap with scripts with in-degree 0 (no unmet dependencies)
     for path, script in scripts.items():
@@ -363,7 +411,7 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
 
     # If some scripts remain with non-zero in-degree, we have a cycle
     if len(result) != len(scripts):
-        remaining_scripts = set(scripts.keys()) - {s.config.name for s in result}
+        remaining_scripts = set(scripts.keys()) - {s.path for s in result}
         raise ValueError(
             f"Bad dependency detected in scripts: {', '.join(remaining_scripts)}\n"
             f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
@@ -374,7 +422,7 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
 
 
 # Purposely uninitialized global console object to ensure proper initialization only once later
-console: Console = None  # type: ignore[assignment]
+console: Console | None = None
 progress_disabled: bool = False
 
 
@@ -389,8 +437,11 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     # When in a terminal, let Rich auto-detect the terminal width.
     # Similarly, if verbosity is increased, use larger width to avoid wrapping.
     width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
-    console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
-    progress_disabled = bool(args["--disable-progress"])
+    # --llm-output implies no colors: non-table console output (status lines,
+    # warnings) needs to stay plain text for cheap LLM consumption.
+    disable_colors = bool(args["--disable-colors"]) or bool(args["--llm-output"])
+    console = Console(theme=utils.create_console_theme(disable_colors), highlight=False, width=width)
+    progress_disabled = bool(args["--disable-progress"]) or bool(args["--llm-output"])
 
     # Set verbose level from -v count (controls which columns are displayed)
     verbose_level = args["-v"] or 0
@@ -423,6 +474,7 @@ def create_progress() -> Progress:
 
 def process_arguments(args: ScriptArguments) -> None:
     init_console_and_verbosity(args)
+    _raise_open_file_limit()
 
 
 def parse_arguments(
@@ -431,17 +483,19 @@ def parse_arguments(
     argv: list[str] | None = None,
     only_triage_script_args=False,
 ) -> ScriptArguments:
-    from docopt import (
-        parse_defaults,
-        parse_pattern,
-        formal_usage,
+    # docopt's typeshed stub only exposes the public docopt() function, but these internal
+    # parser symbols exist at runtime. Ignore the stub gaps for both checkers.
+    from docopt import (  # type: ignore[attr-defined]
+        parse_defaults,  # pyright: ignore[reportAttributeAccessIssue]
+        parse_pattern,  # pyright: ignore[reportAttributeAccessIssue]
+        formal_usage,  # pyright: ignore[reportAttributeAccessIssue]
         printable_usage,
-        parse_argv,
-        Required,
-        TokenStream,
+        parse_argv,  # pyright: ignore[reportAttributeAccessIssue]
+        Required,  # pyright: ignore[reportAttributeAccessIssue]
+        TokenStream,  # pyright: ignore[reportAttributeAccessIssue]
         DocoptExit,
-        Option,
-        AnyOptions,
+        Option,  # pyright: ignore[reportAttributeAccessIssue]
+        AnyOptions,  # pyright: ignore[reportAttributeAccessIssue]
     )
     import sys
 
@@ -453,7 +507,7 @@ def parse_arguments(
         docs[script.name] = script.documentation
 
     combined_options = []
-    combined_pattern: Required = Required(*[Required(*[])])
+    combined_pattern = Required(*[Required(*[])])
 
     for script_name, doc in docs.items():
         try:
@@ -469,7 +523,7 @@ def parse_arguments(
 
     # Deduplicate options if some scripts define the same option
     seen_options: set[str | None] = set()
-    unique_options: list[Option] = []
+    unique_options = []
     for opt in combined_options:
         key = opt.long or opt.short
         if key not in seen_options:
@@ -570,13 +624,55 @@ def log_warning_risc(risc_name: str, location: OnChipCoordinate, message: str) -
     log_warning_location(location, f"{risc_name}: {message}")
 
 
+_output_serializer: Any = None
+
+
+def get_output_serializer() -> Any:
+    """Return the active serializer, defaulting to a Rich-console one on first use."""
+    global _output_serializer
+    if _output_serializer is None:
+        from serializers import ConsoleSink, RichSerializer
+
+        _output_serializer = RichSerializer(ConsoleSink(console), utils, get_verbose_level)
+    return _output_serializer
+
+
+def set_output_serializer(serializer: Any) -> None:
+    global _output_serializer
+    _output_serializer = serializer
+
+
+def init_output_serializer(args: ScriptArguments) -> None:
+    """Build the active serializer(s) based on CLI args.
+
+    Combinations:
+      neither flag                      -> RichSerializer on the console
+      --llm-output                      -> CsvSerializer on the console (replaces Rich)
+      --llm-output-path=<path>          -> Rich on console + CsvSerializer to file
+      --llm-output --llm-output-path=.. -> CsvSerializer on console + CsvSerializer to file
+    """
+    from serializers import ConsoleSink, CsvSerializer, FileSink, MultiSerializer, RichSerializer
+
+    console_sink = ConsoleSink(console)
+    serializers: list[Any] = []
+
+    if args["--llm-output"]:
+        serializers.append(CsvSerializer(console_sink, get_verbose_level))
+    else:
+        serializers.append(RichSerializer(console_sink, utils, get_verbose_level))
+
+    csv_path = utils.safe_path(args["--llm-output-path"])
+    if csv_path:
+        try:
+            file_sink = FileSink(csv_path)
+            serializers.append(CsvSerializer(file_sink, get_verbose_level))
+        except OSError as e:
+            utils.WARN(f"Failed to open --llm-output-path={csv_path!r}: {e}. File output will be skipped.")
+
+    set_output_serializer(serializers[0] if len(serializers) == 1 else MultiSerializer(serializers))
+
+
 def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
-    from dataclasses import fields, is_dataclass
-
-    if script is not None:
-        print()
-        utils.INFO(f"{script.name}{execution_time}:")
-
     global FAILURE_CHECKS, FAILURE_CHECKS_LOCK, WARNING_CHECKS, WARNING_CHECKS_LOCK
     with FAILURE_CHECKS_LOCK:
         failures = FAILURE_CHECKS
@@ -584,87 +680,17 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
     with WARNING_CHECKS_LOCK:
         warnings = WARNING_CHECKS
         WARNING_CHECKS = []
-    if result is None:
-        if len(failures) > 0 or script.failed:
-            utils.ERROR("  fail")
-            for failure in failures:
-                utils.ERROR(f"    {failure}")
-            if script.failed:
-                utils.ERROR(f"    {script.failure_message}")
 
-                import textwrap
-
-                docstring_indented = textwrap.indent(script.documentation.strip(), "    ")
-                utils.ERROR(f"  Script help:\n{docstring_indented}")
-        else:
-            utils.INFO("  pass")
-            for warning in warnings:
-                utils.WARN(f"    {warning}")
-        return
-
-    for failure in failures:
-        utils.ERROR(f"  {failure}")
-
-    for warning in warnings:
-        utils.WARN(f"  {warning}")
-
-    if isinstance(result, list) and len(result) == 0:
-        utils.ERROR("  No results found.")
-
-    if not (is_dataclass(result) or (isinstance(result, list) and all(is_dataclass(item) for item in result))):
-        utils.INFO(f"  {result}")
-    else:
-        if not isinstance(result, list):
-            result = [result]
-
-        def generate_header(table: Table, obj, flds):
-            for field in flds:
-                metadata = field.metadata
-                # Skip field if it requires higher verbosity level
-                if metadata.get("verbose", 0) > _verbose_level:
-                    continue
-                if "dont_serialize" in metadata and metadata["dont_serialize"]:
-                    continue
-                elif "recurse" in metadata and metadata["recurse"]:
-                    value = getattr(obj, field.name)
-                    assert is_dataclass(value)
-                    generate_header(table, value, fields(value))
-                elif "serialized_name" in metadata:
-                    justify = metadata.get("justify", "left")
-                    table.add_column(metadata.get("serialized_name", field.name), justify=justify)
-
-        def generate_row(row: list[str], obj, flds):
-            for field in flds:
-                metadata = field.metadata
-                # Skip field if it requires higher verbosity level
-                if metadata.get("verbose", 0) > _verbose_level:
-                    continue
-                if "dont_serialize" in metadata and metadata["dont_serialize"]:
-                    continue
-                elif "recurse" in metadata and metadata["recurse"]:
-                    value = getattr(obj, field.name)
-                    assert is_dataclass(value)
-                    generate_row(row, value, fields(value))
-                elif "additional_fields" in metadata:
-                    assert all(hasattr(obj, additional_field) for additional_field in metadata["additional_fields"])
-                    all_values = [getattr(obj, field.name)]
-                    all_values.extend(
-                        [getattr(obj, additional_field) for additional_field in metadata["additional_fields"]]
-                    )
-                    assert "serializer" in metadata, "Serializer must be provided for combined field."
-                    row.append(metadata["serializer"](all_values))
-                elif "serializer" in metadata:
-                    row.append(metadata["serializer"](getattr(obj, field.name)))
-
-        table = Table()
-
-        # Create table header
-        generate_header(table, result[0], fields(result[0]))
-        for item in result:
-            row: list[str] = []
-            generate_row(row, item, fields(item))
-            table.add_row(*row)
-        console.print(table)
+    get_output_serializer().emit(
+        script_name=script.name if script is not None else None,
+        execution_time=execution_time,
+        result=result,
+        failures=failures,
+        warnings=warnings,
+        script_failed=script.failed if script is not None else False,
+        failure_message=script.failure_message if script is not None else None,
+        documentation=script.documentation if script is not None else None,
+    )
 
 
 def _enforce_dependencies(args: ScriptArguments) -> None:
@@ -725,9 +751,13 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
         install_cmd = f"{pip_cmd} install -r {_triage_requirements_path}"
         utils.WARN(f"Required debugger component is not installed. Please run: {install_cmd}")
-        console.print(f"Module 'tt-exalens' not found. Please install tt-exalens by running:")
-        console.print(f"  [command]{install_cmd}[/]")
-        exit(1)
+        if console is not None:
+            console.print("Module 'tt-exalens' not found. Please install tt-exalens by running:")
+            console.print(f"  [command]{install_cmd}[/]")
+        else:
+            print("Module 'tt-exalens' not found. Please install tt-exalens by running:")
+            print(f"  {install_cmd}")
+        sys.exit(1)
 
     # Check if installed version satisfies the requirement
     if installed_version not in tt_exalens_req.specifier:
@@ -737,12 +767,18 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         if skip_check:
             utils.WARN(message)
             utils.WARN("Proceeding due to --skip-version-check")
-        else:
+        elif console is not None:
             console.print(message)
-            console.print(f"Please install tt-exalens by running:")
+            console.print("Please install tt-exalens by running:")
             console.print(f"  [command]{install_cmd}[/]")
-            console.print(f"Or disable this check by running with [command]--skip-version-check[/] argument.")
-            exit(1)
+            console.print("Or disable this check by running with [command]--skip-version-check[/] argument.")
+            sys.exit(1)
+        else:
+            print(message)
+            print("Please install tt-exalens by running:")
+            print(f"  {install_cmd}")
+            print("Or disable this check by running with --skip-version-check argument.")
+            sys.exit(1)
 
 
 def _patch_risc_debug() -> None:
@@ -761,16 +797,17 @@ def _patch_risc_debug() -> None:
     from triage_session import get_triage_session
 
     def is_affected_by_cont_bug(device) -> bool:
-        return device.is_wormhole() or device.is_blackhole()
+        return bool(device.is_wormhole() or device.is_blackhole())
 
     original_hw_cont = BabyRiscDebugHardware.cont
     original_hw_continue_without_debug = BabyRiscDebugHardware.continue_without_debug
     original_hw_halt = BabyRiscDebugHardware.halt
 
-    BabyRiscDebugHardware.cont = (
+    # Intentional runtime monkey-patching of a third-party class to work around a HW bug.
+    BabyRiscDebugHardware.cont = (  # type: ignore[method-assign]
         lambda self: None if is_affected_by_cont_bug(self.risc_info.noc_block.device) else original_hw_cont(self)
     )
-    BabyRiscDebugHardware.continue_without_debug = (
+    BabyRiscDebugHardware.continue_without_debug = (  # type: ignore[method-assign]
         lambda self: None
         if is_affected_by_cont_bug(self.risc_info.noc_block.device)
         else original_hw_continue_without_debug(self)
@@ -785,7 +822,7 @@ def _patch_risc_debug() -> None:
             original_hw_halt(self)
             session.add_halted_core(location, risc_name)
 
-    BabyRiscDebugHardware.halt = patched_halt
+    BabyRiscDebugHardware.halt = patched_halt  # type: ignore[method-assign]
 
 
 def _init_ttexalens(args: ScriptArguments) -> Context:
@@ -812,7 +849,7 @@ def run_script(
     if script_path is None:
         # Check if previous call on callstack is a TriageScript
         stack = inspect.stack()
-        if stack is None or len(stack) < 2:
+        if len(stack) < 2:
             raise ValueError("No script path provided and no caller found in callstack.")
         script_path = stack[1].filename
         force_exit = True
@@ -826,15 +863,19 @@ def run_script(
         if not os.path.exists(script_path):
             raise FileNotFoundError(f"Script {script_path} does not exist.")
 
-    # Load script and its dependencies
+    # Load script and its dependencies (drives execution order).
     scripts = TriageScript.load_all(script_path)
 
     # Find execution order of scripts
     script_queue = resolve_execution_order(scripts)
 
-    # Parse arguments
+    # Parse arguments using every script's options
     if args is None:
-        args = parse_arguments(scripts, script_path, argv)
+        all_scripts = TriageScript.discover_all_in_directory(os.path.dirname(script_path))
+        # Ensure the target and its deps are present even if discovery missed them somehow.
+        for path, script in scripts.items():
+            all_scripts.setdefault(path, script)
+        args = parse_arguments(all_scripts, script_path, argv)
 
     # Initialize context if not provided
     if context is None:
@@ -850,12 +891,14 @@ def run_script(
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
-    script = scripts[script_path] if script_path in scripts else None
+    result_script = scripts[script_path] if script_path in scripts else None
     if return_result:
         return result
-    serialize_result(script, result)
+    init_output_serializer(args)
+    serialize_result(result_script, result)
 
     if force_exit:
+        get_output_serializer().close()
         # Remove nanobind leak check to avoid false positives on exit
         os._exit(0)
 
@@ -884,7 +927,6 @@ def main():
 
     # Enumerate all scripts in application directory
     application_path = os.path.abspath(os.path.dirname(__file__))
-    script_files = [f for f in os.listdir(application_path) if f.endswith(".py") and f != os.path.basename(__file__)]
 
     # To avoid multiple imports of this script, we add it to sys.modules
     my_name = os.path.splitext(os.path.basename(__file__))[0]
@@ -893,19 +935,7 @@ def main():
 
     # Load tt-triage scripts
     # TODO: do we need to check for subdirectories?
-    scripts: dict[str, TriageScript] = {}
-    base_path = application_path
-    for script in script_files:
-        script_path = os.path.join(base_path, script)
-        try:
-            triage_script = TriageScript.load(script_path)
-            if triage_script.config.disabled:
-                utils.DEBUG(f"Script {script_path} is disabled, skipping...")
-                continue
-        except Exception as e:
-            utils.DEBUG(f"Failed to load script {script_path}: {e}")
-            continue
-        scripts[script_path] = triage_script
+    scripts = TriageScript.discover_all_in_directory(application_path)
 
     # Resolve dependencies
     for script in scripts.values():
@@ -922,6 +952,8 @@ def main():
 
     # Parse common command line arguments
     args = parse_arguments(scripts)
+
+    init_output_serializer(args)
 
     # Enforce debugger dependencies, then initialize
     _enforce_dependencies(args)
@@ -948,8 +980,9 @@ def main():
             for script in script_queue:
                 progress.update(scripts_task, description=f"Running {script.name}")
                 if not all(not dep.failed for dep in script.depends):
-                    utils.INFO(f"{script.name}:")
-                    utils.WARN(f"  Cannot run script due to failed dependencies.")
+                    # Silently mark as skipped — the original root-cause failure already
+                    # printed its own message; cascading "Cannot run due to failed dependencies"
+                    # lines for every downstream script are noise.
                     script.failed = True
                     script.failure_message = "Cannot run script due to failed dependencies."
                 else:
@@ -983,7 +1016,7 @@ def main():
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
 
-    triage_summary_path = args["--triage-summary-path"]
+    triage_summary_path = utils.safe_path(args["--triage-summary-path"])
     if triage_summary_path:
         try:
             os.makedirs(os.path.dirname(triage_summary_path), exist_ok=True)
@@ -992,6 +1025,12 @@ def main():
             utils.INFO(f"Triage summary written to {triage_summary_path}")
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")
+
+    from elfs_cache import run as get_elfs_cache
+
+    get_elfs_cache(args, context).log_stats()
+
+    get_output_serializer().close()
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ public:
         tt::tt_metal::MetalEnvImpl* env, const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores);
     explicit SubDeviceImpl(
         tt::tt_metal::MetalEnvImpl* env, std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores);
-    explicit SubDeviceImpl(tt::tt_metal::MetalEnvImpl* env, tt::stl::Span<const CoreRangeSet> cores);
+    explicit SubDeviceImpl(tt::tt_metal::MetalEnvImpl* env, ttsl::Span<const CoreRangeSet> cores);
 
     // Copy/move semantics
     SubDeviceImpl(const SubDeviceImpl&) = default;

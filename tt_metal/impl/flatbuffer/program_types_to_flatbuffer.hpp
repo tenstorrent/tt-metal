@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -61,6 +61,6 @@ flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffer::RuntimeA
     flatbuffers::FlatBufferBuilder& builder, const std::shared_ptr<RuntimeArgs>& runtime_args);
 
 flatbuffers::Offset<flatbuffers::Vector<uint8_t>> to_flatbuffer(
-    flatbuffers::FlatBufferBuilder& builder, tt::stl::Span<const SubDeviceId> sub_device_ids);
+    flatbuffers::FlatBufferBuilder& builder, ttsl::Span<const SubDeviceId> sub_device_ids);
 
 }  // namespace tt::tt_metal

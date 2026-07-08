@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -90,7 +90,7 @@ void run_eltwise_binary_test(
     auto binary_reader_kernel = CreateKernel(
         program,
         multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp"
-                  : "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
+                  : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_diff_lengths.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -98,11 +98,14 @@ void run_eltwise_binary_test(
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args;
+    if (multibank) {
+        writer_compile_time_args.emplace_back(ouput_cb_index);
+    }
     TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
     auto unary_writer_kernel = CreateKernel(
         program,
         multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
-                  : "tt_metal/kernels/dataflow/writer_unary.cpp",
+                  : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -115,7 +118,7 @@ void run_eltwise_binary_test(
         {"ELTWISE_OP", op_id_to_op_define[eltwise_op]}, {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};
     auto eltwise_binary_kernel = CreateKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
         core,
         ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 
@@ -154,14 +157,14 @@ void run_eltwise_binary_test(
 
 }  // namespace
 
-TEST_F(UnitMeshCQSingleCardFixture, EltwiseBinaryAdd) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinaryAdd) {
     run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::ADD));
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, EltwiseBinarySub) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinarySub) {
     run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::SUB));
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, EltwiseBinaryMul) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinaryMul) {
     run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::MUL));
 }

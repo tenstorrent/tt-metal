@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,8 +13,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-from models.demos.deepseek_v3_b1.prepare_weights import SharedExpertWeights, prepare_shared_expert_weights
+from models.demos.deepseek_v3_b1.weights.prepare import SharedExpertWeights, prepare_shared_expert_weights
 
 # If False, load from DEEPSEEK_V3_HF_MODEL when set; otherwise skip. If True, use deterministic random weights.
 USE_RANDOM_WEIGHTS = True
@@ -25,6 +24,21 @@ _REF_HF_O_PROJ = (7168, 16384)
 _REF_HF_KV_B = (32768, 512)
 _REF_HF_SHARED_GATE_UP = (2048, 7168)
 _REF_K = 7168
+
+
+# This is a workaround to avoid hanging when crashing during tests since __repr__ is called on traceback, which causes
+# tensors to be brought back to host which is very slow in slow-dispatch mode.
+def _safe_tensor_repr(self):
+    try:
+        return f"ttnn.Tensor(shape={self.shape}, dtype={self.dtype}, layout={self.layout})"
+    except Exception:
+        return object.__repr__(self)
+
+
+try:
+    ttnn.Tensor.__repr__ = _safe_tensor_repr
+except (TypeError, AttributeError):
+    pass
 
 
 def _scaled_randn(*shape, generator, dtype=torch.bfloat16):
@@ -229,8 +243,9 @@ def get_model_decoder_weight(hf_state_dict):
             torch_gate = state_dict[_state_dict_key(layer_idx, "mlp.shared_experts.gate_proj.weight")].T.contiguous()
             torch_up = state_dict[_state_dict_key(layer_idx, "mlp.shared_experts.up_proj.weight")].T.contiguous()
             torch_down = state_dict[_state_dict_key(layer_idx, "mlp.shared_experts.down_proj.weight")].T.contiguous()
-            bdw = BlitzDecodeWeights(mesh_device)
-            weights = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=True, move_to_device=True)
+            weights = prepare_shared_expert_weights(
+                mesh_device, state_dict, layer_idx, is_moe=True, move_to_device=True
+            )
             return SharedExpertWeightBundle(
                 weights=weights,
                 torch_gate=torch_gate,
@@ -262,3 +277,18 @@ def hf_model_path():
 def hf_state_dict(hf_model_path):
     """Session-scoped LazyStateDict over the HuggingFace model for real-weights tests."""
     return LazyStateDict(hf_model_path)
+
+
+def _group_collected_items_by_file(items: list[pytest.Item]) -> list[pytest.Item]:
+    grouped_items: dict[Path, list[pytest.Item]] = {}
+    for item in items:
+        grouped_items.setdefault(item.path, []).append(item)
+    return [item for group in grouped_items.values() for item in group]
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_finish(session: pytest.Session) -> None:
+    # Keep DeepSeek unit tests grouped by file. A/B testing with this hook removed
+    # showed pytest's fixture-based interleaving can run the suite in a bad order
+    # for shared Blackhole fabric/device state.
+    session.items[:] = _group_collected_items_by_file(session.items)

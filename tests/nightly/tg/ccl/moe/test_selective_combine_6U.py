@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,11 @@ import random
 import pytest
 import torch
 import ttnn
+
+# Force torch CPU ops to use all cores. bf16 matmul on CPU is single-thread on
+# some torch builds even with OMP_NUM_THREADS set; this is the runtime knob that
+# keeps host-side golden compute fast. See test_moe_compute_6U.py for context.
+torch.set_num_threads(os.cpu_count() or 1)
 
 # Mesh graph descriptor paths for different mesh configurations
 MESH_GRAPH_DESC_1x16 = (
@@ -42,7 +47,7 @@ from tracy import signpost
 torch.set_printoptions(threshold=float("inf"))
 
 
-def _device_mesh_iterator(mesh_shape):
+def device_mesh_iterator(mesh_shape):
     for m0 in range(mesh_shape[0]):
         for m1 in range(mesh_shape[1]):
             device = m0 * mesh_shape[1] + m1
@@ -86,7 +91,7 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
     # 1 mapping value per token + 12 bytes padding
     dense_token_maps = torch.zeros([experts, batch * seq + 1, 4], dtype=torch.int32)
 
-    for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
+    for m0, m1, rec_d in device_mesh_iterator(mesh_shape):
         device_expert_list = get_experts_on_device(experts, expert_mapping, rec_d)
 
         for b in range(batch):
@@ -151,7 +156,7 @@ def gen_dense_input_contribs(
     assert len(block_counts) == experts
 
     dense_contribs = 0
-    for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
+    for m0, m1, rec_d in device_mesh_iterator(mesh_shape):
         device_dense_idxs = [0] * num_local_experts
         device_blocked_dense_counts = [0] * num_local_experts
         for dt in range(dense_metadata_len[rec_d]):
@@ -214,7 +219,7 @@ def gen_output_ref(
 
     batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch)
 
-    for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
+    for m0, m1, rec_d in device_mesh_iterator(mesh_shape):
         device_dense_idxs = [0] * num_local_experts
         device_blocked_dense_counts = [0] * num_local_experts
         for dt in range(dense_metadata_len[rec_d]):
@@ -623,7 +628,6 @@ def _run_test(
                 batch,
                 seq,
                 select_experts_k,
-                experts,
                 cluster_axis,
                 topology=ttnn.Topology.Ring,
                 num_links=num_links,
@@ -685,7 +689,7 @@ def _run_test(
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("batch", [512, 128, 64])
+@pytest.mark.parametrize("batch", [512, 128, 64, 48])
 @pytest.mark.parametrize("select_experts_k", [1, 2, 8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])

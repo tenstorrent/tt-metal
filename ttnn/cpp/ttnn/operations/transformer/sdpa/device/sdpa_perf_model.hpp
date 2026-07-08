@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,18 @@ int compute_sdpa_ideal_cycles(
     uint32_t DH,
     uint32_t DV,
     bool is_causal,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
+    int num_cores);
+
+// Compute ideal cycles from the number of valid Q/K attention pairs. This is useful for attention
+// variants whose valid-pair geometry is not a simple full or causal Sq x Sk rectangle.
+int compute_sdpa_ideal_cycles_for_valid_pairs(
+    uint32_t batch_size,
+    uint32_t num_heads_q,
+    double valid_pairs,
+    uint32_t DH,
+    uint32_t DV,
+    tt::tt_metal::MathFidelity math_fidelity,
     int num_cores);
 
 }  // namespace ttnn::operations::transformer::sdpa

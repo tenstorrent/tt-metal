@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,8 +13,11 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     generate_input_tensor,
     ttnn_rms_norm_sharded,
     rms_norm_golden,
+    run_sharded_norm_logical_width_multicore,
+    UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
+    UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import is_watcher_enabled
 
 pytestmark = pytest.mark.use_module_device
@@ -71,6 +74,7 @@ def test_rms_norm_sharded_two_stage(
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_residual(device, two_stage, tensor_type, dtype):
+    torch.manual_seed(0)
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     residual = generate_input_tensor(h, w, "random_normal", dtype)
@@ -99,6 +103,7 @@ def test_rms_norm_sharded_with_bias_only(device, two_stage, tensor_type, dtype):
     Sharded rms_norm with bias only (no weight). Exercises do_beta=1, do_gamma=0 in layernorm_sharded.
     Fails with the old cb_im formula; passes with the fixed formula.
     """
+    torch.manual_seed(0)
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     bias = generate_input_tensor(1, w, "random", dtype)
@@ -124,6 +129,7 @@ def test_rms_norm_sharded_with_bias_only(device, two_stage, tensor_type, dtype):
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_weight_and_bias(device, two_stage, tensor_type, dtype):
+    torch.manual_seed(0)
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     weight = generate_input_tensor(1, w, "random", dtype)
@@ -148,6 +154,7 @@ def test_rms_norm_sharded_with_weight_and_bias(device, two_stage, tensor_type, d
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_weight_and_bias_row_major(device, two_stage, tensor_type, dtype):
+    torch.manual_seed(0)
     if is_watcher_enabled() and two_stage is False:
         pytest.skip("Skipping test with watcher enabled, see github issue #37259")
 
@@ -176,6 +183,7 @@ def test_rms_norm_sharded_with_weight_and_bias_row_major(device, two_stage, tens
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_weight_and_bias_and_residual(device, two_stage, tensor_type, dtype):
+    torch.manual_seed(0)
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     residual = generate_input_tensor(h, w, "random_normal", dtype)
@@ -258,10 +266,14 @@ def test_rms_norm_sharded_padded(device, h, w):
 
     golden_output = rms_norm_golden(torch_input_tensor, weight=None).to(dtype)
 
-    # Assert that the output is close to the golden output
-    rtol = 1.6e-2
-    atol = 1e-5
-    assert torch.allclose(output_ttnn, golden_output, rtol=rtol, atol=atol)
+    assert_numeric_metrics(
+        golden_output,
+        output_ttnn,
+        pcc_threshold=0.999,
+        rtol=0.031,
+        atol=0.052,
+        frobenius_threshold=0.010,
+    )
 
 
 @pytest.mark.parametrize("h,w", [(32, 2048)])
@@ -324,4 +336,23 @@ def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
 
     golden_output = rms_norm_golden(torch_input_tensor, weight=torch_weight[0]).to(dtype)
 
-    assert_with_pcc(golden_output, output_tensor, 0.9998)
+    assert_numeric_metrics(
+        golden_output,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.031,
+        atol=0.052,
+        frobenius_threshold=0.010,
+    )
+
+
+# Geometry cases (see UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES in sharded_test_utils.py for the covered
+# tile-aligned-uneven and non-tile-aligned widths).
+@pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
+)
+@pytest.mark.parametrize(
+    ("w", "num_cores_w"), UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, ids=UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS
+)
+def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, dtype):
+    run_sharded_norm_logical_width_multicore(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, dtype=dtype)

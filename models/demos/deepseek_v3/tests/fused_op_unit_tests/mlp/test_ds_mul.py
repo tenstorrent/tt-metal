@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -22,6 +22,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
     even_int_div,
     get_activation_sharding_core_counts_for_dram_matmul,
+    get_fabric_config,
 )
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -262,7 +263,7 @@ def _build_mul_inputs(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config)
+    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config, batch_size_per_row=USERS_PER_ROW)
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,
@@ -298,7 +299,7 @@ def _build_mul_inputs(
         max_num_cores = mesh_device.core_grid.x * mesh_device.core_grid.y
         inner_num_cores = max(get_activation_sharding_core_counts_for_dram_matmul(hidden_dim_per_device, max_num_cores))
         input_memory_config = MLP._get_decode_activation_memory_config(
-            hidden_dim_per_device, inner_num_cores, mesh_device
+            hidden_dim_per_device, inner_num_cores, mesh_device, batch_size_per_row=USERS_PER_ROW
         )
     else:
         input_memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -349,8 +350,8 @@ def _build_mul_inputs(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 2967552,
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,
         }
     ],
     indirect=True,
@@ -465,8 +466,8 @@ def test_ds_mul(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 2967552,
+            "fabric_config": get_fabric_config(),
+            "trace_region_size": 0,
         }
     ],
     indirect=True,
@@ -520,7 +521,9 @@ def test_ds_mul_single_device(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device, device_params["fabric_config"])
+    model_config = get_model_config(
+        MLP, mode, hf_config, mesh_device, device_params["fabric_config"], batch_size_per_row=USERS_PER_ROW
+    )
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,

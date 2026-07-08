@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,12 +54,6 @@ TensorSpec ConvertToHWCDeviceOperation::compute_output_specs(
 Tensor ConvertToHWCDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
-ttsl::hash::hash_t ConvertToHWCDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<ConvertToHWCDeviceOperation>, args, tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

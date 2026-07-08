@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -128,7 +128,6 @@ public:
     std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
-    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
     CoreCoord compute_with_storage_grid_size() const override;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
@@ -175,9 +174,6 @@ public:
     std::size_t num_program_cache_entries() override;
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
-    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(
@@ -194,6 +190,10 @@ public:
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
+    // Returns true if this MeshDevice contains only remote devices (no local devices on this host).
+    // Remote-only MeshDevices cannot perform operations requiring local device access like
+    // allocator(), create_sub_device_manager(), etc. Use this to check before calling such methods.
+    bool is_remote_only() const;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -51,20 +51,20 @@ ttnn::operations::moreh::moreh_norm_backward::MorehNormBackwardOperation::tensor
     const Tensor& output,
     const Tensor& output_grad,
     float p,
-    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
+    const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim,
     bool keepdim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::moreh::moreh_norm_backward::MorehNormBackwardOperation;
-    ttnn::SmallVector<int64_t> dims = ttnn::operations::get_dim(dim, input.logical_shape().rank());
+    ttsl::SmallVector<int64_t> dims = ttnn::operations::get_dim(dim, input.logical_shape().rank());
     std::sort(dims.begin(), dims.end());
     auto operation_attributes = OperationType::operation_attributes_t{
         p,
         dims,
         keepdim,
         memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
     };
     auto tensor_args = OperationType::tensor_args_t{input, output, output_grad, input_grad};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

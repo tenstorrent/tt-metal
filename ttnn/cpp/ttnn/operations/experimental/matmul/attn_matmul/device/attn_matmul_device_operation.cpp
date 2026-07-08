@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -101,27 +101,6 @@ AttnMatmulDeviceOperation::tensor_return_value_t AttnMatmulDeviceOperation::crea
     }
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input_tensor_a.device());
-}
-
-ttsl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    TT_FATAL(
-        is_device_tensor(tensor_args.input_tensor_a),
-        "Unexpected Tensor type {}",
-        tensor_args.input_tensor_a.storage_type());
-    TT_FATAL(
-        is_device_tensor(tensor_args.input_tensor_b),
-        "Unexpected Tensor type {}",
-        tensor_args.input_tensor_b.storage_type());
-    return operation::hash_operation<AttnMatmulDeviceOperation>(
-        args,
-        args.transpose_hw,
-        args.output_mem_config,
-        args.output_dtype,
-        tensor_args.input_tensor_a.dtype(),
-        tensor_args.input_tensor_a.memory_config(),
-        tensor_args.input_tensor_b.dtype(),
-        tensor_args.input_tensor_b.memory_config());
 }
 
 }  // namespace ttnn::experimental::prim

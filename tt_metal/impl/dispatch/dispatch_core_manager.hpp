@@ -1,14 +1,16 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <stdint.h>
+#include <functional>
 #include <list>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -146,12 +148,24 @@ public:
 
     DispatchCoreConfig get_dispatch_core_config();
 
+    // Returns dispatch-column cores not yet allocated to FD or RT profiler.
+    // Valid after initialize_fast_dispatch() completes on this device.
+    std::vector<CoreCoord> get_available_dispatch_cores(ChipId device_id);
+
     uint8_t get_num_hw_cqs() const { return this->num_hw_cqs; }
 
     // TODO: remove this API, we should read the core descriptor once, should not have backdoors like this to add cores
     void add_dispatch_core_to_device(ChipId device_id, const CoreCoord& core);
 
     std::vector<CoreCoord> get_all_logical_dispatch_cores(ChipId device_id);
+
+    /// @brief Returns the tensix reserved at construction time for the real-time profiler.
+    /// Taken from the back of the WORKER dispatch pool (dispatch consumes from the front), so
+    /// this core is never assigned to dispatch / prefetch / dispatch_s / fabric-mux kernels.
+    /// Returns nullopt for ETH dispatch or when no spare slot was available.
+    /// @param device_id ID of the device
+    /// @return tt_cxy_pair logical location of the reserved tensix, or empty if no reservation exists
+    std::optional<tt_cxy_pair> get_reserved_realtime_profiler_core(ChipId device_id);
 
 private:
     /// @brief reset_dispatch_core_manager initializes vector of cores per device for dispatch kernels
@@ -194,6 +208,9 @@ private:
     std::unordered_map<ChipId, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>>
         dispatch_core_assignments;
     std::unordered_map<ChipId, std::list<CoreCoord>> available_dispatch_cores_by_device;
+    // Tensix reserved at construction time for the real-time profiler kernel.
+    // Removed from available_dispatch_cores_by_device so dispatch cannot reach it.
+    std::unordered_map<ChipId, tt_cxy_pair> reserved_realtime_profiler_core_by_device_;
     DispatchCoreConfig dispatch_core_config_;
     uint8_t num_hw_cqs{};
     MetalEnvImpl& env_;

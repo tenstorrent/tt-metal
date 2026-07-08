@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -96,7 +96,6 @@ void kernel_main() {
     constexpr uint32_t batch_size = get_compile_time_arg_val(1);
     constexpr uint32_t seq_len_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t num_embeddings = get_compile_time_arg_val(3);
-    constexpr uint32_t index_page_size = get_compile_time_arg_val(4);
 
     constexpr uint32_t cb_grad = tt::CBIndex::c_0;
     constexpr uint32_t cb_index = tt::CBIndex::c_1;
@@ -112,9 +111,9 @@ void kernel_main() {
     constexpr auto index_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<index_args.next_compile_time_args_offset()>();
 
-    const auto grad_s = TensorAccessor(grad_args, grad_tensor_addr, grad_page_size);
-    const auto index_s = TensorAccessor(index_args, index_tensor_addr, index_page_size);
-    const auto out_s = TensorAccessor(out_args, output_tensor_addr, out_page_size);
+    const auto grad_s = TensorAccessor(grad_args, grad_tensor_addr);
+    const auto index_s = TensorAccessor(index_args, index_tensor_addr);
+    const auto out_s = TensorAccessor(out_args, output_tensor_addr);
 
     uint32_t index_block_size = get_tile_size(cb_index) >> 5;  // we only need 32 elements
     uint32_t index_l1_addr = get_write_ptr(cb_index);          // static
@@ -129,7 +128,7 @@ void kernel_main() {
     uint32_t out_tile_idx = hidden_offset;
     for (uint32_t i = 0; i < num_embeddings; ++i) {
         for (uint32_t hidden_dim = 0; hidden_dim < tiles_per_core; hidden_dim++) {
-            noc_async_write_tile(out_tile_idx + hidden_dim, out_s, out_read_ptr);
+            noc_async_write_page(out_tile_idx + hidden_dim, out_s, out_read_ptr);
         }
         out_tile_idx += tiles_per_hidden;
     }
@@ -140,7 +139,7 @@ void kernel_main() {
 
     uint32_t grad_tile_idx = hidden_offset;
     for (uint32_t b = 0; b < batch_size; ++b) {
-        uint64_t index_seq_noc_addr = get_noc_addr(b, index_s);
+        uint64_t index_seq_noc_addr = index_s.get_noc_addr(b);
         for (uint32_t s = 0; s < seq_len_tiles; ++s) {
             noc_async_read(index_seq_noc_addr, index_l1_addr, index_block_size);
             noc_async_read_barrier();
@@ -156,7 +155,7 @@ void kernel_main() {
             cb_reserve_back(cb_grad, max_tiles_per_core);
             uint32_t grad_write_ptr = get_write_ptr(cb_grad);
             for (uint32_t hidden_dim = 0; hidden_dim < tiles_per_core; hidden_dim++) {
-                noc_async_read_tile(grad_tile_idx + hidden_dim, grad_s, grad_write_ptr);
+                noc_async_read_page(grad_tile_idx + hidden_dim, grad_s, grad_write_ptr);
                 grad_write_ptr += grad_page_size;
             }
             noc_async_read_barrier();
@@ -175,7 +174,7 @@ void kernel_main() {
                 for (uint32_t i = 0; i < INPUT_SIZE; ++i) {
                     uint32_t idx = get_index(index_l1_addr, i);
                     uint32_t msk = get_mask(mask_l1_addr, i);
-                    DPRINT << chunk << ": " << idx << " -> " << msk << ENDL();
+                    DPRINT("{}: {} -> {}\n", chunk, idx, msk);
                 }
 #endif
                 cb_push_back(cb_mask, 1);
@@ -184,7 +183,7 @@ void kernel_main() {
                 uint32_t out_write_ptr = get_write_ptr(cb_out_intermed);
                 out_tile_idx = chunk_idx * tiles_per_hidden + hidden_offset;
                 for (uint32_t hidden_dim = 0; hidden_dim < tiles_per_core; hidden_dim++) {
-                    noc_async_read_tile(out_tile_idx + hidden_dim, out_s, out_write_ptr);
+                    noc_async_read_page(out_tile_idx + hidden_dim, out_s, out_write_ptr);
                     out_write_ptr += out_page_size;
                 }
                 noc_async_read_barrier();
@@ -193,7 +192,7 @@ void kernel_main() {
                 cb_wait_front(cb_id_out0, max_tiles_per_core);
                 uint32_t out_read_ptr = get_read_ptr(cb_id_out0);
                 for (uint32_t hidden_dim = 0; hidden_dim < tiles_per_core; hidden_dim++) {
-                    noc_async_write_tile(out_tile_idx + hidden_dim, out_s, out_read_ptr);
+                    noc_async_write_page(out_tile_idx + hidden_dim, out_s, out_read_ptr);
                     out_read_ptr += out_page_size;
                 }
                 noc_async_write_barrier();
