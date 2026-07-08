@@ -979,13 +979,17 @@ def _stub_body_is_native(stub_path: Path) -> bool:
 
 
 def _stub_has_graduated_from_autofill(stub_path: Path) -> bool:
-    """Verified-graduated: `.py.last_good_native` snapshot exists AND current body is native.
+    """Verified-graduated: a `.py.last_good_native` OR `.py.last_good_sharded` snapshot exists AND
+    current body is native. Shard-graduation happens strictly after and on top of native
+    graduation, so a `.last_good_sharded`-only component is at least as graduated as a native-only
+    one and must not be reported as still pending.
     Without the body re-check, op-synth-scaffolded stubs (no fallback markers, dead-helper bodies)
     would falsely count as graduated."""
     if not stub_path.is_file():
         return False
-    snapshot = stub_path.with_suffix(".py.last_good_native")
-    if not snapshot.is_file():
+    native_snapshot = stub_path.with_suffix(".py.last_good_native")
+    sharded_snapshot = stub_path.with_suffix(".py.last_good_sharded")
+    if not native_snapshot.is_file() and not sharded_snapshot.is_file():
         return False
     return _stub_body_is_native(stub_path)
 

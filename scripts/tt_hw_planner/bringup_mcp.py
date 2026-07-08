@@ -331,7 +331,7 @@ def list_components() -> dict:
     comps = _components()
     return {
         "components": comps,
-        "graduated": [c for c in comps if _is_graduated(c)],
+        "graduated": [c for c in comps if _grad_for_run(c)],
         "fallen_back": [c for c in comps if c in (st.get("fallback") or [])],
         "attempts": {c: (st.get("attempts", {}) or {}).get(c, 0) for c in comps},
     }
