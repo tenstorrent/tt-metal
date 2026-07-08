@@ -410,6 +410,9 @@ class Vocoder(Module):
         # (snake α/β, CCL buffers). Clearing traces without clearing it would skip that warm on the
         # next decode and capture unwarmed state — so reset it too, so re-warming actually re-warms.
         self._warmed_shapes.clear()
+        # Per-shape tpad-mask device tensors also persist; a dispatch-skipped (capture-only) warm leaves
+        # them as garbage the next decode would reuse. Drop them so re-warming recomputes them.
+        self._tpad_mask_cache.clear()
 
     def _host_to_device(self, mel_spec: torch.Tensor) -> ttnn.Tensor:
         """Host preprocessing + upload. Returns the ROW_MAJOR full-T device tensor that

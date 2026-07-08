@@ -56,7 +56,7 @@ from ...utils.patchifiers import (
 )
 from ...utils.progress import Watchdog
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from ...utils.tracing import StateTensor
+from ...utils.tracing import StateTensor, set_kernel_prewarm_capturing
 from ...utils.video import Audio
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
@@ -451,23 +451,27 @@ class LTXPipeline:
                 if _cold:
                     logger.info("cold build_key: capturing kernel manifest for off-device batch compile")
                     _kp.kernel_prewarm_set_capture_only(True)
-                    _saved_traced, self._traced = self._traced, False
+                    # Capture at the run's OWN traced setting: a traced run's real kernels are the
+                    # trace-VARIANT programs (persistent-buffer configs), which an eager capture never
+                    # builds -- so under traced we run the capture denoise traced too, with the tracer
+                    # skipping the device trace-capture (set_kernel_prewarm_capturing) since capture-only
+                    # skips dispatch. capture_all records every kernel the real run uses; in_capture_pass
+                    # skips the audio decode (its mel-VAE / BWE / vocoder lazily warm persistent device
+                    # state on dispatch, which capture-only corrupts -- capturing it produces wrong
+                    # audio). The audio path compiles op-by-op in the warm real warmup; the DiT/VAE bulk
+                    # is what the off-device batch buys back.
+                    set_kernel_prewarm_capturing(self._traced)
                     try:
-                        # capture_all records every kernel the real run uses (even ones iter_fast /
-                        # prep_run defers to gen#0). in_capture_pass skips the audio decode: its mel-VAE /
-                        # BWE / vocoder lazily warm persistent device state on first dispatch, which a
-                        # capture-only (dispatch-skipped) run leaves corrupted -- capturing it produces
-                        # wrong audio. The audio path (~small) instead compiles op-by-op in the warm real
-                        # warmup; the DiT/VAE bulk is what the off-device batch buys back.
                         self.warmup_buffers(
                             num_frames=num_frames,
                             height=height,
                             width=width,
                             capture_all=True,
-                            in_capture_pass=True,
+                            in_capture_pass=False,
+                            capture_traced=self._traced,
                         )
                     finally:
-                        self._traced = _saved_traced
+                        set_kernel_prewarm_capturing(False)
                         _kp.kernel_prewarm_set_capture_only(False)
                     _built = _kp.kernel_prewarm_offline_compile()
                     logger.info(f"cold build_key: batch-compiled {_built} kernels off-device in-process")

@@ -55,6 +55,21 @@ class StateTensor:
             ttnn.copy(value, self._value)
 
 
+# Set by the kernel-prewarm in-process cold-start around its capture pass. When active, a traced call
+# constructs + records the trace-VARIANT kernels (the persistent-buffer program configs the real traced
+# run uses, which an eager warmup never builds) by running the wrapped function once, but SKIPS the
+# device trace capture: capture-only skips dispatch, so begin/end_trace_capture would assert on the
+# setup writes and record nothing. The kernel recipes are written at program construction, which the
+# forward performs -- so the prewarm records the trace kernels without a real trace. Real runs (flag
+# off) capture the trace normally.
+_kernel_prewarm_capturing = False
+
+
+def set_kernel_prewarm_capturing(active: bool) -> None:
+    global _kernel_prewarm_capturing
+    _kernel_prewarm_capturing = active
+
+
 class Tracer:
     """Wrapper for capturing and executing a trace of a given function.
 
@@ -228,6 +243,13 @@ class Tracer:
         kwargs = _tree_map(_verify_value, kwargs, path_label="kwargs")
         self._args = _tree_map(self._tensor_to_device, args, path_label="args")
         self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
+
+        if _kernel_prewarm_capturing:
+            # Record the trace-variant kernels by running the forward once (program construction writes
+            # the manifest recipe), then return without a device trace. trace_ids stays None, so the real
+            # run captures the trace normally. See _kernel_prewarm_capturing.
+            self._outputs = self._function(*self._args, **self._kwargs)
+            return
 
         if self._prep_run:
             if self._clone_prep_inputs:
