@@ -245,8 +245,8 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet03DataIntegrityDram) {
     vector<LinkError> errors;
     int n = 0;
 
-    distributed::MeshDevice* prev_sender = 0;
-    distributed::MeshDevice* prev_recv = 0;
+    distributed::MeshDevice* prev_sender = nullptr;
+    distributed::MeshDevice* prev_recv = nullptr;
 
     print_detected_devices();
     ASSERT_TRUE(ensure_links(devices_));
@@ -311,7 +311,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet03DataIntegrityDram) {
     log_info(tt::LogTest, "Ran {} tests", n);
 
     print_summary(errors);
-    ASSERT_TRUE(!errors.size());
+    ASSERT_TRUE(errors.empty());
 }
 
 }  // namespace tt::tt_metal

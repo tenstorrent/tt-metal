@@ -261,7 +261,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet04DataIntegrityDramBidir) {
     log_info(tt::LogTest, "Ran {} tests", n);
 
     print_summary(errors);
-    ASSERT_TRUE(!errors.size());
+    ASSERT_TRUE(errors.empty());
 }
 
 }  // namespace tt::tt_metal

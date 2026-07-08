@@ -21,7 +21,7 @@ struct l1_allocator {
 std::string pci_bdf_for_device_id(uint32_t device_id);
 std::string trim_copy(std::string s);
 std::string read_text_file_trimmed(const std::string& path);
-std::string get_ubb_id_str(uint32_t device_id);
+std::string get_ubb_id_str(uint32_t chip_id);
 std::vector<std::string> get_chip_physical_locations();
 
 #define ROUND_UP(x, a) ((((x) + (a) - 1) / (a)) * (a))

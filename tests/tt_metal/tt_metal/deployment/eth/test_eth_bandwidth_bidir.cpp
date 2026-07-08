@@ -175,7 +175,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet02BandwidthBidir) {
     log_info(tt::LogTest, "Ran {} tests", n);
 
     print_summary(errors);
-    ASSERT_TRUE(!errors.size());
+    ASSERT_TRUE(errors.count());
 }
 
 }  // namespace tt::tt_metal

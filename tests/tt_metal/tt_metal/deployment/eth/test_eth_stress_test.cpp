@@ -33,6 +33,7 @@ static void run_test_stress(
     vector<struct core_setup>& cores,
     map<shared_ptr<distributed::MeshDevice>, shared_ptr<tt_metal::Program>> programs) {
     /* =================== */
+    (void)fixture;
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];
 
@@ -210,7 +211,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
     ASSERT_TRUE(pass);
 
     print_summary(errors);
-    ASSERT_TRUE(!errors.size());
+    ASSERT_TRUE(errors.empty());
 }
 
 }  // namespace tt::tt_metal

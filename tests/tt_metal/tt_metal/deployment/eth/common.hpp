@@ -744,6 +744,7 @@ static bool test_check_cores(std::span<struct core_setup> cores) {
     return pass;
 }
 
+[[maybe_unused]]
 static void print_summary(std::span<struct LinkError> errors) {
     if (!errors.size()) {
         return;
@@ -764,6 +765,7 @@ static void print_summary(std::span<struct LinkError> errors) {
 }
 
 /* In Gbps */
+[[maybe_unused]]
 static double get_eth_bw() {
     // TODO More comprehensive hardware support
     switch (tt::tt_metal::GetClusterType()) {
@@ -772,6 +774,7 @@ static double get_eth_bw() {
     }
 }
 
+[[maybe_unused]]
 static void print_detected_devices() {
     log_info(tt::LogTest, "Detected devices:");
     for (auto& l : get_chip_physical_locations()) {
@@ -779,6 +782,7 @@ static void print_detected_devices() {
     }
 }
 
+[[maybe_unused]]
 static std::string get_connector(IDevice* sdev, CoreCoord score) {
     const auto& cluster = MetalContext::instance().get_cluster();
     const auto& soc_desc = cluster.get_soc_desc(sdev->id());
@@ -855,6 +859,7 @@ static std::string get_connector(IDevice* sdev, CoreCoord score) {
     }
 }
 
+[[maybe_unused]]
 static std::string get_ubb(IDevice* device) {
     const auto& cluster = MetalContext::instance().get_cluster();
     umd::ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();

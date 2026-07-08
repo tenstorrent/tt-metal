@@ -22,7 +22,7 @@ void handle_sigint(int) {
 
 static std::map<uint32_t, std::string> id_to_bdf;
 static void init_id_to_bdf() {
-    if (!id_to_bdf.size()) {
+    if (id_to_bdf.empty()) {
         tt::Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         tt::umd::ClusterDescriptor* desc = cluster.get_cluster_desc();
         const std::unordered_map<tt::ChipId, std::string>& bdfs = desc->get_chip_pci_bdfs();
@@ -35,7 +35,7 @@ static void init_id_to_bdf() {
 std::string pci_bdf_for_device_id(uint32_t device_id) {
     init_id_to_bdf();
 
-    if (!id_to_bdf.count(device_id)) {
+    if (!id_to_bdf.contains(device_id)) {
         return "unknown";
     }
 
@@ -72,7 +72,7 @@ static std::vector<uint32_t> get_chip_ids() {
 
     std::vector<uint32_t> keys;
     for (auto& it : id_to_bdf) {
-        keys.push_back(it.first);
+        keys.push_back(it.first); /* NOLINT */
     }
 
     sort(keys.begin(), keys.end());
