@@ -59,6 +59,18 @@
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song
 
+# DIAGNOSTIC (tt-metal#49313, temporary): isolate just the 40-host llama pod combos to measure whether
+# they time out on the cpu_medium runner (they pass locally in <7 min). Remove once #49313 is understood.
+- id: fabric-cpu-bh-pod-llama-diag
+  name: fabric cpu unit tests (bh-pod-llama-diag)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep llama_8b
+  skus:
+    cpu_medium:
+      timeout: 45
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
 - id: fabric-cpu-bh-sp4-glx
   name: fabric cpu unit tests (bh-sp4-glx)
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-sp4-glx
