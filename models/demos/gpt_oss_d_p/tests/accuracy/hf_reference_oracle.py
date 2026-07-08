@@ -95,6 +95,13 @@ def main():
         "the reference forward pass.  Matches the --zero-sinks flag on kv_cache_prefill.py.",
     )
     ap.add_argument(
+        "--disable-sliding-window",
+        action="store_true",
+        help="DIAGNOSTIC: force every attention layer to use full causal attention "
+        "in the reference (no sliding window).  Matches --disable-sliding-window on "
+        "kv_cache_prefill.py.",
+    )
+    ap.add_argument(
         "--check-kv-rope",
         action="store_true",
         help=(
@@ -136,6 +143,22 @@ def main():
                     attn.sinks.zero_()
                     n_zeroed += 1
         print(f"[oracle] DIAGNOSTIC: zeroed attention sinks on {n_zeroed} layer(s)", flush=True)
+
+    if args.disable_sliding_window:
+        # Flip every layer to full_attention: rewrite both the module-level
+        # sliding_window attribute (used by HF's eager/sdpa attention) and the
+        # config.layer_types list (used to select the attention implementation).
+        n_disabled = 0
+        if hasattr(model.config, "layer_types") and model.config.layer_types is not None:
+            model.config.layer_types = ["full_attention"] * len(model.config.layer_types)
+        for layer in model.model.layers:
+            attn = layer.self_attn
+            if hasattr(attn, "sliding_window"):
+                attn.sliding_window = None
+            if hasattr(attn, "is_sliding"):
+                attn.is_sliding = False
+            n_disabled += 1
+        print(f"[oracle] DIAGNOSTIC: disabled sliding window on {n_disabled} layer(s)", flush=True)
 
     class FullKVCapture(DynamicCache):
         """DynamicCache subclass that snapshots the full pre-truncation K,V per layer.

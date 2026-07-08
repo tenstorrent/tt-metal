@@ -188,6 +188,13 @@ def main():
         "layer before running.  Requires oracle generated with matching zeroed sinks "
         "to make the comparison meaningful (see --zero-sinks in hf_reference_oracle.py).",
     )
+    ap.add_argument(
+        "--disable-sliding-window",
+        action="store_true",
+        help="DIAGNOSTIC: force every attention layer to use full causal attention "
+        "(bypass the sliding-window SP branch in prefill.py, use ring_joint SDPA "
+        "on all layers).  Requires oracle generated with matching --disable-sliding-window.",
+    )
     args = ap.parse_args()
 
     if args.prompt_file is not None:
@@ -297,6 +304,15 @@ def main():
         del state_dict
         gc.collect()
         print("[kv_cache] model built; weights on device", flush=True)
+
+        if args.disable_sliding_window:
+            n_disabled = 0
+            for decoder_layer in model.layers:
+                attn = decoder_layer.self_attn
+                attn.use_sliding_window = False
+                object.__setattr__(attn.config, "sliding_window", None)
+                n_disabled += 1
+            print(f"[kv_cache] DIAGNOSTIC: disabled sliding window on {n_disabled} layer(s)", flush=True)
 
         if args.zero_sinks:
             # Overwrite each attention layer's `weights.sinks` with a zeros tensor of
