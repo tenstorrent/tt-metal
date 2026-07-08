@@ -159,10 +159,18 @@ void kernel_main() {
 #endif
 
     // [DEBUG] Pack-target CB (follows PACK_TO_SCRATCH). The reduce init and the pack_untilize init MUST
-    // target the same CB or the pipeline desyncs. tilize_untilize_cb == out_cb_id for the RM build.
+    // target the same CB the per-stick loop actually packs into, or the Quasar packer (which bakes its
+    // destination L1 address at init and ignores the runtime `ocb` arg thereafter -- the same class of
+    // bug fixed in the halo op's pack_untilize, see pack_untilize.cpp) writes to the wrong place.
+    // PACK_TO_SCRATCH's scratch-CB workaround only exists for the ROW_MAJOR output path (the `else`
+    // branch below, which packs into curr_scratch_cb); the TILED output path (is_output_tiled) packs
+    // straight into pre_tilize_cb (== tilize_untilize_cb) and never touches scratch_cb_0 at all, so the
+    // init here must follow suit -- init'ing against scratch_cb_0 unconditionally left the TILED path's
+    // packer permanently mis-targeted, and its downstream reader (which always waits on scratch_cb
+    // regardless of is_output_tiled) never received the pushes it was waiting for -> reader deadlock.
 #if PACK_TO_SCRATCH == 1
     // Both scratch CBs share the same full-tile geometry, so init once with scratch_cb_0.
-    constexpr uint32_t pack_target_cb_id = scratch_cb_id_0;
+    constexpr uint32_t pack_target_cb_id = is_output_tiled ? tilize_untilize_cb : scratch_cb_id_0;
 #else
     constexpr uint32_t pack_target_cb_id = tilize_untilize_cb;
 #endif

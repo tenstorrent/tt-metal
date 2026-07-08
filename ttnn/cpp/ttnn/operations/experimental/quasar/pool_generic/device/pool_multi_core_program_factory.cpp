@@ -1118,6 +1118,15 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         reader0_defines.insert({"HAS_CONFIG", "1"});
         reader1_defines.insert({"HAS_CONFIG", "1"});
     }
+    // Mirror compute_defines' OUTPUT_TILED gate (below) onto the readers: for TILED output, compute
+    // packs straight into the real out_cb (borrowed from the output tensor) and never produces
+    // scratch_cb_0/1, so the reader's scratch-consume/NoC-copy-to-out_shard workaround (which only
+    // exists to route around the ROW_MAJOR path's broken narrow pack) must not run -- otherwise the
+    // reader deadlocks forever on scratch_cb.wait_front waiting for pushes that will never come.
+    if (is_output_tiled) {
+        reader0_defines.insert({"OUTPUT_TILED", "1"});
+        reader1_defines.insert({"OUTPUT_TILED", "1"});
+    }
 
     KernelSpec reader0{
         .unique_id = READER0_KERNEL,
