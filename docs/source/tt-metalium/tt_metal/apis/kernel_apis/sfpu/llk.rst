@@ -147,8 +147,8 @@ Constant registers are implemented as objects which can be referenced wherever a
   * ``vConstFloatPrgm2``, ``vConstIntPrgm2``
 
 Note: previously the vector constants ``1.0f``, ``0.0f``, ``-1.0f``
-and `0.8373f`` were also available as named constants. Just use the
-floating literals (possibly converted to ``vFloat``, the compiler
+and ``0.8373f`` were also available as named constants. Just use the
+floating literals (possibly converted to ``vFloat``), the compiler
 knows what to do.
 
 User Visible Objects
