@@ -2626,7 +2626,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
     TT_FATAL(
         std::holds_alternative<ComputeGen2Config>(compute_config),
-        "Trying to construct a Quasar compute config but the kernel's ComputeHardwareConfig does not hold a "
+        "Trying to construct a Gen2 compute config but the kernel's ComputeHardwareConfig does not hold a "
         "ComputeGen2Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen2 = std::get<ComputeGen2Config>(compute_config);
 
