@@ -1018,12 +1018,13 @@ def test_pipeline_distilled_i2v_middle_keyframe(
     mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
 ):
     """MIDDLE-KEYFRAME I2V render check. The arbitrary-frame test only pins the first/last EDGES; a
-    mid-sequence pin is the two-sided case that the few-step fast/medium schedules can't resolve —
-    they pin the frame but leave its neighbors chromatically scrambled (device-verified: only the
-    8-step schedule is clean; the server routes non-frame-0 keyframes to the high tier for this
-    reason). Pin one image at a middle latent frame and check the pinned frame reproduces its image
-    (PCC); neighbor-roughness is logged as a diagnostic (a localized chromatic scramble is hard to
-    threshold from luma alone, so the durable regression gate is the server routing, not this metric)."""
+    mid-sequence pin is the two-sided case a full-strength pin can't reconcile on the few-step
+    fast/medium schedules — it pins the frame but chromatically scrambles the neighbors. The pipeline
+    fixes this by aligning the S1 nodes to the distilled trajectory and softening the interior S1 pin
+    (resolution-aware: 0.25 at the coarse 720p S1, 0.5 at 1080p; s2 re-locks at full strength). Pin
+    one image at a middle latent frame and check the pinned frame reproduces its image (PCC).
+    Neighbor-roughness is logged as a diagnostic only — a localized chromatic smear is hard to
+    threshold from luma, so the real gate is eyeballing the post-pin frames."""
     import glob
     import subprocess
 
@@ -1115,10 +1116,13 @@ def test_pipeline_distilled_i2v_middle_keyframe(
     ratio = win_max / med if med > 0 else float("inf")
 
     pin_idx = min(pin_pixel, nfr - 1)
-    cl = torch.from_numpy(_luma(cond)).flatten()
-    pf = torch.from_numpy(_luma(paths[pin_idx])).flatten()
-    n = min(cl.numel(), pf.numel())
-    pcc = torch.corrcoef(torch.stack([cl[:n], pf[:n]]))[0, 1].item()
+    # Resize the native-res cond to the decoded frame before correlating — a raw native-vs-720p
+    # flatten miscorrelates to ~0 even for a faithful pin (the rows no longer line up).
+    pin_img = Image.open(paths[pin_idx]).convert("L")
+    cond_l = np.asarray(Image.open(cond).convert("L").resize(pin_img.size)).astype("float32")
+    cl = torch.from_numpy(cond_l).flatten()
+    pf = torch.from_numpy(np.asarray(pin_img).astype("float32")).flatten()
+    pcc = torch.corrcoef(torch.stack([cl, pf]))[0, 1].item()
 
     print(
         f"I2V_MID pinned-vs-cond PCC={pcc:.4f} | neighbor roughness "

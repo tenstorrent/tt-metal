@@ -60,6 +60,16 @@ STAGE_2_DISTILLED_SIGMA_VALUES = _sigma_override("LTX_S2_SIGMAS", _DEFAULT_S2_SI
 _KEYFRAME_S1_ALIGNED = [1.0, 0.909375, 0.725, 0.421875, 0.0]
 _KEYFRAME_S1_ALIGNED_LONG = [1.0, 0.975, 0.909375, 0.725, 0.421875, 0.0]
 KEYFRAME_S1_STRENGTH = float(os.environ.get("LTX_KEYFRAME_S1_STRENGTH", "0.5"))
+# A coarser S1 reconciles the pin-wall across fewer spatial tokens, so it needs a softer interior
+# pin: 0.5 is clean at 1080p (s1 544) but smears the post-pin neighbors at 720p (s1 352), while 0.0
+# fails to establish the keyframe at all. s2 re-locks identity at full strength either way.
+KEYFRAME_S1_STRENGTH_COARSE = float(os.environ.get("LTX_KEYFRAME_S1_STRENGTH_COARSE", "0.25"))
+
+
+def _keyframe_s1_strength(s1_height: int) -> float:
+    """Interior-pin S1 strength for a non-frame-0 keyframe. The coarse 720p S1 (352) softens to 0.25;
+    1080p (544) keeps 0.5. Threshold sits between the two supported S1 heights."""
+    return KEYFRAME_S1_STRENGTH_COARSE if s1_height < 480 else KEYFRAME_S1_STRENGTH
 
 
 def _keyframe_s1_sigmas(latent_frames: int) -> list[float]:
@@ -818,7 +828,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 s1s = img[2] if len(img) > 2 else 1.0
                 s2s = img[3] if len(img) > 3 else s1s
                 if kf_fix and lat_idx != 0:
-                    s1s = min(s1s, KEYFRAME_S1_STRENGTH)  # soften the coarse non-frame-0 pin; s2 re-locks
+                    s1s = min(s1s, _keyframe_s1_strength(s1_height))  # soften non-frame-0 pin; s2 re-locks
                 by_slot[lat_idx] = (img[0], s1s, s2s)
             # The conditioning latent depends only on (image, resolution), so encode once and memoize.
             # This skips re-running the eager VAE encoder on later gens (e.g. the traced steady-state
