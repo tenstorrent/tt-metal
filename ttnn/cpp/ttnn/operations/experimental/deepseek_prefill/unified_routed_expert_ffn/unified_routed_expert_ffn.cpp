@@ -23,7 +23,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<ttnn::Tensor>& output,
     const std::optional<ttnn::Tensor>& expert_region_offsets,
     const std::optional<uint32_t>& input_m_tiles,
-    bool read_x_at_offset) {
+    bool read_x_at_offset,
+    RoutedExpertActivation activation) {
     // Single-op fused per-expert FFN. One device Program runs gate matmul,
     // up matmul, silu, multiply, down matmul as four phases inside the same
     // kernel. The kernel reads counts[global_expert_idx_table[local_expert_id]]
@@ -147,7 +148,8 @@ ttnn::Tensor unified_routed_expert_moe(
             dispatched_buffer,
             expert_region_offsets,
             m_tiles,
-            /*read_x_at_offset=*/true);
+            /*read_x_at_offset=*/true,
+            activation);
     }
     return dispatched_buffer;
 }

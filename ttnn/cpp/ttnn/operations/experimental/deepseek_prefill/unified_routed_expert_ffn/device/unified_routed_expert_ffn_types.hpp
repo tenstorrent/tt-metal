@@ -64,12 +64,17 @@ struct UnifiedRoutedExpertFfnParams {
     // ttnn::extract did. Requires expert_region_offsets. False => x is per-expert.
     bool read_x_at_offset = false;
 
+    // Per-expert FFN activation variant. Baked into the compute kernel as a
+    // compile-time define, so each variant caches as a distinct program — hence
+    // it is part of the program-cache key below.
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu;
+
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
     static constexpr auto attribute_names =
-        std::forward_as_tuple("chunk_M_tiles", "m_tiles", "local_expert_id", "read_x_at_offset");
+        std::forward_as_tuple("chunk_M_tiles", "m_tiles", "local_expert_id", "read_x_at_offset", "activation");
     auto attribute_values() const {
-        return std::forward_as_tuple(chunk_M_tiles, m_tiles, local_expert_id, read_x_at_offset);
+        return std::forward_as_tuple(chunk_M_tiles, m_tiles, local_expert_id, read_x_at_offset, activation);
     }
 };
 

@@ -67,7 +67,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<ttnn::Tensor>& output = std::nullopt,
     const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
     const std::optional<uint32_t>& input_m_tiles = std::nullopt,
-    bool read_x_at_offset = false);
+    bool read_x_at_offset = false,
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'
 // weights and loops over local experts in C++, calling

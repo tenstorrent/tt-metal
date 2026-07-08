@@ -253,6 +253,7 @@ ttnn::Tensor unified_routed_expert_ffn(
             .m_tiles = m_tiles,
             .local_expert_id = local_expert_id,
             .read_x_at_offset = read_x_at_offset,
+            .activation = activation,
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{
             .x = x,
