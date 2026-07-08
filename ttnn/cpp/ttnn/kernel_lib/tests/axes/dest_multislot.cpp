@@ -1,0 +1,54 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// DEST multi-slot independence (G4 / DB-01, DB-02).
+//
+// Two FPU adds write INDEPENDENT DEST slots inside one tile_regs window, then an SFPU DEST+DEST add
+// combines them:
+//   D0 = A + B   (BinaryFpu -> D0)
+//   D1 = C + E   (BinaryFpu -> D1, must NOT disturb D0)
+//   D0 = D0 + D1 (AddBinary, SFPU DEST+DEST)
+//   pack D0
+// out = A + B + C + E. If the slots aliased / stomped each other, the result would collapse to just
+// (A+B) or (C+E). This is the running_statistics DEST-thread pattern. Runs under both fp32_dest_acc
+// settings (the halved-capacity path: half-sync limit 8 vs 4 — D0,D1 fit in both).
+
+#include <cstdint>
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
+
+void kernel_main() {
+    constexpr uint32_t cb_a = tt::CBIndex::c_0;
+    constexpr uint32_t cb_b = tt::CBIndex::c_1;
+    constexpr uint32_t cb_c = tt::CBIndex::c_2;
+    constexpr uint32_t cb_e = tt::CBIndex::c_3;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t n = get_compile_time_arg_val(0);
+
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
+
+    using namespace compute_kernel_lib;
+    eltwise_chain(
+        EltwiseShape::tiles(n),
+        BinaryFpu<
+            cb_a,
+            cb_b,
+            BinaryFpuOp::Add,
+            BroadcastDim::None,
+            InputLifecycle::Streaming,
+            InputLifecycle::Streaming,
+            BinaryDataFormatReconfig::Input,
+            Dst::D0>{},
+        BinaryFpu<
+            cb_c,
+            cb_e,
+            BinaryFpuOp::Add,
+            BroadcastDim::None,
+            InputLifecycle::Streaming,
+            InputLifecycle::Streaming,
+            BinaryDataFormatReconfig::Input,
+            Dst::D1>{},
+        AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
+        PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{});
+}
