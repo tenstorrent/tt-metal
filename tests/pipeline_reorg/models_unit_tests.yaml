@@ -711,7 +711,7 @@
   model: flux.1-schnell
   skus:
     bh_quietbox_2:
-      timeout: 30  # was 20: full Flux pipeline+transformer exceeds 20 min on bh_quietbox_2
+      timeout: 27  # was 20: cold-JIT day (07-06) killed at 20m00s; warm ~4-8m. 27 keeps cold margin.
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -726,7 +726,7 @@
   model: flux.1-dev
   skus:
     bh_quietbox_2:
-      timeout: 30  # was 20: full Flux pipeline+transformer exceeds 20 min (07-07: 22m50s) on bh_quietbox_2
+      timeout: 27  # was 20: cold-JIT day (07-06) killed at 20m00s (cited peak 22m50s); warm ~9-11m. 27 keeps cold margin.
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
