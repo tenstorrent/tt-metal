@@ -136,12 +136,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
     };
 
-    ComputeHardwareConfig compute_cfg = ttnn::to_compute_hardware_config(
-        input_tensor.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
+    ttnn::ComputeKernelConfig compute_cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
     if (src0_cb_data_format == tt::DataFormat::Float32) {
-        std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
-            compute_cfg);
+        compute_cfg.unpack_to_dest_mode.emplace(CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }
 
     KernelSpec compute_spec{
@@ -153,7 +150,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
              DFBBinding{
                  .dfb_spec_name = CB_OUT0, .accessor_name = "cb_out0", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"NHtWt", "HtWt", "N", "Ht", "Wt"}},
-        .hw_config = compute_cfg,
+        .hw_config = ttnn::to_compute_hardware_config(input_tensor.device()->arch(), compute_cfg),
     };
 
     std::vector<KernelSpec> kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)};

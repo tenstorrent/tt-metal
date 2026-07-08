@@ -248,16 +248,11 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
     }
 
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
-        ComputeHardwareConfig hw = ttnn::to_compute_hardware_config(
-            device->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
+        ttnn::ComputeKernelConfig cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
-            std::visit(
-                [&](auto& c) {
-                    c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-                },
-                hw);
+            cfg.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }
-        return hw;
+        return ttnn::to_compute_hardware_config(device->arch(), cfg);
     };
 
     const std::filesystem::path compute_source(

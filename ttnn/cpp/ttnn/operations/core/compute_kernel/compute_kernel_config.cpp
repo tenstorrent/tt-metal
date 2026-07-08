@@ -4,6 +4,7 @@
 
 #include <atomic>
 
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -17,6 +18,20 @@
 #define DEST_REGISTER_FULL_SIZE (64 * 16)
 
 namespace ttnn {
+
+std::ostream& operator<<(std::ostream& os, const ComputeKernelConfig& cfg) {
+    os << "ComputeKernelConfig(math_fidelity=" << cfg.math_fidelity << ",math_approx_mode=" << cfg.math_approx_mode
+       << ",fp32_dest_acc_en=" << cfg.fp32_dest_acc_en << ",packer_l1_acc=" << cfg.packer_l1_acc
+       << ",dst_full_sync_en=" << cfg.dst_full_sync_en << ",throttle_level=" << cfg.throttle_level
+       << ",unpack_to_dest_mode={";
+    bool first = true;
+    for (const auto& [dfb, mode] : cfg.unpack_to_dest_mode) {
+        os << (first ? "" : ",") << *dfb << ":" << enchantum::to_string(mode);
+        first = false;
+    }
+    os << "})";
+    return os;
+}
 
 DeviceComputeKernelConfig init_device_compute_kernel_config(
     tt::ARCH,
@@ -115,7 +130,8 @@ tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
             .fp32_dest_acc_en = config.fp32_dest_acc_en,
             .dst_full_sync_en = config.dst_full_sync_en,
             .math_approx_mode = config.math_approx_mode,
-            // Omitted fields use defaults: enable_2x_src_format, unpack_to_dest_en, unpack_to_dest_mode
+            .unpack_to_dest_mode = config.unpack_to_dest_mode,
+            // Omitted fields use defaults: enable_2x_src_format, unpack_to_dest_en
         };
     }
     return tt::tt_metal::experimental::ComputeGen1Config{
@@ -123,7 +139,8 @@ tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
         .fp32_dest_acc_en = config.fp32_dest_acc_en,
         .dst_full_sync_en = config.dst_full_sync_en,
         .math_approx_mode = config.math_approx_mode,
-        // Omitted fields use defaults: bfp8_pack_precise, unpack_to_dest_mode
+        .unpack_to_dest_mode = config.unpack_to_dest_mode,
+        // Omitted fields use defaults: bfp8_pack_precise
     };
 }
 
