@@ -120,7 +120,8 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: bh_galaxy
+      enabled-skus: bh_spsg
+      sp-config: spsg
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       # Perf checks need the profiler build, so keep them out of the "all" plain-build run.
       exclude-test-group: sdpa_perf
@@ -135,6 +136,7 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enabled-skus: bh_galaxy
+      enabled-skus: bh_spsg
+      sp-config: spsg
       # Select the perf entry by its test_group so adding more perf checks needs no workflow edit.
       test-type: sdpa_perf
