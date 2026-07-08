@@ -42,13 +42,13 @@ void kernel_main() {
     constexpr uint32_t reduce_batch_size = get_compile_time_arg_val(5);
     constexpr bool combined_is_bf16 = get_compile_time_arg_val(6) != 0;
 
-    constexpr auto cb_partial = tt::CBIndex::c_21;
+    constexpr auto dfb_partial = tt::CBIndex::c_21;
     // cb_combined: combined scalar tile written by this kernel, read back by
     // compute for repacking into the output data format. Format is Float32 by
     // default; bf16 when combined_is_bf16 is true (variance-to-bf16 path).
-    constexpr auto cb_combined = tt::CBIndex::c_22;
+    constexpr auto dfb_combined = tt::CBIndex::c_22;
     // cb_out: output tile packed by compute in the correct data format.
-    constexpr auto cb_out = tt::CBIndex::c_16;
+    constexpr auto dfb_out = tt::CBIndex::c_16;
 
     constexpr auto dst_args = TensorAccessorArgs<7>();
 
@@ -59,13 +59,13 @@ void kernel_main() {
     constexpr uint32_t FACE_ELEMENTS = FACE_W * FACE_W;
     constexpr uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
-    const uint32_t partial_tile_size_bytes = get_tile_size(cb_partial);
-    const uint32_t out_tile_size_bytes = get_tile_size(cb_out);
+    const uint32_t partial_tile_size_bytes = get_tile_size(dfb_partial);
+    const uint32_t out_tile_size_bytes = get_tile_size(dfb_out);
 
     Noc noc;
-    DataflowBuffer cb_partial_obj(cb_partial);
-    DataflowBuffer cb_combined_obj(cb_combined);
-    DataflowBuffer cb_out_obj(cb_out);
+    DataflowBuffer dfb_partial_obj(dfb_partial);
+    DataflowBuffer dfb_combined_obj(dfb_combined);
+    DataflowBuffer dfb_out_obj(dfb_out);
 
     const auto tensor_out = TensorAccessor(dst_args, dst_addr);
 
@@ -80,9 +80,9 @@ void kernel_main() {
 
         for (uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
-                cb_partial_obj.wait_front(2);
+                dfb_partial_obj.wait_front(2);
 
-                auto means_addr = cb_partial_obj.get_read_ptr();
+                auto means_addr = dfb_partial_obj.get_read_ptr();
                 auto vars_addr = means_addr + partial_tile_size_bytes;
 
                 // cb_partial is Float32: each element is 4 bytes.
@@ -101,7 +101,7 @@ void kernel_main() {
                     running = combine(running, partial);
                 }
 
-                cb_partial_obj.pop_front(2);
+                dfb_partial_obj.pop_front(2);
             }
         }
 
@@ -122,9 +122,9 @@ void kernel_main() {
         // BFLOAT8_B output.  Other face rows have independent exponents
         // and are never read (the output is a single scalar), so stale
         // L1 contents there are harmless.
-        cb_combined_obj.reserve_back(1);
+        dfb_combined_obj.reserve_back(1);
         if constexpr (combined_is_bf16) {
-            auto* combined_ptr = reinterpret_cast<uint16_t*>(cb_combined_obj.get_write_ptr());
+            auto* combined_ptr = reinterpret_cast<uint16_t*>(dfb_combined_obj.get_write_ptr());
             for (uint32_t i = 0; i < FACE_W; ++i) {
                 combined_ptr[i] = 0;
             }
@@ -132,20 +132,20 @@ void kernel_main() {
             // hardware so the output is bit-identical to a packer-produced bf16.
             combined_ptr[0] = fp32_to_bf16(final_var);
         } else {
-            auto* combined_ptr = reinterpret_cast<float*>(cb_combined_obj.get_write_ptr());
+            auto* combined_ptr = reinterpret_cast<float*>(dfb_combined_obj.get_write_ptr());
             for (uint32_t i = 0; i < FACE_W; ++i) {
                 combined_ptr[i] = 0.0f;
             }
             combined_ptr[0] = final_var;
         }
-        cb_combined_obj.push_back(1);
+        dfb_combined_obj.push_back(1);
 
         // --- Phase 2: NOC-write the output tile (packed by compute) to DRAM ---
-        cb_out_obj.wait_front(1);
+        dfb_out_obj.wait_front(1);
         uint32_t out_tile_id = output_tile_start_id + out;
-        noc.async_write(cb_out_obj, tensor_out, out_tile_size_bytes, {}, {.page_id = out_tile_id});
+        noc.async_write(dfb_out_obj, tensor_out, out_tile_size_bytes, {}, {.page_id = out_tile_id});
         noc.async_writes_flushed();
-        cb_out_obj.pop_front(1);
+        dfb_out_obj.pop_front(1);
     }
 
     noc.async_write_barrier();

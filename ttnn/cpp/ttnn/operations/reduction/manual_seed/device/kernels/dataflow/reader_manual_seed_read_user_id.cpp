@@ -17,8 +17,8 @@ void kernel_main() {
     const uint32_t core_id = get_arg_val<uint32_t>(1);
 
     // Compile time args
-    constexpr uint32_t user_ids_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t kernel_communication_cb_index = get_compile_time_arg_val(1);
+    constexpr uint32_t user_ids_dfb_index = get_compile_time_arg_val(0);
+    constexpr uint32_t kernel_communication_dfb_index = get_compile_time_arg_val(1);
     constexpr uint32_t number_of_ids = get_compile_time_arg_val(2);
     constexpr auto user_ids_tensor_accessor_args = TensorAccessorArgs<3>();
 
@@ -26,18 +26,18 @@ void kernel_main() {
     constexpr uint32_t one_tile = 1;
 
     // Index tensor config
-    constexpr DataFormat user_ids_tensor_data_format = get_dataformat(user_ids_cb_index);
+    constexpr DataFormat user_ids_tensor_data_format = get_dataformat(user_ids_dfb_index);
     const auto user_ids_tensor_dram = TensorAccessor(user_ids_tensor_accessor_args, user_ids_tensor_buffer_addr);
 
     Noc noc;
-    DataflowBuffer user_ids_cb(user_ids_cb_index);
-    DataflowBuffer kernel_communication_cb(kernel_communication_cb_index);
+    DataflowBuffer user_ids_dfb(user_ids_dfb_index);
+    DataflowBuffer kernel_communication_dfb(kernel_communication_dfb_index);
 
     // Read user_id from circular buffer
-    user_ids_cb.reserve_back(one_tile);
-    const uint32_t l1_write_addr_index = user_ids_cb.get_write_ptr();
+    user_ids_dfb.reserve_back(one_tile);
+    const uint32_t l1_write_addr_index = user_ids_dfb.get_write_ptr();
     noc.async_read(
-        user_ids_tensor_dram, user_ids_cb, get_tile_size(user_ids_cb_index), {.page_id = 0}, {.offset_bytes = 0});
+        user_ids_tensor_dram, user_ids_dfb, get_tile_size(user_ids_dfb_index), {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
 
     // Process user_ids
@@ -51,10 +51,10 @@ void kernel_main() {
     }
 
     // Prepare message for compute kernel
-    kernel_communication_cb.reserve_back(one_tile);
-    CoreLocalMem<volatile uint32_t> communication_ptr(kernel_communication_cb.get_write_ptr());
+    kernel_communication_dfb.reserve_back(one_tile);
+    CoreLocalMem<volatile uint32_t> communication_ptr(kernel_communication_dfb.get_write_ptr());
     communication_ptr[0] = is_user_id ? 1 : 0;
 
     // Send to compute kernel
-    kernel_communication_cb.push_back(one_tile);
+    kernel_communication_dfb.push_back(one_tile);
 }

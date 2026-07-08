@@ -28,7 +28,7 @@ void kernel_main() {
     const uint32_t flip = get_arg_val<uint32_t>(7);
 
     Noc noc;
-    DataflowBuffer cb_in_obj(CB_IN);
+    DataflowBuffer dfb_in_obj(CB_IN);
 
     const uint32_t ublock_size_bytes = get_tile_size(CB_IN);
     const uint32_t input_tile_bytes = ublock_size_bytes;
@@ -40,10 +40,10 @@ void kernel_main() {
             const uint32_t tile_j = flip ? (tiles_per_row - j - 1) : j;
             const uint32_t read_tile_id{
                 get_tile_id(low_rank_offset, high_rank_offset, tile_j, tiles_per_row, input_tile_offset)};
-            cb_in_obj.reserve_back(ONE_TILE);
-            noc.async_read(input_addrg, cb_in_obj, input_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+            dfb_in_obj.reserve_back(ONE_TILE);
+            noc.async_read(input_addrg, dfb_in_obj, input_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_in_obj.push_back(ONE_TILE);
+            dfb_in_obj.push_back(ONE_TILE);
         }
         ++high_rank_offset;
         if (high_rank_offset >= input_tile_offset) {

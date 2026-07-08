@@ -79,9 +79,9 @@ void kernel_main() {
     constexpr auto dst_cb_idx = tt::CBIndex::c_1;
     constexpr auto trp_cb_idx = tt::CBIndex::c_2;
 
-    DataflowBuffer cb_src(src_cb_idx);
-    DataflowBuffer cb_dst(dst_cb_idx);
-    DataflowBuffer cb_trp(trp_cb_idx);
+    DataflowBuffer dfb_src(src_cb_idx);
+    DataflowBuffer dfb_dst(dst_cb_idx);
+    DataflowBuffer dfb_trp(trp_cb_idx);
 
     // DST indices
     // -----------
@@ -99,31 +99,31 @@ void kernel_main() {
         ema_clear_previous_output();
         for (uint32_t tile_id = 0; tile_id < tiles_per_channel; ++tile_id) {
             // Read input, transpose and compute ema
-            cb_src.wait_front(ONE_TILE);
+            dfb_src.wait_front(ONE_TILE);
             tile_regs_acquire();
             transpose_tile(src_cb_idx, 0, inp_dst_index);
             ema_tile(inp_dst_index);
             tile_regs_commit();
-            cb_src.pop_front(ONE_TILE);
+            dfb_src.pop_front(ONE_TILE);
 
-            cb_trp.reserve_back(ONE_TILE);
+            dfb_trp.reserve_back(ONE_TILE);
             tile_regs_wait();
             pack_tile(output_dst_index, trp_cb_idx);
             tile_regs_release();
-            cb_trp.push_back(ONE_TILE);
+            dfb_trp.push_back(ONE_TILE);
 
             // Transpose back and write to output
-            cb_trp.wait_front(ONE_TILE);
+            dfb_trp.wait_front(ONE_TILE);
             tile_regs_acquire();
             transpose_tile(trp_cb_idx, 0, output_dst_index);
             tile_regs_commit();
-            cb_trp.pop_front(ONE_TILE);
+            dfb_trp.pop_front(ONE_TILE);
 
-            cb_dst.reserve_back(ONE_TILE);
+            dfb_dst.reserve_back(ONE_TILE);
             tile_regs_wait();
             pack_tile(output_dst_index, dst_cb_idx);
             tile_regs_release();
-            cb_dst.push_back(ONE_TILE);
+            dfb_dst.push_back(ONE_TILE);
         }
     }
 }

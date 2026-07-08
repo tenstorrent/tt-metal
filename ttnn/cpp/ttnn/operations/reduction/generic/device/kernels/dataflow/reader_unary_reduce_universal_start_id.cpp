@@ -16,25 +16,25 @@ void kernel_main() {
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(0);
     constexpr auto tensor_args = TensorAccessorArgs<1>();
 
-    constexpr uint32_t cb_id_in2 = 2;
+    constexpr uint32_t dfb_id_in2 = 2;
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    dataflow_kernel_lib::prepare_reduce_scaler<dfb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
 
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    uint32_t tile_bytes = get_tile_size(dfb_id_in0);
 
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
 
     Noc noc;
-    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
-        cb_in0.reserve_back(onetile);
-        noc.async_read(tensor_accessor, cb_in0, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb_in0.reserve_back(onetile);
+        noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in0.push_back(onetile);
+        dfb_in0.push_back(onetile);
     }
 }

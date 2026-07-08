@@ -160,7 +160,7 @@ inline void compute_single_stage_noc_addrs(
  * @tparam T Type of the TensorAccessor object
  * @tparam Block The block type
  * @param noc The Noc object to use for data transfer
- * @param cb The DataflowBuffer to read into
+ * @param dfb The DataflowBuffer to read into
  * @param addr TensorAccessor object for accessing tensor data
  * @param tile_bytes The size of a tile in bytes
  * @param offset Global offset for page ID
@@ -168,22 +168,27 @@ inline void compute_single_stage_noc_addrs(
  */
 template <typename T, typename Block>
 inline void read_block_to_cb(
-    Noc& noc, DataflowBuffer& cb, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const Block& block) {
+    Noc& noc,
+    DataflowBuffer& dfb,
+    const T& addr,
+    const uint32_t tile_bytes,
+    const uint32_t offset,
+    const Block& block) {
     // Need to reserve/push on intervals that nicely
     // divide the CB size. The CB and block size has been
     // configured to ensure this in the program setup
-    cb.reserve_back(block.full_block_size());
+    dfb.reserve_back(block.full_block_size());
     uint32_t idx = 0;
     for (auto r : block.local()) {
-        noc.async_read(addr, cb, tile_bytes, {.page_id = offset + r}, {.offset_bytes = idx * tile_bytes});
+        noc.async_read(addr, dfb, tile_bytes, {.page_id = offset + r}, {.offset_bytes = idx * tile_bytes});
         idx++;
     }
     noc.async_read_barrier();
-    cb.push_back(block.full_block_size());
+    dfb.push_back(block.full_block_size());
 }
 
 /**
- * @brief Read one column block of row-major input data from DRAM into cb_in_rm.
+ * @brief Read one column block of row-major input data from DRAM into dfb_in_rm.
  *
  * Reads `num_valid_rows` rows, each of width `block.size() * tile_stride_bytes` bytes, starting
  * at column `block.start() * tile_stride_bytes` within each row. Rows are written into L1
@@ -193,7 +198,7 @@ inline void read_block_to_cb(
 template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
 inline void read_row_major_block_to_cb(
     Noc& noc,
-    DataflowBuffer& cb_in_rm,
+    DataflowBuffer& dfb_in_rm,
     const T& src_a,
     const uint32_t curr_tile_row,
     const uint32_t num_valid_rows,
@@ -202,20 +207,20 @@ inline void read_row_major_block_to_cb(
     const Block& block) {
     const uint32_t col_byte_offset = block.start() * tile_stride_bytes;
     const uint32_t row_read_bytes = block.size() * tile_stride_bytes;
-    cb_in_rm.reserve_back(block.full_block_size());
+    dfb_in_rm.reserve_back(block.full_block_size());
 
     uint32_t l1_offset = 0;
     for (uint32_t row = 0; row < num_valid_rows; ++row) {
         noc.async_read(
             src_a,
-            cb_in_rm,
+            dfb_in_rm,
             row_read_bytes,
             {.page_id = curr_tile_row * TILE_H + row, .offset_bytes = col_byte_offset},
             {.offset_bytes = l1_offset});
         l1_offset += rm_row_stride_bytes;
     }
     noc.async_read_barrier();
-    cb_in_rm.push_back(block.full_block_size());
+    dfb_in_rm.push_back(block.full_block_size());
 }
 
 /**
@@ -224,16 +229,16 @@ inline void read_row_major_block_to_cb(
 template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
 inline void write_row_major_block_from_cb(
     Noc& noc,
-    DataflowBuffer& cb_out_rm,
+    DataflowBuffer& dfb_out_rm,
     const T& dst_a,
     const uint32_t abs_row_base,
     const uint32_t num_valid_rows,
     const uint32_t tile_width_bytes,
     const uint32_t block_row_stride_bytes,
     const Block& block) {
-    // Compute produces block_size tiles (full_block_size) in cb_out_rm; the last block
+    // Compute produces block_size tiles (full_block_size) in dfb_out_rm; the last block
     // may have fewer valid tiles (block.size() <= blk), but blk slots are reserved.
-    cb_out_rm.wait_front(block.full_block_size());
+    dfb_out_rm.wait_front(block.full_block_size());
 
     // Column byte offset in the output row where this block starts.
     const uint32_t col_byte_offset = block.start() * tile_width_bytes;
@@ -242,27 +247,27 @@ inline void write_row_major_block_from_cb(
 
     for (uint32_t r = 0; r < num_valid_rows; r++) {
         noc.async_write(
-            cb_out_rm,
+            dfb_out_rm,
             dst_a,
             valid_bytes,
             {.offset_bytes = r * block_row_stride_bytes},
             {.page_id = abs_row_base + r, .offset_bytes = col_byte_offset});
     }
     noc.async_write_barrier();
-    cb_out_rm.pop_front(block.full_block_size());
+    dfb_out_rm.pop_front(block.full_block_size());
 }
 
 /**
- * @brief Push all column blocks of one tile-row of row-major input data into cb_in_rm.
+ * @brief Push all column blocks of one tile-row of row-major input data into dfb_in_rm.
  *
  * Iterates over all blocks (via `generic::blocks(Wt, block_size)`) and reads each block from DRAM
- * into cb_in_rm. Only `num_valid_rows` rows are read per block; padding rows are zero-filled
+ * into dfb_in_rm. Only `num_valid_rows` rows are read per block; padding rows are zero-filled
  * by the tilize step in the compute kernel. Handles the case where H is not tile-aligned.
  */
 template <typename T, uint32_t TILE_W, uint32_t TILE_H>
 inline void push_row_major_blocks_to_cb(
     Noc& noc,
-    DataflowBuffer& cb_in_rm,
+    DataflowBuffer& dfb_in_rm,
     const T& src_a,
     const uint32_t Wt,
     const uint32_t block_size,
@@ -286,13 +291,13 @@ inline void push_row_major_blocks_to_cb(
         const uint32_t col_byte_offset = block.start() * tile_stride_bytes;
         const uint32_t row_read_bytes = block.size() * tile_stride_bytes;
 
-        cb_in_rm.reserve_back(block.full_block_size());
+        dfb_in_rm.reserve_back(block.full_block_size());
 
         uint32_t l1_offset = 0;
         for (uint32_t row = 0; row < num_valid_rows; ++row) {
             noc.async_read(
                 src_a,
-                cb_in_rm,
+                dfb_in_rm,
                 row_read_bytes,
                 {.page_id = curr_tile_row * TILE_H + row, .offset_bytes = col_byte_offset},
                 {.offset_bytes = l1_offset});
@@ -300,7 +305,7 @@ inline void push_row_major_blocks_to_cb(
         }
         noc.async_read_barrier();
 
-        cb_in_rm.push_back(block.full_block_size());
+        dfb_in_rm.push_back(block.full_block_size());
     }
 }
 

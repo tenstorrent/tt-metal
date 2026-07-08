@@ -27,12 +27,12 @@ void kernel_main() {
 
     constexpr bool old_running_mean_has_value = get_compile_time_arg_val(0) == 1;
     constexpr bool old_running_var_has_value = get_compile_time_arg_val(1) == 1;
-    constexpr auto cb_id_src = get_compile_time_arg_val(2);
-    constexpr auto cb_id_dst = get_compile_time_arg_val(3);
-    constexpr auto cb_id_old_running_mean = get_compile_time_arg_val(4);
-    constexpr auto cb_id_old_running_var = get_compile_time_arg_val(5);
-    constexpr auto cb_id_updated_running_mean = get_compile_time_arg_val(6);
-    constexpr auto cb_id_updated_running_var = get_compile_time_arg_val(7);
+    constexpr auto dfb_id_src = get_compile_time_arg_val(2);
+    constexpr auto dfb_id_dst = get_compile_time_arg_val(3);
+    constexpr auto dfb_id_old_running_mean = get_compile_time_arg_val(4);
+    constexpr auto dfb_id_old_running_var = get_compile_time_arg_val(5);
+    constexpr auto dfb_id_updated_running_mean = get_compile_time_arg_val(6);
+    constexpr auto dfb_id_updated_running_var = get_compile_time_arg_val(7);
     constexpr auto src_args = TensorAccessorArgs<8>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto old_running_mean_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
@@ -41,23 +41,23 @@ void kernel_main() {
         get_compile_time_arg_val(old_running_var_args.next_compile_time_args_offset()) == 1;
 
     Noc noc;
-    DataflowBuffer cb_src(cb_id_src);
-    DataflowBuffer cb_dst(cb_id_dst);
-    DataflowBuffer cb_old_mean(cb_id_old_running_mean);
-    DataflowBuffer cb_old_var(cb_id_old_running_var);
-    DataflowBuffer cb_new_mean(cb_id_updated_running_mean);
-    DataflowBuffer cb_new_var(cb_id_updated_running_var);
+    DataflowBuffer dfb_src(dfb_id_src);
+    DataflowBuffer dfb_dst(dfb_id_dst);
+    DataflowBuffer dfb_old_mean(dfb_id_old_running_mean);
+    DataflowBuffer dfb_old_var(dfb_id_old_running_var);
+    DataflowBuffer dfb_new_mean(dfb_id_updated_running_mean);
+    DataflowBuffer dfb_new_var(dfb_id_updated_running_var);
 
-    const uint32_t src_tile_bytes = cb_src.get_entry_size();
+    const uint32_t src_tile_bytes = dfb_src.get_entry_size();
     const auto src = TensorAccessor(src_args, src_addr);
 
-    const uint32_t dst_tile_bytes = cb_dst.get_entry_size();
+    const uint32_t dst_tile_bytes = dfb_dst.get_entry_size();
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
-    const uint32_t old_running_mean_tile_bytes = cb_old_mean.get_entry_size();
+    const uint32_t old_running_mean_tile_bytes = dfb_old_mean.get_entry_size();
     const auto old_running_mean = TensorAccessor(old_running_mean_args, old_running_mean_addr);
 
-    const uint32_t old_running_var_tile_bytes = cb_old_var.get_entry_size();
+    const uint32_t old_running_var_tile_bytes = dfb_old_var.get_entry_size();
     const auto old_running_var = TensorAccessor(old_running_var_args, old_running_var_addr);
 
     uint32_t tiles_per_batch = HtWt * C;
@@ -76,76 +76,76 @@ void kernel_main() {
         for (uint32_t c = start_c; c < C && num_tiles_written < num_tiles; ++c, start_t = 0) {
             for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
                 // read a tile from src
-                cb_src.reserve_back(onetile);
-                noc.async_read(src, cb_src, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                dfb_src.reserve_back(onetile);
+                noc.async_read(src, dfb_src, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_src.push_back(onetile);
+                dfb_src.push_back(onetile);
 
                 if constexpr (old_running_mean_has_value) {
                     // read data
-                    cb_old_mean.reserve_back(onetile);
+                    dfb_old_mean.reserve_back(onetile);
                     noc.async_read(
                         old_running_mean,
-                        cb_old_mean,
+                        dfb_old_mean,
                         old_running_mean_tile_bytes,
                         {.page_id = tile_offset},
                         {.offset_bytes = 0});
                     noc.async_read_barrier();
                     if constexpr (old_stat_is_fp32) {
-                        fill_tile_with_first_element<float>(cb_old_mean.get_write_ptr());
+                        fill_tile_with_first_element<float>(dfb_old_mean.get_write_ptr());
                     } else {
-                        fill_tile_with_first_element_bfloat16(cb_old_mean.get_write_ptr());
+                        fill_tile_with_first_element_bfloat16(dfb_old_mean.get_write_ptr());
                     }
-                    cb_old_mean.push_back(onetile);
+                    dfb_old_mean.push_back(onetile);
 
                     // write data
-                    cb_new_mean.wait_front(onetile);
+                    dfb_new_mean.wait_front(onetile);
                     noc.async_write(
-                        cb_new_mean,
+                        dfb_new_mean,
                         old_running_mean,
                         old_running_mean_tile_bytes,
                         {.offset_bytes = 0},
                         {.page_id = tile_offset});
                     noc.async_write_barrier();
-                    cb_new_mean.pop_front(onetile);
+                    dfb_new_mean.pop_front(onetile);
                 }
 
                 if constexpr (old_running_var_has_value) {
                     // read data
-                    cb_old_var.reserve_back(onetile);
+                    dfb_old_var.reserve_back(onetile);
                     noc.async_read(
                         old_running_var,
-                        cb_old_var,
+                        dfb_old_var,
                         old_running_var_tile_bytes,
                         {.page_id = tile_offset},
                         {.offset_bytes = 0});
                     noc.async_read_barrier();
                     if constexpr (old_stat_is_fp32) {
-                        fill_tile_with_first_element<float>(cb_old_var.get_write_ptr());
+                        fill_tile_with_first_element<float>(dfb_old_var.get_write_ptr());
                     } else {
-                        fill_tile_with_first_element_bfloat16(cb_old_var.get_write_ptr());
+                        fill_tile_with_first_element_bfloat16(dfb_old_var.get_write_ptr());
                     }
-                    cb_old_var.push_back(onetile);
+                    dfb_old_var.push_back(onetile);
 
                     // write data
-                    cb_new_var.wait_front(onetile);
+                    dfb_new_var.wait_front(onetile);
                     noc.async_write(
-                        cb_new_var,
+                        dfb_new_var,
                         old_running_var,
                         old_running_var_tile_bytes,
                         {.offset_bytes = 0},
                         {.page_id = tile_offset});
                     noc.async_write_barrier();
-                    cb_new_var.pop_front(onetile);
+                    dfb_new_var.pop_front(onetile);
                 }
                 ++tile_offset;
 
                 // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
-                cb_dst.wait_front(onetile);
+                dfb_dst.wait_front(onetile);
                 noc.async_write(
-                    cb_dst, dst, dst_tile_bytes, {.offset_bytes = 0}, {.page_id = start_tile_id + num_tiles_written});
+                    dfb_dst, dst, dst_tile_bytes, {.offset_bytes = 0}, {.page_id = start_tile_id + num_tiles_written});
                 noc.async_write_barrier();
-                cb_dst.pop_front(onetile);
+                dfb_dst.pop_front(onetile);
             }
             tile_offset += next_channel_shift;
         }

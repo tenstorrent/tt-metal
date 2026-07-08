@@ -51,25 +51,25 @@ void kernel_main() {
     constexpr uint32_t in3_page_size = get_compile_time_arg_val(10);
     constexpr uint32_t in3_num_pages = get_compile_time_arg_val(11);
     constexpr uint32_t in3_block_tiles = get_compile_time_arg_val(12);  // K tiles for bias
-    constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
+    constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
 #endif
 
-    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");  // Local output CB (compute writes here)
-    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    constexpr uint32_t out_single_tile_size_bytes = get_tile_size(cb_id_out);
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("dfb_in1");
+    constexpr uint32_t dfb_id_out = get_named_compile_time_arg_val("dfb_out");  // Local output CB (compute writes here)
+    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(dfb_id_in1);
+    constexpr uint32_t out_single_tile_size_bytes = get_tile_size(dfb_id_out);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
     constexpr uint32_t out_block_size_bytes = out_block_num_tiles * out_single_tile_size_bytes;
 
     Noc noc;
-    DataflowBuffer cb_in1(cb_id_in1);
-    DataflowBuffer cb_out(cb_id_out);
+    DataflowBuffer dfb_in1(dfb_id_in1);
+    DataflowBuffer dfb_out(dfb_id_out);
     // DRAM read setup
     AllocatorBank<AllocatorBankType::DRAM> dram_bank;
     // Output reshard setup - build NOC address for remote output storage core
     UnicastEndpoint remote;
 #ifdef FUSE_BIAS
-    DataflowBuffer cb_in3(cb_id_in3);
+    DataflowBuffer dfb_in3(dfb_id_in3);
 #endif
 
     // Process each batch
@@ -79,52 +79,52 @@ void kernel_main() {
 
         // Read all N blocks of weights for this batch
         for (uint32_t block = 0; block < num_blocks; ++block) {
-            cb_in1.reserve_back(in1_block_num_tiles);
+            dfb_in1.reserve_back(in1_block_num_tiles);
 
             // Read weight block from DRAM
             uint32_t remaining_bytes = in1_block_size_bytes;
-            uint32_t cb_write_offset = 0;
+            uint32_t dfb_write_offset = 0;
             uint32_t curr_dram_offset = l1_read_addr_in1;
 
             while (remaining_bytes > 0) {
                 uint32_t read_size = (remaining_bytes > in1_page_size) ? in1_page_size : remaining_bytes;
                 noc.async_read(
                     dram_bank,
-                    cb_in1,
+                    dfb_in1,
                     read_size,
                     {.bank_id = dram_bank_id, .addr = in1_tensor_addr + in1_batch_offset + curr_dram_offset},
-                    {.offset_bytes = cb_write_offset});
-                cb_write_offset += read_size;
+                    {.offset_bytes = dfb_write_offset});
+                dfb_write_offset += read_size;
                 curr_dram_offset += read_size;
                 remaining_bytes -= read_size;
             }
 
             noc.async_read_barrier();
-            cb_in1.push_back(in1_block_num_tiles);
+            dfb_in1.push_back(in1_block_num_tiles);
             l1_read_addr_in1 += in1_block_size_bytes;
         }
 
 #ifdef FUSE_BIAS
         // Read bias for this batch (if fused)
-        cb_in3.reserve_back(in3_block_tiles);
+        dfb_in3.reserve_back(in3_block_tiles);
         noc.async_read(
             dram_bank,
-            cb_in3,
-            in3_block_tiles * get_tile_size(cb_id_in3),
+            dfb_in3,
+            in3_block_tiles * get_tile_size(dfb_id_in3),
             {.bank_id = dram_bank_id, .addr = in3_tensor_addr},
             {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in3.push_back(in3_block_tiles);
+        dfb_in3.push_back(in3_block_tiles);
 #endif
 
         // Wait for compute to finish this batch
-        cb_out.wait_front(out_block_num_tiles);
+        dfb_out.wait_front(out_block_num_tiles);
 
 #ifdef OUT_SHARDED
         // NOC write output to remote output storage core (CB6)
         uint32_t out_batch_offset = batch * out_tensor_stride_batch_bytes;
         noc.async_write(
-            cb_out,
+            dfb_out,
             remote,
             out_block_size_bytes,
             {.offset_bytes = 0},
@@ -134,6 +134,6 @@ void kernel_main() {
         noc.async_write_barrier();
 #endif
 
-        cb_out.pop_front(out_block_num_tiles);
+        dfb_out.pop_front(out_block_num_tiles);
     }
 }

@@ -37,11 +37,11 @@ void kernel_main() {
     const uint32_t input_storage_noc_y = get_arg_val<uint32_t>(2);
     const uint32_t input_shard_l1_addr = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("dfb_in0");
 
     // Build NOC address for the remote input storage core
     Noc noc;
-    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
     UnicastEndpoint src_core;
 
     // Process each batch
@@ -50,19 +50,19 @@ void kernel_main() {
 
         // Process K blocks within each batch
         for (uint32_t block = 0; block < num_blocks; ++block) {
-            cb_in0.reserve_back(in0_block_num_tiles);
+            dfb_in0.reserve_back(in0_block_num_tiles);
 
             // NOC read block from REMOTE input storage core to local CB
             uint32_t read_offset = batch_offset + block * in0_block_size_bytes;
             noc.async_read(
                 src_core,
-                cb_in0,
+                dfb_in0,
                 in0_block_size_bytes,
                 {.noc_x = input_storage_noc_x, .noc_y = input_storage_noc_y, .addr = input_shard_l1_addr + read_offset},
                 {.offset_bytes = 0});
             noc.async_read_barrier();
 
-            cb_in0.push_back(in0_block_num_tiles);
+            dfb_in0.push_back(in0_block_num_tiles);
         }
     }
 }

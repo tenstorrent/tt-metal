@@ -74,7 +74,7 @@ void kernel_main() {
     // in3 block args
     constexpr uint32_t in3_block_w = get_compile_time_arg_val(17);
 
-    constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
+    constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
 #endif
     constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(18);
 
@@ -85,23 +85,23 @@ void kernel_main() {
     }
     // WRITER
 
-    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("dfb_in1");
 
     // WRITER
-    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("dfb_out");
 
     // WRITER
     // single-tile
-    const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
-    constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
+    const uint32_t output_single_tile_size_bytes = get_tile_size(dfb_id_out0);
+    constexpr const uint32_t output_tile_hw = get_tile_hw(dfb_id_out0);
 
     Noc noc;
-    DataflowBuffer cb_in1(cb_id_in1);
-    DataflowBuffer cb_out(cb_id_out0);
+    DataflowBuffer dfb_in1(dfb_id_in1);
+    DataflowBuffer dfb_out(dfb_id_out0);
     Semaphore<> sender_sem(get_compile_time_arg_val(4));
     Semaphore<> receiver_sem(get_compile_time_arg_val(5));
 #ifdef FUSE_BIAS
-    DataflowBuffer cb_in3(cb_id_in3);
+    DataflowBuffer dfb_in3(dfb_id_in3);
 #endif
 
     // WRITER
@@ -117,7 +117,7 @@ void kernel_main() {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     // Operand 1
-                    cb_in1.reserve_back(in1_block_num_tiles);
+                    dfb_in1.reserve_back(in1_block_num_tiles);
 
                     // Set in1 semaphore value to INVALID
                     receiver_sem.set(INVALID);
@@ -128,14 +128,14 @@ void kernel_main() {
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     receiver_sem.wait(VALID);
 
-                    cb_in1.push_back(in1_block_num_tiles);
+                    dfb_in1.push_back(in1_block_num_tiles);
                 }
 
 #ifdef FUSE_BIAS
                 // Only read bias on first batch, or we have multiple output blocks
                 if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     // Operand 2
-                    cb_in3.reserve_back(in3_block_w);
+                    dfb_in3.reserve_back(in3_block_w);
 
                     // Set in1 semaphore value to INVALID
                     receiver_sem.set(INVALID);
@@ -146,7 +146,7 @@ void kernel_main() {
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     receiver_sem.wait(VALID);
 
-                    cb_in3.push_back(in3_block_w);
+                    dfb_in3.push_back(in3_block_w);
                 }
 #endif
 
@@ -179,7 +179,7 @@ void kernel_main() {
                             subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
                         }
 
-                        cb_out.wait_front(out_subblock_tile_count);
+                        dfb_out.wait_front(out_subblock_tile_count);
                         uint32_t out_read_offset = 0;
 
                         for (uint32_t h = 0; h < out_subblock_h_; ++h) {
@@ -187,7 +187,7 @@ void kernel_main() {
                             for (uint32_t w = 0; w < out_subblock_w_; ++w) {
                                 if (bh < num_blocks_h_dim_ && bw < num_blocks_w_dim_) {
                                     noc.async_write(
-                                        cb_out,
+                                        dfb_out,
                                         s,
                                         output_single_tile_size_bytes,
                                         {.offset_bytes = out_read_offset},
@@ -205,20 +205,20 @@ void kernel_main() {
 
                         noc.async_write_barrier();
 
-                        cb_out.pop_front(out_subblock_tile_count);
+                        dfb_out.pop_front(out_subblock_tile_count);
                         out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
                     }
                     // Pop fully padded subblocks along the row
                     if (bw == num_blocks_w_dim_ - 1) {
-                        cb_out.wait_front(padded_block_tiles_w_skip);
-                        cb_out.pop_front(padded_block_tiles_w_skip);
+                        dfb_out.wait_front(padded_block_tiles_w_skip);
+                        dfb_out.pop_front(padded_block_tiles_w_skip);
                     }
                     out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
                 }
                 // Pop row(s) of fully padded subblocks
                 if (bh == num_blocks_h_dim_ - 1) {
-                    cb_out.wait_front(padded_block_tiles_h_skip);
-                    cb_out.pop_front(padded_block_tiles_h_skip);
+                    dfb_out.wait_front(padded_block_tiles_h_skip);
+                    dfb_out.pop_front(padded_block_tiles_h_skip);
                 }
 #endif
                 out_tensor_current_w_dim_block_tile_id += out_tensor_next_w_dim_block_stride;
@@ -234,7 +234,7 @@ void kernel_main() {
     }
 
 #if OUT_SHARDED
-    cb_out.wait_front(
+    dfb_out.wait_front(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
 }

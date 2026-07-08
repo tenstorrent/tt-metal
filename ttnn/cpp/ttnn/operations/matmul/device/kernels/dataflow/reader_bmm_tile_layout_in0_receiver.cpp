@@ -31,10 +31,10 @@ void kernel_main() {
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
     constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(7);
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("dfb_in0");
 
     Noc noc;
-    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
     Semaphore<> sender_sem(get_compile_time_arg_val(4));
     Semaphore<> receiver_sem(get_compile_time_arg_val(5));
 
@@ -71,7 +71,7 @@ void kernel_main() {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     // Operand 0
-                    cb_in0.reserve_back(in0_block_num_tiles);
+                    dfb_in0.reserve_back(in0_block_num_tiles);
 
                     // Set in0 semaphore value to INVALID
                     receiver_sem.set(INVALID);
@@ -82,7 +82,7 @@ void kernel_main() {
                     // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     receiver_sem.wait(VALID);
 
-                    cb_in0.push_back(in0_block_num_tiles);
+                    dfb_in0.push_back(in0_block_num_tiles);
                 }
             }
         }

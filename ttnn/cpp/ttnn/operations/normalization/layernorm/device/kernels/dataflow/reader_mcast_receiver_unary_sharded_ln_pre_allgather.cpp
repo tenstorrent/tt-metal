@@ -41,9 +41,9 @@ void kernel_main() {
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
 
-    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;
-    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
+    constexpr uint32_t dfb_ex_partial2 = tt::CBIndex::c_11;
+    constexpr uint32_t dfb_ex2 = tt::CBIndex::c_12;
+    constexpr uint32_t dfb_ex_external2 = tt::CBIndex::c_13;
 
     Noc noc;
     Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
@@ -51,8 +51,8 @@ void kernel_main() {
     Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(14));
     UnicastEndpoint remote_ep;
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);
-    const DataFormat data_format = get_dataformat(cb_ex_partial2);
+    const uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial2);
+    const DataFormat data_format = get_dataformat(dfb_ex_partial2);
 
     RemoteCoord remote_coords_first_stage[is_all_to_all_worker ? num_blocks_first_stage : 1];
     RemoteCoord remote_coords_second_stage[is_all_to_all_worker ? num_blocks_second_stage : 1];
@@ -118,31 +118,31 @@ void kernel_main() {
         remote_coords_second_stage[0] = {in0_remote_noc_x[0], in0_remote_noc_y[0]};
     }
 
-    const auto& global_reduce_receiver = [&](const uint32_t cb_partial_id,
-                                             const uint32_t cb_external_id,
-                                             const uint32_t cb_reduce_first_stage_id) __attribute__((always_inline)) {
-        DataflowBuffer cb_partial_obj(cb_partial_id);
-        DataflowBuffer cb_external_obj(cb_external_id);
-        DataflowBuffer cb_reduce_first_stage_obj(cb_reduce_first_stage_id);
+    const auto& global_reduce_receiver = [&](const uint32_t dfb_partial_id,
+                                             const uint32_t dfb_external_id,
+                                             const uint32_t dfb_reduce_first_stage_id) __attribute__((always_inline)) {
+        DataflowBuffer dfb_partial_obj(dfb_partial_id);
+        DataflowBuffer dfb_external_obj(dfb_external_id);
+        DataflowBuffer dfb_reduce_first_stage_obj(dfb_reduce_first_stage_id);
 
         uint32_t num_tiles_per_partial_result = 2;
         if constexpr (rms_norm) {
             num_tiles_per_partial_result = 1;
         }
 
-        cb_partial_obj.wait_front(num_tiles_per_partial_result * block_h);
+        dfb_partial_obj.wait_front(num_tiles_per_partial_result * block_h);
 
         reduce_sender_sem.set(INVALID);
         reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1);
         reduce_sender_sem.wait(VALID);
 
         if constexpr (is_all_to_all_worker) {
-            uint32_t l1_read_addr_ex_par = cb_partial_obj.get_read_ptr();
+            uint32_t l1_read_addr_ex_par = dfb_partial_obj.get_read_ptr();
             l1_read_addr_ex_par += all_to_all_tile_offset_bytes;
             uint32_t l1_read_addr_ex = 0;
             uint32_t block_index_stride = 0;
             if constexpr (use_two_stage_reduce) {
-                l1_read_addr_ex = cb_reduce_first_stage_obj.get_read_ptr();
+                l1_read_addr_ex = dfb_reduce_first_stage_obj.get_read_ptr();
                 if constexpr (row_major) {
                     block_index_stride = num_x;
                 } else {
@@ -151,13 +151,13 @@ void kernel_main() {
             }
             uint32_t write_offset = 0;
             for (uint32_t i = 0; i < num_tiles_to_read; i++) {
-                cb_external_obj.reserve_back(num_tiles_per_partial_result * num_blocks_first_stage);
+                dfb_external_obj.reserve_back(num_tiles_per_partial_result * num_blocks_first_stage);
                 write_offset = 0;
                 for (uint32_t block = 0; block < num_blocks_first_stage; block++) {
                     for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; tile_idx++) {
                         noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                             remote_ep,
-                            cb_external_obj,
+                            dfb_external_obj,
                             single_tile_size_bytes,
                             {.noc_x = remote_coords_first_stage[block].x,
                              .noc_y = remote_coords_first_stage[block].y,
@@ -168,7 +168,7 @@ void kernel_main() {
                 }
                 l1_read_addr_ex_par += single_tile_size_bytes;
                 noc.async_read_barrier();
-                cb_external_obj.push_back(num_tiles_per_partial_result * num_blocks_first_stage);
+                dfb_external_obj.push_back(num_tiles_per_partial_result * num_blocks_first_stage);
 
                 // read data from other cores - reduce first stage
                 if constexpr (use_two_stage_reduce) {
@@ -183,7 +183,7 @@ void kernel_main() {
                         for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                             noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                                 remote_ep,
-                                cb_external_obj,
+                                dfb_external_obj,
                                 single_tile_size_bytes,
                                 {.noc_x = remote_coords_second_stage[block + 1].x,
                                  .noc_y = remote_coords_second_stage[block + 1].y,
@@ -193,17 +193,17 @@ void kernel_main() {
                         }
                         l1_read_addr_ex += single_tile_size_bytes;
                         noc.async_read_barrier();
-                        cb_external_obj.push_back(static_cast<uint16_t>(num_blocks_second_stage - 1));
+                        dfb_external_obj.push_back(static_cast<uint16_t>(num_blocks_second_stage - 1));
                     }
                 }
             }
 
-            cb_reduce_first_stage_obj.wait_front(num_tiles_per_partial_result * num_tiles_to_read);
+            dfb_reduce_first_stage_obj.wait_front(num_tiles_per_partial_result * num_tiles_to_read);
             reduce_second_stage_sem.up(noc, remote_coords_second_stage[0].x, remote_coords_second_stage[0].y, 1);
         }
 
-        cb_partial_obj.pop_front(num_tiles_per_partial_result * block_h);
+        dfb_partial_obj.pop_front(num_tiles_per_partial_result * block_h);
     };
-    global_reduce_receiver(cb_ex_partial2, cb_ex_external2, cb_ex2);
+    global_reduce_receiver(dfb_ex_partial2, dfb_ex_external2, dfb_ex2);
     noc.async_atomic_barrier();
 }

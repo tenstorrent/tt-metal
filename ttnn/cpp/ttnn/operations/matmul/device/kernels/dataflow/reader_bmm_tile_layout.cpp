@@ -48,25 +48,25 @@ void kernel_main() {
     constexpr auto in0_args = TensorAccessorArgs<0>();
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("dfb_in0");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("dfb_in1");
 
-    const uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
+    const uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
+    const uint32_t in1_single_tile_size_bytes = get_tile_size(dfb_id_in1);
 
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 
     Noc noc;
-    DataflowBuffer cb_in0(cb_id_in0);
-    DataflowBuffer cb_in1(cb_id_in1);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in1(dfb_id_in1);
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
         for (uint32_t block = 0; block < num_blocks; block++) {
-            cb_in0.reserve_back(in0_block_num_tiles);
-            cb_in1.reserve_back(in1_block_num_tiles);
+            dfb_in0.reserve_back(in0_block_num_tiles);
+            dfb_in1.reserve_back(in1_block_num_tiles);
 
             uint32_t in0_write_offset = 0;
             uint32_t in1_write_offset = 0;
@@ -77,7 +77,7 @@ void kernel_main() {
                 for (uint32_t w = 0; w < in0_block_w; w++) {
                     noc.async_read(
                         s0,
-                        cb_in0,
+                        dfb_in0,
                         in0_single_tile_size_bytes,
                         {.page_id = in0_tensor_tile_id},
                         {.offset_bytes = in0_write_offset});
@@ -94,7 +94,7 @@ void kernel_main() {
                 for (uint32_t w = 0; w < in1_block_w; w++) {
                     noc.async_read(
                         s1,
-                        cb_in1,
+                        dfb_in1,
                         in1_single_tile_size_bytes,
                         {.page_id = in1_tensor_tile_id},
                         {.offset_bytes = in1_write_offset});
@@ -107,8 +107,8 @@ void kernel_main() {
 
             noc.async_read_barrier();
 
-            cb_in0.push_back(in0_block_num_tiles);
-            cb_in1.push_back(in1_block_num_tiles);
+            dfb_in0.push_back(in0_block_num_tiles);
+            dfb_in1.push_back(in1_block_num_tiles);
         }
         if (bcast_B == 0) {
             in1_tensor_start_tile_id += KtNt;

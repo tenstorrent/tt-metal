@@ -92,12 +92,12 @@
 
 void kernel_main() {
     // Compile time args
-    constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t index_transposed_cb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t values_cb_index = get_compile_time_arg_val(4);
-    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(5);
+    constexpr uint32_t input_dfb_index = get_compile_time_arg_val(0);
+    constexpr uint32_t index_dfb_index = get_compile_time_arg_val(1);
+    constexpr uint32_t input_transposed_dfb_index = get_compile_time_arg_val(2);
+    constexpr uint32_t index_transposed_dfb_index = get_compile_time_arg_val(3);
+    constexpr uint32_t values_dfb_index = get_compile_time_arg_val(4);
+    constexpr uint32_t output_ind_dfb_index = get_compile_time_arg_val(5);
     constexpr uint32_t Ht = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
     constexpr uint32_t K = get_compile_time_arg_val(8);
@@ -122,13 +122,13 @@ void kernel_main() {
     // Supports K only up to 64
     int end_phase = (K <= 64) ? logk - 1 : 5;
 
-    compute_kernel_hw_startup(input_cb_index, index_cb_index, input_transposed_cb_index);
+    compute_kernel_hw_startup(input_dfb_index, index_dfb_index, input_transposed_dfb_index);
     ckernel::topk_tile_init();
 
-    DataflowBuffer input_transposed_cb(input_transposed_cb_index);
-    DataflowBuffer index_transposed_cb(index_transposed_cb_index);
-    DataflowBuffer values_cb(values_cb_index);
-    DataflowBuffer output_ind_cb(output_ind_cb_index);
+    DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
+    DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
+    DataflowBuffer values_dfb(values_dfb_index);
+    DataflowBuffer output_ind_dfb(output_ind_dfb_index);
 
     bool switch_dir = (K == 64);
     int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);
@@ -139,14 +139,14 @@ void kernel_main() {
 
         // Initial bitonic sort on local width chunk
         process_and_sort_tiles(
-            input_cb_index,             // Input values buffer (double-buffered)
-            index_cb_index,             // Input indices buffer (double-buffered)
-            input_transposed_cb_index,  // Transposed values staging buffer
-            index_transposed_cb_index,  // Transposed indices staging buffer
-            Wt,                         // Width tiles for this local chunk
-            switch_dir,                 // Whether to alternate sort direction
-            ascending,                  // Current sort direction
-            end_phase);                 // Ending phase for local sort
+            input_dfb_index,             // Input values buffer (double-buffered)
+            index_dfb_index,             // Input indices buffer (double-buffered)
+            input_transposed_dfb_index,  // Transposed values staging buffer
+            index_transposed_dfb_index,  // Transposed indices staging buffer
+            Wt,                          // Width tiles for this local chunk
+            switch_dir,                  // Whether to alternate sort direction
+            ascending,                   // Current sort direction
+            end_phase);                  // Ending phase for local sort
 
         uint32_t num_k_sequences = (Wt * 32) / K;  // Number of K-element sequences in chunk
 
@@ -158,22 +158,22 @@ void kernel_main() {
         // Final iteration produces locally sorted TopK results for this width chunk.
         for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
             process_iteration(
-                m_iter,                     // Current merge iteration (0 to logWt-1)
-                K,                          // TopK value (number of elements to find)
-                Wt,                         // Width tiles in local chunk
-                num_k_sequences,            // Number of K-element sequences (updated each iter)
-                tiles_per_seq,              // Tiles per sequence (ceil(K/32))
-                input_transposed_cb_index,  // Values buffer for in-place operations
-                index_transposed_cb_index,  // Indices buffer for in-place operations
-                input_dest_start,           // Destination register 0 (first tile)
-                input_dest_end,             // Destination register 1 (second tile)
-                index_dest_start,           // Destination register 2 (first indices)
-                index_dest_end,             // Destination register 3 (second indices)
-                !direction_init,            // Base sort direction
-                switch_dir,                 // Whether to switch direction per iteration
-                logk,                       // log2(K) for bitonic network depth
-                seq_per_2tiles,             // Sequences that fit in 2 tiles
-                largest);                   // Find largest (true) or smallest (false)
+                m_iter,                      // Current merge iteration (0 to logWt-1)
+                K,                           // TopK value (number of elements to find)
+                Wt,                          // Width tiles in local chunk
+                num_k_sequences,             // Number of K-element sequences (updated each iter)
+                tiles_per_seq,               // Tiles per sequence (ceil(K/32))
+                input_transposed_dfb_index,  // Values buffer for in-place operations
+                index_transposed_dfb_index,  // Indices buffer for in-place operations
+                input_dest_start,            // Destination register 0 (first tile)
+                input_dest_end,              // Destination register 1 (second tile)
+                index_dest_start,            // Destination register 2 (first indices)
+                index_dest_end,              // Destination register 3 (second indices)
+                !direction_init,             // Base sort direction
+                switch_dir,                  // Whether to switch direction per iteration
+                logk,                        // log2(K) for bitonic network depth
+                seq_per_2tiles,              // Sequences that fit in 2 tiles
+                largest);                    // Find largest (true) or smallest (false)
         }  // m_iter loop
 
         // Extract and prepare local TopK results for transmission
@@ -181,52 +181,52 @@ void kernel_main() {
         // TopK elements. Extract these and prepare for sending to the final core.
 
         // Configure data formats for tile copying and prepare value tiles.
-        // Pack using values_cb format: input_transposed_cb may be bf16 (higher-precision
-        // intermediate) while values_cb is the original bfp8/bfp4 output format.
-        reconfig_data_format_srca(input_transposed_cb_index);
-        copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
-        pack_reconfig_data_format(values_cb_index);
+        // Pack using values_dfb format: input_transposed_dfb may be bf16 (higher-precision
+        // intermediate) while values_dfb is the original bfp8/bfp4 output format.
+        reconfig_data_format_srca(input_transposed_dfb_index);
+        copy_tile_to_dst_init_short_with_dt(index_transposed_dfb_index, input_transposed_dfb_index);
+        pack_reconfig_data_format(values_dfb_index);
 
         // Extract local TopK values (first Kt tiles contain best values)
-        input_transposed_cb.wait_front(Kt);
+        input_transposed_dfb.wait_front(Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
-            copy_tile(input_transposed_cb_index, i, 0);  // Copy i-th sorted value tile
+            copy_tile(input_transposed_dfb_index, i, 0);  // Copy i-th sorted value tile
             tile_regs_commit();
 
-            values_cb.reserve_back(1);
+            values_dfb.reserve_back(1);
 
             tile_regs_wait();
-            pack_tile(0, values_cb_index);  // Pack for output transmission
+            pack_tile(0, values_dfb_index);  // Pack for output transmission
             tile_regs_release();
 
-            values_cb.push_back(1);
+            values_dfb.push_back(1);
         }
         // Clean up remaining tiles in transposed buffer
-        input_transposed_cb.wait_front(Wt);
-        input_transposed_cb.pop_front(Wt);
+        input_transposed_dfb.wait_front(Wt);
+        input_transposed_dfb.pop_front(Wt);
 
         // Extract local TopK indices (corresponding to the best values)
-        reconfig_data_format_srca(index_transposed_cb_index);
-        copy_tile_to_dst_init_short_with_dt(input_transposed_cb_index, index_transposed_cb_index);
-        pack_reconfig_data_format(index_transposed_cb_index);
-        index_transposed_cb.wait_front(Kt);
+        reconfig_data_format_srca(index_transposed_dfb_index);
+        copy_tile_to_dst_init_short_with_dt(input_transposed_dfb_index, index_transposed_dfb_index);
+        pack_reconfig_data_format(index_transposed_dfb_index);
+        index_transposed_dfb.wait_front(Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
-            copy_tile(index_transposed_cb_index, i, 0);  // Copy i-th sorted index tile
+            copy_tile(index_transposed_dfb_index, i, 0);  // Copy i-th sorted index tile
             tile_regs_commit();
 
-            output_ind_cb.reserve_back(1);
+            output_ind_dfb.reserve_back(1);
 
             tile_regs_wait();
-            pack_tile(0, output_ind_cb_index);  // Pack for output transmission
+            pack_tile(0, output_ind_dfb_index);  // Pack for output transmission
             tile_regs_release();
 
-            output_ind_cb.push_back(1);
+            output_ind_dfb.push_back(1);
         }
         // Clean up remaining tiles in transposed buffer
-        index_transposed_cb.wait_front(Wt);
-        index_transposed_cb.pop_front(Wt);
+        index_transposed_dfb.wait_front(Wt);
+        index_transposed_dfb.pop_front(Wt);
 
         // NOTE: At this point, values_cb_index and output_ind_cb_index contain
         // the locally optimal TopK results for this core's width chunk.
