@@ -191,7 +191,7 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
                         "which must be aligned to {} bytes for reshard",
                         input_tensor.memory_config().shard_spec().has_value()
                             ? input_tensor.memory_config().shard_spec().value().shape[1]
-                            : 0,
+                            : input_tensor.memory_config().nd_shard_spec().value().shard_shape[-1],
                         input_tensor.dtype(),
                         input_page_size,
                         alignment)};
