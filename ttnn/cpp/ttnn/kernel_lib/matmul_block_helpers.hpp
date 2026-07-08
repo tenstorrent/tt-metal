@@ -22,8 +22,7 @@ namespace compute_kernel_lib {
  *     × last_block_target {Out, OutWithRelu, Interm}
  * Untilized (row-major) output is NOT a matmul_block target: accumulate to Interm, then untilize
  * in the kernel via reblock_and_untilize (SubblockMajor) or the standard untilize helper
- * (TileRowMajor). (The old fused OutWithUntilize target was removed — it untilized a partial
- * before accumulation finished and corrupted under packer_l1_acc.)
+ * (TileRowMajor).
  *
  * ── Phase 1: ACCUMULATE the whole output block ──────────────────────────────
  *   packer_l1_acc ON  → in place: ONE reserve_back over the whole block before the K-loop — no
@@ -79,8 +78,7 @@ enum class OutputCBLayout { SubblockMajor, TileRowMajor };
  *                  activation lives in that phase, not the matmul. UNTILIZE is one such phase:
  *                  target Interm, then call reblock_and_untilize (SubblockMajor) or the standard
  *                  untilize (TileRowMajor) helper in the kernel — see the gather / production
- *                  matmul kernels. (This replaces the removed fused OutWithUntilize target, which
- *                  untilized a partial before accumulation finished and corrupted under packer_l1_acc.)
+ *                  matmul kernels.
  */
 enum class LastBlockTarget : uint8_t { Out, OutWithRelu, Interm };
 
@@ -96,6 +94,11 @@ enum class LastBlockTarget : uint8_t { Out, OutWithRelu, Interm };
  *                          manages in1 lifecycle externally (cross-chip global-CB
  *                          receiver advancing rd_ptr via PostKBlockFn; pre-populated
  *                          L1-sharded in1 with no in-program producer).
+ *
+ * Why NoWaitNoPop is in1-only: in0 is the streamed activation operand and is always
+ * consumed in-loop, whereas in1 is the operand a caller may own / advance externally
+ * (the cross-chip global-CB receiver, or pre-populated L1-sharded weights with no
+ * in-program producer). in0 has no such external-management use case.
  */
 enum class InputPolicy : uint8_t { WaitAndPopPerKBlock, WaitAndRetainOnLastBlock, NoWaitNoPop };
 
@@ -152,6 +155,11 @@ enum class DataFormatReconfig : uint8_t { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT 
  * — so callers pass one struct instead of positional integers. Optional strides
  * (in1_per_core_w / out_row_width) stay on the function signature as advanced overrides.
  * Build with MatmulBlockShape::of(...).
+ *
+ * Matmul blocking in one paragraph: A is M×K, B is K×N, C is M×N. K-blocking splits K
+ * into in0_block_k-wide slabs accumulated across num_k_blocks. The output is tiled into
+ * subblocks (in0_num_subblocks × in1_num_subblocks of out_subblock_h × out_subblock_w)
+ * because a subblock is computed in the DST register and must fit its capacity.
  *
  * Axis naming uses matmul dims: the K-block tile count is `in0_block_k` (legacy code
  * outside the helper calls it `in0_block_w`), so a `_k` parameter always means the K
@@ -294,7 +302,7 @@ struct NoIn1BaseOffset {
  *
  * ── Template parameters ──────────────────────────────────────────────────────
  *
- *   transpose          transpose B tiles before the multiply (default false).
+ *   transpose          transpose B tiles before the multiply.
  *   packer_l1_acc      hardware L1 K-accumulation instead of software spill/reload.
  *   last_block_target  Out / OutWithRelu / Interm — see LastBlockTarget.
  *   tile_order         SubblockMajor / TileRowMajor — see OutputCBLayout. The helper cannot
@@ -310,8 +318,8 @@ struct NoIn1BaseOffset {
  *   KBlockInnerDimFn   per-K-block FMA step count (for unpadded/partial K-blocks).
  *   In0SourceFn        per-K-block in0 CB selector (alternates must share in0's dataformat).
  *   In1BaseOffsetFn    per-K-block in1 base-offset shift within the fronted region.
- *   Activation         fuse an SFPU activation on the PACKER thread at the last-block pack
- *                      (default none); independent of PostComputeFn (MATH thread) and
+ *   Activation         fuse an SFPU activation on the PACKER thread at the last-block pack;
+ *                      independent of PostComputeFn (MATH thread) and
  *                      allowed with Interm. Build from the sfpu_activation_helpers.hpp
  *                      aliases, or ActivationOp<type,p0,p1,p2> for host-driven kinds. The
  *                      helper does not issue ActivationInitHelper::init() — boot-time, caller's.
@@ -330,7 +338,7 @@ struct NoIn1BaseOffset {
  *                      matches out_buf — a mismatch silently mis-configures the packer
  *                      width. (Exempt under reconfig=NONE, which issues no pack reconfig.)
  *   shape              MatmulBlockShape — build with MatmulBlockShape::of(...).
- *   post_compute, ...  functor instances for the template hooks above (default {}).
+ *   post_compute, ...  functor instances for the template hooks above.
  *   in1_per_core_w     actual N-tiles the producer pushes per K-block. 0 = derive from
  *                      out_subblock_w * in1_num_subblocks. Pass the real value when the
  *                      factory pads the in1 width above the pushed shard width, else the
