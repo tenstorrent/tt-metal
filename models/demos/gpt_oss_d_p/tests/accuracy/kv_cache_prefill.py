@@ -195,6 +195,13 @@ def main():
         "(bypass the sliding-window SP branch in prefill.py, use ring_joint SDPA "
         "on all layers).  Requires oracle generated with matching --disable-sliding-window.",
     )
+    ap.add_argument(
+        "--save-tt-kv",
+        type=str,
+        default=None,
+        help="save gathered TT K and V tensors for each evaluated layer to this directory "
+        "as tt_layer{N}_k.npy / tt_layer{N}_v.npy (float32, [num_kv_heads, real_len, head_dim]).",
+    )
     args = ap.parse_args()
 
     if args.prompt_file is not None:
@@ -444,8 +451,15 @@ def main():
             k_cache, v_cache = layer_kv
 
             tt_k = _gather_kv_cache(k_cache, mesh, real_len, isl_per_row)  # [num_kv_heads, real_len, head_dim]
-            tt_k = permute_1d(tt_k)  # convert interleaved (Meta) → block (HF) format for comparison
             tt_v = _gather_kv_cache(v_cache, mesh, real_len, isl_per_row)
+
+            if args.save_tt_kv is not None:
+                save_dir = pathlib.Path(args.save_tt_kv)
+                save_dir.mkdir(parents=True, exist_ok=True)
+                np.save(save_dir / f"tt_layer{i}_k.npy", tt_k.numpy())
+                np.save(save_dir / f"tt_layer{i}_v.npy", tt_v.numpy())
+
+            tt_k = permute_1d(tt_k)  # convert interleaved (Meta) → block (HF) format for comparison
 
             oracle_k = torch.tensor(
                 np.load(oracle_dir / record["kv_files"][str(i)]["k"]), dtype=torch.float32
