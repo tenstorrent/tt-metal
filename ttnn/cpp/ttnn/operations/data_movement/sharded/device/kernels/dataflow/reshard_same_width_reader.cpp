@@ -43,11 +43,14 @@ void kernel_main() {
             uint32_t bank_id = args[args_idx++];
             uint32_t src_offset = args[args_idx++];
             uint32_t addr = src_addr + src_offset;
+            DPRINT("addr: {}\n", addr);
             uint32_t units_to_transfer = args[args_idx++];
             uint32_t read_size = units_to_transfer * remote_unit_size_padded;
             CoreLocalMem<uint32_t> scratch_dst(l1_scratch_write_addr + src_offset);
             noc.async_read(bank, scratch_dst, read_size, {.bank_id = bank_id, .addr = addr}, {.offset_bytes = 0});
             noc.async_read_barrier();
+            // tt::data_movement::common::print_bf16_pages(
+            //     l1_scratch_write_addr + src_offset, remote_unit_size_padded / 2, units_to_transfer);
 
             // Re-stride each row from the remote-aligned scratch layout into the local buffer.
             // Both src (remote_unit_size_padded) and dst (local_unit_size_padded) strides are
@@ -64,6 +67,7 @@ void kernel_main() {
                      .noc_y = (uint32_t)my_y[noc.get_noc_id()],
                      .addr = pad_align_addr},
                     {.offset_bytes = 0});
+                // tt::data_movement::common::print_bf16_pages(l1_write_addr, unit_size / 2, 1);
                 l1_write_addr += local_unit_size_padded;
                 pad_align_addr += remote_unit_size_padded;
             }

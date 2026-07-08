@@ -717,13 +717,15 @@ def test_reshard_aligned_channels_height_sharded(device, channels, tt_dtype):
     assert passing, output
 
 
-@pytest.mark.parametrize("channels", [1, 2, 3, 4, 5, 6, 7])
+@pytest.mark.parametrize("channels", [1, 2, 3, 4, 5, 6, 7, 9, 10, 17, 33, 65])
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
 def test_reshard_unaligned_channels_height_sharded(device, channels, tt_dtype):
     """
     Row-major HEIGHT_SHARDED reshard with an unaligned shard page size: the shard row
-    (shard_width * elem_size) is NOT a multiple of the 16-byte L1 alignment -- 1..7
-    channels in bf16 give 2..14-byte rows.
+    (shard_width * elem_size) is NOT a multiple of the 16-byte L1 alignment. The channels
+    tested cover unaligned widths both below and above the alignment -- in bf16, 1..7
+    channels give 2..14-byte rows (smaller than one aligned page), while 9/10/17/33/65 give
+    18/20/34/66/130-byte rows (one or more aligned pages plus a partial remainder).
 
     The height->height same-width path handles this via a scratch buffer: it reads the
     remote rows at their aligned page stride into scratch, then re-strides each row into
