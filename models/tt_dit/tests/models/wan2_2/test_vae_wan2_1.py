@@ -42,9 +42,7 @@ MESH_CONFIGS_WITH_LINKS = [
     ((2, 4), 1, 0, 1),
     ((1, 8), 0, 1, 1),
     ((1, 4), 1, 0, 1),
-    # WH (ring) on 4x8 uses more links
     ((4, 8), 0, 1, 4),
-    # BH (linear) on 4x8 uses fewer links
     ((4, 8), 0, 1, 2),
 ]
 MESH_CONFIG_IDS = [
@@ -53,9 +51,21 @@ MESH_CONFIG_IDS = [
     "2x4h1w0nl1",
     "1x8h0w1nl1",
     "1x4h1w0nl1",
-    "4x8h0w1nl4",
-    "4x8h0w1nl2",
+    "4x8h0w1nl4",  # WH (ring) on 4x8 uses more links
+    "4x8h0w1nl2",  # BH (linear) on 4x8 uses fewer links
 ]
+
+
+def skip_if_unsupported_num_links(mesh_device, num_links):
+    """Skip the test if the mesh device does not support the requested number of links."""
+    from models.common.modules.tt_ccl import get_num_links
+
+    available_links = get_num_links(mesh_device)
+    if available_links < num_links:
+        pytest.skip(
+            f"Mesh device supports {available_links} link(s) but test requires {num_links}. "
+            f"Mesh shape: {mesh_device.shape}"
+        )
 
 
 def setup_hooks(model):
@@ -503,6 +513,7 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
     torch_model = TorchWanAttentionBlock(dim=C)
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -622,6 +633,7 @@ def test_wan_conv3d(
     )
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -746,6 +758,7 @@ def test_wan_residual_block(
     )
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -908,6 +921,7 @@ def test_wan_mid_block(
     )
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -1066,6 +1080,7 @@ def test_wan_resample(
     )
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -1248,6 +1263,7 @@ def test_wan_upblock(
     )
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -1466,6 +1482,7 @@ def test_wan_decoder3d(
     )
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -1626,6 +1643,7 @@ def test_wan_decoder(
     torch_model = TorchAutoencoderKLWan.from_pretrained(VAE_MODEL_NAME, subfolder="vae")
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -1771,6 +1789,7 @@ def test_wan_decoder_production_blocking(
     )
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -1916,6 +1935,7 @@ def test_wan_encoder_production_blocking(
     )
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -2065,6 +2085,7 @@ def test_wan_decoder_chunked_consistency(
     )
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -2207,6 +2228,7 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
     )
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
@@ -2337,6 +2359,7 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
     torch_model = TorchAutoencoderKLWan.from_pretrained(VAE_MODEL_NAME, subfolder="vae")
     torch_model.eval()
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
