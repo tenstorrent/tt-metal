@@ -107,25 +107,28 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
     // shard height across the two RISCs. The local sharded DFB is bound producer on k0 / consumer
     // on k1 to satisfy the DFB endpoint invariant (the CB is used only as an address source).
     const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, DFBEndpointType endpoint) {
-        KernelSpec k{
+        return KernelSpec{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_path),
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = DFBSpecName{kSHDfbName},
+                .accessor_name = kSHDfbName,
+                .endpoint_type = endpoint,
+            }},
+            .tensor_bindings =
+                {TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kSHRemoteTensorParam},
+                     .accessor_name = kSHRemoteTensorParam},
+                 TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kSHLocalTensorParam},
+                     .accessor_name = kSHLocalTensorParam}},
+            .compile_time_args = compile_time_args,
+            .runtime_arg_schema =
+                {.runtime_arg_names =
+                     {"total_num_sticks", "local_stride_bytes", "remote_stride_bytes", "num_segments"}},
             .hw_config = std::move(hw_config),
+            .advanced_options = {.num_runtime_varargs = num_varargs},
         };
-        k.tensor_bindings.push_back(TensorBinding{
-            .tensor_parameter_name = TensorParamName{kSHRemoteTensorParam}, .accessor_name = kSHRemoteTensorParam});
-        k.tensor_bindings.push_back(TensorBinding{
-            .tensor_parameter_name = TensorParamName{kSHLocalTensorParam}, .accessor_name = kSHLocalTensorParam});
-        k.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFBSpecName{kSHDfbName},
-            .accessor_name = kSHDfbName,
-            .endpoint_type = endpoint,
-        });
-        k.compile_time_args = compile_time_args;
-        k.runtime_arg_schema.runtime_arg_names = {
-            "total_num_sticks", "local_stride_bytes", "remote_stride_bytes", "num_segments"};
-        k.advanced_options.num_runtime_varargs = num_varargs;
-        return k;
     };
 
     KernelSpec k0 =

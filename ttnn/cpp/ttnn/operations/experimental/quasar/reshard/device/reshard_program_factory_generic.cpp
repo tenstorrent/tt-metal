@@ -788,23 +788,25 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
     };
 
     const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, DFBEndpointType endpoint) {
-        KernelSpec k{
+        return KernelSpec{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_source),
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = DFBSpecName{kGenDfbName},
+                .accessor_name = kGenDfbName,
+                .endpoint_type = endpoint,
+            }},
+            .tensor_bindings =
+                {TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kGenInputTensorParam},
+                     .accessor_name = kGenInputTensorParam},
+                 TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kGenOutputTensorParam},
+                     .accessor_name = kGenOutputTensorParam}},
+            .compile_time_args = compile_time_args,
             .hw_config = std::move(hw_config),
+            .advanced_options = {.num_runtime_varargs = num_varargs},
         };
-        k.tensor_bindings.push_back(TensorBinding{
-            .tensor_parameter_name = TensorParamName{kGenInputTensorParam}, .accessor_name = kGenInputTensorParam});
-        k.tensor_bindings.push_back(TensorBinding{
-            .tensor_parameter_name = TensorParamName{kGenOutputTensorParam}, .accessor_name = kGenOutputTensorParam});
-        k.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFBSpecName{kGenDfbName},
-            .accessor_name = kGenDfbName,
-            .endpoint_type = endpoint,
-        });
-        k.compile_time_args = compile_time_args;
-        k.advanced_options.num_runtime_varargs = num_varargs;
-        return k;
     };
 
     KernelSpec k0 =
