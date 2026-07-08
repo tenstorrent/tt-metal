@@ -230,7 +230,7 @@ void bind_disaggregation_api(nb::module_& mod) {
         nb::arg("path"),
         "Serialize a KvChunkAddressTable to a protobuf file at `path`.");
 
-    // Deserialization — an external consumer (e.g. the prefill_h2d producer) reconstructs the
+    // Deserialization — an external consumer (e.g. the prefill_producer) reconstructs the
     // table the runner exported.
     mod.def(
         "import_from_protobuf_file",

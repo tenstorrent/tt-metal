@@ -4,7 +4,7 @@
 
 // ---------------------------------------------------------------------------
 // Reads a KV chunk's DRAM bytes over a bare tt::umd::Cluster and reads through on-demand TLB windows.
-// This lets a process that has NOT opened the mesh (an external scheduler / the prefill_h2d producer)
+// This lets a process that has NOT opened the mesh (an external scheduler / the prefill_producer)
 // read a live server's KV cache CONCURRENTLY with the runner that owns the chips via CreateDevice.
 // It is a direct port of the migration worker's device_io.cpp read path
 // (tt-llm-engine disaggregation/migration/src/worker/device_io.cpp). The chip is selected by

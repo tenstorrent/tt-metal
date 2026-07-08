@@ -151,7 +151,7 @@ def _build_device_map(mesh_device, mesh_shape) -> list[tuple[int, int, int]]:
 
 def serialize_device_map(mesh_device, path: str) -> str:
     """Write a JSON {"<mesh_id>:<chip_id>": <asic_unique_id>} device map so a device-less consumer
-    (the prefill_h2d producer) can resolve a table's FabricNodeIds to the ASIC unique_id that
+    (the prefill_producer) can resolve a table's FabricNodeIds to the ASIC unique_id that
     read_dram_umd / the migration worker key device reads on. Reuses _enumerate_devices (which calls
     ttnn.cluster.get_chip_unique_id_from_fabric_node_id). Pairs with the mock KV chunk table."""
     import json

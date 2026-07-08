@@ -393,15 +393,15 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 # ---------------------------------------------------------------------------
 
 
-def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, threshold: float, trace_dir):
+def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     """Read slot `slot_id`'s KV over [0, real_len) via the table and PCC-check it against the golden
     trace. Returns the min PCC across layers."""
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from tests.ttnn.utils_for_testing import comp_pcc
 
-    HEAD_DIM = 576  # qk_rope_head_dim(64) + kv_lora_rank(512)
-    KV_LORA = 512  # the "nope" part is [:, :512]; the rope "pe" part is [:, 512:]
+    KV_LORA = ADAPTER.model_config.KV_LORA_RANK  # "nope" part: device_kv[:, :KV_LORA]
+    HEAD_DIM = KV_LORA + ADAPTER.model_config.QK_ROPE_HEAD_DIM  # + rope "pe" part: device_kv[:, KV_LORA:]
     tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block  # round up to a block
 
@@ -447,7 +447,7 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float) -> bool:
         real_len = min(chunks_pushed * CHUNK_SIZE, actual_isl)
         if real_len <= 0:
             continue
-        pcc = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, threshold, trace_dir)
+        pcc = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, trace_dir)
         min_pcc_overall = min(min_pcc_overall, pcc)
         checked += 1
         if pcc < threshold:
