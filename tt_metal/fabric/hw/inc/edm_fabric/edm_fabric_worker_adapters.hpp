@@ -334,17 +334,21 @@ struct WorkerToFabricEdmSenderBase {
 
     // Non-stateful current-slot helper for payload+header pairs.
     // This avoids recomputing the destination EDM slot address for the header write.
+    template <bool posted = false>
     FORCE_INLINE void send_current_slot_non_blocking(
-        uint32_t payload_source_l1_addr, size_t payload_size_bytes, uint32_t header_source_l1_addr) {
+        uint32_t payload_source_l1_addr,
+        size_t payload_size_bytes,
+        uint32_t header_source_l1_addr,
+        uint8_t noc = get_fabric_worker_noc()) {
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_source_l1_addr))));
 
-        const uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
-        send_chunk_from_address<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(
-            payload_source_l1_addr, 1, payload_size_bytes, buffer_address + sizeof(PACKET_HEADER_TYPE));
-        send_chunk_from_address<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(
-            header_source_l1_addr, 1, sizeof(PACKET_HEADER_TYPE), buffer_address);
-        post_send_payload_increment_pointers();
+        const uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr(noc);
+        send_chunk_from_address<EDM_IO_BLOCKING_MODE::NON_BLOCKING, posted>(
+            payload_source_l1_addr, 1, payload_size_bytes, buffer_address + sizeof(PACKET_HEADER_TYPE), noc);
+        send_chunk_from_address<EDM_IO_BLOCKING_MODE::NON_BLOCKING, posted>(
+            header_source_l1_addr, 1, sizeof(PACKET_HEADER_TYPE), buffer_address, noc);
+        post_send_payload_increment_pointers(noc);
     }
 
     template <bool posted = false>
@@ -518,46 +522,53 @@ struct WorkerToFabricEdmSenderBase {
     // for the ack from the fabric before returning, saving some cycles for advanced users.
     // !!! IMPORTANT !!!
     // Must be called alongside (before) close_finish().
+    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     void close_start() {
-        const uint8_t noc = get_fabric_worker_noc();
         const auto dest_noc_addr_coord_only =
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, noc) & ~(uint64_t)NOC_COORDINATE_MASK;
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, WORKER_HANDSHAKE_NOC) & ~(uint64_t)NOC_COORDINATE_MASK;
 
         // buffer index stored at location after handshake addr
         if (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
-            noc_inline_dw_write<InlineWriteDst::L1>(
-                remote_buffer_index_addr, this->buffer_slot_write_counter.counter, 0xF, noc);
+            noc_inline_dw_write<InlineWriteDst::L1, posted>(
+                remote_buffer_index_addr, this->buffer_slot_write_counter.counter, 0xF, WORKER_HANDSHAKE_NOC);
         } else {
             const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
-            noc_inline_dw_write<InlineWriteDst::L1>(remote_buffer_index_addr, this->get_buffer_slot_index(), 0xF, noc);
+            noc_inline_dw_write<InlineWriteDst::L1, posted>(
+                remote_buffer_index_addr, this->get_buffer_slot_index(), 0xF, WORKER_HANDSHAKE_NOC);
         }
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
-        noc_inline_dw_write<InlineWriteDst::L1>(
+        noc_inline_dw_write<InlineWriteDst::L1, posted>(
             dest_edm_connection_state_addr,
             tt::tt_fabric::connection_interface::close_connection_request_value,
             0xF,
-            noc);
+            WORKER_HANDSHAKE_NOC);
     }
 
     // Advanced usage API:
     // Completes the connection closing process. Induces a write barrier
     // !!! IMPORTANT !!!
     // Must be called alongside (after) close_start().
+    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     void close_finish() {
         WAYPOINT("FCFW");
+        if constexpr (posted) {
+            noc_async_posted_writes_flushed(WORKER_HANDSHAKE_NOC);
+        }
+        noc_async_write_barrier(WORKER_HANDSHAKE_NOC);
+
         // Need to wait for the ack to teardown notice, from edm
         while (*this->worker_teardown_addr != 1) {
             invalidate_l1_cache();
         }
         WAYPOINT("FCFD");
-        noc_async_write_barrier(get_fabric_worker_noc());
         *(this->worker_teardown_addr) = 0;
     }
 
+    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     void close() {
-        close_start();
-        close_finish();
+        close_start<posted, WORKER_HANDSHAKE_NOC>();
+        close_finish<posted, WORKER_HANDSHAKE_NOC>();
     }
 
     uint32_t edm_buffer_addr;
@@ -651,16 +662,13 @@ private:
         }
     }
 
-    FORCE_INLINE uint64_t compute_dest_buffer_slot_noc_addr() const {
+    FORCE_INLINE uint64_t compute_dest_buffer_slot_noc_addr(uint8_t noc = get_fabric_worker_noc()) const {
         // TODO: Worth it to precompute the full noc addr?
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             return get_noc_addr(
-                this->edm_noc_x,
-                this->edm_noc_y,
-                this->edm_buffer_slot_addrs[this->get_buffer_slot_index()],
-                get_fabric_worker_noc());
+                this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_addrs[this->get_buffer_slot_index()], noc);
         } else {
-            return get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr, get_fabric_worker_noc());
+            return get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr, noc);
         }
     }
 
