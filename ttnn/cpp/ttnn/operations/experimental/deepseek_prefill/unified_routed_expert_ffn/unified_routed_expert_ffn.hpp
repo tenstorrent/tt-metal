@@ -55,6 +55,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //   read_x_at_offset: when true, x is a shared buffer and the reader offsets
 //      its x reads by expert_region_offsets[global_id] (fusing ttnn::extract).
 //      Requires expert_region_offsets. False => x is per-expert (rows at 0).
+//   x_is_row_major: when true, x is ROW_MAJOR bf16; the reader streams sticks
+//      and the compute kernel tilizes them to bf8_b before the matmul (fusing
+//      the standalone to_layout). False => x is already TILE bf8_b.
 ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
@@ -68,6 +71,7 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
     const std::optional<uint32_t>& input_m_tiles = std::nullopt,
     bool read_x_at_offset = false,
+    bool x_is_row_major = false,
     RoutedExpertActivation activation = RoutedExpertActivation::Silu);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'

@@ -24,6 +24,7 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<ttnn::Tensor>& expert_region_offsets,
     const std::optional<uint32_t>& input_m_tiles,
     bool read_x_at_offset,
+    bool x_is_row_major,
     RoutedExpertActivation activation) {
     // Single-op fused per-expert FFN. One device Program runs gate matmul,
     // up matmul, silu, multiply, down matmul as four phases inside the same
@@ -76,6 +77,7 @@ ttnn::Tensor unified_routed_expert_ffn(
         chunk_M_tiles,
         M_tiles_full,
         read_x_at_offset,
+        x_is_row_major,
         compute_kernel_config.has_value() ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
                                           : std::nullopt,
         output,
@@ -149,6 +151,7 @@ ttnn::Tensor unified_routed_expert_moe(
             expert_region_offsets,
             m_tiles,
             /*read_x_at_offset=*/true,
+            /*x_is_row_major=*/false,
             activation);
     }
     return dispatched_buffer;

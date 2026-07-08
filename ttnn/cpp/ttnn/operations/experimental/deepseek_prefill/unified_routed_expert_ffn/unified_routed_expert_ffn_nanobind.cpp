@@ -75,6 +75,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             read_x_at_offset (bool, optional): when True, x is a shared buffer
                 and the reader offsets x reads by expert_region_offsets[global_id]
                 (fusing ttnn::extract). Requires expert_region_offsets. Default False.
+            x_is_row_major (bool, optional): when True, x is ROW_MAJOR bf16; the
+                reader streams sticks and the compute kernel tilizes them to bf8_b
+                before the matmul (fusing to_layout). Default False (TILE bf8_b).
             activation (ttnn.RoutedExpertActivation, optional):
                 Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 / gpt-oss).
 
@@ -95,6 +98,7 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("expert_region_offsets") = nb::none(),
         nb::arg("input_m_tiles") = nb::none(),
         nb::arg("read_x_at_offset") = false,
+        nb::arg("x_is_row_major") = false,
         nb::arg("activation") = RoutedExpertActivation::Silu);
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
