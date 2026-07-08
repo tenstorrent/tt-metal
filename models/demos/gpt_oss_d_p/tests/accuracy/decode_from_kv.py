@@ -49,7 +49,41 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((am * bm).sum() / (denom + 1e-8))
 
 
-def scatter_kv_into_cache(k_cache, v_cache, k_np: np.ndarray, v_np: np.ndarray, mesh, real_len: int):
+def _debug_shard_check(tt_tensor, np_source: np.ndarray, real_len: int, mesh, label: str):
+    """Read back each device tensor from a freshly-sharded multi-device tensor and
+    PCC-compare against the expected shard from np_source.  Isolates whether
+    ShardTensor2dMesh(dims=(2, 1)) actually produced the right per-device shards.
+    """
+    sp, tp = tuple(mesh.shape)
+    num_kv_heads = np_source.shape[0]
+    head_dim = np_source.shape[2]
+    local_kv_heads = num_kv_heads // tp
+    per_device_seq = tt_tensor.shape[2]
+    devs = ttnn.get_device_tensors(tt_tensor)
+    print(f"[debug] {label}: per-device tt_tensor.shape={tuple(tt_tensor.shape)} n_devices={len(devs)}", flush=True)
+    for r in range(sp):
+        for c in range(tp):
+            dev_t = ttnn.to_torch(devs[r * tp + c]).float()  # [1, local_kv_heads, per_device_seq, head_dim]
+            seq_lo = r * per_device_seq
+            seq_hi = min(seq_lo + per_device_seq, real_len)
+            head_lo = c * local_kv_heads
+            head_hi = head_lo + local_kv_heads
+            if seq_hi <= seq_lo:
+                continue
+            expected_len = seq_hi - seq_lo
+            expected = torch.from_numpy(np_source[head_lo:head_hi, seq_lo:seq_hi, :]).float()  # [lkv, len, hd]
+            got = dev_t[0, :, :expected_len, :]  # [lkv, len, hd]
+            pcc = _pcc(expected, got)
+            print(
+                f"[debug] {label} r={r} c={c} (heads[{head_lo}:{head_hi}] seq[{seq_lo}:{seq_hi}]) "
+                f"pcc={pcc:.4f}  |exp|={expected.norm():.3f} |got|={got.norm():.3f}",
+                flush=True,
+            )
+
+
+def scatter_kv_into_cache(
+    k_cache, v_cache, k_np: np.ndarray, v_np: np.ndarray, mesh, real_len: int, debug: bool = False
+):
     """Inverse of kv_cache_prefill._gather_kv_cache.
 
     Takes gathered [num_kv_heads, real_len, head_dim] tensors (Meta interleave,
@@ -93,6 +127,14 @@ def scatter_kv_into_cache(k_cache, v_cache, k_np: np.ndarray, v_np: np.ndarray, 
 
     tt_k = _prep(k_np)
     tt_v = _prep(v_np)
+    if debug:
+        print(
+            f"[debug] scatter: k_np.shape={k_np.shape} real_len={real_len} "
+            f"max_seq_len={max_seq_len} sp={sp} tp={tp} "
+            f"local_kv_heads={num_kv_heads // tp} isl_per_row={max_seq_len // sp}",
+            flush=True,
+        )
+        _debug_shard_check(tt_k, k_np, real_len, mesh, "K post-shard")
     ttnn.fill_cache(k_cache, tt_k, batch_idx=0)
     ttnn.fill_cache(v_cache, tt_v, batch_idx=0)
     tt_k.deallocate(True)
@@ -164,7 +206,7 @@ def _build_model(mesh, shape, args, real_len_hint: int):
 def _run_check(args, mesh, shape, record, oracle_dir, kv_dir):
     from models.common.utility_functions import is_blackhole  # noqa: F401  (mesh already opened)
 
-    sp = shape[0]
+    sp, tp = shape[0], shape[1]
     real_len = record["n_tokens"]
     if args.num_tokens is not None and args.num_tokens != real_len:
         print(
@@ -204,12 +246,21 @@ def _run_check(args, mesh, shape, record, oracle_dir, kv_dir):
 
     any_fail = False
     results = []
-    for i in layers_to_check:
+    for idx, i in enumerate(layers_to_check):
         k_np = np.load(kv_dir / f"tt_layer{i}_k.npy")
         v_np = np.load(kv_dir / f"tt_layer{i}_v.npy")
         k_cache, v_cache = model.layers[i].self_attn.kv_cache
 
-        scatter_kv_into_cache(k_cache, v_cache, k_np, v_np, mesh, real_len)
+        debug_this = idx == 0  # only for first evaluated layer
+        if debug_this:
+            print(f"[debug] layer {i}: k_cache.shape={tuple(k_cache.shape)} k_cache.dtype={k_cache.dtype}", flush=True)
+            print(f"[debug] layer {i}: k_np.shape={k_np.shape} k_np.dtype={k_np.dtype}", flush=True)
+            print(
+                f"[debug] layer {i}: |k_np|_L2={float(np.linalg.norm(k_np)):.3f} "
+                f"mean={float(k_np.mean()):.4f} std={float(k_np.std()):.4f}",
+                flush=True,
+            )
+        scatter_kv_into_cache(k_cache, v_cache, k_np, v_np, mesh, real_len, debug=debug_this)
         ttnn.synchronize_device(mesh)
 
         k_round = _gather_kv_cache(k_cache, mesh, real_len, isl_per_row)
@@ -218,6 +269,29 @@ def _run_check(args, mesh, shape, record, oracle_dir, kv_dir):
         pcc_k = _pcc(torch.from_numpy(k_np), k_round)
         pcc_v = _pcc(torch.from_numpy(v_np), v_round)
         passed = pcc_k >= args.pcc_threshold and pcc_v >= args.pcc_threshold
+
+        if debug_this:
+            print(
+                f"[debug] layer {i}: k_round.shape={tuple(k_round.shape)} " f"|k_round|_L2={float(k_round.norm()):.3f}",
+                flush=True,
+            )
+            # Per-row PCC (SP shards) — which rows of the sequence came back wrong?
+            k_np_t = torch.from_numpy(k_np).float()
+            for r in range(sp):
+                lo = r * isl_per_row
+                hi = min(lo + isl_per_row, real_len)
+                if hi <= lo:
+                    continue
+                pcc_r = _pcc(k_np_t[:, lo:hi, :], k_round[:, lo:hi, :])
+                print(f"[debug] layer {i}: K row {r} (seq[{lo}:{hi}]) PCC={pcc_r:.4f}", flush=True)
+            # Per-TP-col PCC (heads) — which head-slices came back wrong?
+            local_kv_heads = k_np.shape[0] // tp
+            for c in range(tp):
+                hlo = c * local_kv_heads
+                hhi = hlo + local_kv_heads
+                pcc_c = _pcc(k_np_t[hlo:hhi, :, :], k_round[hlo:hhi, :, :])
+                print(f"[debug] layer {i}: K col {c} (heads[{hlo}:{hhi}]) PCC={pcc_c:.4f}", flush=True)
+
         if not passed:
             any_fail = True
         results.append((i, pcc_k, pcc_v, passed))
