@@ -51,7 +51,7 @@
       --tcp-interface ens5f0np0 \
       --rank-binding "${RANK_BINDING}" \
       --mpi-args "${TTRUN_MPI_ARGS}" \
-      python3 -m pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
