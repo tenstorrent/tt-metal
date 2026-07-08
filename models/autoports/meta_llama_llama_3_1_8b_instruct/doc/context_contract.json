@@ -1,0 +1,22 @@
+{
+  "hf_model": "meta-llama/Llama-3.1-8B-Instruct",
+  "hf_advertised_context": 131072,
+  "current_supported_context": 8,
+  "largest_validated_prefill_seq": 8,
+  "decode_status": "pending_emitted_decode_version",
+  "prefill_status": "functional_decoder_validated_short_prefill",
+  "limiting_reason": "functional_stage_validation_scope",
+  "notes": [
+    "HF max_position_embeddings is 131072 for the local LlamaConfig.",
+    "This stage validated single-layer prefill at batch 32 for seq_len 1, 4, and 8 only; downstream stages must extend validation before claiming long-context readiness.",
+    "The supplied forge graph is decode-shaped around a cached length of 128; this functional decoder translates the layer math into prefill and deliberately does not implement decode or paged KV.",
+    ".agents/scripts/check_context_contract.py currently treats any below-HF context as a failure unless DRAM-limited; this stage is below advertised because validation scope is short prefill, not because of a proven DRAM limit."
+  ],
+  "evidence": {
+    "test_command": "timeout 600 pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py --tb=short -s",
+    "largest_validated_command": "timeout 300 pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py::test_synthetic_weight_prefill_real_shapes --tb=short -s",
+    "real_weight_pcc": 0.999998,
+    "real_weight_seq_len": 4,
+    "synthetic_seq_lens": [1, 8]
+  }
+}
