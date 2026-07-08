@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include "api/compute/common.h"
 #include "llk_assert.h"
 #ifdef TRISC_MATH
@@ -23,13 +22,13 @@ namespace ckernel {
 namespace pack_untilize_detail {
 
 template <
-    std::uint32_t block_ct_dim,
-    std::uint32_t full_ct_dim,
+    uint32_t block_ct_dim,
+    uint32_t full_ct_dim,
     bool narrow_row,
     std::uint32_t row_num_datums,
     bool dense,
     bool configure_remap>
-ALWI void pack_untilize_dest_init_impl(std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
+ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::PACK>(ocb, call_line);
 #ifdef ARCH_BLACKHOLE
@@ -51,8 +50,8 @@ ALWI void pack_untilize_dest_init_impl(std::uint32_t ocb, std::uint32_t call_lin
 #endif
 }
 
-template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim, bool configure_remap>
-ALWI void pack_untilize_init_impl(std::uint32_t icb, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
+template <uint32_t block_ct_dim, uint32_t full_ct_dim, bool configure_remap>
+ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
     UNPACK((
@@ -120,13 +119,13 @@ ALWI void pack_untilize_init_impl(std::uint32_t icb, std::uint32_t ocb, std::uin
  */
 // clang-format on
 template <
-    std::uint32_t block_ct_dim = 8,
-    std::uint32_t full_ct_dim = block_ct_dim,
+    uint32_t block_ct_dim = 8,
+    uint32_t full_ct_dim = block_ct_dim,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense = false,
     bool configure_remap = true>
-ALWI void pack_untilize_dest_init(std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
+ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     pack_untilize_detail::
         pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, configure_remap>(
@@ -164,8 +163,8 @@ ALWI void pack_untilize_dest_init(std::uint32_t ocb, std::uint32_t call_line = _
  * | Function   | ocb          | Output circular buffer identifier          | uint32_t  | 0 to 31                   | True                    |
  */
 // clang-format on
-template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim>
-ALWI void pack_untilize_init(std::uint32_t icb, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
+template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
+ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true>(icb, ocb, call_line);
 }
@@ -187,9 +186,8 @@ ALWI void pack_untilize_init(std::uint32_t icb, std::uint32_t ocb, std::uint32_t
  * | Function   | ocb          | Output circular buffer identifier | uint32_t | 0 to 31                   | True                |
  */
 // clang-format on
-template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim>
-ALWI void pack_untilize_init_skip_remap(
-    std::uint32_t icb, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
+template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
+ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, false>(icb, ocb, call_line);
 }
@@ -219,13 +217,12 @@ ALWI void pack_untilize_init_skip_remap(
  * | Function   | block_c_index | Index of the currently processed block     | uint32_t  | >= 0                      | False               |
  */
 // clang-format on
-template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim>
-ALWI void pack_untilize_block(
-    std::uint32_t icb, std::uint32_t block_rt_dim, std::uint32_t ocb, std::uint32_t block_c_index = 0) {
+template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
+ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
     LLK_SAN_FUNCTION();
-    for (std::uint32_t r = 0; r < block_rt_dim; ++r) {
+    for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH((llk_math_wait_for_dest_available()));
-        for (std::uint32_t c = 0; c < block_ct_dim; ++c) {
+        for (uint32_t c = 0; c < block_ct_dim; ++c) {
 #ifndef ARCH_QUASAR
             UNPACK((llk_unpack_A<
                     BroadcastType::NONE,
@@ -286,18 +283,18 @@ ALWI void pack_untilize_block(
  */
 // clang-format on
 template <
-    std::uint32_t block_ct_dim = 8,
-    std::uint32_t full_ct_dim = block_ct_dim,
+    uint32_t block_ct_dim = 8,
+    uint32_t full_ct_dim = block_ct_dim,
     bool diagonal = false,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    std::uint32_t tile_dst_ct_offset = 0,
+    uint32_t tile_dst_ct_offset = 0,
     bool dense = false>
 ALWI void pack_untilize_dest(
-    std::uint32_t ocb,
-    std::uint32_t block_rt_dim = 1,
-    std::uint32_t block_c_index = 0 /* used when full_ct_dim > block_ct_dim*/,
-    std::uint32_t tile_dst_rt_offset = 0) {
+    uint32_t ocb,
+    uint32_t block_rt_dim = 1,
+    uint32_t block_c_index = 0 /* used when full_ct_dim > block_ct_dim*/,
+    uint32_t tile_dst_rt_offset = 0) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
@@ -328,7 +325,7 @@ ALWI void pack_untilize_dest(
  * | Function   | ocb  | Output circular buffer identifier  | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void pack_untilize_uninit(std::uint32_t ocb) {
+ALWI void pack_untilize_uninit(uint32_t ocb) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
 
