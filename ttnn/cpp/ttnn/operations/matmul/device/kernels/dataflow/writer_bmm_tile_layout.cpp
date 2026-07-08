@@ -27,16 +27,16 @@ void kernel_main() {
     uint32_t MtNt = get_arg_val<uint32_t>(11);  // if 0
     uint32_t batch = get_arg_val<uint32_t>(12);
 
-    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("dfb_out");
 
     // single-tile
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
+    const uint32_t single_tile_size_bytes = get_tile_size(dfb_id_out0);
 
     constexpr auto out_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(out_args, out_tensor_addr);
 
     Noc noc;
-    DataflowBuffer cb_out(cb_id_out0);
+    DataflowBuffer dfb_out(dfb_id_out0);
 
     bool one_time_profile = true;
     for (uint32_t b = 0; b < batch; b++) {
@@ -46,14 +46,14 @@ void kernel_main() {
             for (uint32_t sbw = 0; sbw < out_num_subblocks_w; sbw++) {
                 uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
-                cb_out.wait_front(out_subblock_tile_count);
+                dfb_out.wait_front(out_subblock_tile_count);
                 uint32_t out_read_offset = 0;
 
                 for (uint32_t h = 0; h < out_subblock_h; h++) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for (uint32_t w = 0; w < out_subblock_w; w++) {
                         noc.async_write(
-                            cb_out,
+                            dfb_out,
                             s,
                             single_tile_size_bytes,
                             {.offset_bytes = out_read_offset},
@@ -66,7 +66,7 @@ void kernel_main() {
                 }
 
                 noc.async_write_barrier();
-                cb_out.pop_front(out_subblock_tile_count);
+                dfb_out.pop_front(out_subblock_tile_count);
                 out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
             }
             out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;

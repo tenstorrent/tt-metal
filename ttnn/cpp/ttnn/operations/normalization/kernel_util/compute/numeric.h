@@ -56,13 +56,13 @@ template <
     typename input_policy,
     typename... AdditionalCBs>
 inline void accumulate_compute_loop(
-    DataflowBuffer& cb_in,
-    DataflowBuffer& cb_scalar,
-    DataflowBuffer& cb_out,
+    DataflowBuffer& dfb_in,
+    DataflowBuffer& dfb_scalar,
+    DataflowBuffer& dfb_out,
     uint32_t num_tiles,
     uint32_t block_size,
     bool last_tile_partial,
-    AdditionalCBs&... cb_additional) {
+    AdditionalCBs&... dfb_additional) {
     static_assert(
         (std::conjunction_v<std::is_same<std::remove_reference_t<AdditionalCBs>, DataflowBuffer>...>),
         "All additional CBs must be DataflowBuffer&");
@@ -70,44 +70,44 @@ inline void accumulate_compute_loop(
     constexpr bool pop_input = input_policy::pop;
     constexpr bool sync_full_block = input_policy::sync_full_block;
 
-    auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles, last_tile_partial](DataflowBuffer& cb) {
+    auto accumulate_cb = [dfb_scalar, block_size, dfb_out, num_tiles, last_tile_partial](DataflowBuffer& dfb) {
         constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
         if constexpr (swap_operands) {
-            reconfig_data_format(cb_scalar.get_id(), cb.get_id());
+            reconfig_data_format(dfb_scalar.get_id(), dfb.get_id());
         }
-        reduce_init<reduce_type, reduce_dim>(cb.get_id(), cb_scalar.get_id(), cb_out.get_id());
+        reduce_init<reduce_type, reduce_dim>(dfb.get_id(), dfb_scalar.get_id(), dfb_out.get_id());
         for (auto block : generic::blocks(num_tiles, block_size)) {
             const auto num_previous_tiles = pop_input ? 0 : block.start();
             const auto curr_block_size = sync_full_block ? block.full_block_size() : block.size();
             const uint32_t num_tiles_to_wait = num_previous_tiles + curr_block_size;
-            cb.wait_front(num_tiles_to_wait);
+            dfb.wait_front(num_tiles_to_wait);
             for (auto j : block.local()) {
-                // If it's the last tile and it's partial, use the second tile in cb_scalar
+                // If it's the last tile and it's partial, use the second tile in dfb_scalar
                 const auto scaler_tile_idx = block.to_global(j) == num_tiles - 1 && last_tile_partial ? 1 : 0;
                 reduce_tile<reduce_type, reduce_dim>(
-                    cb.get_id(), cb_scalar.get_id(), num_previous_tiles + j, scaler_tile_idx, detail::dst0);
+                    dfb.get_id(), dfb_scalar.get_id(), num_previous_tiles + j, scaler_tile_idx, detail::dst0);
             }
             if constexpr (pop_input) {
-                cb.pop_front(curr_block_size);
+                dfb.pop_front(curr_block_size);
             }
         }
     };
 
     // Accumulate the input CB
-    accumulate_cb(cb_in);
+    accumulate_cb(dfb_in);
 
     // Accumulate any additional CBs
-    constexpr uint32_t num_additional_cbs = sizeof...(cb_additional);
-    if constexpr (num_additional_cbs > 0) {
-        DataflowBuffer* additional_cbs_array[num_additional_cbs] = {(&cb_additional)...};
+    constexpr uint32_t num_additional_dfbs = sizeof...(dfb_additional);
+    if constexpr (num_additional_dfbs > 0) {
+        DataflowBuffer* additional_dfbs_array[num_additional_dfbs] = {(&dfb_additional)...};
 
-        for (uint32_t i = 0; i < num_additional_cbs; i++) {
-            accumulate_cb(*additional_cbs_array[i]);
+        for (uint32_t i = 0; i < num_additional_dfbs; i++) {
+            accumulate_cb(*additional_dfbs_array[i]);
         }
     }
 
     reduce_uninit();
-    reconfig_data_format(cb_in.get_id(), cb_scalar.get_id());
+    reconfig_data_format(dfb_in.get_id(), dfb_scalar.get_id());
 }
 
 }  // namespace detail
@@ -116,15 +116,15 @@ inline void accumulate_compute_loop(
  * @brief Accumulate (sum) along the rows of tiles in a CB, apply
  * an optional compute epilogue, and push the result to an output CB
  *
- * @param cb_in Input CB to accumulate
- * @param cb_scalar CB containing the scalar tile to use in reduce
- * @param cb_out Output CB to store the accumulated value
+ * @param dfb_in Input CB to accumulate
+ * @param dfb_scalar CB containing the scalar tile to use in reduce
+ * @param dfb_out Output CB to store the accumulated value
  * @param num_tiles Number of tiles containing the data
  * @param block_size Number of tiles to process at a time
  * @param N Number of entries in the set
  * @param epilogue Optional functor to call after the accumulation before tile registers
  * are committed and packed
- * @param additional_cbs Optional additional input CBs to accumulate
+ * @param additional_dfbs Optional additional input CBs to accumulate
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
  * @tparam FLOAT32_REDUCTION Whether to reduce the sum in FP32 precision
@@ -138,12 +138,12 @@ inline void accumulate_compute_loop(
  * @note It is up to the caller to ensure that the scalar tile
  * is correctly populated. If it doesn't contain 1's, the result
  * will be incorrect @anchor scalar_tile_ones
- * @note If the last tile is partial, we need two scalar tiles in cb_scalar:
+ * @note If the last tile is partial, we need two scalar tiles in dfb_scalar:
  * One for the full tiles, and one for the partial tile @anchor partial_tile_scaler_tiles
  * @note All input CBs will wait on the same number of tiles in a block,
  * and will have the same pop policy
- * @note This first streams all `num_tiles` tiles from `cb_in0` then
- * streams all `num_tiles` tiles from `cb_in1` @anchor stream_cbs
+ * @note This first streams all `num_tiles` tiles from `dfb_in0` then
+ * streams all `num_tiles` tiles from `dfb_in1` @anchor stream_cbs
  */
 template <
     PoolType reduce_type,
@@ -154,50 +154,50 @@ template <
     typename Epilogue = decltype(detail::no_op),
     typename... AdditionalCBs>
 inline void row_wise_accumulate_with_epilogue(
-    DataflowBuffer& cb_in,
-    DataflowBuffer& cb_scalar,
-    DataflowBuffer& cb_out,
+    DataflowBuffer& dfb_in,
+    DataflowBuffer& dfb_scalar,
+    DataflowBuffer& dfb_out,
     uint32_t num_tiles,
     uint32_t block_size,
     uint32_t N,
     uint32_t tile_width = 32,
     Epilogue epilogue = detail::no_op,
-    AdditionalCBs&... additional_cbs) {
+    AdditionalCBs&... additional_dfbs) {
     constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
     // If the last tile is partial, we need two scalar tiles:
     // One for the full tiles, and one for the partial tile
     const auto last_tile_partial = N % tile_width > 0;
     const uint32_t num_scaler_tiles_needed = last_tile_partial ? 2 : 1;
-    cb_scalar.wait_front(num_scaler_tiles_needed);
-    reconfig_data_format(cb_in.get_id(), cb_scalar.get_id());
+    dfb_scalar.wait_front(num_scaler_tiles_needed);
+    reconfig_data_format(dfb_in.get_id(), dfb_scalar.get_id());
     tile_regs_acquire();
 
     detail::accumulate_compute_loop<reduce_type, reduce_dim, FLOAT32_REDUCTION, input_policy>(
-        cb_in, cb_scalar, cb_out, num_tiles, block_size, last_tile_partial, additional_cbs...);
+        dfb_in, dfb_scalar, dfb_out, num_tiles, block_size, last_tile_partial, additional_dfbs...);
 
     epilogue();
 
     tile_regs_commit();
     tile_regs_wait();
 
-    cb_out.reserve_back(1);
-    pack_reconfig_data_format(cb_out.get_id());
-    pack_tile(detail::dst0, cb_out.get_id());
+    dfb_out.reserve_back(1);
+    pack_reconfig_data_format(dfb_out.get_id());
+    pack_tile(detail::dst0, dfb_out.get_id());
     tile_regs_release();
-    cb_out.push_back(1);
+    dfb_out.push_back(1);
 
     if constexpr (wait_at_end) {
-        cb_out.wait_front(1);
+        dfb_out.wait_front(1);
     }
 }
 
 /**
  * @brief Compute the row-wise mean of an entire input CB
  *
- * @param cb_in Input CB to compute mean of
- * @param cb_scalar CB containing a scalar reduce tile of 1's.
+ * @param dfb_in Input CB to compute mean of
+ * @param dfb_scalar CB containing a scalar reduce tile of 1's.
  * See \ref partial_tile_scaler_tiles for additional requirements
- * @param cb_out Output CB to store the mean
+ * @param dfb_out Output CB to store the mean
  * @param N Number of entries in the set
  * @param num_tiles Number of tiles containing the data
  * @param block_size Number of tiles to process at a time
@@ -217,15 +217,15 @@ template <
     typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean(
-    DataflowBuffer& cb_in,
-    DataflowBuffer& cb_scalar,
-    DataflowBuffer& cb_out,
+    DataflowBuffer& dfb_in,
+    DataflowBuffer& dfb_scalar,
+    DataflowBuffer& dfb_out,
     uint32_t N,
     uint32_t num_tiles,
     uint32_t block_size,
     uint32_t tile_width = 32) {
     row_wise_accumulate_with_epilogue<reduce_type, reduce_dim, FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
-        cb_in, cb_scalar, cb_out, num_tiles, block_size, N, tile_width, [N]() {
+        dfb_in, dfb_scalar, dfb_out, num_tiles, block_size, N, tile_width, [N]() {
             detail::scale_dest(detail::dst0, generic::bit_cast<uint32_t>(1.0f / N));
         });
 }
@@ -233,11 +233,11 @@ inline void row_wise_mean(
 /**
  * @brief Compute the row-wise mean of the sum of two input CBs
  *
- * @param cb_in Input CB to compute mean of
- * @param cb_in1 Additional input CB to accumulate
- * @param cb_scalar CB containing a scalar reduce tile of 1's.
+ * @param dfb_in Input CB to compute mean of
+ * @param dfb_in1 Additional input CB to accumulate
+ * @param dfb_scalar CB containing a scalar reduce tile of 1's.
  * See \ref partial_tile_scaler_tiles for additional requirements
- * @param cb_out Output CB to store the mean
+ * @param dfb_out Output CB to store the mean
  * @param N Number of entries in the set
  * @param num_tiles Number of tiles containing the data
  * @param block_size Number of tiles to process at a time
@@ -257,23 +257,23 @@ template <
     typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean_with_pre_add(
-    DataflowBuffer& cb_in0,
-    DataflowBuffer& cb_in1,
-    DataflowBuffer& cb_scalar,
-    DataflowBuffer& cb_out,
+    DataflowBuffer& dfb_in0,
+    DataflowBuffer& dfb_in1,
+    DataflowBuffer& dfb_scalar,
+    DataflowBuffer& dfb_out,
     uint32_t N,
     uint32_t num_tiles,
     uint32_t block_size,
     uint32_t tile_width = 32) {
     row_wise_accumulate_with_epilogue<reduce_type, reduce_dim, FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
-        cb_in0,
-        cb_scalar,
-        cb_out,
+        dfb_in0,
+        dfb_scalar,
+        dfb_out,
         num_tiles,
         block_size,
         N,
         tile_width,
         [N]() { detail::scale_dest(detail::dst0, generic::bit_cast<uint32_t>(1.0f / N)); },
-        cb_in1);
+        dfb_in1);
 }
 }  // namespace norm::kernel_util::compute::numeric

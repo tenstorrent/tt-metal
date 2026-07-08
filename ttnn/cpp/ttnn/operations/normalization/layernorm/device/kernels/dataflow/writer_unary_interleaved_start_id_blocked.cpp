@@ -19,27 +19,27 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<1>();
 
     // CB index - configurable via named compile-time args for kernel chaining support
-    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_out0);
+    const uint32_t tile_bytes = get_tile_size(dfb_id_out0);
 
     Noc noc;
-    DataflowBuffer cb_out0(cb_id_out0);
+    DataflowBuffer dfb_out0(dfb_id_out0);
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t tile_id = tile_offset;
     for (uint32_t h = 0; h < num_tile_rows; h++) {
         for (auto block : generic::blocks(Wt, blk)) {
-            cb_out0.wait_front(block.full_block_size());
+            dfb_out0.wait_front(block.full_block_size());
             uint32_t idx = 0;
             for (auto i : block.local()) {
-                noc.async_write(cb_out0, s, tile_bytes, {.offset_bytes = idx * tile_bytes}, {.page_id = tile_id});
+                noc.async_write(dfb_out0, s, tile_bytes, {.offset_bytes = idx * tile_bytes}, {.page_id = tile_id});
                 tile_id++;
                 idx++;
             }
             noc.async_write_barrier();
-            cb_out0.pop_front(block.full_block_size());
+            dfb_out0.pop_front(block.full_block_size());
         }
     }
 }

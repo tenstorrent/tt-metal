@@ -27,34 +27,34 @@ void kernel_main() {
     const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(0);
     const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex_id = tt::CBIndex::c_9;
-    constexpr uint32_t cb_ex_global_id = tt::CBIndex::c_15;
-    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
-    constexpr uint32_t cb_repack_id = tt::CBIndex::c_11;
-    constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_12;
-    constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
+    constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
+    constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;
+    constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
+    constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_repack_id = tt::CBIndex::c_11;
+    constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_12;
+    constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
 
     Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
-    DataflowBuffer cb_ex_partial(cb_ex_partial_id);
-    DataflowBuffer cb_ex_global(cb_ex_global_id);
-    DataflowBuffer cb_in0(cb_in0_id);
-    DataflowBuffer cb_repack(cb_repack_id);
-    DataflowBuffer cb_repack_out(cb_repack_out_id);
-    DataflowBuffer cb_out0(cb_out0_id);
+    DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    DataflowBuffer dfb_ex_global(dfb_ex_global_id);
+    DataflowBuffer dfb_in0(dfb_in0_id);
+    DataflowBuffer dfb_repack(dfb_repack_id);
+    DataflowBuffer dfb_repack_out(dfb_repack_out_id);
+    DataflowBuffer dfb_out0(dfb_out0_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
-    const DataFormat data_format = get_dataformat(cb_ex_partial_id);
+    const uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
+    const DataFormat data_format = get_dataformat(dfb_ex_partial_id);
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
-    uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
+    uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
     uint32_t src_addr_in0 = in0_l1_read_addr;
     UnicastEndpoint self_ep;
     for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_repack.reserve_back(per_core_N);
-        uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
+        dfb_repack.reserve_back(per_core_N);
+        uint32_t l1_write_addr_repack = dfb_repack.get_write_ptr();
         for (uint32_t i = 0; i < tile_height; ++i) {
             noc.async_read(
                 self_ep,
@@ -66,27 +66,27 @@ void kernel_main() {
             l1_write_addr_repack += per_core_N_bytes_with_stride;
         }
         noc.async_read_barrier();
-        cb_repack.push_back(per_core_N);
+        dfb_repack.push_back(per_core_N);
     }
 #endif
 
     for (uint32_t i = 0; i < num_batch_group; ++i) {
         for (uint32_t j = 0; j < 2; ++j) {
-            cb_ex_partial.wait_front(1);
+            dfb_ex_partial.wait_front(1);
             reduce_sender_sem.set(INVALID);
-            cb_ex_global.reserve_back(1);
+            dfb_ex_global.reserve_back(1);
             reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
             reduce_sender_sem.wait(VALID);
-            cb_ex_global.push_back(1);
-            cb_ex_partial.pop_front(1);
+            dfb_ex_global.push_back(1);
+            dfb_ex_partial.pop_front(1);
         }
     }
 
 #if defined(READER_REPACK) and defined(UNTILIZE_OUT)
-    uint32_t l1_write_addr_repack = cb_out0.get_write_ptr();
+    uint32_t l1_write_addr_repack = dfb_out0.get_write_ptr();
     for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_repack_out.wait_front(per_core_N);
-        uint32_t in0_l1_read_addr = cb_repack_out.get_read_ptr();
+        dfb_repack_out.wait_front(per_core_N);
+        uint32_t in0_l1_read_addr = dfb_repack_out.get_read_ptr();
         uint32_t src_addr_in0 = in0_l1_read_addr;
         UnicastEndpoint self_ep;
         for (uint32_t i = 0; i < tile_height; ++i) {
@@ -100,7 +100,7 @@ void kernel_main() {
             l1_write_addr_repack += per_core_N_bytes;
         }
         noc.async_read_barrier();
-        cb_repack_out.pop_front(per_core_N);
+        dfb_repack_out.pop_front(per_core_N);
     }
 #endif
 }

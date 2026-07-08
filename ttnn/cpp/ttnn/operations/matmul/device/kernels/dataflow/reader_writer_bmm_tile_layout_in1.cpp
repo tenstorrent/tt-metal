@@ -60,9 +60,9 @@ void kernel_main() {
     // batch args
     constexpr uint32_t MtNt = get_compile_time_arg_val(18);
 
-    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("dfb_in1");
     // WRITER
-    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("dfb_out");
 
     constexpr auto in1_args = TensorAccessorArgs<19>();
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
@@ -73,8 +73,8 @@ void kernel_main() {
 #endif
 
     Noc noc;
-    DataflowBuffer cb_in1(cb_id_in1);
-    DataflowBuffer cb_out(cb_id_out0);
+    DataflowBuffer dfb_in1(dfb_id_in1);
+    DataflowBuffer dfb_out(dfb_id_out0);
 
 #ifdef FUSE_BIAS
     // Load the whole per-batch [M, N] bias block once.
@@ -102,10 +102,10 @@ void kernel_main() {
 
 #ifdef IN1_SHARDED
     const uint32_t in1_num_tiles = batch * num_blocks * in1_block_h * in1_block_w;
-    cb_in1.reserve_back(in1_num_tiles);
-    cb_in1.push_back(in1_num_tiles);
+    dfb_in1.reserve_back(in1_num_tiles);
+    dfb_in1.push_back(in1_num_tiles);
 #else
-    const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
+    const uint32_t in1_single_tile_size_bytes = get_tile_size(dfb_id_in1);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the in1
     // CB pages are sized to match (see the program factory), so tiles are laid out in L1 at the
     // padded stride while the NOC reads the unpadded tile of data into each padded slot. No-op when
@@ -116,7 +116,7 @@ void kernel_main() {
 #endif  // IN1_SHARDED
 
 #ifndef OUT_SHARDED
-    const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
+    const uint32_t output_single_tile_size_bytes = get_tile_size(dfb_id_out0);
     const auto s = TensorAccessor(out_args, out_tensor_addr);
 #endif  // OUT_SHARDED
 
@@ -125,7 +125,7 @@ void kernel_main() {
 #ifndef IN1_SHARDED
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
         for (uint32_t block = 0; block < num_blocks; ++block) {
-            cb_in1.reserve_back(in1_block_num_tiles);
+            dfb_in1.reserve_back(in1_block_num_tiles);
 
             uint32_t in1_write_offset = 0;
 
@@ -135,7 +135,7 @@ void kernel_main() {
                 for (uint32_t w = 0; w < in1_block_w; ++w) {
                     noc.async_read(
                         s1,
-                        cb_in1,
+                        dfb_in1,
                         in1_single_tile_size_bytes,
                         {.page_id = in1_tensor_tile_id},
                         {.offset_bytes = in1_write_offset});
@@ -148,7 +148,7 @@ void kernel_main() {
 
             noc.async_read_barrier();
 
-            cb_in1.push_back(in1_block_num_tiles);
+            dfb_in1.push_back(in1_block_num_tiles);
         }
         if (bcast_B == 0) {
             in1_tensor_start_tile_id += KtNt;
@@ -163,14 +163,14 @@ void kernel_main() {
             for (uint32_t sbw = 0; sbw < out_num_subblocks_w; ++sbw) {
                 uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
-                cb_out.wait_front(out_subblock_tile_count);
+                dfb_out.wait_front(out_subblock_tile_count);
                 uint32_t out_read_offset = 0;
 
                 for (uint32_t h = 0; h < out_subblock_h; ++h) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for (uint32_t w = 0; w < out_subblock_w; ++w) {
                         noc.async_write(
-                            cb_out,
+                            dfb_out,
                             s,
                             output_single_tile_size_bytes,
                             {.offset_bytes = out_read_offset},
@@ -184,7 +184,7 @@ void kernel_main() {
                 }
 
                 noc.async_write_barrier();
-                cb_out.pop_front(out_subblock_tile_count);
+                dfb_out.pop_front(out_subblock_tile_count);
                 out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
             }
             out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
@@ -195,6 +195,6 @@ void kernel_main() {
 #endif  // not defined IN1_SHARDED or not defined OUT_SHARDED
 
 #ifdef OUT_SHARDED
-    cb_out.wait_front(batch * out_num_subblocks_h * out_num_subblocks_w * out_subblock_w * out_subblock_h);
+    dfb_out.wait_front(batch * out_num_subblocks_h * out_num_subblocks_w * out_subblock_w * out_subblock_h);
 #endif  // OUT_SHARDED
 }

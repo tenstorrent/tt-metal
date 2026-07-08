@@ -19,25 +19,25 @@ void kernel_main() {
     constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
     constexpr auto dst_args = TensorAccessorArgs<1>();
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_14;
+    constexpr uint32_t dfb_out = tt::CBIndex::c_14;
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_out);
+    const uint32_t tile_bytes = get_tile_size(dfb_out);
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    DataflowBuffer cb_out_buf(cb_out);
+    DataflowBuffer dfb_out_buf(dfb_out);
 
     uint32_t tile_id = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i += blk) {
-        cb_out_buf.wait_front(blk);
+        dfb_out_buf.wait_front(blk);
         uint32_t write_offset = 0;
         for (uint32_t j = 0; j < blk; j++) {
-            noc.async_write(cb_out_buf, s, tile_bytes, {.offset_bytes = write_offset}, {.page_id = tile_id});
+            noc.async_write(dfb_out_buf, s, tile_bytes, {.offset_bytes = write_offset}, {.page_id = tile_id});
             tile_id++;
             write_offset += tile_bytes;
         }
         noc.async_write_barrier();
-        cb_out_buf.pop_front(blk);
+        dfb_out_buf.pop_front(blk);
     }
 }

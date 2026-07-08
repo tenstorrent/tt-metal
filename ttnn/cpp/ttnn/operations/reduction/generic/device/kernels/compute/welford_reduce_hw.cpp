@@ -54,18 +54,18 @@ void kernel_main() {
 
     // cb_in: For FP32 input it is flagged UnpackToDestFp32 (program factory), preserving FP32
     // mantissa for the copy_tile -> welford SFPU consumer path. BF16 input: Default.
-    constexpr auto cb_in = tt::CBIndex::c_0;
+    constexpr auto dfb_in = tt::CBIndex::c_0;
     // Final output CB (output data format), consumed by the writer for NOC write.
-    constexpr auto cb_out = tt::CBIndex::c_16;
+    constexpr auto dfb_out = tt::CBIndex::c_16;
     // Intermediate CB for mean+var tile pairs, consumed by writer kernel.
-    constexpr auto cb_partial = tt::CBIndex::c_21;
+    constexpr auto dfb_partial = tt::CBIndex::c_21;
     // Combined scalar result from the writer kernel (Float32).
-    constexpr auto cb_combined = tt::CBIndex::c_22;
+    constexpr auto dfb_combined = tt::CBIndex::c_22;
 
-    DataflowBuffer cb_in_obj(cb_in);
-    DataflowBuffer cb_out_obj(cb_out);
-    DataflowBuffer cb_partial_obj(cb_partial);
-    DataflowBuffer cb_combined_obj(cb_combined);
+    DataflowBuffer dfb_in_obj(dfb_in);
+    DataflowBuffer dfb_out_obj(dfb_out);
+    DataflowBuffer dfb_partial_obj(dfb_partial);
+    DataflowBuffer dfb_combined_obj(dfb_combined);
 
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
@@ -77,8 +77,8 @@ void kernel_main() {
     // Bessel's correction is applied later by the writer kernel.
     constexpr uint32_t scale_idx = H - 1;
 
-    compute_kernel_hw_startup(cb_in, cb_partial);
-    pack_reconfig_data_format(cb_partial);
+    compute_kernel_hw_startup(dfb_in, dfb_partial);
+    pack_reconfig_data_format(dfb_partial);
 
     uint32_t num_outputs = NC_per_core / reduce_batch_size;
 
@@ -86,7 +86,7 @@ void kernel_main() {
         // --- Phase 1: H-reduce all columns for reduce_batch_size NC slices ---
         // Restore unpacker to cb_in's format after Phase 2 set it to
         // cb_combined (Float32).
-        reconfig_data_format_srca(cb_in);
+        reconfig_data_format_srca(dfb_in);
         for (uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 // H-reduce one column of Ht tiles.
@@ -118,18 +118,18 @@ void kernel_main() {
                 //   writes final mean/variance tiles into DST.
                 // - start_N advances by one tile height each iteration so Welford sees the correct
                 //   element count / divisor progression across the whole H reduction.
-                copy_tile_to_dst_init_short(cb_in);
+                copy_tile_to_dst_init_short(dfb_in);
                 tile_regs_acquire();
 
                 // Welford SFPU state (running mean in LREG4, M2 in LREG5)
                 // persists across DST cycles because LREGs are separate from
                 // the DST register file managed by tile_regs_acquire/release.
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
-                    cb_in_obj.wait_front(onetile);
+                    dfb_in_obj.wait_front(onetile);
                     // copy_tile reads cb_in. For FP32 input, c_0 carries UnpackToDestFp32
                     // so the FP32 mantissa is preserved into DEST.
-                    copy_tile(cb_in, 0, input_dst);
-                    cb_in_obj.pop_front(onetile);
+                    copy_tile(dfb_in, 0, input_dst);
+                    dfb_in_obj.pop_front(onetile);
 
                     if (ht < (Ht - 1)) {
                         welford_update<0>(input_dst, start_N, {});
@@ -151,12 +151,12 @@ void kernel_main() {
                 }
 
                 // Pack mean (DST[1]) and var (DST[2]) tiles to cb_partial.
-                cb_partial_obj.reserve_back(2);
+                dfb_partial_obj.reserve_back(2);
                 tile_regs_wait();
-                pack_reconfig_data_format(cb_partial);
-                pack_tile_block(mean_dst, cb_partial, 2);
+                pack_reconfig_data_format(dfb_partial);
+                pack_tile_block(mean_dst, dfb_partial, 2);
                 tile_regs_release();
-                cb_partial_obj.push_back(2);
+                dfb_partial_obj.push_back(2);
             }
         }
 
@@ -166,14 +166,14 @@ void kernel_main() {
         // already applied).  We unpack it, apply sqrt_tile for std, apply the
         // user scalar, and re-pack into cb_out using the packer, which converts
         // to the output data format (handles BFLOAT8_B and all other formats).
-        cb_combined_obj.wait_front(onetile);
+        dfb_combined_obj.wait_front(onetile);
         // Explicit srca reconfig is required because the unpacker was last
         // configured for cb_in's format (e.g. Float16_b) during Phase 1.
         // cb_combined uses Float32, so the unpacker must be reconfigured.
-        reconfig_data_format_srca(cb_combined);
+        reconfig_data_format_srca(dfb_combined);
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_combined);
-        copy_tile(cb_combined, 0, input_dst);
+        copy_tile_to_dst_init_short(dfb_combined);
+        copy_tile(dfb_combined, 0, input_dst);
         if constexpr (is_std) {
             sqrt_tile_init();
             sqrt_tile(input_dst);
@@ -185,13 +185,13 @@ void kernel_main() {
         mul_unary_tile(input_dst, post_mul_scaler_bits);
 #endif
         tile_regs_commit();
-        cb_combined_obj.pop_front(onetile);
+        dfb_combined_obj.pop_front(onetile);
 
-        cb_out_obj.reserve_back(onetile);
+        dfb_out_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(cb_out);
-        pack_tile(input_dst, cb_out);
+        pack_reconfig_data_format(dfb_out);
+        pack_tile(input_dst, dfb_out);
         tile_regs_release();
-        cb_out_obj.push_back(onetile);
+        dfb_out_obj.push_back(onetile);
     }
 }
