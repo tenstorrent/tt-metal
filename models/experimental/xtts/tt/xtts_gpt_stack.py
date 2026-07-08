@@ -34,3 +34,23 @@ class TtXttsGptStack(LightweightModule):
         for block in self.blocks:
             x = block(x)
         return ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
+
+    def forward_prefill(self, x):
+        """Prefill the prompt. Returns ``(ln_f(hidden), kv)`` where ``kv`` is the
+        per-layer ``[(k, v), ...]`` list that seeds the decode KV cache."""
+        kv = []
+        for block in self.blocks:
+            x, k, v = block.forward_prefill(x)
+            kv.append((k, v))
+        x = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
+        return x, kv
+
+    def forward_decode(self, x, kv):
+        """Decode one token. ``kv`` is the per-layer cache list; returns the
+        ``ln_f`` hidden state and the grown cache."""
+        new_kv = []
+        for block, (k, v) in zip(self.blocks, kv):
+            x, k, v = block.forward_decode(x, k, v)
+            new_kv.append((k, v))
+        x = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
+        return x, new_kv
