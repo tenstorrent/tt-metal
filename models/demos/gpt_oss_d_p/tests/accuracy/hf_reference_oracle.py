@@ -102,6 +102,15 @@ def main():
         "kv_cache_prefill.py.",
     )
     ap.add_argument(
+        "--gen-tokens",
+        type=int,
+        default=0,
+        help="after the initial forward, autoregressively generate this many tokens "
+        "(greedy) reusing past_key_values.  For each generated position, save the "
+        "argmax id/text and top-5 (id, text, logit) into rec['generation'].  Used by "
+        "decode_from_kv.py to compare TT decode outputs against this HF ground truth.",
+    )
+    ap.add_argument(
         "--check-kv-rope",
         action="store_true",
         help=(
@@ -346,6 +355,44 @@ def main():
                 kv_files[str(i)] = {"k": k_fname, "v": v_fname}
             print(f"[oracle] saved {len(kv_files)} KV cache layer(s)", flush=True)
 
+        # Generation must come AFTER --save-kv so capture_cache.full_kv still
+        # reflects only prefill positions.  During autoregressive steps HF will
+        # call FullKVCapture.update() with new K/V for each generated position,
+        # which would overwrite the prefill snapshot.
+        generation: list[dict] = []
+        if args.gen_tokens > 0:
+            gen_cache = out.past_key_values
+            next_tok = argmax
+            print(f"[oracle] generating {args.gen_tokens} tokens greedily...", flush=True)
+            with torch.no_grad():
+                for step in range(args.gen_tokens):
+                    step_out = model(
+                        input_ids=torch.tensor([[next_tok]], dtype=torch.long),
+                        past_key_values=gen_cache,
+                        use_cache=True,
+                    )
+                    step_logits = step_out.logits[0, -1, :].float()
+                    step_top = torch.topk(step_logits, 5)
+                    step_top5 = [
+                        {"id": int(i), "text": tok.decode([int(i)]), "logit": float(step_logits[int(i)])}
+                        for i in step_top.indices
+                    ]
+                    step_argmax = int(step_top.indices[0])
+                    generation.append(
+                        {
+                            "pos": last + 1 + step,
+                            "argmax_id": step_argmax,
+                            "argmax_text": tok.decode([step_argmax]),
+                            "top5": step_top5,
+                        }
+                    )
+                    next_tok = step_argmax
+                    gen_cache = step_out.past_key_values
+            print(
+                f"[oracle] generated: {tok.decode([g['argmax_id'] for g in generation])!r}",
+                flush=True,
+            )
+
         rec = {
             "prompt": prompt,
             "chat_template": args.chat_template,
@@ -360,6 +407,8 @@ def main():
         }
         if layer_files:
             rec["layer_files"] = layer_files
+        if generation:
+            rec["generation"] = generation
         if kv_files:
             rec["kv_files"] = kv_files
 
