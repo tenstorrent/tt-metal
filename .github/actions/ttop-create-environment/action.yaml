@@ -104,8 +104,6 @@ runs:
       shell: bash
       run: |
         echo "Creating environment..."
-        # Remove any stale release so apply performs a create instead of a patch.
-        kubectl --token ${{ steps.token.outputs.idToken }} -n${{ inputs.namespace }} delete helmrelease/${{ inputs.environmentName }} --ignore-not-found --wait
         echo "${{ env.ENVIRONMENT_MANIFEST }}" | kubectl --token ${{ steps.token.outputs.idToken }} -n${{ inputs.namespace }} apply -f -
 
     - name: Wait for environment
