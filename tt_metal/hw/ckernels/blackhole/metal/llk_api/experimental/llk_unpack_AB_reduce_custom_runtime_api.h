@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "chlkc_list.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -47,8 +48,9 @@ using namespace ckernel::unpacker;
  * Use the standard llk_unpack_AB_reduce_init<ReduceDim::REDUCE_ROW> for general-purpose reduction.
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void llk_unpack_AB_reduce_block_max_row_init_runtime(uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
-    _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, num_faces);
+inline void llk_unpack_AB_reduce_block_max_row_init_runtime(
+    std::uint32_t block_ct_dim, bool respect_trigger, const ckernel::TensorShape& tensor_shape) {
+    _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape);
 }
 
 /**

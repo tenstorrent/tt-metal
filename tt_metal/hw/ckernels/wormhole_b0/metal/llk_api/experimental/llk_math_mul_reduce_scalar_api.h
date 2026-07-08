@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_binary.h"
 #include "experimental/llk_math_mul_reduce_scalar.h"
@@ -26,7 +27,7 @@ inline void llk_math_eltwise_mul_reduce_scalar_init(
 
 template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void llk_math_eltwise_mul_reduce_scalar(
-    uint dst_index, const std::uint32_t icb0, const bool clear_fp32_dst_acc = true) {
+    std::uint32_t dst_index, const std::uint32_t icb0, const bool clear_fp32_dst_acc = true) {
     const std::uint32_t operand_id = get_operand_id(icb0);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
@@ -45,10 +46,10 @@ inline void llk_math_mul_reduce_scalar_reduce_init() {
 }
 
 template <MathFidelity math_fidelity>
-inline void llk_math_mul_reduce_column(const uint dst_index, const std::uint32_t icb0) {
+inline void llk_math_mul_reduce_column(const std::uint32_t dst_index, const std::uint32_t icb0) {
     const std::uint32_t operand_id = get_operand_id(icb0);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    _llk_math_mul_reduce_column_<math_fidelity>(dst_index, false, num_faces);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+    _llk_math_mul_reduce_column_<math_fidelity>(dst_index, tensor_shape);
 }
 
 template <MathFidelity math_fidelity>
@@ -59,6 +60,6 @@ inline void llk_math_mul_reduce_scalar() {
 inline void llk_math_mul_reduce_scalar_clear_dvalid() { _llk_math_mul_reduce_scalar_clear_dvalid_(); }
 
 template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_mul_reduce_scalar_move_dest_to_src(uint32_t idst = 0) {
+inline void llk_math_mul_reduce_scalar_move_dest_to_src(std::uint32_t idst = 0) {
     _llk_math_mul_reduce_scalar_move_dest_to_src_<binary_reuse_dest>(idst);
 }

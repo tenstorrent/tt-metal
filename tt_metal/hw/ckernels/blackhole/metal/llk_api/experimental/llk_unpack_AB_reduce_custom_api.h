@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "chlkc_list.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -45,9 +46,9 @@ using namespace ckernel::unpacker;
  * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
  * Use the standard llk_unpack_AB_reduce_init<ReduceDim::REDUCE_ROW> for general-purpose reduction.
  */
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, bool respect_trigger = false, std::uint32_t num_faces = 4>
-inline void llk_unpack_AB_reduce_block_max_row_init() {
-    _llk_unpack_AB_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en, respect_trigger, num_faces>();
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, bool respect_trigger = false>
+inline void llk_unpack_AB_reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape) {
+    _llk_unpack_AB_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape);
 }
 
 /**
@@ -69,7 +70,7 @@ inline void llk_unpack_AB_reduce_block_max_row_init() {
  * This function should NOT be used as a substitute for native llk_unpack_AB LLK.
  * Use the standard llk_unpack_AB<BroadcastType::NONE> in a loop for general-purpose operations.
  */
-template <uint32_t block_ct_dim, bool respect_trigger = false>
+template <std::uint32_t block_ct_dim, bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t row_start_index) {
     std::uint32_t operandA_id = get_operand_id(operandA);

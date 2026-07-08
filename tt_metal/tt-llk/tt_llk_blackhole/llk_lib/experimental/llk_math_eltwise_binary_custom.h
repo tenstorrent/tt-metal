@@ -11,6 +11,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -93,7 +94,7 @@ inline void _bcast_cols_op_()
  *
  * @tparam eltwise_binary_type: FPU op, values = <ELWSUB/ELWMUL>
  * @param ct_dim: Number of srcA column tiles processed in the block.
- * @param num_faces: Number of faces per tile (2 for 16x32 tiny tiles, 4 for full 32x32 tiles).
+ * @param tensor_shape: Shape of the operand tile (2 faces for 16x32 tiny tiles, 4 faces for full 32x32 tiles).
  * @param dst_index: Absolute dest tile slot where this block-row's ct_dim tiles begin. Multi-tile-row
  *                   callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
  *                   lands on its own dest slots; single-tile-row callers leave it at 0.
@@ -101,14 +102,16 @@ inline void _bcast_cols_op_()
  */
 template <EltwiseBinaryType eltwise_binary_type>
 inline void _llk_math_bcast_cols_reuse_custom_(
-    const std::uint32_t ct_dim = 1, const std::uint32_t num_faces = 4, const std::uint32_t dst_index = 0)
+    const std::uint32_t ct_dim = 1, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
     static_assert(
         eltwise_binary_type == EltwiseBinaryType::ELWMUL || eltwise_binary_type == EltwiseBinaryType::ELWSUB,
         "blocked bcast-col reuse scaffold supports ELWMUL and ELWSUB only");
 
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+
     // Two faces make up one face-row; a full tile has two of them, a tiny tile one.
-    const std::uint32_t num_face_rows = num_faces / 2;
+    const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
 
     addr_mod_t {
         .srca = {.incr = 8},
@@ -177,11 +180,11 @@ inline void _llk_math_bcast_cols_reuse_custom_(
  * and calls @ref _llk_math_bcast_cols_reuse_custom_ <ELWMUL> directly.
  *
  * @param ct_dim: Number of srcA column tiles processed in the block.
- * @param num_faces: Number of faces per tile (2 for 16x32 tiny tiles, 4 for full 32x32 tiles).
+ * @param tensor_shape: Shape of the operand tile (2 faces for 16x32 tiny tiles, 4 faces for full 32x32 tiles).
  * @param dst_index: Absolute dest tile slot where this block-row's ct_dim tiles begin.
  */
 inline void _llk_math_sub_bcast_cols_reuse_custom_(
-    const std::uint32_t ct_dim = 1, const std::uint32_t num_faces = 4, const std::uint32_t dst_index = 0)
+    const std::uint32_t ct_dim = 1, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
-    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWSUB>(ct_dim, num_faces, dst_index);
+    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWSUB>(ct_dim, tensor_shape, dst_index);
 }

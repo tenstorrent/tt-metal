@@ -11,20 +11,24 @@
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 #include "llk_unpack_common.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
 // SDPA-specific custom init for the blocked sub+bcast(col) unpack flow.
-// @param num_faces Number of faces per tile (2 for 16x32 tiny tiles, 4 for full 32x32 tiles).
-inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const std::uint32_t num_faces = 4)
+// @param tensor_shape Shape of the operand tile (2 faces for 16x32 tiny tiles, 4 faces for full 32x32 tiles).
+inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0); // transpose within the face
 
-    // Force both unpackers to unpack the requested number of faces (num_faces * 16 * 16
-    // datums). Full 32x32 tile = 4 faces = 1024 datums, 16x32 tiny tile = 2 faces = 512 datums.
-    const std::uint32_t x_end = num_faces * FACE_R_DIM * FACE_C_DIM - 1;
+    // Force both unpackers to unpack all faces of the operand. Full 32x32 tile = 4 faces = 1024
+    // datums, 16x32 tiny tile = 2 faces = 512 datums.
+    const std::uint32_t x_end = tensor_shape.total_tensor_size() - 1;
     TT_SETADCXX(p_setadc::UNP0, x_end, 0x0);
     TT_SETADCXX(p_setadc::UNP1, x_end, 0x0);
 }
@@ -35,7 +39,7 @@ inline void _llk_unpack_AB_sub_bcast_col_custom_(const std::uint32_t address_a, 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 
     // Program srcA and srcB base addresses
-    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // Wait for free context
     wait_for_next_context(2);
