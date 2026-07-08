@@ -168,6 +168,7 @@ _CASE_IDS = ["T512", "T1024", "T2048", "T4096w2048", "T8192w2048"]
 
 
 @torch.no_grad()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("T,window", _CASES, ids=_CASE_IDS)
 @_MESH
 def test_forward_prefill_perf(mesh_device, T, window, reset_seeds, ensure_gc, request):
