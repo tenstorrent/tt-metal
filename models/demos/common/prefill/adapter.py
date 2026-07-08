@@ -216,10 +216,10 @@ DEFAULT_MODEL = "deepseek_v3_d_p"
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
     "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
-    # Sparse-attention (DSA) variants — test-only today (config + sparse-MLA reference parity;
-    # no prefill serving runtime wired). See adapters/sparse_mla.py.
+    # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
+    "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
+    # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
-    "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:GLM51Adapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}
