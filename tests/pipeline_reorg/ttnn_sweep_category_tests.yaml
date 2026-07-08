@@ -1,11 +1,12 @@
 # Sweep batch definitions for the ttnn-run-sweeps workflow.
 #
-# Each entry is one PRE-DEFINED batch = a test category. The cmd runs the sweep
-# runner over that category's modules (--module-name prefix-matches every module
-# under the category, e.g. `eltwise.unary` -> all eltwise.unary.* sweeps) against
-# the vectors generated upstream. Giants are split along their subdirs (eltwise);
-# everything else is one entry per top-level category. model_traced / lead-models
-# are separate run types and are not batched here.
+# Each entry is one PRE-DEFINED batch = a test category. The cmd is the sweep
+# runner WITHOUT --module-name; load-test-matrix resolves the entry's `category`
+# to a concrete comma-separated module list (via compute_sweep_matrix over the
+# generated-vector manifest) and injects it as --module-name at run time. A bare
+# category name does not resolve to any vectors, so the explicit list is required.
+# Giants are split along their subdirs (eltwise); everything else is one entry per
+# top-level category. model_traced / lead-models are separate run types (not here).
 #
 # Single-card categories run on wh_n150/wh_n300/bh_p150b_civ2; ccl (multi-device)
 # runs on wh_galaxy/bh_loudbox. Timeouts are first-pass estimates weighted by
@@ -14,7 +15,7 @@
 
 # --- eltwise (split along subdirs) ---
 - name: ttnn sweeps eltwise.unary
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
   skus:
     wh_n150_civ2:
       timeout: 300
@@ -29,7 +30,7 @@
   category: eltwise.unary
 
 # - name: ttnn sweeps eltwise.unary_backward
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary_backward --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 130
@@ -44,7 +45,7 @@
 #   category: eltwise.unary_backward
 # 
 # - name: ttnn sweeps eltwise.binary
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.binary --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 110
@@ -59,7 +60,7 @@
 #   category: eltwise.binary
 # 
 # - name: ttnn sweeps eltwise.binary_backward
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.binary_backward --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 30
@@ -74,7 +75,7 @@
 #   category: eltwise.binary_backward
 # 
 # - name: ttnn sweeps eltwise.composite
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.composite --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 25
@@ -89,7 +90,7 @@
 #   category: eltwise.composite
 # 
 # - name: ttnn sweeps eltwise.unary_complex
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary_complex --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 18
@@ -104,7 +105,7 @@
 #   category: eltwise.unary_complex
 # 
 # - name: ttnn sweeps eltwise.ternary
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.ternary --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 14
@@ -119,7 +120,7 @@
 #   category: eltwise.ternary
 # 
 # - name: ttnn sweeps eltwise.binary_complex
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.binary_complex --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 8
@@ -134,7 +135,7 @@
 #   category: eltwise.binary_complex
 # 
 # - name: ttnn sweeps eltwise.ternary_backward
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.ternary_backward --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -150,7 +151,7 @@
 # 
 # # --- other single-card categories ---
 # - name: ttnn sweeps data_movement
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name data_movement --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 55
@@ -165,7 +166,7 @@
 #   category: data_movement
 # 
 # - name: ttnn sweeps reduction
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name reduction --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 30
@@ -180,7 +181,7 @@
 #   category: reduction
 # 
 # - name: ttnn sweeps matmul
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name matmul --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 27
@@ -195,7 +196,7 @@
 #   category: matmul
 # 
 # - name: ttnn sweeps transformer
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name transformer --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 10
@@ -210,7 +211,7 @@
 #   category: transformer
 # 
 # - name: ttnn sweeps pool2d
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name pool2d --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 10
@@ -225,7 +226,7 @@
 #   category: pool2d
 # 
 # - name: ttnn sweeps normalization
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name normalization --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 10
@@ -240,7 +241,7 @@
 #   category: normalization
 # 
 # - name: ttnn sweeps creation
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name creation --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -255,7 +256,7 @@
 #   category: creation
 # 
 # - name: ttnn sweeps losses
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name losses --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -270,7 +271,7 @@
 #   category: losses
 # 
 # - name: ttnn sweeps fused
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name fused --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -285,7 +286,7 @@
 #   category: fused
 # 
 # - name: ttnn sweeps conv2d
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name conv2d --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -300,7 +301,7 @@
 #   category: conv2d
 # 
 # - name: ttnn sweeps composite
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name composite --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -315,7 +316,7 @@
 #   category: composite
 # 
 # - name: ttnn sweeps embedding
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name embedding --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -330,7 +331,7 @@
 #   category: embedding
 # 
 # - name: ttnn sweeps embedding_bw
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name embedding_bw --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -345,7 +346,7 @@
 #   category: embedding_bw
 # 
 # - name: ttnn sweeps conv_transpose2d
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name conv_transpose2d --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -361,7 +362,7 @@
 # 
 # # --- flat top-level sweep modules (no subdir) ---
 # - name: ttnn sweeps add
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name add --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -376,7 +377,7 @@
 #   category: add
 # 
 # - name: ttnn sweeps tilize
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name tilize --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -391,7 +392,7 @@
 #   category: tilize
 # 
 # - name: ttnn sweeps tilize_with_val_padding
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name tilize_with_val_padding --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -406,7 +407,7 @@
 #   category: tilize_with_val_padding
 # 
 # - name: ttnn sweeps untilize
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name untilize --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -421,7 +422,7 @@
 #   category: untilize
 # 
 # - name: ttnn sweeps untilize_with_unpadding
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name untilize_with_unpadding --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
 #   skus:
 #     wh_n150_civ2:
 #       timeout: 5
@@ -437,7 +438,7 @@
 # 
 # # --- ccl (multi-device) ---
 # - name: ttnn sweeps ccl
-#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name ccl --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name generality_suite_fabric_1d'
+#   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name generality_suite_fabric_1d'
 #   skus:
 #     wh_galaxy:
 #       timeout: 90
