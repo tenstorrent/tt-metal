@@ -183,7 +183,8 @@ def test_ring_joint_cache_read_sp(mesh_device, device_params, n_chunks, cap_chun
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
-def test_ring_joint_cache_read_sp_accumulate(mesh_device, device_params, reset_seeds):
+@pytest.mark.parametrize("reset_between", [False, True], ids=["noreset", "reset"])
+def test_ring_joint_cache_read_sp_accumulate(mesh_device, device_params, reset_between, reset_seeds):
     """Multi-call REUSE repro of the 50k chunked-prefill hang, op-level (no model/weights).
 
     The single-call test above PASSES even at logical_n=15360 with an oversize buffer. The model
@@ -193,6 +194,12 @@ def test_ring_joint_cache_read_sp_accumulate(mesh_device, device_params, reset_s
     then run dense_sp_attention for chunk 1 (logical_n=10240) and chunk 2 (logical_n=15360) sharing the
     SAME ccl + buffer. Chunk 1 succeeds; if the op mis-handles cross-call semaphore/buffer reuse at the
     larger logical_n, chunk 2 DEADLOCKS — the op-level face of the galaxy hang.
+
+    reset_between: when True, zero ALL of the CCLManager's global semaphores between the two calls
+    (ring-attention + reduce-scatter/all-gather ping-pong + barrier). If that unblocks chunk 2, the
+    dirty state is a caller-resettable global semaphore the GQA path fails to clear (→ M3 workaround +
+    which semaphore to fix); if it still hangs, the dirty state is op-INTERNAL (program-local mcast
+    semaphores / ring index) and must be fixed inside the op.
     """
     rows, cols = tuple(mesh_device.shape)
     assert (rows, cols) == (8, 4)
@@ -256,8 +263,20 @@ def test_ring_joint_cache_read_sp_accumulate(mesh_device, device_params, reset_s
     write(cache_v, v[0], 0)
     ttnn.synchronize_device(mesh_device)
 
+    all_sems = (
+        list(ccl.ring_attention_ccl_semaphore_handles)
+        + list(ccl.rs_ping_pong_semaphores)
+        + list(ccl.ag_ping_pong_semaphores)
+        + list(ccl.barrier_semaphore)
+    )
+
     # Successive cache-read chunks 1,2 — SHARED ccl + persistent buffer (cache_global=cap_global fixed).
     for c in (1, 2):
+        if reset_between and c != 1:
+            for sem in all_sems:
+                ttnn.reset_global_semaphore_value(sem, 0)
+            ttnn.synchronize_device(mesh_device)
+            logger.info(f"[accumulate] reset {len(all_sems)} global semaphores before chunk {c}")
         kv_actual = c * chunk_global  # prefix before this chunk
         logical_n = (c + 1) * chunk_global  # valid prefix incl this chunk (10240 then 15360)
         q_bc = q[:, :, bc_index(kv_actual), :]
