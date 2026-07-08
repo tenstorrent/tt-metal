@@ -137,6 +137,13 @@ public:
     DeviceAddr get_allocation_high_water_mark() const;
     DeviceAddr get_deletion_high_water_mark() const;
 
+    // Persistent bottom-up HWM (always-on; tracks only bottom-up allocations).
+    // Unlike allocation_high_water_mark_, this counter is never reset by trace
+    // internals or BankManager::clear() — it can only be reset explicitly via
+    // reset_persistent_bottom_up_hwm(). Intended for end-to-end memory profiling.
+    DeviceAddr get_persistent_bottom_up_hwm() const;
+    void reset_persistent_bottom_up_hwm();
+
     // Cross-allocator mirroring: mark a region as allocated/deallocated in a specific sub-allocator.
     // Used to mirror lockstep allocations from the mesh-level allocator into per-device allocators.
     void mark_allocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size);
@@ -189,6 +196,10 @@ private:
     bool tracking_high_water_mark_ = false;
     DeviceAddr allocation_high_water_mark_ = 0;
     DeviceAddr deletion_high_water_mark_ = 0;
+
+    // Persistent bottom-up HWM: always-on, only bottom-up allocs, never reset
+    // by trace internals or BankManager::clear(). See public accessors above.
+    DeviceAddr persistent_bottom_up_hwm_ = 0;
 
     /*********************************
      * Allocator-independent methods *

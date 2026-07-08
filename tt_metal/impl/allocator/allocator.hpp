@@ -88,6 +88,11 @@ public:
     DeviceAddr get_dram_allocation_high_water_mark() const;
     DeviceAddr get_dram_deletion_high_water_mark() const;
 
+    // Persistent bottom-up DRAM HWM: always-on, never reset by trace internals.
+    // Intended for end-to-end memory profiling.
+    DeviceAddr get_dram_persistent_bottom_up_hwm() const;
+    void reset_dram_persistent_bottom_up_hwm();
+
     // what does clear even mean on an allocator???
     void clear();
 
