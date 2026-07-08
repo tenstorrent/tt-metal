@@ -21,7 +21,7 @@
 
 
 from collections.abc import Callable
-from typing import Optional, Union, Unpack
+from typing import Optional, Union
 
 import torch
 from torch import nn
@@ -40,9 +40,11 @@ from transformers.modeling_layers import (
 from transformers.modeling_outputs import MoeCausalLMOutputWithPast, MoeModelOutputWithPast
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
+from transformers.processing_utils import Unpack
 from transformers.utils import TransformersKwargs, auto_docstring, can_return_tuple
 from transformers.utils.deprecation import deprecate_kwarg
-from transformers.utils.generic import OutputRecorder, check_model_inputs
+from transformers.utils.generic import check_model_inputs
+from transformers.utils.output_capturing import OutputRecorder
 
 from .configuration_minimax_m2 import MiniMaxM2Config
 
