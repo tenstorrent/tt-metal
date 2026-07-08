@@ -11,6 +11,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "ckernel_instr_params.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "lltt.h"
 #include "sfpi.h"
@@ -502,16 +503,15 @@ inline void horizontal_reduce_max_int32() {
     _emit_int32_signed_cswap_<p_sfpu::LREG4, p_sfpu::LREG5>();
 
     // Phase 3: rotate by 1 and compare -> quad extrema become the full 8-column extreme in every column.
+    // This rotate butterfly leaves the extreme replicated across all 8 columns (not just col 7), so no
+    // final "move to col 0" rotate is needed before the store reads column 0 (unlike the shift-based
+    // float horizontal_reduce_max, whose phase 4 is likewise redundant after its rotate reduction).
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
     TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
     _emit_int32_signed_cswap_<p_sfpu::LREG0, p_sfpu::LREG1>();
     _emit_int32_signed_cswap_<p_sfpu::LREG4, p_sfpu::LREG5>();
-
-    // Phase 4: rotate right by 1 -> move single extreme from col 7 to col 0 for store.
-    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG0, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG4, 3);
 }
 
 /**
@@ -1366,10 +1366,6 @@ inline void calculate_reduce_max_min_uint16() {
         {0, 0, 32, 32},   // j=0: Face 0 and Face 2
         {16, 16, 48, 48}  // j=1: Face 1 and Face 3
     };
-    constexpr std::uint32_t FINAL_REDUCE_ADDRS[2][2] = {
-        {0, 32},  // j=0: Face 0 and Face 2
-        {16, 48}  // j=1: Face 1 and Face 3
-    };
 
     // The intermediate stores below land in non-row-0 dest slots that we reload, so they use the
     // plain (full 32-bit) instruction mode. Only the final row-0 stores are packer-visible and use
@@ -1384,7 +1380,7 @@ inline void calculate_reduce_max_min_uint16() {
     constexpr std::uint32_t PARTIAL_LREG[4] = {p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG3};
 
     for (std::uint32_t j = 0; j < 2; j++) {
-        std::uint32_t top_face_addr = FINAL_REDUCE_ADDRS[j][0];  // face 0 & 1 dst indices
+        std::uint32_t top_face_addr = FACE_ADDRS[j][0];  // face 0 & 1 row-0 dst index
 
         // Reduce each of the four vertically adjacent faces (f0,f2 then f1,f3) within itself; the
         // max/min of its 16 rows is left in the top 4 rows. The masked face loads and the reduce replay
@@ -1453,10 +1449,6 @@ inline void calculate_reduce_max_min_int32_col() {
         {0, 0, 32, 32},   // j=0: Face 0 and Face 2
         {16, 16, 48, 48}  // j=1: Face 1 and Face 3
     };
-    constexpr std::uint32_t FINAL_REDUCE_ADDRS[2][2] = {
-        {0, 32},  // j=0: Face 0 and Face 2
-        {16, 48}  // j=1: Face 1 and Face 3
-    };
 
     // Where each per-face partial (left in LREG4 by the reduce) is parked so it survives the remaining
     // face loads (which clobber LREG4-7). The order matches the LREG0-3 layout the transpose expects:
@@ -1464,7 +1456,7 @@ inline void calculate_reduce_max_min_int32_col() {
     constexpr std::uint32_t PARTIAL_LREG[4] = {p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG3};
 
     for (std::uint32_t j = 0; j < 2; j++) {
-        std::uint32_t top_face_addr = FINAL_REDUCE_ADDRS[j][0];  // face 0 & 1 dst indices
+        std::uint32_t top_face_addr = FACE_ADDRS[j][0];  // face 0 & 1 row-0 dst index
 
         // Reduce each of the four vertically adjacent faces (f0,f2 then f1,f3) within itself; the
         // max/min of its 16 rows is left in the top 4 rows. The face loads and the reduce replay only
@@ -1812,6 +1804,11 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
         if constexpr (int32_max_min_col) {
             // Signed Int32 column MAX/MIN: two's-complement compare-and-swap path (handles INT32_MIN).
+            // This is a single-tile (32x32) kernel and ignores block_ct_dim/block_rt_dim, so guard the
+            // single-tile contract loudly rather than silently dropping tiles if a caller passes >1.
+            LLK_ASSERT(
+                block_ct_dim == 1 && block_rt_dim == 1,
+                "Int32 column MAX/MIN reduce only supports a single tile (block_ct_dim == block_rt_dim == 1)");
             calculate_reduce_max_min_int32_col<pool_type, reduce_dim>();
         } else if constexpr (int32_max_min_row) {
             // Signed Int32 row MAX/MIN: two's-complement compare-and-swap path (handles INT32_MIN).

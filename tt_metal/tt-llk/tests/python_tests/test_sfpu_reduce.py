@@ -542,8 +542,8 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 10
             tile_count_A=tile_cnt,
             tile_count_B=1,
             tile_count_res=tile_cnt,
-            # Int32 MAX/MIN operands sit in DEST as two's-complement.
-            twos_complement=True,
+            # Int32 MAX/MIN operands sit in DEST as two's-complement (centralized in one helper).
+            twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
         ),
         dest_acc=dest_acc,
         unpack_to_dest=True,
