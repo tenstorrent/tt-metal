@@ -32,10 +32,21 @@ std::array<ttnn::Tensor, 2> dispatch(
     std::optional<tt::tt_fabric::Topology> topology,
     bool use_l1_small_for_semaphores,
     bool use_fp8_dispatch,
-    uint32_t num_untilizers_per_sender) {
+    uint32_t num_untilizers_per_sender,
+    const std::optional<CoreRangeSet>& core_grid_override) {
     auto* mesh_device = input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    // Core selection: normally derived from the sub-device via worker_cores(); when
+    // `core_grid_override` is provided we place the dispatch sender+untilize cores on
+    // exactly that CoreRangeSet with NO sub-device involved (experiment: isolate whether
+    // a first/last row/column layout hangs because of the sub-device mechanism or the
+    // column core layout itself).
+    CoreRangeSet subdevice_core_range_set;
+    if (core_grid_override.has_value()) {
+        subdevice_core_range_set = *core_grid_override;
+    } else {
+        auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+        subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    }
 
     // Validate fabric configuration - only tested values are supported
     TT_FATAL(

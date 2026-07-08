@@ -15,6 +15,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 #include "dispatch.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail {
@@ -113,7 +114,8 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("use_l1_small_for_semaphores") = false,
         nb::arg("use_fp8_dispatch") = false,
-        nb::arg("num_untilizers_per_sender") = 2);
+        nb::arg("num_untilizers_per_sender") = 2,
+        nb::arg("core_grid_override") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail

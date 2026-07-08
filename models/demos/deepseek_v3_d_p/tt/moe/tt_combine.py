@@ -60,6 +60,7 @@ class TtCombineModule(LightweightModule):
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
         fp8_output: bool = False,
+        core_grid_override=None,
     ):
         """
         Initialize combine module with configuration parameters.
@@ -93,6 +94,9 @@ class TtCombineModule(LightweightModule):
         self.memory_config = memory_config
         self.init_zeros = init_zeros
         self.fp8_output = fp8_output
+        # Optional explicit CoreRangeSet: place combine cores here directly (bypasses
+        # subdevice/worker_cores). Used to run combine on an edge (row/column) layout.
+        self.core_grid_override = core_grid_override
 
     def forward(
         self,
@@ -155,6 +159,7 @@ class TtCombineModule(LightweightModule):
             memory_config=self.memory_config,
             init_zeros=self.init_zeros,
             use_fp8_combine=self.fp8_output,
+            core_grid_override=self.core_grid_override,
         )
 
         return output

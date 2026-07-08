@@ -135,6 +135,7 @@ class TtPrefillTransformer(LightweightModule):
         first_layer_idx: int = 0,
         is_first_rank: bool = True,
         is_last_rank: bool = True,
+        dispatch_subdevice_edge: str = "first_row",
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -212,6 +213,7 @@ class TtPrefillTransformer(LightweightModule):
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+                dispatch_subdevice_edge=dispatch_subdevice_edge,
             )
             self.layers.append(layer)
 

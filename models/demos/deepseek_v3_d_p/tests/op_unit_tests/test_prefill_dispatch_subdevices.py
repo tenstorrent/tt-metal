@@ -50,12 +50,13 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_valida
 # A single representative 2-D mesh config (8 chips). The subdevice placement under test is
 # a property of the per-chip worker grid, independent of the mesh topology, so one config
 # is enough to exercise all four edge lines.
-MESH_CONFIGS = [p for p in ALL_MESH_CONFIGS if p.id == "mesh-4x2"]
+MESH_CONFIGS = [p for p in ALL_MESH_CONFIGS if p.id == "fabric2d-mesh-8x4-2link"]
 
 # Small PCC-checked data case (same shape as test_prefill_dispatch.py's "pcc" case).
-SEQ_LEN_PER_CHIP = 32
+# NOTE: bumped 32 -> 640 (=5K ISL / 8 sp) to reproduce the column-dispatch hang seen at 5K+.
+SEQ_LEN_PER_CHIP = 640
 EMB_DIM = 7 * 1024
-NUM_ROUTED_EXPERTS = 16
+NUM_ROUTED_EXPERTS = 64  # 32-dev mesh: experts_per_chip = 64 // 32 = 2 (matches original 16//8=2)
 NUM_EXPERTS_PER_TOK = 4
 DISPATCH_BUFFER_CAPACITY_FACTOR = 4
 
@@ -267,7 +268,7 @@ def test_dispatch_subdevice_placement(
         sd_manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([edge_cores])], 0)
         mesh_device.load_sub_device_manager(sd_manager)
         try:
-            with pytest.raises(RuntimeError, match="2-D subdevice core grid"):
+            with expect_error(RuntimeError, match="2-D subdevice core grid"):
                 module = _build_module(ttnn.SubDeviceId(0))
                 module(tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table)
         finally:

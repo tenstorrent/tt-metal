@@ -68,6 +68,7 @@ class TtDispatchModule(LightweightModule):
         fp8_output: bool = False,
         subdevice_id=None,
         num_untilizers_per_sender: int = 2,
+        core_grid_override=None,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -107,6 +108,9 @@ class TtDispatchModule(LightweightModule):
         self.topology = topology
         self.fp8_output = fp8_output
         self.subdevice_id = subdevice_id
+        # Optional explicit CoreRangeSet: place dispatch sender+untilize cores here directly
+        # (bypasses subdevice/worker_cores). Used to test edge core layouts without a sub-device.
+        self.core_grid_override = core_grid_override
         # num_untilizers_per_sender >= 1 is validated on the device op side
         # (DispatchDeviceOperation::validate_on_program_cache_miss).
         self.num_untilizers_per_sender = num_untilizers_per_sender
@@ -280,6 +284,7 @@ class TtDispatchModule(LightweightModule):
             use_fp8_dispatch=self.fp8_output,
             subdevice_id=self.subdevice_id,
             num_untilizers_per_sender=self.num_untilizers_per_sender,
+            core_grid_override=self.core_grid_override,
         )
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape

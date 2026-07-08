@@ -97,6 +97,7 @@ def run_model(
     determinism_check: bool = False,
     num_iterations: int = 1,
     use_pretrained: bool = False,
+    dispatch_subdevice_edge: str = "first_row",
 ):
     if (is_ci_env or is_ci_v2_env) and pcc_validation == False and not determinism_check:
         pytest.skip("Skip non-PCC test in CI to save time")
@@ -338,6 +339,7 @@ def run_model(
         tp_axis=tp_axis,
         weight_cache_path=cache_dir,
         is_balanced=is_balanced,
+        dispatch_subdevice_edge=dispatch_subdevice_edge,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -623,6 +625,11 @@ def run_model(
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
+@pytest.mark.parametrize(
+    "dispatch_subdevice_edge",
+    ["first_row", "last_row", "first_col", "last_col"],
+    ids=["disp-first_row", "disp-last_row", "disp-first_col", "disp-last_col"],
+)
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 def test_ds_prefill_block(
@@ -646,6 +653,7 @@ def test_ds_prefill_block(
     num_iterations,
     use_pretrained,
     request,
+    dispatch_subdevice_edge,
 ):
     # FABRIC_2D on the 2x4 mesh regresses the MoE/device-gate PCC ~3 points below the 0.992 gate.
     # xfail this exact combo (keeping the real threshold for every other config) until it is fixed;
@@ -685,6 +693,7 @@ def test_ds_prefill_block(
         num_iterations=num_iterations,
         thresholds=DSV3_THRESHOLDS,
         use_pretrained=use_pretrained,
+        dispatch_subdevice_edge=dispatch_subdevice_edge,
     )
 
 
@@ -726,6 +735,11 @@ def test_ds_prefill_block(
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
+@pytest.mark.parametrize(
+    "dispatch_subdevice_edge",
+    ["first_row", "last_row", "first_col", "last_col"],
+    ids=["disp-first_row", "disp-last_row", "disp-first_col", "disp-last_col"],
+)
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
@@ -750,6 +764,7 @@ def test_kimi_prefill_block(
     num_iterations,
     use_pretrained,
     request,
+    dispatch_subdevice_edge,
 ):
     run_model(
         variant,
@@ -773,6 +788,7 @@ def test_kimi_prefill_block(
         num_iterations=num_iterations,
         thresholds=KIMI_THRESHOLDS,
         use_pretrained=use_pretrained,
+        dispatch_subdevice_edge=dispatch_subdevice_edge,
     )
 
 
@@ -982,6 +998,7 @@ def test_glm_prefill_block(
         tp_axis=tp_axis,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
         weight_cache_path=device_cache,
+        dispatch_subdevice_edge=dispatch_subdevice_edge,
     )
     kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,

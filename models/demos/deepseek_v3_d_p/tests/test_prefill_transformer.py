@@ -159,6 +159,7 @@ def run_model(
     is_ci_v2_env,
     tokenizer,
     request,
+    dispatch_subdevice_edge="first_row",
 ):
     torch.manual_seed(42)
 
@@ -428,6 +429,7 @@ def run_model(
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
         lm_head_is_column_parallel=True,
+        dispatch_subdevice_edge=dispatch_subdevice_edge,
     )
     ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)
@@ -894,7 +896,7 @@ def run_model(
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_5K, 8), (SEQ_LEN_25K, 8)],
 )
 @pytest.mark.parametrize(
     "num_layers",
@@ -955,6 +957,11 @@ def run_model(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize(
+    "dispatch_subdevice_edge",
+    ["first_row", "last_row", "first_col", "last_col"],
+    ids=["disp-first_row", "disp-last_row", "disp-first_col", "disp-last_col"],
+)
 @pytest.mark.timeout(0)
 def test_ds_prefill_transformer(
     variant,
@@ -981,6 +988,7 @@ def test_ds_prefill_transformer(
     is_ci_v2_env,
     tokenizer,
     request,
+    dispatch_subdevice_edge,
 ):
     run_model(
         variant,
@@ -1007,6 +1015,7 @@ def test_ds_prefill_transformer(
         is_ci_v2_env,
         tokenizer,
         request,
+        dispatch_subdevice_edge=dispatch_subdevice_edge,
     )
 
 

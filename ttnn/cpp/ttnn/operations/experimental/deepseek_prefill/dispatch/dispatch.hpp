@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
@@ -33,7 +34,11 @@ std::array<ttnn::Tensor, 2> dispatch(
     std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear,
     bool use_l1_small_for_semaphores = false,
     bool use_fp8_dispatch = false,
-    uint32_t num_untilizers_per_sender = 2);
+    uint32_t num_untilizers_per_sender = 2,
+    // Debug/experiment: place the dispatch sender+untilize cores on exactly this
+    // CoreRangeSet instead of deriving them from `subdevice_id` via worker_cores().
+    // Lets us test an edge (first/last row/column) core layout WITHOUT a sub-device.
+    const std::optional<CoreRangeSet>& core_grid_override = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch
 

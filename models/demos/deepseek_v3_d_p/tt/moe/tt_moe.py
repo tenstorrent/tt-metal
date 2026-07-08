@@ -127,6 +127,36 @@ class TtMoe(LightweightModule):
                 f"layer_{layer_idx}.shared_expert",
             )
 
+    @staticmethod
+    def _edge_dispatch_core_ranges(edge: str, grid_x: int, grid_y: int):
+        """Split the worker grid into a dispatch edge line and its complementary block.
+
+        Returns (dispatch_cores, shared_cores) as CoreRangeSets. The dispatch line is a
+        single row or column on the requested edge; the shared block is everything else
+        (always a rectangle for an edge line). CoreCoord is (x=column, y=row).
+        """
+        if edge == "first_row":
+            assert grid_y > 1, f"first_row dispatch needs grid_y > 1, got {grid_y}"
+            dispatch = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, 0))
+            shared = ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid_x - 1, grid_y - 1))
+        elif edge == "last_row":
+            assert grid_y > 1, f"last_row dispatch needs grid_y > 1, got {grid_y}"
+            dispatch = ttnn.CoreRange(ttnn.CoreCoord(0, grid_y - 1), ttnn.CoreCoord(grid_x - 1, grid_y - 1))
+            shared = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 2))
+        elif edge == "first_col":
+            assert grid_x > 1, f"first_col dispatch needs grid_x > 1, got {grid_x}"
+            dispatch = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, grid_y - 1))
+            shared = ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))
+        elif edge == "last_col":
+            assert grid_x > 1, f"last_col dispatch needs grid_x > 1, got {grid_x}"
+            dispatch = ttnn.CoreRange(ttnn.CoreCoord(grid_x - 1, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))
+            shared = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 2, grid_y - 1))
+        else:
+            raise ValueError(
+                f"unknown dispatch_subdevice_edge={edge!r}; " "expected one of first_row, last_row, first_col, last_col"
+            )
+        return ttnn.CoreRangeSet({dispatch}), ttnn.CoreRangeSet({shared})
+
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -159,6 +189,7 @@ class TtMoe(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         routing_use_l1_small_for_semaphores: bool = False,
         is_balanced: bool = False,
+        dispatch_subdevice_edge: str = "first_row",
     ):
         """
         Initialize TtMoe module.
@@ -197,6 +228,9 @@ class TtMoe(LightweightModule):
                 setup and run them sequentially on the full Tensix grid.
             is_balanced: If True, uses zigzag sequence placement for padding awareness.
                 Should match the is_balanced flag used in MLA/transformer.
+            dispatch_subdevice_edge: Which edge line of the worker grid the dispatch
+                sub-device occupies when overlap is enabled. One of "first_row", "last_row",
+                "first_col", "last_col". The shared expert takes the complementary block.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -211,7 +245,31 @@ class TtMoe(LightweightModule):
         self.seq_len_per_chip = seq_len_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
-        self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
+        # Experiment gate (env, no plumbing through Block/Transformer/tests): keep dispatch
+        # confined to the `dispatch_subdevice_edge` subdevice, but run the shared expert on
+        # the FULL grid (no dispatch<->shared overlap). Used to isolate whether the column
+        # hang comes from the shared expert running on a column-shaped subdevice.
+        self._dispatch_edge_no_overlap = os.getenv("TT_DS_DISPATCH_ON_EDGE_NO_OVERLAP", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        # Experiment gate 2: place dispatch cores on the `dispatch_subdevice_edge` line via an
+        # EXPLICIT CoreRangeSet passed straight to the op (no sub-device manager created at all).
+        # Isolates whether the column hang comes from the sub-device mechanism or the column
+        # core layout itself: if dispatch-on-column-cores (no sub-device) also hangs, it's the
+        # layout; if it runs, the sub-device lifecycle was the culprit.
+        self._dispatch_core_grid_override = os.getenv("TT_DS_DISPATCH_CORE_GRID_OVERRIDE", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        # Effective overlap: either env experiment forces overlap off (shared runs full-grid).
+        self.overlap_shared_expert_with_dispatch = (
+            overlap_shared_expert_with_dispatch
+            and not self._dispatch_edge_no_overlap
+            and not self._dispatch_core_grid_override
+        )
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -281,35 +339,71 @@ class TtMoe(LightweightModule):
 
         # ========================================
         # Sub-devices: when overlap is enabled, split the Tensix grid into a "dispatch"
-        # strip and a "shared expert" strip so the two ops run on disjoint cores and the
+        # edge line and a "shared expert" block so the two ops run on disjoint cores and the
         # Fast-Dispatch per-sub-device counters let them overlap on-chip.
-        #   sub-device 0 (dispatch_sd):     rows [0, dispatch_sd_rows)
-        #   sub-device 1 (shared_sd):       rows [dispatch_sd_rows, grid_y)
+        #   sub-device 0 (dispatch_sd):     one edge line of the worker grid
+        #   sub-device 1 (shared_sd):       the complementary block (all remaining cores)
+        # The dispatch kernel lays its sender + untilize cores along a single 1-D line, so
+        # the dispatch sub-device is always a single row or column. Its edge is selected by
+        # `dispatch_subdevice_edge` (first/last row/column); the shared expert takes whatever
+        # is left, which is always a rectangle for an edge line.
         # When overlap is disabled, both ops run sequentially on the full grid and no
         # sub-device manager is created.
         # ========================================
-        if overlap_shared_expert_with_dispatch:
-            dispatch_sd_rows = 1
+        # Default: no explicit dispatch core-grid override (dispatch derives cores from its
+        # sub-device, or the legacy first-row path).
+        self.dispatch_core_grid = None
+
+        # Optional (independent of dispatch): run the COMBINE op on an explicit edge core-grid
+        # with no sub-device. Set TT_DS_COMBINE_CORE_GRID_OVERRIDE_EDGE=first_row|last_row|
+        # first_col|last_col. Lets us e.g. keep dispatch on a row but push combine onto a
+        # column, to tell whether the column hang is dispatch-specific or a general NoC issue.
+        self.combine_core_grid = None
+        _combine_edge = os.getenv("TT_DS_COMBINE_CORE_GRID_OVERRIDE_EDGE", "").strip()
+        if _combine_edge:
+            _cgrid = mesh_device.compute_with_storage_grid_size()
+            self.combine_core_grid, _ = self._edge_dispatch_core_ranges(_combine_edge, _cgrid.x, _cgrid.y)
+            logger.debug(f"Combine CORE-GRID OVERRIDE: edge={_combine_edge}, cores={self.combine_core_grid}")
+
+        if self._dispatch_core_grid_override:
+            # Experiment: NO sub-device manager at all. Dispatch places its cores on the
+            # explicit edge CoreRangeSet; shared expert runs on the full grid.
+            grid = mesh_device.compute_with_storage_grid_size()
+            self.dispatch_core_grid, _ = self._edge_dispatch_core_ranges(dispatch_subdevice_edge, grid.x, grid.y)
+            self.sd_manager_id = None
+            self.dispatch_sd_id = None
+            self.shared_sd_id = None
+            self.shared_sd_cores = None
+            logger.debug(
+                f"Dispatch CORE-GRID OVERRIDE (no sub-device): edge={dispatch_subdevice_edge}, "
+                f"cores={self.dispatch_core_grid}"
+            )
+        elif self.overlap_shared_expert_with_dispatch or self._dispatch_edge_no_overlap:
             grid = mesh_device.compute_with_storage_grid_size()
             grid_x, grid_y = grid.x, grid.y
-            assert 0 < dispatch_sd_rows < grid_y, f"dispatch_sd_rows={dispatch_sd_rows} must be in (0, grid_y={grid_y})"
-            dispatch_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, dispatch_sd_rows - 1))}
-            )
-            shared_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, dispatch_sd_rows), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
-            )
+            dispatch_cores, shared_cores = self._edge_dispatch_core_ranges(dispatch_subdevice_edge, grid_x, grid_y)
             dispatch_sd = ttnn.SubDevice([dispatch_cores])
             shared_sd = ttnn.SubDevice([shared_cores])
             self.sd_manager_id = mesh_device.create_sub_device_manager([dispatch_sd, shared_sd], 0)
             self.dispatch_sd_id = ttnn.SubDeviceId(0)
-            self.shared_sd_id = ttnn.SubDeviceId(1)
-            # Stash the CoreRangeSet of the shared sub-device so TtSharedExpert can build
-            # sub-device-confined shard_specs in Python without a C++ worker_cores binding.
-            self.shared_sd_cores = shared_cores
+            if self.overlap_shared_expert_with_dispatch:
+                # Overlap: shared runs confined to the complementary sub-device so it and
+                # dispatch occupy disjoint cores and overlap on-chip.
+                self.shared_sd_id = ttnn.SubDeviceId(1)
+                # Stash the CoreRangeSet of the shared sub-device so TtSharedExpert can build
+                # sub-device-confined shard_specs in Python without a C++ worker_cores binding.
+                self.shared_sd_cores = shared_cores
+            else:
+                # Env experiment: dispatch stays on the edge sub-device, but the shared expert
+                # runs on the FULL grid (no confinement); forward loads the manager only around
+                # the dispatch op (see forward()).
+                self.shared_sd_id = None
+                self.shared_sd_cores = None
             logger.debug(
-                f"Sub-devices: grid={grid_x}x{grid_y}, dispatch=rows[0,{dispatch_sd_rows}), "
-                f"shared=rows[{dispatch_sd_rows},{grid_y})"
+                f"Sub-devices: grid={grid_x}x{grid_y}, dispatch_edge={dispatch_subdevice_edge}, "
+                f"dispatch={dispatch_cores}, shared={shared_cores}, "
+                f"overlap={self.overlap_shared_expert_with_dispatch}, "
+                f"dispatch_edge_no_overlap={self._dispatch_edge_no_overlap}"
             )
         else:
             self.sd_manager_id = None
@@ -333,6 +427,7 @@ class TtMoe(LightweightModule):
             num_links=self.row_num_links,
             topology=self.row_topology,
             subdevice_id=self.dispatch_sd_id,
+            core_grid_override=self.dispatch_core_grid,
         )
 
         # Initialize combine module (row axis: axis 0)
@@ -347,6 +442,7 @@ class TtMoe(LightweightModule):
             num_links=self.row_num_links,
             topology=self.row_topology,
             init_zeros=False,
+            core_grid_override=self.combine_core_grid,
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded
@@ -536,6 +632,7 @@ class TtMoe(LightweightModule):
         logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
         signpost("shared_expert_and_dispatch_start")
+        # Overlap mode: load the manager around BOTH ops (they run on disjoint sub-devices).
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.load_sub_device_manager(self.sd_manager_id)
 
@@ -548,6 +645,14 @@ class TtMoe(LightweightModule):
 
         shared_output = self.shared_expert(x)
         logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
+
+        # Env experiment (no overlap, dispatch-on-edge): the shared expert just ran on the
+        # full grid with no manager loaded. Force a full device sync so the shared expert is
+        # completely finished before dispatch starts (truly sequential, no on-chip overlap),
+        # then load the manager so dispatch is confined to its edge sub-device.
+        if self._dispatch_edge_no_overlap:
+            ttnn.synchronize_device(self.mesh_device)
+            self.mesh_device.load_sub_device_manager(self.sd_manager_id)
 
         # ========================================
         # Step 2: Dispatch (enabled)
@@ -562,7 +667,7 @@ class TtMoe(LightweightModule):
             self.tt_expert_dispatch_table,
             padding_config=padding_config,
         )
-        if self.overlap_shared_expert_with_dispatch:
+        if self.overlap_shared_expert_with_dispatch or self._dispatch_edge_no_overlap:
             self.mesh_device.clear_loaded_sub_device_manager()
         # padding_config was shared with both the gate and dispatch; free it now that
         # dispatch (its last consumer) has been issued.
