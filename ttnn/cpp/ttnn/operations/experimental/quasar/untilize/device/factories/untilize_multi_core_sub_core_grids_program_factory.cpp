@@ -132,12 +132,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
-        a.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
+    ttnn::ComputeKernelConfig compute_hw{.fp32_dest_acc_en = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
-        std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
-            compute_hw);
+        compute_hw.unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }
     KernelSpec compute{
         .unique_id = COMPUTE,
@@ -148,7 +145,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
             {DFBBinding{.dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args = {{"per_core_block_cnt", nblocks_per_core}, {"per_core_block_tile_cnt", ntiles_per_block}},
-        .hw_config = compute_hw,
+        .hw_config = ttnn::to_compute_hardware_config(a.device()->arch(), compute_hw),
     };
 
     Group<KernelSpec> kernels = {reader, writer, compute};

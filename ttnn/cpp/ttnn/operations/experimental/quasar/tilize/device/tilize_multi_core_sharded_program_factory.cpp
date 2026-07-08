@@ -99,11 +99,9 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
     };
 
     // -- Compute kernel --
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
-        input.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_llk_acc});
+    ttnn::ComputeKernelConfig compute_hw{.fp32_dest_acc_en = fp32_llk_acc};
     if (fp32_llk_acc) {
-        std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(INPUT_DFB, UnpackToDestMode::UnpackToDestFp32); }, compute_hw);
+        compute_hw.unpack_to_dest_mode.emplace(INPUT_DFB, UnpackToDestMode::UnpackToDestFp32);
     }
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,
@@ -122,7 +120,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
         .compile_time_args =
             {{"per_core_block_cnt", num_tiles_per_shard / num_tiles_per_row},
              {"per_core_block_tile_cnt", num_tiles_per_row}},
-        .hw_config = compute_hw,
+        .hw_config = ttnn::to_compute_hardware_config(input.device()->arch(), compute_hw),
     };
 
     spec.kernels = {reader, writer, compute};

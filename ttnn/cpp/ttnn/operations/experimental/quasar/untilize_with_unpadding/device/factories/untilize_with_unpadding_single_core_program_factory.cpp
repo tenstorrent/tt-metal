@@ -176,12 +176,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
     if (float32_dtype) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
-        a.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
+    ttnn::ComputeKernelConfig compute_hw{.fp32_dest_acc_en = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
-        std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
-            compute_hw);
+        compute_hw.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }
     KernelSpec compute{
         .unique_id = COMPUTE,
@@ -195,7 +192,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
         .compile_time_args =
             {{"per_core_block_cnt", static_cast<uint32_t>(num_tiles / num_tiles_per_block)},
              {"per_core_block_tile_cnt", num_tiles_per_block}},
-        .hw_config = std::move(compute_hw),
+        .hw_config = ttnn::to_compute_hardware_config(a.device()->arch(), compute_hw),
     };
 
     // ---- ProgramSpec ----

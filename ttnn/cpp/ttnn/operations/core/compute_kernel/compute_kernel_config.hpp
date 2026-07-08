@@ -24,14 +24,10 @@ struct ComputeKernelConfig {
     bool dst_full_sync_en = false;
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
         ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
+    tt::tt_metal::experimental::ComputeUnpackToDestModes unpack_to_dest_mode;
 };
 
-inline std::ostream& operator<<(std::ostream& os, const ComputeKernelConfig& cfg) {
-    os << "ComputeKernelConfig(math_fidelity=" << cfg.math_fidelity << ",math_approx_mode=" << cfg.math_approx_mode
-       << ",fp32_dest_acc_en=" << cfg.fp32_dest_acc_en << ",packer_l1_acc=" << cfg.packer_l1_acc
-       << ",dst_full_sync_en=" << cfg.dst_full_sync_en << ",throttle_level=" << cfg.throttle_level << ")";
-    return os;
-}
+std::ostream& operator<<(std::ostream& os, const ComputeKernelConfig& cfg);
 
 // Type aliases for backward compatibility
 using DeviceComputeKernelConfig = ComputeKernelConfig;
@@ -66,11 +62,11 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 // common to both generations; `arch` selects the matching alternative (ComputeGen2Config on Quasar,
 // else ComputeGen1Config) — the config's generation must match the target platform.
 // packer_l1_acc and throttle_level are op-side concerns, not translated.
-// The result's per-DFB unpack_to_dest_mode is left default for the program factory to set.
-// (As is bfp8_pack_precise, but that is rarely to never set non-default.)
+// config.unpack_to_dest_mode is copied through to the result's per-DFB unpack_to_dest_mode.
+// (bfp8_pack_precise is left default, as it is rarely to never set non-default.)
 //
 // Please note that the following fields are not set from this helper:
-// enable_2x_src_format, unpack_to_dest_en, unpack_to_dest_mode
+// enable_2x_src_format, unpack_to_dest_en
 // If specialization is desired, use site should update them instead.
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     tt::ARCH arch, const ComputeKernelConfig& config);

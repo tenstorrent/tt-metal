@@ -225,12 +225,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
-        a.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
+    ttnn::ComputeKernelConfig compute_hw{.fp32_dest_acc_en = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
-        std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
-            compute_hw);
+        compute_hw.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }
 
     KernelSpec compute{
@@ -239,7 +236,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         .dfb_bindings =
             {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
-        .hw_config = std::move(compute_hw),
+        .hw_config = ttnn::to_compute_hardware_config(a.device()->arch(), compute_hw),
     };
     if (unpad_tensor_w_16) {
         compute.source = std::filesystem::path(

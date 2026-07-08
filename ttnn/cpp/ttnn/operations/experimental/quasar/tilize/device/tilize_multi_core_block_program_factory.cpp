@@ -261,11 +261,9 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         });
 
         // Compute: consumes c_0 (in), produces c_16 (out).
-        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
-            device->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_llk_acc});
+        ttnn::ComputeKernelConfig compute_config{.fp32_dest_acc_en = fp32_llk_acc};
         if (fp32_llk_acc) {
-            std::visit(
-                [&](auto& c) { c.unpack_to_dest_mode.emplace(g.in, UnpackToDestMode::UnpackToDestFp32); }, compute_hw);
+            compute_config.unpack_to_dest_mode.emplace(g.in, UnpackToDestMode::UnpackToDestFp32);
         }
         spec.kernels.push_back(KernelSpec{
             .unique_id = g.compute,
@@ -276,7 +274,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                      .dfb_spec_name = g.out, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
                 {{"block_size_col", g.compute_col}, {"block_size_row", g.compute_row}, {"third_dim", third_dim}},
-            .hw_config = compute_hw,
+            .hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_config),
         });
 
         spec.work_units.push_back(WorkUnitSpec{

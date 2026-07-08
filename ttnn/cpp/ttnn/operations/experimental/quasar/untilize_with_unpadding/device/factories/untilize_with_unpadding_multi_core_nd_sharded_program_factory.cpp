@@ -201,12 +201,9 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
-        input.device()->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en});
+    ttnn::ComputeKernelConfig compute_hw{.fp32_dest_acc_en = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
-        std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
-            compute_hw);
+        compute_hw.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }
 
     KernelSpec compute{
@@ -220,7 +217,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args = {{"per_core_block_tile_cnt", num_tiles_per_input_block}},
         .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
-        .hw_config = std::move(compute_hw),
+        .hw_config = ttnn::to_compute_hardware_config(input.device()->arch(), compute_hw),
     };
 
     // ------------------------------------------------------------------------
