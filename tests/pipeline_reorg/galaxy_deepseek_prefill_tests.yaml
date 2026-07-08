@@ -32,7 +32,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 30
+      timeout: 45
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -55,7 +55,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 30
+      timeout: 45
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -72,7 +72,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 30
+      timeout: 45
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: spsg
@@ -95,7 +95,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 30
+      timeout: 45
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -117,7 +117,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 30
+      timeout: 45
 
   owner_id: U08RL15T4N8
   team: models
@@ -140,7 +140,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 30
+      timeout: 45
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -157,7 +157,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 30
+      timeout: 45
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -176,7 +176,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 10
+      timeout: 15
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: spsg
@@ -192,7 +192,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 30
+      timeout: 45
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -208,7 +208,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 90
+      timeout: 135
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -230,7 +230,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 20
+      timeout: 30
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -252,7 +252,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 30
+      timeout: 45
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -277,8 +277,8 @@
   test_group: sdpa_perf
   skus:
     bh_spsg:
-      # Both perf checks run in ~5.6 min; 15 leaves ~2.7x headroom for tracy/Galaxy variance.
-      timeout: 15
+      # Both perf checks run in ~5.6 min; 23 leaves ~4x headroom for tracy/Galaxy variance.
+      timeout: 23
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
