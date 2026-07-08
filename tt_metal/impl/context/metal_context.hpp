@@ -132,6 +132,12 @@ public:
         bool minimal = false);
     void teardown();
 
+    // Relaunch base firmware on the given devices. No-op if firmware init has not run yet.
+    void reinitialize_firmware(const std::set<tt::ChipId>& device_ids);
+
+    // Request firmware relaunch before the next DPRINT attach (e.g. after a watcher assert).
+    void set_firmware_recovery_needed(bool needed) { firmware_recovery_needed_ = needed; }
+
     // Set fast dispatch mode and automatically reinitialize dispatch managers
     // This ensures dispatch/compute core allocations stay in sync with the mode
     void set_fast_dispatch_mode(bool enable);
@@ -212,6 +218,8 @@ private:
 
     bool initialized_ = false;
     bool force_reinit_ = false;
+    // Set when watcher stops due to error; cleared after firmware is relaunched.
+    bool firmware_recovery_needed_ = false;
 
     uint8_t num_hw_cqs_ = 0;
     BankMapping l1_bank_remap_;

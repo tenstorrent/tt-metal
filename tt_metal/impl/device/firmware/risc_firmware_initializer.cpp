@@ -208,6 +208,11 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
     }
 }
 
+void RiscFirmwareInitializer::reinitialize_firmware(tt::ChipId device_id) {
+    reset_cores(device_id);
+    initialize_and_launch_firmware(device_id);
+}
+
 void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& device_ids) {
     // Launch FW on each device sequentially, since a multithreaded launch leads to initialization hangs.
     // See https://github.com/tenstorrent/tt-metal/issues/35701

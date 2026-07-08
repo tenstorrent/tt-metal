@@ -1,0 +1,86 @@
+# Quasar emulator regression tests
+#
+# Structure:
+#   <group>:            Binary name under build/test/tt_metal/
+#     - filter: <glob>  GTest filter pattern
+#       config: <config>   Simulator grid config (maps to emu-quasar-<config>). Supports 1x3 and 2x3 and 2x3_DISPATCH
+#       env:            (optional) Extra environment variables as key: value pairs
+#       gtest_repeat:   (optional) Run each matched test N times (--gtest_repeat=N)
+#       back2back:      (optional) When true, run this entry in the same gtest process as
+#                       other consecutive back2back entries that share the same group,
+#                       config, env, and gtest_repeat. Used by run_quasar_back2back_regression.sh.
+#                       Defaults to false (each entry runs in its own process).
+#
+# Example test entry
+#
+# unit_tests_legacy:
+#   - filter: "*SingleDmL1Write*"
+#     config: 1x3
+#     env:
+#       TT_METAL_SOMETHING: 1
+
+unit_tests_legacy:
+# 1x3 tests run back-to-back
+  - filter: "*SingleDmL1Write*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*DmLoopback*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarComputeKernelSingleThread*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarComputeKernelMultipleThread*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarCreateMultipleComputeKernelsSingleCluster*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarMeshDeviceSingleCardFixture*GlobalsAndTLS"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  # - filter: "QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline"
+  #   config: 1x3
+  #   back2back: true
+  #   env:
+  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+
+# 1x3 tests with special setup
+
+  - filter: "*Bmm"
+    config: 2x3_DISPATCH
+    env:
+      TT_METAL_LOGGER_LEVEL: warning
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+unit_tests_api:
+  - filter: "*QuasarCRTASharedL1Address*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarCRTAUniqueL1Addresses*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+unit_tests_device:
+  - filter: "*SimulatorFixture*QuasarStaticTlbReadWrite*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1

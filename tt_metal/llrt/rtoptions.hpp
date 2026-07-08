@@ -707,6 +707,7 @@ public:
     void set_disable_dma_ops(bool disable) { disable_dma_ops.store(disable, std::memory_order_relaxed); }
 
     bool get_force_context_reinit() const { return force_context_reinit; }
+    void set_force_context_reinit(bool enable) { force_context_reinit = enable; }
 
     // Presence-based override to force-disable fabric 2-ERISC
     bool get_disable_fabric_2_erisc_mode() const { return disable_fabric_2_erisc_mode; }
