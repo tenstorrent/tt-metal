@@ -254,10 +254,23 @@ class Transformer(LightweightModule):
 
     def _apply_norm_and_lm_head(self, x):
         """Shared norm + lm_head for prefill logit processing. Input: [1, 1, 32, hidden_dim]."""
+        # #47820 (option a): once the DRAM prefetcher is initialized its global CB is
+        # resident on core (0,0), and the PREFILL distributed norm — which materializes the
+        # full hidden dim on (0,0) — would clash with it. Run this 32-token step on the
+        # DECODE layout instead: the sharded rms_norm + ring lm_head use the prefetcher's
+        # worker grid and small per-core CBs, which coexist with the resident global CB
+        # (this is exactly what every decode step already does). Load the prefetcher's
+        # sub-device manager for the step; the global CB is never torn down, so the decode
+        # trace's state stays intact across repeat batches.
+        use_decode_layout = self.prefetcher is not None and self.prefetcher.is_initialized
+        norm_mode = Mode.DECODE if use_decode_layout else Mode.PREFILL
+        norm_prefetcher = self.prefetcher if use_decode_layout else None
+        if use_decode_layout:
+            self.switch_mode(Mode.DECODE)
         x = self.norm(
-            x, mode=Mode.PREFILL, norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.prefetcher)
+            x, mode=norm_mode, norm_config=self.args.get_norm_config("lm_head", norm_mode, self.prefetcher)
         )
-        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(Mode.PREFILL, None)
+        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(norm_mode, norm_prefetcher)
         if lm_head_input_mem_cfg.is_sharded():
             x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
         logits = self.lm_head(x)
@@ -848,21 +861,19 @@ class Transformer(LightweightModule):
         if self.prefetcher is None:
             return
         if mode == Mode.DECODE:
-            # Create (first time) or re-activate the prefetcher's decode sub-device
-            # manager, ensure weights are queued, and re-allocate the global CB (freed
-            # for the preceding prefill) at its original L1 address so the cached decode
-            # trace can be replayed without re-capture (#47820).
+            # (Re)activate the prefetcher's decode sub-device manager and queue weights.
+            # The global CB is NEVER torn down (see below), so its trace-baked state is
+            # preserved across repeat batches — no re-allocate, no re-capture (#47820).
             self.prefetcher.init(mode)
             self.prefetcher.prefetch()
-            self.prefetcher.ensure_global_cb_allocated()
         elif mode == Mode.PREFILL:
-            # #47820: run prefill on the mesh device's default sub-device manager (where
-            # the prefill trace is captured). Free the persistent global CB L1 — it
-            # otherwise clashes with the prefill sharded RMSNorm on core (0,0) — but KEEP
-            # the prefetcher's sub-device manager and the cached decode trace. The next
-            # decode re-allocates the global CB at the same address and replays the trace
-            # (no re-capture; re-capturing the async prefetcher op hangs on repeat batches).
-            self.prefetcher.teardown_global_cb()
+            # #47820 (option a): run prefill on the default sub-device manager, but KEEP
+            # the global CB resident (do NOT tear it down) — freeing + rebuilding it
+            # resets the prefetcher's sender/receiver semaphore state that the decode
+            # trace depends on, hanging trace replay on batch 2. The clash between the
+            # resident global CB (core (0,0)) and the prefill LM-head norm is instead
+            # avoided by running that norm on the decode (worker-grid) layout — see
+            # Transformer._apply_norm_and_lm_head.
             self.prefetcher.revert_to_default_sub_device_manager()
 
     def forward(
