@@ -10,6 +10,7 @@ from typing import Any
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.experimental.hunyuan_image_3_0.ref.vae.decoder import LATENT_H, LATENT_T, LATENT_W
+from models.experimental.hunyuan_image_3_0.tt.vae.conv3d_blockings import register_hunyuan_conv3d_blockings
 from models.tt_dit.layers.audio_ops import prepare_conv3d_weight_state
 from models.tt_dit.layers.module import Module, Parameter
 from models.tt_dit.utils.conv3d import (
@@ -18,10 +19,11 @@ from models.tt_dit.utils.conv3d import (
     _ntuple,
     aligned_channels,
     get_conv3d_config,
-    register_conv3d_configs,
 )
 
 import os
+
+register_hunyuan_conv3d_blockings()
 
 # Max im2col elements (in_ch*T*H*W*kernel_vol) before a conv3d chunks over H.
 # The conv3d op's internal buffers are addressed with 32 bits, so a single buffer
@@ -30,56 +32,6 @@ import os
 # chunk always fits; GRID<=64 stays below this and is unaffected (no chunking).
 # HY_CONV_CHUNK_ELEMS overrides it (used to A/B chunk-vs-nochunk for correctness).
 _CONV3D_CHUNK_ELEMS = int(os.environ.get("HY_CONV_CHUNK_ELEMS", str(1024 * 1024 * 1024)))
-
-register_conv3d_configs(
-    {
-        (1024, 1024, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (1024, 1024, (1, 1, 1)): (256, 32, 1, 1, 1),
-        (1024, 8192, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (1024, 4096, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (1024, 2048, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (512, 1024, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (512, 512, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (256, 512, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (256, 256, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (128, 512, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (128, 128, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (128, 3, (3, 3, 3)): (32, 32, 1, 2, 2),
-        (32, 1024, (3, 3, 3)): (32, 32, 1, 2, 2),
-    }
-)
-
-# Hardware-swept exact blockings, applied and PCC-verified one at a time against
-# the full decoder (not just an isolated single call) since blocking choice can
-# interact badly with repeated/chunked invocation under the program cache in
-# ways a single-call comparison won't catch. See bruteforce_conv3d_sweep_hunyuan.py.
-# (h_factor, w_factor, C_in, C_out, kernel, T, H, W) -> blocking
-_BLOCKINGS.update(
-    {
-        (1, 1, 512, 512, (3, 3, 3), 4, 130, 130): (64, 256, 2, 4, 8),  # 22.2x, full-decode PCC verified
-        (1, 1, 128, 128, (3, 3, 3), 4, 130, 514): (64, 128, 2, 16, 8),  # 10.6x
-        (1, 1, 256, 256, (3, 3, 3), 4, 130, 258): (64, 256, 2, 2, 16),  # 20.9x
-        (1, 1, 1024, 1024, (3, 3, 3), 2, 66, 66): (64, 256, 1, 8, 8),  # 14.8x
-        (1, 1, 1024, 4096, (3, 3, 3), 2, 66, 66): (64, 256, 1, 8, 8),  # 16.6x
-        (1, 1, 512, 1024, (3, 3, 3), 4, 130, 130): (64, 256, 1, 8, 8),  # 13.9x
-        (1, 1, 256, 512, (3, 3, 3), 4, 130, 258): (64, 256, 2, 2, 16),  # 21.0x
-        (1, 1, 1024, 1024, (3, 3, 3), 1, 34, 34): (64, 256, 1, 4, 8),  # 11.9x
-        # (1, 1, 128, 3, (3, 3, 3), 4, 130, 514): (128, 32, 2, 8, 16),  # REJECTED:
-        # full-decode PCC 0.499 (vs 0.999941 baseline) despite passing an isolated
-        # single-call PCC check at 0.999995. This is the conv_out layer; some
-        # interaction with repeated/chunked invocation under program cache breaks
-        # it. Needs a different candidate blocking re-swept and re-verified, or
-        # leave on the channel-keyed fallback above.
-        (1, 1, 1024, 1024, (1, 1, 1), 1, 64, 64): (1024, 512, 1, 8, 4),  # 208.5x
-        (1, 1, 32, 1024, (3, 3, 3), 1, 34, 34): (32, 256, 1, 2, 16),  # 6.8x
-        # (1, 1, 1024, 8192, (3, 3, 3), 1, 34, 34): (128, 64, 1, 16, 16),  # REJECTED:
-        # full-decode PCC 0.762 (vs 0.999941 baseline) despite 10,176us in the isolated
-        # sweep (vs the channel-keyed fallback's much slower ~90k+us estimate for this
-        # shape). Same repeated/chunked-invocation-under-program-cache failure mode as
-        # the 128x3 rejection above. Needs a different candidate blocking re-swept and
-        # re-verified, or leave on the channel-keyed fallback.
-    }
-)
 
 
 def promote_conv3d_fallback_to_exact(

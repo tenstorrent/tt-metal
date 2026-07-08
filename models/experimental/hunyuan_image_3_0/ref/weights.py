@@ -135,6 +135,26 @@ def resolve_checkpoint(*, env_var: str, repo_id: str) -> Path:
     raise FileNotFoundError(f"No checkpoint for {repo_id!r}. Set {env_var} or run: hf download {repo_id}")
 
 
+def resolve_base_model_dir() -> Path:
+    """Resolve base VAE/DiT weights: ``HUNYUAN_MODEL_DIR``, then HF base, then instruct fallbacks."""
+    if override := os.environ.get(ENV_BASE):
+        return Path(override)
+    if snap := find_hf_snapshot(HF_REPO_BASE):
+        return snap
+    for env_var, repo_id in (
+        (ENV_INSTRUCT_DISTIL, HF_REPO_INSTRUCT_DISTIL),
+        (ENV_INSTRUCT, HF_REPO_INSTRUCT),
+    ):
+        if override := os.environ.get(env_var):
+            return Path(override)
+        if snap := find_hf_snapshot(repo_id):
+            return snap
+    raise FileNotFoundError(
+        f"No checkpoint for {HF_REPO_BASE!r}. Set {ENV_BASE} (or {ENV_INSTRUCT_MODEL_DIR} / "
+        f"{ENV_INSTRUCT_DISTIL_MODEL_DIR}) or run: hf download {HF_REPO_BASE}"
+    )
+
+
 def ensure_checkpoint(*, env_var: str, repo_id: str) -> Path:
     """Like ``resolve_checkpoint``, downloading from HuggingFace when missing or incomplete."""
     path: Path | None = None
@@ -187,17 +207,14 @@ def has_distil_weights(model_dir: Path | None = None) -> bool:
 def __getattr__(name: str):
     """Lazy paths: env override, HF hub snapshot, or placeholder (for skip-if-missing tests)."""
     _mapping = {
-        "MODEL_DIR": (ENV_BASE, HF_REPO_BASE),
-        "INSTRUCT_MODEL_DIR": (ENV_INSTRUCT, HF_REPO_INSTRUCT),
-        "INSTRUCT_DISTIL_MODEL_DIR": (ENV_INSTRUCT_DISTIL, HF_REPO_INSTRUCT_DISTIL),
+        "MODEL_DIR": resolve_base_model_dir,
+        "INSTRUCT_MODEL_DIR": lambda: resolve_checkpoint(env_var=ENV_INSTRUCT, repo_id=HF_REPO_INSTRUCT),
+        "INSTRUCT_DISTIL_MODEL_DIR": lambda: resolve_checkpoint(
+            env_var=ENV_INSTRUCT_DISTIL, repo_id=HF_REPO_INSTRUCT_DISTIL
+        ),
     }
     if name in _mapping:
-        env_var, repo_id = _mapping[name]
-        if override := os.environ.get(env_var):
-            return Path(override)
-        if snap := find_hf_snapshot(repo_id):
-            return snap
-        return _repo_snapshots_dir(repo_id)
+        return _mapping[name]()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
