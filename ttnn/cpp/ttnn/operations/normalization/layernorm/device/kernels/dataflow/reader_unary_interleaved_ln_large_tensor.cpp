@@ -60,8 +60,8 @@ void kernel_main() {
 
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in");
     constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_inb");
-    constexpr uint32_t dfb_id_gamma = get_named_compile_time_arg_val("dfb_gamma");
-    constexpr uint32_t dfb_id_beta = get_named_compile_time_arg_val("dfb_beta");
+    constexpr uint32_t dfb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
+    constexpr uint32_t dfb_id_beta = get_named_compile_time_arg_val("cb_beta");
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
@@ -92,7 +92,7 @@ void kernel_main() {
     constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
-    constexpr uint32_t dfb_id_in_rm = get_named_compile_time_arg_val("dfb_in_rm");
+    constexpr uint32_t dfb_id_in_rm = get_named_compile_time_arg_val("cb_in_rm");
     DataflowBuffer dfb_in_rm(dfb_id_in_rm);
 
     const uint32_t src0_page_bytes = W_logical * elem_size_bytes;
