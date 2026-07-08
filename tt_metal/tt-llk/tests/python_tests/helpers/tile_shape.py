@@ -102,14 +102,3 @@ def cpp_tensor_shape(tile_shape: TileShape) -> str:
         f"{tile_shape.num_faces_r_dim}, "
         f"{tile_shape.num_faces_c_dim})"
     )
-
-
-def cpp_tensor_shape_from_legacy(face_r_dim: int, num_faces: int) -> str:
-    """
-    Emit a C++ ``ckernel::make_tensor_shape_from_legacy`` call string from legacy
-    scalar parameters (face_r_dim, total num_faces).
-
-    Mirrors the C++ helper of the same name for fuser code generators that only
-    have legacy scalar values available.
-    """
-    return f"ckernel::make_tensor_shape_from_legacy({face_r_dim}, {num_faces})"
