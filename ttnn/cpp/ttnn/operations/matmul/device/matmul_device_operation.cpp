@@ -746,7 +746,7 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
         chosen_program_config);
 }
 
-// Shared Block-4 — Reuse config only. Each L1-sharded input's shard grid must fit within
+// Shared Block-4: Reuse config only. Each L1-sharded input's shard grid must fit within
 // the device grid. Non-sharded inputs and DRAM inputs are not checked.
 void validate_matmul_sharded_operand_grids_within_program_compute_grid(
     const Tensor& input_tensor_a,
@@ -773,7 +773,7 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
         chosen_program_config);
 }
 
-// Shared Block-5 — Reuse config only. If an input is sharded across N cores, the total
+// Shared Block-5: Reuse config only. If an input is sharded across N cores, the total
 // number of output blocks must be a multiple of N so the work splits evenly across those
 // cores; otherwise the program factory can't distribute it and fails.
 void validate_matmul_reuse_sharded_output_block_divisibility(
@@ -818,7 +818,7 @@ void validate_matmul_reuse_sharded_output_block_divisibility(
         chosen_program_config);
 }
 
-// Shared Block-6 — bias support by config. Reuse rejects bias; other configs allow it.
+// Shared Block-6: bias support by config. Reuse rejects bias; other configs allow it.
 void validate_matmul_bias(
     const std::optional<const Tensor>& optional_bias,
     const operations::matmul::MatmulProgramConfig& chosen_program_config) {
@@ -842,7 +842,7 @@ void validate_matmul_bias(
         ttsl::get_active_type_name_in_variant(chosen_program_config));
 }
 
-// Cross-validate a DRAM-sender global_cb's geometry against the matmul + weight shape.
+// Helper: cross-validate a DRAM-sender global_cb's geometry against the matmul + weight shape.
 // These catch silent-hang configs where the matmul reads more in1 pages than the prefetcher
 // pushes (e.g. activation K padded past weight K). Gated by the caller on the DRAM-sender path
 // because the worker-sender variant predates this work and uses different sizing/ordering
@@ -989,9 +989,9 @@ void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
         ring_size);
 }
 
-// Warns if a caller of MatmulDeviceOperation's static API hasn't populated allowed_worker_cores
-// on a program_config variant that supports the field. ttnn::prim::matmul() normalizes its
-// attributes before launch, but direct callers (e.g. CCL fused ops in
+// Helper: warns if a caller of MatmulDeviceOperation's static API hasn't populated
+// allowed_worker_cores on a program_config variant that supports the field. ttnn::prim::matmul()
+// normalizes its attributes before launch, but direct callers (e.g. CCL fused ops in
 // ttnn/operations/experimental/ccl) need to invoke
 // ttnn::operations::matmul::normalize_program_config() themselves. Downstream code in this file
 // auto-populates via normalize_program_config on the chosen_program_config local, so this is
@@ -1023,7 +1023,7 @@ void warn_if_allowed_worker_cores_missing(
         */
 }
 
-// Shared Block-7 — Mcast1D on a sub-device (non-gather). Checks the matmul grid fits on
+// Shared Block-7: Mcast1D on a sub-device (non-gather). Checks the matmul grid fits on
 // the sub-device's cores.
 void validate_matmul_mcast1d_subdevice_worker_grid(
     const Tensor& input_tensor_a,
@@ -1114,7 +1114,7 @@ void validate_output_subblock_block_divides_per_core_n(
 // std::visit.
 // ===========================================================================
 
-// MultiCore config — the un-optimized fallback. Rejects tiny outer tiles and requires
+// MultiCore config: the un-optimized fallback. Rejects tiny outer tiles and requires
 // all operands + output to be INTERLEAVED.
 void validate_matmul_multicore_config(
     const Tensor& input_tensor_a,
@@ -1152,7 +1152,7 @@ void validate_matmul_multicore_config(
         attributes.output_mem_config.memory_layout());
 }
 
-// DRAMSharded config. in0 width-sharded in L1, in1 width-sharded in DRAM; height must
+// DRAMSharded config: in0 width-sharded in L1, in1 width-sharded in DRAM; height must
 // be a single tile (M == 1) and K/shard dims divide in0_block_w.
 void validate_matmul_dram_sharded_config(
     const Tensor& input_tensor_a,
@@ -1214,7 +1214,7 @@ void validate_matmul_dram_sharded_config(
         input_tensor_b.memory_config().memory_layout());
 }
 
-// BatchedDRAMSharded config. [1,B,M,K] x [1,B,K,N]: A height-sharded in L1, B height-
+// BatchedDRAMSharded config: [1,B,M,K] x [1,B,K,N]: A height-sharded in L1, B height-
 // sharded in DRAM, output height-sharded in L1; contracted dim divides in0_block_w.
 void validate_matmul_batched_dram_sharded_config(
     const Tensor& input_tensor_a,
@@ -1265,7 +1265,7 @@ void validate_matmul_batched_dram_sharded_config(
         input_tensor_b.memory_config().memory_layout());
 }
 
-// Mcast2D config — block-sharded 2D multicast. Validates that sharded input A, input B,
+// Mcast2D config: block-sharded 2D multicast. Validates that sharded input A, input B,
 // and the output have layouts, grids, and orientations consistent with a 2D multicast.
 void validate_matmul_mcast2d_config(
     const Tensor& input_tensor_a,
@@ -1472,7 +1472,7 @@ void validate_matmul_mcast2d_config(
     }
 }
 
-// Reuse config — non-multicast block reuse. Validates per_core_M/N divisibility vs M/N,
+// Reuse config: non-multicast block reuse. Validates per_core_M/N divisibility vs M/N,
 // sharded A/B/output layouts, grid/shard-shape agreement, and rejects batch broadcast.
 // (The post-visit work-split check is also Reuse-only, wired at the dispatch.)
 void validate_matmul_reuse_config(
@@ -1637,7 +1637,7 @@ void validate_matmul_reuse_config(
     }
 }
 
-// Mcast1D config — 1D multicast. Validates the mcast_in0 and gather_in0 paths, the
+// Mcast1D config: 1D multicast. Validates the mcast_in0 and gather_in0 paths, the
 // width-sharded and height-sharded in0 paths, and the output layout/subblock rules for
 // 1-row vs 1-column grids.
 void validate_matmul_mcast1d_config(
@@ -1970,7 +1970,7 @@ void validate_matmul_mcast_fuse_batch_preamble(
     }
 }
 
-// Returns whether batch broadcasting applies: true when input B has batch size 1 (B is
+// Helper: returns whether batch broadcasting applies: true when input B has batch size 1 (B is
 // reused across A's batches). Used by compute_output_specs, not by validate.
 bool get_broadcast_batch(
     const Tensor& input_tensor_a,
