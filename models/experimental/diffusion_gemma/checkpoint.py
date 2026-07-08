@@ -208,9 +208,11 @@ def build_tt_model_from_checkpoint_inputs(
 
         remap_fn = remap_state_dict
     if create_model_fn is None:
-        from models.demos.gemma4.tt.common import create_tt_model
+        # DG-local builder honours the experts-dtype knob (DG_EXPERTS_BFP8 / DG_EXPERTS_DTYPE);
+        # with no knob set it delegates to the shared create_tt_model unchanged (#47475).
+        from models.experimental.diffusion_gemma.tt.precision_build import create_tt_model_dg
 
-        create_model_fn = create_tt_model
+        create_model_fn = create_tt_model_dg
 
     backbone_state, _self_conditioning_state, _ignored = remap_fn(checkpoint_inputs.state_dict)
     model_args, tt_model, tt_kv_cache, _loaded_state = create_model_fn(
