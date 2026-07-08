@@ -26,6 +26,10 @@ from models.experimental.xtts.reference.xtts_mel import HOP_LENGTH, N_FFT, N_MEL
 
 N_FREQS = N_FFT // 2 + 1  # 257
 CENTER_PAD = N_FFT // 2  # 256
+# Frames processed per gather+reshape. The [1, nf*512] -> [nf, 512] ROW_MAJOR reshape
+# grows circular buffers ~linearly with nf; on p150 (1.5 MB L1) ~180 frames is the
+# ceiling, so chunk well under it and concat, letting the frontend handle long audio.
+FRAME_CHUNK = 128
 
 
 def _reflect_index(positions: torch.Tensor, length: int) -> torch.Tensor:
@@ -86,9 +90,17 @@ class TtMelFrontend(LightweightModule):
         x = ttnn.to_layout(ttnn.reshape(x, [1, length]), ttnn.TILE_LAYOUT)  # gather needs TILE
 
         idx, num_frames = self._frame_index(length)
-        framed = ttnn.gather(x, dim=1, index=idx)  # [1, T*512] TILE
-        framed = ttnn.reshape(ttnn.to_layout(framed, ttnn.ROW_MAJOR_LAYOUT), [num_frames, N_FFT])
-        framed = ttnn.to_layout(framed, ttnn.TILE_LAYOUT)
+        # Gather + reshape the frames in chunks so the ROW_MAJOR reshape stays in L1,
+        # then concat to the full [T, 512] frame matrix (a no-op single chunk for short
+        # audio, so the validated short-audio path is unchanged).
+        chunks = []
+        for start in range(0, num_frames, FRAME_CHUNK):
+            nf = min(FRAME_CHUNK, num_frames - start)
+            idx_c = ttnn.slice(idx, [0, start * N_FFT], [1, (start + nf) * N_FFT])  # [1, nf*512] TILE
+            g = ttnn.gather(x, dim=1, index=idx_c)  # [1, nf*512] TILE
+            g = ttnn.reshape(ttnn.to_layout(g, ttnn.ROW_MAJOR_LAYOUT), [nf, N_FFT])
+            chunks.append(ttnn.to_layout(g, ttnn.TILE_LAYOUT))
+        framed = chunks[0] if len(chunks) == 1 else ttnn.concat(chunks, dim=0)  # [T, 512] TILE
 
         spec = ttnn.matmul(framed, self.basis)  # [T, 514]
         real = ttnn.slice(spec, [0, 0], [num_frames, N_FREQS])
