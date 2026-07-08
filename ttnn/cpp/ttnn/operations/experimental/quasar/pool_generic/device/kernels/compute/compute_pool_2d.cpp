@@ -334,9 +334,23 @@ void kernel_main() {
 #else
                     // QSR: fast_tilize is unported on Quasar (fast_tilize.h is #ifndef ARCH_QUASAR). Use the
                     // supported compute-API tilize on the same fast_tilize_cb view — all CB push/wait/pop
-                    // plumbing above and below is preserved. NEEDS ON-QUASAR VALIDATION via the global
-                    // avg_pool2d correctness test: the fast->regular tilize swap keeps CB sync intact, but
-                    // the tile-view read semantics must be confirmed.
+                    // plumbing above and below is preserved.
+                    //
+                    // QSR packer retarget (same defect class as the halo pack_untilize fix and the
+                    // OUTPUT_TILED deadlock fix above): Quasar's `tilize_init` (tilize.h) only programs
+                    // UNPACK+MATH -- unlike WH/BH it does NOT call a PACK-side init, because on Quasar the
+                    // packer's destination CB/tensor-shape descriptor is baked into tensix state by an
+                    // explicit init call and is NOT reprogrammed implicitly (see reconfig_data_format.h's
+                    // ARCH_QUASAR note: "When the pack output operand changes, call pack_init(new_cb_id)
+                    // before pack_tile"). Immediately before this point the packer was left in
+                    // pack-untilize mode targeting pre_tilize_cb_id (from the per-stick reduce loop's
+                    // pack_untilize_dest_init below / at kernel entry). `pack_reconfig_data_format` above
+                    // only reprograms the THCON data-format (gasket), not the pack MOP/descriptor, so
+                    // without an explicit `llk_pack_init(out_cb_id)` here, `tilize_block`'s Quasar-path
+                    // `llk_pack<out_of_order>(...)` call packs through a descriptor still bound to
+                    // pre_tilize_cb_id in untilize mode -- the real out_cb never receives the tilized tile
+                    // (observed as PCC 0.0 / all-zero output on the OUTPUT_TILED avg-pool path).
+                    PACK((llk_pack_init(out_cb_id)));
                     tilize_init(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
                     tilize_block(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
                     tilize_uninit(fast_tilize_cb_id, out_cb_id);
