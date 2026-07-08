@@ -573,3 +573,44 @@ def test_group_norm_DRAM_tile_vs_rm_input(
         input_layout=input_layout,
         output_layout=output_layout,
     )
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
+@pytest.mark.parametrize(
+    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
+    [
+        # Large per-core group forcing num_out_blocks > 1. On the legacy ROW_MAJOR path cb_in_tilized (c_17)
+        # would hold the WHOLE per-core group (num_out_blocks x an out-block) and exceed L1, so the program
+        # factory gates the tilize-in-L1 optimization on an L1 footprint check and falls back to the per-pass
+        # re-tilize path (bounded by num_out_blocks, always fits). Issue #21131 shape; before the gate it
+        # failed circular-buffer allocation. Legacy-only: the Welford path has no re-tilize fallback yet and
+        # cannot fit this shape with ROW_MAJOR input.
+        (1, 128, 1, 262144, 32, 64, 8, 4),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_layout, output_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["RM_IN_TILE_OUT", "RM_IN_RM_OUT"],
+)
+def test_group_norm_DRAM_rm_input_large_group_l1_fallback(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, input_layout, output_layout
+):
+    run_group_norm_DRAM(
+        device,
+        N,
+        C,
+        H,
+        W,
+        num_groups,
+        num_out_blocks,
+        cores_y,
+        cores_x,
+        welford_mode="legacy",
+        use_input_mask=True,
+        input_layout=input_layout,
+        output_layout=output_layout,
+    )

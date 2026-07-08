@@ -470,17 +470,63 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         }
     }
 
-    // Legacy + ROW_MAJOR input: the compute kernel tilizes the whole per-core group once and keeps it
-    // kept in cb_in_tilized (c_17) across all three passes (mean/variance/normalize), avoiding the
-    // per-pass DRAM re-read and re-tilize. Size that CB to the full padded group. c_0/c_29 stay one out-block.
+    // Legacy + ROW_MAJOR input: cb_in_tilized (c_17) holds the whole per-core group so the three passes
+    // reuse it. That is num_out_blocks x an out-block, so for num_out_blocks > 1 it can exceed L1. Only
+    // enable it (INPUT_FITS_L1) when BOTH per-core groups fit; otherwise the kernel falls back to the
+    // re-tilize path, which is bounded by num_out_blocks and always fits.
     uint32_t in_tilized_CB_size_group_1 = 0;
     uint32_t in_tilized_CB_size_group_2 = 0;
-    if (!use_welford && tilize_in) {
+    bool input_fits_l1 = !use_welford && tilize_in;
+    if (input_fits_l1) {
         in_tilized_CB_size_group_1 =
             groupnorm_tilized_group_tiles(block_ht_group_1, num_out_blocks, block_wt) * in_single_tile_size;
         if (!equal_batches_per_core) {
             in_tilized_CB_size_group_2 =
                 groupnorm_tilized_group_tiles(block_ht_group_2, num_out_blocks, block_wt) * in_single_tile_size;
+        }
+
+        // Shared per-core L1 usage: the small fixed scalar/reduction CBs (approximated by the allowance)
+        // plus the gamma/beta/mask/repack CBs that live on every core.
+        uint64_t shared_cb_bytes = static_cast<uint64_t>(kGroupnormSmallCbAllowanceTiles) * single_tile_size;
+        shared_cb_bytes += gamma.has_value() ? in5_CB_size : 0;
+        shared_cb_bytes += beta.has_value() ? in6_CB_size : 0;
+        shared_cb_bytes += input_mask.has_value() ? in_mask_CB_size : 0;
+        shared_cb_bytes += reader_repack_output ? repack_CB_size : 0;
+
+        // Usable L1 for CBs = total per-core L1 minus the base-allocated region (kernel binaries, etc.).
+        // Both per-core groups live on different cores, so each must fit independently.
+        const uint64_t available_l1 =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const auto group_fits = [&](const GroupNormGroupCbBytes& cbs) {
+            return groupnorm_group_l1_bytes(cbs, untilize_out, shared_cb_bytes) * 100 <=
+                   available_l1 * kGroupnormTilizedL1UsagePercent;
+        };
+        bool fits = group_fits(
+            {.in0 = in0_CB_size_group_1,
+             .out = out_CB_size_group_1,
+             .in = in_CB_size_group_1,
+             .in_tilized = in_tilized_CB_size_group_1,
+             .x = x_CB_size_group_1,
+             .xmm = xmm_CB_size_group_1,
+             .xmm2 = xmm2_CB_size_group_1,
+             .xmm3 = xmm3_CB_size_group_1,
+             .rm_untilize = rm_untilize_CB_size_group_1});
+        if (!equal_batches_per_core) {
+            fits = fits && group_fits(
+                               {.in0 = in0_CB_size_group_2,
+                                .out = out_CB_size_group_2,
+                                .in = in_CB_size_group_2,
+                                .in_tilized = in_tilized_CB_size_group_2,
+                                .x = x_CB_size_group_2,
+                                .xmm = xmm_CB_size_group_2,
+                                .xmm2 = xmm2_CB_size_group_2,
+                                .xmm3 = xmm3_CB_size_group_2,
+                                .rm_untilize = rm_untilize_CB_size_group_2});
+        }
+        if (!fits) {
+            input_fits_l1 = false;
+            in_tilized_CB_size_group_1 = 0;
+            in_tilized_CB_size_group_2 = 0;
         }
     }
 
@@ -562,6 +608,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     }
     if (tilize_in) {
         reader_mcast_sender_defines["TILIZE_IN"] = "1";
+    }
+    if (input_fits_l1) {
+        // Fits-in-L1 variant: reader gathers from DRAM only on the first pass; compute tilizes once and
+        // keeps the whole group in L1. Without this define the reader re-gathers every pass (re-tilize
+        // fallback), used when the tilized-group CB would not fit in L1.
+        reader_mcast_sender_defines["INPUT_FITS_L1"] = "1";
     }
     if (untilize_out) {
         reader_mcast_sender_defines["UNTILIZE_OUT"] = "1";
@@ -816,6 +868,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     }
     if (tilize_in) {
         eltwise_binary_defines["TILIZE_IN"] = "1";
+    }
+    if (input_fits_l1) {
+        eltwise_binary_defines["INPUT_FITS_L1"] = "1";
     }
     if (untilize_out) {
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";

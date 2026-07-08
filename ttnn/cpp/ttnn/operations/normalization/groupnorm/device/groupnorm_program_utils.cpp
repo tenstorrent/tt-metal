@@ -22,6 +22,15 @@ uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_block
     return num_out_blocks_padded * out_block_h_normal * block_wt;
 }
 
+uint64_t groupnorm_group_l1_bytes(const GroupNormGroupCbBytes& cbs, bool untilize_out, uint64_t shared_cb_bytes) {
+    uint64_t bytes = static_cast<uint64_t>(cbs.in0) + cbs.out + cbs.in + cbs.in_tilized + cbs.x + cbs.xmm + cbs.xmm2 +
+                     cbs.xmm3 + shared_cb_bytes;
+    if (untilize_out) {
+        bytes += cbs.rm_untilize + cbs.in;  // c_30 output + c_20 reread scratch
+    }
+    return bytes;
+}
+
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     if (n <= max_subblock_w) {
         return n;
