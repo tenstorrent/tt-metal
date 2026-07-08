@@ -264,7 +264,7 @@ template <
     uint32_t output_dfb_id,
     ReduceInputPolicy input_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
-    bool enable_fp32_sfpu = false,
+    ReduceFp32Mode fp32_mode,
     typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce(
@@ -332,7 +332,7 @@ ALWI void reduce(
     const uint32_t Wt = input_block_shape.cols;
     const uint32_t num_batches = input_block_shape.batches;
 
-    constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, enable_fp32_sfpu>();
+    constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
 
     DataflowBuffer input_dfb(input_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);
