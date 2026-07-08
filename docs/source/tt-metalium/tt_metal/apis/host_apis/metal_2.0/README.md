@@ -7,7 +7,8 @@ follow the route.
 
 | You are… | Start with | Then |
 |---|---|---|
-| **An AI porter** (Claude) porting an op | [`ai/port_op_to_metal2_audit.md`](ai/port_op_to_metal2_audit.md) — run the port-readiness audit **first** (the go/no-go gate) | [`ai/port_op_to_metal2_recipe.md`](ai/port_op_to_metal2_recipe.md) — do the port |
+| **An AI porter** (Claude) porting an op | [`ai/port_op_to_metal2_audit.md`](ai/port_op_to_metal2_audit.md) — host/spec port-readiness audit | [`ai/port_op_to_metal2_recipe.md`](ai/port_op_to_metal2_recipe.md) — do the port |
+| **An AI porter / reviewer** auditing **kernel CB→DFB** readiness | [`ai/cb_dfb_kernel_audit_helper.md`](ai/cb_dfb_kernel_audit_helper.md) — **standalone device-side CB audit** ([How to use](ai/cb_dfb_kernel_audit_helper.md#how-to-use-this-doc)) | Optional: cross-ref host audit if doing a full op port |
 | **A human** getting oriented | [`human/user_orientation.md`](human/user_orientation.md) | [`human/CB-to-DFB-flowchart.svg`](human/CB-to-DFB-flowchart.svg) — the CB→DFB decision flowchart |
 | **Anyone** who needs the concepts / API reference | [`metal2_migration_guide.md`](metal2_migration_guide.md) | — |
 
@@ -20,7 +21,8 @@ follow the route.
   - `user_orientation.md` — orientation for people.
   - `CB-to-DFB-flowchart.svg` — the CB→DFB classification flowchart.
 - **[`ai/`](ai/)** — the AI porter / auditor recipes (the working procedures).
-  - `port_op_to_metal2_audit.md` — port-readiness audit: the per-op go/no-go gate. **Run first.**
+  - `port_op_to_metal2_audit.md` — port-readiness audit: the per-op **host/spec** go/no-go gate.
+  - `cb_dfb_kernel_audit_helper.md` — **standalone device-side** CB→DFB kernel audit (per-op CB portability report; no host audit prerequisite).
   - `port_op_to_metal2_recipe.md` — the port procedure itself.
   - `metal2_port_patterns.md` — patterns & anti-patterns catalog (referenced throughout the recipe and audit).
   - `port_op_to_metal2_ttnn_factory.md` — TTNN factory-concept specifics for the port.
