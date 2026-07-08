@@ -54,11 +54,11 @@ namespace {
 
 // Import shared test helpers
 using test_helpers::BindTensorParameterToKernel;
-using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
+using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalTensorParameter;
@@ -280,7 +280,7 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     // self-loop is the only legal self-loop (it lowers to the intra-Tensix packer->unpacker flow),
     // so it exercises the accessor-name relaxation through a path that survives validation. (A DM
     // self-loop is rejected — see DMKernelSelfLoopFails.)
-    auto kernel = MakeMinimalComputeKernel("kernel");
+    auto kernel = MakeMinimalGen2ComputeKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "acc"));
@@ -482,7 +482,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInSameWorkUnitFails) {
 
     auto producer1 = MakeMinimalGen2DMKernel("producer1");
     auto producer2 = MakeMinimalGen2DMKernel("producer2");
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -540,8 +540,8 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInDifferentWorkUnitsSuccee
     spec.name = "test_program";
 
     auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer1 = MakeMinimalComputeKernel("consumer1");
-    auto consumer2 = MakeMinimalComputeKernel("consumer2");
+    auto consumer1 = MakeMinimalGen2ComputeKernel("consumer1");
+    auto consumer2 = MakeMinimalGen2ComputeKernel("consumer2");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -570,7 +570,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInDifferentWorkUnitsSuccee
 
     auto producer1 = MakeMinimalGen2DMKernel("producer1");
     auto producer2 = MakeMinimalGen2DMKernel("producer2");
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -597,7 +597,7 @@ TEST_F(ProgramSpecTestQuasar, DFBProducerConsumerCoverageMismatchFails) {
     spec.name = "test_program";
 
     auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -627,7 +627,7 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBAllGridConsumerWithPerGroupProducersSuccee
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto consumer = MakeMinimalComputeKernel("compute");
+    auto consumer = MakeMinimalGen2ComputeKernel("compute");
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
@@ -659,8 +659,8 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingAccessPatternMismatchFails) {
     spec.name = "test_program";
 
     auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer1 = MakeMinimalComputeKernel("consumer1");
-    auto consumer2 = MakeMinimalComputeKernel("consumer2");
+    auto consumer1 = MakeMinimalGen2ComputeKernel("consumer1");
+    auto consumer2 = MakeMinimalGen2ComputeKernel("consumer2");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -690,8 +690,8 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingNumThreadsMismatchFails) {
     spec.name = "test_program";
 
     auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer1 = MakeMinimalComputeKernel("consumer1", /*num_threads=*/1);
-    auto consumer2 = MakeMinimalComputeKernel("consumer2", /*num_threads=*/2);
+    auto consumer1 = MakeMinimalGen2ComputeKernel("consumer1", /*num_threads=*/1);
+    auto consumer2 = MakeMinimalGen2ComputeKernel("consumer2", /*num_threads=*/2);
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -725,7 +725,7 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingMixingComputeAndDMOnSameRoleFails) 
     // processor mask per role; the two kinds occupy disjoint mask bit ranges and cannot
     // share a mask. The validator must reject upfront.
     auto dm_producer = MakeMinimalGen2DMKernel("dm_producer");
-    auto compute_producer = MakeMinimalComputeKernel("compute_producer");
+    auto compute_producer = MakeMinimalGen2ComputeKernel("compute_producer");
     auto consumer = MakeMinimalGen2DMKernel("consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -757,8 +757,8 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingSelfLoopWithMatchingSidesSucceeds) 
     // Two self-looping kernels on disjoint WUs. Each binds "dfb" as both producer and
     // consumer; producer set equals consumer set = {self_loop_1, self_loop_2}. At each node,
     // exactly one kernel runs and self-loops the DFB — the local invariant holds.
-    auto self_loop_1 = MakeMinimalComputeKernel("self_loop_1");
-    auto self_loop_2 = MakeMinimalComputeKernel("self_loop_2");
+    auto self_loop_1 = MakeMinimalGen2ComputeKernel("self_loop_1");
+    auto self_loop_2 = MakeMinimalGen2ComputeKernel("self_loop_2");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -796,9 +796,9 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
     // self-loop — a DM self-loop would be rejected earlier on Gen2 (see DMKernelSelfLoopOnGen2Fails),
     // masking the rule under test. With compute kernels the per-role kind-uniformity check passes and
     // the self-loop set-equality refinement check is reached.
-    auto self_loop_1 = MakeMinimalComputeKernel("self_loop_1");
-    auto extra_producer = MakeMinimalComputeKernel("extra_producer");
-    auto extra_consumer = MakeMinimalComputeKernel("extra_consumer");
+    auto self_loop_1 = MakeMinimalGen2ComputeKernel("self_loop_1");
+    auto extra_producer = MakeMinimalGen2ComputeKernel("extra_producer");
+    auto extra_consumer = MakeMinimalGen2ComputeKernel("extra_consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -837,7 +837,7 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllDisablesProducerSide) {
         spec.name = "test_program";
 
         auto dm_kernel = MakeMinimalGen2DMKernel("dm_kernel");
-        auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
+        auto compute_kernel = MakeMinimalGen2ComputeKernel("compute_kernel");
         auto& dm_hw_config =
             std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(dm_kernel.hw_config));
         dm_hw_config.disable_dfb_implicit_sync_for_all = disable_all;
@@ -877,7 +877,7 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllDisagreementAcrossProduce
 
     auto producer1 = MakeMinimalGen2DMKernel("producer1");
     auto producer2 = MakeMinimalGen2DMKernel("producer2");
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
     // producer1 hammers implicit sync off; producer2 leaves it on. Both bind the same DFB on
     // the producer side, so the per-side opt-out disagrees and validation must reject.
@@ -913,7 +913,7 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllAgreesWithExplicitList) {
 
     auto producer1 = MakeMinimalGen2DMKernel("producer1");
     auto producer2 = MakeMinimalGen2DMKernel("producer2");
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
     // producer1 opts out via the per-kernel hammer; producer2 opts the same DFB out by name.
     // Both express the same per-side decision (disable), so they agree and the side lowers off.
@@ -997,7 +997,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
     spec.name = "test_program";
 
     // Quasar has 4 Tensix cores per node
-    auto kernel = MakeMinimalComputeKernel("kernel", 5);  // Too many threads!
+    auto kernel = MakeMinimalGen2ComputeKernel("kernel", 5);  // Too many threads!
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
@@ -1674,7 +1674,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithComputeEndpointRequiresDataFormat) {
     spec.name = "test_program";
 
     auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer = MakeMinimalComputeKernel("consumer");  // Compute!
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");  // Compute!
     auto dfb = MakeMinimalDFB("dfb");
     // dfb.data_format_metadata is NOT set (nullopt)
 
@@ -1698,7 +1698,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnboundDFBF
     spec.name = "test_program";
 
     auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
     // Set unpack_to_dest_mode referencing a DFB this kernel doesn't bind
     // (in this case, a DFB that doesn't exist in the spec at all).
@@ -1800,7 +1800,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto producer_compute = MakeMinimalComputeKernel("producer_compute");
+    auto producer_compute = MakeMinimalGen2ComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(producer_compute.hw_config));
     producer_config.fp32_dest_acc_en = true;
 
@@ -1828,7 +1828,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto producer_compute = MakeMinimalComputeKernel("producer_compute");
+    auto producer_compute = MakeMinimalGen2ComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(producer_compute.hw_config));
     producer_config.fp32_dest_acc_en = true;
     producer_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
@@ -1895,7 +1895,7 @@ TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
     spec.name = "test_program";
 
     auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
 
     // Legacy block-float format; not supported on Quasar.
@@ -1923,7 +1923,7 @@ TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
     spec.name = "test_program";
 
     auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
     const uint32_t too_many = tt::tt_metal::hal::get_arch_num_circular_buffers() + 1;
     for (uint32_t i = 0; i < too_many; ++i) {
@@ -2067,8 +2067,8 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitExceedsComputeCoreBudgetFails) {
 
     // Create enough compute kernels to exceed the 4 Tensix core budget (2+4=6).
     // (Legal thread counts on Quasar are 1, 2, 4; 3 is explicitly disallowed.)
-    auto kernel1 = MakeMinimalComputeKernel("compute1", 2);
-    auto kernel2 = MakeMinimalComputeKernel("compute2", 4);
+    auto kernel1 = MakeMinimalGen2ComputeKernel("compute1", 2);
+    auto kernel2 = MakeMinimalGen2ComputeKernel("compute2", 4);
 
     spec.kernels = {kernel1, kernel2};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute1", "compute2"})};
@@ -2086,8 +2086,8 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitWithMultipleComputeKernelsFails) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto compute1 = MakeMinimalComputeKernel("compute1");
-    auto compute2 = MakeMinimalComputeKernel("compute2");
+    auto compute1 = MakeMinimalGen2ComputeKernel("compute1");
+    auto compute2 = MakeMinimalGen2ComputeKernel("compute2");
 
     spec.kernels = {compute1, compute2};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute1", "compute2"})};
@@ -2151,7 +2151,7 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelSucceeds) {
     ProgramSpec spec;
     spec.name = "compute_self_loop";
 
-    auto compute = MakeMinimalComputeKernel("compute");
+    auto compute = MakeMinimalGen2ComputeKernel("compute");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -2261,7 +2261,7 @@ TEST_F(ProgramSpecTestQuasar, MaxComputeThreadsSucceeds) {
     spec.name = "max_compute_threads";
 
     auto dm = MakeMinimalGen2DMKernel("dm");
-    auto compute = MakeMinimalComputeKernel("compute", 4);  // Max threads
+    auto compute = MakeMinimalGen2ComputeKernel("compute", 4);  // Max threads
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -2284,7 +2284,7 @@ TEST_F(ProgramSpecTestQuasar, MultipleDFBsSucceeds) {
     spec.name = "multi_dfb_program";
 
     auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
     auto dfb1 = MakeMinimalDFB("dfb1");
     dfb1.data_format_metadata = tt::DataFormat::Float16_b;
@@ -2434,7 +2434,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     spec.name = "test_program";
 
     auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
     auto dfb0 = MakeMinimalDFB("dfb_0");
     dfb0.data_format_metadata = tt::DataFormat::Float16_b;
@@ -2696,7 +2696,7 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingForcesUniformRiscMaskAcrossProducer
     auto producer_a = MakeMinimalGen2DMKernel("producer_a", /*num_threads=*/1);
     auto producer_b = MakeMinimalGen2DMKernel("producer_b", /*num_threads=*/1);
     auto unrelated_dm = MakeMinimalGen2DMKernel("unrelated_dm", /*num_threads=*/2);
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;

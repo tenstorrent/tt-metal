@@ -35,10 +35,10 @@ namespace tt::tt_metal::experimental {
 namespace {
 
 using test_helpers::BindTensorParameterToKernel;
-using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::MakeMinimalWriterDMKernel;

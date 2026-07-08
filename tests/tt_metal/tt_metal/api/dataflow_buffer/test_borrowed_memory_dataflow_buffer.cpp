@@ -35,7 +35,7 @@ namespace tt::tt_metal {
 namespace {
 
 using namespace experimental;
-using test_helpers::MakeMinimalComputeKernel;
+using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalWorkUnit;
@@ -132,8 +132,8 @@ void run_borrowed_memory_dfb_program(
     KernelSpec consumer_spec;
     if (cfg.tensix_consumer) {
         // dfb_t6_consumer.cpp: drains the DFB, does not write to DRAM.
-        consumer_spec = (arch == ARCH::QUASAR) ? MakeMinimalComputeKernel("consumer", cfg.num_consumers)
-                                               : MakeMinimalComputeKernel("consumer");
+        consumer_spec = (arch == ARCH::QUASAR) ? MakeMinimalGen2ComputeKernel("consumer", cfg.num_consumers)
+                                               : MakeMinimalGen2ComputeKernel("consumer");
         consumer_spec.source = DFB_TENSIX_CONSUMER_KERNEL;
         consumer_spec.compile_time_args = {
             {"num_entries_per_consumer", entries_per_consumer},
