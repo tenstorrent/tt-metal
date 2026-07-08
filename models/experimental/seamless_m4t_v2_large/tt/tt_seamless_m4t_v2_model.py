@@ -858,6 +858,10 @@ class TTSeamlessM4Tv2Model:
     _ARGMAX_CHUNKS = 32
     # Bias subtracted along argmax dims so ``ttnn.argmax`` picks the lowest index on ties (HF ``torch.argmax``).
     _ARGMAX_TIE_BREAK_EPS = 1e-9
+    # Row-block for the T2U greedy argmax. The multicore argmax reduce-core CBs scale with
+    # (rows * num_cores * ~6 B); a single call over long speech (~2500+ unit frames) overflows L1
+    # (>1.5 MB). Process unit_seq in blocks of this many rows (per-row argmax is independent).
+    _T2U_ARGMAX_ROW_BLOCK = 1024
 
     def _argmax_tie_break_bias_1d(self, length: int) -> ttnn.Tensor:
         """Cached float32 ``[1,1,1,L]`` bias: ``idx * eps`` (lowest index wins on equal scores)."""
@@ -2982,8 +2986,41 @@ class TTSeamlessM4Tv2Model:
                 (1, 1, 1),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        unit_ids_argmax = ttnn.argmax(t2u_logits_tt, dim=-1)  # [B, unit_seq] int32
+        # Greedy unit ids. Untilize to ROW_MAJOR so ``ttnn.argmax`` takes the parallel *multicore*
+        # last-dim path instead of the single-core TILE path: the T2U argmax runs over the whole
+        # ``[B, unit_seq, vocab]`` at once and the single-core kernel serializes over ``unit_seq``
+        # (tens of ms for long speech — ~38x slower). The multicore kernel reduces the *physical*
+        # tile-padded width, so pad the vocab to a multiple of 32 with ``-1e9`` first; otherwise the
+        # garbage pad columns (10082 -> 10112) can win the argmax and corrupt unit ids. Verified
+        # bit-identical to the TILE argmax across tile-aligned and non-aligned ``unit_seq``.
+        v_t2u = int(t2u_logits_tt.shape[-1])
+        v_t2u_pad = ((v_t2u + 31) // 32) * 32
+        t2u_rm = ttnn.untilize(t2u_logits_tt, use_multicore=True)
         ttnn.deallocate(t2u_logits_tt)
+        if v_t2u_pad != v_t2u:
+            t2u_rm_p = ttnn.pad(t2u_rm, [(0, 0), (0, 0), (0, v_t2u_pad - v_t2u)], value=-1e9)
+            ttnn.deallocate(t2u_rm)
+            t2u_rm = t2u_rm_p
+        # The multicore argmax reduce-core CBs grow with (unit_seq * num_cores), so one call over a
+        # long speech sequence overflows L1. Argmax is per-row independent, so slice unit_seq into
+        # row-blocks, argmax each, and concat — bounded CBs, identical result.
+        seq_rows = int(t2u_rm.shape[-2])
+        block = self._T2U_ARGMAX_ROW_BLOCK
+        if seq_rows <= block:
+            unit_ids_argmax = ttnn.argmax(t2u_rm, dim=-1)  # [B, unit_seq] uint32
+            ttnn.deallocate(t2u_rm)
+        else:
+            b_rows = int(t2u_rm.shape[0])
+            parts = []
+            for start in range(0, seq_rows, block):
+                end = min(start + block, seq_rows)
+                blk = ttnn.slice(t2u_rm, [0, start, 0], [b_rows, end, v_t2u_pad], (1, 1, 1))
+                parts.append(ttnn.argmax(blk, dim=-1))
+                ttnn.deallocate(blk)
+            ttnn.deallocate(t2u_rm)
+            unit_ids_argmax = ttnn.concat(parts, dim=-1)  # [B, unit_seq] uint32
+            for _p in parts:
+                ttnn.deallocate(_p)
 
         # On-device unit-id remap (EOS/pad mask + vocoder offset). Mirrors the HF host remap
         #   voc = (unit == eos | pad < 0.5 | unit == pad_id) ? pad_id : unit - vocoder_offset
