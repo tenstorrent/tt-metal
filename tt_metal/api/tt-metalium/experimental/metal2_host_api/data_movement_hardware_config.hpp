@@ -56,20 +56,46 @@ struct DataMovementGen1Config {
 // Factory helper:
 // Default config for a reader DM kernel (i.e. that reads from DRAM)
 inline DataMovementGen1Config CreateReaderGen1DataMovementConfig() noexcept {
-    return DataMovementGen1Config{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-        .noc = tt::tt_metal::NOC::NOC_0,
-        .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC};
+    return DataMovementGen1Config{// On Wormhole, RISCV_1 runs faster than RISCV_0 due to its dedicated
+                                  // instruction memory. Since DM reader kernels are usually more complex than
+                                  // DM writer kernels, prefer RISCV_1 for readers.
+                                  // NOTE:
+                                  //  - The Wormhole RISCV_1 dedicated instruction memory has a 16 kB size limit,
+                                  //    so a large DM reader kernel may fail to fit. (Runtime error.)
+                                  //  - On Blackhole, RISCV_0 and RISCV_1 have no meaningful performance difference;
+                                  //    reader DM kernels are placed on RISCV_1 by convention only.
+                                  .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+
+                                  // It is more efficient to read from DRAM via NOC_0 on all Gen1 architectures.
+                                  // This is a subtle consequence of the device topology:
+                                  //  - NOC_0 routes east, then south (rows first)
+                                  //  - NOC_1 routes north, then west (columns first)
+                                  //  - DRAMs are in columns
+                                  // Return data from DRAM reads may cause NOC congestion if it flows column-first.
+                                  // Thus, prefer NOC_0 for DRAM reads.
+                                  .noc = tt::tt_metal::NOC::NOC_0,
+
+                                  // Dedicated NOC mode is the most bandwidth-efficient mode.
+                                  // (Dynamic NOC mode is generally only used to multiplex both DM cores onto a
+                                  // single NOC in order to reserve the other NOC for fabric traffic.)
+                                  .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC};
 }
 
 // Factory helper:
 // Default config for a writer DM kernel (i.e. that writes to DRAM)
 inline DataMovementGen1Config CreateWriterGen1DataMovementConfig() noexcept {
-    return DataMovementGen1Config{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-        .noc = tt::tt_metal::NOC::NOC_1,
-        .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC};
+    return DataMovementGen1Config{// DM kernels on the same node must be assigned to different RISC-V cores.
+                                  // Since RISCV_1 is preferred for readers, place writers on RISCV_0.
+                                  .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+
+                                  // Since NOC_0 is preferred for DRAM reads, use NOC_1 for DRAM writes.
+                                  .noc = tt::tt_metal::NOC::NOC_1,
+
+                                  // Prefer dedicated NOC mode for the same reasons as above.
+                                  .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC};
 }
+
+// ============================================================================
 
 // Gen2 architectures have a unified NOC and fully automated DM kernel core selection.
 // The DataMovementGen2Config controls whether the DFB implicit sync feature for DM
