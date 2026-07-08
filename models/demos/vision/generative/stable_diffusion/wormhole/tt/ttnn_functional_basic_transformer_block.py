@@ -85,7 +85,7 @@ class basic_transformer_block:
             bias=self.parameters.norm1.bias,
             memory_config=sharded_mem_cfg,
             program_config=program_config,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi2),
         )
         hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_cfg)
         # 1. Self-Attention
@@ -128,7 +128,7 @@ class basic_transformer_block:
                 bias=self.parameters.norm2.bias,
                 memory_config=sharded_mem_cfg,
                 program_config=program_config,
-                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi2),
             )
             hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_cfg)
             # 2. Cross-Attention
@@ -165,7 +165,7 @@ class basic_transformer_block:
             bias=self.parameters.norm3.bias,
             memory_config=sharded_mem_cfg,
             program_config=program_config,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi2),
         )
         hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_cfg)
         if use_ada_layer_norm_zero:
