@@ -121,7 +121,7 @@ inline KernelSpec MakeMinimalWriterDMKernel(std::string name) {
 }
 
 // Helper to create a minimal valid KernelSpec for compute (Gen2/Quasar)
-inline KernelSpec MakeMinimalComputeKernel(std::string name, uint32_t num_threads = 1) {
+inline KernelSpec MakeMinimalGen2ComputeKernel(std::string name, uint32_t num_threads = 1) {
     return KernelSpec{
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
@@ -244,7 +244,7 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
 
     // Create a DM kernel (producer) and compute kernel (consumer)
     auto dm_kernel = MakeMinimalGen2DMKernel("dm_kernel");
-    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
+    auto compute_kernel = MakeMinimalGen2ComputeKernel("compute_kernel");
 
     // Create a DFB with data format (required for compute endpoint)
     auto dfb = MakeMinimalDFB("dfb_0");
